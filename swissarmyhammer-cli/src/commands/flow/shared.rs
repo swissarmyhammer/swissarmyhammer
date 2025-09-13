@@ -58,7 +58,10 @@ pub fn workflow_run_id_to_string(id: &WorkflowRunId) -> String {
 }
 
 /// Convert ExecutorError to SwissArmyHammerError
-pub fn handle_executor_error(executor_error: ExecutorError, _context: &str) -> SwissArmyHammerError {
+pub fn handle_executor_error(
+    executor_error: ExecutorError,
+    _context: &str,
+) -> SwissArmyHammerError {
     // Convert ExecutorError directly to SwissArmyHammerError using From trait
     swissarmyhammer_common::SwissArmyHammerError::from(executor_error)
 }
@@ -118,10 +121,7 @@ pub async fn execute_workflow_with_progress(
 }
 
 /// Print workflow run status using CliContext formatting
-pub fn print_run_status(
-    run: &WorkflowRun,
-    context: &CliContext,
-) -> Result<()> {
+pub fn print_run_status(run: &WorkflowRun, context: &CliContext) -> Result<()> {
     // For now, use simple serialization since WorkflowRun doesn't implement Tabled
     match context.format {
         crate::cli::OutputFormat::Table => {
@@ -187,19 +187,23 @@ impl LogLevel {
 }
 
 /// Determine log level for a workflow transition based on state properties
-fn get_state_log_level(run: &WorkflowRun, state_id: &swissarmyhammer_workflow::StateId) -> LogLevel {
+fn get_state_log_level(
+    run: &WorkflowRun,
+    state_id: &swissarmyhammer_workflow::StateId,
+) -> LogLevel {
     if let Some(state) = run.workflow.states.get(state_id) {
         // Terminal states that are successful are Info level
         if state.is_terminal && run.status == WorkflowRunStatus::Completed {
             return LogLevel::Info;
         }
-        // Terminal states that are failed are Error level  
+        // Terminal states that are failed are Error level
         if state.is_terminal && run.status == WorkflowRunStatus::Failed {
             return LogLevel::Error;
         }
         // States with "error", "fail" in description are Error level
-        if state.description.to_lowercase().contains("error") || 
-           state.description.to_lowercase().contains("fail") {
+        if state.description.to_lowercase().contains("error")
+            || state.description.to_lowercase().contains("fail")
+        {
             return LogLevel::Error;
         }
         // States with "warn" in description are Warn level
@@ -219,12 +223,15 @@ pub fn print_run_logs(
 ) -> Result<()> {
     println!("📄 Logs for run {}", workflow_run_id_to_string(&run.id));
     println!("📋 Workflow: {}", run.workflow.name);
-    
+
     // Parse level filter
     let level_filter = if let Some(level_str) = level {
         match LogLevel::from_str(level_str) {
             Some(level) => {
-                println!("🔍 Filtering by level: {} and above", level_str.to_uppercase());
+                println!(
+                    "🔍 Filtering by level: {} and above",
+                    level_str.to_uppercase()
+                );
                 Some(level)
             }
             None => {
@@ -235,7 +242,7 @@ pub fn print_run_logs(
     } else {
         None
     };
-    
+
     println!();
 
     // Show execution history as logs
@@ -258,7 +265,7 @@ pub fn print_run_logs(
             .unwrap_or("Unknown state");
 
         let log_level = get_state_log_level(run, state_id);
-        
+
         // Apply level filter
         if let Some(ref filter_level) = level_filter {
             if log_level < *filter_level {

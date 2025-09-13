@@ -53,29 +53,26 @@ mod tests {
 
     #[tokio::test]
     async fn test_execute_logs_command_invalid_run_id() -> Result<()> {
-        let result = execute_logs_command(
-            "invalid-run-id".to_string(),
-            false,
-            None,
-            None,
-        ).await;
+        let result = execute_logs_command("invalid-run-id".to_string(), false, None, None).await;
 
         // Should fail with invalid run ID
-        assert!(result.is_err(), "Logs command with invalid run ID should fail");
+        assert!(
+            result.is_err(),
+            "Logs command with invalid run ID should fail"
+        );
         Ok(())
     }
 
     #[tokio::test]
     async fn test_execute_logs_command_with_tail() -> Result<()> {
-        let result = execute_logs_command(
-            "invalid-run-id".to_string(),
-            false,
-            Some(10),
-            None,
-        ).await;
+        let result =
+            execute_logs_command("invalid-run-id".to_string(), false, Some(10), None).await;
 
         // Should still fail with invalid run ID, but tests the tail parameter
-        assert!(result.is_err(), "Logs command with tail and invalid run ID should fail");
+        assert!(
+            result.is_err(),
+            "Logs command with tail and invalid run ID should fail"
+        );
         Ok(())
     }
 
@@ -86,10 +83,14 @@ mod tests {
             false,
             None,
             Some("error".to_string()),
-        ).await;
+        )
+        .await;
 
         // Should still fail with invalid run ID, but tests the level parameter
-        assert!(result.is_err(), "Logs command with level and invalid run ID should fail");
+        assert!(
+            result.is_err(),
+            "Logs command with level and invalid run ID should fail"
+        );
         Ok(())
     }
 }

@@ -1,7 +1,7 @@
 //! Test a workflow without executing actions command implementation
 
+use super::run::execute_run_command;
 use crate::context::CliContext;
-use super::run::{execute_run_command};
 use swissarmyhammer::Result;
 
 /// Execute the test workflow command
@@ -22,5 +22,6 @@ pub async fn execute_test_command(
         timeout,
         quiet,
         context,
-    ).await
+    )
+    .await
 }

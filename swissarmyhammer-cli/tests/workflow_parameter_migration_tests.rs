@@ -61,9 +61,25 @@ async fn run_builtin_workflow_in_process(
 
     let cli_context = create_test_cli_context().await?;
     let result = match subcommand {
-        FlowSubcommand::Run { workflow, vars, interactive, dry_run, timeout, quiet } => {
-            execute_run_command(workflow, vars, interactive, dry_run, timeout, quiet, &cli_context).await
-        },
+        FlowSubcommand::Run {
+            workflow,
+            vars,
+            interactive,
+            dry_run,
+            timeout,
+            quiet,
+        } => {
+            execute_run_command(
+                workflow,
+                vars,
+                interactive,
+                dry_run,
+                timeout,
+                quiet,
+                &cli_context,
+            )
+            .await
+        }
         _ => panic!("Unexpected subcommand type"),
     };
 

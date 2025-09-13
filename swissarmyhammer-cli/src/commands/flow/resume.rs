@@ -1,7 +1,8 @@
 //! Resume a paused workflow run command implementation
 
 use super::shared::{
-    parse_workflow_run_id, parse_duration, execute_workflow_with_progress, workflow_run_id_to_string,
+    execute_workflow_with_progress, parse_duration, parse_workflow_run_id,
+    workflow_run_id_to_string,
 };
 use std::future;
 use swissarmyhammer::{Result, WorkflowExecutor, WorkflowRunStatus, WorkflowStorage};
@@ -127,15 +128,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_execute_resume_command_invalid_run_id() -> Result<()> {
-        let result = execute_resume_command(
-            "invalid-run-id".to_string(),
-            false,
-            None,
-            false,
-        ).await;
+        let result = execute_resume_command("invalid-run-id".to_string(), false, None, false).await;
 
         // Should fail with invalid run ID
-        assert!(result.is_err(), "Resume command with invalid run ID should fail");
+        assert!(
+            result.is_err(),
+            "Resume command with invalid run ID should fail"
+        );
         Ok(())
     }
 
@@ -146,24 +145,26 @@ mod tests {
             false,
             Some("30s".to_string()),
             false,
-        ).await;
+        )
+        .await;
 
         // Should still fail with invalid run ID
-        assert!(result.is_err(), "Resume command with timeout should fail with invalid run ID");
+        assert!(
+            result.is_err(),
+            "Resume command with timeout should fail with invalid run ID"
+        );
         Ok(())
     }
 
     #[tokio::test]
     async fn test_execute_resume_command_quiet_mode() -> Result<()> {
-        let result = execute_resume_command(
-            "invalid-run-id".to_string(),
-            false,
-            None,
-            true,
-        ).await;
+        let result = execute_resume_command("invalid-run-id".to_string(), false, None, true).await;
 
         // Should still fail with invalid run ID
-        assert!(result.is_err(), "Resume command in quiet mode should fail with invalid run ID");
+        assert!(
+            result.is_err(),
+            "Resume command in quiet mode should fail with invalid run ID"
+        );
         Ok(())
     }
 }

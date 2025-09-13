@@ -605,10 +605,7 @@ async fn handle_validate_command(matches: &clap::ArgMatches, cli_context: &CliCo
     commands::validate::handle_command(workflow_dirs, validate_tools, cli_context).await
 }
 
-async fn handle_plan_command(
-    matches: &clap::ArgMatches,
-    context: &CliContext,
-) -> i32 {
+async fn handle_plan_command(matches: &clap::ArgMatches, context: &CliContext) -> i32 {
     let plan_filename = matches.get_one::<String>("plan_filename").cloned().unwrap();
     commands::plan::handle_command(plan_filename, context).await
 }

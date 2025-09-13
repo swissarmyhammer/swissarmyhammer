@@ -1,7 +1,7 @@
 //! Generate execution visualization command implementation
 
+use super::shared::{create_local_workflow_run_storage, parse_workflow_run_id};
 use crate::cli::VisualizationFormat;
-use super::shared::{parse_workflow_run_id, create_local_workflow_run_storage};
 use swissarmyhammer::{Result, SwissArmyHammerError};
 use swissarmyhammer_workflow::ExecutionVisualizer;
 
@@ -16,32 +16,28 @@ pub async fn execute_visualize_command(
 ) -> Result<()> {
     let run_id_typed = parse_workflow_run_id(&run_id)?;
     let run_storage = create_local_workflow_run_storage()?;
-    
-    let run = run_storage.get_run(&run_id_typed).map_err(|e| {
-        SwissArmyHammerError::Other {
+
+    let run = run_storage
+        .get_run(&run_id_typed)
+        .map_err(|e| SwissArmyHammerError::Other {
             message: format!("Failed to load workflow run {run_id}: {e}"),
-        }
-    })?;
+        })?;
 
     let visualizer = ExecutionVisualizer::new();
-    
+
     let trace = visualizer.generate_trace(&run);
-    
+
     let visualization_result = match format {
         VisualizationFormat::Mermaid => {
             generate_mermaid_visualization(&run, timing, counts, path_only)
         }
-        VisualizationFormat::Dot => {
-            generate_dot_visualization(&run, timing, counts, path_only)
-        }
+        VisualizationFormat::Dot => generate_dot_visualization(&run, timing, counts, path_only),
         VisualizationFormat::Json => {
             serde_json::to_string_pretty(&trace).map_err(|e| SwissArmyHammerError::Other {
                 message: format!("JSON serialization error: {}", e),
             })
         }
-        VisualizationFormat::Html => {
-            generate_html_visualization(&run, timing, counts, path_only)
-        }
+        VisualizationFormat::Html => generate_html_visualization(&run, timing, counts, path_only),
     };
 
     let visualization = visualization_result.map_err(|e| SwissArmyHammerError::Other {
@@ -49,10 +45,8 @@ pub async fn execute_visualize_command(
     })?;
 
     if let Some(output_path) = output {
-        std::fs::write(&output_path, &visualization).map_err(|e| {
-            SwissArmyHammerError::Other {
-                message: format!("Failed to write visualization to {output_path}: {e}"),
-            }
+        std::fs::write(&output_path, &visualization).map_err(|e| SwissArmyHammerError::Other {
+            message: format!("Failed to write visualization to {output_path}: {e}"),
         })?;
         println!("📊 Visualization written to: {output_path}");
     } else {
@@ -70,12 +64,15 @@ fn generate_mermaid_visualization(
     path_only: bool,
 ) -> Result<String> {
     let mut mermaid = String::from("graph TD\n");
-    
+
     if path_only {
         // Show only the execution path
         mermaid.push_str(&format!("    Start --> {}\n", run.workflow.initial_state));
         for (state_id, _) in &run.history {
-            mermaid.push_str(&format!("    {} --> {}\n", run.workflow.initial_state, state_id));
+            mermaid.push_str(&format!(
+                "    {} --> {}\n",
+                run.workflow.initial_state, state_id
+            ));
         }
         mermaid.push_str(&format!("    {} --> End\n", run.current_state));
     } else {
@@ -83,7 +80,9 @@ fn generate_mermaid_visualization(
         for (state_id, state) in &run.workflow.states {
             let label = if timing && !run.history.is_empty() {
                 // Find timing info for this state from history
-                let timing_info = run.history.iter()
+                let timing_info = run
+                    .history
+                    .iter()
                     .find(|(id, _)| id == state_id)
                     .map(|(_, timestamp)| timestamp.format("%H:%M:%S").to_string())
                     .unwrap_or_default();
@@ -98,13 +97,16 @@ fn generate_mermaid_visualization(
             };
             mermaid.push_str(&format!("    {}\n", label));
         }
-        
+
         // Add transitions
         for transition in &run.workflow.transitions {
-            mermaid.push_str(&format!("    {} --> {}\n", transition.from_state, transition.to_state));
+            mermaid.push_str(&format!(
+                "    {} --> {}\n",
+                transition.from_state, transition.to_state
+            ));
         }
     }
-    
+
     Ok(mermaid)
 }
 
@@ -116,19 +118,24 @@ fn generate_dot_visualization(
     path_only: bool,
 ) -> Result<String> {
     let mut dot = String::from("digraph workflow {\n    rankdir=TD;\n");
-    
+
     if path_only {
         // Show only the execution path
         dot.push_str(&format!("    Start -> {};\n", run.workflow.initial_state));
         for (state_id, _) in &run.history {
-            dot.push_str(&format!("    {} -> {};\n", run.workflow.initial_state, state_id));
+            dot.push_str(&format!(
+                "    {} -> {};\n",
+                run.workflow.initial_state, state_id
+            ));
         }
         dot.push_str(&format!("    {} -> End;\n", run.current_state));
     } else {
         // Show all states
         for (state_id, state) in &run.workflow.states {
             let label = if timing && !run.history.is_empty() {
-                let timing_info = run.history.iter()
+                let timing_info = run
+                    .history
+                    .iter()
                     .find(|(id, _)| id == state_id)
                     .map(|(_, timestamp)| timestamp.format("%H:%M:%S").to_string())
                     .unwrap_or_default();
@@ -140,17 +147,27 @@ fn generate_dot_visualization(
             } else {
                 format!("{}\\n{}", state_id, state.description)
             };
-            
-            let shape = if state.is_terminal { "doublecircle" } else { "box" };
-            dot.push_str(&format!("    {} [label=\"{}\" shape={}];\n", state_id, label, shape));
+
+            let shape = if state.is_terminal {
+                "doublecircle"
+            } else {
+                "box"
+            };
+            dot.push_str(&format!(
+                "    {} [label=\"{}\" shape={}];\n",
+                state_id, label, shape
+            ));
         }
-        
+
         // Add transitions
         for transition in &run.workflow.transitions {
-            dot.push_str(&format!("    {} -> {};\n", transition.from_state, transition.to_state));
+            dot.push_str(&format!(
+                "    {} -> {};\n",
+                transition.from_state, transition.to_state
+            ));
         }
     }
-    
+
     dot.push_str("}\n");
     Ok(dot)
 }
@@ -162,7 +179,8 @@ fn generate_html_visualization(
     counts: bool,
     path_only: bool,
 ) -> Result<String> {
-    let mut html = String::from(r#"<!DOCTYPE html>
+    let mut html = String::from(
+        r#"<!DOCTYPE html>
 <html>
 <head>
     <title>Workflow Visualization</title>
@@ -182,13 +200,23 @@ fn generate_html_visualization(
     </style>
 </head>
 <body>
-"#);
-    
+"#,
+    );
+
     html.push_str(&format!("<h1>Workflow Run: {}</h1>\n", run.workflow.name));
-    html.push_str(&format!("<p><strong>Run ID:</strong> {}</p>\n", super::shared::workflow_run_id_to_string(&run.id)));
-    html.push_str(&format!("<p><strong>Status:</strong> {:?}</p>\n", run.status));
-    html.push_str(&format!("<p><strong>Current State:</strong> {}</p>\n", run.current_state));
-    
+    html.push_str(&format!(
+        "<p><strong>Run ID:</strong> {}</p>\n",
+        super::shared::workflow_run_id_to_string(&run.id)
+    ));
+    html.push_str(&format!(
+        "<p><strong>Status:</strong> {:?}</p>\n",
+        run.status
+    ));
+    html.push_str(&format!(
+        "<p><strong>Current State:</strong> {}</p>\n",
+        run.current_state
+    ));
+
     if path_only {
         html.push_str("<h2>Execution Path</h2>\n<div class=\"path\">\n");
         html.push_str(&format!("Start → {} ", run.workflow.initial_state));
@@ -198,11 +226,11 @@ fn generate_html_visualization(
         html.push_str("→ End\n</div>\n");
     } else {
         html.push_str("<h2>Workflow States</h2>\n");
-        
+
         for (state_id, state) in &run.workflow.states {
             let visited = run.history.iter().any(|(id, _)| id == state_id);
             let is_current = state_id == &run.current_state;
-            
+
             let mut class = "state".to_string();
             if state.is_terminal {
                 class.push_str(" terminal");
@@ -212,33 +240,40 @@ fn generate_html_visualization(
             } else if visited {
                 class.push_str(" visited");
             }
-            
+
             html.push_str(&format!("<div class=\"{}\">\n", class));
             html.push_str(&format!("<h3>{}</h3>\n", state_id));
             html.push_str(&format!("<p>{}</p>\n", state.description));
-            
+
             if timing && visited {
                 if let Some((_, timestamp)) = run.history.iter().find(|(id, _)| id == state_id) {
-                    html.push_str(&format!("<p><em>Executed at: {}</em></p>\n", 
-                        timestamp.format("%Y-%m-%d %H:%M:%S UTC")));
+                    html.push_str(&format!(
+                        "<p><em>Executed at: {}</em></p>\n",
+                        timestamp.format("%Y-%m-%d %H:%M:%S UTC")
+                    ));
                 }
             }
-            
+
             if counts {
-                html.push_str(&format!("<p><strong>Visited:</strong> {}</p>\n", 
-                    if visited { "Yes" } else { "No" }));
+                html.push_str(&format!(
+                    "<p><strong>Visited:</strong> {}</p>\n",
+                    if visited { "Yes" } else { "No" }
+                ));
             }
-            
+
             html.push_str("</div>\n");
         }
-        
+
         html.push_str("<h2>Transitions</h2>\n<ul>\n");
         for transition in &run.workflow.transitions {
-            html.push_str(&format!("<li>{} → {}</li>\n", transition.from_state, transition.to_state));
+            html.push_str(&format!(
+                "<li>{} → {}</li>\n",
+                transition.from_state, transition.to_state
+            ));
         }
         html.push_str("</ul>\n");
     }
-    
+
     html.push_str("</body>\n</html>");
     Ok(html)
 }
@@ -257,10 +292,14 @@ mod tests {
             false,
             false,
             false,
-        ).await;
+        )
+        .await;
 
         // Should fail with invalid run ID
-        assert!(result.is_err(), "Visualize command with invalid run ID should fail");
+        assert!(
+            result.is_err(),
+            "Visualize command with invalid run ID should fail"
+        );
         Ok(())
     }
 
@@ -273,10 +312,14 @@ mod tests {
             false,
             false,
             false,
-        ).await;
+        )
+        .await;
 
         // Should still fail with invalid run ID
-        assert!(result.is_err(), "Visualize command with JSON format should fail with invalid run ID");
+        assert!(
+            result.is_err(),
+            "Visualize command with JSON format should fail with invalid run ID"
+        );
         Ok(())
     }
 
@@ -289,10 +332,14 @@ mod tests {
             false,
             false,
             false,
-        ).await;
+        )
+        .await;
 
         // Should still fail with invalid run ID
-        assert!(result.is_err(), "Visualize command with output file should fail with invalid run ID");
+        assert!(
+            result.is_err(),
+            "Visualize command with output file should fail with invalid run ID"
+        );
         Ok(())
     }
 }

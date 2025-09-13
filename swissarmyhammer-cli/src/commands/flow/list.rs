@@ -1,8 +1,8 @@
 //! List available workflows command implementation
 
+use super::display::{VerboseWorkflowInfo, WorkflowInfo};
 use crate::cli::{OutputFormat, PromptSource, PromptSourceArg};
 use crate::context::CliContext;
-use super::display::{VerboseWorkflowInfo, WorkflowInfo};
 use swissarmyhammer::{Result, WorkflowResolver, WorkflowStorageBackend};
 use swissarmyhammer_workflow::MemoryWorkflowStorage;
 
@@ -50,16 +50,12 @@ pub async fn execute_list_command(
 
     // Convert to display objects based on verbose flag
     if verbose {
-        let verbose_workflows: Vec<VerboseWorkflowInfo> = workflow_infos
-            .iter()
-            .map(|(w, _)| w.into())
-            .collect();
+        let verbose_workflows: Vec<VerboseWorkflowInfo> =
+            workflow_infos.iter().map(|(w, _)| w.into()).collect();
         context.display(verbose_workflows)?;
     } else {
-        let workflow_info: Vec<WorkflowInfo> = workflow_infos
-            .iter()
-            .map(|(w, _)| w.into())
-            .collect();
+        let workflow_info: Vec<WorkflowInfo> =
+            workflow_infos.iter().map(|(w, _)| w.into()).collect();
         context.display(workflow_info)?;
     }
 
@@ -90,14 +86,9 @@ mod tests {
     #[tokio::test]
     async fn test_execute_list_command_basic() -> Result<()> {
         let context = create_test_context().await?;
-        
+
         // This should succeed without error, even if no workflows are found
-        let result = execute_list_command(
-            OutputFormat::Table,
-            false,
-            None,
-            &context,
-        ).await;
+        let result = execute_list_command(OutputFormat::Table, false, None, &context).await;
 
         assert!(result.is_ok(), "Basic list command should succeed");
         Ok(())
@@ -106,13 +97,8 @@ mod tests {
     #[tokio::test]
     async fn test_execute_list_command_verbose() -> Result<()> {
         let context = create_test_context().await?;
-        
-        let result = execute_list_command(
-            OutputFormat::Table,
-            true,
-            None,
-            &context,
-        ).await;
+
+        let result = execute_list_command(OutputFormat::Table, true, None, &context).await;
 
         assert!(result.is_ok(), "Verbose list command should succeed");
         Ok(())
@@ -121,13 +107,14 @@ mod tests {
     #[tokio::test]
     async fn test_execute_list_command_with_filter() -> Result<()> {
         let context = create_test_context().await?;
-        
+
         let result = execute_list_command(
             OutputFormat::Table,
             false,
             Some(PromptSourceArg::Builtin),
             &context,
-        ).await;
+        )
+        .await;
 
         assert!(result.is_ok(), "Filtered list command should succeed");
         Ok(())

@@ -1,8 +1,8 @@
 //! View metrics for workflow runs command implementation
 
+use super::shared::parse_workflow_run_id;
 use crate::cli::OutputFormat;
 use crate::context::CliContext;
-use super::shared::parse_workflow_run_id;
 use swissarmyhammer::{Result, WorkflowExecutor, WorkflowStorage};
 
 /// Execute the metrics workflow command
@@ -57,7 +57,10 @@ pub async fn execute_metrics_command(
                     println!("Workflow: {}", run_metrics.workflow_name);
                     println!("Status: {:?}", run_metrics.status);
                     println!("Status: {:?}", run_metrics.status);
-                    println!("Started: {}", run_metrics.started_at.format("%Y-%m-%d %H:%M:%S UTC"));
+                    println!(
+                        "Started: {}",
+                        run_metrics.started_at.format("%Y-%m-%d %H:%M:%S UTC")
+                    );
                     if let Some(completed) = run_metrics.completed_at {
                         println!("Completed: {}", completed.format("%Y-%m-%d %H:%M:%S UTC"));
                     }
@@ -115,14 +118,8 @@ mod tests {
     #[tokio::test]
     async fn test_execute_metrics_command_global() -> Result<()> {
         let context = create_test_context().await?;
-        
-        let result = execute_metrics_command(
-            None,
-            None,
-            OutputFormat::Table,
-            true,
-            &context,
-        ).await;
+
+        let result = execute_metrics_command(None, None, OutputFormat::Table, true, &context).await;
 
         assert!(result.is_ok(), "Global metrics command should succeed");
         Ok(())
@@ -131,17 +128,15 @@ mod tests {
     #[tokio::test]
     async fn test_execute_metrics_command_no_params() -> Result<()> {
         let context = create_test_context().await?;
-        
-        let result = execute_metrics_command(
-            None,
-            None,
-            OutputFormat::Table,
-            false,
-            &context,
-        ).await;
+
+        let result =
+            execute_metrics_command(None, None, OutputFormat::Table, false, &context).await;
 
         // Should succeed but show error message about missing parameters
-        assert!(result.is_ok(), "Metrics command with no params should succeed");
+        assert!(
+            result.is_ok(),
+            "Metrics command with no params should succeed"
+        );
         Ok(())
     }
 }

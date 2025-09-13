@@ -1,14 +1,16 @@
 //! Run a workflow command implementation
 
-use crate::context::CliContext;
-use crate::parameter_cli;
 use super::shared::{
-    parse_duration, execute_workflow_with_progress, create_local_workflow_run_storage,
+    create_local_workflow_run_storage, execute_workflow_with_progress, parse_duration,
     workflow_run_id_to_string,
 };
+use crate::context::CliContext;
+use crate::parameter_cli;
 use std::collections::HashMap;
 use std::future;
-use swissarmyhammer::{Result, SwissArmyHammerError, WorkflowName, WorkflowExecutor, WorkflowRunStatus};
+use swissarmyhammer::{
+    Result, SwissArmyHammerError, WorkflowExecutor, WorkflowName, WorkflowRunStatus,
+};
 use swissarmyhammer_common::{read_abort_file, remove_abort_file};
 use tokio::signal;
 use tokio::time::timeout;

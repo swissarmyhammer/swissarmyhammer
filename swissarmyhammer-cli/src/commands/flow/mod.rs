@@ -3,15 +3,15 @@
 //! Executes and manages workflows with support for starting new runs and resuming existing ones
 
 pub mod display;
-pub mod shared;
 pub mod list;
-pub mod status;
 pub mod logs;
-pub mod run;
 pub mod metrics;
-pub mod visualize;
-pub mod test;
 pub mod resume;
+pub mod run;
+pub mod shared;
+pub mod status;
+pub mod test;
+pub mod visualize;
 
 use crate::cli::FlowSubcommand;
 use crate::context::CliContext;
@@ -31,8 +31,16 @@ pub async fn handle_command(subcommand: FlowSubcommand, context: &CliContext) ->
             timeout,
             quiet,
         } => {
-            run::execute_run_command(workflow, vars, interactive, dry_run, timeout, quiet, context)
-                .await
+            run::execute_run_command(
+                workflow,
+                vars,
+                interactive,
+                dry_run,
+                timeout,
+                quiet,
+                context,
+            )
+            .await
         }
         FlowSubcommand::Resume {
             run_id,
@@ -69,8 +77,10 @@ pub async fn handle_command(subcommand: FlowSubcommand, context: &CliContext) ->
             timing,
             counts,
             path_only,
-        } => visualize::execute_visualize_command(run_id, format, output, timing, counts, path_only)
-            .await,
+        } => {
+            visualize::execute_visualize_command(run_id, format, output, timing, counts, path_only)
+                .await
+        }
         FlowSubcommand::Test {
             workflow,
             vars,

@@ -1,8 +1,8 @@
 //! Check status of a workflow run command implementation
 
+use super::shared::{parse_workflow_run_id, print_run_status};
 use crate::cli::OutputFormat;
 use crate::context::CliContext;
-use super::shared::{parse_workflow_run_id, print_run_status};
 use std::time::Duration;
 use swissarmyhammer::{Result, WorkflowRunStatus, WorkflowStorage};
 use tokio::signal;
@@ -79,16 +79,20 @@ mod tests {
     #[tokio::test]
     async fn test_execute_status_command_invalid_run_id() -> Result<()> {
         let context = create_test_context().await?;
-        
+
         let result = execute_status_command(
             "invalid-run-id".to_string(),
             OutputFormat::Table,
             false,
             &context,
-        ).await;
+        )
+        .await;
 
         // Should fail with invalid run ID
-        assert!(result.is_err(), "Status command with invalid run ID should fail");
+        assert!(
+            result.is_err(),
+            "Status command with invalid run ID should fail"
+        );
         Ok(())
     }
 
