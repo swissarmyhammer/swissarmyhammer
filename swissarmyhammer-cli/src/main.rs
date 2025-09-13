@@ -252,7 +252,7 @@ async fn handle_dynamic_matches(
     // Handle subcommands
     match context.matches.subcommand() {
         Some(("serve", sub_matches)) => {
-            commands::serve::handle_command(sub_matches, &template_context).await
+            commands::serve::handle_command(sub_matches, &context).await
         }
         Some(("doctor", _)) => handle_doctor_command(&context).await,
         Some(("prompt", sub_matches)) => handle_prompt_command(sub_matches, &context).await,
