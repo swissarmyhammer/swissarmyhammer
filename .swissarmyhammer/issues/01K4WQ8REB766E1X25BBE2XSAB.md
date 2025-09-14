@@ -1,1 +1,0 @@
-verify that we have tests of creating an in process streaming http mcp server with a llama model. make sure we can call an actual mcp tool -- read a file like Cargo.toml
