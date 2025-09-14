@@ -2,7 +2,7 @@
 //!
 //! This module provides stdio transport for the existing MCP server using the
 //! proper rmcp stdio transport instead of reimplementing MCP protocol.
-//! 
+//!
 //! NOTE: This module is DEPRECATED in favor of unified_server.rs
 //! It's kept for backward compatibility with existing AgentExecutor integration.
 
@@ -47,7 +47,7 @@ impl McpServerHandle {
     }
 
     /// Shutdown the server gracefully
-    /// 
+    ///
     /// Note: For stdio mode, this is mostly a no-op since stdio servers
     /// typically run until the client disconnects or the process terminates.
     pub async fn shutdown(&self) -> Result<()> {
@@ -67,14 +67,14 @@ impl McpServerHandle {
 /// This is kept for backward compatibility with existing AgentExecutor integration.
 pub async fn start_stdio_server() -> Result<McpServerHandle> {
     use super::unified_server::{start_mcp_server, McpServerMode};
-    
+
     tracing::warn!("Using deprecated stdio_server::start_stdio_server - consider migrating to unified_server::start_mcp_server");
-    
+
     let mode = McpServerMode::Stdio;
-    
+
     // Use the unified server and wrap the result in the legacy handle format
     let _unified_handle = start_mcp_server(mode, None).await?;
-    
+
     // Create legacy handle format for backward compatibility
     let (shutdown_tx, _) = tokio::sync::oneshot::channel();
     Ok(McpServerHandle::new(shutdown_tx))
@@ -84,7 +84,7 @@ pub async fn start_stdio_server() -> Result<McpServerHandle> {
 ///
 /// DEPRECATED: Use unified_server::start_mcp_server instead.
 /// This is kept for backward compatibility with existing AgentExecutor integration.
-/// 
+///
 /// Note: "In-process" stdio server is somewhat of a misnomer since stdio
 /// inherently involves external process communication. This function exists
 /// for API consistency with the HTTP server.
@@ -100,7 +100,7 @@ mod tests {
     async fn test_stdio_server_handle_creation() {
         let (tx, _rx) = tokio::sync::oneshot::channel();
         let handle = McpServerHandle::new(tx);
-        
+
         assert_eq!(handle.url(), "stdio");
         assert_eq!(handle.port(), None);
         assert_eq!(handle.host(), None);
@@ -110,10 +110,10 @@ mod tests {
     async fn test_stdio_server_shutdown() {
         let (tx, _rx) = tokio::sync::oneshot::channel();
         let handle = McpServerHandle::new(tx);
-        
+
         // Should not panic
         handle.shutdown().await.unwrap();
-        
+
         // Second shutdown should also work (idempotent)
         handle.shutdown().await.unwrap();
     }

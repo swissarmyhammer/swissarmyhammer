@@ -55,7 +55,6 @@ impl IssueName {
 
     /// Create a new issue name with relaxed validation for internal filesystem use with custom config
     pub fn new_internal_with_config(name: String, config: &Config) -> Result<Self> {
-
         let trimmed = name.trim();
 
         if trimmed.is_empty() {
@@ -88,7 +87,6 @@ impl IssueName {
 
     /// Create a new issue name from filesystem with custom config
     pub fn from_filesystem_with_config(name: String, config: &Config) -> Result<Self> {
-
         let trimmed = name.trim();
 
         // Allow truly empty names for nameless issues, but reject whitespace-only strings

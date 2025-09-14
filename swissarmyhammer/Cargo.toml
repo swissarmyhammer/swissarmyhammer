@@ -147,6 +147,7 @@ rstest = "0.22"
 futures = "0.3"
 swissarmyhammer-config = { path = "../swissarmyhammer-config" }
 swissarmyhammer-issues = { path = "../swissarmyhammer-issues" }
+swissarmyhammer-tools = { path = "../swissarmyhammer-tools" }
 
 [lib]
 name = "swissarmyhammer"

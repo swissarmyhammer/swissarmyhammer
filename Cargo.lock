@@ -6190,6 +6190,7 @@ dependencies = [
  "swissarmyhammer-search",
  "swissarmyhammer-shell",
  "swissarmyhammer-templating",
+ "swissarmyhammer-tools",
  "swissarmyhammer-workflow",
  "syntect",
  "sysinfo",

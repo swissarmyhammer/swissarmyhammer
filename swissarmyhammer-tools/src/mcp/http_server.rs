@@ -2,7 +2,7 @@
 //!
 //! This module provides HTTP transport for the existing MCP server using the
 //! proper rmcp StreamableHttpService instead of reimplementing MCP protocol.
-//! 
+//!
 //! NOTE: This module is DEPRECATED in favor of unified_server.rs
 //! It's kept for backward compatibility with existing AgentExecutor integration.
 
@@ -72,20 +72,28 @@ impl McpServerHandle {
 /// This is kept for backward compatibility with AgentExecutor integration.
 pub async fn start_in_process_mcp_server(config: &McpServerConfig) -> Result<McpServerHandle> {
     use super::unified_server::{start_mcp_server, McpServerMode};
-    
+
     tracing::warn!("Using deprecated http_server::start_in_process_mcp_server - consider migrating to unified_server::start_mcp_server");
 
     let mode = McpServerMode::Http {
-        port: if config.port == 0 { None } else { Some(config.port) },
+        port: if config.port == 0 {
+            None
+        } else {
+            Some(config.port)
+        },
     };
 
     // Use the unified server and wrap the result in the legacy handle format
     let unified_handle = start_mcp_server(mode, None).await?;
     let port = unified_handle.port().unwrap_or(8000);
-    
+
     // Create legacy handle format for backward compatibility
     let (shutdown_tx, _) = tokio::sync::oneshot::channel();
-    Ok(McpServerHandle::new(port, "127.0.0.1".to_string(), shutdown_tx))
+    Ok(McpServerHandle::new(
+        port,
+        "127.0.0.1".to_string(),
+        shutdown_tx,
+    ))
 }
 
 /// Start standalone HTTP MCP server (for CLI usage)
@@ -93,13 +101,16 @@ pub async fn start_in_process_mcp_server(config: &McpServerConfig) -> Result<Mcp
 /// DEPRECATED: Use unified_server::start_mcp_server instead.
 pub async fn start_http_server(bind_addr: &str) -> Result<McpServerHandle> {
     use super::unified_server::{start_mcp_server, McpServerMode};
-    
+
     tracing::warn!("Using deprecated http_server::start_http_server - consider migrating to unified_server::start_mcp_server");
-    
+
     let (host, port) = parse_bind_address(bind_addr)?;
-    
+
     if host != "127.0.0.1" {
-        tracing::warn!("Custom host '{}' not supported by unified server, using 127.0.0.1", host);
+        tracing::warn!(
+            "Custom host '{}' not supported by unified server, using 127.0.0.1",
+            host
+        );
     }
 
     let mode = McpServerMode::Http {
@@ -109,23 +120,27 @@ pub async fn start_http_server(bind_addr: &str) -> Result<McpServerHandle> {
     // Use the unified server and wrap the result in the legacy handle format
     let unified_handle = start_mcp_server(mode, None).await?;
     let actual_port = unified_handle.port().unwrap_or(port);
-    
+
     // Create legacy handle format for backward compatibility
     let (shutdown_tx, _) = tokio::sync::oneshot::channel();
-    Ok(McpServerHandle::new(actual_port, "127.0.0.1".to_string(), shutdown_tx))
+    Ok(McpServerHandle::new(
+        actual_port,
+        "127.0.0.1".to_string(),
+        shutdown_tx,
+    ))
 }
 
 // REMOVED: start_http_server_with_mcp_server function
-// 
+//
 // This internal function was replaced by unified_server rmcp-based implementation.
 // It was only used internally and has been eliminated as part of the consolidation.
 
 // REMOVED: Custom MCP protocol implementation
-// 
+//
 // The original HTTP server reimplemented the entire MCP protocol with custom
 // JSON-RPC handlers for initialize, prompts/list, tools/list, tools/call, etc.
-// 
-// This has been REPLACED with proper rmcp StreamableHttpService usage in 
+//
+// This has been REPLACED with proper rmcp StreamableHttpService usage in
 // unified_server.rs, which eliminates ~200 lines of protocol reimplementation.
 //
 // The rmcp library handles all MCP protocol details correctly, including:
@@ -136,7 +151,7 @@ pub async fn start_http_server(bind_addr: &str) -> Result<McpServerHandle> {
 //
 // Benefits of using rmcp instead of custom implementation:
 // ✅ No protocol bugs or compatibility issues
-// ✅ Automatic updates when MCP protocol evolves  
+// ✅ Automatic updates when MCP protocol evolves
 // ✅ Much less code to maintain (~200 lines removed)
 // ✅ Better performance and memory usage
 // ✅ Official protocol compliance
@@ -218,7 +233,7 @@ mod tests {
     #[ignore = "random port allocation not supported by rmcp SseServer"]
     async fn test_standalone_http_server_backward_compatibility() {
         let server = start_http_server("127.0.0.1:0").await.unwrap();
-        
+
         // Verify server started
         assert!(server.port() > 0);
         assert!(server.url().contains("/mcp")); // Should use rmcp path

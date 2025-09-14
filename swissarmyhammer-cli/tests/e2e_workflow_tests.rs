@@ -713,11 +713,13 @@ async fn test_error_recovery_workflow_lightweight() -> Result<()> {
 
     let result = tokio::time::timeout(timeout_duration, async {
         // Test basic operations that don't require ML
-        let issue_list = run_sah_command_in_process_with_dir(&["issue", "list"], test_env.path()).await?;
+        let issue_list =
+            run_sah_command_in_process_with_dir(&["issue", "list"], test_env.path()).await?;
         assert_eq!(issue_list.exit_code, 0, "Should be able to list issues");
 
         // Test memo operations
-        let memo_list = run_sah_command_in_process_with_dir(&["memo", "list"], test_env.path()).await?;
+        let memo_list =
+            run_sah_command_in_process_with_dir(&["memo", "list"], test_env.path()).await?;
         assert_eq!(memo_list.exit_code, 0, "Should be able to list memos");
 
         // Test help command as a basic functionality test

@@ -61,13 +61,13 @@ where
 /// * `Result<String, McpError>` - The validated and trimmed name, or an error
 pub fn validate_issue_name(name: &str) -> std::result::Result<String, McpError> {
     use swissarmyhammer_issues::IssueName;
-    
+
     // MCP interface doesn't allow empty names, unlike the internal API
     let trimmed = name.trim();
     if trimmed.is_empty() {
         return Err(McpError::invalid_params("Issue name cannot be empty", None));
     }
-    
+
     // Use the centralized validation logic
     match IssueName::new(name.to_string()) {
         Ok(issue_name) => Ok(issue_name.into_string()),

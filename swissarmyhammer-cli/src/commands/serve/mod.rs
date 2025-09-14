@@ -68,14 +68,24 @@ async fn handle_http_serve(matches: &clap::ArgMatches) -> i32 {
 
     // Note: unified server currently only supports 127.0.0.1, host parameter ignored for now
     if host != "127.0.0.1" {
-        eprintln!("Warning: Custom host '{}' not yet supported by unified server, using 127.0.0.1", host);
+        eprintln!(
+            "Warning: Custom host '{}' not yet supported by unified server, using 127.0.0.1",
+            host
+        );
     }
 
     let mode = McpServerMode::Http {
-        port: if port == 0 { None } else { Some(port) }
+        port: if port == 0 { None } else { Some(port) },
     };
 
-    println!("Starting SwissArmyHammer MCP server on 127.0.0.1:{}", if port == 0 { "random port".to_string() } else { port.to_string() });
+    println!(
+        "Starting SwissArmyHammer MCP server on 127.0.0.1:{}",
+        if port == 0 {
+            "random port".to_string()
+        } else {
+            port.to_string()
+        }
+    );
 
     let mut server_handle = match start_mcp_server(mode, None).await {
         Ok(handle) => {
@@ -111,8 +121,8 @@ async fn handle_http_serve(matches: &clap::ArgMatches) -> i32 {
 
 /// Handle stdio serve mode using unified MCP server
 async fn handle_stdio_serve() -> i32 {
-    use swissarmyhammer_tools::mcp::{start_mcp_server, McpServerMode};
     use crate::signal_handler::wait_for_shutdown;
+    use swissarmyhammer_tools::mcp::{start_mcp_server, McpServerMode};
 
     tracing::debug!("Starting unified MCP server in stdio mode");
 

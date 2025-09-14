@@ -9,10 +9,10 @@
 use rmcp::serve_server;
 use rmcp::transport::io::stdio;
 use rmcp::transport::SseServer;
-use tokio::net::TcpListener;
 use serde::{Deserialize, Serialize};
 use swissarmyhammer_common::Result;
 use swissarmyhammer_prompts::PromptLibrary;
+
 use tokio::sync::oneshot;
 
 use super::server::McpServer;
@@ -115,7 +115,7 @@ async fn start_stdio_server(library: Option<PromptLibrary>) -> Result<McpServerH
 
     // Create a dummy shutdown channel for API consistency (stdio doesn't need shutdown)
     let (shutdown_tx, _shutdown_rx) = oneshot::channel();
-    
+
     // For stdio mode, the server blocks on stdin/stdout until client disconnects
     // This is the correct behavior for stdio transport
     tokio::spawn(async move {
@@ -153,7 +153,7 @@ async fn start_http_server(
 ) -> Result<McpServerHandle> {
     let bind_port = port.unwrap_or(0); // 0 = random port
     let bind_addr = format!("127.0.0.1:{}", bind_port);
-    
+
     tracing::info!("Starting unified MCP server in HTTP mode on {}", bind_addr);
 
     // Create and initialize MCP server
@@ -168,10 +168,8 @@ async fn start_http_server(
         }
     })?)
     .await
-    .map_err(|e| {
-        swissarmyhammer_common::SwissArmyHammerError::Other {
-            message: format!("Failed to start SSE server: {}", e),
-        }
+    .map_err(|e| swissarmyhammer_common::SwissArmyHammerError::Other {
+        message: format!("Failed to start SSE server: {}", e),
     })?
     .with_service(move || server.clone());
 
@@ -184,7 +182,7 @@ async fn start_http_server(
 
     // Create a shutdown channel that will cancel the SSE server
     let (shutdown_tx, shutdown_rx) = oneshot::channel();
-    
+
     tokio::spawn(async move {
         let _ = shutdown_rx.await;
         cancellation_token.cancel();
@@ -193,10 +191,18 @@ async fn start_http_server(
 
     let info = McpServerInfo {
         mode: McpServerMode::Http {
-            port: if bind_port == 0 { None } else { Some(actual_port) },
+            port: if bind_port == 0 {
+                None
+            } else {
+                Some(actual_port)
+            },
         },
         connection_url,
-        port: if bind_port == 0 { None } else { Some(actual_port) },
+        port: if bind_port == 0 {
+            None
+        } else {
+            Some(actual_port)
+        },
     };
 
     Ok(McpServerHandle::new(info, shutdown_tx))
@@ -205,7 +211,6 @@ async fn start_http_server(
 #[cfg(test)]
 mod tests {
     use super::*;
-
 
     #[tokio::test]
     #[ignore = "test hangs - needs investigation"]
@@ -236,24 +241,22 @@ mod tests {
             }
             _ => panic!("Expected HTTP mode"),
         }
-        
+
         assert_eq!(server.port().unwrap(), 18081);
         assert_eq!(server.url(), "http://127.0.0.1:18081/mcp");
 
         server.shutdown().await.unwrap();
     }
 
-
-
     #[tokio::test]
     #[ignore = "test hangs - needs investigation"]
     async fn test_server_with_custom_library() {
         // Test that custom library is properly used
         let custom_library = PromptLibrary::default();
-        
+
         let mode = McpServerMode::Http { port: None };
         let mut server = start_mcp_server(mode, Some(custom_library)).await.unwrap();
-        
+
         // Server should start successfully with custom library
         assert!(server.port().unwrap() > 0);
         server.shutdown().await.unwrap();
@@ -265,20 +268,26 @@ mod tests {
         // First, start a server on a specific port
         let mode1 = McpServerMode::Http { port: Some(18082) };
         let mut server1 = start_mcp_server(mode1, None).await.unwrap();
-        
+
         // Verify first server is running
         assert_eq!(server1.port().unwrap(), 18082);
-        
+
         // Try to start another server on the same port - should fail
         let mode2 = McpServerMode::Http { port: Some(18082) };
         let result = start_mcp_server(mode2, None).await;
-        
+
         // Should get an error about port being in use
-        assert!(result.is_err(), "Expected error when trying to bind to same port");
+        assert!(
+            result.is_err(),
+            "Expected error when trying to bind to same port"
+        );
         let error_msg = format!("{}", result.unwrap_err());
-        assert!(error_msg.contains("Failed to bind") || error_msg.contains("18082"), 
-                "Error should mention binding failure or port number. Got: {}", error_msg);
-        
+        assert!(
+            error_msg.contains("Failed to bind") || error_msg.contains("18082"),
+            "Error should mention binding failure or port number. Got: {}",
+            error_msg
+        );
+
         // Clean up
         server1.shutdown().await.unwrap();
     }
@@ -289,12 +298,20 @@ mod tests {
         // Test with invalid port (port 1 requires root privileges)
         let mode = McpServerMode::Http { port: Some(1) };
         let result = start_mcp_server(mode, None).await;
-        
+
         // Should get an error about permission denied
-        assert!(result.is_err(), "Expected error when trying to bind to privileged port");
+        assert!(
+            result.is_err(),
+            "Expected error when trying to bind to privileged port"
+        );
         let error_msg = format!("{}", result.unwrap_err());
-        assert!(error_msg.contains("Failed to bind") || error_msg.contains("Permission denied") || error_msg.contains("1"), 
-                "Error should mention binding failure, permission denied, or port 1. Got: {}", error_msg);
+        assert!(
+            error_msg.contains("Failed to bind")
+                || error_msg.contains("Permission denied")
+                || error_msg.contains("1"),
+            "Error should mention binding failure, permission denied, or port 1. Got: {}",
+            error_msg
+        );
     }
 
     #[tokio::test]
@@ -303,10 +320,10 @@ mod tests {
         // Test that calling shutdown multiple times doesn't panic
         let mode = McpServerMode::Http { port: None };
         let mut server = start_mcp_server(mode, None).await.unwrap();
-        
+
         // First shutdown should work
         server.shutdown().await.unwrap();
-        
+
         // Second shutdown should also work (idempotent)
         let result = server.shutdown().await;
         assert!(result.is_ok(), "Shutdown should be idempotent");
@@ -318,21 +335,26 @@ mod tests {
         // Test that server info remains consistent
         let mode = McpServerMode::Http { port: Some(18083) };
         let mut server = start_mcp_server(mode.clone(), None).await.unwrap();
-        
+
         let info1 = server.info();
         let info2 = server.info();
-        
+
         // Info should be consistent across calls
         assert_eq!(info1.port, info2.port);
         assert_eq!(info1.connection_url, info2.connection_url);
-        
+
         match (&info1.mode, &mode) {
-            (McpServerMode::Http { port: info_port }, McpServerMode::Http { port: expected_port }) => {
+            (
+                McpServerMode::Http { port: info_port },
+                McpServerMode::Http {
+                    port: expected_port,
+                },
+            ) => {
                 assert_eq!(info_port, expected_port);
             }
             _ => panic!("Mode mismatch"),
         }
-        
+
         server.shutdown().await.unwrap();
     }
 

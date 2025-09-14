@@ -27,9 +27,10 @@ mod tests;
 
 // Re-export commonly used items from submodules
 pub use http_server::{start_http_server, start_in_process_mcp_server, McpServerHandle};
-pub use stdio_server::{start_stdio_server, start_in_process_stdio_server, McpServerHandle as StdioMcpServerHandle};
 pub use server::McpServer;
-pub use unified_server::{start_mcp_server, McpServerInfo, McpServerMode, McpServerHandle as UnifiedMcpServerHandle};
+pub use stdio_server::{
+    start_in_process_stdio_server, start_stdio_server, McpServerHandle as StdioMcpServerHandle,
+};
 pub use tool_handlers::ToolHandlers;
 pub use tool_registry::{
     register_abort_tools, register_file_tools, register_issue_tools, register_memo_tools,
@@ -38,6 +39,9 @@ pub use tool_registry::{
     ToolRegistry,
 };
 pub use types::{GetPromptRequest, ListPromptsRequest};
+pub use unified_server::{
+    start_mcp_server, McpServerHandle as UnifiedMcpServerHandle, McpServerInfo, McpServerMode,
+};
 
 pub use types::{
     AllCompleteRequest, CreateIssueRequest, IssueName, MarkCompleteRequest, MergeIssueRequest,

@@ -5,9 +5,9 @@
 
 use serde_json::{json, Value};
 use std::io::{BufRead, BufReader, Write};
+use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::time::Duration;
-use std::path::PathBuf;
 
 mod test_utils;
 use test_utils::ProcessGuard;
@@ -24,7 +24,7 @@ async fn test_sah_serve_has_mcp_tools() -> Result<(), Box<dyn std::error::Error>
 
     // Build the binary once if it doesn't exist
     let binary_path = ensure_binary_built()?;
-    
+
     // Start the MCP server process using pre-built binary
     let child = Command::new(&binary_path)
         .args(["serve"])
@@ -349,16 +349,14 @@ fn ensure_binary_built() -> Result<PathBuf, Box<dyn std::error::Error>> {
         .args(["metadata", "--format-version", "1"])
         .output()
         .expect("Failed to get cargo metadata");
-    
+
     let metadata: serde_json::Value = serde_json::from_slice(&output.stdout)?;
     let target_dir = metadata["target_directory"]
         .as_str()
         .ok_or("Failed to get target directory")?;
-    
-    let binary_path = PathBuf::from(target_dir)
-        .join("debug")
-        .join("sah");
-    
+
+    let binary_path = PathBuf::from(target_dir).join("debug").join("sah");
+
     // Check if binary exists and is recent
     if !binary_path.exists() {
         println!("Building SAH binary for tests...");
@@ -366,14 +364,17 @@ fn ensure_binary_built() -> Result<PathBuf, Box<dyn std::error::Error>> {
             .args(["build", "--bin", "sah"])
             .output()
             .expect("Failed to build SAH binary");
-        
+
         if !output.status.success() {
-            return Err(format!("Failed to build SAH binary: {}", 
-                String::from_utf8_lossy(&output.stderr)).into());
+            return Err(format!(
+                "Failed to build SAH binary: {}",
+                String::from_utf8_lossy(&output.stderr)
+            )
+            .into());
         }
         println!("✅ SAH binary built successfully");
     }
-    
+
     Ok(binary_path)
 }
 
@@ -382,7 +383,7 @@ fn ensure_binary_built() -> Result<PathBuf, Box<dyn std::error::Error>> {
 
 async fn test_sah_binary_exists() {
     let binary_path = ensure_binary_built().expect("Failed to ensure binary is built");
-    
+
     let output = Command::new(&binary_path)
         .args(["--help"])
         .output()
