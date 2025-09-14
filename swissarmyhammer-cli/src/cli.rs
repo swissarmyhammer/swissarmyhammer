@@ -43,13 +43,7 @@ impl From<PromptSource> for PromptSourceArg {
     }
 }
 
-#[derive(ValueEnum, Clone, Debug)]
-pub enum VisualizationFormat {
-    Mermaid,
-    Html,
-    Json,
-    Dot,
-}
+
 
 #[derive(Parser, Debug)]
 #[command(name = "swissarmyhammer")]
@@ -349,31 +343,7 @@ pub enum FlowSubcommand {
         #[arg(short, long)]
         global: bool,
     },
-    /// Generate execution visualization
-    Visualize {
-        /// Run ID to visualize
-        run_id: String,
 
-        /// Output format
-        #[arg(long, value_enum, default_value = "mermaid")]
-        format: VisualizationFormat,
-
-        /// Output file path (optional - prints to stdout if not specified)
-        #[arg(short, long)]
-        output: Option<String>,
-
-        /// Include timing information
-        #[arg(long)]
-        timing: bool,
-
-        /// Include execution counts
-        #[arg(long)]
-        counts: bool,
-
-        /// Show only executed path
-        #[arg(long)]
-        path_only: bool,
-    },
     /// Test a workflow without executing actions (simulates dry run)
     #[command(long_about = "
 Test workflows in simulation mode without actually executing actions.

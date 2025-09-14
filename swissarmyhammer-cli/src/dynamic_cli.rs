@@ -1133,48 +1133,7 @@ When variables are not provided via --var, the command prompts interactively:
                             .action(ArgAction::SetTrue),
                     ),
             )
-            .subcommand(
-                Command::new("visualize")
-                    .about("Generate execution visualization")
-                    .arg(
-                        Arg::new("run_id")
-                            .help("Run ID to visualize")
-                            .value_name("RUN_ID")
-                            .required(true),
-                    )
-                    .arg(
-                        Arg::new("format")
-                            .long("format")
-                            .help("Output format")
-                            .value_parser(["mermaid", "html", "json", "dot"])
-                            .default_value("mermaid"),
-                    )
-                    .arg(
-                        Arg::new("output")
-                            .short('o')
-                            .long("output")
-                            .help("Output file path")
-                            .value_name("FILE"),
-                    )
-                    .arg(
-                        Arg::new("timing")
-                            .long("timing")
-                            .help("Include timing information")
-                            .action(ArgAction::SetTrue),
-                    )
-                    .arg(
-                        Arg::new("counts")
-                            .long("counts")
-                            .help("Include execution counts")
-                            .action(ArgAction::SetTrue),
-                    )
-                    .arg(
-                        Arg::new("path-only")
-                            .long("path-only")
-                            .help("Show only executed path")
-                            .action(ArgAction::SetTrue),
-                    ),
-            )
+
             .subcommand(
                 Command::new("test")
                     .about("Test a workflow without executing actions")

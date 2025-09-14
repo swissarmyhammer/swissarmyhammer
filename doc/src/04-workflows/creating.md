@@ -152,8 +152,7 @@ sah flow status my-workflow-run-id
 # Validate syntax
 sah validate workflows/
 
-# Visualize state diagram  
-sah flow visualize my-workflow
+
 ```
 
 ## Best Practices

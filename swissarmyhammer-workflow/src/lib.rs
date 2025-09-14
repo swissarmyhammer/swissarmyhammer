@@ -35,9 +35,7 @@ mod test_helpers;
 mod test_liquid_rendering;
 mod transition;
 mod transition_key;
-mod visualization;
-#[cfg(test)]
-mod visualization_tests;
+
 
 pub use actions::{
     is_valid_env_var_name, parse_action_from_description,
@@ -77,10 +75,7 @@ pub use storage::{
 pub use template_context::WorkflowTemplateContext;
 pub use transition::{ConditionType, Transition, TransitionCondition};
 pub use transition_key::TransitionKey;
-pub use visualization::{
-    ColorScheme, ExecutionStep, ExecutionTrace, ExecutionVisualizer, VisualizationFormat,
-    VisualizationOptions,
-};
+
 
 /// Convenience function to parse a workflow from a string
 pub fn parse_workflow_from_string(input: &str) -> ParseResult<Workflow> {

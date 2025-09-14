@@ -11,7 +11,7 @@ pub mod run;
 pub mod shared;
 pub mod status;
 pub mod test;
-pub mod visualize;
+
 
 use crate::cli::FlowSubcommand;
 use crate::context::CliContext;
@@ -70,17 +70,7 @@ pub async fn handle_command(subcommand: FlowSubcommand, context: &CliContext) ->
             format,
             global,
         } => metrics::execute_metrics_command(run_id, workflow, format, global, context).await,
-        FlowSubcommand::Visualize {
-            run_id,
-            format,
-            output,
-            timing,
-            counts,
-            path_only,
-        } => {
-            visualize::execute_visualize_command(run_id, format, output, timing, counts, path_only)
-                .await
-        }
+
         FlowSubcommand::Test {
             workflow,
             vars,

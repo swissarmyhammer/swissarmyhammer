@@ -83,3 +83,6 @@ test_validation
 
 # Memo backup directory (scratch files)
 .swissarmyhammer/memos_backup/
+
+# Claude Code usage tracking files
+cc.json

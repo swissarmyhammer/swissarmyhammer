@@ -442,7 +442,7 @@ async fn handle_prompt_command(matches: &clap::ArgMatches, context: &CliContext)
 }
 
 async fn handle_flow_command(sub_matches: &clap::ArgMatches, context: &CliContext) -> i32 {
-    use crate::cli::{FlowSubcommand, OutputFormat, PromptSourceArg, VisualizationFormat};
+    use crate::cli::{FlowSubcommand, OutputFormat, PromptSourceArg};
 
     let subcommand = match sub_matches.subcommand() {
         Some(("run", sub_matches)) => {
@@ -546,28 +546,7 @@ async fn handle_flow_command(sub_matches: &clap::ArgMatches, context: &CliContex
                 global,
             }
         }
-        Some(("visualize", sub_matches)) => {
-            let run_id = sub_matches.get_one::<String>("run_id").cloned().unwrap();
-            let format = match sub_matches.get_one::<String>("format").map(|s| s.as_str()) {
-                Some("html") => VisualizationFormat::Html,
-                Some("json") => VisualizationFormat::Json,
-                Some("dot") => VisualizationFormat::Dot,
-                _ => VisualizationFormat::Mermaid,
-            };
-            let output = sub_matches.get_one::<String>("output").cloned();
-            let timing = sub_matches.get_flag("timing");
-            let counts = sub_matches.get_flag("counts");
-            let path_only = sub_matches.get_flag("path-only");
 
-            FlowSubcommand::Visualize {
-                run_id,
-                format,
-                output,
-                timing,
-                counts,
-                path_only,
-            }
-        }
         Some(("test", sub_matches)) => {
             let workflow = sub_matches.get_one::<String>("workflow").cloned().unwrap();
             let vars = sub_matches
