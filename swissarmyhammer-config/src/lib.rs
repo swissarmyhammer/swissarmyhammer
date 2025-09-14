@@ -405,7 +405,6 @@ pub mod test_config {
     /// Test configuration for different environments
     #[derive(Debug, Clone)]
     pub struct TestConfig {
-        pub enable_llama_tests: bool,
         pub enable_claude_tests: bool,
         pub test_timeout_seconds: u64,
         pub llama_model_repo: String,
@@ -415,9 +414,6 @@ pub mod test_config {
     impl TestConfig {
         pub fn from_environment() -> Self {
             Self {
-                enable_llama_tests: env::var("SAH_TEST_LLAMA")
-                    .map(|v| v.to_lowercase() == "true" || v == "1")
-                    .unwrap_or(false),
                 enable_claude_tests: env::var("SAH_TEST_CLAUDE")
                     .map(|v| v.to_lowercase() == "true" || v == "1")
                     .unwrap_or(true),
@@ -462,13 +458,7 @@ pub mod test_config {
         }
     }
 
-    /// Skip test if LlamaAgent testing is disabled
-    pub fn skip_if_llama_disabled() {
-        let config = TestConfig::from_environment();
-        if !config.enable_llama_tests {
-            println!("Skipping LlamaAgent test (set SAH_TEST_LLAMA=true to enable)");
-        }
-    }
+
 
     /// Skip test if Claude testing is disabled  
     pub fn skip_if_claude_disabled() {
@@ -480,8 +470,7 @@ pub mod test_config {
 
     /// Check if LlamaAgent tests are enabled
     pub fn is_llama_enabled() -> bool {
-        let config = TestConfig::from_environment();
-        config.enable_llama_tests
+        true
     }
 
     /// Check if Claude tests are enabled
@@ -498,9 +487,7 @@ pub mod test_config {
             executors.push(AgentExecutorType::ClaudeCode);
         }
 
-        if is_llama_enabled() {
-            executors.push(AgentExecutorType::LlamaAgent);
-        }
+        executors.push(AgentExecutorType::LlamaAgent);
 
         executors
     }

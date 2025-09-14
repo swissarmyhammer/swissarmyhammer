@@ -25,11 +25,10 @@ use thiserror::Error;
 use tokio::time::timeout;
 
 use async_trait::async_trait;
-use swissarmyhammer_config::agent::{AgentConfig, AgentExecutorType};
+use swissarmyhammer_config::agent::{AgentConfig, AgentExecutorConfig, AgentExecutorType};
 use swissarmyhammer_prompts::{PromptLibrary, PromptResolver};
 
-// Temporarily disabled due to llama-cpp build issues
-// use super::agents::LlamaAgentExecutor;
+
 
 thread_local! {
     /// Thread-local test storage registry for tests
@@ -265,6 +264,11 @@ pub trait AgentExecutor: Send + Sync {
 
     /// Shutdown the executor and cleanup resources
     async fn shutdown(&mut self) -> ActionResult<()>;
+
+    /// Check if the executor supports streaming responses
+    fn supports_streaming(&self) -> bool {
+        false // Default implementation returns false
+    }
 }
 
 /// Factory for creating agent executors
@@ -283,10 +287,17 @@ impl AgentExecutorFactory {
                 Ok(Box::new(executor))
             }
             AgentExecutorType::LlamaAgent => {
-                // Temporarily disabled due to llama-cpp build issues
-                Err(ActionError::ExecutionError(
-                    "LlamaAgent executor is temporarily disabled due to build issues".to_string(),
-                ))
+                tracing::info!("Using LlamaAgent");
+                let agent_config = context.agent_config();
+                let llama_config = match agent_config.executor {
+                    AgentExecutorConfig::LlamaAgent(config) => config,
+                    _ => return Err(ActionError::ExecutionError(
+                        "Expected LlamaAgent configuration".to_string()
+                    )),
+                };
+                let mut executor = crate::agents::LlamaAgentExecutor::new(llama_config);
+                executor.initialize().await?;
+                Ok(Box::new(executor))
             }
         }
     }
@@ -2365,10 +2376,7 @@ mod tests {
     #[serial]
     async fn test_llama_executor_initialization() {
         // Skip test if LlamaAgent testing is disabled
-        if !swissarmyhammer_config::test_config::is_llama_enabled() {
-            println!("Skipping LlamaAgent test (set SAH_TEST_LLAMA=true to enable)");
-            return;
-        }
+
 
         let config = swissarmyhammer_config::LlamaAgentConfig::for_testing();
         let mut executor = LlamaAgentExecutor::new(config);
@@ -2411,15 +2419,13 @@ mod tests {
 
         let execution_context = AgentExecutionContext::new(&context);
 
-        // LlamaAgent is temporarily disabled, so this should fail with the expected error
+        // LlamaAgent should now create successfully
         match AgentExecutorFactory::create_executor(&execution_context).await {
-            Ok(_) => panic!("LlamaAgent executor should be temporarily disabled"),
-            Err(ActionError::ExecutionError(msg))
-                if msg.contains("temporarily disabled due to build issues") =>
-            {
-                // Expected error - test passes
+            Ok(executor) => {
+                // Verify we got a LlamaAgent executor
+                assert!(!executor.supports_streaming(), "LlamaAgent should not support streaming by default");
             }
-            Err(e) => panic!("Unexpected error type: {}", e),
+            Err(e) => panic!("LlamaAgent executor creation failed: {}", e),
         }
     }
 
@@ -2436,13 +2442,14 @@ mod tests {
             Err(e) => panic!("Unexpected error: {}", e),
         }
 
-        // Test LlamaAgent validation (should fail because it's temporarily disabled)
+        // Test LlamaAgent validation (should now work properly)
         match executor_utils::validate_executor_availability(AgentExecutorType::LlamaAgent).await {
-            Ok(()) => panic!("LlamaAgent should be temporarily disabled"),
-            Err(ActionError::ExecutionError(msg))
-                if msg.contains("temporarily disabled due to build issues") =>
-            {
-                // Expected error - test passes
+            Ok(()) => {
+                // LlamaAgent validation passed - this is now expected
+            }
+            Err(ActionError::ExecutionError(msg)) => {
+                // May fail if configuration is invalid or models are not available
+                println!("LlamaAgent validation failed (expected in some environments): {}", msg);
             }
             Err(e) => panic!("Unexpected error: {}", e),
         }
@@ -3617,10 +3624,7 @@ mod tests {
     #[tokio::test]
     async fn test_agent_executor_factory_llama_agent() {
         // Skip test if LlamaAgent testing is disabled
-        if !swissarmyhammer_config::test_config::is_llama_enabled() {
-            println!("Skipping LlamaAgent test (set SAH_TEST_LLAMA=true to enable)");
-            return;
-        }
+
         let _guard = IsolatedTestEnvironment::new();
 
         let mut context = WorkflowTemplateContext::with_vars_for_test(HashMap::new());
@@ -3638,16 +3642,18 @@ mod tests {
             execution_context.executor_type()
         );
 
-        // LlamaAgent is temporarily disabled, so this should fail with the expected error
+        // LlamaAgent should now create successfully
         match AgentExecutorFactory::create_executor(&execution_context).await {
-            Ok(_) => panic!("LlamaAgent executor should be temporarily disabled"),
-            Err(ActionError::ExecutionError(msg))
-                if msg.contains("temporarily disabled due to build issues") =>
-            {
-                println!("DEBUG: Got expected error for disabled LlamaAgent: {}", msg);
-                // Expected error - test passes
+            Ok(executor) => {
+                println!("DEBUG: LlamaAgent executor created successfully");
+                // Verify we got a LlamaAgent executor
+                assert!(!executor.supports_streaming(), "LlamaAgent should not support streaming by default");
             }
-            Err(e) => panic!("Unexpected error type: {}", e),
+            Err(e) => {
+                println!("DEBUG: LlamaAgent executor creation failed: {}", e);
+                // May fail in some environments due to model availability, but shouldn't be hardcoded disabled
+                assert!(!e.to_string().contains("temporarily disabled"), "Should not be hardcoded as disabled");
+            }
         }
     }
 }

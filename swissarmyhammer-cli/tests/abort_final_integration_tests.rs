@@ -584,7 +584,7 @@ async fn test_regression_normal_workflow_execution() -> Result<()> {
     env.verify_no_abort_file();
 
     std::env::set_var("SWISSARMYHAMMER_SKIP_MCP_STARTUP", "1");
-    let result = run_sah_command_in_process(&["flow", "run", &workflow_file]).await?;
+    let result = run_sah_command_in_process(&["flow", "run", workflow_file]).await?;
     std::env::remove_var("SWISSARMYHAMMER_SKIP_MCP_STARTUP");
 
     // Should complete successfully without abort

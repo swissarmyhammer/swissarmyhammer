@@ -13,9 +13,12 @@ use serde::{Deserialize, Serialize};
 use swissarmyhammer_common::Result;
 use swissarmyhammer_prompts::PromptLibrary;
 
+use tokio::net::TcpListener;
 use tokio::sync::oneshot;
 
 use super::server::McpServer;
+
+
 
 /// MCP server transport mode configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -146,66 +149,141 @@ async fn start_stdio_server(library: Option<PromptLibrary>) -> Result<McpServerH
     Ok(McpServerHandle::new(info, shutdown_tx))
 }
 
+
+
 /// Start MCP server with HTTP transport using rmcp SseServer
 async fn start_http_server(
     port: Option<u16>,
     library: Option<PromptLibrary>,
 ) -> Result<McpServerHandle> {
-    let bind_port = port.unwrap_or(0); // 0 = random port
-    let bind_addr = format!("127.0.0.1:{}", bind_port);
+    if let Some(bind_port) = port {
+        // Use specified port
+        tracing::info!("Using specified port: {}", bind_port);
+        let bind_addr = format!("127.0.0.1:{}", bind_port);
+        tracing::info!("Starting unified MCP server in HTTP mode on {}", bind_addr);
 
-    tracing::info!("Starting unified MCP server in HTTP mode on {}", bind_addr);
+        // Create and initialize MCP server
+        let library = library.unwrap_or_default();
+        let server = McpServer::new(library).await?;
+        server.initialize().await?;
 
-    // Create and initialize MCP server
-    let library = library.unwrap_or_default();
-    let server = McpServer::new(library).await?;
-    server.initialize().await?;
+        // Use rmcp SseServer pattern
+        let sse_server = SseServer::serve(bind_addr.parse().map_err(|e| {
+            swissarmyhammer_common::SwissArmyHammerError::Other {
+                message: format!("Failed to parse bind address {}: {}", bind_addr, e),
+            }
+        })?)
+        .await
+        .map_err(|e| swissarmyhammer_common::SwissArmyHammerError::Other {
+            message: format!("Failed to start SSE server on port {}: {}", bind_port, e),
+        })?;
 
-    // Use rmcp SseServer pattern - it will handle port allocation
-    let cancellation_token = SseServer::serve(bind_addr.parse().map_err(|e| {
-        swissarmyhammer_common::SwissArmyHammerError::Other {
-            message: format!("Failed to parse bind address {}: {}", bind_addr, e),
-        }
-    })?)
-    .await
-    .map_err(|e| swissarmyhammer_common::SwissArmyHammerError::Other {
-        message: format!("Failed to start SSE server: {}", e),
-    })?
-    .with_service(move || server.clone());
+        let cancellation_token = sse_server.with_service(move || server.clone());
+        let connection_url = format!("http://127.0.0.1:{}", bind_port);
 
-    // For backward compatibility, return the requested port
-    // Note: rmcp SseServer doesn't expose actual bound port for random allocation
-    let actual_port = bind_port;
-    let connection_url = format!("http://127.0.0.1:{}", actual_port);
+        tracing::info!("Unified HTTP MCP server ready on {}", connection_url);
 
-    tracing::info!("Unified HTTP MCP server ready on {}", connection_url);
+        // Create a shutdown channel that will cancel the SSE server
+        let (shutdown_tx, shutdown_rx) = oneshot::channel();
 
-    // Create a shutdown channel that will cancel the SSE server
-    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+        tokio::spawn(async move {
+            let _ = shutdown_rx.await;
+            cancellation_token.cancel();
+            tracing::info!("HTTP MCP server cancelled");
+        });
 
-    tokio::spawn(async move {
-        let _ = shutdown_rx.await;
-        cancellation_token.cancel();
-        tracing::info!("HTTP MCP server cancelled");
-    });
-
-    let info = McpServerInfo {
-        mode: McpServerMode::Http {
-            port: if bind_port == 0 {
-                None
-            } else {
-                Some(actual_port)
+        let info = McpServerInfo {
+            mode: McpServerMode::Http {
+                port: Some(bind_port),
             },
-        },
-        connection_url,
-        port: if bind_port == 0 {
-            None
-        } else {
-            Some(actual_port)
-        },
-    };
+            connection_url,
+            port: Some(bind_port),
+        };
 
-    Ok(McpServerHandle::new(info, shutdown_tx))
+        Ok(McpServerHandle::new(info, shutdown_tx))
+    } else {
+        // Use retry logic to find and bind to an available port
+        tracing::info!("Finding available port with retry logic");
+        const MAX_RETRIES: usize = 10;
+        
+        for attempt in 0..MAX_RETRIES {
+            // Create and initialize MCP server first (outside the port binding)
+            let library_instance = library.as_ref().map(|_| PromptLibrary::default()).unwrap_or_default();
+            let server = McpServer::new(library_instance).await?;
+            server.initialize().await?;
+
+            // Find an available port but don't drop the listener yet
+            let temp_listener = TcpListener::bind("127.0.0.1:0").await.map_err(|e| {
+                swissarmyhammer_common::SwissArmyHammerError::Other {
+                    message: format!("Failed to bind to random port (attempt {}): {}", attempt + 1, e),
+                }
+            })?;
+            
+            let port = temp_listener.local_addr().map_err(|e| {
+                swissarmyhammer_common::SwissArmyHammerError::Other {
+                    message: format!("Failed to get local address (attempt {}): {}", attempt + 1, e),
+                }
+            })?.port();
+            
+            let bind_addr = format!("127.0.0.1:{}", port);
+            tracing::info!("Trying to start unified MCP server on {} (attempt {})", bind_addr, attempt + 1);
+
+            // Parse the address first to avoid any parsing errors
+            let socket_addr = bind_addr.parse().map_err(|e| {
+                swissarmyhammer_common::SwissArmyHammerError::Other {
+                    message: format!("Failed to parse bind address {}: {}", bind_addr, e),
+                }
+            })?;
+
+            // Drop the temp listener just before attempting to start the SSE server
+            drop(temp_listener);
+
+            // Immediately try to bind with rmcp SseServer pattern
+            match SseServer::serve(socket_addr).await {
+                Ok(sse_server) => {
+                    let cancellation_token = sse_server.with_service(move || server.clone());
+                    let connection_url = format!("http://127.0.0.1:{}", port);
+
+                    tracing::info!("Unified HTTP MCP server ready on {} (attempt {})", connection_url, attempt + 1);
+
+                    // Create a shutdown channel that will cancel the SSE server
+                    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+
+                    tokio::spawn(async move {
+                        let _ = shutdown_rx.await;
+                        cancellation_token.cancel();
+                        tracing::info!("HTTP MCP server cancelled");
+                    });
+
+                    let info = McpServerInfo {
+                        mode: McpServerMode::Http {
+                            port: Some(port),
+                        },
+                        connection_url,
+                        port: Some(port),
+                    };
+
+                    return Ok(McpServerHandle::new(info, shutdown_tx));
+                }
+                Err(e) if attempt < MAX_RETRIES - 1 => {
+                    tracing::debug!("Failed to bind to port {} (attempt {}), trying another: {}", port, attempt + 1, e);
+                    // Use exponential backoff to reduce contention
+                    let backoff_ms = 10 + (1 << attempt) * 5; // 15ms, 20ms, 30ms, 50ms, etc.
+                    tokio::time::sleep(tokio::time::Duration::from_millis(backoff_ms)).await;
+                    continue;
+                }
+                Err(e) => {
+                    return Err(swissarmyhammer_common::SwissArmyHammerError::Other {
+                        message: format!("Failed to start SSE server on port {} after {} attempts. Last error: {}", port, MAX_RETRIES, e),
+                    });
+                }
+            }
+        }
+        
+        Err(swissarmyhammer_common::SwissArmyHammerError::Other {
+            message: format!("Failed to find available port after {} attempts", MAX_RETRIES),
+        })
+    }
 }
 
 #[cfg(test)]

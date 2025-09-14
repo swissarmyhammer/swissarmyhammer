@@ -10,11 +10,6 @@ use tokio::time::timeout;
 
 #[tokio::test]
 async fn test_executor_compatibility() {
-    // Skip test if LlamaAgent testing is disabled
-    if !swissarmyhammer_config::test_config::is_llama_enabled() {
-        println!("Skipping LlamaAgent test (set SAH_TEST_LLAMA=true to enable)");
-        return;
-    }
     let _guard = IsolatedTestEnvironment::new().expect("Failed to create test environment");
 
     // Test that both executor types can be created with identical interfaces
@@ -53,11 +48,7 @@ async fn test_executor_compatibility() {
 
 #[tokio::test]
 async fn test_agent_execution_context() {
-    // Skip test if LlamaAgent testing is disabled
-    if !swissarmyhammer_config::test_config::is_llama_enabled() {
-        println!("Skipping LlamaAgent test (set SAH_TEST_LLAMA=true to enable)");
-        return;
-    }
+
     let _guard = IsolatedTestEnvironment::new().expect("Failed to create test environment");
 
     // Test context creation with different configurations
@@ -85,11 +76,7 @@ async fn test_agent_execution_context() {
 
 #[tokio::test]
 async fn test_concurrent_executor_access() {
-    // Skip test if LlamaAgent testing is disabled
-    if !swissarmyhammer_config::test_config::is_llama_enabled() {
-        println!("Skipping LlamaAgent test (set SAH_TEST_LLAMA=true to enable)");
-        return;
-    }
+
     let _guard = IsolatedTestEnvironment::new().expect("Failed to create test environment");
 
     const CONCURRENT_CONTEXTS: usize = 5;
@@ -137,11 +124,7 @@ async fn test_concurrent_executor_access() {
 
 #[tokio::test]
 async fn test_executor_factory_patterns() {
-    // Skip test if LlamaAgent testing is disabled
-    if !swissarmyhammer_config::test_config::is_llama_enabled() {
-        println!("Skipping LlamaAgent test (set SAH_TEST_LLAMA=true to enable)");
-        return;
-    }
+
     let _guard = IsolatedTestEnvironment::new().expect("Failed to create test environment");
 
     // Test factory with different context patterns
@@ -184,11 +167,7 @@ async fn test_executor_factory_patterns() {
 
 #[tokio::test]
 async fn test_configuration_serialization() {
-    // Skip test if LlamaAgent testing is disabled
-    if !swissarmyhammer_config::test_config::is_llama_enabled() {
-        println!("Skipping LlamaAgent test (set SAH_TEST_LLAMA=true to enable)");
-        return;
-    }
+
     let _guard = IsolatedTestEnvironment::new().expect("Failed to create test environment");
 
     // Test that configurations can be properly serialized/deserialized
@@ -233,11 +212,7 @@ async fn test_configuration_serialization() {
 
 #[tokio::test]
 async fn test_timeout_handling() {
-    // Skip test if LlamaAgent testing is disabled
-    if !swissarmyhammer_config::test_config::is_llama_enabled() {
-        println!("Skipping LlamaAgent test (set SAH_TEST_LLAMA=true to enable)");
-        return;
-    }
+
     let _guard = IsolatedTestEnvironment::new().expect("Failed to create test environment");
 
     // Test that executor creation handles timeouts gracefully
@@ -271,11 +246,7 @@ async fn test_timeout_handling() {
 
 #[tokio::test]
 async fn test_repetition_detection_configuration() {
-    // Skip test if LlamaAgent testing is disabled
-    if !swissarmyhammer_config::test_config::is_llama_enabled() {
-        println!("Skipping LlamaAgent test (set SAH_TEST_LLAMA=true to enable)");
-        return;
-    }
+
     let _guard = IsolatedTestEnvironment::new().expect("Failed to create test environment");
 
     // Test default repetition detection configuration
@@ -340,11 +311,7 @@ async fn test_repetition_detection_configuration() {
 
 #[tokio::test]
 async fn test_repetition_configuration_integration() {
-    // Skip test if LlamaAgent testing is disabled
-    if !swissarmyhammer_config::test_config::is_llama_enabled() {
-        println!("Skipping LlamaAgent test (set SAH_TEST_LLAMA=true to enable)");
-        return;
-    }
+
     let _guard = IsolatedTestEnvironment::new().expect("Failed to create test environment");
 
     // This test verifies that repetition detection configuration gets passed

@@ -15,7 +15,7 @@ async fn test_stdio_rmcp_client_lists_tools_and_prompts() {
     let service = ()
         .serve(
             TokioChildProcess::new(Command::new("cargo").configure(|cmd| {
-                cmd.args(&[
+                cmd.args([
                     "run",
                     "--package",
                     "swissarmyhammer-cli",
