@@ -529,23 +529,7 @@ async fn handle_flow_command(sub_matches: &clap::ArgMatches, context: &CliContex
                 level,
             }
         }
-        Some(("metrics", sub_matches)) => {
-            let run_id = sub_matches.get_one::<String>("run_id").cloned();
-            let workflow = sub_matches.get_one::<String>("workflow").cloned();
-            let format = match sub_matches.get_one::<String>("format").map(|s| s.as_str()) {
-                Some("json") => OutputFormat::Json,
-                Some("yaml") => OutputFormat::Yaml,
-                _ => OutputFormat::Table,
-            };
-            let global = sub_matches.get_flag("global");
 
-            FlowSubcommand::Metrics {
-                run_id,
-                workflow,
-                format,
-                global,
-            }
-        }
 
         Some(("test", sub_matches)) => {
             let workflow = sub_matches.get_one::<String>("workflow").cloned().unwrap();

@@ -326,23 +326,7 @@ pub enum FlowSubcommand {
         #[arg(long)]
         level: Option<String>,
     },
-    /// View metrics for workflow runs
-    Metrics {
-        /// Run ID to view metrics for (optional - shows all if not specified)
-        run_id: Option<String>,
 
-        /// Workflow name to filter by
-        #[arg(long)]
-        workflow: Option<String>,
-
-        /// Output format
-        #[arg(long, value_enum, default_value = "table")]
-        format: OutputFormat,
-
-        /// Show global metrics summary
-        #[arg(short, long)]
-        global: bool,
-    },
 
     /// Test a workflow without executing actions (simulates dry run)
     #[command(long_about = "

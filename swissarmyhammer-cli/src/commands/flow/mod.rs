@@ -5,7 +5,7 @@
 pub mod display;
 pub mod list;
 pub mod logs;
-pub mod metrics;
+
 pub mod resume;
 pub mod run;
 pub mod shared;
@@ -64,12 +64,7 @@ pub async fn handle_command(subcommand: FlowSubcommand, context: &CliContext) ->
             tail,
             level,
         } => logs::execute_logs_command(run_id, follow, tail, level).await,
-        FlowSubcommand::Metrics {
-            run_id,
-            workflow,
-            format,
-            global,
-        } => metrics::execute_metrics_command(run_id, workflow, format, global, context).await,
+
 
         FlowSubcommand::Test {
             workflow,

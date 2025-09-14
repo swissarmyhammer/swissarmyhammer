@@ -1104,35 +1104,7 @@ When variables are not provided via --var, the command prompts interactively:
                             .value_name("LEVEL"),
                     ),
             )
-            .subcommand(
-                Command::new("metrics")
-                    .about("View metrics for workflow runs")
-                    .arg(
-                        Arg::new("run_id")
-                            .help("Run ID to view metrics for (optional)")
-                            .value_name("RUN_ID"),
-                    )
-                    .arg(
-                        Arg::new("workflow")
-                            .long("workflow")
-                            .help("Workflow name to filter by")
-                            .value_name("WORKFLOW"),
-                    )
-                    .arg(
-                        Arg::new("format")
-                            .long("format")
-                            .help("Output format")
-                            .value_parser(["table", "json", "yaml"])
-                            .default_value("table"),
-                    )
-                    .arg(
-                        Arg::new("global")
-                            .short('g')
-                            .long("global")
-                            .help("Show global metrics summary")
-                            .action(ArgAction::SetTrue),
-                    ),
-            )
+
 
             .subcommand(
                 Command::new("test")
