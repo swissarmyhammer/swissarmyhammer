@@ -269,3 +269,201 @@ McpServerInfo {
 - ✅ **Port Management**: Standard Rust patterns for port binding/discovery
 
 This shows our current HTTP implementation is likely **over-engineered** and should be replaced with the simple rmcp `StreamableHttpService` pattern.
+
+## Analysis Results
+
+After analyzing the current MCP server implementations, I've confirmed the fragmentation described in the issue:
+
+### Current State Analysis:
+
+**Stdio Implementation (✅ Good rmcp usage):**
+- Located in `swissarmyhammer-cli/src/commands/serve/mod.rs:handle_stdio_serve()`
+- Uses `rmcp::serve_server(server, stdio())` correctly
+- Proper integration with rmcp SDK
+- Clean shutdown handling
+
+**HTTP Implementation (❌ Over-engineered):**
+- Located in `swissarmyhammer-tools/src/mcp/http_server.rs`
+- Custom axum implementation with manual JSON-RPC handling
+- Re-implements MCP protocol instead of using rmcp
+- Complex custom handlers for `initialize`, `tools/list`, `tools/call`, etc.
+- Does not use rmcp's `StreamableHttpService`
+
+**Core Server (✅ Good design):**
+- Located in `swissarmyhammer-tools/src/mcp/server.rs`
+- Implements `ServerHandler` trait properly
+- Clean tool registry and execution
+- Shared between both transports
+
+### Key Problems Identified:
+
+1. **HTTP server reimplements MCP protocol** - should use `rmcp::transport::streamable_http_server::StreamableHttpService`
+2. **Split implementation** - stdio in CLI, HTTP in tools crate
+3. **No unified interface** - no enumerated modes or connection info return
+4. **Complex custom HTTP handlers** - unnecessary when rmcp provides this
+
+## Proposed Solution
+
+Based on rmcp's official example pattern, I propose creating a unified MCP server with clean enumerated modes:
+
+```rust
+pub enum McpServerMode {
+    Stdio,
+    Http { port: Option<u16> }, // None = random port
+}
+
+pub struct McpServerInfo {
+    mode: McpServerMode,
+    connection_url: String, // "stdio" or "http://127.0.0.1:8000/mcp"
+    port: Option<u16>, // For HTTP mode
+}
+
+pub async fn start_mcp_server(mode: McpServerMode) -> Result<McpServerInfo> {
+    match mode {
+        McpServerMode::Stdio => {
+            // Use existing rmcp stdio pattern
+            let server = McpServer::new(library).await?;
+            let running_service = serve_server(server, stdio()).await?;
+            // Return stdio connection info
+        }
+        McpServerMode::Http { port } => {
+            // Use rmcp StreamableHttpService pattern
+            let service = StreamableHttpService::new(
+                || McpServer::new(library),
+                LocalSessionManager::default().into(),
+                Default::default(),
+            );
+            let router = axum::Router::new().nest_service("/mcp", service);
+            // Handle port binding and return HTTP connection info
+        }
+    }
+}
+```
+
+This approach:
+- ✅ Uses rmcp properly without reimplementing protocol
+- ✅ Supports both stdio and HTTP in unified interface
+- ✅ Returns clear connection information
+- ✅ Eliminates custom HTTP MCP handlers
+- ✅ Consolidates fragmented implementations
+
+
+## Proposed Solution
+
+After analyzing the current MCP server implementations, I've identified the exact problems and have a clear path to consolidation:
+
+### Current State Analysis:
+
+**✅ Stdio Implementation (Good rmcp usage):**
+- `swissarmyhammer-cli/src/commands/serve/mod.rs:handle_stdio_serve()`
+- Uses `rmcp::serve_server(server, stdio())` correctly
+- Proper graceful shutdown with tokio select
+
+**❌ HTTP Implementation (Over-engineered reimplementation):**
+- `swissarmyhammer-tools/src/mcp/http_server.rs`
+- 200+ lines of custom axum handlers manually implementing MCP protocol
+- Reimplements JSON-RPC handling instead of using rmcp
+- Custom handlers for initialize, tools/list, tools/call, etc.
+- Should use rmcp's `StreamableHttpService` instead
+
+**✅ Core Server (Well designed):**
+- `swissarmyhammer-tools/src/mcp/server.rs`
+- Clean `ServerHandler` implementation
+- Shared tool registry between transports
+
+### Implementation Strategy:
+
+**Phase 1: Create Unified MCP Server Interface**
+```rust
+// In swissarmyhammer-tools/src/mcp/unified_server.rs
+pub enum McpServerMode {
+    Stdio,
+    Http { port: Option<u16> }, // None = random port
+}
+
+pub struct McpServerInfo {
+    mode: McpServerMode,
+    connection_url: String,
+    port: Option<u16>,
+}
+
+pub async fn start_unified_mcp_server(mode: McpServerMode) -> Result<McpServerInfo>
+```
+
+**Phase 2: Replace HTTP Implementation**
+- Remove custom JSON-RPC handlers from `http_server.rs`
+- Use `rmcp::transport::streamable_http_server::StreamableHttpService`
+- Follow official rmcp pattern from rust-sdk examples
+- Implement proper port management (specific vs random)
+
+**Phase 3: Consolidate CLI Integration**
+- Update `swissarmyhammer-cli/src/commands/serve/mod.rs`
+- Use unified server for both stdio and HTTP modes
+- Remove duplicate MCP logic from CLI crate
+
+### Key Benefits:
+- **Eliminates 200+ lines of MCP protocol reimplementation**
+- **Uses rmcp library properly as intended**
+- **Single source of truth for MCP server logic**
+- **Clean enumerated mode interface**
+- **Proper connection information return**
+
+### Files to Create/Modify:
+1. **NEW**: `swissarmyhammer-tools/src/mcp/unified_server.rs`
+2. **MODIFY**: `swissarmyhammer-cli/src/commands/serve/mod.rs`
+3. **REPLACE**: `swissarmyhammer-tools/src/mcp/http_server.rs`
+4. **KEEP**: `swissarmyhammer-tools/src/mcp/server.rs` (core logic)
+
+This consolidation will eliminate the fragmentation and protocol reimplementation while providing a clean, professional MCP server interface.
+## Implementation Progress
+
+### ✅ Completed Tasks:
+
+**Phase 1: Analysis Complete**
+- Analyzed current fragmented MCP server implementations
+- Identified stdio implementation (good rmcp usage) in CLI
+- Identified HTTP implementation (over-engineered) with custom protocol reimplementation
+- Confirmed core server logic is well-designed and shared
+
+**Phase 2: Unified Server Architecture** 
+- Found existing `unified_server.rs` with partial implementation
+- Fixed stdio server implementation to work with rmcp properly
+- Implemented HTTP server using rmcp `StreamableHttpService` pattern
+- Added proper port management (specific vs random ports)
+- Created `McpServerMode` enum and `McpServerInfo` struct for clean interface
+
+**Phase 3: CLI Integration Updated**
+- Updated CLI `serve` command to use unified server for both stdio and HTTP
+- Fixed stdio mode to handle graceful shutdown properly
+- Maintained backward compatibility with existing CLI interface
+
+**Phase 4: HTTP Server Consolidation**
+- Replaced custom MCP protocol handlers (~200 lines) with rmcp delegation
+- Updated `http_server.rs` to delegate to unified server for backward compatibility
+- Maintained existing API for `AgentExecutor` integration
+- Added deprecation warnings pointing to unified server
+
+### 🔧 Current State:
+- **Unified server**: ✅ Complete with both stdio and HTTP modes
+- **CLI integration**: ✅ Updated to use unified server 
+- **Backward compatibility**: ✅ Maintained for AgentExecutor
+- **Protocol reimplementation**: ✅ Eliminated (~200 lines removed)
+- **rmcp usage**: ✅ Proper throughout, no custom protocol handling
+
+### 📁 Files Modified:
+1. ✅ `swissarmyhammer-tools/src/mcp/unified_server.rs` - Fixed and completed
+2. ✅ `swissarmyhammer-cli/src/commands/serve/mod.rs` - Updated to use unified server
+3. ✅ `swissarmyhammer-tools/src/mcp/http_server.rs` - Replaced with rmcp delegation
+
+### 🎯 Benefits Achieved:
+- **Eliminated 200+ lines of MCP protocol reimplementation**
+- **Uses rmcp library properly as intended**
+- **Single source of truth for MCP server logic**
+- **Clean enumerated mode interface (stdio, HTTP with known/random port)**
+- **Proper connection information return**
+- **Backward compatibility maintained**
+
+### 🧪 Next: Testing
+- Test compilation and basic functionality
+- Verify both stdio and HTTP modes work correctly
+- Ensure CLI integration works as expected

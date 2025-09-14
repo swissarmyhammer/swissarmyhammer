@@ -13,11 +13,13 @@ pub mod responses;
 pub mod search_types;
 pub mod server;
 pub mod shared_utils;
+pub mod stdio_server;
 pub mod tool_descriptions;
 pub mod tool_handlers;
 pub mod tool_registry;
 pub mod tools;
 pub mod types;
+pub mod unified_server;
 pub mod utils;
 
 #[cfg(test)]
@@ -25,7 +27,9 @@ mod tests;
 
 // Re-export commonly used items from submodules
 pub use http_server::{start_http_server, start_in_process_mcp_server, McpServerHandle};
+pub use stdio_server::{start_stdio_server, start_in_process_stdio_server, McpServerHandle as StdioMcpServerHandle};
 pub use server::McpServer;
+pub use unified_server::{start_mcp_server, McpServerInfo, McpServerMode, McpServerHandle as UnifiedMcpServerHandle};
 pub use tool_handlers::ToolHandlers;
 pub use tool_registry::{
     register_abort_tools, register_file_tools, register_issue_tools, register_memo_tools,
