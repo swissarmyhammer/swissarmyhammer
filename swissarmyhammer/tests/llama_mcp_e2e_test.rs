@@ -24,13 +24,19 @@ const MODEL_EXECUTION_TIMEOUT_SECS: u64 = 180; // 3 minutes for model execution
 const FILE_READ_PROMPT: &str = "read the cargo.toml file using the file_read tool";
 const SYSTEM_PROMPT: &str = "You are a helpful assistant that can use tools to read files.";
 
-/// Creates LlamaAgent configuration with its own MCP server
+/// Creates LlamaAgent configuration that uses HuggingFace with proper caching
 fn create_llama_config_for_integration_test() -> AgentConfig {
-    info!("Configuring LlamaAgent with its own MCP server for integration testing");
+    info!("Configuring LlamaAgent with HuggingFace source and caching");
 
     let mut llama_config = LlamaAgentConfig::for_testing();
-    // Use port 0 for dynamic allocation - LlamaAgent will start its own MCP server
     llama_config.mcp_server.port = 0;
+    
+    // Ensure we're using the test model constants
+    llama_config.model.source = swissarmyhammer_config::agent::ModelSource::HuggingFace {
+        repo: DEFAULT_TEST_LLM_MODEL_REPO.to_string(),
+        filename: Some(DEFAULT_TEST_LLM_MODEL_FILENAME.to_string()),
+        folder: None,
+    };
 
     AgentConfig::llama_agent(llama_config)
 }

@@ -24,12 +24,14 @@ use tokio::sync::OnceCell;
 
 // All types now imported from real llama-agent
 
-// Import real types from llama-agent  
+// Import real types from llama-agent exactly as shown in examples
 pub use llama_agent::{
-    AgentAPI, AgentConfig as RealAgentConfig, AgentServer, GenerationRequest, 
-    Message, MessageRole, SessionConfig, ParallelExecutionConfig, MCPServerConfig, 
-    HttpServerConfig, ModelConfig as LlamaModelConfig, QueueConfig as LlamaQueueConfig, 
-    StoppingConfig, ModelSource as LlamaModelSource,
+    types::{
+        AgentAPI, AgentConfig, GenerationRequest, HttpServerConfig, MCPServerConfig,
+        Message, MessageRole, ModelConfig, ModelSource as LlamaModelSource, ParallelConfig, 
+        QueueConfig, RetryConfig, SessionConfig, StoppingConfig,
+    },
+    AgentServer,
 };
 
 /// Constant for random port allocation logging
@@ -768,7 +770,7 @@ impl LlamaAgentExecutor {
     }
 
     /// Convert SwissArmyHammer LlamaAgentConfig to llama-agent AgentConfig
-    fn to_llama_agent_config(&self) -> ActionResult<RealAgentConfig> {
+    fn to_llama_agent_config(&self) -> ActionResult<AgentConfig> {
         tracing::debug!(
             "Converting to llama-agent config with MCP server: {:?}",
             self.mcp_server.is_some()
@@ -812,15 +814,16 @@ impl LlamaAgentExecutor {
             },
         };
 
-        let model_config = LlamaModelConfig {
+        let model_config = ModelConfig {
             source: model_source,
             batch_size: self.config.model.batch_size,
             use_hf_params: self.config.model.use_hf_params,
-            retry_config: Default::default(),
+            retry_config: RetryConfig::default(),
             debug: self.config.model.debug,
             n_seq_max: 512,
             n_threads: 1,
             n_threads_batch: 1,
+
         };
 
         // Create MCP server configs for HTTP transport
@@ -849,12 +852,16 @@ impl LlamaAgentExecutor {
         // Only basic stopping config with EOS detection is now available.
         tracing::debug!("Using basic StoppingConfig with EOS detection only");
 
-        Ok(RealAgentConfig {
+        Ok(AgentConfig {
             model: model_config,
-            queue_config: LlamaQueueConfig::default(),
+            queue_config: QueueConfig {
+                max_queue_size: 100,
+                request_timeout: Duration::from_secs(30),
+                worker_threads: 1,
+            },
             session_config: SessionConfig::default(),
             mcp_servers,
-            parallel_execution_config: ParallelExecutionConfig::default(),
+            parallel_execution_config: ParallelConfig::default(),
         })
     }
 
