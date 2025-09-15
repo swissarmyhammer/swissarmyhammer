@@ -20,7 +20,6 @@ use tracing::info;
 const INTEGRATION_TEST_TIMEOUT_SECS: u64 = 300; // 5 minutes for complete integration test
 const MODEL_EXECUTION_TIMEOUT_SECS: u64 = 180; // 3 minutes for model execution
 
-
 // Test prompt template
 const FILE_READ_PROMPT: &str = "read the cargo.toml file using the file_read tool";
 const SYSTEM_PROMPT: &str = "You are a helpful assistant that can use tools to read files.";
@@ -39,6 +38,7 @@ fn create_llama_config_for_integration_test() -> AgentConfig {
 /// Validates that response contains expected Cargo.toml content
 fn validate_cargo_toml_response(response: &str) -> Result<(), String> {
     let response_lower = response.to_lowercase();
+    println!("Validating response content:\n{}", response);
 
     // Check for key Cargo.toml sections
     if !response_lower.contains("[package]") && !response_lower.contains("package") {
@@ -143,7 +143,10 @@ async fn test_llama_mcp_cargo_toml_integration() {
         info!("Complete workflow verified: LlamaAgent ↔ Internal MCP Server ↔ file_read tool");
 
         // Properly shutdown the executor to clean up MCP server resources
-        executor.shutdown().await.map_err(|e| format!("Failed to shutdown executor: {}", e))?;
+        executor
+            .shutdown()
+            .await
+            .map_err(|e| format!("Failed to shutdown executor: {}", e))?;
         info!("LlamaAgent executor shutdown successfully");
 
         Ok::<(), Box<dyn std::error::Error + Send + Sync>>(())
@@ -177,7 +180,8 @@ async fn test_llama_mcp_server_connectivity() {
     let agent_config = create_llama_config_for_integration_test();
 
     // Create workflow context with agent configuration
-    let context = WorkflowTemplateContext::with_vars(HashMap::new()).expect("Failed to create context");
+    let context =
+        WorkflowTemplateContext::with_vars(HashMap::new()).expect("Failed to create context");
     let mut context_with_config = context;
     context_with_config.set_agent_config(agent_config);
     let execution_context = AgentExecutionContext::new(&context_with_config);
@@ -191,7 +195,10 @@ async fn test_llama_mcp_server_connectivity() {
     info!("LlamaAgent successfully created with integrated MCP server capability");
 
     // Properly shutdown the executor to clean up MCP server resources
-    executor.shutdown().await.expect("Failed to shutdown executor");
+    executor
+        .shutdown()
+        .await
+        .expect("Failed to shutdown executor");
     info!("LlamaAgent executor shutdown successfully");
 }
 
@@ -236,7 +243,10 @@ async fn test_llama_agent_config_with_mcp() {
     );
 
     info!("Integrated MCP server configuration validated");
-    info!("MCP server port: {} (random allocation)", llama_config.mcp_server.port);
+    info!(
+        "MCP server port: {} (random allocation)",
+        llama_config.mcp_server.port
+    );
     info!(
         "MCP server timeout: {}s",
         llama_config.mcp_server.timeout_seconds
