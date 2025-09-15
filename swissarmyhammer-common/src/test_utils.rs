@@ -26,8 +26,8 @@
 /// ```
 use std::path::PathBuf;
 use std::sync::Mutex;
-use tempfile::TempDir;
 use std::sync::OnceLock;
+use tempfile::TempDir;
 
 /// Helper struct to ensure process cleanup in tests
 ///
@@ -157,8 +157,6 @@ pub fn create_isolated_test_home() -> (TempDir, PathBuf) {
     std::fs::create_dir_all(sah_dir.join("issues/complete"))
         .expect("Failed to create issues/complete directory");
 
-
-
     (temp_dir, home_path)
 }
 
@@ -170,7 +168,7 @@ pub fn create_isolated_test_home() -> (TempDir, PathBuf) {
 ///
 /// The guard holds a mutex lock for the entire duration of the test to ensure
 /// that HOME manipulation is serialized across all tests in the test suite.
-pub struct IsolatedTestHome {
+struct IsolatedTestHome {
     _temp_dir: TempDir,
     original_home: Option<String>,
     _lock_guard: std::sync::MutexGuard<'static, ()>,
@@ -246,7 +244,6 @@ impl IsolatedTestEnvironment {
     /// - A temporary directory that can be used as working directory if needed
     /// - Does NOT change the current working directory to allow parallel test execution
     pub fn new() -> std::io::Result<Self> {
-
         // Retry up to 3 times in case of temporary filesystem issues during parallel test execution
         for attempt in 1..=3 {
             match Self::try_create() {
@@ -289,12 +286,16 @@ impl IsolatedTestEnvironment {
             }
         }
 
-
-
         // Create symlink to real cache directory for HuggingFace model caching
-        if let Some(real_cache_dir) = dirs::cache_dir() {
+        if let Some(original_home_path) = &original_home {
+            let real_cache_dir = format!("{}/.cache", original_home_path);
             let fake_cache_dir = home_guard.home_path().join(".cache");
-            let _ = std::os::unix::fs::symlink(&real_cache_dir, &fake_cache_dir);
+
+            if std::path::Path::new(&real_cache_dir).exists() && !fake_cache_dir.exists() {
+                if let Err(_e) = std::os::unix::fs::symlink(&real_cache_dir, &fake_cache_dir) {
+                    // Ignore symlink creation failures
+                }
+            }
         }
 
         // NOTE: We do NOT change the current working directory to allow parallel test execution
