@@ -246,7 +246,7 @@ impl IsolatedTestEnvironment {
     /// - A temporary directory that can be used as working directory if needed
     /// - Does NOT change the current working directory to allow parallel test execution
     pub fn new() -> std::io::Result<Self> {
-        println!("DEBUG: IsolatedTestEnvironment::new() called");
+
         // Retry up to 3 times in case of temporary filesystem issues during parallel test execution
         for attempt in 1..=3 {
             match Self::try_create() {
@@ -296,10 +296,8 @@ impl IsolatedTestEnvironment {
             let real_cache_dir = format!("{}/.cache", original_home_path);
             let fake_cache_dir = home_guard.home_path().join(".cache");
 
-            if std::path::Path::new(&real_cache_dir).exists() && !fake_cache_dir.exists() {
-                if let Err(_e) = std::os::unix::fs::symlink(&real_cache_dir, &fake_cache_dir) {
-                    // Ignore symlink creation failures
-                }
+            if std::path::Path::new(&real_cache_dir).exists() {
+                let _ = std::os::unix::fs::symlink(&real_cache_dir, &fake_cache_dir);
             }
         }
 
