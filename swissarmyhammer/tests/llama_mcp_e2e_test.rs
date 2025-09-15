@@ -20,7 +20,7 @@ use tracing::info;
 const INTEGRATION_TEST_TIMEOUT_SECS: u64 = 300; // 5 minutes for complete integration test
 const MODEL_EXECUTION_TIMEOUT_SECS: u64 = 180; // 3 minutes for model execution
 
-// Test prompt template  
+// Test prompt template
 const FILE_READ_PROMPT: &str = "Use the files_read tool to read the cargo.toml file. If you successfully read content, respond with exactly 'THERE IS CONTENT'.";
 const SYSTEM_PROMPT: &str = "You are a helpful assistant that can use tools to read files. When you successfully read file content, respond with exactly 'THERE IS CONTENT'.";
 
@@ -30,11 +30,11 @@ fn create_llama_config_for_integration_test() -> AgentConfig {
 
     let mut llama_config = LlamaAgentConfig::for_testing();
     llama_config.mcp_server.port = 0;
-    
-    // Ensure we're using the test model constants
+
+    // Use same model as cache test for consistency
     llama_config.model.source = swissarmyhammer_config::agent::ModelSource::HuggingFace {
-        repo: DEFAULT_TEST_LLM_MODEL_REPO.to_string(),
-        filename: Some(DEFAULT_TEST_LLM_MODEL_FILENAME.to_string()),
+        repo: "unsloth/Qwen3-0.6B-GGUF".to_string(),
+        filename: Some("Qwen3-0.6B-UD-Q4_K_XL.gguf".to_string()),
         folder: None,
     };
 
@@ -66,6 +66,18 @@ fn validate_cargo_toml_response(response: &str) -> Result<(), String> {
 #[tokio::test]
 async fn test_llama_mcp_cargo_toml_integration() {
     let _guard = IsolatedTestEnvironment::new().expect("Failed to create test environment");
+
+    // Create symlink from fake home's .cache to real cache so HuggingFace caching works
+    let fake_home = std::env::var("HOME").expect("HOME should be set by IsolatedTestEnvironment");
+    let fake_cache_dir = format!("{}/.cache", fake_home);
+    let real_cache_dir = "/Users/wballard/.cache";
+
+    // Create .cache symlink to real cache directory
+    if !std::path::Path::new(&fake_cache_dir).exists() {
+        std::os::unix::fs::symlink(real_cache_dir, &fake_cache_dir)
+            .expect("Failed to create cache symlink");
+        info!("Created symlink: {} -> {}", fake_cache_dir, real_cache_dir);
+    }
 
     let test_timeout = Duration::from_secs(INTEGRATION_TEST_TIMEOUT_SECS);
 

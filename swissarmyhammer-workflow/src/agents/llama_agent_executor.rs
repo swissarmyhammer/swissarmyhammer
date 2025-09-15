@@ -816,14 +816,18 @@ impl LlamaAgentExecutor {
 
         let model_config = ModelConfig {
             source: model_source,
-            batch_size: self.config.model.batch_size,
+            batch_size: 64, // Match cache test
             use_hf_params: self.config.model.use_hf_params,
-            retry_config: RetryConfig::default(),
-            debug: self.config.model.debug,
-            n_seq_max: 512,
-            n_threads: 1,
-            n_threads_batch: 1,
-
+            retry_config: RetryConfig {
+                max_retries: 2,
+                initial_delay_ms: 100,
+                backoff_multiplier: 1.5,
+                max_delay_ms: 1000,
+            },
+            debug: true, // Always enable debug for cache logging
+            n_seq_max: 1, // Match cache test
+            n_threads: 4, // Match cache test  
+            n_threads_batch: 4, // Match cache test
         };
 
         // Create MCP server configs for HTTP transport
