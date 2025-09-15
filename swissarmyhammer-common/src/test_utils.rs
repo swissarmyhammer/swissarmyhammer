@@ -292,13 +292,9 @@ impl IsolatedTestEnvironment {
 
 
         // Create symlink to real cache directory for HuggingFace model caching
-        if let Some(original_home_path) = &original_home {
-            let real_cache_dir = format!("{}/.cache", original_home_path);
+        if let Some(real_cache_dir) = dirs::cache_dir() {
             let fake_cache_dir = home_guard.home_path().join(".cache");
-
-            if std::path::Path::new(&real_cache_dir).exists() {
-                let _ = std::os::unix::fs::symlink(&real_cache_dir, &fake_cache_dir);
-            }
+            let _ = std::os::unix::fs::symlink(&real_cache_dir, &fake_cache_dir);
         }
 
         // NOTE: We do NOT change the current working directory to allow parallel test execution

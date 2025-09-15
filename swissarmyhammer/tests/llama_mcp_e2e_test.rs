@@ -67,17 +67,7 @@ fn validate_cargo_toml_response(response: &str) -> Result<(), String> {
 async fn test_llama_mcp_cargo_toml_integration() {
     let _guard = IsolatedTestEnvironment::new().expect("Failed to create test environment");
 
-    // Create symlink from fake home's .cache to real cache so HuggingFace caching works
-    let fake_home = std::env::var("HOME").expect("HOME should be set by IsolatedTestEnvironment");
-    let fake_cache_dir = format!("{}/.cache", fake_home);
-    let real_cache_dir = "/Users/wballard/.cache";
 
-    // Create .cache symlink to real cache directory
-    if !std::path::Path::new(&fake_cache_dir).exists() {
-        std::os::unix::fs::symlink(real_cache_dir, &fake_cache_dir)
-            .expect("Failed to create cache symlink");
-        info!("Created symlink: {} -> {}", fake_cache_dir, real_cache_dir);
-    }
 
     let test_timeout = Duration::from_secs(INTEGRATION_TEST_TIMEOUT_SECS);
 
@@ -170,6 +160,8 @@ async fn test_llama_mcp_cargo_toml_integration() {
 #[tokio::test]
 async fn test_llama_mcp_server_connectivity() {
     let _guard = IsolatedTestEnvironment::new().expect("Failed to create test environment");
+
+
 
     info!("Testing LlamaAgent MCP server integration configuration");
 
