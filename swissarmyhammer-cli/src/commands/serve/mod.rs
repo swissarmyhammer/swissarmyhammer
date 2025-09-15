@@ -177,8 +177,7 @@ async fn handle_http_serve(matches: &clap::ArgMatches, cli_context: &CliContext)
 
 /// Handle stdio serve mode (existing behavior)
 async fn handle_stdio_serve(cli_context: &CliContext) -> i32 {
-    use crate::signal_handler::wait_for_shutdown;
-    use swissarmyhammer_tools::McpServer;
+    use swissarmyhammer_tools::mcp::{start_mcp_server, McpServerMode};
 
     tracing::debug!("Starting unified MCP server in stdio mode");
 
@@ -216,8 +215,9 @@ async fn handle_stdio_serve(cli_context: &CliContext) -> i32 {
         );
     }
 
-    let _server = match McpServer::new(library).await {
-        Ok(server) => server,
+    let mode = McpServerMode::Stdio;
+    let mut server_handle = match start_mcp_server(mode, Some(library)).await {
+        Ok(handle) => handle,
         Err(e) => {
             tracing::error!("Failed to start unified stdio MCP server: {}", e);
             eprintln!("Failed to start unified stdio MCP server: {}", e);
@@ -225,10 +225,15 @@ async fn handle_stdio_serve(cli_context: &CliContext) -> i32 {
         }
     };
 
-    // Wait for shutdown signal or server completion
+    // The stdio server runs in a spawned task, but we need to wait for shutdown signals
+    // to keep the main process alive
+    use crate::signal_handler::wait_for_shutdown;
     wait_for_shutdown().await;
 
-    // Note: stdio server doesn't need explicit shutdown like HTTP server
+    // Attempt graceful shutdown
+    if let Err(e) = server_handle.shutdown().await {
+        tracing::warn!("Error during server shutdown: {}", e);
+    }
 
     tracing::info!("MCP stdio server completed successfully");
     EXIT_SUCCESS

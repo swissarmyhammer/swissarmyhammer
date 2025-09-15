@@ -2,6 +2,7 @@ use serde_json::{json, Value};
 use std::io::{BufRead, BufReader, Write};
 use std::process::{Command, Stdio};
 use std::time::Duration;
+use swissarmyhammer_common::test_utils::IsolatedTestEnvironment;
 use tokio::time::timeout;
 
 mod test_utils;
@@ -118,14 +119,10 @@ async fn test_mcp_server_basic_functionality() {
 
 /// Test that MCP server loads prompts from the same directories as CLI
 #[tokio::test]
-
 async fn test_mcp_server_prompt_loading() {
-    use tempfile::TempDir;
-
-    // Create a temporary directory structure
-    let temp_dir = TempDir::new().unwrap();
-    let swissarmyhammer_dir = temp_dir.path().join(".swissarmyhammer");
-    let prompts_dir = swissarmyhammer_dir.join("prompts");
+    let _guard = IsolatedTestEnvironment::new().expect("Failed to create test environment");
+    let home_path = std::env::var("HOME").expect("HOME should be set");
+    let prompts_dir = std::path::PathBuf::from(home_path).join(".swissarmyhammer/prompts");
     std::fs::create_dir_all(&prompts_dir).unwrap();
 
     // Create a test prompt
@@ -136,18 +133,13 @@ async fn test_mcp_server_prompt_loading() {
     )
     .unwrap();
 
-    // Debug: Print paths
-    eprintln!("Temp dir: {:?}", temp_dir.path());
-    eprintln!("Prompts dir: {prompts_dir:?}");
-    eprintln!("Test prompt: {test_prompt:?}");
-    eprintln!("Test prompt exists: {}", test_prompt.exists());
-
-    // Start MCP server with HOME set to temp dir
+    // Start MCP server (HOME already set by IsolatedTestEnvironment)
+    // Disable LlamaAgent to prevent model loading for prompt-only test
     let child = Command::new("cargo")
         .args(["run", "--bin", "sah", "--", "serve"])
         .current_dir(".")
-        .env("HOME", temp_dir.path())
         .env("RUST_LOG", "debug")
+        .env("SAH_DISABLE_LLAMA", "true")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())

@@ -979,11 +979,13 @@ impl PromptAction {
         Ok(response_value)
     }
 
-    /// Get executor based on execution context
+    /// Get executor based on execution context (lazy initialization)
     async fn get_executor(
         &self,
         context: &AgentExecutionContext<'_>,
     ) -> ActionResult<Box<dyn AgentExecutor>> {
+        // Only create executor when actually needed for prompt execution
+        tracing::debug!("Creating executor on-demand for prompt execution");
         AgentExecutorFactory::create_executor(context).await
     }
 }
