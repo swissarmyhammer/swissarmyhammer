@@ -27,6 +27,7 @@
 use std::path::PathBuf;
 use std::sync::Mutex;
 use tempfile::TempDir;
+use std::sync::OnceLock;
 
 /// Helper struct to ensure process cleanup in tests
 ///
@@ -108,6 +109,9 @@ impl Drop for ProcessGuard {
 /// This prevents race conditions when multiple tests run in parallel
 static HOME_ENV_LOCK: Mutex<()> = Mutex::new(());
 
+/// Original HOME directory captured once at process start
+static ORIGINAL_HOME: OnceLock<String> = OnceLock::new();
+
 /// Global mutex to serialize access to SWISSARMYHAMMER_SEMANTIC_DB_PATH environment variable manipulation
 /// This prevents race conditions when multiple tests run in parallel
 static SEMANTIC_DB_ENV_LOCK: Mutex<()> = Mutex::new(());
@@ -154,14 +158,18 @@ pub fn create_isolated_test_home() -> (TempDir, PathBuf) {
         .expect("Failed to create issues/complete directory");
 
     // Create symlink to real cache directory for HuggingFace model caching
-    if let Some(ref original_home_path) = original_home {
-        let real_cache_dir = format!("{}/.cache", original_home_path);
+    if let Some(real_cache_dir) = dirs::cache_dir() {
         let fake_cache_dir = home_path.join(".cache");
 
-        if std::path::Path::new(&real_cache_dir).exists() && !fake_cache_dir.exists() {
-            if let Err(e) = std::os::unix::fs::symlink(&real_cache_dir, &fake_cache_dir) {
-                // Don't fail the test if symlink creation fails, just warn
-                eprintln!("Warning: Could not create cache symlink: {}", e);
+        eprintln!("Cache debug - Real: {}, Fake: {}", real_cache_dir.display(), fake_cache_dir.display());
+        eprintln!("Real exists: {}, Fake exists: {}", 
+                  real_cache_dir.exists(), 
+                  fake_cache_dir.exists());
+                  
+        if real_cache_dir.exists() && !fake_cache_dir.exists() {
+            match std::os::unix::fs::symlink(&real_cache_dir, &fake_cache_dir) {
+                Ok(()) => eprintln!("Created cache symlink: {} -> {}", fake_cache_dir.display(), real_cache_dir.display()),
+                Err(e) => eprintln!("Failed to create cache symlink: {}", e),
             }
         }
     }
@@ -217,6 +225,11 @@ impl IsolatedTestHome {
         self._temp_dir.path().to_path_buf()
     }
 
+    /// Get the original home directory before isolation
+    pub fn original_home(&self) -> Option<&String> {
+        self.original_home.as_ref()
+    }
+
     /// Get the path to the .swissarmyhammer directory in the isolated home
     pub fn swissarmyhammer_dir(&self) -> PathBuf {
         self.home_path().join(".swissarmyhammer")
@@ -265,7 +278,7 @@ impl IsolatedTestEnvironment {
 
     /// Try to create an isolated test environment (single attempt)
     fn try_create() -> std::io::Result<Self> {
-        // Capture original home before creating isolated environment
+        // Capture original HOME before any isolation happens
         let original_home = std::env::var("HOME").ok();
         let home_guard = IsolatedTestHome::new();
         let temp_dir = TempDir::new()?;
