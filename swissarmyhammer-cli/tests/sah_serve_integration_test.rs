@@ -47,7 +47,6 @@ fn get_sah_binary_path() -> Result<std::path::PathBuf, Box<dyn std::error::Error
 }
 
 mod test_utils;
-use std::path::PathBuf;
 use test_utils::ProcessGuard;
 
 /// Sample of expected tools with their names - this is not exhaustive but validates key tools

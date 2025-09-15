@@ -425,18 +425,18 @@ mod tests {
     use super::*;
     use crate::types::{ChunkType, ContentHash, Language};
     use std::path::PathBuf;
-    use swissarmyhammer_common::IsolatedTestHome;
+    use swissarmyhammer_common::IsolatedTestEnvironment;
 
     #[tokio::test]
     async fn test_embedding_engine_creation() {
-        let _guard = IsolatedTestHome::new();
+        let _guard = IsolatedTestEnvironment::new().expect("Failed to create test environment");
         let engine = EmbeddingEngine::new_for_testing().await;
         assert!(engine.is_ok());
     }
 
     #[tokio::test]
     async fn test_embedding_engine_with_model_id() {
-        let _guard = IsolatedTestHome::new();
+        let _guard = IsolatedTestEnvironment::new().expect("Failed to create test environment");
         let config = EmbeddingConfig {
             model_id: "custom-model".to_string(),
             embedding_model: EmbeddingModel::NomicEmbedTextV15, // Not used for mock
@@ -458,7 +458,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_embedding_engine_invalid_config() {
-        let _guard = IsolatedTestHome::new();
+        let _guard = IsolatedTestEnvironment::new().expect("Failed to create test environment");
         let config = EmbeddingConfig {
             model_id: "".to_string(),
             ..Default::default()
@@ -470,7 +470,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_embed_text() {
-        let _guard = IsolatedTestHome::new();
+        let _guard = IsolatedTestEnvironment::new().expect("Failed to create test environment");
         let engine = EmbeddingEngine::new_for_testing().await.unwrap();
         let embedding = engine.embed_text("fn main() {}").await;
 
@@ -485,7 +485,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_embed_text_empty() {
-        let _guard = IsolatedTestHome::new();
+        let _guard = IsolatedTestEnvironment::new().expect("Failed to create test environment");
         let engine = EmbeddingEngine::new_for_testing().await.unwrap();
         let embedding = engine.embed_text("").await;
 
@@ -494,7 +494,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_embed_chunk() {
-        let _guard = IsolatedTestHome::new();
+        let _guard = IsolatedTestEnvironment::new().expect("Failed to create test environment");
         // Use mock engine for testing to avoid network dependencies
         let engine = EmbeddingEngine::new_for_testing().await.unwrap();
 
@@ -519,7 +519,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_embed_batch() {
-        let _guard = IsolatedTestHome::new();
+        let _guard = IsolatedTestEnvironment::new().expect("Failed to create test environment");
         let engine = EmbeddingEngine::new_for_testing().await.unwrap();
         let texts = vec!["fn main() {}", "println!(\"hello\");"];
         let embeddings = engine.embed_batch(&texts).await;
@@ -533,7 +533,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_semantic_consistency() {
-        let _guard = IsolatedTestHome::new();
+        let _guard = IsolatedTestEnvironment::new().expect("Failed to create test environment");
         let engine = EmbeddingEngine::new_for_testing().await.unwrap();
 
         // Test that similar texts produce similar embeddings
@@ -558,7 +558,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_model_info() {
-        let _guard = IsolatedTestHome::new();
+        let _guard = IsolatedTestEnvironment::new().expect("Failed to create test environment");
         // Use real small model for testing
         let engine = EmbeddingEngine::new_for_testing().await.unwrap();
 
@@ -571,7 +571,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_prepare_chunk_text() {
-        let _guard = IsolatedTestHome::new();
+        let _guard = IsolatedTestEnvironment::new().expect("Failed to create test environment");
         // Use mock engine for testing to avoid network dependencies
         let engine = EmbeddingEngine::new_for_testing().await.unwrap();
 
@@ -594,7 +594,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_clean_text() {
-        let _guard = IsolatedTestHome::new();
+        let _guard = IsolatedTestEnvironment::new().expect("Failed to create test environment");
         // Use mock engine for testing to avoid network dependencies
         let engine = EmbeddingEngine::new_for_testing().await.unwrap();
 
@@ -612,7 +612,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_clean_text_truncation() {
-        let _guard = IsolatedTestHome::new();
+        let _guard = IsolatedTestEnvironment::new().expect("Failed to create test environment");
         // Create a config with limited text length for testing text truncation
         let config = EmbeddingConfig {
             model_id: "nomic-ai/nomic-embed-code".to_string(),

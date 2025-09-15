@@ -669,6 +669,9 @@ impl ServerHandler for McpServer {
             server_info: Implementation {
                 name: "SwissArmyHammer".into(),
                 version: crate::VERSION.into(),
+                icons: None,
+                title: Some("SwissArmyHammer MCP Server".into()),
+                website_url: Some("https://github.com/swissarmyhammer/swissarmyhammer".into()),
             },
         })
     }
@@ -692,6 +695,8 @@ impl ServerHandler for McpServer {
                             name: p.name.clone(),
                             description: p.description.clone(),
                             arguments,
+                            icons: None,
+                            title: Some(p.name.clone()),
                         }
                     })
                     .collect();
@@ -823,6 +828,9 @@ impl ServerHandler for McpServer {
             },server_info: Implementation {
                 name: "SwissArmyHammer".into(),
                 version: crate::VERSION.into(),
+                icons: None,
+                title: Some("SwissArmyHammer MCP Server".into()),
+                website_url: Some("https://github.com/swissarmyhammer/swissarmyhammer".into()),
             },instructions: Some("A flexible prompt and workflow management server with integrated issue tracking. Use list_prompts to see available prompts and get_prompt to retrieve and render them. Use workflow tools to execute and manage workflows. Use issue_* tools to create and manage work items tracked as markdown files in your repository.".into()),
         }
     }

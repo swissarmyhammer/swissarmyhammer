@@ -642,6 +642,8 @@ impl ToolRegistry {
                     input_schema: std::sync::Arc::new(schema_map),
                     annotations: None,
                     output_schema: None,
+                    icons: None,
+                    title: Some(tool.name().into()),
                 }
             })
             .collect()

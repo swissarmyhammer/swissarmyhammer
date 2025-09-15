@@ -4,25 +4,6 @@
 /// all SwissArmyHammer crates without creating circular dependencies. The utilities
 /// focus on creating isolated test environments and managing test processes.
 ///
-/// # Architecture
-///
-/// The test utilities provide:
-/// - Isolated HOME directory management through `IsolatedTestHome`
-/// - Process cleanup utilities through `ProcessGuard`
-/// - Thread-safe environment variable manipulation
-/// - Common temporary directory creation patterns
-///
-/// # Usage
-///
-/// ```no_run
-/// use swissarmyhammer_common::test_utils::IsolatedTestHome;
-///
-/// #[test]
-/// fn test_something() {
-///     let _guard = IsolatedTestHome::new();
-///     // HOME is now set to an isolated temporary directory
-///     // with mock .swissarmyhammer structure
-/// }
 /// ```
 use std::path::PathBuf;
 use std::sync::Mutex;
@@ -138,7 +119,7 @@ pub fn acquire_semantic_db_lock() -> std::sync::MutexGuard<'static, ()> {
 ///     // temp_dir is automatically cleaned up when dropped
 /// }
 /// ```
-pub fn create_isolated_test_home() -> (TempDir, PathBuf) {
+fn create_isolated_test_home() -> (TempDir, PathBuf) {
     let temp_dir = create_temp_dir();
     let home_path = temp_dir.path().to_path_buf();
 
@@ -164,7 +145,9 @@ pub fn create_isolated_test_home() -> (TempDir, PathBuf) {
 ///
 /// The guard holds a mutex lock for the entire duration of the test to ensure
 /// that HOME manipulation is serialized across all tests in the test suite.
-pub struct IsolatedTestHome {
+///
+/// Used from IsolatedTestEnvironment to provide a complete isolated test setup.
+struct IsolatedTestHome {
     _temp_dir: TempDir,
     original_home: Option<String>,
     _lock_guard: std::sync::MutexGuard<'static, ()>,
@@ -252,6 +235,8 @@ impl IsolatedTestEnvironment {
 
     /// Try to create an isolated test environment (single attempt)
     fn try_create() -> std::io::Result<Self> {
+        // Capture original HOME before any isolation happens
+        let original_home = std::env::var("HOME").ok();
         let home_guard = IsolatedTestHome::new();
         let temp_dir = TempDir::new()?;
 
@@ -272,6 +257,18 @@ impl IsolatedTestEnvironment {
                     std::io::ErrorKind::PermissionDenied,
                     format!("Cannot access temporary directory {:?}: {}", temp_path, e),
                 ));
+            }
+        }
+
+        // Create symlink to real cache directory for HuggingFace model caching
+        if let Some(original_home_path) = &original_home {
+            let real_cache_dir = format!("{}/.cache", original_home_path);
+            let fake_cache_dir = home_guard.home_path().join(".cache");
+
+            if std::path::Path::new(&real_cache_dir).exists() && !fake_cache_dir.exists() {
+                if let Err(_e) = std::os::unix::fs::symlink(&real_cache_dir, &fake_cache_dir) {
+                    // Ignore symlink creation failures
+                }
             }
         }
 

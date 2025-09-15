@@ -6,12 +6,12 @@ use test_utils::{create_temp_dir, setup_git_repo};
 mod in_process_test_utils;
 use in_process_test_utils::run_sah_command_in_process_with_dir;
 
-use swissarmyhammer::test_utils::IsolatedTestHome;
+use swissarmyhammer::test_utils::IsolatedTestEnvironment;
 
 /// Test that the implement command starts workflow execution (demonstrates CliContext integration)
 #[tokio::test]
 async fn test_implement_command_starts_workflow() {
-    let _guard = IsolatedTestHome::new();
+    let _guard = IsolatedTestEnvironment::new();
     let (_temp_dir, temp_path) = setup_implement_test_environment().unwrap();
 
     // Test basic implement command execution
@@ -39,7 +39,7 @@ async fn test_implement_command_starts_workflow() {
 /// Test implement workflow delegation via flow test command (CliContext integration test)
 #[tokio::test]
 async fn test_implement_workflow_delegation_via_flow_test() {
-    let _guard = IsolatedTestHome::new();
+    let _guard = IsolatedTestEnvironment::new();
     let (_temp_dir, temp_path) = setup_implement_test_environment().unwrap();
 
     // Test implement workflow via flow test command (tests CliContext delegation)
@@ -63,7 +63,7 @@ async fn test_implement_workflow_delegation_via_flow_test() {
 /// Test implement workflow with custom variables (CliContext parameter passing)
 #[tokio::test]
 async fn test_implement_workflow_with_custom_variables() {
-    let _guard = IsolatedTestHome::new();
+    let _guard = IsolatedTestEnvironment::new();
     let (_temp_dir, temp_path) = setup_implement_test_environment().unwrap();
 
     // Test implement workflow with custom variables via flow test (tests CliContext parameter passing)
@@ -98,7 +98,7 @@ async fn test_implement_workflow_with_custom_variables() {
 /// Test that implement command delegates to flow correctly (CliContext delegation)
 #[tokio::test]
 async fn test_implement_command_delegates_to_flow() {
-    let _guard = IsolatedTestHome::new();
+    let _guard = IsolatedTestEnvironment::new();
     let (_temp_dir, temp_path) = setup_implement_test_environment().unwrap();
 
     // Test that implement command behaves like 'sah flow run implement'

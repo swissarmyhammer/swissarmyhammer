@@ -1,12 +1,12 @@
 /// Integration test for test home directory setup
-use swissarmyhammer::test_utils::IsolatedTestHome;
+use swissarmyhammer::test_utils::IsolatedTestEnvironment;
 
 #[test]
 fn test_home_directory_override_works() {
     let original_home = std::env::var("HOME").ok();
 
     {
-        let guard = IsolatedTestHome::new();
+        let guard = IsolatedTestEnvironment::new().expect("Failed to create test environment");
 
         let home = std::env::var("HOME").expect("HOME not set");
         assert!(home.contains("tmp") || home.contains("temp")); // Should be in a temp directory
@@ -63,7 +63,7 @@ fn test_home_directory_override_works() {
 fn test_prompt_loading_with_test_home() {
     use swissarmyhammer_prompts::PromptLoader;
 
-    let guard = IsolatedTestHome::new();
+    let guard = IsolatedTestEnvironment::new().expect("env");
 
     // Create test prompt files
     let prompts_dir = guard.swissarmyhammer_dir().join("prompts");
@@ -96,7 +96,7 @@ fn test_prompt_loading_with_test_home() {
 fn test_prompt_resolver_with_test_home() {
     use swissarmyhammer::{PromptLibrary, PromptResolver};
 
-    let guard = IsolatedTestHome::new();
+    let guard = IsolatedTestEnvironment::new().expect("env");
 
     // Create test prompt files
     let prompts_dir = guard.swissarmyhammer_dir().join("prompts");
