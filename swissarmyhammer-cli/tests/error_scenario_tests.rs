@@ -4,7 +4,7 @@
 //! proper error handling, user-friendly messages, and correct exit codes.
 
 use anyhow::Result;
-use swissarmyhammer::test_utils::IsolatedTestHome;
+use swissarmyhammer::test_utils::IsolatedTestEnvironment;
 use tempfile::TempDir;
 
 mod in_process_test_utils;
@@ -15,9 +15,10 @@ use in_process_test_utils::{
 };
 use test_utils::setup_git_repo;
 
-/// Setup function for error scenario testing using IsolatedTestHome
-fn setup_error_test_environment() -> Result<(IsolatedTestHome, TempDir, std::path::PathBuf)> {
-    let home_guard = IsolatedTestHome::new();
+/// Setup function for error scenario testing using IsolatedTestEnvironment
+fn setup_error_test_environment() -> Result<(IsolatedTestEnvironment, TempDir, std::path::PathBuf)>
+{
+    let home_guard = IsolatedTestEnvironment::new()?;
     let temp_dir = TempDir::new()?;
     let work_dir = temp_dir.path().to_path_buf();
 

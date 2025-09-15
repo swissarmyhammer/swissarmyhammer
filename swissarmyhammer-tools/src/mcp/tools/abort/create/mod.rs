@@ -95,7 +95,7 @@ mod tests {
     use super::*;
     use crate::mcp::tool_registry::{BaseToolImpl, ToolRegistry};
     use swissarmyhammer_common::create_abort_file;
-    use swissarmyhammer_common::test_utils::IsolatedTestHome;
+    use swissarmyhammer_common::test_utils::IsolatedTestEnvironment;
     use tempfile::TempDir;
 
     #[test]
@@ -150,7 +150,7 @@ mod tests {
 
     #[test]
     fn test_create_abort_file() {
-        let _guard = IsolatedTestHome::new();
+        let _guard = IsolatedTestEnvironment::new().expect("Failed to create test environment");
         let temp_dir = TempDir::new().unwrap();
         let temp_path = temp_dir.path();
 
@@ -168,7 +168,7 @@ mod tests {
 
     #[test]
     fn test_creates_sah_directory() {
-        let _guard = IsolatedTestHome::new();
+        let _guard = IsolatedTestEnvironment::new().expect("Failed to create test environment");
         let temp_dir = TempDir::new().unwrap();
         let temp_path = temp_dir.path();
 
@@ -197,7 +197,7 @@ mod tests {
 
     #[test]
     fn test_concurrent_abort_file_creation() {
-        let _guard = IsolatedTestHome::new();
+        let _guard = IsolatedTestEnvironment::new().expect("Failed to create test environment");
         let temp_dir = TempDir::new().unwrap();
         let temp_path = temp_dir.path();
 
@@ -228,7 +228,7 @@ mod tests {
 
     #[test]
     fn test_abort_file_overwrite() {
-        let _guard = IsolatedTestHome::new();
+        let _guard = IsolatedTestEnvironment::new().expect("Failed to create test environment");
         let temp_dir = TempDir::new().unwrap();
         let temp_path = temp_dir.path();
 
@@ -314,7 +314,7 @@ mod tests {
 
     #[test]
     fn test_create_abort_file_with_unicode() {
-        let _guard = IsolatedTestHome::new();
+        let _guard = IsolatedTestEnvironment::new().expect("Failed to create test environment");
         let temp_dir = TempDir::new().unwrap();
         let temp_path = temp_dir.path();
 
@@ -332,7 +332,7 @@ mod tests {
 
     #[test]
     fn test_create_abort_file_when_directory_already_exists() {
-        let _guard = IsolatedTestHome::new();
+        let _guard = IsolatedTestEnvironment::new().expect("Failed to create test environment");
         let temp_dir = TempDir::new().unwrap();
         let temp_path = temp_dir.path();
 
@@ -355,7 +355,7 @@ mod tests {
 
     #[test]
     fn test_abort_file_operations_idempotent() {
-        let _guard = IsolatedTestHome::new();
+        let _guard = IsolatedTestEnvironment::new().expect("Failed to create test environment");
         let temp_dir = TempDir::new().unwrap();
         let temp_path = temp_dir.path();
 

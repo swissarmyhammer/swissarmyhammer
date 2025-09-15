@@ -10,7 +10,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use swissarmyhammer_common::rate_limiter::RateLimiterConfig;
 
-use swissarmyhammer_common::test_utils::IsolatedTestHome;
+use swissarmyhammer_common::test_utils::IsolatedTestEnvironment;
 use swissarmyhammer_git::GitOperations;
 use swissarmyhammer_issues::{FileSystemIssueStorage, IssueStorage};
 use swissarmyhammer_memoranda::{MarkdownMemoStorage, MemoStorage};
@@ -68,7 +68,7 @@ proptest! {
         content in ".*{0,100}", // Simple content pattern
     ) {
         let result = tokio_test::block_on(async {
-            let _guard = IsolatedTestHome::new();
+            let _guard = IsolatedTestEnvironment::new().expect("Failed to create test environment");
             let registry = create_property_test_registry();
             let context = create_property_test_context().await;
             let write_tool = registry.get_tool("files_write").unwrap();
@@ -123,7 +123,7 @@ proptest! {
             // Create content that definitely contains the old_string
             let test_content = format!("{} {} {}", content, old_string, content);
 
-            let _guard = IsolatedTestHome::new();
+            let _guard = IsolatedTestEnvironment::new().expect("Failed to create test environment");
             let registry = create_property_test_registry();
             let context = create_property_test_context().await;
             let write_tool = registry.get_tool("files_write").unwrap();
@@ -193,7 +193,7 @@ proptest! {
         pattern in r"\*\.(txt|rs|md)",
     ) {
         let result = tokio_test::block_on(async {
-            let _guard = IsolatedTestHome::new();
+            let _guard = IsolatedTestEnvironment::new().expect("Failed to create test environment");
             let registry = create_property_test_registry();
             let context = create_property_test_context().await;
             let write_tool = registry.get_tool("files_write").unwrap();
@@ -249,7 +249,7 @@ proptest! {
         filename in r"[a-zA-Z][a-zA-Z0-9_]{0,20}\.(txt|rs|md)",
     ) {
         let result = tokio_test::block_on(async {
-            let _guard = IsolatedTestHome::new();
+            let _guard = IsolatedTestEnvironment::new().expect("Failed to create test environment");
             let registry = create_property_test_registry();
             let context = create_property_test_context().await;
             let write_tool = registry.get_tool("files_write").unwrap();

@@ -175,12 +175,12 @@ impl McpTool for WorkIssueTool {
 #[cfg(test)]
 mod tests {
     use swissarmyhammer_common::create_abort_file;
-    use swissarmyhammer_common::test_utils::IsolatedTestHome;
+    use swissarmyhammer_common::test_utils::IsolatedTestEnvironment;
     use tempfile::TempDir;
 
     #[test]
     fn test_create_abort_file() {
-        let _guard = IsolatedTestHome::new();
+        let _guard = IsolatedTestEnvironment::new().expect("Failed to create test environment");
         let temp_dir = TempDir::new().unwrap();
         let temp_path = temp_dir.path();
 

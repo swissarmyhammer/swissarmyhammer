@@ -4,25 +4,6 @@
 /// all SwissArmyHammer crates without creating circular dependencies. The utilities
 /// focus on creating isolated test environments and managing test processes.
 ///
-/// # Architecture
-///
-/// The test utilities provide:
-/// - Isolated HOME directory management through `IsolatedTestHome`
-/// - Process cleanup utilities through `ProcessGuard`
-/// - Thread-safe environment variable manipulation
-/// - Common temporary directory creation patterns
-///
-/// # Usage
-///
-/// ```no_run
-/// use swissarmyhammer_common::test_utils::IsolatedTestHome;
-///
-/// #[test]
-/// fn test_something() {
-///     let _guard = IsolatedTestHome::new();
-///     // HOME is now set to an isolated temporary directory
-///     // with mock .swissarmyhammer structure
-/// }
 /// ```
 use std::path::PathBuf;
 use std::sync::Mutex;
@@ -142,7 +123,7 @@ pub fn acquire_semantic_db_lock() -> std::sync::MutexGuard<'static, ()> {
 ///     // temp_dir is automatically cleaned up when dropped
 /// }
 /// ```
-pub fn create_isolated_test_home() -> (TempDir, PathBuf) {
+fn create_isolated_test_home() -> (TempDir, PathBuf) {
     let temp_dir = create_temp_dir();
     let home_path = temp_dir.path().to_path_buf();
 
@@ -168,6 +149,8 @@ pub fn create_isolated_test_home() -> (TempDir, PathBuf) {
 ///
 /// The guard holds a mutex lock for the entire duration of the test to ensure
 /// that HOME manipulation is serialized across all tests in the test suite.
+///
+/// Used from IsolatedTestEnvironment to provide a complete isolated test setup.
 struct IsolatedTestHome {
     _temp_dir: TempDir,
     original_home: Option<String>,

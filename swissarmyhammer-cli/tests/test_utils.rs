@@ -16,23 +16,23 @@ pub use swissarmyhammer::test_utils::ProcessGuard;
 // Re-export commonly used test utilities from the main crate
 #[allow(unused_imports)]
 pub use swissarmyhammer_common::test_utils::{
-    create_isolated_test_home, IsolatedTestEnvironment, IsolatedTestHome,
+    IsolatedTestEnvironment,
 };
 
 // Legacy compatibility aliases
-pub type TestHomeGuard = IsolatedTestHome;
+pub type TestHomeGuard = IsolatedTestEnvironment;
 
-pub fn create_test_home_guard() -> IsolatedTestHome {
-    IsolatedTestHome::new()
+pub fn create_test_home_guard() -> IsolatedTestEnvironment {
+    IsolatedTestEnvironment::new().expect("Failed to create test environment")
 }
 
 pub fn get_test_home() -> std::path::PathBuf {
-    let guard = IsolatedTestHome::new();
+    let guard = IsolatedTestEnvironment::new().expect("Failed to create test environment");
     guard.home_path()
 }
 
 pub fn get_test_swissarmyhammer_dir() -> std::path::PathBuf {
-    let guard = IsolatedTestHome::new();
+    let guard = IsolatedTestEnvironment::new().expect("Failed to create test environment");
     guard.swissarmyhammer_dir()
 }
 

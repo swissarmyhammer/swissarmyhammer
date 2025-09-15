@@ -78,7 +78,7 @@ pub use abort_utils::{
 
 // Re-export test utilities for convenience (when testing)
 pub use test_utils::{
-    acquire_semantic_db_lock, create_isolated_test_home, create_temp_dir, IsolatedTestHome,
+    acquire_semantic_db_lock, create_temp_dir,
     ProcessGuard,
 };
 

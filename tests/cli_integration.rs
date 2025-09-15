@@ -1,7 +1,7 @@
 use assert_cmd::Command;
 use predicates::prelude::*;
 
-use swissarmyhammer::test_utils::IsolatedTestHome;
+use swissarmyhammer::test_utils::IsolatedTestEnvironment;
 
 #[test]
 fn test_help_command() {
@@ -9,7 +9,9 @@ fn test_help_command() {
     cmd.arg("--help")
         .assert()
         .success()
-        .stdout(predicate::str::contains("MCP (Model Context Protocol) server"))
+        .stdout(predicate::str::contains(
+            "MCP (Model Context Protocol) server",
+        ))
         .stdout(predicate::str::contains("Commands:"))
         .stdout(predicate::str::contains("serve"))
         .stdout(predicate::str::contains("doctor"))
@@ -27,8 +29,8 @@ fn test_version_command() {
 
 #[test]
 fn test_doctor_command() {
-    let _guard = IsolatedTestHome::new();
-    
+    let _guard = IsolatedTestEnvironment::new();
+
     let mut cmd = Command::cargo_bin("swissarmyhammer").unwrap();
     cmd.arg("doctor")
         .assert()
@@ -44,7 +46,9 @@ fn test_serve_command_help() {
         .arg("--help")
         .assert()
         .success()
-        .stdout(predicate::str::contains("Runs swissarmyhammer as an MCP server"));
+        .stdout(predicate::str::contains(
+            "Runs swissarmyhammer as an MCP server",
+        ));
 }
 
 #[test]
@@ -58,8 +62,8 @@ fn test_invalid_command() {
 
 #[test]
 fn test_quiet_flag() {
-    let _guard = IsolatedTestHome::new();
-    
+    let _guard = IsolatedTestEnvironment::new();
+
     let mut cmd = Command::cargo_bin("swissarmyhammer").unwrap();
     cmd.arg("--quiet")
         .arg("doctor")
@@ -70,8 +74,8 @@ fn test_quiet_flag() {
 
 #[test]
 fn test_verbose_flag() {
-    let _guard = IsolatedTestHome::new();
-    
+    let _guard = IsolatedTestEnvironment::new();
+
     let mut cmd = Command::cargo_bin("swissarmyhammer").unwrap();
     cmd.arg("--verbose")
         .arg("doctor")
