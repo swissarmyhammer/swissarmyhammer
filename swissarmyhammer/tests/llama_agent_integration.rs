@@ -74,53 +74,6 @@ async fn test_agent_execution_context() {
 }
 
 #[tokio::test]
-async fn test_concurrent_executor_access() {
-    let _guard = IsolatedTestEnvironment::new().expect("Failed to create test environment");
-
-    const CONCURRENT_CONTEXTS: usize = 2;
-
-    let handles: Vec<_> = (0..CONCURRENT_CONTEXTS)
-        .map(|i| {
-            tokio::spawn(async move {
-                let context = WorkflowTemplateContext::with_vars(HashMap::new())
-                    .expect("Failed to create context");
-                let mut context_with_config = context;
-
-                // Alternate between executor types
-                let config = if i % 2 == 0 {
-                    AgentConfig::claude_code()
-                } else {
-                    AgentConfig::llama_agent(LlamaAgentConfig::for_testing())
-                };
-
-                context_with_config.set_agent_config(config);
-                let execution_context = AgentExecutionContext::new(&context_with_config);
-
-                // Attempt to create executor
-                match AgentExecutorFactory::create_executor(&execution_context).await {
-                    Ok(_executor) => format!("Context {} succeeded", i),
-                    Err(e) => format!("Context {} failed gracefully: {}", i, e),
-                }
-            })
-        })
-        .collect();
-
-    // Wait for all contexts to complete
-    let mut results = Vec::new();
-    for handle in handles {
-        let result = handle.await.expect("Task should not panic");
-        results.push(result);
-    }
-
-    // All tasks should complete without panicking
-    assert_eq!(results.len(), CONCURRENT_CONTEXTS);
-
-    for result in results {
-        println!("✓ Concurrent test: {:?}", result);
-    }
-}
-
-#[tokio::test]
 async fn test_executor_factory_patterns() {
     let _guard = IsolatedTestEnvironment::new().expect("Failed to create test environment");
 

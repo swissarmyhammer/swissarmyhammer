@@ -157,22 +157,7 @@ pub fn create_isolated_test_home() -> (TempDir, PathBuf) {
     std::fs::create_dir_all(sah_dir.join("issues/complete"))
         .expect("Failed to create issues/complete directory");
 
-    // Create symlink to real cache directory for HuggingFace model caching
-    if let Some(real_cache_dir) = dirs::cache_dir() {
-        let fake_cache_dir = home_path.join(".cache");
 
-        eprintln!("Cache debug - Real: {}, Fake: {}", real_cache_dir.display(), fake_cache_dir.display());
-        eprintln!("Real exists: {}, Fake exists: {}", 
-                  real_cache_dir.exists(), 
-                  fake_cache_dir.exists());
-                  
-        if real_cache_dir.exists() && !fake_cache_dir.exists() {
-            match std::os::unix::fs::symlink(&real_cache_dir, &fake_cache_dir) {
-                Ok(()) => eprintln!("Created cache symlink: {} -> {}", fake_cache_dir.display(), real_cache_dir.display()),
-                Err(e) => eprintln!("Failed to create cache symlink: {}", e),
-            }
-        }
-    }
 
     (temp_dir, home_path)
 }
@@ -261,6 +246,7 @@ impl IsolatedTestEnvironment {
     /// - A temporary directory that can be used as working directory if needed
     /// - Does NOT change the current working directory to allow parallel test execution
     pub fn new() -> std::io::Result<Self> {
+        println!("DEBUG: IsolatedTestEnvironment::new() called");
         // Retry up to 3 times in case of temporary filesystem issues during parallel test execution
         for attempt in 1..=3 {
             match Self::try_create() {
@@ -304,6 +290,18 @@ impl IsolatedTestEnvironment {
         }
 
 
+
+        // Create symlink to real cache directory for HuggingFace model caching
+        if let Some(original_home_path) = &original_home {
+            let real_cache_dir = format!("{}/.cache", original_home_path);
+            let fake_cache_dir = home_guard.home_path().join(".cache");
+
+            if std::path::Path::new(&real_cache_dir).exists() && !fake_cache_dir.exists() {
+                if let Err(_e) = std::os::unix::fs::symlink(&real_cache_dir, &fake_cache_dir) {
+                    // Ignore symlink creation failures
+                }
+            }
+        }
 
         // NOTE: We do NOT change the current working directory to allow parallel test execution
 
