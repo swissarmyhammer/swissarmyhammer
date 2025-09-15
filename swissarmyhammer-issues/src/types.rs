@@ -1,10 +1,10 @@
 //! Core types for issue management
 
+use crate::config::Config;
 use crate::error::{Error, Result};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
-use swissarmyhammer_issues_config::Config;
 
 /// A wrapper type for issue names to prevent mixing up different string types
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, schemars::JsonSchema)]
@@ -47,20 +47,24 @@ impl IssueName {
 
     /// Create a new issue name with relaxed validation for internal filesystem use
     ///
-    /// Uses hard-coded length limit and allows filesystem-safe characters.
+    /// Uses configurable length limit and allows filesystem-safe characters.
     /// Intended for filesystem operations and internal use.
     pub fn new_internal(name: String) -> Result<Self> {
-        const FILESYSTEM_MAX_ISSUE_NAME_LENGTH: usize = 200;
+        Self::new_internal_with_config(name, Config::global())
+    }
 
+    /// Create a new issue name with relaxed validation for internal filesystem use with custom config
+    pub fn new_internal_with_config(name: String, config: &Config) -> Result<Self> {
         let trimmed = name.trim();
 
         if trimmed.is_empty() {
             return Err(Error::other("Issue name cannot be empty"));
         }
 
-        if trimmed.len() > FILESYSTEM_MAX_ISSUE_NAME_LENGTH {
+        if trimmed.len() > config.max_issue_name_length {
             return Err(Error::other(format!(
-                "Issue name cannot exceed {FILESYSTEM_MAX_ISSUE_NAME_LENGTH} characters"
+                "Issue name cannot exceed {} characters",
+                config.max_issue_name_length
             )));
         }
 
@@ -74,12 +78,15 @@ impl IssueName {
 
     /// Create a new issue name with relaxed validation for internal filesystem use
     ///
-    /// Uses a fixed length limit and only rejects null bytes.
+    /// Uses configurable length limit and only rejects null bytes.
     /// Intended for parsing existing filenames from the filesystem.
     /// Empty names are allowed for nameless issues like 000123.md, but whitespace-only strings are rejected.
     pub fn from_filesystem(name: String) -> Result<Self> {
-        const FILESYSTEM_MAX_ISSUE_NAME_LENGTH: usize = 200;
+        Self::from_filesystem_with_config(name, Config::global())
+    }
 
+    /// Create a new issue name from filesystem with custom config
+    pub fn from_filesystem_with_config(name: String, config: &Config) -> Result<Self> {
         let trimmed = name.trim();
 
         // Allow truly empty names for nameless issues, but reject whitespace-only strings
@@ -87,10 +94,11 @@ impl IssueName {
             return Err(Error::other("Issue name cannot be empty"));
         }
 
-        // For filesystem names, allow up to a fixed limit and only reject null bytes
-        if trimmed.len() > FILESYSTEM_MAX_ISSUE_NAME_LENGTH {
+        // For filesystem names, allow up to configurable limit and only reject null bytes
+        if trimmed.len() > config.max_issue_name_length {
             return Err(Error::other(format!(
-                "Issue name cannot exceed {FILESYSTEM_MAX_ISSUE_NAME_LENGTH} characters"
+                "Issue name cannot exceed {} characters",
+                config.max_issue_name_length
             )));
         }
 

@@ -662,22 +662,24 @@ async fn test_error_recovery_workflow() -> Result<()> {
 async fn test_error_recovery_workflow_lightweight() -> Result<()> {
     eprintln!("🔄 Running lightweight error recovery test (no ML operations)");
 
-    let _test_env = E2ETestEnvironment::new()?;
+    let test_env = E2ETestEnvironment::new()?;
 
     // Test basic error recovery scenarios without ML operations
     let timeout_duration = std::time::Duration::from_secs(5); // Much shorter timeout for lightweight test
 
     let result = tokio::time::timeout(timeout_duration, async {
         // Test basic operations that don't require ML
-        let issue_list = run_sah_command_in_process(&["issue", "list"]).await?;
+        let issue_list =
+            run_sah_command_in_process_with_dir(&["issue", "list"], test_env.path()).await?;
         assert_eq!(issue_list.exit_code, 0, "Should be able to list issues");
 
         // Test memo operations
-        let memo_list = run_sah_command_in_process(&["memo", "list"]).await?;
+        let memo_list =
+            run_sah_command_in_process_with_dir(&["memo", "list"], test_env.path()).await?;
         assert_eq!(memo_list.exit_code, 0, "Should be able to list memos");
 
         // Test help command as a basic functionality test
-        let help_result = run_sah_command_in_process(&["--help"]).await?;
+        let help_result = run_sah_command_in_process_with_dir(&["--help"], test_env.path()).await?;
         assert_eq!(help_result.exit_code, 0, "Help command should work");
 
         Ok(())

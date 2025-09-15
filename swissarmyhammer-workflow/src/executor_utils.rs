@@ -4,8 +4,7 @@
 //! getting recommended timeouts, and other executor-related functionality.
 
 use crate::actions::{ActionError, ActionResult};
-// Temporarily disabled due to llama-cpp build issues
-// use crate::agents::LlamaAgentExecutor;
+use crate::agents::LlamaAgentExecutor;
 use swissarmyhammer_config::agent::AgentExecutorType;
 
 /// Validate that a specific executor type is available
@@ -25,20 +24,16 @@ pub async fn validate_executor_availability(executor_type: AgentExecutorType) ->
             }
         }
         AgentExecutorType::LlamaAgent => {
-            // Temporarily disabled due to llama-cpp build issues
-            Err(ActionError::ExecutionError(
-                "LlamaAgent executor is temporarily disabled due to build issues".to_string(),
-            ))
+            // Validate LlamaAgent configuration and availability
+            validate_llama_agent_configuration().await
         }
     }
 }
 
-// Temporarily disabled due to llama-cpp build issues
-/*
 /// Validate LlamaAgent configuration and availability
 async fn validate_llama_agent_configuration() -> ActionResult<()> {
     // Create a test configuration to validate the executor setup
-    let test_config = LlamaAgentConfig::for_testing();
+    let test_config = swissarmyhammer_config::agent::LlamaAgentConfig::for_testing();
 
     // Create executor with test configuration and validate it
     let executor = LlamaAgentExecutor::new(test_config);
@@ -48,7 +43,6 @@ async fn validate_llama_agent_configuration() -> ActionResult<()> {
         ActionError::ExecutionError(format!("LlamaAgent configuration validation failed: {}", e))
     })
 }
-*/
 
 // Temporarily disabled due to llama-cpp build issues
 /*

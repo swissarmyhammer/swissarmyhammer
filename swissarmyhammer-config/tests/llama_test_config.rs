@@ -15,8 +15,6 @@ use swissarmyhammer_config::{
 /// Test configuration for different environments
 #[derive(Debug, Clone)]
 pub struct TestConfig {
-    /// Enable LlamaAgent tests (default: false, requires models)
-    pub enable_llama_tests: bool,
     /// Enable Claude tests (default: true, requires claude CLI)
     pub enable_claude_tests: bool,
     /// Test timeout in seconds (shorter in CI)
@@ -48,9 +46,6 @@ impl TestConfig {
                 .unwrap_or(false);
 
         Self {
-            enable_llama_tests: env::var("SAH_TEST_LLAMA")
-                .map(|v| v.to_lowercase() == "true" || v == "1")
-                .unwrap_or(false),
             enable_claude_tests: env::var("SAH_TEST_CLAUDE")
                 .map(|v| v.to_lowercase() == "true" || v == "1")
                 .unwrap_or(true),
@@ -87,7 +82,6 @@ impl TestConfig {
     /// Get optimized configuration for development environment
     pub fn development() -> Self {
         Self {
-            enable_llama_tests: true,
             enable_claude_tests: true,
             test_timeout_seconds: 120,
             llama_model_repo: DEFAULT_TEST_LLM_MODEL_REPO.to_string(),
@@ -100,7 +94,6 @@ impl TestConfig {
     /// Get optimized configuration for CI environment
     pub fn ci() -> Self {
         Self {
-            enable_llama_tests: false, // Disabled by default in CI (no models)
             enable_claude_tests: true,
             test_timeout_seconds: 60,
             llama_model_repo: DEFAULT_TEST_LLM_MODEL_REPO.to_string(),
@@ -166,9 +159,9 @@ impl TestEnvironment {
         Self { config }
     }
 
-    /// Check if LlamaAgent tests should run
+    /// Check if LlamaAgent tests should run (always enabled)
     pub fn should_test_llama(&self) -> bool {
-        self.config.enable_llama_tests
+        true
     }
 
     /// Check if Claude tests should run
@@ -198,15 +191,7 @@ impl Default for TestEnvironment {
     }
 }
 
-/// Skip test if LlamaAgent testing is disabled
-pub fn skip_if_llama_disabled() {
-    let config = TestConfig::from_environment();
-    if !config.enable_llama_tests {
-        eprintln!("⚠️ Skipping LlamaAgent test (set SAH_TEST_LLAMA=true to enable)");
-        eprintln!("   This test requires model files and may take significant time");
-        std::process::exit(0); // Skip test gracefully
-    }
-}
+
 
 /// Skip test if Claude testing is disabled
 pub fn skip_if_claude_disabled() {
@@ -220,9 +205,9 @@ pub fn skip_if_claude_disabled() {
 /// Skip test if both executors are disabled
 pub fn skip_if_both_disabled() {
     let config = TestConfig::from_environment();
-    if !config.enable_claude_tests && !config.enable_llama_tests {
-        eprintln!("⚠️ Skipping test - both Claude and LlamaAgent tests are disabled");
-        eprintln!("   Enable with SAH_TEST_CLAUDE=true and/or SAH_TEST_LLAMA=true");
+    if !config.enable_claude_tests {
+        eprintln!("⚠️ Skipping test - Claude tests are disabled");
+        eprintln!("   Enable with SAH_TEST_CLAUDE=true");
         std::process::exit(0); // Skip test gracefully
     }
 }
@@ -257,7 +242,6 @@ macro_rules! executor_test {
     ($test_name:ident, llama, $test_body:block) => {
         #[tokio::test]
         async fn $test_name() {
-            $crate::llama_test_config::skip_if_llama_disabled();
             $test_body
         }
     };
@@ -300,15 +284,13 @@ macro_rules! cross_executor_test {
                 test_fn(config).await;
             }
 
-            if env.should_test_llama() {
-                println!("🔸 Testing with LlamaAgent executor");
-                let config = env.config().create_llama_agent_config();
-                test_fn(config).await;
-            }
+            println!("🔸 Testing with LlamaAgent executor");
+            let config = env.config().create_llama_agent_config();
+            test_fn(config).await;
 
-            if !env.should_test_claude() && !env.should_test_llama() {
-                eprintln!("⚠️ No executors enabled for cross-executor test");
-                eprintln!("   Enable with SAH_TEST_CLAUDE=true and/or SAH_TEST_LLAMA=true");
+            if !env.should_test_claude() {
+                eprintln!("⚠️ Only LlamaAgent executor enabled for cross-executor test");
+                eprintln!("   Enable Claude with SAH_TEST_CLAUDE=true");
             }
         }
     };
@@ -330,8 +312,7 @@ mod tests {
 
         let config = TestConfig::from_environment_uncached();
 
-        // Defaults should be Claude enabled, LlamaAgent disabled
-        assert!(!config.enable_llama_tests);
+        // Defaults should be Claude enabled
         assert!(config.enable_claude_tests);
         assert_eq!(config.test_timeout_seconds, 120); // Non-CI default
         assert!(!config.is_ci);
@@ -342,7 +323,7 @@ mod tests {
     fn test_config_development_preset() {
         let config = TestConfig::development();
 
-        assert!(config.enable_llama_tests);
+
         assert!(config.enable_claude_tests);
         assert_eq!(config.test_timeout_seconds, 120);
         assert_eq!(config.max_concurrent_tests, 5);
@@ -354,7 +335,7 @@ mod tests {
     fn test_config_ci_preset() {
         let config = TestConfig::ci();
 
-        assert!(!config.enable_llama_tests); // Disabled in CI by default
+
         assert!(config.enable_claude_tests);
         assert_eq!(config.test_timeout_seconds, 60); // Shorter in CI
         assert_eq!(config.max_concurrent_tests, 3); // Lower concurrency in CI
@@ -419,7 +400,7 @@ mod tests {
         let config = TestConfig::ci();
         let env = TestEnvironment::with_config(config.clone());
 
-        assert_eq!(env.should_test_llama(), config.enable_llama_tests);
+        assert!(env.should_test_llama());
         assert_eq!(env.should_test_claude(), config.enable_claude_tests);
         assert_eq!(
             env.test_timeout(),

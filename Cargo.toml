@@ -8,7 +8,6 @@ members = [
     "swissarmyhammer-cli",
     "swissarmyhammer-tools",
     "swissarmyhammer-config",
-    "swissarmyhammer-issues-config",
     "swissarmyhammer-issues",
     "swissarmyhammer-common",
     "swissarmyhammer-memoranda",
@@ -85,10 +84,14 @@ is-terminal = "0.4"
 
 rmcp = { version = "0.6.0", features = [
     "server",
+    "client", 
     "macros",
     "transport-sse-server",
+    "transport-sse-client",
+    "transport-sse-client-reqwest",
     "transport-io",
     "transport-streamable-http-server",
+    "transport-child-process",
     "auth",
     "elicitation",
     "schemars",

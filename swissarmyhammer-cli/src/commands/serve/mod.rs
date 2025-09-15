@@ -57,17 +57,25 @@ pub async fn handle_command(matches: &clap::ArgMatches, cli_context: &CliContext
 /// Handle HTTP serve mode
 async fn handle_http_serve(matches: &clap::ArgMatches, cli_context: &CliContext) -> i32 {
     use crate::signal_handler::wait_for_shutdown;
-    use swissarmyhammer_tools::mcp::start_http_server;
+    use swissarmyhammer_tools::mcp::{start_mcp_server, McpServerMode};
 
     // Parse port and host arguments from CLI
     let port: u16 = matches.get_one::<u16>("port").copied().unwrap_or(8000);
-
     let host = matches
         .get_one::<String>("host")
         .map(|s| s.as_str())
         .unwrap_or("127.0.0.1");
 
     let bind_addr = format!("{}:{}", host, port);
+    let mode = McpServerMode::Http { port: Some(port) };
+
+    // Note: unified server currently only supports 127.0.0.1, host parameter ignored for now
+    if host != "127.0.0.1" {
+        eprintln!(
+            "Warning: Custom host '{}' not yet supported by unified server, using 127.0.0.1",
+            host
+        );
+    }
 
     // Display starting status
     display_server_status(
@@ -80,9 +88,18 @@ async fn handle_http_serve(matches: &clap::ArgMatches, cli_context: &CliContext)
         &format!("Starting SwissArmyHammer MCP server on {}", bind_addr),
     );
 
-    let server_handle = match start_http_server(&bind_addr).await {
+    println!(
+        "Starting SwissArmyHammer MCP server on 127.0.0.1:{}",
+        if port == 0 {
+            "random port".to_string()
+        } else {
+            port.to_string()
+        }
+    );
+
+    let mut server_handle = match start_mcp_server(mode, None).await {
         Ok(handle) => {
-            let actual_port = handle.port();
+            let actual_port = handle.port().unwrap_or(port);
             let running_message = if port == 0 {
                 format!("✅ MCP HTTP server running on {} (bound to random port: {}). 💡 Use Ctrl+C to stop.", handle.url(), actual_port)
             } else {
@@ -126,7 +143,7 @@ async fn handle_http_serve(matches: &clap::ArgMatches, cli_context: &CliContext)
         "HTTP",
         "Stopping",
         server_handle.url(),
-        Some(server_handle.port()),
+        server_handle.port(),
         0,
         "🛑 Shutting down server...",
     );
@@ -138,7 +155,7 @@ async fn handle_http_serve(matches: &clap::ArgMatches, cli_context: &CliContext)
             "HTTP",
             "Error",
             server_handle.url(),
-            Some(server_handle.port()),
+            server_handle.port(),
             0,
             &format!("Warning: Server shutdown error: {}", e),
         );
@@ -160,11 +177,10 @@ async fn handle_http_serve(matches: &clap::ArgMatches, cli_context: &CliContext)
 
 /// Handle stdio serve mode (existing behavior)
 async fn handle_stdio_serve(cli_context: &CliContext) -> i32 {
-    use rmcp::serve_server;
-    use rmcp::transport::io::stdio;
+    use crate::signal_handler::wait_for_shutdown;
     use swissarmyhammer_tools::McpServer;
 
-    tracing::debug!("Starting MCP server in stdio mode");
+    tracing::debug!("Starting unified MCP server in stdio mode");
 
     // Get prompt library from CliContext
     let library = match cli_context.get_prompt_library() {
@@ -200,54 +216,21 @@ async fn handle_stdio_serve(cli_context: &CliContext) -> i32 {
         );
     }
 
-    let server = match McpServer::new(library).await {
+    let _server = match McpServer::new(library).await {
         Ok(server) => server,
         Err(e) => {
-            tracing::error!("Failed to create MCP server: {}", e);
-            eprintln!("Failed to create MCP server: {}", e);
+            tracing::error!("Failed to start unified stdio MCP server: {}", e);
+            eprintln!("Failed to start unified stdio MCP server: {}", e);
             return EXIT_ERROR;
         }
     };
 
-    // Initialize the server before starting
-    if let Err(e) = server.initialize().await {
-        tracing::error!("Failed to initialize MCP server: {}", e);
-        eprintln!("Failed to initialize MCP server: {}", e);
-        return EXIT_ERROR;
-    }
+    // Wait for shutdown signal or server completion
+    wait_for_shutdown().await;
 
-    tracing::info!("MCP server initialized successfully");
+    // Note: stdio server doesn't need explicit shutdown like HTTP server
 
-    // Start the rmcp SDK server with stdio transport -- THINK before messing with this!
-    let running_service = match serve_server(server, stdio()).await {
-        Ok(service) => {
-            tracing::info!("MCP server started successfully");
-            service
-        }
-        Err(e) => {
-            tracing::error!("MCP server error: {}", e);
-            eprintln!("MCP server error: {}", e);
-            return EXIT_WARNING;
-        }
-    };
-
-    // Wait for the service to complete - this will return when:
-    // - The client disconnects (transport closed)
-    // - The server is cancelled
-    // - A serious error occurs
-    // THINK before messing with this, otherwise you can easily end up with a server that does not start.
-    match running_service.waiting().await {
-        Ok(quit_reason) => {
-            // The QuitReason enum is not exported by rmcp, so we'll just log it
-            tracing::info!("MCP server stopped: {:?}", quit_reason);
-        }
-        Err(e) => {
-            tracing::error!("MCP server task error: {}", e);
-            return EXIT_WARNING;
-        }
-    }
-
-    tracing::info!("MCP server shutting down gracefully");
+    tracing::info!("MCP stdio server completed successfully");
     EXIT_SUCCESS
 }
 

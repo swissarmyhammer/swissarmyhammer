@@ -908,35 +908,4 @@ mod tests {
             .message
             .contains("Claude Code command not found in PATH"));
     }
-
-    #[test]
-    fn test_claude_not_in_path() {
-        // Save original PATH
-        let original_path = env::var("PATH").unwrap_or_default();
-
-        // Set PATH to a directory that definitely doesn't contain claude
-        let temp_dir = TempDir::new().unwrap();
-        env::set_var("PATH", temp_dir.path().display().to_string());
-
-        // Run the check
-        let mut checks = Vec::new();
-        let result = check_claude_config(&mut checks);
-
-        // Restore original PATH
-        env::set_var("PATH", original_path);
-
-        // Verify the result
-        assert!(result.is_ok());
-        assert!(!checks.is_empty());
-
-        // The check should report claude not found in PATH
-        let claude_check = checks
-            .iter()
-            .find(|c| c.name == check_names::CLAUDE_CONFIG)
-            .unwrap();
-        assert_eq!(claude_check.status, CheckStatus::Error);
-        assert!(claude_check
-            .message
-            .contains("Claude Code command not found in PATH"));
-    }
 }

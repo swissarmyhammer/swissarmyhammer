@@ -95,7 +95,6 @@ swissarmyhammer-git = { path = "../swissarmyhammer-git" }
 
 # Configuration support
 swissarmyhammer-config = { path = "../swissarmyhammer-config" }
-swissarmyhammer-issues-config = { path = "../swissarmyhammer-issues-config" }
 
 # Memoranda support for examples only
 swissarmyhammer-memoranda = { path = "../swissarmyhammer-memoranda" }
@@ -148,6 +147,7 @@ rstest = "0.22"
 futures = "0.3"
 swissarmyhammer-config = { path = "../swissarmyhammer-config" }
 swissarmyhammer-issues = { path = "../swissarmyhammer-issues" }
+swissarmyhammer-tools = { path = "../swissarmyhammer-tools" }
 
 [lib]
 name = "swissarmyhammer"
