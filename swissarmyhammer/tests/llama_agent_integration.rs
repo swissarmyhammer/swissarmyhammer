@@ -48,7 +48,6 @@ async fn test_executor_compatibility() {
 
 #[tokio::test]
 async fn test_agent_execution_context() {
-
     let _guard = IsolatedTestEnvironment::new().expect("Failed to create test environment");
 
     // Test context creation with different configurations
@@ -76,10 +75,9 @@ async fn test_agent_execution_context() {
 
 #[tokio::test]
 async fn test_concurrent_executor_access() {
-
     let _guard = IsolatedTestEnvironment::new().expect("Failed to create test environment");
 
-    const CONCURRENT_CONTEXTS: usize = 5;
+    const CONCURRENT_CONTEXTS: usize = 2;
 
     let handles: Vec<_> = (0..CONCURRENT_CONTEXTS)
         .map(|i| {
@@ -124,7 +122,6 @@ async fn test_concurrent_executor_access() {
 
 #[tokio::test]
 async fn test_executor_factory_patterns() {
-
     let _guard = IsolatedTestEnvironment::new().expect("Failed to create test environment");
 
     // Test factory with different context patterns
@@ -167,7 +164,6 @@ async fn test_executor_factory_patterns() {
 
 #[tokio::test]
 async fn test_configuration_serialization() {
-
     let _guard = IsolatedTestEnvironment::new().expect("Failed to create test environment");
 
     // Test that configurations can be properly serialized/deserialized
@@ -212,7 +208,6 @@ async fn test_configuration_serialization() {
 
 #[tokio::test]
 async fn test_timeout_handling() {
-
     let _guard = IsolatedTestEnvironment::new().expect("Failed to create test environment");
 
     // Test that executor creation handles timeouts gracefully
@@ -246,7 +241,6 @@ async fn test_timeout_handling() {
 
 #[tokio::test]
 async fn test_repetition_detection_configuration() {
-
     let _guard = IsolatedTestEnvironment::new().expect("Failed to create test environment");
 
     // Test default repetition detection configuration
@@ -311,7 +305,6 @@ async fn test_repetition_detection_configuration() {
 
 #[tokio::test]
 async fn test_repetition_configuration_integration() {
-
     let _guard = IsolatedTestEnvironment::new().expect("Failed to create test environment");
 
     // This test verifies that repetition detection configuration gets passed

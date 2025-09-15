@@ -154,16 +154,15 @@ pub fn create_isolated_test_home() -> (TempDir, PathBuf) {
         .expect("Failed to create issues/complete directory");
 
     // Create symlink to real cache directory for HuggingFace model caching
-    let real_home = std::env::var("ORIGINAL_HOME")
-        .or_else(|_| std::env::var("REAL_HOME"))
-        .unwrap_or_else(|_| "/Users/wballard".to_string());
-    let real_cache_dir = format!("{}/.cache", real_home);
-    let fake_cache_dir = home_path.join(".cache");
+    if let Some(ref original_home_path) = original_home {
+        let real_cache_dir = format!("{}/.cache", original_home_path);
+        let fake_cache_dir = home_path.join(".cache");
 
-    if std::path::Path::new(&real_cache_dir).exists() && !fake_cache_dir.exists() {
-        if let Err(e) = std::os::unix::fs::symlink(&real_cache_dir, &fake_cache_dir) {
-            // Don't fail the test if symlink creation fails, just warn
-            eprintln!("Warning: Could not create cache symlink: {}", e);
+        if std::path::Path::new(&real_cache_dir).exists() && !fake_cache_dir.exists() {
+            if let Err(e) = std::os::unix::fs::symlink(&real_cache_dir, &fake_cache_dir) {
+                // Don't fail the test if symlink creation fails, just warn
+                eprintln!("Warning: Could not create cache symlink: {}", e);
+            }
         }
     }
 
@@ -266,6 +265,8 @@ impl IsolatedTestEnvironment {
 
     /// Try to create an isolated test environment (single attempt)
     fn try_create() -> std::io::Result<Self> {
+        // Capture original home before creating isolated environment
+        let original_home = std::env::var("HOME").ok();
         let home_guard = IsolatedTestHome::new();
         let temp_dir = TempDir::new()?;
 
