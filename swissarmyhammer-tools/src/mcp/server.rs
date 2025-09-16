@@ -8,7 +8,7 @@ use serde_json::Value;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
-// TODO: Move workflow storage to swissarmyhammer-common to avoid circular dependency
+// TODO: Move workflow storage to swissarmyhammer-common to fix circular dependency
 // use swissarmyhammer_workflow::{
 //     FileSystemWorkflowRunStorage, FileSystemWorkflowStorage, WorkflowRunStorageBackend,
 //     WorkflowStorage, WorkflowStorageBackend,
@@ -32,12 +32,11 @@ use super::tool_registry::{
     ToolRegistry,
 };
 
-/// MCP server for serving prompts and workflows
+/// MCP server for all SwissArmyHammer functionality.
 #[derive(Clone)]
 pub struct McpServer {
     library: Arc<RwLock<PromptLibrary>>,
-    // TODO: Re-enable workflow storage after moving to common crate
-    // workflow_storage: Arc<RwLock<WorkflowStorage>>,
+
     file_watcher: Arc<Mutex<FileWatcher>>,
     tool_registry: Arc<ToolRegistry>,
     pub tool_context: Arc<ToolContext>,
@@ -56,7 +55,6 @@ impl McpServer {
     ///
     /// # Errors
     ///
-    /// Returns an error if workflow storage, issue storage, or git operations fail to initialize.
     pub async fn new(library: PromptLibrary) -> Result<Self> {
         let work_dir = std::env::current_dir().unwrap_or_else(|_| {
             // Fallback to a temporary directory if current directory is not accessible
@@ -78,29 +76,7 @@ impl McpServer {
     ///
     /// # Errors
     ///
-    /// Returns an error if workflow storage, issue storage, or git operations fail to initialize.
     pub async fn new_with_work_dir(library: PromptLibrary, work_dir: PathBuf) -> Result<Self> {
-        // TODO: Re-enable workflow storage after moving to common crate to break circular dependency
-        // Initialize workflow storage with filesystem backend
-        // let workflow_backend = Arc::new(FileSystemWorkflowStorage::new().map_err(|e| {
-        //     tracing::error!("Failed to create workflow storage: {}", e);
-        //     SwissArmyHammerError::Other {
-        //         message: format!("Failed to create workflow storage: {e}"),
-        //     }
-        // })?) as Arc<dyn WorkflowStorageBackend>;
-
-        // Create runs directory in user's home directory
-        // let runs_path = Self::get_workflow_runs_path();
-
-        // let run_backend = Arc::new(FileSystemWorkflowRunStorage::new(runs_path).map_err(|e| {
-        //     tracing::error!("Failed to create workflow run storage: {}", e);
-        //     SwissArmyHammerError::Other {
-        //         message: format!("Failed to create workflow run storage: {e}"),
-        //     }
-        // })?) as Arc<dyn WorkflowRunStorageBackend>;
-
-        // let workflow_storage = WorkflowStorage::new(workflow_backend, run_backend);
-
         // Initialize issue storage using new storage defaults with working directory context
         let issue_storage = {
             let original_dir = std::env::current_dir().ok();
@@ -210,8 +186,6 @@ impl McpServer {
 
         Ok(Self {
             library: Arc::new(RwLock::new(library)),
-            // TODO: Re-enable after moving workflow storage to common crate
-            // workflow_storage: Arc::new(RwLock::new(workflow_storage)),
             file_watcher: Arc::new(Mutex::new(FileWatcher::new())),
             tool_registry: Arc::new(tool_registry),
             tool_context,
@@ -227,10 +201,10 @@ impl McpServer {
         &self.library
     }
 
-    /// Initialize the server by loading prompts and workflows from disk.
+    /// Initialize the server.
     ///
-    /// This method loads all prompts using the PromptResolver and initializes
-    /// workflow storage. It should be called before starting the MCP server.
+    /// This method loads all prompts using the PromptResolver.
+    /// It should be called before starting the MCP server.
     ///
     /// # Returns
     ///
@@ -238,7 +212,7 @@ impl McpServer {
     ///
     /// # Errors
     ///
-    /// Returns an error if prompt loading or workflow initialization fails.
+    /// Returns an error if prompt loading fails.
     pub async fn initialize(&self) -> Result<()> {
         let mut library = self.library.write().await;
         let mut resolver = PromptResolver::new();
@@ -257,19 +231,6 @@ impl McpServer {
             })?
             .len();
         tracing::debug!("Loaded {} prompts total", total);
-
-        // Initialize workflows - workflows are loaded automatically by FileSystemWorkflowStorage
-        // so we just need to check how many are available
-        // TODO: Re-enable after moving workflow storage to common crate
-        // let workflow_storage = self.workflow_storage.read().await;
-        let workflow_count = 0; // TODO: Re-enable workflow counting after fixing circular dependency
-        // let workflow_count = workflow_storage
-        //     .list_workflows()
-        //     .map_err(|e| SwissArmyHammerError::Other {
-        //         message: e.to_string(),
-        //     })?
-        //     .len();
-        tracing::debug!("Loaded {} workflows total", workflow_count);
 
         Ok(())
     }
@@ -292,25 +253,6 @@ impl McpServer {
             .filter(|p| !p.is_partial_template())
             .map(|p| p.name.clone())
             .collect())
-    }
-
-    /// List all available workflows loaded from the workflow storage.
-    ///
-    /// # Returns
-    ///
-    /// * `Result<Vec<String>>` - List of workflow names or an error
-    pub async fn list_workflows(&self) -> Result<Vec<String>> {
-        // TODO: Re-enable after moving workflow storage to common crate
-        // let workflow_storage = self.workflow_storage.read().await;
-        // TODO: Re-enable workflow listing after fixing circular dependency
-        Ok(vec!["workflow_support_disabled_due_to_circular_dependency".to_string()])
-        // let workflows =
-        //     workflow_storage
-        //         .list_workflows()
-        //         .map_err(|e| SwissArmyHammerError::Other {
-        //             message: e.to_string(),
-        //         })?;
-        // Ok(workflows.iter().map(|w| w.name.to_string()).collect())
     }
 
     /// List all available tools from the tool registry.
@@ -419,16 +361,6 @@ impl McpServer {
         };
 
         Ok(content)
-    }
-
-    /// Get the workflow runs directory path
-    fn get_workflow_runs_path() -> std::path::PathBuf {
-        dirs::home_dir()
-            .unwrap_or_else(|| {
-                std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."))
-            })
-            .join(".swissarmyhammer")
-            .join("workflow-runs")
     }
 
     /// Convert serde_json::Map to HashMap<String, String> for template rendering.
@@ -674,7 +606,10 @@ impl ServerHandler for McpServer {
                 logging: None,
                 completions: None,
                 experimental: None,
-            },instructions: Some("A flexible prompt and workflow management server with integrated issue tracking. Use list_prompts to see available prompts and get_prompt to retrieve and render them. Use workflow tools to execute and manage workflows. Use issue_* tools to create and manage work items tracked as markdown files in your repository.".into()),
+            },
+            instructions: Some(
+                "The only coding assistant you'll ever need. Write specs, not code.".into(),
+            ),
             server_info: Implementation {
                 name: "SwissArmyHammer".into(),
                 version: crate::VERSION.into(),
@@ -846,13 +781,17 @@ impl ServerHandler for McpServer {
                 logging: None,
                 completions: None,
                 experimental: None,
-            },server_info: Implementation {
+            },
+            server_info: Implementation {
                 name: "SwissArmyHammer".into(),
                 version: crate::VERSION.into(),
                 icons: None,
                 title: Some("SwissArmyHammer MCP Server".into()),
                 website_url: Some("https://github.com/swissarmyhammer/swissarmyhammer".into()),
-            },instructions: Some("A flexible prompt and workflow management server with integrated issue tracking. Use list_prompts to see available prompts and get_prompt to retrieve and render them. Use workflow tools to execute and manage workflows. Use issue_* tools to create and manage work items tracked as markdown files in your repository.".into()),
+            },
+            instructions: Some(
+                "The only coding assistant you'll ever need. Write specs, not code.".into(),
+            ),
         }
     }
 }

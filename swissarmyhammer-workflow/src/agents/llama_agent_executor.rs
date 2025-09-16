@@ -85,72 +85,34 @@ impl McpServerHandle {
 async fn start_in_process_mcp_server(
     config: &swissarmyhammer_config::McpServerConfig,
 ) -> Result<McpServerHandle, Box<dyn std::error::Error + Send + Sync>> {
-    use axum::{
-        extract::State,
-        http::StatusCode,
-        response::Json,
-        routing::post,
-        Router,
-    };
-    use serde_json::json;
+    // Use the REAL unified HTTP MCP server from swissarmyhammer-tools
+    use swissarmyhammer_tools::mcp::unified_server::{start_mcp_server, McpServerMode};
+    use swissarmyhammer_prompts::PromptLibrary;
 
-    let port = if config.port == 0 { 56789 } else { config.port };
-    let bind_addr = format!("127.0.0.1:{}", port);
-    
-    tracing::error!("CLAUDE_DEBUG: start_in_process_mcp_server called with port {}", port);
+    tracing::info!("Starting REAL unified HTTP MCP server with full tool registry");
 
-    let listener = tokio::net::TcpListener::bind(&bind_addr)
-        .await
-        .map_err(|e| format!("Failed to bind to {}: {}", bind_addr, e))?;
+    // Use the real unified server implementation with correct signature
+    let handle = start_mcp_server(
+        McpServerMode::Http { 
+            port: if config.port == 0 { None } else { Some(config.port) }
+        },
+        Some(PromptLibrary::default())
+    ).await.map_err(|e| {
+        tracing::error!("Failed to start real unified HTTP MCP server: {}", e);
+        e
+    })?;
 
-    let actual_addr = listener.local_addr()
-        .map_err(|e| format!("Failed to get local address: {}", e))?;
+    tracing::info!("Real unified HTTP MCP server started on port {}", handle.info.port.unwrap_or(0));
 
-    // Create simple working MCP handler that returns an error for tool calls
-    // This will at least establish the connection and show that the server is reachable
-    let mcp_handler = |Json(payload): Json<serde_json::Value>| async move {
-        let method = payload.get("method").and_then(|m| m.as_str()).unwrap_or("unknown");
-        let id = payload.get("id").cloned();
+    // Convert to our handle type
+    let (dummy_tx, _dummy_rx) = tokio::sync::oneshot::channel();
+    let mcp_handle = McpServerHandle::new(
+        handle.info.port.unwrap_or(0),
+        "127.0.0.1".to_string(),
+        dummy_tx,
+    );
 
-        let result = match method {
-            "initialize" => json!({
-                "protocol_version": "2024-11-05",
-                "capabilities": { "tools": { "list_changed": true } },
-                "server_info": { "name": "SwissArmyHammer", "version": "0.1.0" }
-            }),
-            "tools/list" => json!({ "tools": [] }),
-            "tools/call" => json!({
-                "content": [{ "type": "text", "text": "MCP server connected but tool execution disabled due to circular dependency - need to fix architecture" }],
-                "isError": true
-            }),
-            _ => return Ok::<_, StatusCode>(Json(json!({
-                "jsonrpc": "2.0", "id": id, "error": { "code": -32601, "message": format!("Method not found: {}", method) }
-            })))
-        };
-
-        Ok(Json(json!({ "jsonrpc": "2.0", "id": id, "result": result })))
-    };
-
-    let app = Router::new().route("/mcp", post(mcp_handler));
-    let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
-
-    // Actually start the server
-    tokio::spawn(async move {
-        let graceful = axum::serve(listener, app).with_graceful_shutdown(async {
-            let _ = shutdown_rx.await;
-        });
-        if let Err(e) = graceful.await {
-            tracing::error!("MCP server error: {}", e);
-        }
-    });
-
-    // Give the server time to actually start
-    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-
-    let handle = McpServerHandle::new(actual_addr.port(), "127.0.0.1".to_string(), shutdown_tx);
-    tracing::error!("CLAUDE_DEBUG: Created MCP server on port {} with URL {}", actual_addr.port(), handle.url());
-
-    Ok(handle)
+    Ok(mcp_handle)
 }
 
 /// HTTP server state for sharing tool registry
