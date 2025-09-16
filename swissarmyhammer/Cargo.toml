@@ -118,9 +118,6 @@ tower = { workspace = true }
 tower-http = { workspace = true, features = ["trace"] }
 hyper = { workspace = true }
 
-# LlamaAgent integration for local AI execution - TEMPORARILY DISABLED due to hanging cmake build
-# llama-agent = { workspace = true }
-
 # Progress bars and user interface
 indicatif = { workspace = true }
 
@@ -143,6 +140,7 @@ sysinfo = { workspace = true }
 serial_test = "3.1"
 rand = { workspace = true }
 rstest = "0.22"
+test-log = "0.2"
 
 futures = "0.3"
 swissarmyhammer-config = { path = "../swissarmyhammer-config" }

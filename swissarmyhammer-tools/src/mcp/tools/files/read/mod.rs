@@ -151,6 +151,8 @@ impl McpTool for ReadFileTool {
         use crate::mcp::tools::files::shared_utils::SecureFileAccess;
         use serde::Deserialize;
 
+        tracing::error!("files_read execute() called with arguments: {:?}", arguments);
+
         #[derive(Deserialize)]
         struct ReadRequest {
             absolute_path: String,
@@ -159,7 +161,17 @@ impl McpTool for ReadFileTool {
         }
 
         // Parse arguments
-        let request: ReadRequest = BaseToolImpl::parse_arguments(arguments)?;
+        let request: ReadRequest = match BaseToolImpl::parse_arguments::<ReadRequest>(arguments) {
+            Ok(r) => {
+                tracing::error!("Parsed request successfully: path={}, offset={:?}, limit={:?}", 
+                               r.absolute_path, r.offset, r.limit);
+                r
+            }
+            Err(e) => {
+                tracing::error!("Failed to parse arguments: {}", e);
+                return Err(e);
+            }
+        };
 
         // Validate parameters before security layer
         if let Some(offset) = request.offset {

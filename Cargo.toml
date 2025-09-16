@@ -132,7 +132,8 @@ hyper = "1.0"
 # Web fetch dependencies
 markdowndown = { git = "https://github.com/swissarmyhammer/markdowndown", version = "0.1.0" }
 
-#llama-agent = { path = "../llama-agent/llama-agent" }
+llama-agent = { path = "../llama-agent/llama-agent" }
+llama-loader = { path = "../llama-agent/llama-loader" }
 
 # Additional common dependencies
 libc = "0.2"

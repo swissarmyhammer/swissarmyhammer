@@ -7,7 +7,7 @@
 //! # Features
 //!
 //! - **Multiple file formats**: TOML, YAML, JSON with automatic format detection
-//! - **File discovery**: Automatic discovery in standard `.swissarmyhammer/` directories  
+//! - **File discovery**: Automatic discovery in standard `.swissarmyhammer/` directories
 //! - **Environment integration**: Full environment variable support with `SAH_` and `SWISSARMYHAMMER_` prefixes
 //! - **Variable substitution**: Shell-style `${VAR}` and `${VAR:-default}` syntax in config files
 //! - **Proper precedence**: Clear precedence ordering: defaults → global → project → env → CLI
@@ -84,7 +84,7 @@
 //!
 //! ```bash
 //! export SAH_APP_NAME="MyProject"          # → app.name
-//! export SAH_DATABASE_HOST="localhost"     # → database.host  
+//! export SAH_DATABASE_HOST="localhost"     # → database.host
 //! export SAH_DATABASE_PORT="5432"          # → database.port
 //! export SAH_DEBUG="true"                  # → debug
 //! ```
@@ -210,7 +210,7 @@ pub use template_context::TemplateContext;
 ///
 /// 1. Default values (lowest precedence)
 /// 2. Global config files (`~/.swissarmyhammer/sah.*`)
-/// 3. Project config files (`./.swissarmyhammer/sah.*`)  
+/// 3. Project config files (`./.swissarmyhammer/sah.*`)
 /// 4. Environment variables (`SAH_*` and `SWISSARMYHAMMER_*`)
 /// 5. CLI arguments (highest precedence, if provided)
 ///
@@ -224,7 +224,7 @@ pub use template_context::TemplateContext;
 ///
 /// Returns `ConfigurationError` for issues such as:
 /// - Invalid file syntax (malformed TOML, YAML, or JSON)
-/// - Environment variable substitution failures  
+/// - Environment variable substitution failures
 /// - File permission or access issues
 /// - Type conversion errors
 ///
@@ -243,7 +243,7 @@ pub use template_context::TemplateContext;
 ///     println!("Application: {}", app_name);
 /// }
 ///
-/// // Access nested values  
+/// // Access nested values
 /// if let Some(db_host) = context.get("database.host") {
 ///     println!("Database host: {}", db_host);
 /// }
@@ -339,14 +339,14 @@ pub fn load_configuration() -> ConfigurationResult<TemplateContext> {
 /// // CLI tool that respects configuration
 /// fn main() -> Result<(), Box<dyn std::error::Error>> {
 ///     let context = load_configuration_for_cli()?;
-///     
+///
 ///     // Get configuration or use CLI args as fallback
 ///     let output_format = env::args()
 ///         .find(|arg| arg.starts_with("--format="))
 ///         .map(|arg| arg.split('=').nth(1).unwrap_or("json").to_string())
 ///         .or_else(|| context.get("output.format").and_then(|v| v.as_str().map(String::from)))
 ///         .unwrap_or_else(|| "json".to_string());
-///         
+///
 ///     println!("Using output format: {}", output_format);
 ///     Ok(())
 /// }
@@ -358,28 +358,18 @@ pub fn load_configuration_for_cli() -> ConfigurationResult<TemplateContext> {
 /// Default LLM model repository for testing
 ///
 /// This constant specifies the Hugging Face repository for the default test LLM model.
-/// Qwen3-1.7B is chosen as the test model because it provides:
-/// - Small size (suitable for CI/CD environments)
-/// - Fast inference (minimizes test execution time)
-/// - High quality instruction following (reliable test behavior)
-/// - Local execution capability (no API dependencies)
 ///
 /// Used in conjunction with [`DEFAULT_TEST_LLM_MODEL_FILENAME`] to configure
 /// test LlamaAgent instances across all packages.
-pub const DEFAULT_TEST_LLM_MODEL_REPO: &str = "unsloth/Qwen3-1.7B-GGUF";
+pub const DEFAULT_TEST_LLM_MODEL_REPO: &str = "unsloth/Qwen3-4B-Instruct-2507-GGUF";
 
 /// Default LLM model filename for testing
 ///
 /// This constant specifies the specific GGUF file within the repository
-/// defined by [`DEFAULT_TEST_LLM_MODEL_REPO`]. The Q6_K_XL quantization
-/// provides an optimal balance between:
-/// - Model quality (maintains instruction following capability)  
-/// - File size (~1.2GB - efficient downloads and storage)
-/// - Inference speed (fast enough for test suites with 1.7B parameters)
-/// - Memory usage (runs on typical development machines with ~2-3GB RAM)
+/// defined by [`DEFAULT_TEST_LLM_MODEL_REPO`].
 ///
 /// This file will be automatically downloaded by llama.cpp when first accessed.
-pub const DEFAULT_TEST_LLM_MODEL_FILENAME: &str = "Qwen3-1.7B-UD-Q6_K_XL.gguf";
+pub const DEFAULT_TEST_LLM_MODEL_FILENAME: &str = "Qwen3-4B-Instruct-2507-UD-Q4_K_XL.gguf";
 
 /// Default embedding model for testing
 ///
@@ -458,9 +448,7 @@ pub mod test_config {
         }
     }
 
-
-
-    /// Skip test if Claude testing is disabled  
+    /// Skip test if Claude testing is disabled
     pub fn skip_if_claude_disabled() {
         let config = TestConfig::from_environment();
         if !config.enable_claude_tests {

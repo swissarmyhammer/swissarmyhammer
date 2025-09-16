@@ -689,15 +689,39 @@ impl SecureFileAccess {
         offset: Option<usize>,
         limit: Option<usize>,
     ) -> Result<String, McpError> {
+        tracing::debug!("SecureFileAccess::read called with path: {}", path);
+        
         // Validate path through security framework
-        let validated_path = self.validator.validate_absolute_path(path)?;
+        let validated_path = match self.validator.validate_absolute_path(path) {
+            Ok(p) => {
+                tracing::debug!("Path validation successful: {}", p.display());
+                p
+            }
+            Err(e) => {
+                tracing::error!("Path validation failed for '{}': {}", path, e);
+                return Err(e);
+            }
+        };
 
         // Check permissions for read operation
-        check_file_permissions(&validated_path, FileOperation::Read)?;
+        if let Err(e) = check_file_permissions(&validated_path, FileOperation::Read) {
+            tracing::error!("Permission check failed for '{}': {}", validated_path.display(), e);
+            return Err(e);
+        }
+        
+        tracing::debug!("Permission check passed for: {}", validated_path.display());
 
         // Perform the actual read operation
-        let content = std::fs::read_to_string(&validated_path)
-            .map_err(|e| handle_file_error(e, "read", &validated_path))?;
+        let content = match std::fs::read_to_string(&validated_path) {
+            Ok(c) => {
+                tracing::debug!("File read successful, content length: {} bytes", c.len());
+                c
+            }
+            Err(e) => {
+                tracing::error!("File read failed for '{}': {}", validated_path.display(), e);
+                return Err(handle_file_error(e, "read", &validated_path));
+            }
+        };
 
         // Apply offset and limit if specified (same logic as existing read tool)
         let final_content = match (offset, limit) {

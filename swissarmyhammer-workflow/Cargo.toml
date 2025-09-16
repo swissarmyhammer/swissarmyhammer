@@ -33,6 +33,7 @@ swissarmyhammer-common = { path = "../swissarmyhammer-common" }
 swissarmyhammer-prompts = { path = "../swissarmyhammer-prompts" }
 swissarmyhammer-shell = { path = "../swissarmyhammer-shell" }
 swissarmyhammer-templating = { path = "../swissarmyhammer-templating" }
+swissarmyhammer-tools = { path = "../swissarmyhammer-tools" }
 
 # Template engine (legacy - being phased out)
 liquid = { workspace = true }
@@ -118,7 +119,7 @@ tower-http = { workspace = true, features = ["trace"] }
 hyper = { workspace = true }
 
 # LlamaAgent integration for local AI execution
-llama-agent = { git = "https://github.com/swissarmyhammer/llama-agent.git", branch = "main" }
+llama-agent = { workspace = true }
 
 # Progress bars and user interface
 indicatif = { workspace = true }

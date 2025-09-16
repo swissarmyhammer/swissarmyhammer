@@ -20,22 +20,30 @@ use tracing::info;
 const INTEGRATION_TEST_TIMEOUT_SECS: u64 = 300; // 5 minutes for complete integration test
 const MODEL_EXECUTION_TIMEOUT_SECS: u64 = 180; // 3 minutes for model execution
 
-// Test prompt template
-const FILE_READ_PROMPT: &str = "Use the files_read tool to read the cargo.toml file. When you have the context, extract the authors and tell me the authors.";
-const SYSTEM_PROMPT: &str = "You are a helpful assistant that can use tools to read files.";
+// Test prompt template - dynamically constructed with absolute path
+const SYSTEM_PROMPT: &str = "You are a helpful assistant that can use tools to read files. Always use absolute file paths when calling tools.";
 
 /// Creates LlamaAgent configuration that uses HuggingFace with proper caching
 fn create_llama_config_for_integration_test() -> AgentConfig {
     info!("Configuring LlamaAgent with HuggingFace source and caching");
 
-    let mut llama_config = LlamaAgentConfig::for_testing();
-    llama_config.mcp_server.port = 0;
-
-    // Use same model as cache test for consistency
-    llama_config.model.source = swissarmyhammer_config::agent::ModelSource::HuggingFace {
-        repo: "unsloth/Qwen3-0.6B-GGUF".to_string(),
-        filename: Some("Qwen3-0.6B-UD-Q4_K_XL.gguf".to_string()),
-        folder: None,
+    // Create a completely fresh config to bypass any environment overrides
+    let llama_config = swissarmyhammer_config::agent::LlamaAgentConfig {
+        model: swissarmyhammer_config::agent::ModelConfig {
+            source: swissarmyhammer_config::agent::ModelSource::HuggingFace {
+                repo: DEFAULT_TEST_LLM_MODEL_REPO.to_string(),
+                filename: Some(DEFAULT_TEST_LLM_MODEL_FILENAME.to_string()),
+                folder: None,
+            },
+            batch_size: 64,
+            use_hf_params: true,
+            debug: false,
+        },
+        mcp_server: swissarmyhammer_config::agent::McpServerConfig {
+            port: 0,
+            timeout_seconds: 30,
+        },
+        repetition_detection: Default::default(),
     };
 
     AgentConfig::llama_agent(llama_config)
@@ -63,7 +71,7 @@ fn validate_cargo_toml_response(response: &str) -> Result<(), String> {
 /// 2. Executes prompt asking model to read Cargo.toml using file_read tool
 /// 3. Validates model makes correct MCP tool call to its own server and receives file contents
 /// 4. Verifies response contains actual Cargo.toml content
-#[tokio::test]
+#[test_log::test(tokio::test)]
 async fn test_llama_mcp_cargo_toml_integration() {
     let _guard = IsolatedTestEnvironment::new().expect("Failed to create test environment");
 
@@ -102,7 +110,11 @@ async fn test_llama_mcp_cargo_toml_integration() {
         );
 
         // Execute prompt asking model to read Cargo.toml using integrated MCP tools
-        info!("Executing prompt: '{}'", FILE_READ_PROMPT);
+        let file_read_prompt = format!(
+            "Use the files_read tool to read the file at the absolute path \"{}\". Use exactly this path with the files_read tool. When you have the content, extract the authors and tell me the authors.",
+            cargo_toml_path.display()
+        );
+        info!("Executing prompt: '{}'", file_read_prompt);
         info!("Expected workflow: LlamaAgent → Internal MCP Server → file_read tool → file system");
 
         let model_timeout = Duration::from_secs(MODEL_EXECUTION_TIMEOUT_SECS);
@@ -110,7 +122,7 @@ async fn test_llama_mcp_cargo_toml_integration() {
         let agent_response = executor
             .execute_prompt(
                 SYSTEM_PROMPT.to_string(),
-                FILE_READ_PROMPT.to_string(),
+                file_read_prompt,
                 &execution_context,
                 model_timeout,
             )
