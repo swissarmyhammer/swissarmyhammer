@@ -1,0 +1,14 @@
+project_name: SwissArmyHammer
+agent:
+  quiet: false
+  executor:
+    type: llama-agent
+    config:
+      model:
+        source:
+          HuggingFace:
+            repo: "unsloth/Phi-4-mini-instruct-GGUF"
+            filename: "Phi-4-mini-instruct-Q4_K_M.gguf"
+      mcp_server:
+        port: 0
+        timeout_seconds: 30
