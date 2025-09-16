@@ -51,7 +51,7 @@ pub struct McpServerHandle {
 impl McpServerHandle {
     /// Create a new MCP server handle
     fn new(port: u16, host: String, shutdown_tx: tokio::sync::oneshot::Sender<()>) -> Self {
-        let url = format!("http://{}:{}", host, port);
+        let url = format!("http://{}:{}", host, port);  // Base URL - MCP service is nested at /mcp
         Self {
             port,
             url,
@@ -836,7 +836,7 @@ impl LlamaAgentExecutor {
 
             let http_config = HttpServerConfig {
                 name: "swissarmyhammer".to_string(),
-                url: mcp_server.url().to_string(),
+                url: format!("{}/mcp", mcp_server.url()),  // Add /mcp path here
                 timeout_secs: Some(self.config.mcp_server.timeout_seconds),
                 sse_keep_alive_secs: Some(30), // 30 second keepalive
                 stateful_mode: false,          // Use stateless mode for simplicity

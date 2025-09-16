@@ -800,10 +800,22 @@ impl ServerHandler for McpServer {
         request: CallToolRequestParam,
         _context: RequestContext<RoleServer>,
     ) -> std::result::Result<CallToolResult, McpError> {
+        tracing::info!("🔧 call_tool() invoked for tool: {}", request.name);
+        tracing::debug!("🔧 Tool arguments: {:?}", request.arguments);
+
         if let Some(tool) = self.tool_registry.get_tool(&request.name) {
-            tool.execute(request.arguments.unwrap_or_default(), &self.tool_context)
-                .await
+            tracing::info!("🔧 Executing tool: {}", request.name);
+            let result = tool
+                .execute(request.arguments.unwrap_or_default(), &self.tool_context)
+                .await;
+            tracing::info!(
+                "🔧 Tool execution result for {}: {:?}",
+                request.name,
+                result.is_ok()
+            );
+            result
         } else {
+            tracing::error!("🔧 Unknown tool requested: {}", request.name);
             Err(McpError::invalid_request(
                 format!("Unknown tool: {}", request.name),
                 None,

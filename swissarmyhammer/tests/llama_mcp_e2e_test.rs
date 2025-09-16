@@ -21,8 +21,8 @@ const INTEGRATION_TEST_TIMEOUT_SECS: u64 = 300; // 5 minutes for complete integr
 const MODEL_EXECUTION_TIMEOUT_SECS: u64 = 180; // 3 minutes for model execution
 
 // Test prompt template
-const FILE_READ_PROMPT: &str = "Use the files_read tool to read the cargo.toml file. If you successfully read content, respond with exactly 'THERE IS CONTENT'.";
-const SYSTEM_PROMPT: &str = "You are a helpful assistant that can use tools to read files. When you successfully read file content, respond with exactly 'THERE IS CONTENT'.";
+const FILE_READ_PROMPT: &str = "Use the files_read tool to read the cargo.toml file. When you have the context, extract the authors and tell me the authors.";
+const SYSTEM_PROMPT: &str = "You are a helpful assistant that can use tools to read files.";
 
 /// Creates LlamaAgent configuration that uses HuggingFace with proper caching
 fn create_llama_config_for_integration_test() -> AgentConfig {
@@ -46,12 +46,12 @@ fn validate_cargo_toml_response(response: &str) -> Result<(), String> {
     println!("Validating response content:\n{}", response);
 
     // Check for the specific success indicator
-    if response.contains("THERE IS CONTENT") {
+    if response.contains("SwissArmyHammer Team") {
         return Ok(());
     }
 
     return Err(format!(
-        "Response should contain 'THERE IS CONTENT' indicating successful file read. Got: {}",
+        "Response should contain 'SwissArmyHammer Team' indicating successful file read. Got: {}",
         response
     ));
 }
@@ -66,8 +66,6 @@ fn validate_cargo_toml_response(response: &str) -> Result<(), String> {
 #[tokio::test]
 async fn test_llama_mcp_cargo_toml_integration() {
     let _guard = IsolatedTestEnvironment::new().expect("Failed to create test environment");
-
-
 
     let test_timeout = Duration::from_secs(INTEGRATION_TEST_TIMEOUT_SECS);
 
@@ -160,8 +158,6 @@ async fn test_llama_mcp_cargo_toml_integration() {
 #[tokio::test]
 async fn test_llama_mcp_server_connectivity() {
     let _guard = IsolatedTestEnvironment::new().expect("Failed to create test environment");
-
-
 
     info!("Testing LlamaAgent MCP server integration configuration");
 
