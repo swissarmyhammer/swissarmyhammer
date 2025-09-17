@@ -60,18 +60,11 @@ impl McpTool for AbortCreateTool {
     async fn execute(
         &self,
         arguments: serde_json::Map<String, serde_json::Value>,
-        context: &ToolContext,
+        _context: &ToolContext,
     ) -> std::result::Result<CallToolResult, McpError> {
         let request: AbortCreateRequest = BaseToolImpl::parse_arguments(arguments)?;
 
-        // Apply rate limiting for abort creation
-        context
-            .rate_limiter
-            .check_rate_limit("unknown", "abort_create", 1)
-            .map_err(|e| {
-                tracing::warn!("Rate limit exceeded for abort creation: {}", e);
-                McpError::invalid_params(e.to_string(), None)
-            })?;
+
 
         tracing::debug!("Creating abort with reason: {}", request.reason);
 

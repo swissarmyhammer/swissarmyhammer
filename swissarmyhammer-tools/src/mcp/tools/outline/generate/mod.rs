@@ -459,7 +459,7 @@ mod tests {
     #[tokio::test]
     async fn test_tool_execution_invalid_empty_patterns() {
         use crate::mcp::tool_handlers::ToolHandlers;
-        use std::path::PathBuf;
+
         use std::sync::Arc;
         use swissarmyhammer_git::GitOperations;
         use swissarmyhammer_issues::IssueStorage;
@@ -468,8 +468,9 @@ mod tests {
 
         // Create mock context
         let issue_storage: Arc<RwLock<Box<dyn IssueStorage>>> = Arc::new(RwLock::new(Box::new(
-            swissarmyhammer_issues::FileSystemIssueStorage::new(PathBuf::from("./test_issues"))
-                .unwrap(),
+            swissarmyhammer_issues::FileSystemIssueStorage::new(
+                tempfile::tempdir().unwrap().path().to_path_buf()
+            ).unwrap(),
         )));
         let git_ops: Arc<Mutex<Option<GitOperations>>> = Arc::new(Mutex::new(None));
         // Create temporary directory for memo storage
@@ -483,14 +484,6 @@ mod tests {
             issue_storage,
             git_ops,
             memo_storage,
-            Arc::new(swissarmyhammer_common::RateLimiter::with_config(
-                swissarmyhammer_common::RateLimiterConfig {
-                    global_limit: 10000,
-                    per_client_limit: 1000,
-                    expensive_operation_limit: 500,
-                    window_duration: std::time::Duration::from_secs(1),
-                },
-            )),
         );
 
         let tool = OutlineGenerateTool::new();
@@ -508,7 +501,7 @@ mod tests {
     #[tokio::test]
     async fn test_tool_execution_valid_patterns() {
         use crate::mcp::tool_handlers::ToolHandlers;
-        use std::path::PathBuf;
+
         use std::sync::Arc;
         use swissarmyhammer_git::GitOperations;
         use swissarmyhammer_issues::IssueStorage;
@@ -517,8 +510,9 @@ mod tests {
 
         // Create mock context
         let issue_storage: Arc<RwLock<Box<dyn IssueStorage>>> = Arc::new(RwLock::new(Box::new(
-            swissarmyhammer_issues::FileSystemIssueStorage::new(PathBuf::from("./test_issues"))
-                .unwrap(),
+            swissarmyhammer_issues::FileSystemIssueStorage::new(
+                tempfile::tempdir().unwrap().path().to_path_buf()
+            ).unwrap(),
         )));
         let git_ops: Arc<Mutex<Option<GitOperations>>> = Arc::new(Mutex::new(None));
         // Create temporary directory for memo storage
@@ -532,14 +526,6 @@ mod tests {
             issue_storage,
             git_ops,
             memo_storage,
-            Arc::new(swissarmyhammer_common::RateLimiter::with_config(
-                swissarmyhammer_common::RateLimiterConfig {
-                    global_limit: 10000,
-                    per_client_limit: 1000,
-                    expensive_operation_limit: 500,
-                    window_duration: std::time::Duration::from_secs(1),
-                },
-            )),
         );
 
         let tool = OutlineGenerateTool::new();

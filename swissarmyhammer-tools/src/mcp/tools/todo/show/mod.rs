@@ -48,19 +48,12 @@ impl McpTool for ShowTodoTool {
     async fn execute(
         &self,
         arguments: serde_json::Map<String, serde_json::Value>,
-        context: &ToolContext,
+        _context: &ToolContext,
     ) -> std::result::Result<CallToolResult, McpError> {
         // Parse arguments using base tool implementation
         let request: ShowTodoRequest = BaseToolImpl::parse_arguments(arguments)?;
 
-        // Apply rate limiting
-        context
-            .rate_limiter
-            .check_rate_limit("unknown", "todo_show", 1)
-            .map_err(|e| {
-                tracing::warn!("Rate limit exceeded for todo show: {}", e);
-                McpError::invalid_params(e.to_string(), None)
-            })?;
+
 
         tracing::debug!(
             "Showing todo item '{}' from list: {}",

@@ -7,7 +7,7 @@ use rmcp::model::CallToolResult;
 use rmcp::ErrorData as McpError;
 use serde_json::{Map, Value};
 use std::sync::Arc;
-use swissarmyhammer_common::rate_limiter::{RateLimitChecker, RateLimiter};
+
 use swissarmyhammer_git::GitOperations;
 use swissarmyhammer_tools::{
     register_file_tools, register_issue_tools, register_memo_tools, register_search_tools,
@@ -40,14 +40,12 @@ impl CliToolContext {
         let git_ops = Self::create_git_operations(working_dir);
         let memo_storage = Self::create_memo_storage(working_dir);
         let tool_handlers = Self::create_tool_handlers(memo_storage.clone());
-        let rate_limiter = Self::create_rate_limiter();
 
         let tool_context = ToolContext::new(
             tool_handlers,
             issue_storage,
             git_ops,
             memo_storage,
-            rate_limiter,
         );
 
         let tool_registry = Arc::new(Self::create_tool_registry());
@@ -108,10 +106,7 @@ impl CliToolContext {
         Arc::new(swissarmyhammer_tools::mcp::tool_handlers::ToolHandlers::new(memo_storage))
     }
 
-    /// Create rate limiter
-    fn create_rate_limiter() -> Arc<dyn RateLimitChecker> {
-        Arc::new(RateLimiter::new())
-    }
+
 
     /// Create and populate tool registry
     fn create_tool_registry() -> ToolRegistry {
@@ -285,25 +280,7 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_rate_limiter_creation() {
-        // Test that rate limiter can be created independently
-        let rate_limiter1 = CliToolContext::create_rate_limiter();
-        let rate_limiter2 = CliToolContext::create_rate_limiter();
 
-        // Both rate limiters should be created successfully
-        // This tests that the rate limiter creation is working properly
-        // without the complexity of full context creation
-
-        // We can't easily test the internals, but we can verify they exist
-        // and that the creation doesn't panic or fail
-
-        // Use Arc::ptr_eq to check they are different instances
-        assert!(
-            !Arc::ptr_eq(&rate_limiter1, &rate_limiter2),
-            "Rate limiters should be different instances"
-        );
-    }
 
     // Helper function for tests
     async fn create_mock_tool_context() -> ToolContext {
@@ -331,14 +308,11 @@ mod tests {
             swissarmyhammer_tools::mcp::tool_handlers::ToolHandlers::new(memo_storage.clone()),
         );
 
-        let rate_limiter: Arc<dyn RateLimitChecker> = Arc::new(RateLimiter::new());
-
         ToolContext::new(
             tool_handlers,
             issue_storage,
             git_ops,
             memo_storage,
-            rate_limiter,
         )
     }
 }

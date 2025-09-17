@@ -4,27 +4,14 @@ use crate::mcp::tool_handlers::ToolHandlers;
 use crate::mcp::tool_registry::ToolContext;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::Duration;
-use swissarmyhammer_common::{RateLimiter, RateLimiterConfig};
+
 use swissarmyhammer_git::GitOperations;
 use swissarmyhammer_issues::{FileSystemIssueStorage, IssueStorage};
 use swissarmyhammer_memoranda::{MarkdownMemoStorage, MemoStorage};
 use tempfile::TempDir;
 use tokio::sync::{Mutex as TokioMutex, RwLock};
 
-/// Creates a test rate limiter with generous limits suitable for testing
-///
-/// This replaces MockRateLimiter usage in tests with a real RateLimiter
-/// configured with very high limits to prevent rate limiting during tests
-/// while still testing the actual rate limiting implementation.
-pub fn create_test_rate_limiter() -> Arc<RateLimiter> {
-    Arc::new(RateLimiter::with_config(RateLimiterConfig {
-        global_limit: 10000,                     // Very high global limit
-        per_client_limit: 1000,                  // High per-client limit
-        expensive_operation_limit: 500,          // High expensive operation limit
-        window_duration: Duration::from_secs(1), // Short refill window for tests
-    }))
-}
+
 
 /// Creates a test context with mock storage backends for testing MCP tools
 ///
@@ -56,8 +43,6 @@ pub async fn create_test_context() -> ToolContext {
         MarkdownMemoStorage::new(memo_temp_dir),
     )));
 
-    let rate_limiter = create_test_rate_limiter();
-
     let tool_handlers = Arc::new(ToolHandlers::new(memo_storage.clone()));
 
     ToolContext::new(
@@ -65,7 +50,6 @@ pub async fn create_test_context() -> ToolContext {
         issue_storage,
         git_ops,
         memo_storage,
-        rate_limiter,
     )
 }
 

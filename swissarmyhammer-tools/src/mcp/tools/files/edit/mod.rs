@@ -469,7 +469,7 @@ mod tests {
     use crate::mcp::tool_registry::ToolContext;
     use std::fs;
     use std::sync::Arc;
-    use swissarmyhammer_common::{RateLimiter, RateLimiterConfig};
+
     use swissarmyhammer_git::GitOperations;
     use swissarmyhammer_memoranda::{MarkdownMemoStorage, MemoStorage};
     use tempfile::TempDir;
@@ -490,19 +490,11 @@ mod tests {
             temp_dir.path().join("memos"),
         )) as Box<dyn MemoStorage>));
         let tool_handlers = Arc::new(ToolHandlers::new(memo_storage.clone()));
-        let rate_limiter = Arc::new(RateLimiter::with_config(RateLimiterConfig {
-            global_limit: 10000,
-            per_client_limit: 1000,
-            expensive_operation_limit: 500,
-            window_duration: std::time::Duration::from_secs(1),
-        }));
-
         ToolContext::new(
             tool_handlers,
             issue_storage,
             git_ops,
             memo_storage,
-            rate_limiter,
         )
     }
 

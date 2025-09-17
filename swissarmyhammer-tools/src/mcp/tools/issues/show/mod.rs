@@ -92,14 +92,7 @@ impl McpTool for ShowIssueTool {
     ) -> std::result::Result<CallToolResult, McpError> {
         let request: ShowIssueRequest = BaseToolImpl::parse_arguments(arguments)?;
 
-        // Apply rate limiting for issue show
-        context
-            .rate_limiter
-            .check_rate_limit("unknown", "issue_show", 1)
-            .map_err(|e| {
-                tracing::warn!("Rate limit exceeded for issue show: {}", e);
-                McpError::invalid_params(e.to_string(), None)
-            })?;
+
 
         // Validate issue name is not empty
         McpValidation::validate_not_empty(&request.name, "issue name")

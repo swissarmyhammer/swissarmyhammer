@@ -162,14 +162,7 @@ impl McpTool for ListIssuesTool {
     ) -> std::result::Result<CallToolResult, McpError> {
         let request: ListIssuesRequest = BaseToolImpl::parse_arguments(arguments)?;
 
-        // Apply rate limiting for issue listing
-        context
-            .rate_limiter
-            .check_rate_limit("unknown", "issue_list", 1)
-            .map_err(|e| {
-                tracing::warn!("Rate limit exceeded for issue listing: {}", e);
-                McpError::invalid_params(e.to_string(), None)
-            })?;
+
 
         tracing::debug!(
             "Listing issues with filters: show_completed={:?}, show_active={:?}, format={:?}",

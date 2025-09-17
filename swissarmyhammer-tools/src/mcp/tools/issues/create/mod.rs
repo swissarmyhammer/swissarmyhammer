@@ -57,14 +57,7 @@ impl McpTool for CreateIssueTool {
     ) -> std::result::Result<CallToolResult, McpError> {
         let request: CreateIssueRequest = BaseToolImpl::parse_arguments(arguments)?;
 
-        // Apply rate limiting for issue creation
-        context
-            .rate_limiter
-            .check_rate_limit("unknown", "issue_create", 1)
-            .map_err(|e| {
-                tracing::warn!("Rate limit exceeded for issue creation: {}", e);
-                McpError::invalid_params(e.to_string(), None)
-            })?;
+
 
         tracing::debug!("Creating issue: {:?}", request.name);
 

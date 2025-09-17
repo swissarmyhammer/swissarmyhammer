@@ -20,6 +20,14 @@ use tokio::sync::oneshot;
 
 use super::server::McpServer;
 
+/// Health check endpoint handler
+async fn health_check() -> axum::response::Json<serde_json::Value> {
+    axum::response::Json(serde_json::json!({
+        "status": "healthy",
+        "service": "swissarmyhammer-mcp"
+    }))
+}
+
 /// MCP server transport mode configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum McpServerMode {
@@ -207,7 +215,9 @@ async fn start_http_server(
         Default::default(),
     );
 
-    let router = axum::Router::new().nest_service("/mcp", service);
+    let router = axum::Router::new()
+        .nest_service("/mcp", service)
+        .route("/health", axum::routing::get(health_check));
     let listener = tokio::net::TcpListener::bind(socket_addr).await.map_err(|e| {
         swissarmyhammer_common::SwissArmyHammerError::Other {
             message: format!("Failed to bind to {}: {}", socket_addr, e),

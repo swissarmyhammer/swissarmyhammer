@@ -289,7 +289,7 @@ impl LlamaAgentExecutor {
                     } else {
                         filename.clone()
                     },
-                    folder: folder.as_ref().map(|s| s.clone()),
+                    folder: folder.clone(),
                 }
             }
             ModelSource::Local { filename, folder } => LlamaModelSource::Local {
@@ -833,7 +833,7 @@ impl LlamaAgentExecutor {
 
         // Create generation request with repetition detection
         let stopping_config = self.create_stopping_config();
-        let session_id = session.id.clone();
+        let session_id = session.id;
         let generation_request =
             GenerationRequest::new(session_id).with_stopping_config(stopping_config);
 
@@ -1231,6 +1231,8 @@ mod tests {
 
         let mcp_url = executor.mcp_server_url().unwrap();
         let mcp_port = executor.mcp_server_port().unwrap();
+        
+        tracing::info!("Retrieved MCP URL: {}, MCP Port: {}", mcp_url, mcp_port);
 
         // Verify URL format is correct for HTTP transport
         assert!(mcp_url.starts_with("http://"));
@@ -1241,19 +1243,40 @@ mod tests {
 
         // Test basic HTTP connectivity to the MCP server
         let client = reqwest::Client::new();
-        let health_url = format!("{}/health", mcp_url);
+        // Health endpoint is at server root, not under /mcp path
+        let base_url = mcp_url.strip_suffix("/mcp").unwrap_or(&mcp_url);
+        let health_url = format!("{}/health", base_url);
+        
+        tracing::info!("Testing health check: mcp_url={}, base_url={}, health_url={}", mcp_url, base_url, health_url);
 
-        match client.get(&health_url).send().await {
-            Ok(response) => {
-                assert!(response.status().is_success());
-                tracing::info!("HTTP MCP server health check passed: {}", response.status());
-            }
-            Err(e) => {
-                tracing::warn!(
-                    "HTTP MCP server health check failed (may be expected in test environment): {}",
-                    e
-                );
-                // Don't fail the test here as the server might not be fully ready
+        // Retry health check with delay to handle server startup timing
+        for attempt in 1..=3 {
+            tokio::time::sleep(std::time::Duration::from_millis(100 * attempt)).await;
+            
+            match client.get(&health_url).send().await {
+                Ok(response) => {
+                    let status = response.status();
+                    tracing::info!("Health check response (attempt {}): status={}, headers={:?}", attempt, status, response.headers());
+                    if status.is_success() {
+                        tracing::info!("HTTP MCP server health check passed: {}", status);
+                        break;
+                    } else {
+                        let body = response.text().await.unwrap_or_else(|_| "Failed to read response body".to_string());
+                        let error_msg = format!("Health check failed on attempt {}: status={}, body={}", attempt, status, body);
+                        tracing::warn!("{}", error_msg);
+                        if attempt == 3 {
+                            panic!("Health check failed after {} attempts: {}", attempt, error_msg);
+                        }
+                    }
+                }
+                Err(e) => {
+                    let error_msg = format!("HTTP MCP server health check failed on attempt {}: {}", attempt, e);
+                    tracing::warn!("{}", error_msg);
+                    if attempt == 3 {
+                        tracing::warn!("Health check failed after {} attempts, but this may be expected in test environment", attempt);
+                        // Don't fail the test here as the server might not be fully ready
+                    }
+                }
             }
         }
 

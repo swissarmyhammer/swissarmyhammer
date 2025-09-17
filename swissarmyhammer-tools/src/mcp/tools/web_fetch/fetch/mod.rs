@@ -291,18 +291,11 @@ impl McpTool for WebFetchTool {
     async fn execute(
         &self,
         arguments: serde_json::Map<String, serde_json::Value>,
-        context: &ToolContext,
+        _context: &ToolContext,
     ) -> std::result::Result<CallToolResult, McpError> {
         let request: WebFetchRequest = BaseToolImpl::parse_arguments(arguments)?;
 
-        // Apply rate limiting for web fetch operations
-        context
-            .rate_limiter
-            .check_rate_limit("unknown", "web_fetch", 1)
-            .map_err(|e| {
-                tracing::warn!("Rate limit exceeded for web fetch: {}", e);
-                McpError::invalid_params(e.to_string(), None)
-            })?;
+
 
         tracing::debug!("Fetching web content from URL: {}", request.url);
 

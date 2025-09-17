@@ -14,7 +14,6 @@ use std::sync::Arc;
 //     WorkflowStorage, WorkflowStorageBackend,
 // };
 
-use swissarmyhammer_common::get_rate_limiter;
 use swissarmyhammer_common::{Result, SwissArmyHammerError};
 use swissarmyhammer_config::TemplateContext;
 use swissarmyhammer_git::GitOperations;
@@ -167,7 +166,6 @@ impl McpServer {
             issue_storage.clone(),
             git_ops_arc.clone(),
             memo_storage_arc.clone(),
-            get_rate_limiter().clone(),
         ));
 
         // Register all available tools

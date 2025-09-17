@@ -58,10 +58,10 @@ fn validate_cargo_toml_response(response: &str) -> Result<(), String> {
         return Ok(());
     }
 
-    return Err(format!(
+    Err(format!(
         "Response should contain 'SwissArmyHammer Team' indicating successful file read. Got: {}",
         response
-    ));
+    ))
 }
 
 /// End-to-end integration test validating LlamaAgent can use its own MCP tools to read Cargo.toml

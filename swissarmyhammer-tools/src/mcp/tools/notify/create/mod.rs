@@ -64,18 +64,11 @@ impl McpTool for NotifyTool {
     async fn execute(
         &self,
         arguments: serde_json::Map<String, serde_json::Value>,
-        context: &ToolContext,
+        _context: &ToolContext,
     ) -> std::result::Result<CallToolResult, McpError> {
         let request: NotifyRequest = BaseToolImpl::parse_arguments(arguments)?;
 
-        // Apply rate limiting for notifications
-        context
-            .rate_limiter
-            .check_rate_limit("unknown", "notify_create", 1)
-            .map_err(|e| {
-                tracing::warn!("Rate limit exceeded for notification: {}", e);
-                McpError::invalid_params(e.to_string(), None)
-            })?;
+
 
         tracing::debug!("Creating notification: {}", request.message);
 

@@ -6,9 +6,9 @@
 use proptest::prelude::*;
 use proptest::test_runner::Config as ProptestConfig;
 use serde_json::json;
-use std::path::PathBuf;
+
 use std::sync::Arc;
-use swissarmyhammer_common::rate_limiter::RateLimiterConfig;
+
 
 use swissarmyhammer_common::test_utils::IsolatedTestEnvironment;
 use swissarmyhammer_git::GitOperations;
@@ -23,7 +23,7 @@ use tempfile::TempDir;
 async fn create_property_test_context() -> ToolContext {
     let issue_storage: Arc<tokio::sync::RwLock<Box<dyn IssueStorage>>> =
         Arc::new(tokio::sync::RwLock::new(Box::new(
-            FileSystemIssueStorage::new(PathBuf::from("./test_issues")).unwrap(),
+            FileSystemIssueStorage::new(tempfile::tempdir().unwrap().path().to_path_buf()).unwrap(),
         )));
     let git_ops: Arc<tokio::sync::Mutex<Option<GitOperations>>> =
         Arc::new(tokio::sync::Mutex::new(None));
@@ -34,14 +34,6 @@ async fn create_property_test_context() -> ToolContext {
         tokio::sync::RwLock::new(Box::new(MarkdownMemoStorage::new(memo_temp_dir))),
     );
 
-    let rate_limiter = Arc::new(
-        swissarmyhammer_common::rate_limiter::RateLimiter::with_config(RateLimiterConfig {
-            global_limit: 10000,
-            per_client_limit: 1000,
-            expensive_operation_limit: 500,
-            window_duration: std::time::Duration::from_secs(1),
-        }),
-    );
     let tool_handlers = Arc::new(ToolHandlers::new(memo_storage.clone()));
 
     ToolContext::new(
@@ -49,7 +41,6 @@ async fn create_property_test_context() -> ToolContext {
         issue_storage,
         git_ops,
         memo_storage,
-        rate_limiter,
     )
 }
 

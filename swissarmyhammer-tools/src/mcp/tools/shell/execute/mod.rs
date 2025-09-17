@@ -1410,18 +1410,11 @@ impl McpTool for ShellExecuteTool {
     async fn execute(
         &self,
         arguments: serde_json::Map<String, serde_json::Value>,
-        context: &ToolContext,
+        _context: &ToolContext,
     ) -> std::result::Result<CallToolResult, McpError> {
         let request: ShellExecuteRequest = BaseToolImpl::parse_arguments(arguments)?;
 
-        // Apply rate limiting for shell command execution
-        context
-            .rate_limiter
-            .check_rate_limit("unknown", "shell_execute", 1)
-            .map_err(|e| {
-                tracing::warn!("Rate limit exceeded for shell execution: {}", e);
-                McpError::invalid_params(e.to_string(), None)
-            })?;
+
 
         tracing::debug!("Executing shell command: {:?}", request.command);
 
@@ -1651,7 +1644,7 @@ mod tests {
     use crate::mcp::tool_registry::ToolContext;
 
     use std::sync::Arc;
-    use swissarmyhammer_common::{RateLimiter, RateLimiterConfig};
+
 
     fn create_test_context() -> ToolContext {
         use crate::test_utils::TestIssueEnvironment;
@@ -1677,12 +1670,6 @@ mod tests {
             issue_storage,
             git_ops,
             memo_storage,
-            Arc::new(RateLimiter::with_config(RateLimiterConfig {
-                global_limit: 10000,
-                per_client_limit: 1000,
-                expensive_operation_limit: 500,
-                window_duration: std::time::Duration::from_secs(1),
-            })),
         )
     }
 

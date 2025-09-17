@@ -7,7 +7,7 @@ use crate::mcp::tool_registry::{BaseToolImpl, McpTool, ToolContext};
 use async_trait::async_trait;
 use rmcp::model::CallToolResult;
 use rmcp::ErrorData as McpError;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use tracing::{debug, info};
 
 /// Tool for creating new files or completely overwriting existing files with atomic operations
@@ -137,7 +137,7 @@ impl McpTool for WriteFileTool {
         _context: &ToolContext,
     ) -> std::result::Result<CallToolResult, McpError> {
         use serde::Deserialize;
-        use std::path::PathBuf;
+    
 
         #[derive(Deserialize)]
         struct WriteRequest {
@@ -208,9 +208,9 @@ mod tests {
     use crate::mcp::tool_handlers::ToolHandlers;
     use crate::mcp::tool_registry::ToolContext;
     use std::fs;
-    use std::path::PathBuf;
+
     use std::sync::Arc;
-    use swissarmyhammer_common::{RateLimiter, RateLimiterConfig};
+
     use swissarmyhammer_git::GitOperations;
     use swissarmyhammer_issues::FileSystemIssueStorage;
     use swissarmyhammer_memoranda::{MarkdownMemoStorage, MemoStorage};
@@ -219,30 +219,24 @@ mod tests {
 
     /// Create a test context for tool execution
     fn create_test_context() -> ToolContext {
+        // Create temporary directory for issue storage
+        let issues_temp_dir = tempfile::tempdir().unwrap();
         let issue_storage = Arc::new(RwLock::new(Box::new(
-            FileSystemIssueStorage::new(PathBuf::from("./test_issues")).unwrap(),
+            FileSystemIssueStorage::new(issues_temp_dir.path().to_path_buf()).unwrap(),
         )
             as Box<dyn swissarmyhammer_issues::IssueStorage>));
         let git_ops = Arc::new(Mutex::new(None::<GitOperations>));
         // Create temporary directory for memo storage
-        let temp_dir = tempfile::tempdir().unwrap();
+        let memo_temp_dir = tempfile::tempdir().unwrap();
         let memo_storage = Arc::new(RwLock::new(Box::new(MarkdownMemoStorage::new(
-            temp_dir.path().join("memos"),
+            memo_temp_dir.path().join("memos"),
         )) as Box<dyn MemoStorage>));
         let tool_handlers = Arc::new(ToolHandlers::new(memo_storage.clone()));
-        let rate_limiter = Arc::new(RateLimiter::with_config(RateLimiterConfig {
-            global_limit: 10000,
-            per_client_limit: 1000,
-            expensive_operation_limit: 500,
-            window_duration: std::time::Duration::from_secs(1),
-        }));
-
         ToolContext::new(
             tool_handlers,
             issue_storage,
             git_ops,
             memo_storage,
-            rate_limiter,
         )
     }
 

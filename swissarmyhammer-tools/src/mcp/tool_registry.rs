@@ -223,7 +223,7 @@ use rmcp::model::{Annotated, CallToolResult, RawContent, RawTextContent, Tool};
 use rmcp::ErrorData as McpError;
 use std::collections::HashMap;
 use std::sync::Arc;
-use swissarmyhammer_common::RateLimitChecker;
+
 use swissarmyhammer_git::GitOperations;
 use swissarmyhammer_issues::IssueStorage;
 use swissarmyhammer_memoranda::MemoStorage;
@@ -286,11 +286,7 @@ pub struct ToolContext {
     /// read operations and `write()` for write operations.
     pub memo_storage: Arc<RwLock<Box<dyn MemoStorage>>>,
 
-    /// Rate limiter for preventing denial of service attacks
-    ///
-    /// Provides configurable rate limiting for MCP operations. The trait-based
-    /// design allows for easy testing with mock implementations.
-    pub rate_limiter: Arc<dyn RateLimitChecker>,
+
 }
 
 impl ToolContext {
@@ -300,14 +296,12 @@ impl ToolContext {
         issue_storage: Arc<RwLock<Box<dyn IssueStorage>>>,
         git_ops: Arc<Mutex<Option<GitOperations>>>,
         memo_storage: Arc<RwLock<Box<dyn MemoStorage>>>,
-        rate_limiter: Arc<dyn RateLimitChecker>,
     ) -> Self {
         Self {
             tool_handlers,
             issue_storage,
             git_ops,
             memo_storage,
-            rate_limiter,
         }
     }
 }
@@ -1437,14 +1431,6 @@ mod tests {
             issue_storage,
             git_ops,
             memo_storage,
-            Arc::new(swissarmyhammer_common::RateLimiter::with_config(
-                swissarmyhammer_common::RateLimiterConfig {
-                    global_limit: 10000,
-                    per_client_limit: 1000,
-                    expensive_operation_limit: 500,
-                    window_duration: std::time::Duration::from_secs(1),
-                },
-            )),
         );
 
         let tool = MockTool {
