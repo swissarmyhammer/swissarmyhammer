@@ -86,23 +86,32 @@ async fn start_in_process_mcp_server(
     config: &swissarmyhammer_config::McpServerConfig,
 ) -> Result<McpServerHandle, Box<dyn std::error::Error + Send + Sync>> {
     // Use the REAL unified HTTP MCP server from swissarmyhammer-tools
-    use swissarmyhammer_tools::mcp::unified_server::{start_mcp_server, McpServerMode};
     use swissarmyhammer_prompts::PromptLibrary;
+    use swissarmyhammer_tools::mcp::unified_server::{start_mcp_server, McpServerMode};
 
     tracing::info!("Starting REAL unified HTTP MCP server with full tool registry");
 
     // Use the real unified server implementation with correct signature
     let handle = start_mcp_server(
-        McpServerMode::Http { 
-            port: if config.port == 0 { None } else { Some(config.port) }
+        McpServerMode::Http {
+            port: if config.port == 0 {
+                None
+            } else {
+                Some(config.port)
+            },
         },
-        Some(PromptLibrary::default())
-    ).await.map_err(|e| {
+        Some(PromptLibrary::default()),
+    )
+    .await
+    .map_err(|e| {
         tracing::error!("Failed to start real unified HTTP MCP server: {}", e);
         e
     })?;
 
-    tracing::info!("Real unified HTTP MCP server started on port {}", handle.info.port.unwrap_or(0));
+    tracing::info!(
+        "Real unified HTTP MCP server started on port {}",
+        handle.info.port.unwrap_or(0)
+    );
 
     // Convert to our handle type
     let (dummy_tx, _dummy_rx) = tokio::sync::oneshot::channel();
@@ -113,12 +122,6 @@ async fn start_in_process_mcp_server(
     );
 
     Ok(mcp_handle)
-}
-
-/// HTTP server state for sharing tool registry
-#[derive(Clone)]
-struct HttpServerState {
-    tools: Vec<serde_json::Value>,
 }
 
 /// Start the real HTTP MCP server for llama-agent integration
@@ -1214,8 +1217,7 @@ mod tests {
         assert!(executor.mcp_server.is_none());
     }
 
-    #[tokio::test]
-    #[serial]
+    #[test_log::test(tokio::test)]
     async fn test_http_mcp_server_integration() {
         let config = LlamaAgentConfig::for_testing();
         let mut executor = LlamaAgentExecutor::new(config);

@@ -167,7 +167,7 @@ async fn test_llama_mcp_cargo_toml_integration() {
 }
 
 /// Tests LlamaAgent MCP server integration by validating configuration
-#[tokio::test]
+#[test_log::test(tokio::test)]
 async fn test_llama_mcp_server_connectivity() {
     let _guard = IsolatedTestEnvironment::new().expect("Failed to create test environment");
 
