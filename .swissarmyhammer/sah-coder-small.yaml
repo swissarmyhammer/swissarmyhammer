@@ -7,8 +7,8 @@ agent:
       model:
         source:
           HuggingFace:
-            repo: "unsloth/Phi-4-mini-instruct-GGUF"
-            filename: "Phi-4-mini-instruct-Q4_K_M.gguf"
+            repo: "unsloth/Qwen3-Coder-30B-A3B-Instruct-GGUF"
+            filename: "Qwen3-Coder-30B-A3B-Instruct-UD-TQ1_0.gguf"
       mcp_server:
         port: 0
         timeout_seconds: 30

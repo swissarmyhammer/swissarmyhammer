@@ -84,45 +84,13 @@ impl McpTool for AllCompleteIssueTool {
         let active_count = active_issues.len();
         let all_complete = active_count == 0 && total_issues > 0;
 
-        let completion_percentage = if total_issues > 0 {
-            (completed_count * 100) / total_issues
-        } else {
-            0
-        };
-
-        // Generate comprehensive response text
+        // Generate simple response text
         let response_text = if total_issues == 0 {
-            "📋 No issues found in the project\n\n✨ The project has no tracked issues. You can create issues using the `issue_create` tool.".to_string()
+            "No issues found".to_string()
         } else if all_complete {
-            format!(
-                "🎉 All issues are complete!\n\n📊 Project Status:\n• Total Issues: {}\n• Completed: {} (100%)\n• Active: 0\n\n✅ Completed Issues:\n{}",
-                total_issues,
-                completed_count,
-                completed_issues.iter()
-                    .map(|issue| format!("• {}", issue.name))
-                    .collect::<Vec<_>>()
-                    .join("\n")
-            )
+            format!("All {} issues complete", total_issues)
         } else {
-            let active_list = active_issues
-                .iter()
-                .map(|issue| format!("• {}", issue.name))
-                .collect::<Vec<_>>()
-                .join("\n");
-
-            let completed_list = if completed_count > 0 {
-                completed_issues
-                    .iter()
-                    .map(|issue| format!("• {}", issue.name))
-                    .collect::<Vec<_>>()
-                    .join("\n")
-            } else {
-                "  (none)".to_string()
-            };
-
-            format!(
-                "⏳ Project has active issues ({completion_percentage}% complete)\n\n📊 Project Status:\n• Total Issues: {total_issues}\n• Completed: {completed_count} ({completion_percentage}%)\n• Active: {active_count}\n\n🔄 Active Issues:\n{active_list}\n\n✅ Completed Issues:\n{completed_list}"
-            )
+            format!("{} of {} issues complete", completed_count, total_issues)
         };
 
         Ok(create_success_response(response_text))
