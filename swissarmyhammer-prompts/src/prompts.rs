@@ -845,7 +845,7 @@ impl PromptLibrary {
         let mut enhanced_context = template_context.clone();
 
         // Set default model variable if not already set
-        enhanced_context.set_default_model_variable();
+        enhanced_context.set_default_variables();
 
         // Use environment if not already defined in the context
         // This allows args to be preserved -- and we're loading env vars as late as possible

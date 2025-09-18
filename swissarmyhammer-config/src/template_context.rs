@@ -195,21 +195,21 @@ impl TemplateContext {
     /// ```
     pub fn load() -> ConfigurationResult<Self> {
         let mut context = Self::load_with_options(false, None)?;
-        context.set_default_model_variable();
+        context.set_default_variables();
         Ok(context)
     }
 
     /// Load configuration for CLI usage (no security validation)
     pub fn load_for_cli() -> ConfigurationResult<Self> {
         let mut context = Self::load_with_options(true, None)?;
-        context.set_default_model_variable();
+        context.set_default_variables();
         Ok(context)
     }
 
     /// Load configuration with CLI argument overrides
     pub fn load_with_cli_args(cli_args: Value) -> ConfigurationResult<Self> {
         let mut context = Self::load_with_options(false, Some(cli_args))?;
-        context.set_default_model_variable();
+        context.set_default_variables();
         Ok(context)
     }
 
@@ -251,8 +251,8 @@ impl TemplateContext {
             context.set(key, value);
         }
 
-        // Set default model variable if not already provided
-        context.set_default_model_variable();
+        // Set default variables if not already provided
+        context.set_default_variables();
 
         Ok(context)
     }
@@ -659,19 +659,20 @@ impl TemplateContext {
         configs
     }
 
-    /// Set the default model variable if not already set
+    /// Set default variables if not already set
     ///
-    /// This method determines the appropriate model name based on the configured agent
-    /// and sets the "model" variable in the template context. The model variable is used
-    /// in templates like .system.md to display model information.
+    /// This method sets default template variables including:
+    /// - "model": The model name based on the configured agent
+    /// - "working_directory": The fully qualified current working directory
+    /// - "cwd": Alias for the current working directory
     ///
     /// Model names are determined as follows:
     /// - ClaudeCode: "Claude Code"
     /// - LlamaAgent with HuggingFace model: the repository name
     /// - LlamaAgent with Local model: the filename
     /// - Unknown/Default: "Claude Code"
-    pub fn set_default_model_variable(&mut self) {
-        // Only set if not already provided by user
+    pub fn set_default_variables(&mut self) {
+        // Set model variable if not already provided by user
         if self.get("model").is_none() {
             let agent_config = self.get_agent_config(None);
             let model_name = match &agent_config.executor {
@@ -692,6 +693,28 @@ impl TemplateContext {
             debug!(
                 "Model variable already set, not overriding: {:?}",
                 self.get("model")
+            );
+        }
+
+        // Set working directory variables if not already provided by user
+        if self.get("working_directory").is_none() && self.get("cwd").is_none() {
+            match std::env::current_dir() {
+                Ok(current_dir) => {
+                    let current_dir_str = current_dir.to_string_lossy().to_string();
+                    debug!("Setting default working directory variables to: {}", current_dir_str);
+                    
+                    self.set("working_directory".to_string(), Value::String(current_dir_str.clone()));
+                    self.set("cwd".to_string(), Value::String(current_dir_str));
+                }
+                Err(e) => {
+                    debug!("Failed to get current directory, not setting working_directory/cwd variables: {}", e);
+                }
+            }
+        } else {
+            debug!(
+                "Working directory variables already set, not overriding. working_directory: {:?}, cwd: {:?}",
+                self.get("working_directory"),
+                self.get("cwd")
             );
         }
     }
@@ -1175,7 +1198,7 @@ Generated for {{app.name}} by liquid templating engine.
     }
 
     #[test]
-    fn test_set_default_model_variable_claude_code() {
+    fn test_set_default_variables_claude_code() {
         let mut context = TemplateContext::new();
 
         // Set Claude Code agent config
@@ -1184,15 +1207,22 @@ Generated for {{app.name}} by liquid templating engine.
             serde_json::to_value(AgentConfig::claude_code()).unwrap(),
         );
 
-        // Set default model variable
-        context.set_default_model_variable();
+        // Set default variables
+        context.set_default_variables();
 
         // Should set model to "Claude Code"
         assert_eq!(context.get("model"), Some(&json!("Claude Code")));
+        
+        // Should set working directory variables
+        assert!(context.get("working_directory").is_some());
+        assert!(context.get("cwd").is_some());
+        
+        // Both should be the same value
+        assert_eq!(context.get("working_directory"), context.get("cwd"));
     }
 
     #[test]
-    fn test_set_default_model_variable_llama_agent_huggingface() {
+    fn test_set_default_variables_llama_agent_huggingface() {
         use crate::agent::{
             AgentConfig, AgentExecutorConfig, LlamaAgentConfig, McpServerConfig, ModelConfig,
             ModelSource,
@@ -1229,15 +1259,19 @@ Generated for {{app.name}} by liquid templating engine.
             serde_json::to_value(agent_config).unwrap(),
         );
 
-        // Set default model variable
-        context.set_default_model_variable();
+        // Set default variables
+        context.set_default_variables();
 
         // Should set model to the HuggingFace repo name
         assert_eq!(context.get("model"), Some(&json!("microsoft/CodeT5-base")));
+        
+        // Should set working directory variables
+        assert!(context.get("working_directory").is_some());
+        assert!(context.get("cwd").is_some());
     }
 
     #[test]
-    fn test_set_default_model_variable_llama_agent_local() {
+    fn test_set_default_variables_llama_agent_local() {
         use crate::agent::{
             AgentConfig, AgentExecutorConfig, LlamaAgentConfig, McpServerConfig, ModelConfig,
             ModelSource,
@@ -1274,40 +1308,52 @@ Generated for {{app.name}} by liquid templating engine.
             serde_json::to_value(agent_config).unwrap(),
         );
 
-        // Set default model variable
-        context.set_default_model_variable();
+        // Set default variables
+        context.set_default_variables();
 
         // Should set model to the local filename
         assert_eq!(context.get("model"), Some(&json!("/path/to/model.gguf")));
+        
+        // Should set working directory variables
+        assert!(context.get("working_directory").is_some());
+        assert!(context.get("cwd").is_some());
     }
 
     #[test]
-    fn test_set_default_model_variable_no_agent_config() {
+    fn test_set_default_variables_no_agent_config() {
         let mut context = TemplateContext::new();
 
         // No agent config set - should default to Claude Code
-        context.set_default_model_variable();
+        context.set_default_variables();
 
         // Should set model to "Claude Code" (default)
         assert_eq!(context.get("model"), Some(&json!("Claude Code")));
+        
+        // Should set working directory variables
+        assert!(context.get("working_directory").is_some());
+        assert!(context.get("cwd").is_some());
     }
 
     #[test]
-    fn test_set_default_model_variable_user_provided_model() {
+    fn test_set_default_variables_user_provided_model() {
         let mut context = TemplateContext::new();
 
         // User has already set a model variable
         context.set("model".to_string(), json!("Custom Model"));
 
-        // Set default model variable should not override user's choice
-        context.set_default_model_variable();
+        // Set default variables should not override user's choice
+        context.set_default_variables();
 
         // Should keep user's model value
         assert_eq!(context.get("model"), Some(&json!("Custom Model")));
+        
+        // Should still set working directory variables
+        assert!(context.get("working_directory").is_some());
+        assert!(context.get("cwd").is_some());
     }
 
     #[test]
-    fn test_load_sets_default_model_variable() {
+    fn test_load_sets_default_variables() {
         // This test may pass or fail depending on the environment, but should not crash
         let context_result = TemplateContext::load_for_cli();
 
@@ -1321,15 +1367,24 @@ Generated for {{app.name}} by liquid templating engine.
             // Should default to "Claude Code" if no agent config found
             let model_str = context.get("model").unwrap().as_str().unwrap();
             assert!(!model_str.is_empty());
+            
+            // Should have working directory variables set
+            assert!(context.get("working_directory").is_some());
+            assert!(context.get("cwd").is_some());
+            
+            // Both should be strings and equal
+            assert!(context.get("working_directory").unwrap().is_string());
+            assert!(context.get("cwd").unwrap().is_string());
+            assert_eq!(context.get("working_directory"), context.get("cwd"));
         }
     }
 
     #[test]
-    fn test_with_template_vars_sets_default_model_variable() {
+    fn test_with_template_vars_sets_default_variables() {
         let mut vars = HashMap::new();
         vars.insert("test_var".to_string(), json!("test_value"));
 
-        // This should set both the template vars and the default model variable
+        // This should set both the template vars and the default variables
         let context_result = TemplateContext::with_template_vars(vars);
 
         if let Ok(context) = context_result {
@@ -1339,6 +1394,10 @@ Generated for {{app.name}} by liquid templating engine.
             // Should also have a model variable set
             assert!(context.get("model").is_some());
             assert!(context.get("model").unwrap().is_string());
+            
+            // Should have working directory variables set
+            assert!(context.get("working_directory").is_some());
+            assert!(context.get("cwd").is_some());
         }
     }
 
@@ -1357,7 +1416,30 @@ Generated for {{app.name}} by liquid templating engine.
 
             // Should keep user's model value
             assert_eq!(context.get("model"), Some(&json!("User Custom Model")));
+            
+            // Should still set working directory variables
+            assert!(context.get("working_directory").is_some());
+            assert!(context.get("cwd").is_some());
         }
+    }
+
+    #[test]
+    fn test_set_default_variables_user_provided_working_directory() {
+        let mut context = TemplateContext::new();
+
+        // User has already set working directory variables
+        context.set("working_directory".to_string(), json!("/custom/path"));
+        context.set("cwd".to_string(), json!("/custom/path"));
+
+        // Set default variables should not override user's choice
+        context.set_default_variables();
+
+        // Should keep user's working directory values
+        assert_eq!(context.get("working_directory"), Some(&json!("/custom/path")));
+        assert_eq!(context.get("cwd"), Some(&json!("/custom/path")));
+        
+        // Should still set model variable
+        assert_eq!(context.get("model"), Some(&json!("Claude Code")));
     }
 
     #[test]
