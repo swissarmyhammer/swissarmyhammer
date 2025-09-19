@@ -55,7 +55,6 @@ async fn run_builtin_workflow_in_process(
         vars,
         interactive: false,
         dry_run,
-        timeout: Some("2s".to_string()), // Use 2 second timeout for fast tests
         quiet: true,
     };
 
@@ -66,7 +65,6 @@ async fn run_builtin_workflow_in_process(
             vars,
             interactive,
             dry_run,
-            timeout,
             quiet,
         } => {
             execute_run_command(
@@ -74,7 +72,6 @@ async fn run_builtin_workflow_in_process(
                 vars,
                 interactive,
                 dry_run,
-                timeout,
                 quiet,
                 &cli_context,
             )

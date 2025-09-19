@@ -453,7 +453,6 @@ async fn handle_flow_command(sub_matches: &clap::ArgMatches, context: &CliContex
                 .unwrap_or_default();
             let interactive = sub_matches.get_flag("interactive");
             let dry_run = sub_matches.get_flag("dry-run");
-            let timeout = sub_matches.get_one::<String>("timeout").cloned();
             let quiet = sub_matches.get_flag("quiet");
 
             FlowSubcommand::Run {
@@ -461,20 +460,17 @@ async fn handle_flow_command(sub_matches: &clap::ArgMatches, context: &CliContex
                 vars,
                 interactive,
                 dry_run,
-                timeout,
                 quiet,
             }
         }
         Some(("resume", sub_matches)) => {
             let run_id = sub_matches.get_one::<String>("run_id").cloned().unwrap();
             let interactive = sub_matches.get_flag("interactive");
-            let timeout = sub_matches.get_one::<String>("timeout").cloned();
             let quiet = sub_matches.get_flag("quiet");
 
             FlowSubcommand::Resume {
                 run_id,
                 interactive,
-                timeout,
                 quiet,
             }
         }
@@ -538,14 +534,12 @@ async fn handle_flow_command(sub_matches: &clap::ArgMatches, context: &CliContex
                 .map(|vals| vals.cloned().collect())
                 .unwrap_or_default();
             let interactive = sub_matches.get_flag("interactive");
-            let timeout = sub_matches.get_one::<String>("timeout").cloned();
             let quiet = sub_matches.get_flag("quiet");
 
             FlowSubcommand::Test {
                 workflow,
                 vars,
                 interactive,
-                timeout,
                 quiet,
             }
         }

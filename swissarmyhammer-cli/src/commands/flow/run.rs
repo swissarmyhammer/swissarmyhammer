@@ -1,19 +1,17 @@
 //! Run a workflow command implementation
 
 use super::shared::{
-    create_local_workflow_run_storage, execute_workflow_with_progress, parse_duration,
+    create_local_workflow_run_storage, execute_workflow_with_progress,
     workflow_run_id_to_string,
 };
 use crate::context::CliContext;
 use crate::parameter_cli;
 use std::collections::HashMap;
-use std::future;
 use swissarmyhammer::{
     Result, SwissArmyHammerError, WorkflowExecutor, WorkflowName, WorkflowRunStatus,
 };
 use swissarmyhammer_common::{read_abort_file, remove_abort_file};
 use tokio::signal;
-use tokio::time::timeout;
 
 /// Configuration for running a workflow command
 pub struct WorkflowCommandConfig {
@@ -21,7 +19,6 @@ pub struct WorkflowCommandConfig {
     pub vars: Vec<String>,
     pub interactive: bool,
     pub dry_run: bool,
-    pub timeout_str: Option<String>,
     pub quiet: bool,
 }
 
@@ -31,7 +28,6 @@ pub async fn execute_run_command(
     vars: Vec<String>,
     interactive: bool,
     dry_run: bool,
-    timeout: Option<String>,
     quiet: bool,
     context: &CliContext,
 ) -> Result<()> {
@@ -40,7 +36,6 @@ pub async fn execute_run_command(
         vars,
         interactive,
         dry_run,
-        timeout_str: timeout,
         quiet,
     };
 
@@ -83,21 +78,14 @@ pub async fn run_workflow_command(
         }
     }
 
-    // Parse timeout
-    let timeout_duration = if let Some(timeout_str) = config.timeout_str {
-        Some(parse_duration(&timeout_str)?)
-    } else {
-        None
-    };
+
 
     if config.dry_run {
         println!("🔍 Dry run mode - showing execution plan:");
         println!("📋 Workflow: {}", workflow.name);
         println!("🏁 Initial state: {}", workflow.initial_state);
         println!("🔧 Variables: {variables:?}");
-        if let Some(timeout) = timeout_duration {
-            println!("⏱️  Timeout: {timeout:?}");
-        }
+
         println!("📊 States: {}", workflow.states.len());
         println!("🔄 Transitions: {}", workflow.transitions.len());
 
@@ -159,13 +147,7 @@ pub async fn run_workflow_command(
             .insert("_quiet".to_string(), serde_json::Value::Bool(true));
     }
 
-    // Set timeout in context for actions to use
-    if let Some(timeout_duration) = timeout_duration {
-        run.context.insert(
-            "_timeout_secs".to_string(),
-            serde_json::Value::Number(serde_json::Number::from(timeout_duration.as_secs())),
-        );
-    }
+
 
     // Setup signal handling for graceful shutdown
     let (shutdown_tx, mut shutdown_rx) = tokio::sync::mpsc::channel(1);
@@ -176,29 +158,13 @@ pub async fn run_workflow_command(
         let _ = shutdown_tx_clone.send(()).await;
     });
 
-    // Execute workflow with timeout and signal handling
-    let execution_result = if let Some(timeout_duration) = timeout_duration {
-        tokio::select! {
-            result = execute_workflow_with_progress(&mut executor, &mut run, config.interactive) => result,
-            _ = timeout(timeout_duration, future::pending::<()>()) => {
-                tracing::warn!("Workflow execution timed out");
-                run.status = WorkflowRunStatus::Cancelled;
-                Ok(())
-            },
-            _ = shutdown_rx.recv() => {
-                tracing::info!("Workflow execution interrupted by user");
-                run.status = WorkflowRunStatus::Cancelled;
-                Ok(())
-            }
-        }
-    } else {
-        tokio::select! {
-            result = execute_workflow_with_progress(&mut executor, &mut run, config.interactive) => result,
-            _ = shutdown_rx.recv() => {
-                tracing::info!("Workflow execution interrupted by user");
-                run.status = WorkflowRunStatus::Cancelled;
-                Ok(())
-            }
+    // Execute workflow with signal handling
+    let execution_result = tokio::select! {
+        result = execute_workflow_with_progress(&mut executor, &mut run, config.interactive) => result,
+        _ = shutdown_rx.recv() => {
+            tracing::info!("Workflow execution interrupted by user");
+            run.status = WorkflowRunStatus::Cancelled;
+            Ok(())
         }
     };
 

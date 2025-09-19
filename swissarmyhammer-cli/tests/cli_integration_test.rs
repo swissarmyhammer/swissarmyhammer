@@ -192,7 +192,7 @@ async fn run_test_workflow_in_process(workflow_name: &str, vars: Vec<String>) ->
     let _env = setup_test_workflow(workflow_name).await?;
 
     // Use very fast timeout for performance tests
-    let result = run_flow_test_in_process(workflow_name, vars, Some("1s".to_string()), false).await;
+    let result = run_flow_test_in_process(workflow_name, vars, None, false).await;
 
     Ok(result.is_ok())
 }
@@ -239,22 +239,22 @@ async fn test_flow_test_nonexistent_workflow() -> Result<()> {
     Ok(())
 }
 
-/// Test flow test command with timeout
+/// Test flow run command with dry-run flag
 #[tokio::test]
 
-async fn test_flow_test_with_timeout() -> Result<()> {
+async fn test_flow_run_with_dry_run() -> Result<()> {
     let result =
-        run_sah_command_in_process(&["flow", "run", "hello-world", "--timeout", "5s", "--dry-run"])
+        run_sah_command_in_process(&["flow", "run", "hello-world", "--dry-run"])
             .await?;
 
     assert_eq!(
         result.exit_code, 0,
-        "flow run with timeout and dry-run should succeed"
+        "flow run with dry-run should succeed. stdout: '{}', stderr: '{}'", result.stdout, result.stderr
     );
 
     assert!(
-        result.stdout.contains("Timeout: 5s"),
-        "should show timeout duration in dry run output"
+        result.stdout.contains("🔍 Dry run mode"),
+        "should show dry run mode in stdout. stdout: '{}', stderr: '{}'", result.stdout, result.stderr
     );
 
     Ok(())
@@ -366,10 +366,7 @@ async fn test_flow_test_help() -> Result<()> {
         result.stdout.contains("--var"),
         "help should mention --var parameter"
     );
-    assert!(
-        result.stdout.contains("--timeout"),
-        "help should mention --timeout parameter"
-    );
+    // timeout parameter removed from CLI
     assert!(
         result.stdout.contains("--interactive"),
         "help should mention --interactive flag"

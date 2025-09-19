@@ -1,49 +1,11 @@
 //! Shared utilities for flow command subcommands
 
 use crate::context::CliContext;
-use std::time::Duration;
+
 use swissarmyhammer::{Result, SwissArmyHammerError, WorkflowRunId, WorkflowRunStorageBackend};
 use swissarmyhammer::{WorkflowExecutor, WorkflowRunStatus};
 use swissarmyhammer_workflow::{ExecutorError, WorkflowRun};
 
-/// Parse duration string (e.g., "30s", "5m", "1h") into Duration
-pub fn parse_duration(s: &str) -> Result<Duration> {
-    let s = s.trim();
-    if s.is_empty() {
-        return Err(SwissArmyHammerError::Other {
-            message: "Empty duration string. Expected format: 30s, 5m, or 1h".to_string(),
-        });
-    }
-
-    let (value_str, unit) = if let Some(stripped) = s.strip_suffix('s') {
-        (stripped, "s")
-    } else if let Some(stripped) = s.strip_suffix('m') {
-        (stripped, "m")
-    } else if let Some(stripped) = s.strip_suffix('h') {
-        (stripped, "h")
-    } else {
-        (s, "s") // Default to seconds
-    };
-
-    let value: u64 = value_str.parse().map_err(|_| SwissArmyHammerError::Other {
-        message: format!("Invalid duration value: '{value_str}'. Expected a positive number"),
-    })?;
-
-    let duration = match unit {
-        "s" => Duration::from_secs(value),
-        "m" => Duration::from_secs(value * 60),
-        "h" => Duration::from_secs(value * 3600),
-        _ => {
-            return Err(SwissArmyHammerError::Other {
-                message: format!(
-            "Invalid duration unit: '{unit}'. Supported units: s (seconds), m (minutes), h (hours)"
-        ),
-            })
-        }
-    };
-
-    Ok(duration)
-}
 
 /// Helper to parse WorkflowRunId from string
 pub fn parse_workflow_run_id(s: &str) -> Result<WorkflowRunId> {
@@ -315,17 +277,7 @@ pub fn create_local_workflow_run_storage() -> Result<Box<dyn WorkflowRunStorageB
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_parse_duration() {
-        assert_eq!(parse_duration("30s").unwrap(), Duration::from_secs(30));
-        assert_eq!(parse_duration("5m").unwrap(), Duration::from_secs(300));
-        assert_eq!(parse_duration("2h").unwrap(), Duration::from_secs(7200));
-        assert_eq!(parse_duration("60").unwrap(), Duration::from_secs(60));
 
-        assert!(parse_duration("").is_err());
-        assert!(parse_duration("invalid").is_err());
-        assert!(parse_duration("10x").is_err());
-    }
 
     #[test]
     fn test_workflow_run_id_helpers() {

@@ -9,7 +9,6 @@ pub async fn execute_test_command(
     workflow: String,
     vars: Vec<String>,
     interactive: bool,
-    timeout: Option<String>,
     quiet: bool,
     context: &CliContext,
 ) -> Result<()> {
@@ -19,7 +18,6 @@ pub async fn execute_test_command(
         vars,
         interactive,
         true, // dry_run = true for test mode
-        timeout,
         quiet,
         context,
     )

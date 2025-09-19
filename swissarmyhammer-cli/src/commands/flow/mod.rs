@@ -28,7 +28,6 @@ pub async fn handle_command(subcommand: FlowSubcommand, context: &CliContext) ->
             vars,
             interactive,
             dry_run,
-            timeout,
             quiet,
         } => {
             run::execute_run_command(
@@ -36,7 +35,6 @@ pub async fn handle_command(subcommand: FlowSubcommand, context: &CliContext) ->
                 vars,
                 interactive,
                 dry_run,
-                timeout,
                 quiet,
                 context,
             )
@@ -45,9 +43,8 @@ pub async fn handle_command(subcommand: FlowSubcommand, context: &CliContext) ->
         FlowSubcommand::Resume {
             run_id,
             interactive,
-            timeout,
             quiet,
-        } => resume::execute_resume_command(run_id, interactive, timeout, quiet).await,
+        } => resume::execute_resume_command(run_id, interactive, quiet).await,
         FlowSubcommand::List {
             format,
             verbose,
@@ -70,9 +67,8 @@ pub async fn handle_command(subcommand: FlowSubcommand, context: &CliContext) ->
             workflow,
             vars,
             interactive,
-            timeout,
             quiet,
-        } => test::execute_test_command(workflow, vars, interactive, timeout, quiet, context).await,
+        } => test::execute_test_command(workflow, vars, interactive, quiet, context).await,
     };
 
     match result {

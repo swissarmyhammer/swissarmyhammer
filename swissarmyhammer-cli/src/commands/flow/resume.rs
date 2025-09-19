@@ -1,19 +1,16 @@
 //! Resume a paused workflow run command implementation
 
 use super::shared::{
-    execute_workflow_with_progress, parse_duration, parse_workflow_run_id,
+    execute_workflow_with_progress, parse_workflow_run_id,
     workflow_run_id_to_string,
 };
-use std::future;
 use swissarmyhammer::{Result, WorkflowExecutor, WorkflowRunStatus, WorkflowStorage};
 use tokio::signal;
-use tokio::time;
 
 /// Execute the resume workflow command
 pub async fn execute_resume_command(
     run_id: String,
     interactive: bool,
-    timeout: Option<String>,
     quiet: bool,
 ) -> Result<()> {
     let mut storage = WorkflowStorage::file_system()?;
@@ -34,13 +31,6 @@ pub async fn execute_resume_command(
         println!("❌ Cannot resume failed workflow");
         return Ok(());
     }
-
-    // Parse timeout
-    let timeout_duration = if let Some(timeout_str) = timeout {
-        Some(parse_duration(&timeout_str)?)
-    } else {
-        None
-    };
 
     println!("🔄 Resuming workflow: {}", run.workflow.name);
     println!("🔄 From state: {}", run.current_state);
@@ -64,28 +54,12 @@ pub async fn execute_resume_command(
     });
 
     // Resume workflow execution
-    let execution_result = if let Some(timeout_duration) = timeout_duration {
-        tokio::select! {
-            result = execute_workflow_with_progress(&mut executor, &mut run, interactive) => result,
-            _ = time::timeout(timeout_duration, future::pending::<()>()) => {
-                tracing::warn!("Workflow execution timed out");
-                run.status = WorkflowRunStatus::Cancelled;
-                Ok(())
-            },
-            _ = shutdown_rx.recv() => {
-                tracing::info!("Workflow execution interrupted by user");
-                run.status = WorkflowRunStatus::Cancelled;
-                Ok(())
-            }
-        }
-    } else {
-        tokio::select! {
-            result = execute_workflow_with_progress(&mut executor, &mut run, interactive) => result,
-            _ = shutdown_rx.recv() => {
-                tracing::info!("Workflow execution interrupted by user");
-                run.status = WorkflowRunStatus::Cancelled;
-                Ok(())
-            }
+    let execution_result = tokio::select! {
+        result = execute_workflow_with_progress(&mut executor, &mut run, interactive) => result,
+        _ = shutdown_rx.recv() => {
+            tracing::info!("Workflow execution interrupted by user");
+            run.status = WorkflowRunStatus::Cancelled;
+            Ok(())
         }
     };
 
@@ -128,7 +102,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_execute_resume_command_invalid_run_id() -> Result<()> {
-        let result = execute_resume_command("invalid-run-id".to_string(), false, None, false).await;
+        let result = execute_resume_command("invalid-run-id".to_string(), false, false).await;
 
         // Should fail with invalid run ID
         assert!(
@@ -139,26 +113,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_execute_resume_command_with_timeout() -> Result<()> {
-        let result = execute_resume_command(
-            "invalid-run-id".to_string(),
-            false,
-            Some("30s".to_string()),
-            false,
-        )
-        .await;
-
-        // Should still fail with invalid run ID
-        assert!(
-            result.is_err(),
-            "Resume command with timeout should fail with invalid run ID"
-        );
-        Ok(())
-    }
-
-    #[tokio::test]
     async fn test_execute_resume_command_quiet_mode() -> Result<()> {
-        let result = execute_resume_command("invalid-run-id".to_string(), false, None, true).await;
+        let result = execute_resume_command("invalid-run-id".to_string(), false, true).await;
 
         // Should still fail with invalid run ID
         assert!(

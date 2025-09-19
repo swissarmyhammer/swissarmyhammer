@@ -26,7 +26,6 @@ pub async fn handle_command(context: &CliContext) -> i32 {
         vars: vec![],
         interactive: false,
         dry_run: false,
-        timeout: None,
         quiet: context.quiet,
     };
 

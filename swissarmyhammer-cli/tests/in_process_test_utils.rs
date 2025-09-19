@@ -520,7 +520,6 @@ async fn execute_cli_command_with_capture(cli: Cli) -> Result<(String, String, i
                     workflow,
                     vars,
                     dry_run,
-                    timeout,
                     ..
                 } => {
                     // Check for abort file before starting workflow (like the real flow command)
@@ -583,12 +582,7 @@ async fn execute_cli_command_with_capture(cli: Cli) -> Result<(String, String, i
 
                     if workflow_exists {
                         let mut output = if dry_run {
-                            let mut dry_output =
-                                format!("🔍 Dry run mode\nRunning workflow: {}", workflow);
-                            if let Some(timeout_val) = timeout {
-                                dry_output.push_str(&format!("\nTimeout: {}", timeout_val));
-                            }
-                            dry_output
+                            format!("🔍 Dry run mode\nRunning workflow: {}", workflow)
                         } else {
                             format!("Running workflow: {}", workflow)
                         };
@@ -635,7 +629,7 @@ async fn execute_cli_command_with_capture(cli: Cli) -> Result<(String, String, i
 pub async fn run_flow_test_in_process(
     workflow_name: &str,
     vars: Vec<String>,
-    timeout: Option<String>,
+    _timeout: Option<String>,
     quiet: bool,
 ) -> Result<CapturedOutput> {
     // Build command args for "flow test"
@@ -647,10 +641,7 @@ pub async fn run_flow_test_in_process(
         args.push(var);
     }
 
-    // Add timeout if provided
-    let timeout_str = timeout.unwrap_or_else(|| "2s".to_string());
-    args.push("--timeout");
-    args.push(&timeout_str);
+    // Timeout removed - no longer supported in CLI
 
     // Add quiet flag
     if quiet {
@@ -683,16 +674,52 @@ mod tests {
 
     #[tokio::test]
     async fn test_in_process_utilities() {
-        // Test with a workflow that should succeed
+        println!("=== STARTING TEST ===");
+        
+        // Test with a workflow that should succeed - get detailed info first
+        println!("Running detailed test...");
+        let detailed_result = run_flow_test_in_process("greeting", vec![], None, false).await;
+        
+        println!("Detailed result analysis:");
+        match &detailed_result {
+            Ok(cmd_result) => {
+                println!("  Exit code: {}", cmd_result.exit_code);
+                println!("  Stdout: '{}'", cmd_result.stdout);
+                println!("  Stderr: '{}'", cmd_result.stderr);
+            },
+            Err(e) => {
+                println!("  Error running detailed test: {}", e);
+                panic!("Failed to run detailed test: {}", e);
+            }
+        }
+        
+        println!("Running simple test...");
         let result = simple_workflow_test("greeting").await;
-        assert!(
-            result.is_ok(),
-            "Should handle existing workflows gracefully"
-        );
-
-        // The result should be true (success) for existing workflows
+        
+        println!("Simple result analysis:");
+        match &result {
+            Ok(success) => {
+                println!("  Test result: success = {}", success);
+                if !*success {
+                    println!("  WORKFLOW FAILED - exit code was not 0");
+                    if let Ok(cmd_result) = &detailed_result {
+                        println!("  Final exit code: {}", cmd_result.exit_code);
+                        println!("  Final stdout: '{}'", cmd_result.stdout);
+                        println!("  Final stderr: '{}'", cmd_result.stderr);
+                    }
+                }
+            },
+            Err(e) => {
+                println!("  Test error: {}", e);
+                panic!("Simple workflow test failed with error: {}", e);
+            }
+        }
+        
+        // Only assert if we've printed debug info
         let success = result.unwrap();
-        assert!(success, "Existing workflow should succeed");
+        if !success {
+            panic!("Workflow should have succeeded but failed with non-zero exit code");
+        }
     }
 
     #[tokio::test]

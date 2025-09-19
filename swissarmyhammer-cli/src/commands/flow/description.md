@@ -12,7 +12,6 @@ Workflow execution:
   --vars key=value                               # Pass initial variables
   --interactive                                  # Step-by-step execution
   --dry-run                                      # Show execution plan
-  --timeout 60s                                  # Set execution timeout
 
 Examples:
   swissarmyhammer flow run code-review --vars file=main.rs

@@ -26,7 +26,6 @@ pub async fn handle_command(plan_filename: String, context: &CliContext) -> i32 
         vars: vec![format!("plan_filename={}", plan_filename)],
         interactive: false,
         dry_run: false,
-        timeout: None,
         quiet: context.quiet,
     };
 

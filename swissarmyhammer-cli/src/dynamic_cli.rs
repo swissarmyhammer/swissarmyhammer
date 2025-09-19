@@ -982,12 +982,7 @@ When variables are not provided via --var, the command prompts interactively:
                             .help("Test mode - execute with mocked actions")
                             .action(ArgAction::SetTrue),
                     )
-                    .arg(
-                        Arg::new("timeout")
-                            .long("timeout")
-                            .help("Execution timeout (e.g., 30s, 5m, 1h)")
-                            .value_name("DURATION"),
-                    )
+
                     .arg(
                         Arg::new("quiet")
                             .short('q')
@@ -1012,12 +1007,7 @@ When variables are not provided via --var, the command prompts interactively:
                             .help("Interactive mode - prompt at each state")
                             .action(ArgAction::SetTrue),
                     )
-                    .arg(
-                        Arg::new("timeout")
-                            .long("timeout")
-                            .help("Execution timeout")
-                            .value_name("DURATION"),
-                    )
+
                     .arg(
                         Arg::new("quiet")
                             .short('q')
@@ -1129,12 +1119,7 @@ When variables are not provided via --var, the command prompts interactively:
                             .help("Interactive mode - prompt at each state")
                             .action(ArgAction::SetTrue),
                     )
-                    .arg(
-                        Arg::new("timeout")
-                            .long("timeout")
-                            .help("Execution timeout")
-                            .value_name("DURATION"),
-                    )
+
                     .arg(
                         Arg::new("quiet")
                             .short('q')

@@ -257,10 +257,6 @@ pub enum FlowSubcommand {
         #[arg(long)]
         dry_run: bool,
 
-        /// Execution timeout (e.g., 30s, 5m, 1h)
-        #[arg(long)]
-        timeout: Option<String>,
-
         /// Quiet mode - only show errors
         #[arg(short, long)]
         quiet: bool,
@@ -273,10 +269,6 @@ pub enum FlowSubcommand {
         /// Interactive mode - prompt at each state
         #[arg(short, long)]
         interactive: bool,
-
-        /// Execution timeout (e.g., 30s, 5m, 1h)
-        #[arg(long)]
-        timeout: Option<String>,
 
         /// Quiet mode - only show errors
         #[arg(short, long)]
@@ -348,7 +340,7 @@ Usage:
 Examples:
   swissarmyhammer flow test hello-world                               # Test basic workflow
   swissarmyhammer flow test greeting --var name=John --var language=Spanish  # With template variables
-  swissarmyhammer flow test code-review --var file=main.rs --timeout 60s     # With vars and timeout
+  swissarmyhammer flow test code-review --var file=main.rs                   # With vars
   swissarmyhammer flow test deploy --interactive                      # Step-by-step execution
 
 This is equivalent to 'flow run --test' but provided as a separate command
@@ -365,10 +357,6 @@ for better discoverability and clearer intent.
         /// Interactive mode - prompt at each state
         #[arg(short, long)]
         interactive: bool,
-
-        /// Execution timeout (e.g., 30s, 5m, 1h)
-        #[arg(long)]
-        timeout: Option<String>,
 
         /// Quiet mode - only show errors
         #[arg(short, long)]
@@ -544,14 +532,12 @@ mod tests {
                 workflow,
                 vars,
                 interactive,
-                timeout,
                 quiet,
             } = subcommand
             {
                 assert_eq!(workflow, "my-workflow");
                 assert!(vars.is_empty());
                 assert!(!interactive);
-                assert_eq!(timeout, None);
                 assert!(!quiet);
             } else {
                 unreachable!("Expected Test subcommand");
@@ -575,8 +561,6 @@ mod tests {
             "--var",
             "version=2.0",
             "--interactive",
-            "--timeout",
-            "30s",
             "--quiet",
         ]);
         assert!(result.is_ok());
@@ -587,14 +571,12 @@ mod tests {
                 workflow,
                 vars,
                 interactive,
-                timeout,
                 quiet,
             } = subcommand
             {
                 assert_eq!(workflow, "my-workflow");
                 assert_eq!(vars, vec!["input=test", "author=Jane", "version=2.0"]);
                 assert!(interactive);
-                assert_eq!(timeout, Some("30s".to_string()));
                 assert!(quiet);
             } else {
                 unreachable!("Expected Test subcommand");

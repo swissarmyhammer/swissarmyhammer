@@ -47,7 +47,7 @@ async fn run_test_workflow_in_process(workflow_name: &str, vars: Vec<String>) ->
     let env = setup_test_workflow(workflow_name).await?;
 
     // Use very fast timeout for performance tests
-    let result = run_flow_test_in_process(workflow_name, vars, Some("1s".to_string()), false).await;
+    let result = run_flow_test_in_process(workflow_name, vars, None, false).await;
 
     // Explicitly drop env to ensure cleanup happens before returning
     drop(env);
@@ -122,7 +122,7 @@ async fn test_flow_test_with_timeout() -> Result<()> {
     let _env = setup_test_workflow("timeout-test").await?;
 
     let captured =
-        run_flow_test_in_process("timeout-test", vec![], Some("10s".to_string()), false).await?;
+        run_flow_test_in_process("timeout-test", vec![], None, false).await?;
 
     // Should complete (success or failure) within timeout
     assert!(
