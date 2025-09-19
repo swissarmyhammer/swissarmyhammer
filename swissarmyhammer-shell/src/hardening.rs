@@ -48,8 +48,7 @@ pub struct SecurityHardeningConfig {
     /// Enable sandboxing (if available on platform)
     pub enable_sandboxing: bool,
 
-    /// Timeout for security checks themselves
-    pub security_check_timeout: Duration,
+
 }
 
 impl Default for SecurityHardeningConfig {
@@ -88,7 +87,6 @@ impl Default for SecurityHardeningConfig {
                 "su".to_string(),
             ],
             enable_sandboxing: false, // Disabled by default due to complexity
-            security_check_timeout: Duration::from_secs(5),
         }
     }
 }

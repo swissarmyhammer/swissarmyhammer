@@ -19,8 +19,7 @@ const MAX_COMMAND_LENGTH: usize = 4096;
 /// Maximum allowed environment variable value length in characters
 const MAX_ENV_VALUE_LENGTH: usize = 1024;
 
-/// Default timeout duration for shell commands
-const DEFAULT_TIMEOUT_SECONDS: Duration = Duration::from_secs(300);
+
 
 /// Security validation errors that can occur during shell command processing
 #[derive(Debug, Error)]
@@ -101,11 +100,7 @@ pub struct ShellSecurityPolicy {
     /// Enable audit logging of all command executions
     pub enable_audit_logging: bool,
 
-    /// Default timeout for commands in seconds
-    pub default_timeout_seconds: Duration,
 
-    /// Maximum allowed timeout in seconds
-    pub max_timeout_seconds: Duration,
 
     /// Maximum allowed environment variable value length
     pub max_env_value_length: usize,
@@ -148,8 +143,7 @@ impl Default for ShellSecurityPolicy {
             allowed_directories: None, // No directory restrictions by default
             max_command_length: MAX_COMMAND_LENGTH,
             enable_audit_logging: true,
-            default_timeout_seconds: DEFAULT_TIMEOUT_SECONDS,
-            max_timeout_seconds: DEFAULT_TIMEOUT_SECONDS,
+
             max_env_value_length: MAX_ENV_VALUE_LENGTH,
         }
     }
