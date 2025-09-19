@@ -1,6 +1,6 @@
 # Shell Execute Tool
 
-Execute shell commands with timeout controls and proper output handling for interactive AI workflows.
+Execute shell commands with proper output handling for interactive AI workflows.
 
 ## Purpose
 
@@ -23,12 +23,7 @@ The shell execute tool provides secure command execution capabilities for LLMs, 
   - Description: Path where the command should be executed
   - Default: Current working directory
   
-- `timeout` (optional): Command timeout in seconds
-  - Type: integer  
-  - Description: Maximum time to wait for command completion
-  - Default: 300 seconds (5 minutes)
-  - Range: 1 to 1800 seconds (30 minutes)
-  
+
 - `environment` (optional): Additional environment variables
   - Type: object
   - Description: Key-value pairs of environment variables to set
@@ -74,23 +69,7 @@ The shell execute tool provides secure command execution capabilities for LLMs, 
 }
 ```
 
-### Timeout Error
-```json
-{
-  "content": [{
-    "type": "text",
-    "text": "Command timed out after 300 seconds"
-  }],
-  "is_error": true, 
-  "metadata": {
-    "command": "long_running_command",
-    "timeout_seconds": 300,
-    "partial_stdout": "...",
-    "partial_stderr": "...",
-    "working_directory": "/path/to/dir"
-  }
-}
-```
+
 
 ## Usage Examples
 
@@ -98,16 +77,14 @@ The shell execute tool provides secure command execution capabilities for LLMs, 
 ```json
 {
   "command": "cargo test",
-  "working_directory": "/project/path",
-  "timeout": 600
+  "working_directory": "/project/path"
 }
 ```
 
 ### System Information  
 ```json
 {
-  "command": "uname -a && df -h",
-  "timeout": 30
+  "command": "uname -a && df -h"
 }
 ```
 
@@ -118,8 +95,7 @@ The shell execute tool provides secure command execution capabilities for LLMs, 
   "environment": {
     "RUST_LOG": "debug",
     "BUILD_ENV": "production"
-  },
-  "timeout": 900
+  }
 }
 ```
 

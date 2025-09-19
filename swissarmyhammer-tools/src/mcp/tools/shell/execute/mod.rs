@@ -14,7 +14,7 @@ use std::time::{Duration, Instant};
 // Replaced sah_config with local defaults for shell configuration
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::{Child, Command};
-use tokio::time::timeout;
+
 
 // Performance and integration tests would use additional dependencies like futures, assert_cmd, etc.
 
@@ -56,20 +56,7 @@ const DEFAULT_MAX_OUTPUT_SIZE: &str = "10MB";
 /// from commands that output very long single lines.
 const DEFAULT_MAX_LINE_LENGTH: usize = 2000;
 
-/// Minimum allowed timeout for shell commands (1 second)
-///
-/// Prevents accidentally setting timeouts that are too short to be useful.
-const DEFAULT_MIN_TIMEOUT: u32 = 1;
 
-/// Maximum allowed timeout for shell commands (1800 seconds = 30 minutes)
-///
-/// Upper limit to prevent runaway processes while allowing long operations.
-const DEFAULT_MAX_TIMEOUT: u32 = 1800;
-
-/// Default timeout for shell commands when none specified (300 seconds = 5 minutes)
-///
-/// Balanced default that works for most commands while preventing hangs.
-const DEFAULT_DEFAULT_TIMEOUT: u32 = 3600;
 
 /// Parse size strings with units (e.g., "10MB", "1GB", "512KB") into bytes
 ///
@@ -150,8 +137,6 @@ fn parse_size_string(size_str: &str) -> Result<usize, SizeParseError> {
 ///   produce massive output (e.g., `cat large_file.log`, `find /`)
 /// - **Line Length Limit**: 2000 characters handles most real-world command output
 ///   while preventing single-line memory issues
-/// - **Timeout Constraints**: 1-1800 second range with 300s default provides
-///   flexibility for both quick commands and long-running operations
 ///
 /// # Default Values
 ///
@@ -159,18 +144,12 @@ fn parse_size_string(size_str: &str) -> Result<usize, SizeParseError> {
 /// |---------|-------|--------|
 /// | Max Output | 10MB | Generous limit for build logs, test output |
 /// | Max Line Length | 2000 chars | Handles verbose tool output |
-/// | Min Timeout | 1 second | Prevents near-instant timeouts |
-/// | Max Timeout | 30 minutes | Upper bound for long operations |
-/// | Default Timeout | 5 minutes | Reasonable for most commands |
 ///
 /// # Examples
 ///
 /// Default configuration values (struct is private, examples cannot be tested):
 /// - `max_output_size()`: 10,485,760 bytes (10MB)
-/// - `max_line_length()`: 2000 characters  
-/// - `default_timeout()`: 300 seconds
-/// - `min_timeout()`: 1 second
-/// - `max_timeout()`: 1800 seconds
+/// - `max_line_length()`: 2000 characters
 ///
 /// # Migration from sah_config
 ///
@@ -179,7 +158,6 @@ fn parse_size_string(size_str: &str) -> Result<usize, SizeParseError> {
 /// # Old sah.toml configuration (no longer supported)
 /// [shell]
 /// max_output_size = "50MB"
-/// default_timeout = 600
 /// ```
 ///
 /// The new approach uses compile-time constants, trading configurability for
@@ -212,40 +190,7 @@ impl DefaultShellConfig {
         DEFAULT_MAX_LINE_LENGTH
     }
 
-    /// Minimum allowed timeout in seconds (1)
-    ///
-    /// Commands must run for at least this duration before timing out.
-    /// This prevents accidentally setting near-instant timeouts.
-    ///
-    /// # Examples
-    /// Returns 1 second minimum timeout
-    fn min_timeout() -> u32 {
-        DEFAULT_MIN_TIMEOUT
-    }
 
-    /// Maximum allowed timeout in seconds (1800 = 30 minutes)
-    ///
-    /// Commands cannot run longer than this duration. This prevents
-    /// runaway processes while allowing for long-running operations
-    /// like large builds or system maintenance tasks.
-    ///
-    /// # Examples
-    /// Returns 1800 seconds (30 minutes) maximum timeout
-    fn max_timeout() -> u32 {
-        DEFAULT_MAX_TIMEOUT
-    }
-
-    /// Default timeout in seconds (300 = 5 minutes)
-    ///
-    /// This is the timeout used when no explicit timeout is specified.
-    /// Chosen to be long enough for most commands while preventing
-    /// hung processes from blocking indefinitely.
-    ///
-    /// # Examples
-    /// Returns 300 seconds (5 minutes) default timeout
-    fn default_timeout() -> u32 {
-        DEFAULT_DEFAULT_TIMEOUT
-    }
 }
 
 /// Request structure for shell command execution
@@ -256,9 +201,6 @@ struct ShellExecuteRequest {
 
     /// Optional working directory for command execution
     working_directory: Option<String>,
-
-    /// Optional timeout in seconds (default: 300, max: 1800)
-    timeout: Option<u32>,
 
     /// Optional environment variables as JSON string
     environment: Option<String>,
@@ -652,19 +594,7 @@ pub enum ShellError {
         message: String,
     },
 
-    /// Command execution timed out
-    TimeoutError {
-        /// The command that timed out
-        command: String,
-        /// Timeout duration in seconds
-        timeout_seconds: u64,
-        /// Partial stdout captured before timeout
-        partial_stdout: String,
-        /// Partial stderr captured before timeout
-        partial_stderr: String,
-        /// Working directory where the command was executed
-        working_directory: PathBuf,
-    },
+
 
     /// Invalid command provided
     InvalidCommand {
@@ -694,16 +624,7 @@ impl fmt::Display for ShellError {
             ShellError::ExecutionError { command, message } => {
                 write!(f, "Command '{command}' execution failed: {message}")
             }
-            ShellError::TimeoutError {
-                command,
-                timeout_seconds,
-                ..
-            } => {
-                write!(
-                    f,
-                    "Command '{command}' timed out after {timeout_seconds} seconds"
-                )
-            }
+
             ShellError::InvalidCommand { message } => {
                 write!(f, "Invalid command: {message}")
             }
@@ -778,7 +699,7 @@ impl AsyncProcessGuard {
             );
 
             // Try to terminate the process and wait for it to exit
-            let termination_result = timeout(timeout_duration, async {
+            let termination_result = tokio::time::timeout(timeout_duration, async {
                 // On Unix systems, we can try to send SIGTERM first
                 #[cfg(unix)]
                 {
@@ -1036,15 +957,14 @@ async fn process_child_output_with_limits(
     Ok((exit_status, output_buffer))
 }
 
-/// Execute a shell command with timeout, process management, and full output capture
+/// Execute a shell command with process management and full output capture
 ///
 /// This function provides the core shell command execution logic with comprehensive
-/// timeout management and process cleanup, handling:
+/// process cleanup, handling:
 /// - Process spawning using tokio::process::Command
-/// - Timeout control with tokio::time::timeout
-/// - Process tree termination on timeout using AsyncProcessGuard
+/// - Process management using AsyncProcessGuard
 /// - Working directory and environment variable management
-/// - Complete stdout/stderr capture with partial output on timeout
+/// - Complete stdout/stderr capture with size limits
 /// - Execution time measurement
 /// - Comprehensive error handling
 ///
@@ -1052,14 +972,12 @@ async fn process_child_output_with_limits(
 ///
 /// * `command` - The shell command to execute
 /// * `working_directory` - Optional working directory for execution
-/// * `timeout_seconds` - Timeout in seconds (actual timeout enforcement)
 /// * `environment` - Optional environment variables to set
 ///
 /// # Returns
 ///
 /// Returns a `Result` containing either a `ShellExecutionResult` with complete
-/// execution metadata or a `ShellError` describing the failure mode, including
-/// timeout errors with partial output.
+/// execution metadata or a `ShellError` describing the failure mode.
 ///
 /// # Examples
 ///
@@ -1118,15 +1036,7 @@ async fn process_child_output_with_limits(
 /// }
 /// # });
 /// ```
-///
-/// # Timeout Behavior
-///
-/// When a command times out, the function attempts to:
-/// 1. Capture any available partial output
-/// 2. Gracefully terminate the process (SIGTERM)
-/// 3. Force-kill if graceful termination fails
-/// 4. Return a `ShellError::TimeoutError` with partial output
-///
+/// 
 /// # Output Handling
 ///
 /// The function provides advanced output management:
@@ -1137,7 +1047,6 @@ async fn process_child_output_with_limits(
 async fn execute_shell_command(
     command: String,
     working_directory: Option<PathBuf>,
-    timeout_seconds: u64,
     environment: Option<std::collections::HashMap<String, String>>,
 ) -> Result<ShellExecutionResult, ShellError> {
     let start_time = Instant::now();
@@ -1180,10 +1089,9 @@ async fn execute_shell_command(
         .stderr(std::process::Stdio::piped());
 
     tracing::debug!(
-        "Executing command: '{}' in directory: {} with timeout: {}s",
+        "Executing command: '{}' in directory: {}",
         command,
-        work_dir.display(),
-        timeout_seconds
+        work_dir.display()
     );
 
     // Spawn the process
@@ -1203,10 +1111,8 @@ async fn execute_shell_command(
         message: format!("Invalid output configuration: {e}"),
     })?;
 
-    // Execute with timeout
-    let timeout_duration = Duration::from_secs(timeout_seconds);
-
-    match timeout(timeout_duration, async {
+    // Execute command directly (rely on MCP server timeout)
+    {
         // Take the child from the guard for execution
         let child = process_guard
             .take_child()
@@ -1218,13 +1124,8 @@ async fn execute_shell_command(
         let (exit_status, output_buffer) =
             process_child_output_with_limits(child, &output_limits).await?;
 
-        Ok::<_, ShellError>((exit_status, output_buffer))
-    })
-    .await
-    {
-        Ok(output_result) => {
-            match output_result {
-                Ok((exit_status, output_buffer)) => {
+        let (exit_status, output_buffer) = (exit_status, output_buffer);
+        {
                     let execution_time = start_time.elapsed();
                     let execution_time_ms = execution_time.as_millis() as u64;
 
@@ -1272,88 +1173,7 @@ async fn execute_shell_command(
                         binary_output_detected: output_buffer.has_binary_content(),
                     })
                 }
-                Err(shell_error) => Err(shell_error),
-            }
         }
-        Err(_timeout_error) => {
-            // Timeout occurred - attempt to collect partial output and clean up process
-            tracing::warn!(
-                "Command '{}' timed out after {}s, attempting to capture partial output",
-                command,
-                timeout_seconds
-            );
-
-            // Try to capture partial output if the process is still running
-            let (partial_stdout, partial_stderr) = if process_guard.child.is_some() {
-                // Attempt to capture any available output with a very short timeout
-                match tokio::time::timeout(Duration::from_millis(100), async {
-                    // Take the child process to read its outputs
-                    let captured_child =
-                        process_guard
-                            .take_child()
-                            .ok_or_else(|| ShellError::SystemError {
-                                message: "Process guard has no child process".to_string(),
-                            })?;
-
-                    // Create a small output buffer for partial capture
-                    let partial_output_limits = OutputLimits {
-                        max_output_size: 1024 * 1024, // 1MB limit for partial output
-                        ..OutputLimits::default()
-                    };
-
-                    // Try to process available output
-                    process_child_output_with_limits(captured_child, &partial_output_limits).await
-                })
-                .await
-                {
-                    Ok(Ok((_, output_buffer))) => {
-                        // Successfully captured some partial output
-                        let stdout = output_buffer.get_stdout();
-                        let stderr = output_buffer.get_stderr();
-
-                        tracing::info!(
-                            "Captured partial output: {} bytes stdout, {} bytes stderr",
-                            stdout.len(),
-                            stderr.len()
-                        );
-
-                        (stdout, stderr)
-                    }
-                    Ok(Err(e)) => {
-                        tracing::debug!("Failed to capture partial output: {}", e);
-                        (String::new(), String::new())
-                    }
-                    Err(_) => {
-                        tracing::debug!("Timed out while capturing partial output");
-                        (String::new(), String::new())
-                    }
-                }
-            } else {
-                (String::new(), String::new())
-            };
-
-            // Try to gracefully terminate the process
-            if let Err(e) = process_guard
-                .terminate_gracefully(Duration::from_secs(5))
-                .await
-            {
-                tracing::error!("Failed to terminate process gracefully: {}", e);
-                // Force kill as fallback
-                if let Err(e) = process_guard.force_kill().await {
-                    tracing::error!("Failed to force kill process: {}", e);
-                }
-            }
-
-            // Return timeout error with captured partial output
-            Err(ShellError::TimeoutError {
-                command,
-                timeout_seconds,
-                partial_stdout,
-                partial_stderr,
-                working_directory: work_dir,
-            })
-        }
-    }
 }
 
 /// Tool for executing shell commands
@@ -1391,13 +1211,7 @@ impl McpTool for ShellExecuteTool {
                     "type": "string",
                     "description": "Working directory for command execution (optional, defaults to current directory)"
                 },
-                "timeout": {
-                    "type": "integer",
-                    "description": "Command timeout in seconds (optional, defaults to 300 seconds / 5 minutes)",
-                    "minimum": 1,
-                    "maximum": 1800,
-                    "default": 300
-                },
+
                 "environment": {
                     "type": "string",
                     "description": "Additional environment variables as JSON string (optional, e.g., '{\"KEY1\":\"value1\",\"KEY2\":\"value2\"}')"
@@ -1430,15 +1244,7 @@ impl McpTool for ShellExecuteTool {
             McpError::invalid_params(format!("Command security check failed: {e}"), None)
         })?;
 
-        // Validate timeout if provided
-        if let Some(timeout) = request.timeout {
-            if timeout == 0 || timeout > 1800 {
-                return Err(McpError::invalid_params(
-                    "Timeout must be between 1 and 1800 seconds".to_string(),
-                    None,
-                ));
-            }
-        }
+
 
         // Validate working directory if provided with security checks
         if let Some(ref working_dir) = request.working_directory {
@@ -1490,43 +1296,11 @@ impl McpTool for ShellExecuteTool {
         // Execute the shell command using our core execution function
         let working_directory = request.working_directory.map(PathBuf::from);
 
-        // Use configured timeout, applying limits and validation
-        let timeout_seconds = if let Some(requested_timeout) = request.timeout {
-            let requested_timeout = requested_timeout as u64;
 
-            // Ensure timeout is within default limits
-            if requested_timeout < DefaultShellConfig::min_timeout() as u64 {
-                return Err(McpError::invalid_params(
-                    format!(
-                        "Timeout {} seconds is below minimum {} seconds",
-                        requested_timeout,
-                        DefaultShellConfig::min_timeout()
-                    ),
-                    None,
-                ));
-            }
-
-            if requested_timeout > DefaultShellConfig::max_timeout() as u64 {
-                return Err(McpError::invalid_params(
-                    format!(
-                        "Timeout {} seconds exceeds maximum {} seconds",
-                        requested_timeout,
-                        DefaultShellConfig::max_timeout()
-                    ),
-                    None,
-                ));
-            }
-
-            requested_timeout
-        } else {
-            // Use default timeout
-            DefaultShellConfig::default_timeout() as u64
-        };
 
         match execute_shell_command(
             request.command.clone(),
             working_directory,
-            timeout_seconds,
             parsed_environment,
         )
         .await
@@ -1564,75 +1338,22 @@ impl McpTool for ShellExecuteTool {
             }
             Err(shell_error) => {
                 // Handle different types of shell errors with appropriate responses
-                match &shell_error {
-                    ShellError::TimeoutError {
-                        command,
-                        timeout_seconds,
-                        partial_stdout,
-                        partial_stderr,
-                        working_directory,
-                    } => {
-                        // Create timeout-specific response per specification
-                        let timeout_response = serde_json::json!({
-                            "command": command,
-                            "timeout_seconds": timeout_seconds,
-                            "partial_stdout": partial_stdout,
-                            "partial_stderr": partial_stderr,
-                            "working_directory": working_directory.display().to_string()
-                        });
+                // Return standard error response
+                let error_message = format!("Shell execution failed: {shell_error}");
+                tracing::error!("{}", error_message);
 
-                        let response_text =
-                            format!("Command timed out after {timeout_seconds} seconds");
-                        tracing::warn!(
-                            "Command '{}' timed out after {}s",
-                            command,
-                            timeout_seconds
-                        );
-
-                        Ok(CallToolResult {
-                            content: vec![
-                                rmcp::model::Annotated::new(
-                                    rmcp::model::RawContent::Text(rmcp::model::RawTextContent {
-                                        text: response_text,
-                                        meta: None,
-                                    }),
-                                    None,
-                                ),
-                                rmcp::model::Annotated::new(
-                                    rmcp::model::RawContent::Text(rmcp::model::RawTextContent {
-                                        text: serde_json::to_string_pretty(&timeout_response)
-                                            .unwrap_or_else(|_| {
-                                                "Failed to serialize timeout metadata".to_string()
-                                            }),
-                                        meta: None,
-                                    }),
-                                    None,
-                                ),
-                            ],
-                            structured_content: None,
-                            is_error: Some(true),
+                Ok(CallToolResult {
+                    content: vec![rmcp::model::Annotated::new(
+                        rmcp::model::RawContent::Text(rmcp::model::RawTextContent {
+                            text: error_message,
                             meta: None,
-                        })
-                    }
-                    _ => {
-                        // Other error types - return standard error response
-                        let error_message = format!("Shell execution failed: {shell_error}");
-                        tracing::error!("{}", error_message);
-
-                        Ok(CallToolResult {
-                            content: vec![rmcp::model::Annotated::new(
-                                rmcp::model::RawContent::Text(rmcp::model::RawTextContent {
-                                    text: error_message,
-                                    meta: None,
-                                }),
-                                None,
-                            )],
-                            structured_content: None,
-                            meta: None,
-                            is_error: Some(true),
-                        })
-                    }
-                }
+                        }),
+                        None,
+                    )],
+                    structured_content: None,
+                    meta: None,
+                    is_error: Some(true),
+                })
             }
         }
     }
@@ -1722,10 +1443,7 @@ mod tests {
             "working_directory".to_string(),
             serde_json::Value::String("/tmp".to_string()),
         );
-        args.insert(
-            "timeout".to_string(),
-            serde_json::Value::Number(serde_json::Number::from(120)),
-        );
+
         args.insert(
             "environment".to_string(),
             serde_json::Value::String(env_json.to_string()),
@@ -1753,43 +1471,9 @@ mod tests {
         assert!(result.is_err());
     }
 
-    #[tokio::test]
-    async fn test_execute_invalid_timeout() {
-        let tool = ShellExecuteTool::new();
-        let context = create_test_context();
 
-        let mut args = serde_json::Map::new();
-        args.insert(
-            "command".to_string(),
-            serde_json::Value::String("echo test".to_string()),
-        );
-        args.insert(
-            "timeout".to_string(),
-            serde_json::Value::Number(serde_json::Number::from(2000)),
-        ); // Over 1800 limit
 
-        let result = tool.execute(args, &context).await;
-        assert!(result.is_err());
-    }
 
-    #[tokio::test]
-    async fn test_execute_zero_timeout() {
-        let tool = ShellExecuteTool::new();
-        let context = create_test_context();
-
-        let mut args = serde_json::Map::new();
-        args.insert(
-            "command".to_string(),
-            serde_json::Value::String("echo test".to_string()),
-        );
-        args.insert(
-            "timeout".to_string(),
-            serde_json::Value::Number(serde_json::Number::from(0)),
-        );
-
-        let result = tool.execute(args, &context).await;
-        assert!(result.is_err());
-    }
 
     #[tokio::test]
     async fn test_execute_empty_working_directory() {
@@ -1971,220 +1655,17 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn test_execute_with_short_timeout() {
-        let tool = ShellExecuteTool::new();
-        let context = create_test_context();
 
-        let mut args = serde_json::Map::new();
-        args.insert(
-            "command".to_string(),
-            serde_json::Value::String("sleep 3".to_string()), // Command that takes 3 seconds
-        );
-        args.insert(
-            "timeout".to_string(),
-            serde_json::Value::Number(serde_json::Number::from(1)), // But timeout after 1 second
-        );
 
-        let result = tool.execute(args, &context).await;
-        assert!(result.is_ok(), "Tool should return result even for timeout");
 
-        let call_result = result.unwrap();
-        assert_eq!(
-            call_result.is_error,
-            Some(true),
-            "Timeout should be reported as error"
-        );
 
-        // Check that response contains timeout information
-        assert!(!call_result.content.is_empty());
-        let content_text = match &call_result.content[0].raw {
-            rmcp::model::RawContent::Text(text_content) => &text_content.text,
-            _ => panic!("Expected text content"),
-        };
 
-        assert!(
-            content_text.contains("timed out"),
-            "Response should mention timeout"
-        );
-        assert!(
-            content_text.contains("1 seconds"),
-            "Response should mention the timeout duration"
-        );
-    }
 
-    #[tokio::test]
-    async fn test_execute_timeout_metadata() {
-        let tool = ShellExecuteTool::new();
-        let context = create_test_context();
 
-        let mut args = serde_json::Map::new();
-        args.insert(
-            "command".to_string(),
-            serde_json::Value::String("sleep 5".to_string()),
-        );
-        args.insert(
-            "timeout".to_string(),
-            serde_json::Value::Number(serde_json::Number::from(2)),
-        );
-        args.insert(
-            "working_directory".to_string(),
-            serde_json::Value::String("/tmp".to_string()),
-        );
 
-        let result = tool.execute(args, &context).await;
-        assert!(result.is_ok());
 
-        let call_result = result.unwrap();
-        assert_eq!(call_result.is_error, Some(true));
 
-        // Should have at least 2 content items: error message and metadata
-        assert!(call_result.content.len() >= 2);
 
-        // Check if the second content item contains timeout metadata
-        if call_result.content.len() >= 2 {
-            let metadata_text = match &call_result.content[1].raw {
-                rmcp::model::RawContent::Text(text_content) => &text_content.text,
-                _ => panic!("Expected text content for metadata"),
-            };
-
-            // Parse as JSON and verify timeout metadata
-            if let Ok(metadata_json) = serde_json::from_str::<serde_json::Value>(metadata_text) {
-                assert!(metadata_json.get("command").is_some());
-                assert!(metadata_json.get("timeout_seconds").is_some());
-                assert!(metadata_json.get("partial_stdout").is_some());
-                assert!(metadata_json.get("partial_stderr").is_some());
-                assert!(metadata_json.get("working_directory").is_some());
-
-                assert_eq!(metadata_json["command"], "sleep 5");
-                assert_eq!(metadata_json["timeout_seconds"], 2);
-                assert!(metadata_json["working_directory"]
-                    .as_str()
-                    .unwrap()
-                    .contains("/tmp"));
-            }
-        }
-    }
-
-    #[tokio::test]
-    async fn test_execute_fast_command_no_timeout() {
-        let tool = ShellExecuteTool::new();
-        let context = create_test_context();
-
-        let mut args = serde_json::Map::new();
-        args.insert(
-            "command".to_string(),
-            serde_json::Value::String("echo 'fast command'".to_string()),
-        );
-        args.insert(
-            "timeout".to_string(),
-            serde_json::Value::Number(serde_json::Number::from(1)),
-        );
-
-        let result = tool.execute(args, &context).await;
-        assert!(result.is_ok());
-
-        let call_result = result.unwrap();
-        assert_eq!(
-            call_result.is_error,
-            Some(false),
-            "Fast command should complete without timeout"
-        );
-
-        // Should have regular success response
-        assert!(!call_result.content.is_empty());
-        let content_text = match &call_result.content[0].raw {
-            rmcp::model::RawContent::Text(text_content) => &text_content.text,
-            _ => panic!("Expected text content"),
-        };
-
-        // Parse the JSON response
-        if let Ok(response_json) = serde_json::from_str::<serde_json::Value>(content_text) {
-            assert_eq!(response_json["exit_code"], 0);
-            assert!(response_json["stdout"]
-                .as_str()
-                .unwrap()
-                .contains("fast command"));
-        }
-    }
-
-    #[tokio::test]
-    async fn test_execute_maximum_timeout_validation() {
-        let tool = ShellExecuteTool::new();
-        let context = create_test_context();
-
-        let mut args = serde_json::Map::new();
-        args.insert(
-            "command".to_string(),
-            serde_json::Value::String("echo test".to_string()),
-        );
-        args.insert(
-            "timeout".to_string(),
-            serde_json::Value::Number(serde_json::Number::from(1801)), // Over 1800 limit
-        );
-
-        let result = tool.execute(args, &context).await;
-        assert!(
-            result.is_err(),
-            "Should fail validation for timeout over 1800 seconds"
-        );
-    }
-
-    #[tokio::test]
-    async fn test_execute_minimum_timeout_validation() {
-        let tool = ShellExecuteTool::new();
-        let context = create_test_context();
-
-        let mut args = serde_json::Map::new();
-        args.insert(
-            "command".to_string(),
-            serde_json::Value::String("echo test".to_string()),
-        );
-        args.insert(
-            "timeout".to_string(),
-            serde_json::Value::Number(serde_json::Number::from(0)), // Below minimum
-        );
-
-        let result = tool.execute(args, &context).await;
-        assert!(
-            result.is_err(),
-            "Should fail validation for timeout of 0 seconds"
-        );
-    }
-
-    #[tokio::test]
-    async fn test_process_cleanup_on_timeout() {
-        // This test verifies that processes are properly cleaned up on timeout
-        // We can't easily test this without creating actual long-running processes,
-        // but we can test that the function completes and doesn't hang
-        let tool = ShellExecuteTool::new();
-        let context = create_test_context();
-
-        let mut args = serde_json::Map::new();
-        args.insert(
-            "command".to_string(),
-            // Command that would run longer than timeout but should be killed
-            serde_json::Value::String("sleep 10".to_string()),
-        );
-        args.insert(
-            "timeout".to_string(),
-            serde_json::Value::Number(serde_json::Number::from(1)),
-        );
-
-        let start_time = std::time::Instant::now();
-        let result = tool.execute(args, &context).await;
-        let execution_time = start_time.elapsed();
-
-        // Should complete relatively quickly (much less than the 10 second sleep)
-        assert!(
-            execution_time.as_secs() < 5,
-            "Command should be killed and function should return quickly"
-        );
-        assert!(result.is_ok());
-
-        let call_result = result.unwrap();
-        assert_eq!(call_result.is_error, Some(true));
-    }
 
     // Security validation tests for the new functionality
     #[tokio::test]
@@ -3108,27 +2589,7 @@ mod tests {
         assert!(!guard.is_running());
     }
 
-    #[tokio::test]
-    async fn test_async_process_guard_timeout_scenarios() {
-        // Test timeout behavior in graceful termination
-        let mut cmd = Command::new("sleep");
-        cmd.arg("2"); // Sleep for 2 seconds
-        cmd.stdout(std::process::Stdio::null());
-        cmd.stderr(std::process::Stdio::null());
 
-        let child = cmd.spawn().expect("Failed to spawn sleep process");
-        let mut guard = AsyncProcessGuard::new(child, "sleep 2".to_string());
-
-        // Try graceful termination with very short timeout
-        let start = std::time::Instant::now();
-        let result = guard.terminate_gracefully(Duration::from_millis(10)).await;
-        let elapsed = start.elapsed();
-
-        // Should timeout and then force kill, completing quickly
-        assert!(elapsed < Duration::from_secs(1));
-        assert!(result.is_ok()); // Should succeed after timeout->force kill
-        assert!(!guard.is_running());
-    }
 
     #[tokio::test]
     async fn test_async_process_guard_process_status_detection() {
@@ -3540,8 +3001,7 @@ mod tests {
 
         let iterations = 100;
         let request = serde_json::json!({
-            "command": "echo 'Memory test iteration'",
-            "timeout": 30
+            "command": "echo 'Memory test iteration'"
         });
 
         let start = std::time::Instant::now();
@@ -3585,8 +3045,7 @@ mod tests {
                 };
 
                 let request = serde_json::json!({
-                    "command": command,
-                    "timeout": 10
+                    "command": command
                 });
 
                 tool_clone.execute(
@@ -3631,18 +3090,15 @@ mod tests {
         let stress_tasks = vec![
             // Large output generation
             serde_json::json!({
-                "command": "head -c 50000 /dev/zero | base64",
-                "timeout": 30
+                "command": "head -c 50000 /dev/zero | base64"
             }),
             // CPU intensive task
             serde_json::json!({
-                "command": "echo 'CPU test' && sleep 0.5",
-                "timeout": 30
+                "command": "echo 'CPU test' && sleep 0.5"
             }),
             // Multiple small commands
             serde_json::json!({
-                "command": "for i in $(seq 1 10); do echo \"Item $i\"; done",
-                "timeout": 30
+                "command": "for i in $(seq 1 10); do echo \"Item $i\"; done"
             }),
         ];
 
@@ -3878,12 +3334,6 @@ mod tests {
         // Test DefaultShellConfig methods use valid defaults
         assert_eq!(DefaultShellConfig::max_output_size(), 10 * 1024 * 1024);
         assert_eq!(DefaultShellConfig::max_line_length(), 2000);
-        assert_eq!(DefaultShellConfig::min_timeout(), 1);
-        assert_eq!(DefaultShellConfig::max_timeout(), 1800);
-        assert_eq!(
-            DefaultShellConfig::default_timeout(),
-            DEFAULT_DEFAULT_TIMEOUT
-        );
     }
 
     #[test]
