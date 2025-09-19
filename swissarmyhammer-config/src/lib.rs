@@ -147,12 +147,12 @@
 //! use serde_json::json;
 //!
 //! let mut context = TemplateContext::new();
-//! context.set("app.name".to_string(), json!("MyApp"));
-//! context.set("app.debug".to_string(), json!(true));
-//! context.set("database.host".to_string(), json!("localhost"));
+//! context.set("app_name".to_string(), json!("MyApp"));
+//! context.set("debug".to_string(), json!(true));
+//! context.set("database_host".to_string(), json!("localhost"));
 //!
-//! assert_eq!(context.get("app.name"), Some(&json!("MyApp")));
-//! assert_eq!(context.get("database.host"), Some(&json!("localhost")));
+//! assert_eq!(context.get("app_name"), Some(&json!("MyApp")));
+//! assert_eq!(context.get("database_host"), Some(&json!("localhost")));
 //! ```
 //!
 //! # Error Handling
@@ -166,11 +166,11 @@
 //!     Ok(context) => {
 //!         println!("Loaded {} configuration values", context.len());
 //!     },
-//!     Err(ConfigurationError::FileNotFound { path, .. }) => {
-//!         eprintln!("Configuration file not found: {}", path);
+//!     Err(ConfigurationError::LoadError { path, source, .. }) => {
+//!         eprintln!("Failed to load configuration from {}: {}", path.display(), source);
 //!     },
-//!     Err(ConfigurationError::ParseError { source, .. }) => {
-//!         eprintln!("Configuration parsing failed: {}", source);
+//!     Err(ConfigurationError::EnvVarError { message, .. }) => {
+//!         eprintln!("Environment variable error: {}", message);
 //!     },
 //!     Err(err) => {
 //!         eprintln!("Configuration error: {}", err);
@@ -278,11 +278,11 @@ pub use template_context::TemplateContext;
 ///             println!("{}: {}", key, value);
 ///         }
 ///     },
-///     Err(ConfigurationError::ParseError { source, path, .. }) => {
+///     Err(ConfigurationError::LoadError { path, source, .. }) => {
 ///         eprintln!("Failed to parse {}: {}", path.display(), source);
 ///     },
-///     Err(ConfigurationError::EnvironmentVariableError { variable, source, .. }) => {
-///         eprintln!("Environment variable {} error: {}", variable, source);
+///     Err(ConfigurationError::EnvVarError { message, .. }) => {
+///         eprintln!("Environment variable error: {}", message);
 ///     },
 ///     Err(err) => {
 ///         eprintln!("Configuration error: {}", err);
@@ -396,7 +396,6 @@ pub mod test_config {
     #[derive(Debug, Clone)]
     pub struct TestConfig {
         pub enable_claude_tests: bool,
-        pub test_timeout_seconds: u64,
         pub llama_model_repo: String,
         pub llama_model_filename: String,
     }
@@ -407,10 +406,6 @@ pub mod test_config {
                 enable_claude_tests: env::var("SAH_TEST_CLAUDE")
                     .map(|v| v.to_lowercase() == "true" || v == "1")
                     .unwrap_or(true),
-                test_timeout_seconds: env::var("SAH_TEST_TIMEOUT")
-                    .ok()
-                    .and_then(|v| v.parse().ok())
-                    .unwrap_or(120),
                 llama_model_repo: env::var("SAH_TEST_MODEL_REPO")
                     .unwrap_or_else(|_| crate::DEFAULT_TEST_LLM_MODEL_REPO.to_string()),
                 llama_model_filename: env::var("SAH_TEST_MODEL_FILENAME")

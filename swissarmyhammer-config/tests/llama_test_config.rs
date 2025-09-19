@@ -17,8 +17,6 @@ use swissarmyhammer_config::{
 pub struct TestConfig {
     /// Enable Claude tests (default: true, requires claude CLI)
     pub enable_claude_tests: bool,
-    /// Test timeout in seconds (shorter in CI)
-    pub test_timeout_seconds: u64,
     /// LlamaAgent model repository for testing
     pub llama_model_repo: String,
     /// LlamaAgent model filename for testing
@@ -49,17 +47,6 @@ impl TestConfig {
             enable_claude_tests: env::var("SAH_TEST_CLAUDE")
                 .map(|v| v.to_lowercase() == "true" || v == "1")
                 .unwrap_or(true),
-            test_timeout_seconds: if is_ci {
-                env::var("SAH_TEST_TIMEOUT")
-                    .ok()
-                    .and_then(|v| v.parse().ok())
-                    .unwrap_or(60) // Shorter timeout in CI
-            } else {
-                env::var("SAH_TEST_TIMEOUT")
-                    .ok()
-                    .and_then(|v| v.parse().ok())
-                    .unwrap_or(120) // Longer timeout for local development
-            },
             llama_model_repo: env::var("SAH_TEST_MODEL_REPO")
                 .unwrap_or_else(|_| DEFAULT_TEST_LLM_MODEL_REPO.to_string()),
             llama_model_filename: env::var("SAH_TEST_MODEL_FILENAME")
@@ -83,7 +70,6 @@ impl TestConfig {
     pub fn development() -> Self {
         Self {
             enable_claude_tests: true,
-            test_timeout_seconds: 120,
             llama_model_repo: DEFAULT_TEST_LLM_MODEL_REPO.to_string(),
             llama_model_filename: DEFAULT_TEST_LLM_MODEL_FILENAME.to_string(),
             max_concurrent_tests: 5,
@@ -95,7 +81,6 @@ impl TestConfig {
     pub fn ci() -> Self {
         Self {
             enable_claude_tests: true,
-            test_timeout_seconds: 60,
             llama_model_repo: DEFAULT_TEST_LLM_MODEL_REPO.to_string(),
             llama_model_filename: DEFAULT_TEST_LLM_MODEL_FILENAME.to_string(),
             max_concurrent_tests: 3,
@@ -171,7 +156,11 @@ impl TestEnvironment {
 
     /// Get test timeout duration
     pub fn test_timeout(&self) -> std::time::Duration {
-        std::time::Duration::from_secs(self.config.test_timeout_seconds)
+        if self.config.is_ci {
+            std::time::Duration::from_secs(60) // Shorter timeout in CI
+        } else {
+            std::time::Duration::from_secs(120) // Longer timeout for local development
+        }
     }
 
     /// Get maximum concurrent test count
@@ -306,7 +295,6 @@ mod tests {
         // Clear environment variables
         env::remove_var("SAH_TEST_LLAMA");
         env::remove_var("SAH_TEST_CLAUDE");
-        env::remove_var("SAH_TEST_TIMEOUT");
         env::remove_var("CI");
         env::remove_var("GITHUB_ACTIONS");
 
@@ -314,7 +302,6 @@ mod tests {
 
         // Defaults should be Claude enabled
         assert!(config.enable_claude_tests);
-        assert_eq!(config.test_timeout_seconds, 120); // Non-CI default
         assert!(!config.is_ci);
     }
 
@@ -325,7 +312,6 @@ mod tests {
 
 
         assert!(config.enable_claude_tests);
-        assert_eq!(config.test_timeout_seconds, 120);
         assert_eq!(config.max_concurrent_tests, 5);
         assert!(!config.is_ci);
     }
@@ -337,7 +323,6 @@ mod tests {
 
 
         assert!(config.enable_claude_tests);
-        assert_eq!(config.test_timeout_seconds, 60); // Shorter in CI
         assert_eq!(config.max_concurrent_tests, 3); // Lower concurrency in CI
         assert!(config.is_ci);
     }
@@ -404,7 +389,7 @@ mod tests {
         assert_eq!(env.should_test_claude(), config.enable_claude_tests);
         assert_eq!(
             env.test_timeout(),
-            std::time::Duration::from_secs(config.test_timeout_seconds)
+            std::time::Duration::from_secs(60) // CI environment uses fixed 60 second timeout
         );
         assert_eq!(env.max_concurrent(), config.max_concurrent_tests);
     }

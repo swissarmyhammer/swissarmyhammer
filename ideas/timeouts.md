@@ -41,10 +41,7 @@ Based on analysis of the SwissArmyHammer codebase, here are all the distinct tim
 - **Default**: 45 seconds
 - **Purpose**: Web content fetching during searches
 
-### 7. Test Timeout
-- **Location**: `swissarmyhammer-config/src/lib.rs:399`
-- **Configuration**: `SAH_TEST_TIMEOUT` environment variable
-- **Purpose**: Test execution timeouts
+
 
 ## CLI/Workflow Timeouts (configurable)
 

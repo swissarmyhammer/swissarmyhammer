@@ -108,11 +108,11 @@ impl TemplateContext {
     /// assert!(context.is_empty());
     ///
     /// // Build configuration programmatically
-    /// context.set("app.name".to_string(), json!("MyApp"));
+    /// context.set("app_name".to_string(), json!("MyApp"));
     /// context.set("debug".to_string(), json!(true));
     ///
     /// assert_eq!(context.len(), 2);
-    /// assert_eq!(context.get("app.name"), Some(&json!("MyApp")));
+    /// assert_eq!(context.get("app_name"), Some(&json!("MyApp")));
     /// ```
     pub fn new() -> Self {
         Self {
