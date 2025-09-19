@@ -15,7 +15,7 @@ fn test_sub_workflow_action_creation() {
     assert!(action.result_variable.is_none());
     assert_eq!(
         action.timeout,
-        ActionTimeouts::default().sub_workflow_timeout
+        ActionTimeouts::default().action_timeout
     );
 }
 

@@ -109,35 +109,14 @@ pub type ActionResult<T> = std::result::Result<T, ActionError>;
 /// Configuration for action timeouts
 #[derive(Debug, Clone)]
 pub struct ActionTimeouts {
-    /// Default timeout for prompt actions
-    pub prompt_timeout: Duration,
-    /// Default timeout for user input actions
-    pub user_input_timeout: Duration,
-    /// Default timeout for sub-workflow actions
-    pub sub_workflow_timeout: Duration,
+    /// Default timeout for all action types
+    pub action_timeout: Duration,
 }
 
 impl Default for ActionTimeouts {
     fn default() -> Self {
         Self {
-            prompt_timeout: Duration::from_secs(
-                std::env::var("SWISSARMYHAMMER_PROMPT_TIMEOUT")
-                    .ok()
-                    .and_then(|s| s.parse().ok())
-                    .unwrap_or(3600 * 8),
-            ), // 5 minutes default
-            user_input_timeout: Duration::from_secs(
-                std::env::var("SWISSARMYHAMMER_USER_INPUT_TIMEOUT")
-                    .ok()
-                    .and_then(|s| s.parse().ok())
-                    .unwrap_or(300),
-            ), // 5 minutes default
-            sub_workflow_timeout: Duration::from_secs(
-                std::env::var("SWISSARMYHAMMER_SUB_WORKFLOW_TIMEOUT")
-                    .ok()
-                    .and_then(|s| s.parse().ok())
-                    .unwrap_or(3600 * 24),
-            ),
+            action_timeout: Duration::from_secs(3600), // 1 hour default
         }
     }
 }
@@ -655,7 +634,7 @@ impl PromptAction {
             prompt_name,
             arguments: HashMap::new(),
             result_variable: None,
-            timeout: timeouts.prompt_timeout,
+            timeout: timeouts.action_timeout,
             quiet: false, // Default to showing output
         }
     }
@@ -1002,7 +981,7 @@ impl Action for WaitAction {
 
                 // Use configurable timeout for user input
                 let timeouts = ActionTimeouts::default();
-                match timeout(timeouts.user_input_timeout, reader.read_line(&mut line)).await {
+                match timeout(timeouts.action_timeout, reader.read_line(&mut line)).await {
                     Ok(Ok(_)) => {
                         // Successfully read input
                     }
@@ -1011,7 +990,7 @@ impl Action for WaitAction {
                     }
                     Err(_) => {
                         return Err(ActionError::Timeout {
-                            timeout: timeouts.user_input_timeout,
+                            timeout: timeouts.action_timeout,
                         });
                     }
                 }
@@ -1288,7 +1267,7 @@ impl SubWorkflowAction {
             workflow_name,
             input_variables: HashMap::new(),
             result_variable: None,
-            timeout: timeouts.sub_workflow_timeout,
+            timeout: timeouts.action_timeout,
         }
     }
 
@@ -1379,7 +1358,7 @@ impl ShellAction {
     pub fn validate_timeout(&self) -> ActionResult<Duration> {
         let timeout = self
             .timeout
-            .unwrap_or(ActionTimeouts::default().prompt_timeout);
+            .unwrap_or(ActionTimeouts::default().action_timeout);
 
         if timeout.as_millis() == 0 {
             return Err(ActionError::ExecutionError(
@@ -2591,7 +2570,7 @@ mod tests {
 
         // Verify basic properties (retry logic removed)
         assert_eq!(action.prompt_name, "test-prompt");
-        assert_eq!(action.timeout, ActionTimeouts::default().prompt_timeout);
+        assert_eq!(action.timeout, ActionTimeouts::default().action_timeout);
         assert!(!action.quiet);
         assert!(action.arguments.is_empty());
         assert!(action.result_variable.is_none());
