@@ -32,16 +32,12 @@ impl McpTool for MarkCompleteTodoTool {
         serde_json::json!({
             "type": "object",
             "properties": {
-                "todo_list": {
-                    "type": "string",
-                    "description": "Name of the todo list file (without extension)"
-                },
                 "id": {
                     "type": "string",
                     "description": "ULID of the todo item to mark as complete"
                 }
             },
-            "required": ["todo_list", "id"]
+            "required": ["id"]
         })
     }
 
@@ -55,16 +51,9 @@ impl McpTool for MarkCompleteTodoTool {
 
 
 
-        tracing::debug!(
-            "Marking todo item '{}' complete in list: {}",
-            request.id,
-            request.todo_list
-        );
+        tracing::debug!("Marking todo item '{}' complete", request.id);
 
-        // Validate todo list name and ID
-        McpValidation::validate_not_empty(&request.todo_list, "todo list name")
-            .map_err(|e| McpErrorHandler::handle_error(e, "validate todo list name"))?;
-
+        // Validate ID
         McpValidation::validate_not_empty(request.id.as_str(), "todo item ID")
             .map_err(|e| McpErrorHandler::handle_error(e, "validate todo item ID"))?;
 
@@ -76,20 +65,15 @@ impl McpTool for MarkCompleteTodoTool {
 
         // Mark the item as complete
         match storage
-            .mark_todo_complete(&request.todo_list, &request.id)
+            .mark_todo_complete(&request.id)
             .await
         {
             Ok(()) => {
-                tracing::info!(
-                    "Marked todo item {} complete in list {}",
-                    request.id,
-                    request.todo_list
-                );
+                tracing::info!("Marked todo item {} complete", request.id);
                 Ok(BaseToolImpl::create_success_response(
                     json!({
-                        "message": format!("Marked todo item '{}' as complete in list '{}'", request.id, request.todo_list),
+                        "message": format!("Marked todo item '{}' as complete", request.id),
                         "action": "marked_complete",
-                        "todo_list": request.todo_list,
                         "id": request.id.as_str()
                     }).to_string()
                 ))

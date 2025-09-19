@@ -32,10 +32,6 @@ impl McpTool for CreateTodoTool {
         serde_json::json!({
             "type": "object",
             "properties": {
-                "todo_list": {
-                    "type": "string",
-                    "description": "Name of the todo list file (without extension)"
-                },
                 "task": {
                     "type": "string",
                     "description": "Brief description of the task to be completed"
@@ -45,7 +41,7 @@ impl McpTool for CreateTodoTool {
                     "description": "Optional additional context, notes, or implementation details"
                 }
             },
-            "required": ["todo_list", "task"]
+            "required": ["task"]
         })
     }
 
@@ -59,12 +55,9 @@ impl McpTool for CreateTodoTool {
 
 
 
-        tracing::debug!("Creating todo item in list: {}", request.todo_list);
+        tracing::debug!("Creating todo item");
 
-        // Validate todo list name and task
-        McpValidation::validate_not_empty(&request.todo_list, "todo list name")
-            .map_err(|e| McpErrorHandler::handle_error(e, "validate todo list name"))?;
-
+        // Validate task
         McpValidation::validate_not_empty(&request.task, "task description")
             .map_err(|e| McpErrorHandler::handle_error(e, "validate task description"))?;
 
@@ -74,18 +67,14 @@ impl McpTool for CreateTodoTool {
 
         // Create the todo item
         match storage
-            .create_todo_item(&request.todo_list, request.task, request.context)
+            .create_todo_item(request.task, request.context)
             .await
         {
             Ok(item) => {
-                tracing::info!(
-                    "Created todo item {} in list {}",
-                    item.id,
-                    request.todo_list
-                );
+                tracing::info!("Created todo item {}", item.id);
                 Ok(BaseToolImpl::create_success_response(
                     json!({
-                        "message": format!("Created todo item in list '{}'", request.todo_list),
+                        "message": "Created todo item",
                         "todo_item": {
                             "id": item.id.as_str(),
                             "task": item.task,

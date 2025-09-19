@@ -32,16 +32,12 @@ impl McpTool for ShowTodoTool {
         serde_json::json!({
             "type": "object",
             "properties": {
-                "todo_list": {
-                    "type": "string",
-                    "description": "Name of the todo list file (without extension)"
-                },
                 "item": {
                     "type": "string",
                     "description": "Either a specific ULID or \"next\" to show the next incomplete item"
                 }
             },
-            "required": ["todo_list", "item"]
+            "required": ["item"]
         })
     }
 
@@ -55,16 +51,9 @@ impl McpTool for ShowTodoTool {
 
 
 
-        tracing::debug!(
-            "Showing todo item '{}' from list: {}",
-            request.item,
-            request.todo_list
-        );
+        tracing::debug!("Showing todo item '{}'", request.item);
 
-        // Validate todo list name and item identifier
-        McpValidation::validate_not_empty(&request.todo_list, "todo list name")
-            .map_err(|e| McpErrorHandler::handle_error(e, "validate todo list name"))?;
-
+        // Validate item identifier
         McpValidation::validate_not_empty(&request.item, "item identifier")
             .map_err(|e| McpErrorHandler::handle_error(e, "validate item identifier"))?;
 
@@ -74,11 +63,11 @@ impl McpTool for ShowTodoTool {
 
         // Get the requested todo item
         match storage
-            .get_todo_item(&request.todo_list, &request.item)
+            .get_todo_item(&request.item)
             .await
         {
             Ok(Some(item)) => {
-                tracing::info!("Found todo item {} in list {}", item.id, request.todo_list);
+                tracing::info!("Found todo item {}", item.id);
                 Ok(BaseToolImpl::create_success_response(
                     json!({
                         "todo_item": {
@@ -105,16 +94,13 @@ impl McpTool for ShowTodoTool {
                 if request.item == "next" {
                     Ok(BaseToolImpl::create_success_response(
                         json!({
-                            "message": format!("No incomplete todo items found in list '{}'", request.todo_list),
+                            "message": "No incomplete todo items found",
                             "todo_item": null
                         }).to_string()
                     ))
                 } else {
                     Err(McpError::invalid_request(
-                        format!(
-                            "Todo item '{}' not found in list '{}'",
-                            request.item, request.todo_list
-                        ),
+                        format!("Todo item '{}' not found", request.item),
                         None,
                     ))
                 }
