@@ -22,7 +22,6 @@ name: code-review-workflow
 description: Complete code review process with automated checks
 version: "1.0"
 initial_state: setup
-timeout_ms: 300000
 variables:
   - name: project_type
     description: Type of project being reviewed
@@ -102,7 +101,6 @@ This workflow performs a comprehensive code review process.
 | Field | Description | Default |
 |-------|-------------|---------|
 | `version` | Workflow version | `"1.0"` |
-| `timeout_ms` | Overall timeout | `300000` (5 min) |
 | `max_parallel` | Max parallel actions | `4` |
 | `on_error` | Error handling state | `"error"` |
 | `on_timeout` | Timeout handling state | `"timeout"` |
@@ -502,9 +500,6 @@ test_mode: true
 # Use parallel execution where possible
 max_parallel: 4
 
-# Set appropriate timeouts
-timeout_ms: 300000
-
 # Minimize state transitions
 # Combine related actions in single states
 
@@ -584,7 +579,6 @@ name: issue-workflow
 description: Simple issue creation and tracking workflow
 version: "1.0"
 initial_state: create_issue
-timeout_ms: 60000
 variables:
   - name: issue_title
     description: Title for the new issue
@@ -686,7 +680,6 @@ name: development-workflow
 description: Complete development workflow with testing and deployment
 version: "2.0"
 initial_state: analyze_changes
-timeout_ms: 1800000  # 30 minutes
 variables:
   - name: feature_name
     description: Name of feature being developed
@@ -878,7 +871,6 @@ name: team-collaboration-workflow
 description: Workflow for coordinated team development
 version: "1.5"
 initial_state: plan_sprint
-timeout_ms: 604800000  # 1 week
 variables:
   - name: sprint_name
     description: Name of the sprint
@@ -988,7 +980,6 @@ name: cicd-integration-workflow
 description: Integrates with CI/CD pipeline for automated deployments
 version: "2.1"
 initial_state: trigger_build
-timeout_ms: 2700000  # 45 minutes
 variables:
   - name: git_branch
     description: Git branch to build

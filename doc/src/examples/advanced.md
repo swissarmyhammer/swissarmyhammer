@@ -258,7 +258,6 @@ name: ci-cd-pipeline
 description: Complete CI/CD pipeline with quality gates
 version: "3.0"
 initial_state: validate-pr
-timeout_ms: 1800000  # 30 minutes
 max_parallel: 6
 
 variables:

@@ -5,7 +5,6 @@ use super::{
     LAST_ACTION_RESULT_KEY, MAX_TRANSITIONS,
 };
 use crate::{
-    actions::ActionTimeouts,
     metrics::{MemoryMetrics, WorkflowMetrics},
     parse_action_from_description_with_context, ActionError, CompensationKey, ErrorContext,
     StateId, Workflow, WorkflowRun, WorkflowRunStatus,
@@ -286,24 +285,7 @@ impl WorkflowExecutor {
 
         let mut current_remaining = transition_limit;
 
-        // Add overall timeout protection for the entire workflow execution
-        let execution_start = std::time::Instant::now();
-        let max_execution_duration = std::time::Duration::from_secs(
-            run.context
-                .get("_timeout_secs")
-                .and_then(|v| v.as_u64())
-                .unwrap_or(ActionTimeouts::default().sub_workflow_timeout.as_secs()),
-        );
-
         loop {
-            // Check for overall execution timeout
-            if execution_start.elapsed() > max_execution_duration {
-                return Err(ExecutorError::ExecutionFailed(format!(
-                    "Workflow execution timed out after {:?} (max {:?})",
-                    execution_start.elapsed(),
-                    max_execution_duration
-                )));
-            }
             // Check for abort file before each iteration
             let abort_path = self.working_dir.join(".swissarmyhammer").join(".abort");
             if abort_path.exists() {

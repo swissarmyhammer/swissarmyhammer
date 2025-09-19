@@ -9,12 +9,24 @@ use super::utils::validate_issue_name;
 use crate::test_utils::TestIssueEnvironment;
 use rmcp::ServerHandler;
 use std::collections::HashMap;
+use std::path::PathBuf;
 use swissarmyhammer_prompts::{Prompt, PromptLibrary, PromptResolver};
+
+/// RAII guard to ensure working directory is restored when dropped
+struct DirGuard(PathBuf);
+
+impl Drop for DirGuard {
+    fn drop(&mut self) {
+        let _ = std::env::set_current_dir(&self.0);
+    }
+}
 
 #[tokio::test]
 async fn test_mcp_server_creation() {
     let test_env = TestIssueEnvironment::new();
-    let _guard = std::env::set_current_dir(test_env.path());
+    let original_dir = std::env::current_dir().expect("Failed to get current dir");
+    std::env::set_current_dir(test_env.path()).expect("Failed to change dir");
+    let _guard = DirGuard(original_dir);
 
     let library = PromptLibrary::new();
     let server = McpServer::new_with_work_dir(library, test_env.path().to_path_buf())
@@ -53,7 +65,9 @@ async fn test_mcp_server_exposes_shell_tools() {
 #[tokio::test]
 async fn test_mcp_server_list_prompts() {
     let test_env = TestIssueEnvironment::new();
-    let _guard = std::env::set_current_dir(test_env.path());
+    let original_dir = std::env::current_dir().expect("Failed to get current dir");
+    std::env::set_current_dir(test_env.path()).expect("Failed to change dir");
+    let _guard = DirGuard(original_dir);
 
     let mut library = PromptLibrary::new();
     let prompt = Prompt::new("test", "Test prompt: {{ name }}")
@@ -72,7 +86,9 @@ async fn test_mcp_server_list_prompts() {
 #[tokio::test]
 async fn test_mcp_server_get_prompt() {
     let test_env = TestIssueEnvironment::new();
-    let _guard = std::env::set_current_dir(test_env.path());
+    let original_dir = std::env::current_dir().expect("Failed to get current dir");
+    std::env::set_current_dir(test_env.path()).expect("Failed to change dir");
+    let _guard = DirGuard(original_dir);
 
     let mut library = PromptLibrary::new();
     let prompt =
@@ -164,7 +180,9 @@ async fn test_mcp_server_file_watching_integration() {
 #[tokio::test]
 async fn test_mcp_server_uses_same_directory_discovery() {
     let test_env = TestIssueEnvironment::new();
-    let _guard = std::env::set_current_dir(test_env.path());
+    let original_dir = std::env::current_dir().expect("Failed to get current dir");
+    std::env::set_current_dir(test_env.path()).expect("Failed to change dir");
+    let _guard = DirGuard(original_dir);
 
     // Verify that MCP server uses same directory discovery as PromptResolver
     let resolver = PromptResolver::new();
@@ -247,7 +265,9 @@ async fn test_mcp_server_exposes_prompts_tools_capability() {
 #[tokio::test]
 async fn test_mcp_server_does_not_expose_partial_templates() {
     let test_env = TestIssueEnvironment::new();
-    let _guard = std::env::set_current_dir(test_env.path());
+    let original_dir = std::env::current_dir().expect("Failed to get current dir");
+    std::env::set_current_dir(test_env.path()).expect("Failed to change dir");
+    let _guard = DirGuard(original_dir);
 
     // Create a test library with both regular and partial templates
     let mut library = PromptLibrary::new();

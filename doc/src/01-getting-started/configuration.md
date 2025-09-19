@@ -219,8 +219,7 @@ languages = ["rust", "python", "javascript", "typescript", "dart"]
 # Maximum parallel actions in workflows
 max_parallel_actions = 4
 
-# Default workflow timeout (milliseconds)
-default_timeout_ms = 300000  # 5 minutes
+
 
 
 
