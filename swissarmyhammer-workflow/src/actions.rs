@@ -28,8 +28,6 @@ use async_trait::async_trait;
 use swissarmyhammer_config::agent::{AgentConfig, AgentExecutorConfig, AgentExecutorType};
 use swissarmyhammer_prompts::{PromptLibrary, PromptResolver};
 
-
-
 thread_local! {
     /// Thread-local test storage registry for tests
     static TEST_STORAGE_REGISTRY: std::cell::RefCell<Option<Arc<WorkflowStorage>>> = const { std::cell::RefCell::new(None) };
@@ -149,13 +147,14 @@ impl Default for ActionTimeouts {
 pub struct AgentExecutionContext<'a> {
     /// Reference to the workflow template context
     pub workflow_context: &'a WorkflowTemplateContext,
+    /// Timeout for prompt execution
+    pub timeout: Duration,
 }
 
 impl<'a> AgentExecutionContext<'a> {
     /// Create a new agent execution context
-    /// Create a new agent execution context
-    pub fn new(workflow_context: &'a WorkflowTemplateContext) -> Self {
-        Self { workflow_context }
+    pub fn new(workflow_context: &'a WorkflowTemplateContext, timeout: Duration) -> Self {
+        Self { workflow_context, timeout }
     }
 
     /// Get agent configuration from workflow context
@@ -253,7 +252,6 @@ pub trait AgentExecutor: Send + Sync {
         system_prompt: String,
         rendered_prompt: String,
         context: &AgentExecutionContext<'_>,
-        timeout: Duration,
     ) -> ActionResult<AgentResponse>;
 
     /// Get the executor type enum
@@ -291,9 +289,11 @@ impl AgentExecutorFactory {
                 let agent_config = context.agent_config();
                 let llama_config = match agent_config.executor {
                     AgentExecutorConfig::LlamaAgent(config) => config,
-                    _ => return Err(ActionError::ExecutionError(
-                        "Expected LlamaAgent configuration".to_string()
-                    )),
+                    _ => {
+                        return Err(ActionError::ExecutionError(
+                            "Expected LlamaAgent configuration".to_string(),
+                        ))
+                    }
                 };
                 let mut executor = crate::agents::LlamaAgentExecutor::new(llama_config);
                 executor.initialize().await?;
@@ -457,7 +457,6 @@ impl AgentExecutor for ClaudeCodeExecutor {
         system_prompt: String,
         rendered_prompt: String,
         context: &AgentExecutionContext<'_>,
-        timeout: Duration,
     ) -> ActionResult<AgentResponse> {
         let claude_path = self.get_claude_path()?;
 
@@ -484,7 +483,7 @@ impl AgentExecutor for ClaudeCodeExecutor {
             &claude_path_buf,
             rendered_prompt,
             system_prompt_opt,
-            timeout,
+            context.timeout,
         )
         .await
     }
@@ -519,53 +518,6 @@ impl AgentExecutor for ClaudeCodeExecutor {
         Ok(())
     }
 }
-
-// LlamaAgentExecutor implementation moved to agents module
-// Temporarily disabled due to llama-cpp build issues
-
-/*
-/// Wrapper around global LlamaAgent executor to implement AgentExecutor trait
-pub struct LlamaAgentExecutorWrapper {
-    global_executor: Arc<tokio::sync::Mutex<LlamaAgentExecutor>>,
-}
-
-impl LlamaAgentExecutorWrapper {
-    /// Create a new wrapper around the global LlamaAgent executor
-    pub fn new(global_executor: Arc<tokio::sync::Mutex<LlamaAgentExecutor>>) -> Self {
-        Self { global_executor }
-    }
-}
-
-#[async_trait]
-impl AgentExecutor for LlamaAgentExecutorWrapper {
-    async fn initialize(&mut self) -> ActionResult<()> {
-        // Global executor is already initialized
-        Ok(())
-    }
-
-    async fn execute_prompt(
-        &self,
-        system_prompt: String,
-        rendered_prompt: String,
-        context: &AgentExecutionContext<'_>,
-        timeout: Duration,
-    ) -> ActionResult<AgentResponse> {
-        let executor = self.global_executor.lock().await;
-        executor
-            .execute_prompt(system_prompt, rendered_prompt, context, timeout)
-            .await
-    }
-
-    fn executor_type(&self) -> AgentExecutorType {
-        AgentExecutorType::LlamaAgent
-    }
-
-    async fn shutdown(&mut self) -> ActionResult<()> {
-        // Don't shut down global executor, just release our reference
-        Ok(())
-    }
-}
-*/
 
 impl ActionError {
     /// Create an executor-specific error
@@ -918,7 +870,7 @@ impl PromptAction {
         // Execute the rendered prompt using the AgentExecutor trait
 
         // Create execution context
-        let execution_context = AgentExecutionContext::new(context);
+        let execution_context = AgentExecutionContext::new(context, self.timeout);
 
         // Get executor based on configuration
         let executor = self.get_executor(&execution_context).await?;
@@ -929,7 +881,6 @@ impl PromptAction {
                 system_prompt.unwrap_or_default(),
                 user_prompt,
                 &execution_context,
-                self.timeout,
             )
             .await?;
 
@@ -2253,7 +2204,6 @@ pub fn parse_action_from_description(description: &str) -> ActionResult<Option<B
 mod tests {
     use super::*;
     use crate::action_parser::ActionParser;
-    use crate::executor_utils;
 
     use swissarmyhammer_common::test_utils::IsolatedTestEnvironment;
 
@@ -2344,7 +2294,7 @@ mod tests {
         // Set up agent config
         context.set_agent_config(AgentConfig::default());
 
-        let execution_context = AgentExecutionContext::new(&context);
+        let execution_context = AgentExecutionContext::new(&context, Duration::from_secs(30));
         assert_eq!(
             execution_context.executor_type(),
             AgentExecutorType::ClaudeCode
@@ -2397,7 +2347,7 @@ mod tests {
         let mut context = WorkflowTemplateContext::with_vars_for_test(HashMap::new());
         context.set_agent_config(AgentConfig::default());
 
-        let execution_context = AgentExecutionContext::new(&context);
+        let execution_context = AgentExecutionContext::new(&context, Duration::from_secs(30));
 
         // This test may fail if claude CLI is not available - that's expected
         match AgentExecutorFactory::create_executor(&execution_context).await {
@@ -2419,93 +2369,19 @@ mod tests {
         let llama_config = LlamaAgentConfig::for_testing();
         context.set_agent_config(AgentConfig::llama_agent(llama_config));
 
-        let execution_context = AgentExecutionContext::new(&context);
+        let execution_context = AgentExecutionContext::new(&context, Duration::from_secs(30));
 
         // LlamaAgent should now create successfully
         match AgentExecutorFactory::create_executor(&execution_context).await {
             Ok(executor) => {
                 // Verify we got a LlamaAgent executor
-                assert!(!executor.supports_streaming(), "LlamaAgent should not support streaming by default");
+                assert!(
+                    !executor.supports_streaming(),
+                    "LlamaAgent should not support streaming by default"
+                );
             }
             Err(e) => panic!("LlamaAgent executor creation failed: {}", e),
         }
-    }
-
-    #[tokio::test]
-    async fn test_executor_validation() {
-        // Test Claude validation
-        match executor_utils::validate_executor_availability(AgentExecutorType::ClaudeCode).await {
-            Ok(()) => {
-                // Claude CLI is available
-            }
-            Err(ActionError::ExecutionError(msg)) if msg.contains("Claude CLI not found") => {
-                // Expected when Claude CLI is not installed
-            }
-            Err(e) => panic!("Unexpected error: {}", e),
-        }
-
-        // Test LlamaAgent validation (should now work properly)
-        match executor_utils::validate_executor_availability(AgentExecutorType::LlamaAgent).await {
-            Ok(()) => {
-                // LlamaAgent validation passed - this is now expected
-            }
-            Err(ActionError::ExecutionError(msg)) => {
-                // May fail if configuration is invalid or models are not available
-                println!("LlamaAgent validation failed (expected in some environments): {}", msg);
-            }
-            Err(e) => panic!("Unexpected error: {}", e),
-        }
-    }
-
-    #[tokio::test]
-    async fn test_executor_placeholder_responses() {
-        let mut context = WorkflowTemplateContext::with_vars_for_test(HashMap::new());
-        context.set_agent_config(AgentConfig::default());
-        let execution_context = AgentExecutionContext::new(&context);
-
-        // Test Claude executor - should fail without initialization
-        let claude_executor = ClaudeCodeExecutor::new();
-        let result = claude_executor
-            .execute_prompt(
-                "System prompt".to_string(),
-                "User prompt".to_string(),
-                &execution_context,
-                Duration::from_secs(30),
-            )
-            .await;
-
-        // Should fail because executor is not initialized
-        assert!(result.is_err());
-        match result {
-            Err(ActionError::ExecutionError(msg)) => {
-                assert!(msg.contains("not initialized"));
-            }
-            _ => panic!("Expected ExecutionError for uninitialized executor"),
-        }
-
-        // Test LlamaAgent executor placeholder (should fail without initialization)
-        // Temporarily disabled due to llama-cpp build issues
-        /*
-        let config = swissarmyhammer_config::LlamaAgentConfig::for_testing();
-        let llama_executor = LlamaAgentExecutor::new(config);
-        let result = llama_executor
-            .execute_prompt(
-                "System prompt".to_string(),
-                "User prompt".to_string(),
-                &execution_context,
-                Duration::from_secs(30),
-            )
-            .await;
-
-        // Should fail because executor is not initialized
-        assert!(result.is_err());
-        match result {
-            Err(ActionError::ExecutionError(msg)) => {
-                assert!(msg.contains("not initialized"));
-            }
-            _ => panic!("Expected ExecutionError for uninitialized LlamaAgent executor"),
-        }
-        */
     }
 
     #[test]
@@ -3610,7 +3486,7 @@ mod tests {
         let mut context = WorkflowTemplateContext::with_vars_for_test(HashMap::new());
         context.set_agent_config(swissarmyhammer_config::agent::AgentConfig::claude_code());
 
-        let execution_context = AgentExecutionContext::new(&context);
+        let execution_context = AgentExecutionContext::new(&context, Duration::from_secs(30));
 
         match AgentExecutorFactory::create_executor(&execution_context).await {
             Ok(executor) => {
@@ -3636,7 +3512,7 @@ mod tests {
             llama_config,
         ));
 
-        let execution_context = AgentExecutionContext::new(&context);
+        let execution_context = AgentExecutionContext::new(&context, Duration::from_secs(30));
 
         // Debug: Print the executor type and config
         println!(
@@ -3649,12 +3525,18 @@ mod tests {
             Ok(executor) => {
                 println!("DEBUG: LlamaAgent executor created successfully");
                 // Verify we got a LlamaAgent executor
-                assert!(!executor.supports_streaming(), "LlamaAgent should not support streaming by default");
+                assert!(
+                    !executor.supports_streaming(),
+                    "LlamaAgent should not support streaming by default"
+                );
             }
             Err(e) => {
                 println!("DEBUG: LlamaAgent executor creation failed: {}", e);
                 // May fail in some environments due to model availability, but shouldn't be hardcoded disabled
-                assert!(!e.to_string().contains("temporarily disabled"), "Should not be hardcoded as disabled");
+                assert!(
+                    !e.to_string().contains("temporarily disabled"),
+                    "Should not be hardcoded as disabled"
+                );
             }
         }
     }

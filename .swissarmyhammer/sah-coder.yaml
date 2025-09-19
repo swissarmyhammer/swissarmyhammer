@@ -8,7 +8,4 @@ agent:
         source:
           HuggingFace:
             repo: "unsloth/Qwen3-Coder-480B-A35B-Instruct-GGUF"
-            filename: "Qwen3-Coder-480B-A35B-Instruct-UD-IQ1_M.gguf"
-      mcp_server:
-        port: 0
-        timeout_seconds: 30
+            folder: "Q4_K_M"

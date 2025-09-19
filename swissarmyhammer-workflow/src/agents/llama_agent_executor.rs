@@ -14,17 +14,6 @@ use swissarmyhammer_config::agent::AgentExecutorType;
 use swissarmyhammer_config::{LlamaAgentConfig, ModelSource};
 use tokio::sync::OnceCell;
 
-// LlamaAgent integration temporarily disabled due to build issues
-// When enabled, these imports would be:
-// use llama_agent::{
-//     AgentAPI, AgentConfig, AgentServer, GenerationRequest, HttpServerConfig, MCPServerConfig,
-//     Message, MessageRole, ModelConfig, ModelSource as LlamaModelSource, ParallelExecutionConfig,
-//     QueueConfig, SessionConfig, StoppingConfig,
-// };
-
-// All types now imported from real llama-agent
-
-// Import real types from llama-agent exactly as shown in examples
 pub use llama_agent::{
     types::{
         AgentAPI, AgentConfig, GenerationRequest, HttpServerConfig, MCPServerConfig, Message,
@@ -727,8 +716,7 @@ impl AgentExecutor for LlamaAgentExecutor {
         &self,
         system_prompt: String,
         rendered_prompt: String,
-        _context: &AgentExecutionContext<'_>,
-        timeout: Duration,
+        context: &AgentExecutionContext<'_>,
     ) -> ActionResult<AgentResponse> {
         if !self.initialized {
             return Err(ActionError::ExecutionError(
@@ -745,7 +733,7 @@ impl AgentExecutor for LlamaAgentExecutor {
         tracing::info!(
             "Executing LlamaAgent with MCP server at {} (timeout: {}s)",
             mcp_server_info,
-            timeout.as_secs()
+            context.timeout.as_secs()
         );
         tracing::debug!("System prompt length: {}", system_prompt.len());
         tracing::debug!("Rendered prompt length: {}", rendered_prompt.len());
@@ -764,7 +752,7 @@ impl AgentExecutor for LlamaAgentExecutor {
                     agent_server,
                     system_prompt,
                     rendered_prompt,
-                    timeout,
+                    context.timeout,
                     execution_start,
                 )
                 .await;
@@ -1101,7 +1089,7 @@ mod tests {
 
         // Create a test execution context
         let workflow_context = create_test_context();
-        let context = AgentExecutionContext::new(&workflow_context);
+        let context = AgentExecutionContext::new(&workflow_context, Duration::from_secs(30));
 
         // Try to execute without initialization - should fail
         let result = executor
@@ -1109,7 +1097,6 @@ mod tests {
                 "System prompt".to_string(),
                 "User prompt".to_string(),
                 &context,
-                Duration::from_secs(30),
             )
             .await;
 
@@ -1136,7 +1123,7 @@ mod tests {
 
         // Create a test execution context
         let workflow_context = create_test_context();
-        let context = AgentExecutionContext::new(&workflow_context);
+        let context = AgentExecutionContext::new(&workflow_context, Duration::from_secs(30));
 
         // Execute prompt
         let result = executor
@@ -1144,7 +1131,6 @@ mod tests {
                 "System prompt".to_string(),
                 "User prompt".to_string(),
                 &context,
-                Duration::from_secs(30),
             )
             .await;
 
@@ -1231,7 +1217,7 @@ mod tests {
 
         let mcp_url = executor.mcp_server_url().unwrap();
         let mcp_port = executor.mcp_server_port().unwrap();
-        
+
         tracing::info!("Retrieved MCP URL: {}, MCP Port: {}", mcp_url, mcp_port);
 
         // Verify URL format is correct for HTTP transport
@@ -1246,31 +1232,53 @@ mod tests {
         // Health endpoint is at server root, not under /mcp path
         let base_url = mcp_url.strip_suffix("/mcp").unwrap_or(&mcp_url);
         let health_url = format!("{}/health", base_url);
-        
-        tracing::info!("Testing health check: mcp_url={}, base_url={}, health_url={}", mcp_url, base_url, health_url);
+
+        tracing::info!(
+            "Testing health check: mcp_url={}, base_url={}, health_url={}",
+            mcp_url,
+            base_url,
+            health_url
+        );
 
         // Retry health check with delay to handle server startup timing
         for attempt in 1..=3 {
             tokio::time::sleep(std::time::Duration::from_millis(100 * attempt)).await;
-            
+
             match client.get(&health_url).send().await {
                 Ok(response) => {
                     let status = response.status();
-                    tracing::info!("Health check response (attempt {}): status={}, headers={:?}", attempt, status, response.headers());
+                    tracing::info!(
+                        "Health check response (attempt {}): status={}, headers={:?}",
+                        attempt,
+                        status,
+                        response.headers()
+                    );
                     if status.is_success() {
                         tracing::info!("HTTP MCP server health check passed: {}", status);
                         break;
                     } else {
-                        let body = response.text().await.unwrap_or_else(|_| "Failed to read response body".to_string());
-                        let error_msg = format!("Health check failed on attempt {}: status={}, body={}", attempt, status, body);
+                        let body = response
+                            .text()
+                            .await
+                            .unwrap_or_else(|_| "Failed to read response body".to_string());
+                        let error_msg = format!(
+                            "Health check failed on attempt {}: status={}, body={}",
+                            attempt, status, body
+                        );
                         tracing::warn!("{}", error_msg);
                         if attempt == 3 {
-                            panic!("Health check failed after {} attempts: {}", attempt, error_msg);
+                            panic!(
+                                "Health check failed after {} attempts: {}",
+                                attempt, error_msg
+                            );
                         }
                     }
                 }
                 Err(e) => {
-                    let error_msg = format!("HTTP MCP server health check failed on attempt {}: {}", attempt, e);
+                    let error_msg = format!(
+                        "HTTP MCP server health check failed on attempt {}: {}",
+                        attempt, e
+                    );
                     tracing::warn!("{}", error_msg);
                     if attempt == 3 {
                         tracing::warn!("Health check failed after {} attempts, but this may be expected in test environment", attempt);

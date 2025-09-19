@@ -178,8 +178,8 @@ impl Default for ModelConfig {
 impl Default for McpServerConfig {
     fn default() -> Self {
         Self {
-            port: 0, // Random available port
-            timeout_seconds: 30,
+            port: 0,              // Random available port
+            timeout_seconds: 900, // 15 minutes
         }
     }
 }
@@ -312,7 +312,7 @@ mod tests {
             ModelSource::Local { .. } => panic!("Default should be HuggingFace"),
         }
         assert_eq!(config.mcp_server.port, 0);
-        assert_eq!(config.mcp_server.timeout_seconds, 30);
+        assert_eq!(config.mcp_server.timeout_seconds, 15 * 60);
     }
 
     #[test]

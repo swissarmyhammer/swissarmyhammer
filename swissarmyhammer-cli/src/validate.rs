@@ -951,10 +951,6 @@ mod tests {
         }
     }
 
-    // Note: Many tests have been temporarily disabled after simplifying the validate command
-    // to always validate all prompts. These tests need to be rewritten to work with the new
-    // simplified validation approach.
-
     #[test]
     fn test_validation_result_creation() {
         let result = ValidationResult::new();

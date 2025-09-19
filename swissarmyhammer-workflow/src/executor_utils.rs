@@ -214,7 +214,7 @@ mod tests {
 
         let executor = LlamaAgentExecutor::new(valid_config);
         let result = executor.validate_config();
-
+        
         assert!(result.is_ok(), "Valid local file should pass validation");
     }
 

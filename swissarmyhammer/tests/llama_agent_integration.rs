@@ -26,7 +26,7 @@ async fn test_executor_compatibility() {
             WorkflowTemplateContext::with_vars(HashMap::new()).expect("Failed to create context");
         let mut context_with_config = context;
         context_with_config.set_agent_config(config);
-        let execution_context = AgentExecutionContext::new(&context_with_config);
+        let execution_context = AgentExecutionContext::new(&context_with_config, Duration::from_secs(30));
 
         // Both should create executors without panicking
         let result = AgentExecutorFactory::create_executor(&execution_context).await;
@@ -65,7 +65,7 @@ async fn test_agent_execution_context() {
         let mut context_with_config = context;
         context_with_config.set_agent_config(config);
 
-        let execution_context = AgentExecutionContext::new(&context_with_config);
+        let execution_context = AgentExecutionContext::new(&context_with_config, Duration::from_secs(30));
 
         // Verify context was created properly
         assert!(!execution_context.quiet()); // Test a real method that exists
@@ -101,7 +101,7 @@ async fn test_executor_factory_patterns() {
         let context = WorkflowTemplateContext::with_vars(vars).expect("Failed to create context");
         let mut context_with_config = context;
         context_with_config.set_agent_config(AgentConfig::claude_code());
-        let execution_context = AgentExecutionContext::new(&context_with_config);
+        let execution_context = AgentExecutionContext::new(&context_with_config, Duration::from_secs(30));
 
         // Test factory creation
         match AgentExecutorFactory::create_executor(&execution_context).await {
@@ -168,7 +168,7 @@ async fn test_timeout_handling() {
         WorkflowTemplateContext::with_vars(HashMap::new()).expect("Failed to create context");
     let mut context_with_config = context;
     context_with_config.set_agent_config(AgentConfig::claude_code());
-    let execution_context = AgentExecutionContext::new(&context_with_config);
+    let execution_context = AgentExecutionContext::new(&context_with_config, Duration::from_secs(30));
 
     // Test with a very short timeout
     let result = timeout(
@@ -271,7 +271,7 @@ async fn test_repetition_configuration_integration() {
         WorkflowTemplateContext::with_vars(HashMap::new()).expect("Failed to create context");
     let mut context_with_config = context;
     context_with_config.set_agent_config(agent_config);
-    let execution_context = AgentExecutionContext::new(&context_with_config);
+    let execution_context = AgentExecutionContext::new(&context_with_config, Duration::from_secs(30));
 
     // This should create the executor with repetition detection configuration
     // In test mode, this will use the mock implementation, but verifies

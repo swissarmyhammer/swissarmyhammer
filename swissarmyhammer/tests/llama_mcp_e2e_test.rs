@@ -85,7 +85,8 @@ async fn test_llama_mcp_cargo_toml_integration() {
         let context = WorkflowTemplateContext::with_vars(HashMap::new())?;
         let mut context_with_config = context;
         context_with_config.set_agent_config(agent_config);
-        let execution_context = AgentExecutionContext::new(&context_with_config);
+        let model_timeout = Duration::from_secs(MODEL_EXECUTION_TIMEOUT_SECS);
+        let execution_context = AgentExecutionContext::new(&context_with_config, model_timeout);
 
         info!("Creating LlamaAgent executor with integrated MCP server");
         let mut executor = AgentExecutorFactory::create_executor(&execution_context).await?;
@@ -117,14 +118,11 @@ async fn test_llama_mcp_cargo_toml_integration() {
         info!("Executing prompt: '{}'", file_read_prompt);
         info!("Expected workflow: LlamaAgent → Internal MCP Server → file_read tool → file system");
 
-        let model_timeout = Duration::from_secs(MODEL_EXECUTION_TIMEOUT_SECS);
-
         let agent_response = executor
             .execute_prompt(
                 SYSTEM_PROMPT.to_string(),
                 file_read_prompt,
                 &execution_context,
-                model_timeout,
             )
             .await
             .map_err(|e| format!("Failed to execute prompt with LlamaAgent: {}", e))?;
@@ -181,7 +179,8 @@ async fn test_llama_mcp_server_connectivity() {
         WorkflowTemplateContext::with_vars(HashMap::new()).expect("Failed to create context");
     let mut context_with_config = context;
     context_with_config.set_agent_config(agent_config);
-    let execution_context = AgentExecutionContext::new(&context_with_config);
+    let model_timeout = Duration::from_secs(MODEL_EXECUTION_TIMEOUT_SECS);
+    let execution_context = AgentExecutionContext::new(&context_with_config, model_timeout);
 
     info!("Creating LlamaAgent executor which will start integrated MCP server");
     let mut executor = AgentExecutorFactory::create_executor(&execution_context)
