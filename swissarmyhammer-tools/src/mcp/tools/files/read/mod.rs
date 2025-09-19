@@ -17,7 +17,7 @@
 //! ## Security Considerations
 //!
 //! All file operations are subject to comprehensive security validation:
-//! - Absolute path requirements to prevent relative path confusion
+//! - Both absolute and relative path support with secure resolution
 //! - Workspace boundary enforcement to prevent access outside authorized directories
 //! - Path traversal attack prevention (blocking `../` sequences)
 //! - Permission checking before file access attempts
@@ -34,12 +34,12 @@
 //!
 //! // Read entire file
 //! let mut args = serde_json::Map::new();
-//! args.insert("absolute_path".to_string(), json!("/workspace/src/main.rs"));
+//! args.insert("path".to_string(), json!("/workspace/src/main.rs"));
 //! let result = tool.execute(args, context).await?;
 //!
 //! // Read with offset and limit
 //! let mut args = serde_json::Map::new();
-//! args.insert("absolute_path".to_string(), json!("/workspace/logs/app.log"));
+//! args.insert("path".to_string(), json!("/workspace/logs/app.log"));
 //! args.insert("offset".to_string(), json!(100));
 //! args.insert("limit".to_string(), json!(50));
 //! let result = tool.execute(args, context).await?;
@@ -61,7 +61,7 @@ use tracing::{debug, info};
 ///
 /// ## Security Features
 ///
-/// * **Path Validation**: All file paths must be absolute and undergo comprehensive security validation
+/// * **Path Validation**: File paths (absolute or relative) undergo comprehensive security validation
 /// * **Workspace Boundaries**: Enforces workspace directory restrictions to prevent unauthorized access
 /// * **Path Traversal Protection**: Blocks dangerous path sequences like `../` to prevent directory traversal attacks
 /// * **Permission Checking**: Validates read permissions before attempting file access
@@ -76,7 +76,7 @@ use tracing::{debug, info};
 ///
 /// ## Supported Parameters
 ///
-/// * `absolute_path`: Required absolute path to the file to read
+/// * `path`: Required path to the file to read (absolute or relative to current working directory)
 /// * `offset`: Optional starting line number (1-based, max 1,000,000)
 /// * `limit`: Optional maximum lines to read (1-100,000 lines)
 ///
@@ -126,9 +126,9 @@ impl McpTool for ReadFileTool {
         serde_json::json!({
             "type": "object",
             "properties": {
-                "absolute_path": {
+                "path": {
                     "type": "string",
-                    "description": "Full absolute path to the file to read"
+                    "description": "Path to the file to read (absolute or relative to current working directory)"
                 },
                 "offset": {
                     "type": "number",
@@ -139,7 +139,7 @@ impl McpTool for ReadFileTool {
                     "description": "Maximum number of lines to read (optional)"
                 }
             },
-            "required": ["absolute_path"]
+            "required": ["path"]
         })
     }
 
@@ -155,8 +155,8 @@ impl McpTool for ReadFileTool {
 
         #[derive(Deserialize)]
         struct ReadRequest {
-            #[serde(alias = "path")]
-            absolute_path: String,
+            #[serde(alias = "absolute_path")]
+            path: String,
             offset: Option<usize>,
             limit: Option<usize>,
         }
@@ -165,7 +165,7 @@ impl McpTool for ReadFileTool {
         let request: ReadRequest = match BaseToolImpl::parse_arguments::<ReadRequest>(arguments) {
             Ok(r) => {
                 tracing::debug!("Parsed request successfully: path={}, offset={:?}, limit={:?}", 
-                               r.absolute_path, r.offset, r.limit);
+                               r.path, r.offset, r.limit);
                 r
             }
             Err(e) => {
@@ -199,9 +199,9 @@ impl McpTool for ReadFileTool {
             }
         }
 
-        if request.absolute_path.is_empty() {
+        if request.path.is_empty() {
             return Err(McpError::invalid_request(
-                "absolute_path cannot be empty".to_string(),
+                "path cannot be empty".to_string(),
                 None,
             ));
         }
@@ -211,17 +211,17 @@ impl McpTool for ReadFileTool {
 
         // Log file access attempt for security auditing
         info!(
-            path = %request.absolute_path,
+            path = %request.path,
             offset = request.offset,
             limit = request.limit,
             "Attempting to read file"
         );
 
         // Perform secure read operation
-        let content = secure_access.read(&request.absolute_path, request.offset, request.limit)?;
+        let content = secure_access.read(&request.path, request.offset, request.limit)?;
 
         debug!(
-            path = %request.absolute_path,
+            path = %request.path,
             content_length = content.len(),
             "Successfully read file content"
         );

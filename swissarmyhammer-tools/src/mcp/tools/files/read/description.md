@@ -8,65 +8,72 @@ The File Read tool provides secure, validated file reading operations with compr
 
 ## Parameters
 
-- `absolute_path` (required): Full absolute path to the file to read
+- `path` (required): Path to the file to read (absolute or relative to current working directory)
 - `offset` (optional): Starting line number for partial reading (1-based, max 1,000,000)
 - `limit` (optional): Maximum number of lines to read (1-100,000 lines)
 
 ## Examples
 
 ### Basic File Reading
-Read complete source file:
+Read complete source file with absolute path:
 ```json
 {
-  "absolute_path": "/workspace/src/main.rs"
+  "path": "/workspace/src/main.rs"
 }
 ```
 
-Read configuration file:
+Read configuration file with relative path:
 ```json
 {
-  "absolute_path": "/workspace/config/settings.toml"
+  "path": "config/settings.toml"
+}
+```
+
+Read file in current directory:
+```json
+{
+  "path": "./README.md"
 }
 ```
 
 ### Large File Processing
-Read specific section of large log file:
+Read specific section of large log file with absolute path:
 ```json
 {
-  "absolute_path": "/workspace/logs/application.log",
+  "path": "/workspace/logs/application.log",
   "offset": 1000,
   "limit": 100
 }
 ```
 
-Start reading from line 50:
+Start reading from line 50 using relative path:
 ```json
 {
-  "absolute_path": "/workspace/data/large_dataset.csv",
+  "path": "data/large_dataset.csv",
   "offset": 50
 }
 ```
 
-Read first 20 lines only:
+Read first 20 lines of current directory file:
 ```json
 {
-  "absolute_path": "/workspace/README.md",
+  "path": "README.md",
   "limit": 20
 }
 ```
 
 ### Binary File Reading
-Read binary file (returns base64):
+Read binary file with absolute path (returns base64):
 ```json
 {
-  "absolute_path": "/workspace/assets/logo.png"
+  "path": "/workspace/assets/logo.png"
 }
 ```
 
-Read executable file:
+Read executable file with relative path:
 ```json
 {
-  "absolute_path": "/workspace/target/release/application"
+  "path": "target/release/application"
 }
 ```
 

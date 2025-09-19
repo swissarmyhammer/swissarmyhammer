@@ -282,15 +282,12 @@ impl FilePathValidator {
     pub fn new() -> Self {
         let mut blocked_patterns = HashSet::new();
 
-        // Add common path traversal patterns
-        blocked_patterns.insert("..".to_string());
-        blocked_patterns.insert("../".to_string());
-        blocked_patterns.insert("\\..\\".to_string());
-        blocked_patterns.insert("..\\".to_string());
-
-        // Add current directory patterns (also considered dangerous)
-        blocked_patterns.insert("./".to_string());
-        blocked_patterns.insert(".\\".to_string());
+        // Block path traversal patterns that escape to parent directories
+        blocked_patterns.insert("../".to_string());  // Unix-style parent directory traversal
+        blocked_patterns.insert("\\..\\".to_string()); // Windows-style parent directory traversal
+        blocked_patterns.insert("..\\".to_string());   // Mixed Windows-style parent directory traversal
+        // Note: Don't block bare ".." since it could be a legitimate filename
+        // Note: "./" patterns are allowed as they reference the current directory (secure)
 
         // Add null byte and other dangerous patterns
         blocked_patterns.insert("\0".to_string());
@@ -343,22 +340,23 @@ impl FilePathValidator {
         self
     }
 
-    /// Validates an absolute path with comprehensive security checks
+    /// Validates a path (absolute or relative) with comprehensive security checks
     ///
     /// This method performs all security validations including:
-    /// 1. Path format validation
-    /// 2. Dangerous pattern detection
-    /// 3. Unicode normalization
-    /// 4. Workspace boundary enforcement
-    /// 5. Symlink security validation
+    /// 1. Path resolution (relative paths resolved against current working directory)
+    /// 2. Path format validation
+    /// 3. Dangerous pattern detection
+    /// 4. Unicode normalization
+    /// 5. Workspace boundary enforcement
+    /// 6. Symlink security validation
     ///
     /// # Arguments
     ///
-    /// * `path` - The path string to validate
+    /// * `path` - The path string to validate (absolute or relative)
     ///
     /// # Returns
     ///
-    /// * `Result<PathBuf, McpError>` - The validated and normalized path
+    /// * `Result<PathBuf, McpError>` - The validated and normalized absolute path
     ///
     /// # Security Guarantees
     ///
@@ -371,25 +369,31 @@ impl FilePathValidator {
         // Step 0: Check for blocked patterns early
         self.check_blocked_patterns(path)?;
 
-        // Step 1: Create PathBuf and check if it's absolute
+        // Step 1: Resolve path (absolute or relative) to absolute path
         let path_buf = PathBuf::from(path);
-        if !path_buf.is_absolute() {
-            return Err(McpError::invalid_request(
-                "File path must be absolute, not relative".to_string(),
-                None,
-            ));
-        }
+        let resolved_path = if path_buf.is_absolute() {
+            path_buf
+        } else {
+            // Resolve relative path against current working directory
+            let current_dir = std::env::current_dir().map_err(|e| {
+                McpError::invalid_request(
+                    format!("Failed to get current working directory: {}", e),
+                    None,
+                )
+            })?;
+            current_dir.join(path_buf)
+        };
 
         // Step 2: Symlink validation BEFORE canonicalization
-        if path_buf.is_symlink() && !self.allow_symlinks {
+        if resolved_path.is_symlink() && !self.allow_symlinks {
             return Err(McpError::invalid_request(
-                format!("Symlinks are not allowed: {}", path_buf.display()),
+                format!("Symlinks are not allowed: {}", resolved_path.display()),
                 None,
             ));
         }
 
         // Step 3: Basic validation (reuse existing function which may canonicalize)
-        let mut validated_path = validate_file_path(path)?;
+        let mut validated_path = validate_file_path(&resolved_path.to_string_lossy())?;
 
         // Step 4: Unicode normalization if enabled
         if self.normalize_unicode {
@@ -405,7 +409,7 @@ impl FilePathValidator {
         }
 
         // Step 6: Final symlink resolution with boundary check if symlinks are allowed
-        if self.allow_symlinks && PathBuf::from(path).is_symlink() {
+        if self.allow_symlinks && resolved_path.is_symlink() {
             validated_path = self.resolve_symlink_securely(&validated_path)?;
         }
 
@@ -960,7 +964,6 @@ mod tests {
         // These should be blocked by default patterns
         let dangerous_paths = vec![
             format!("{}/../etc/passwd", base_path),
-            format!("{}/./file", base_path),
             format!("{}\\..\\windows\\system32", base_path),
         ];
 
@@ -972,6 +975,84 @@ mod tests {
                 dangerous_path
             );
         }
+    }
+
+    #[test]
+    fn test_file_path_validator_relative_paths() {
+        // Use validator without workspace restrictions for basic testing
+        let validator = FilePathValidator::new();
+        let temp_dir = TempDir::new().unwrap();
+
+        // Create test files
+        let test_file = temp_dir.path().join("test_file.txt");
+        fs::write(&test_file, "test content").unwrap();
+
+        // Change to the temp directory for relative path testing
+        let original_dir = std::env::current_dir().unwrap();
+        std::env::set_current_dir(temp_dir.path()).unwrap();
+
+        // Test basic relative path resolution
+        let result = validator.validate_absolute_path("test_file.txt");
+        assert!(result.is_ok(), "Should accept simple relative path");
+        let resolved = result.unwrap();
+        assert!(resolved.is_absolute(), "Resolved path should be absolute");
+        assert!(resolved.ends_with("test_file.txt"), "Should preserve filename");
+
+        // Test current directory relative path
+        let result = validator.validate_absolute_path("./test_file.txt");
+        assert!(result.is_ok(), "Should accept ./ relative path");
+
+        // Test parent directory (should be blocked by dangerous patterns)
+        let result = validator.validate_absolute_path("../test_file.txt");
+        assert!(result.is_err(), "Should block ../ path traversal");
+
+        // Test nested relative path
+        let nested_dir = temp_dir.path().join("nested");
+        fs::create_dir(&nested_dir).unwrap();
+        let nested_file = nested_dir.join("nested_file.txt");
+        fs::write(&nested_file, "nested content").unwrap();
+
+        let result = validator.validate_absolute_path("nested/nested_file.txt");
+        assert!(result.is_ok(), "Should accept nested relative path");
+
+        // Restore original directory
+        std::env::set_current_dir(original_dir).unwrap();
+    }
+
+    #[test]
+    fn test_file_path_validator_relative_with_workspace() {
+        let temp_dir = TempDir::new().unwrap();
+        let workspace_root = temp_dir.path().to_path_buf();
+        let validator = FilePathValidator::with_workspace_root(workspace_root.clone());
+
+        // Create test file in workspace
+        let test_file = workspace_root.join("workspace_file.txt");
+        fs::write(&test_file, "workspace content").unwrap();
+
+        // Change to workspace directory
+        let original_dir = std::env::current_dir().unwrap();
+        std::env::set_current_dir(&workspace_root).unwrap();
+
+        // Test relative path within workspace
+        let result = validator.validate_absolute_path("workspace_file.txt");
+        assert!(result.is_ok(), "Should accept relative path within workspace");
+
+        // Create and try to access file outside workspace
+        let outside_dir = TempDir::new().unwrap();
+        let outside_file = outside_dir.path().join("outside_file.txt");
+        fs::write(&outside_file, "outside content").unwrap();
+
+        // Change to outside directory and try relative path (should fail workspace check)
+        if outside_dir.path().exists() {
+            std::env::set_current_dir(&outside_dir).unwrap();
+            let result = validator.validate_absolute_path("outside_file.txt");
+            assert!(result.is_err(), "Should reject relative path outside workspace");
+        } else {
+            println!("Outside directory doesn't exist, skipping outside workspace test");
+        }
+
+        // Restore original directory
+        std::env::set_current_dir(original_dir).unwrap();
     }
 
     #[test]
@@ -1118,7 +1199,7 @@ mod tests {
         let content = "Line 1\nLine 2\nLine 3\nLine 4\nLine 5";
         fs::write(&test_file, content).unwrap();
 
-        // Test full read
+        // Test full read with absolute path
         let result = secure_access.read(&test_file.to_string_lossy(), None, None);
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), content);
@@ -1137,6 +1218,48 @@ mod tests {
         let result = secure_access.read(&test_file.to_string_lossy(), Some(2), Some(2));
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), "Line 2\nLine 3");
+    }
+
+    #[test]
+    fn test_secure_file_access_read_relative_paths() {
+        // Use default secure access without workspace restrictions for simple testing
+        let secure_access = SecureFileAccess::default_secure();
+        
+        let temp_dir = TempDir::new().unwrap();
+        let workspace_root = temp_dir.path().to_path_buf();
+
+        // Create test file with content
+        let test_file = workspace_root.join("relative_test.txt");
+        let content = "Relative path content";
+        fs::write(&test_file, content).unwrap();
+
+        // Change to temp directory to test relative paths
+        let original_dir = std::env::current_dir().unwrap();
+        std::env::set_current_dir(&workspace_root).unwrap();
+
+        // Test read with relative path
+        let result = secure_access.read("relative_test.txt", None, None);
+        assert!(result.is_ok(), "Should be able to read file with relative path");
+        assert_eq!(result.unwrap(), content);
+
+        // Test read with ./ relative path
+        let result = secure_access.read("./relative_test.txt", None, None);
+        assert!(result.is_ok(), "Should be able to read file with ./ relative path");
+
+        // Create nested directory and file
+        let nested_dir = workspace_root.join("nested");
+        fs::create_dir(&nested_dir).unwrap();
+        let nested_file = nested_dir.join("nested_file.txt");
+        let nested_content = "Nested file content";
+        fs::write(&nested_file, nested_content).unwrap();
+
+        // Test read nested file with relative path
+        let result = secure_access.read("nested/nested_file.txt", None, None);
+        assert!(result.is_ok(), "Should be able to read nested file with relative path");
+        assert_eq!(result.unwrap(), nested_content);
+
+        // Restore original directory
+        std::env::set_current_dir(original_dir).unwrap();
     }
 
     #[test]
