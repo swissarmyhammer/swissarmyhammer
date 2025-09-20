@@ -11,6 +11,11 @@ You job is to resolve an issue by coding a solution.
 
 {% render "workflow_guards" %}
 
+### Rust
+
+- Run tests with `cargo nextest run --failure-output immediate --hide-progress-bar --status-level fail --final-status-level fail`
+- Be patient and let the test run finish before moving on
+
 ## Process
 
 - Use the issue_show current tool. Do not use a cli command.

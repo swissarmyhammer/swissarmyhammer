@@ -133,7 +133,10 @@ pub struct AgentExecutionContext<'a> {
 impl<'a> AgentExecutionContext<'a> {
     /// Create a new agent execution context
     pub fn new(workflow_context: &'a WorkflowTemplateContext, timeout: Duration) -> Self {
-        Self { workflow_context, timeout }
+        Self {
+            workflow_context,
+            timeout,
+        }
     }
 
     /// Get agent configuration from workflow context
@@ -354,6 +357,11 @@ impl ClaudeCodeExecutor {
 
         // Add system prompt parameter if provided
         if let Some(ref sys_prompt) = system_prompt {
+            tracing::debug!(
+                "Executing Claude command: {} with system prompt length: {}",
+                claude_path.display(),
+                sys_prompt.len()
+            );
             cmd.args(["--append-system-prompt", sys_prompt]);
         }
 

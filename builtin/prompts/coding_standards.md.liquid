@@ -131,6 +131,7 @@ Focus on understanding the problem requirements and coding tests that prove the 
   - `cargo nextest run --fail-fast` is the way
   - do not use `--no-capture` unless you are debugging specific tests -- it is VERY SLOW
   - if `cargo nextest` is not available, install with `cargo install cargo-nextest`
+- *Important*: avoid using `cargo test` instead of `cargo nextest` -- `cargo test` is SLOW and does not parallelize tests
 - Always lint your files with `cargo clippy`
   - All lint errors and warnings should be included as todo items in code review
 - Use `tracing` not `eprintln`

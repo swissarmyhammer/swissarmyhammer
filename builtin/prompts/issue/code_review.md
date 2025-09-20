@@ -11,6 +11,11 @@ You job is to code up the needed changes in the code review.
 
 {% render "workflow_guards" %}
 
+### Rust
+
+- Run tests with `cargo nextest run --failure-output immediate --hide-progress-bar --status-level fail --final-status-level fail`
+- Be patient and let the test run finish before moving on
+
 ## Process
 
 {% render "todo", todo_file: "./CODE_REVIEW.md" %}
