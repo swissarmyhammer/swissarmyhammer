@@ -340,7 +340,6 @@ impl LlamaAgentExecutor {
             model: model_config,
             queue_config: QueueConfig {
                 max_queue_size: 100,
-                request_timeout: Duration::from_secs(30),
                 worker_threads: 1,
             },
             session_config: SessionConfig::default(),
