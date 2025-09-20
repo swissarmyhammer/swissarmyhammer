@@ -87,7 +87,7 @@ fn check_disk_space_statvfs(path: &Path) -> Result<(DiskSpace, DiskSpace)> {
     }
 
     // Calculate available and total space in bytes
-    let block_size = stat.f_frsize as u64;
+    let block_size = stat.f_frsize;
     let total_blocks = stat.f_blocks as u64;
     let available_blocks = stat.f_bavail as u64;
 
