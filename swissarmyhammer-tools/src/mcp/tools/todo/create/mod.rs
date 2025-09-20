@@ -53,8 +53,6 @@ impl McpTool for CreateTodoTool {
         // Parse arguments using base tool implementation
         let request: CreateTodoRequest = BaseToolImpl::parse_arguments(arguments)?;
 
-
-
         tracing::debug!("Creating todo item");
 
         // Validate task

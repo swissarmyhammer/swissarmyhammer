@@ -92,8 +92,6 @@ impl McpTool for ShowIssueTool {
     ) -> std::result::Result<CallToolResult, McpError> {
         let request: ShowIssueRequest = BaseToolImpl::parse_arguments(arguments)?;
 
-
-
         // Validate issue name is not empty
         McpValidation::validate_not_empty(&request.name, "issue name")
             .map_err(|e| McpErrorHandler::handle_error(e, "validate issue name"))?;

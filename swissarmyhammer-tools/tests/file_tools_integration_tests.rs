@@ -9,7 +9,6 @@ use std::fs;
 
 use std::sync::Arc;
 
-
 use swissarmyhammer_git::GitOperations;
 use swissarmyhammer_issues::{FileSystemIssueStorage, IssueStorage};
 use swissarmyhammer_memoranda::{MarkdownMemoStorage, MemoStorage};
@@ -22,8 +21,6 @@ use tempfile::TempDir;
 use std::fs::File;
 #[cfg(target_os = "linux")]
 use std::io::{BufRead, BufReader};
-
-
 
 /// Memory usage profiling utilities for performance testing
 struct MemoryProfiler {
@@ -116,12 +113,7 @@ async fn create_test_context() -> ToolContext {
 
     let tool_handlers = Arc::new(ToolHandlers::new(memo_storage.clone()));
 
-    ToolContext::new(
-        tool_handlers,
-        issue_storage,
-        git_ops,
-        memo_storage,
-    )
+    ToolContext::new(tool_handlers, issue_storage, git_ops, memo_storage)
 }
 
 /// Create a test tool registry with file tools registered
@@ -177,10 +169,7 @@ async fn test_read_tool_execution_success_cases() {
 
     // Test basic file reading
     let mut arguments = serde_json::Map::new();
-    arguments.insert(
-        "path".to_string(),
-        json!(test_file.to_string_lossy()),
-    );
+    arguments.insert("path".to_string(), json!(test_file.to_string_lossy()));
 
     let result = tool.execute(arguments, &context).await;
     assert!(result.is_ok(), "File read should succeed: {:?}", result);
@@ -216,10 +205,7 @@ async fn test_read_tool_offset_limit_functionality() {
 
     // Test reading with offset and limit
     let mut arguments = serde_json::Map::new();
-    arguments.insert(
-        "path".to_string(),
-        json!(test_file.to_string_lossy()),
-    );
+    arguments.insert("path".to_string(), json!(test_file.to_string_lossy()));
     arguments.insert("offset".to_string(), json!(2)); // Start from line 2
     arguments.insert("limit".to_string(), json!(2)); // Read 2 lines
 
@@ -259,10 +245,7 @@ async fn test_read_tool_offset_only() {
 
     // Test reading with offset only (should read from line 3 to end)
     let mut arguments = serde_json::Map::new();
-    arguments.insert(
-        "path".to_string(),
-        json!(test_file.to_string_lossy()),
-    );
+    arguments.insert("path".to_string(), json!(test_file.to_string_lossy()));
     arguments.insert("offset".to_string(), json!(3)); // Start from line 3
 
     let result = tool.execute(arguments, &context).await;
@@ -294,10 +277,7 @@ async fn test_read_tool_limit_only() {
 
     // Test reading with limit only (should read first 3 lines)
     let mut arguments = serde_json::Map::new();
-    arguments.insert(
-        "path".to_string(),
-        json!(test_file.to_string_lossy()),
-    );
+    arguments.insert("path".to_string(), json!(test_file.to_string_lossy()));
     arguments.insert("limit".to_string(), json!(3)); // Read first 3 lines
 
     let result = tool.execute(arguments, &context).await;
@@ -354,12 +334,18 @@ async fn test_read_tool_relative_path_support() {
     arguments.insert("path".to_string(), json!("relative/path/file.txt"));
 
     let result = tool.execute(arguments, &context).await;
-    assert!(result.is_err(), "Relative path should be accepted but file should not exist");
+    assert!(
+        result.is_err(),
+        "Relative path should be accepted but file should not exist"
+    );
 
     let error = result.unwrap_err();
     let error_msg = format!("{:?}", error);
     // Should fail due to file not existing, not because path is relative
-    assert!(!error_msg.contains("absolute"), "Should not reject relative paths anymore");
+    assert!(
+        !error_msg.contains("absolute"),
+        "Should not reject relative paths anymore"
+    );
 }
 
 #[tokio::test]
@@ -455,10 +441,7 @@ async fn test_read_tool_handles_large_files_safely() {
 
     // Test reading large file with limit
     let mut arguments = serde_json::Map::new();
-    arguments.insert(
-        "path".to_string(),
-        json!(test_file.to_string_lossy()),
-    );
+    arguments.insert("path".to_string(), json!(test_file.to_string_lossy()));
     arguments.insert("limit".to_string(), json!(10)); // Only read first 10 lines
 
     let result = tool.execute(arguments, &context).await;
@@ -501,10 +484,7 @@ async fn test_read_tool_empty_file() {
     fs::write(&test_file, "").unwrap();
 
     let mut arguments = serde_json::Map::new();
-    arguments.insert(
-        "path".to_string(),
-        json!(test_file.to_string_lossy()),
-    );
+    arguments.insert("path".to_string(), json!(test_file.to_string_lossy()));
 
     let result = tool.execute(arguments, &context).await;
     assert!(result.is_ok(), "Reading empty file should succeed");
@@ -534,10 +514,7 @@ async fn test_read_tool_single_line_file() {
     fs::write(&test_file, test_content).unwrap();
 
     let mut arguments = serde_json::Map::new();
-    arguments.insert(
-        "path".to_string(),
-        json!(test_file.to_string_lossy()),
-    );
+    arguments.insert("path".to_string(), json!(test_file.to_string_lossy()));
 
     let result = tool.execute(arguments, &context).await;
     assert!(result.is_ok());
@@ -567,10 +544,7 @@ async fn test_read_tool_with_unicode_content() {
     fs::write(&test_file, test_content).unwrap();
 
     let mut arguments = serde_json::Map::new();
-    arguments.insert(
-        "path".to_string(),
-        json!(test_file.to_string_lossy()),
-    );
+    arguments.insert("path".to_string(), json!(test_file.to_string_lossy()));
 
     let result = tool.execute(arguments, &context).await;
     assert!(result.is_ok(), "Reading unicode file should succeed");
@@ -680,10 +654,7 @@ async fn test_read_tool_permission_denied_scenarios() {
     }
 
     let mut arguments = serde_json::Map::new();
-    arguments.insert(
-        "path".to_string(),
-        json!(test_file.to_string_lossy()),
-    );
+    arguments.insert("path".to_string(), json!(test_file.to_string_lossy()));
 
     let result = tool.execute(arguments, &context).await;
     // Note: This test may pass on systems where we can't actually restrict permissions
@@ -711,10 +682,7 @@ async fn test_read_tool_large_file_handling() {
 
     // Test reading with limit to avoid reading the entire large file
     let mut arguments = serde_json::Map::new();
-    arguments.insert(
-        "path".to_string(),
-        json!(test_file.to_string_lossy()),
-    );
+    arguments.insert("path".to_string(), json!(test_file.to_string_lossy()));
     arguments.insert("limit".to_string(), json!(100)); // Read only 100 lines
 
     let start_time = std::time::Instant::now();
@@ -758,10 +726,7 @@ async fn test_read_tool_edge_cases() {
     fs::write(&empty_file, "").unwrap();
 
     let mut arguments = serde_json::Map::new();
-    arguments.insert(
-        "path".to_string(),
-        json!(empty_file.to_string_lossy()),
-    );
+    arguments.insert("path".to_string(), json!(empty_file.to_string_lossy()));
 
     let result = tool.execute(arguments, &context).await;
     assert!(result.is_ok(), "Empty file read should succeed");
@@ -771,10 +736,7 @@ async fn test_read_tool_edge_cases() {
     fs::write(&whitespace_file, "   \n\t\n   \n").unwrap();
 
     let mut arguments = serde_json::Map::new();
-    arguments.insert(
-        "path".to_string(),
-        json!(whitespace_file.to_string_lossy()),
-    );
+    arguments.insert("path".to_string(), json!(whitespace_file.to_string_lossy()));
 
     let result = tool.execute(arguments, &context).await;
     assert!(result.is_ok(), "Whitespace file read should succeed");
@@ -2304,10 +2266,7 @@ async fn test_write_then_read_workflow() {
 
     // Step 2: Read the same file
     let mut read_args = serde_json::Map::new();
-    read_args.insert(
-        "path".to_string(),
-        json!(test_file.to_string_lossy()),
-    );
+    read_args.insert("path".to_string(), json!(test_file.to_string_lossy()));
 
     let read_result = read_tool.execute(read_args, &context).await;
     assert!(read_result.is_ok(), "Read should succeed");
@@ -2379,10 +2338,7 @@ async fn test_read_then_edit_workflow() {
 
     // Step 1: Read the file to analyze content
     let mut read_args = serde_json::Map::new();
-    read_args.insert(
-        "path".to_string(),
-        json!(test_file.to_string_lossy()),
-    );
+    read_args.insert("path".to_string(), json!(test_file.to_string_lossy()));
 
     let read_result = read_tool.execute(read_args, &context).await;
     assert!(read_result.is_ok(), "Read should succeed");
@@ -2548,10 +2504,7 @@ async fn test_complex_file_workflow() {
     // Step 2: Read one of the config files
     let config_file = temp_dir.path().join("src/config.json");
     let mut read_args = serde_json::Map::new();
-    read_args.insert(
-        "path".to_string(),
-        json!(config_file.to_string_lossy()),
-    );
+    read_args.insert("path".to_string(), json!(config_file.to_string_lossy()));
 
     let read_result = read_tool.execute(read_args, &context).await;
     assert!(read_result.is_ok(), "Read should succeed");
@@ -2585,10 +2538,7 @@ async fn test_complex_file_workflow() {
 
     // Step 4: Read again to verify the change
     let mut read_verify_args = serde_json::Map::new();
-    read_verify_args.insert(
-        "path".to_string(),
-        json!(config_file.to_string_lossy()),
-    );
+    read_verify_args.insert("path".to_string(), json!(config_file.to_string_lossy()));
 
     let read_verify_result = read_tool.execute(read_verify_args, &context).await;
     assert!(
@@ -2811,10 +2761,7 @@ async fn test_symlink_attack_prevention() {
     // Test read tool with symlink (if it exists)
     if symlink_file.exists() {
         let mut read_args = serde_json::Map::new();
-        read_args.insert(
-            "path".to_string(),
-            json!(symlink_file.to_string_lossy()),
-        );
+        read_args.insert("path".to_string(), json!(symlink_file.to_string_lossy()));
 
         let read_result = read_tool.execute(read_args, &context).await;
         // Should either handle symlinks safely or reject them
@@ -3093,10 +3040,7 @@ async fn test_resource_exhaustion_protection() {
     fs::write(&test_file, "small content").unwrap();
 
     let mut read_args = serde_json::Map::new();
-    read_args.insert(
-        "path".to_string(),
-        json!(test_file.to_string_lossy()),
-    );
+    read_args.insert("path".to_string(), json!(test_file.to_string_lossy()));
     read_args.insert("offset".to_string(), json!(u32::MAX)); // Excessive offset
     read_args.insert("limit".to_string(), json!(u32::MAX)); // Excessive limit
 
@@ -3186,10 +3130,7 @@ async fn test_concurrent_file_operations_safety() {
         join_set.spawn(async move {
             let read_tool = registry_clone.get_tool("files_read").unwrap();
             let mut read_args = serde_json::Map::new();
-            read_args.insert(
-                "path".to_string(),
-                json!(file_clone.to_string_lossy()),
-            );
+            read_args.insert("path".to_string(), json!(file_clone.to_string_lossy()));
 
             read_tool.execute(read_args, &context_clone).await
         });
@@ -3261,10 +3202,7 @@ async fn test_large_file_read_memory_usage() {
     println!("File path: {}", large_file.to_string_lossy());
 
     let mut arguments = serde_json::Map::new();
-    arguments.insert(
-        "path".to_string(),
-        json!(large_file.to_string_lossy()),
-    );
+    arguments.insert("path".to_string(), json!(large_file.to_string_lossy()));
 
     println!("Reading file with memory profiling...");
     let result = read_tool.execute(arguments.clone(), &context).await;
@@ -3528,10 +3466,7 @@ async fn test_concurrent_operations_memory_usage() {
             // Read file back
             let read_tool = registry_clone.get_tool("files_read").unwrap();
             let mut read_args = serde_json::Map::new();
-            read_args.insert(
-                "path".to_string(),
-                json!(file_path.to_string_lossy()),
-            );
+            read_args.insert("path".to_string(), json!(file_path.to_string_lossy()));
 
             let read_result = read_tool.execute(read_args, &context_clone).await;
 
@@ -3623,10 +3558,7 @@ async fn test_high_concurrency_stress_test() {
             // Read file back to verify
             let read_tool = registry_clone.get_tool("files_read").unwrap();
             let mut read_args = serde_json::Map::new();
-            read_args.insert(
-                "path".to_string(),
-                json!(file_path.to_string_lossy()),
-            );
+            read_args.insert("path".to_string(), json!(file_path.to_string_lossy()));
 
             let read_result = read_tool.execute(read_args, &context_clone).await;
 
@@ -3765,10 +3697,7 @@ async fn test_mixed_operation_concurrency_stress() {
 
             let read_tool = registry_clone.get_tool("files_read").unwrap();
             let mut read_args = serde_json::Map::new();
-            read_args.insert(
-                "path".to_string(),
-                json!(file_path.to_string_lossy()),
-            );
+            read_args.insert("path".to_string(), json!(file_path.to_string_lossy()));
 
             read_tool.execute(read_args, &context_clone).await
         });
@@ -3887,10 +3816,7 @@ async fn test_concurrent_file_access_patterns() {
         join_set.spawn(async move {
             let read_tool = registry_clone.get_tool("files_read").unwrap();
             let mut read_args = serde_json::Map::new();
-            read_args.insert(
-                "path".to_string(),
-                json!(file_path.to_string_lossy()),
-            );
+            read_args.insert("path".to_string(), json!(file_path.to_string_lossy()));
 
             // Vary read parameters to test different code paths
             if i % 3 == 0 {
@@ -4045,10 +3971,7 @@ async fn test_write_read_roundtrip_properties() {
 
         // Read file back
         let mut read_args = serde_json::Map::new();
-        read_args.insert(
-            "path".to_string(),
-            json!(full_path.to_string_lossy()),
-        );
+        read_args.insert("path".to_string(), json!(full_path.to_string_lossy()));
 
         let read_result = read_tool.execute(read_args, &context).await;
         match read_result {
@@ -4107,10 +4030,7 @@ async fn test_edit_operation_consistency_properties() {
 
         // Read back and verify
         let mut read_args = serde_json::Map::new();
-        read_args.insert(
-            "path".to_string(),
-            json!(file_path.to_string_lossy()),
-        );
+        read_args.insert("path".to_string(), json!(file_path.to_string_lossy()));
 
         let response = read_tool.execute(read_args, &context).await.unwrap();
         let edited_content = extract_text_content(&response.content[0].raw);
@@ -4221,10 +4141,7 @@ async fn test_read_offset_limit_consistency_properties() {
 
     for (offset, limit) in test_cases {
         let mut read_args = serde_json::Map::new();
-        read_args.insert(
-            "path".to_string(),
-            json!(file_path.to_string_lossy()),
-        );
+        read_args.insert("path".to_string(), json!(file_path.to_string_lossy()));
         read_args.insert("offset".to_string(), json!(offset));
         read_args.insert("limit".to_string(), json!(limit));
 

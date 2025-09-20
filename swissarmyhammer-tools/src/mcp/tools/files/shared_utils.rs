@@ -283,11 +283,11 @@ impl FilePathValidator {
         let mut blocked_patterns = HashSet::new();
 
         // Block path traversal patterns that escape to parent directories
-        blocked_patterns.insert("../".to_string());  // Unix-style parent directory traversal
+        blocked_patterns.insert("../".to_string()); // Unix-style parent directory traversal
         blocked_patterns.insert("\\..\\".to_string()); // Windows-style parent directory traversal
-        blocked_patterns.insert("..\\".to_string());   // Mixed Windows-style parent directory traversal
-        // Note: Don't block bare ".." since it could be a legitimate filename
-        // Note: "./" patterns are allowed as they reference the current directory (secure)
+        blocked_patterns.insert("..\\".to_string()); // Mixed Windows-style parent directory traversal
+                                                     // Note: Don't block bare ".." since it could be a legitimate filename
+                                                     // Note: "./" patterns are allowed as they reference the current directory (secure)
 
         // Add null byte and other dangerous patterns
         blocked_patterns.insert("\0".to_string());
@@ -694,7 +694,7 @@ impl SecureFileAccess {
         limit: Option<usize>,
     ) -> Result<String, McpError> {
         tracing::debug!("SecureFileAccess::read called with path: {}", path);
-        
+
         // Validate path through security framework
         let validated_path = match self.validator.validate_absolute_path(path) {
             Ok(p) => {
@@ -709,10 +709,14 @@ impl SecureFileAccess {
 
         // Check permissions for read operation
         if let Err(e) = check_file_permissions(&validated_path, FileOperation::Read) {
-            tracing::error!("Permission check failed for '{}': {}", validated_path.display(), e);
+            tracing::error!(
+                "Permission check failed for '{}': {}",
+                validated_path.display(),
+                e
+            );
             return Err(e);
         }
-        
+
         tracing::debug!("Permission check passed for: {}", validated_path.display());
 
         // Perform the actual read operation
@@ -996,7 +1000,10 @@ mod tests {
         assert!(result.is_ok(), "Should accept simple relative path");
         let resolved = result.unwrap();
         assert!(resolved.is_absolute(), "Resolved path should be absolute");
-        assert!(resolved.ends_with("test_file.txt"), "Should preserve filename");
+        assert!(
+            resolved.ends_with("test_file.txt"),
+            "Should preserve filename"
+        );
 
         // Test current directory relative path
         let result = validator.validate_absolute_path("./test_file.txt");
@@ -1035,7 +1042,10 @@ mod tests {
 
         // Test relative path within workspace
         let result = validator.validate_absolute_path("workspace_file.txt");
-        assert!(result.is_ok(), "Should accept relative path within workspace");
+        assert!(
+            result.is_ok(),
+            "Should accept relative path within workspace"
+        );
 
         // Create and try to access file outside workspace
         let outside_dir = TempDir::new().unwrap();
@@ -1046,7 +1056,10 @@ mod tests {
         if outside_dir.path().exists() {
             std::env::set_current_dir(&outside_dir).unwrap();
             let result = validator.validate_absolute_path("outside_file.txt");
-            assert!(result.is_err(), "Should reject relative path outside workspace");
+            assert!(
+                result.is_err(),
+                "Should reject relative path outside workspace"
+            );
         } else {
             println!("Outside directory doesn't exist, skipping outside workspace test");
         }
@@ -1224,7 +1237,7 @@ mod tests {
     fn test_secure_file_access_read_relative_paths() {
         // Use default secure access without workspace restrictions for simple testing
         let secure_access = SecureFileAccess::default_secure();
-        
+
         let temp_dir = TempDir::new().unwrap();
         let workspace_root = temp_dir.path().to_path_buf();
 
@@ -1239,12 +1252,18 @@ mod tests {
 
         // Test read with relative path
         let result = secure_access.read("relative_test.txt", None, None);
-        assert!(result.is_ok(), "Should be able to read file with relative path");
+        assert!(
+            result.is_ok(),
+            "Should be able to read file with relative path"
+        );
         assert_eq!(result.unwrap(), content);
 
         // Test read with ./ relative path
         let result = secure_access.read("./relative_test.txt", None, None);
-        assert!(result.is_ok(), "Should be able to read file with ./ relative path");
+        assert!(
+            result.is_ok(),
+            "Should be able to read file with ./ relative path"
+        );
 
         // Create nested directory and file
         let nested_dir = workspace_root.join("nested");
@@ -1255,7 +1274,10 @@ mod tests {
 
         // Test read nested file with relative path
         let result = secure_access.read("nested/nested_file.txt", None, None);
-        assert!(result.is_ok(), "Should be able to read nested file with relative path");
+        assert!(
+            result.is_ok(),
+            "Should be able to read nested file with relative path"
+        );
         assert_eq!(result.unwrap(), nested_content);
 
         // Restore original directory

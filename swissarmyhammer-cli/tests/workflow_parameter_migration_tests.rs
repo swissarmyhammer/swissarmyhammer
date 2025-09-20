@@ -66,17 +66,7 @@ async fn run_builtin_workflow_in_process(
             interactive,
             dry_run,
             quiet,
-        } => {
-            execute_run_command(
-                workflow,
-                vars,
-                interactive,
-                dry_run,
-                quiet,
-                &cli_context,
-            )
-            .await
-        }
+        } => execute_run_command(workflow, vars, interactive, dry_run, quiet, &cli_context).await,
         _ => panic!("Unexpected subcommand type"),
     };
 

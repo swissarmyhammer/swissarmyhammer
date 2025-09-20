@@ -1,8 +1,7 @@
 //! Run a workflow command implementation
 
 use super::shared::{
-    create_local_workflow_run_storage, execute_workflow_with_progress,
-    workflow_run_id_to_string,
+    create_local_workflow_run_storage, execute_workflow_with_progress, workflow_run_id_to_string,
 };
 use crate::context::CliContext;
 use crate::parameter_cli;
@@ -78,8 +77,6 @@ pub async fn run_workflow_command(
         }
     }
 
-
-
     if config.dry_run {
         println!("🔍 Dry run mode - showing execution plan:");
         println!("📋 Workflow: {}", workflow.name);
@@ -146,8 +143,6 @@ pub async fn run_workflow_command(
         run.context
             .insert("_quiet".to_string(), serde_json::Value::Bool(true));
     }
-
-
 
     // Setup signal handling for graceful shutdown
     let (shutdown_tx, mut shutdown_rx) = tokio::sync::mpsc::channel(1);

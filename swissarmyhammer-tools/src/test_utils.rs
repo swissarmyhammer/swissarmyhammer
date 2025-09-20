@@ -11,8 +11,6 @@ use swissarmyhammer_memoranda::{MarkdownMemoStorage, MemoStorage};
 use tempfile::TempDir;
 use tokio::sync::{Mutex as TokioMutex, RwLock};
 
-
-
 /// Creates a test context with mock storage backends for testing MCP tools
 ///
 /// This function creates a ToolContext similar to the one in swissarmyhammer,
@@ -45,12 +43,7 @@ pub async fn create_test_context() -> ToolContext {
 
     let tool_handlers = Arc::new(ToolHandlers::new(memo_storage.clone()));
 
-    ToolContext::new(
-        tool_handlers,
-        issue_storage,
-        git_ops,
-        memo_storage,
-    )
+    ToolContext::new(tool_handlers, issue_storage, git_ops, memo_storage)
 }
 
 /// Test environment specifically designed for issue-related testing

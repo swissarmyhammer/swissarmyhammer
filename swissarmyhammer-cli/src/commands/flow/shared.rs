@@ -6,7 +6,6 @@ use swissarmyhammer::{Result, SwissArmyHammerError, WorkflowRunId, WorkflowRunSt
 use swissarmyhammer::{WorkflowExecutor, WorkflowRunStatus};
 use swissarmyhammer_workflow::{ExecutorError, WorkflowRun};
 
-
 /// Helper to parse WorkflowRunId from string
 pub fn parse_workflow_run_id(s: &str) -> Result<WorkflowRunId> {
     WorkflowRunId::parse(s).map_err(|e| SwissArmyHammerError::Other {
@@ -276,8 +275,6 @@ pub fn create_local_workflow_run_storage() -> Result<Box<dyn WorkflowRunStorageB
 #[cfg(test)]
 mod tests {
     use super::*;
-
-
 
     #[test]
     fn test_workflow_run_id_helpers() {

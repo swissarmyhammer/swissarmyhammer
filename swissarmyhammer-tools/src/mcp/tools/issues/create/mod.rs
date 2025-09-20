@@ -57,8 +57,6 @@ impl McpTool for CreateIssueTool {
     ) -> std::result::Result<CallToolResult, McpError> {
         let request: CreateIssueRequest = BaseToolImpl::parse_arguments(arguments)?;
 
-
-
         tracing::debug!("Creating issue: {:?}", request.name);
 
         // Validate issue name using shared validation logic, or use empty string for nameless issues

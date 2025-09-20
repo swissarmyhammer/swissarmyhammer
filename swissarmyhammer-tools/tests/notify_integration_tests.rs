@@ -14,9 +14,6 @@ use swissarmyhammer_tools::mcp::tool_handlers::ToolHandlers;
 use swissarmyhammer_tools::mcp::tool_registry::{ToolContext, ToolRegistry};
 use swissarmyhammer_tools::mcp::tools::notify;
 
-
-
-
 /// Create a test context with mock storage backends for testing MCP tools
 async fn create_test_context() -> ToolContext {
     let issue_storage: Arc<tokio::sync::RwLock<Box<dyn IssueStorage>>> =
@@ -34,12 +31,7 @@ async fn create_test_context() -> ToolContext {
 
     let tool_handlers = Arc::new(ToolHandlers::new(memo_storage.clone()));
 
-    ToolContext::new(
-        tool_handlers,
-        issue_storage,
-        git_ops,
-        memo_storage,
-    )
+    ToolContext::new(tool_handlers, issue_storage, git_ops, memo_storage)
 }
 
 /// Create a test tool registry with notify tool registered

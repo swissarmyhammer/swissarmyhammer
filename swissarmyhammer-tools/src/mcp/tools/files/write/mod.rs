@@ -137,7 +137,6 @@ impl McpTool for WriteFileTool {
         _context: &ToolContext,
     ) -> std::result::Result<CallToolResult, McpError> {
         use serde::Deserialize;
-    
 
         #[derive(Deserialize)]
         struct WriteRequest {
@@ -232,12 +231,7 @@ mod tests {
             memo_temp_dir.path().join("memos"),
         )) as Box<dyn MemoStorage>));
         let tool_handlers = Arc::new(ToolHandlers::new(memo_storage.clone()));
-        ToolContext::new(
-            tool_handlers,
-            issue_storage,
-            git_ops,
-            memo_storage,
-        )
+        ToolContext::new(tool_handlers, issue_storage, git_ops, memo_storage)
     }
 
     /// Create test arguments for the write tool

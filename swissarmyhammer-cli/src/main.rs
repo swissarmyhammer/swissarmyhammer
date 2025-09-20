@@ -526,7 +526,6 @@ async fn handle_flow_command(sub_matches: &clap::ArgMatches, context: &CliContex
             }
         }
 
-
         Some(("test", sub_matches)) => {
             let workflow = sub_matches.get_one::<String>("workflow").cloned().unwrap();
             let vars = sub_matches

@@ -64,8 +64,6 @@ impl McpTool for AbortCreateTool {
     ) -> std::result::Result<CallToolResult, McpError> {
         let request: AbortCreateRequest = BaseToolImpl::parse_arguments(arguments)?;
 
-
-
         tracing::debug!("Creating abort with reason: {}", request.reason);
 
         // Validate reason is not empty

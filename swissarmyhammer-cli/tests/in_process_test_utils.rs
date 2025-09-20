@@ -675,27 +675,27 @@ mod tests {
     #[tokio::test]
     async fn test_in_process_utilities() {
         println!("=== STARTING TEST ===");
-        
+
         // Test with a workflow that should succeed - get detailed info first
         println!("Running detailed test...");
         let detailed_result = run_flow_test_in_process("greeting", vec![], None, false).await;
-        
+
         println!("Detailed result analysis:");
         match &detailed_result {
             Ok(cmd_result) => {
                 println!("  Exit code: {}", cmd_result.exit_code);
                 println!("  Stdout: '{}'", cmd_result.stdout);
                 println!("  Stderr: '{}'", cmd_result.stderr);
-            },
+            }
             Err(e) => {
                 println!("  Error running detailed test: {}", e);
                 panic!("Failed to run detailed test: {}", e);
             }
         }
-        
+
         println!("Running simple test...");
         let result = simple_workflow_test("greeting").await;
-        
+
         println!("Simple result analysis:");
         match &result {
             Ok(success) => {
@@ -708,13 +708,13 @@ mod tests {
                         println!("  Final stderr: '{}'", cmd_result.stderr);
                     }
                 }
-            },
+            }
             Err(e) => {
                 println!("  Test error: {}", e);
                 panic!("Simple workflow test failed with error: {}", e);
             }
         }
-        
+
         // Only assert if we've printed debug info
         let success = result.unwrap();
         if !success {

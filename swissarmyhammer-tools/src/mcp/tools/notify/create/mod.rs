@@ -68,8 +68,6 @@ impl McpTool for NotifyTool {
     ) -> std::result::Result<CallToolResult, McpError> {
         let request: NotifyRequest = BaseToolImpl::parse_arguments(arguments)?;
 
-
-
         tracing::debug!("Creating notification: {}", request.message);
 
         // Validate request using built-in validation

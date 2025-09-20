@@ -180,8 +180,6 @@ impl Default for TestEnvironment {
     }
 }
 
-
-
 /// Skip test if Claude testing is disabled
 pub fn skip_if_claude_disabled() {
     let config = TestConfig::from_environment();
@@ -310,7 +308,6 @@ mod tests {
     fn test_config_development_preset() {
         let config = TestConfig::development();
 
-
         assert!(config.enable_claude_tests);
         assert_eq!(config.max_concurrent_tests, 5);
         assert!(!config.is_ci);
@@ -320,7 +317,6 @@ mod tests {
     #[serial]
     fn test_config_ci_preset() {
         let config = TestConfig::ci();
-
 
         assert!(config.enable_claude_tests);
         assert_eq!(config.max_concurrent_tests, 3); // Lower concurrency in CI

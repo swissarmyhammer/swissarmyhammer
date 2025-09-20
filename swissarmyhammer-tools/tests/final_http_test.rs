@@ -1,9 +1,9 @@
 //! Final HTTP MCP test
 
 use rmcp::{
-    ServiceExt,
     model::{ClientCapabilities, ClientInfo, Implementation},
     transport::streamable_http_client::StreamableHttpClientTransport,
+    ServiceExt,
 };
 use swissarmyhammer_tools::mcp::unified_server::{start_mcp_server, McpServerMode};
 

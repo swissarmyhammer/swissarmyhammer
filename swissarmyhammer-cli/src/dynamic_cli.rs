@@ -982,7 +982,6 @@ When variables are not provided via --var, the command prompts interactively:
                             .help("Test mode - execute with mocked actions")
                             .action(ArgAction::SetTrue),
                     )
-
                     .arg(
                         Arg::new("quiet")
                             .short('q')
@@ -1007,7 +1006,6 @@ When variables are not provided via --var, the command prompts interactively:
                             .help("Interactive mode - prompt at each state")
                             .action(ArgAction::SetTrue),
                     )
-
                     .arg(
                         Arg::new("quiet")
                             .short('q')
@@ -1094,8 +1092,6 @@ When variables are not provided via --var, the command prompts interactively:
                             .value_name("LEVEL"),
                     ),
             )
-
-
             .subcommand(
                 Command::new("test")
                     .about("Test a workflow without executing actions")
@@ -1119,7 +1115,6 @@ When variables are not provided via --var, the command prompts interactively:
                             .help("Interactive mode - prompt at each state")
                             .action(ArgAction::SetTrue),
                     )
-
                     .arg(
                         Arg::new("quiet")
                             .short('q')

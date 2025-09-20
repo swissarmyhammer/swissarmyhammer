@@ -57,7 +57,8 @@ async fn test_multi_step_workflow_simulation() {
                 .expect("Failed to create context");
             let mut context_with_config = context;
             context_with_config.set_agent_config(config.clone());
-            let execution_context = AgentExecutionContext::new(&context_with_config, Duration::from_secs(30));
+            let execution_context =
+                AgentExecutionContext::new(&context_with_config, Duration::from_secs(30));
 
             // Attempt to create executor for this step
             match AgentExecutorFactory::create_executor(&execution_context).await {
@@ -118,7 +119,8 @@ async fn test_error_recovery_scenarios() {
                 WorkflowTemplateContext::with_vars(vars.clone()).expect("Failed to create context");
             let mut context_with_config = context;
             context_with_config.set_agent_config(config);
-            let execution_context = AgentExecutionContext::new(&context_with_config, Duration::from_secs(30));
+            let execution_context =
+                AgentExecutionContext::new(&context_with_config, Duration::from_secs(30));
 
             match AgentExecutorFactory::create_executor(&execution_context).await {
                 Ok(_executor) => {
@@ -171,7 +173,8 @@ async fn test_variable_templating_patterns() {
         let context = WorkflowTemplateContext::with_vars(vars).expect("Failed to create context");
         let mut context_with_config = context;
         context_with_config.set_agent_config(AgentConfig::claude_code());
-        let execution_context = AgentExecutionContext::new(&context_with_config, Duration::from_secs(30));
+        let execution_context =
+            AgentExecutionContext::new(&context_with_config, Duration::from_secs(30));
 
         // Test that complex variables don't break context creation
         match AgentExecutorFactory::create_executor(&execution_context).await {
@@ -233,7 +236,8 @@ async fn test_conditional_execution_simulation() {
                 WorkflowTemplateContext::with_vars(vars.clone()).expect("Failed to create context");
             let mut context_with_config = context;
             context_with_config.set_agent_config(config);
-            let execution_context = AgentExecutionContext::new(&context_with_config, Duration::from_secs(30));
+            let execution_context =
+                AgentExecutionContext::new(&context_with_config, Duration::from_secs(30));
 
             // Test conditional execution
             if should_execute {
@@ -316,7 +320,8 @@ async fn test_workflow_state_persistence() {
             .expect("Failed to create context");
         let mut context_with_config = context;
         context_with_config.set_agent_config(AgentConfig::claude_code());
-        let execution_context = AgentExecutionContext::new(&context_with_config, Duration::from_secs(30));
+        let execution_context =
+            AgentExecutionContext::new(&context_with_config, Duration::from_secs(30));
 
         match AgentExecutorFactory::create_executor(&execution_context).await {
             Ok(_executor) => {
@@ -380,7 +385,8 @@ async fn test_intentional_error_handling() {
             Ok(ctx) => {
                 let mut context_with_config = ctx;
                 context_with_config.set_agent_config(AgentConfig::claude_code());
-                let execution_context = AgentExecutionContext::new(&context_with_config, Duration::from_secs(30));
+                let execution_context =
+                    AgentExecutionContext::new(&context_with_config, Duration::from_secs(30));
 
                 match AgentExecutorFactory::create_executor(&execution_context).await {
                     Ok(_executor) => {

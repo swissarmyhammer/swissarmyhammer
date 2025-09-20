@@ -243,18 +243,19 @@ async fn test_flow_test_nonexistent_workflow() -> Result<()> {
 #[tokio::test]
 
 async fn test_flow_run_with_dry_run() -> Result<()> {
-    let result =
-        run_sah_command_in_process(&["flow", "run", "hello-world", "--dry-run"])
-            .await?;
+    let result = run_sah_command_in_process(&["flow", "run", "hello-world", "--dry-run"]).await?;
 
     assert_eq!(
         result.exit_code, 0,
-        "flow run with dry-run should succeed. stdout: '{}', stderr: '{}'", result.stdout, result.stderr
+        "flow run with dry-run should succeed. stdout: '{}', stderr: '{}'",
+        result.stdout, result.stderr
     );
 
     assert!(
         result.stdout.contains("🔍 Dry run mode"),
-        "should show dry run mode in stdout. stdout: '{}', stderr: '{}'", result.stdout, result.stderr
+        "should show dry run mode in stdout. stdout: '{}', stderr: '{}'",
+        result.stdout,
+        result.stderr
     );
 
     Ok(())

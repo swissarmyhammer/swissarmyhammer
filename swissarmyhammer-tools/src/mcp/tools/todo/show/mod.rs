@@ -49,8 +49,6 @@ impl McpTool for ShowTodoTool {
         // Parse arguments using base tool implementation
         let request: ShowTodoRequest = BaseToolImpl::parse_arguments(arguments)?;
 
-
-
         tracing::debug!("Showing todo item '{}'", request.item);
 
         // Validate item identifier
@@ -62,10 +60,7 @@ impl McpTool for ShowTodoTool {
             .map_err(|e| McpErrorHandler::handle_todo_error(e, "create todo storage"))?;
 
         // Get the requested todo item
-        match storage
-            .get_todo_item(&request.item)
-            .await
-        {
+        match storage.get_todo_item(&request.item).await {
             Ok(Some(item)) => {
                 tracing::info!("Found todo item {}", item.id);
                 Ok(BaseToolImpl::create_success_response(
@@ -96,7 +91,8 @@ impl McpTool for ShowTodoTool {
                         json!({
                             "message": "No incomplete todo items found",
                             "todo_item": null
-                        }).to_string()
+                        })
+                        .to_string(),
                     ))
                 } else {
                     Err(McpError::invalid_request(

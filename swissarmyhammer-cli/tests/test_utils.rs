@@ -15,9 +15,7 @@ pub use swissarmyhammer::test_utils::ProcessGuard;
 
 // Re-export commonly used test utilities from the main crate
 #[allow(unused_imports)]
-pub use swissarmyhammer_common::test_utils::{
-    IsolatedTestEnvironment,
-};
+pub use swissarmyhammer_common::test_utils::IsolatedTestEnvironment;
 
 // Legacy compatibility aliases
 pub type TestHomeGuard = IsolatedTestEnvironment;

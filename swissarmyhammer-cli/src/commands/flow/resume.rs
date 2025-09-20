@@ -1,18 +1,13 @@
 //! Resume a paused workflow run command implementation
 
 use super::shared::{
-    execute_workflow_with_progress, parse_workflow_run_id,
-    workflow_run_id_to_string,
+    execute_workflow_with_progress, parse_workflow_run_id, workflow_run_id_to_string,
 };
 use swissarmyhammer::{Result, WorkflowExecutor, WorkflowRunStatus, WorkflowStorage};
 use tokio::signal;
 
 /// Execute the resume workflow command
-pub async fn execute_resume_command(
-    run_id: String,
-    interactive: bool,
-    quiet: bool,
-) -> Result<()> {
+pub async fn execute_resume_command(run_id: String, interactive: bool, quiet: bool) -> Result<()> {
     let mut storage = WorkflowStorage::file_system()?;
 
     // Parse run ID

@@ -49,8 +49,6 @@ impl McpTool for MarkCompleteTodoTool {
         // Parse arguments using base tool implementation
         let request: MarkCompleteTodoRequest = BaseToolImpl::parse_arguments(arguments)?;
 
-
-
         tracing::debug!("Marking todo item '{}' complete", request.id);
 
         // Validate ID
@@ -64,10 +62,7 @@ impl McpTool for MarkCompleteTodoTool {
         // The request.id is already a TodoId from the swissarmyhammer-todo crate
 
         // Mark the item as complete
-        match storage
-            .mark_todo_complete(&request.id)
-            .await
-        {
+        match storage.mark_todo_complete(&request.id).await {
             Ok(()) => {
                 tracing::info!("Marked todo item {} complete", request.id);
                 Ok(BaseToolImpl::create_success_response(
@@ -75,7 +70,8 @@ impl McpTool for MarkCompleteTodoTool {
                         "message": format!("Marked todo item '{}' as complete", request.id),
                         "action": "marked_complete",
                         "id": request.id.as_str()
-                    }).to_string()
+                    })
+                    .to_string(),
                 ))
             }
             Err(e) => Err(McpErrorHandler::handle_todo_error(

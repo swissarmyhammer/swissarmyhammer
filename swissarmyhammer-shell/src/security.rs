@@ -19,8 +19,6 @@ const MAX_COMMAND_LENGTH: usize = 4096;
 /// Maximum allowed environment variable value length in characters
 const MAX_ENV_VALUE_LENGTH: usize = 1024;
 
-
-
 /// Security validation errors that can occur during shell command processing
 #[derive(Debug, Error)]
 pub enum ShellSecurityError {
@@ -99,8 +97,6 @@ pub struct ShellSecurityPolicy {
 
     /// Enable audit logging of all command executions
     pub enable_audit_logging: bool,
-
-
 
     /// Maximum allowed environment variable value length
     pub max_env_value_length: usize,

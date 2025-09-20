@@ -218,13 +218,13 @@ async fn start_http_server(
     let router = axum::Router::new()
         .nest_service("/mcp", service)
         .route("/health", axum::routing::get(health_check));
-    let listener = tokio::net::TcpListener::bind(socket_addr).await.map_err(|e| {
-        swissarmyhammer_common::SwissArmyHammerError::Other {
+    let listener = tokio::net::TcpListener::bind(socket_addr)
+        .await
+        .map_err(|e| swissarmyhammer_common::SwissArmyHammerError::Other {
             message: format!("Failed to bind to {}: {}", socket_addr, e),
-        }
-    })?;
+        })?;
 
-    let connection_url = format!("http://127.0.0.1:{}/mcp", actual_port);  // Full URL with /mcp
+    let connection_url = format!("http://127.0.0.1:{}/mcp", actual_port); // Full URL with /mcp
     tracing::info!("Unified HTTP MCP server ready on {}", connection_url);
 
     // Create shutdown channel
@@ -270,7 +270,6 @@ mod tests {
         // Quick shutdown
         server.shutdown().await.unwrap();
     }
-
 
     #[tokio::test]
     #[test_log::test]

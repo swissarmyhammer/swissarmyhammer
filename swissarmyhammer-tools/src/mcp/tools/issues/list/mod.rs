@@ -162,8 +162,6 @@ impl McpTool for ListIssuesTool {
     ) -> std::result::Result<CallToolResult, McpError> {
         let request: ListIssuesRequest = BaseToolImpl::parse_arguments(arguments)?;
 
-
-
         tracing::debug!(
             "Listing issues with filters: show_completed={:?}, show_active={:?}, format={:?}",
             request.show_completed,

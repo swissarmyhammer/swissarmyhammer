@@ -121,8 +121,7 @@ async fn test_flow_test_with_timeout() -> Result<()> {
     // Test with timeout parameter
     let _env = setup_test_workflow("timeout-test").await?;
 
-    let captured =
-        run_flow_test_in_process("timeout-test", vec![], None, false).await?;
+    let captured = run_flow_test_in_process("timeout-test", vec![], None, false).await?;
 
     // Should complete (success or failure) within timeout
     assert!(

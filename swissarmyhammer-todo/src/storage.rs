@@ -57,10 +57,7 @@ impl TodoStorage {
     }
 
     /// Get a specific todo item by ID or the next incomplete item
-    pub async fn get_todo_item(
-        &self,
-        item_identifier: &str,
-    ) -> Result<Option<TodoItem>> {
+    pub async fn get_todo_item(&self, item_identifier: &str) -> Result<Option<TodoItem>> {
         let path = self.get_todo_file_path()?;
 
         if !path.exists() {
@@ -98,9 +95,7 @@ impl TodoStorage {
         if list.all_complete() {
             // Delete the file if all tasks are complete
             fs::remove_file(&path).map_err(|e| {
-                TodoError::other(format!(
-                    "Failed to delete completed todo list: {e}"
-                ))
+                TodoError::other(format!("Failed to delete completed todo list: {e}"))
             })?;
         } else {
             // Save the updated list
@@ -121,8 +116,6 @@ impl TodoStorage {
         let list = self.load_todo_list(&path).await?;
         Ok(Some(list))
     }
-
-
 
     /// Get the path for the single todo file
     fn get_todo_file_path(&self) -> Result<PathBuf> {
@@ -190,10 +183,7 @@ mod tests {
         let storage = TodoStorage::new(temp_dir.path().to_path_buf());
 
         let item = storage
-            .create_todo_item(
-                "Test task".to_string(),
-                Some("Test context".to_string()),
-            )
+            .create_todo_item("Test task".to_string(), Some("Test context".to_string()))
             .await
             .unwrap();
 
@@ -221,11 +211,7 @@ mod tests {
             .unwrap();
 
         // Get next should return first item
-        let next = storage
-            .get_todo_item("next")
-            .await
-            .unwrap()
-            .unwrap();
+        let next = storage.get_todo_item("next").await.unwrap().unwrap();
 
         assert_eq!(next.id, item1.id);
         assert_eq!(next.task, "Task 1");
@@ -244,10 +230,7 @@ mod tests {
             .unwrap();
 
         // Mark complete
-        storage
-            .mark_todo_complete(&item.id)
-            .await
-            .unwrap();
+        storage.mark_todo_complete(&item.id).await.unwrap();
 
         // Since all items are complete, the list should be deleted
         let result = storage.get_todo_list().await.unwrap();
@@ -272,10 +255,7 @@ mod tests {
             .unwrap();
 
         // Mark first item complete
-        storage
-            .mark_todo_complete(&item1.id)
-            .await
-            .unwrap();
+        storage.mark_todo_complete(&item1.id).await.unwrap();
 
         // List should still exist with one incomplete item
         let list = storage.get_todo_list().await.unwrap().unwrap();
@@ -283,11 +263,7 @@ mod tests {
         assert_eq!(list.complete_count(), 1);
 
         // Next should return the second task
-        let next = storage
-            .get_todo_item("next")
-            .await
-            .unwrap()
-            .unwrap();
+        let next = storage.get_todo_item("next").await.unwrap().unwrap();
         assert_eq!(next.task, "Task 2");
     }
 
@@ -314,8 +290,6 @@ mod tests {
         assert_eq!(retrieved.task, "Test task");
     }
 
-
-
     #[tokio::test]
     async fn test_validation_errors() {
         // Create a temporary directory for todo storage instead of using default
@@ -324,9 +298,7 @@ mod tests {
         let storage = TodoStorage::new(temp_dir.path().to_path_buf());
 
         // Empty task
-        let result = storage
-            .create_todo_item("".to_string(), None)
-            .await;
+        let result = storage.create_todo_item("".to_string(), None).await;
         assert!(result.is_err());
     }
 

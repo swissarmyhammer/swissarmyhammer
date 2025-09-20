@@ -15,7 +15,6 @@ use std::time::{Duration, Instant};
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::{Child, Command};
 
-
 // Performance and integration tests would use additional dependencies like futures, assert_cmd, etc.
 
 /// Error types for size string parsing
@@ -55,8 +54,6 @@ const DEFAULT_MAX_OUTPUT_SIZE: &str = "10MB";
 /// Lines longer than this are truncated to prevent memory issues
 /// from commands that output very long single lines.
 const DEFAULT_MAX_LINE_LENGTH: usize = 2000;
-
-
 
 /// Parse size strings with units (e.g., "10MB", "1GB", "512KB") into bytes
 ///
@@ -189,8 +186,6 @@ impl DefaultShellConfig {
     fn max_line_length() -> usize {
         DEFAULT_MAX_LINE_LENGTH
     }
-
-
 }
 
 /// Request structure for shell command execution
@@ -593,8 +588,6 @@ pub enum ShellError {
         /// Error message describing the failure
         message: String,
     },
-
-
 
     /// Invalid command provided
     InvalidCommand {
@@ -1036,7 +1029,7 @@ async fn process_child_output_with_limits(
 /// }
 /// # });
 /// ```
-/// 
+///
 /// # Output Handling
 ///
 /// The function provides advanced output management:
@@ -1126,54 +1119,54 @@ async fn execute_shell_command(
 
         let (exit_status, output_buffer) = (exit_status, output_buffer);
         {
-                    let execution_time = start_time.elapsed();
-                    let execution_time_ms = execution_time.as_millis() as u64;
+            let execution_time = start_time.elapsed();
+            let execution_time_ms = execution_time.as_millis() as u64;
 
-                    // Get formatted output strings with binary handling
-                    let stdout = output_buffer.get_stdout();
-                    let stderr = output_buffer.get_stderr();
+            // Get formatted output strings with binary handling
+            let stdout = output_buffer.get_stdout();
+            let stderr = output_buffer.get_stderr();
 
-                    // Get the exit code
-                    let exit_code = exit_status.code().unwrap_or(-1);
+            // Get the exit code
+            let exit_code = exit_status.code().unwrap_or(-1);
 
-                    // Log execution completion with output metadata
-                    let truncation_info = if output_buffer.is_truncated() {
-                        format!(
-                            " (output truncated at {} bytes)",
-                            output_limits.max_output_size
-                        )
-                    } else {
-                        String::new()
-                    };
+            // Log execution completion with output metadata
+            let truncation_info = if output_buffer.is_truncated() {
+                format!(
+                    " (output truncated at {} bytes)",
+                    output_limits.max_output_size
+                )
+            } else {
+                String::new()
+            };
 
-                    let binary_info = if output_buffer.has_binary_content() {
-                        " (binary content detected)"
-                    } else {
-                        ""
-                    };
+            let binary_info = if output_buffer.has_binary_content() {
+                " (binary content detected)"
+            } else {
+                ""
+            };
 
-                    tracing::info!(
-                        "Command '{}' completed with exit code {} in {}ms{}{}",
-                        command,
-                        exit_code,
-                        execution_time_ms,
-                        truncation_info,
-                        binary_info
-                    );
+            tracing::info!(
+                "Command '{}' completed with exit code {} in {}ms{}{}",
+                command,
+                exit_code,
+                execution_time_ms,
+                truncation_info,
+                binary_info
+            );
 
-                    Ok(ShellExecutionResult {
-                        command,
-                        exit_code,
-                        stdout,
-                        stderr,
-                        execution_time_ms,
-                        working_directory: work_dir,
-                        output_truncated: output_buffer.is_truncated(),
-                        total_output_size: output_buffer.total_bytes_processed(),
-                        binary_output_detected: output_buffer.has_binary_content(),
-                    })
-                }
+            Ok(ShellExecutionResult {
+                command,
+                exit_code,
+                stdout,
+                stderr,
+                execution_time_ms,
+                working_directory: work_dir,
+                output_truncated: output_buffer.is_truncated(),
+                total_output_size: output_buffer.total_bytes_processed(),
+                binary_output_detected: output_buffer.has_binary_content(),
+            })
         }
+    }
 }
 
 /// Tool for executing shell commands
@@ -1228,8 +1221,6 @@ impl McpTool for ShellExecuteTool {
     ) -> std::result::Result<CallToolResult, McpError> {
         let request: ShellExecuteRequest = BaseToolImpl::parse_arguments(arguments)?;
 
-
-
         tracing::debug!("Executing shell command: {:?}", request.command);
 
         // Using default shell configuration (removed sah_config dependency)
@@ -1243,8 +1234,6 @@ impl McpTool for ShellExecuteTool {
             tracing::warn!("Command security validation failed: {}", e);
             McpError::invalid_params(format!("Command security check failed: {e}"), None)
         })?;
-
-
 
         // Validate working directory if provided with security checks
         if let Some(ref working_dir) = request.working_directory {
@@ -1295,8 +1284,6 @@ impl McpTool for ShellExecuteTool {
 
         // Execute the shell command using our core execution function
         let working_directory = request.working_directory.map(PathBuf::from);
-
-
 
         match execute_shell_command(
             request.command.clone(),
@@ -1366,7 +1353,6 @@ mod tests {
 
     use std::sync::Arc;
 
-
     fn create_test_context() -> ToolContext {
         use crate::test_utils::TestIssueEnvironment;
         use swissarmyhammer_git::GitOperations;
@@ -1386,12 +1372,7 @@ mod tests {
         let tool_handlers = Arc::new(crate::mcp::tool_handlers::ToolHandlers::new(
             memo_storage.clone(),
         ));
-        ToolContext::new(
-            tool_handlers,
-            issue_storage,
-            git_ops,
-            memo_storage,
-        )
+        ToolContext::new(tool_handlers, issue_storage, git_ops, memo_storage)
     }
 
     #[test]
@@ -1470,10 +1451,6 @@ mod tests {
         let result = tool.execute(args, &context).await;
         assert!(result.is_err());
     }
-
-
-
-
 
     #[tokio::test]
     async fn test_execute_empty_working_directory() {
@@ -1654,18 +1631,6 @@ mod tests {
             }
         }
     }
-
-
-
-
-
-
-
-
-
-
-
-
 
     // Security validation tests for the new functionality
     #[tokio::test]
@@ -2588,8 +2553,6 @@ mod tests {
 
         assert!(!guard.is_running());
     }
-
-
 
     #[tokio::test]
     async fn test_async_process_guard_process_status_detection() {

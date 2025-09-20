@@ -41,12 +41,7 @@ impl CliToolContext {
         let memo_storage = Self::create_memo_storage(working_dir);
         let tool_handlers = Self::create_tool_handlers(memo_storage.clone());
 
-        let tool_context = ToolContext::new(
-            tool_handlers,
-            issue_storage,
-            git_ops,
-            memo_storage,
-        );
+        let tool_context = ToolContext::new(tool_handlers, issue_storage, git_ops, memo_storage);
 
         let tool_registry = Arc::new(Self::create_tool_registry());
 
@@ -105,8 +100,6 @@ impl CliToolContext {
     ) -> Arc<swissarmyhammer_tools::mcp::tool_handlers::ToolHandlers> {
         Arc::new(swissarmyhammer_tools::mcp::tool_handlers::ToolHandlers::new(memo_storage))
     }
-
-
 
     /// Create and populate tool registry
     fn create_tool_registry() -> ToolRegistry {
@@ -280,8 +273,6 @@ mod tests {
         }
     }
 
-
-
     // Helper function for tests
     async fn create_mock_tool_context() -> ToolContext {
         use std::path::PathBuf;
@@ -308,11 +299,6 @@ mod tests {
             swissarmyhammer_tools::mcp::tool_handlers::ToolHandlers::new(memo_storage.clone()),
         );
 
-        ToolContext::new(
-            tool_handlers,
-            issue_storage,
-            git_ops,
-            memo_storage,
-        )
+        ToolContext::new(tool_handlers, issue_storage, git_ops, memo_storage)
     }
 }

@@ -469,8 +469,9 @@ mod tests {
         // Create mock context
         let issue_storage: Arc<RwLock<Box<dyn IssueStorage>>> = Arc::new(RwLock::new(Box::new(
             swissarmyhammer_issues::FileSystemIssueStorage::new(
-                tempfile::tempdir().unwrap().path().to_path_buf()
-            ).unwrap(),
+                tempfile::tempdir().unwrap().path().to_path_buf(),
+            )
+            .unwrap(),
         )));
         let git_ops: Arc<Mutex<Option<GitOperations>>> = Arc::new(Mutex::new(None));
         // Create temporary directory for memo storage
@@ -479,12 +480,7 @@ mod tests {
             MarkdownMemoStorage::new(temp_dir.path().join("memos")),
         )));
         let tool_handlers = Arc::new(ToolHandlers::new(memo_storage.clone()));
-        let context = ToolContext::new(
-            tool_handlers,
-            issue_storage,
-            git_ops,
-            memo_storage,
-        );
+        let context = ToolContext::new(tool_handlers, issue_storage, git_ops, memo_storage);
 
         let tool = OutlineGenerateTool::new();
         let mut args = serde_json::Map::new();
@@ -511,8 +507,9 @@ mod tests {
         // Create mock context
         let issue_storage: Arc<RwLock<Box<dyn IssueStorage>>> = Arc::new(RwLock::new(Box::new(
             swissarmyhammer_issues::FileSystemIssueStorage::new(
-                tempfile::tempdir().unwrap().path().to_path_buf()
-            ).unwrap(),
+                tempfile::tempdir().unwrap().path().to_path_buf(),
+            )
+            .unwrap(),
         )));
         let git_ops: Arc<Mutex<Option<GitOperations>>> = Arc::new(Mutex::new(None));
         // Create temporary directory for memo storage
@@ -521,12 +518,7 @@ mod tests {
             MarkdownMemoStorage::new(temp_dir2.path().join("memos")),
         )));
         let tool_handlers = Arc::new(ToolHandlers::new(memo_storage.clone()));
-        let context = ToolContext::new(
-            tool_handlers,
-            issue_storage,
-            git_ops,
-            memo_storage,
-        );
+        let context = ToolContext::new(tool_handlers, issue_storage, git_ops, memo_storage);
 
         let tool = OutlineGenerateTool::new();
         let mut args = serde_json::Map::new();

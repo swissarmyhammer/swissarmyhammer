@@ -12,7 +12,6 @@ pub mod shared;
 pub mod status;
 pub mod test;
 
-
 use crate::cli::FlowSubcommand;
 use crate::context::CliContext;
 use crate::exit_codes::{EXIT_ERROR, EXIT_SUCCESS};
@@ -29,17 +28,7 @@ pub async fn handle_command(subcommand: FlowSubcommand, context: &CliContext) ->
             interactive,
             dry_run,
             quiet,
-        } => {
-            run::execute_run_command(
-                workflow,
-                vars,
-                interactive,
-                dry_run,
-                quiet,
-                context,
-            )
-            .await
-        }
+        } => run::execute_run_command(workflow, vars, interactive, dry_run, quiet, context).await,
         FlowSubcommand::Resume {
             run_id,
             interactive,
@@ -61,7 +50,6 @@ pub async fn handle_command(subcommand: FlowSubcommand, context: &CliContext) ->
             tail,
             level,
         } => logs::execute_logs_command(run_id, follow, tail, level).await,
-
 
         FlowSubcommand::Test {
             workflow,

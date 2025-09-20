@@ -701,9 +701,15 @@ impl TemplateContext {
             match std::env::current_dir() {
                 Ok(current_dir) => {
                     let current_dir_str = current_dir.to_string_lossy().to_string();
-                    debug!("Setting default working directory variables to: {}", current_dir_str);
-                    
-                    self.set("working_directory".to_string(), Value::String(current_dir_str.clone()));
+                    debug!(
+                        "Setting default working directory variables to: {}",
+                        current_dir_str
+                    );
+
+                    self.set(
+                        "working_directory".to_string(),
+                        Value::String(current_dir_str.clone()),
+                    );
                     self.set("cwd".to_string(), Value::String(current_dir_str));
                 }
                 Err(e) => {
@@ -1212,11 +1218,11 @@ Generated for {{app.name}} by liquid templating engine.
 
         // Should set model to "Claude Code"
         assert_eq!(context.get("model"), Some(&json!("Claude Code")));
-        
+
         // Should set working directory variables
         assert!(context.get("working_directory").is_some());
         assert!(context.get("cwd").is_some());
-        
+
         // Both should be the same value
         assert_eq!(context.get("working_directory"), context.get("cwd"));
     }
@@ -1264,7 +1270,7 @@ Generated for {{app.name}} by liquid templating engine.
 
         // Should set model to the HuggingFace repo name
         assert_eq!(context.get("model"), Some(&json!("microsoft/CodeT5-base")));
-        
+
         // Should set working directory variables
         assert!(context.get("working_directory").is_some());
         assert!(context.get("cwd").is_some());
@@ -1313,7 +1319,7 @@ Generated for {{app.name}} by liquid templating engine.
 
         // Should set model to the local filename
         assert_eq!(context.get("model"), Some(&json!("/path/to/model.gguf")));
-        
+
         // Should set working directory variables
         assert!(context.get("working_directory").is_some());
         assert!(context.get("cwd").is_some());
@@ -1328,7 +1334,7 @@ Generated for {{app.name}} by liquid templating engine.
 
         // Should set model to "Claude Code" (default)
         assert_eq!(context.get("model"), Some(&json!("Claude Code")));
-        
+
         // Should set working directory variables
         assert!(context.get("working_directory").is_some());
         assert!(context.get("cwd").is_some());
@@ -1346,7 +1352,7 @@ Generated for {{app.name}} by liquid templating engine.
 
         // Should keep user's model value
         assert_eq!(context.get("model"), Some(&json!("Custom Model")));
-        
+
         // Should still set working directory variables
         assert!(context.get("working_directory").is_some());
         assert!(context.get("cwd").is_some());
@@ -1367,11 +1373,11 @@ Generated for {{app.name}} by liquid templating engine.
             // Should default to "Claude Code" if no agent config found
             let model_str = context.get("model").unwrap().as_str().unwrap();
             assert!(!model_str.is_empty());
-            
+
             // Should have working directory variables set
             assert!(context.get("working_directory").is_some());
             assert!(context.get("cwd").is_some());
-            
+
             // Both should be strings and equal
             assert!(context.get("working_directory").unwrap().is_string());
             assert!(context.get("cwd").unwrap().is_string());
@@ -1394,7 +1400,7 @@ Generated for {{app.name}} by liquid templating engine.
             // Should also have a model variable set
             assert!(context.get("model").is_some());
             assert!(context.get("model").unwrap().is_string());
-            
+
             // Should have working directory variables set
             assert!(context.get("working_directory").is_some());
             assert!(context.get("cwd").is_some());
@@ -1416,7 +1422,7 @@ Generated for {{app.name}} by liquid templating engine.
 
             // Should keep user's model value
             assert_eq!(context.get("model"), Some(&json!("User Custom Model")));
-            
+
             // Should still set working directory variables
             assert!(context.get("working_directory").is_some());
             assert!(context.get("cwd").is_some());
@@ -1435,9 +1441,12 @@ Generated for {{app.name}} by liquid templating engine.
         context.set_default_variables();
 
         // Should keep user's working directory values
-        assert_eq!(context.get("working_directory"), Some(&json!("/custom/path")));
+        assert_eq!(
+            context.get("working_directory"),
+            Some(&json!("/custom/path"))
+        );
         assert_eq!(context.get("cwd"), Some(&json!("/custom/path")));
-        
+
         // Should still set model variable
         assert_eq!(context.get("model"), Some(&json!("Claude Code")));
     }

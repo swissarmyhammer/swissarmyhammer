@@ -47,8 +47,6 @@ pub struct SecurityHardeningConfig {
 
     /// Enable sandboxing (if available on platform)
     pub enable_sandboxing: bool,
-
-
 }
 
 impl Default for SecurityHardeningConfig {

@@ -131,10 +131,8 @@ tower-http = "0.5"
 hyper = "1.0"
 
 # Web fetch dependencies
-markdowndown = { git = "https://github.com/swissarmyhammer/markdowndown", version = "0.1.0" }
-
-llama-agent = { path = "../llama-agent/llama-agent" }
-llama-loader = { path = "../llama-agent/llama-loader" }
+markdowndown = { git = "https://github.com/swissarmyhammer/markdowndown" }
+llama-agent = { git = "https://github.com/swissarmyhammer/llama-agent" }
 
 # Additional common dependencies
 libc = "0.2"

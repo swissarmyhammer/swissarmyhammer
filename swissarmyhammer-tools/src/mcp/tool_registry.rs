@@ -285,8 +285,6 @@ pub struct ToolContext {
     /// Provides thread-safe access to memoranda storage operations. Use `read()` for
     /// read operations and `write()` for write operations.
     pub memo_storage: Arc<RwLock<Box<dyn MemoStorage>>>,
-
-
 }
 
 impl ToolContext {
@@ -1426,12 +1424,7 @@ mod tests {
             Arc::new(RwLock::new(Box::new(MarkdownMemoStorage::new(memo_dir))));
 
         let tool_handlers = Arc::new(ToolHandlers::new(memo_storage.clone()));
-        let context = ToolContext::new(
-            tool_handlers,
-            issue_storage,
-            git_ops,
-            memo_storage,
-        );
+        let context = ToolContext::new(tool_handlers, issue_storage, git_ops, memo_storage);
 
         let tool = MockTool {
             name: "exec_test",

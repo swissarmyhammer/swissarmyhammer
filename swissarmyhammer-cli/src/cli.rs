@@ -43,8 +43,6 @@ impl From<PromptSource> for PromptSourceArg {
     }
 }
 
-
-
 #[derive(Parser, Debug)]
 #[command(name = "swissarmyhammer")]
 #[command(version)]
@@ -318,7 +316,6 @@ pub enum FlowSubcommand {
         #[arg(long)]
         level: Option<String>,
     },
-
 
     /// Test a workflow without executing actions (simulates dry run)
     #[command(long_about = "

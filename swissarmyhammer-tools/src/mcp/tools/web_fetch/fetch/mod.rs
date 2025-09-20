@@ -295,8 +295,6 @@ impl McpTool for WebFetchTool {
     ) -> std::result::Result<CallToolResult, McpError> {
         let request: WebFetchRequest = BaseToolImpl::parse_arguments(arguments)?;
 
-
-
         tracing::debug!("Fetching web content from URL: {}", request.url);
 
         // Validate request parameters
