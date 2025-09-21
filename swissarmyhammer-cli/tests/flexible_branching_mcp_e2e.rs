@@ -72,7 +72,10 @@ impl McpTestEnvironment {
 
         // Create develop branch from main
         // First checkout main
-        let main_branch = repo.find_branch("main", git2::BranchType::Local).unwrap();
+        let main_branch = match repo.find_branch("main", git2::BranchType::Local) {
+            Ok(b) => b,
+            Err(_) => repo.branch("main", &head_commit, false).unwrap(),
+        };
         let main_ref = main_branch.get();
         let main_tree = main_ref.peel_to_tree().unwrap();
         repo.checkout_tree(main_tree.as_object(), None).unwrap();
