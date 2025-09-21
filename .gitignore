@@ -68,6 +68,9 @@ swissarmyhammer-cli/.swissarmyhammer
 # SwissArmyHammer temporary todo files
 .swissarmyhammer/todo/
 
+# SwissArmyHammer config symlinks
+.swissarmyhammer/sah.yaml
+
 doc/book
 
 # Claude Code configuration
