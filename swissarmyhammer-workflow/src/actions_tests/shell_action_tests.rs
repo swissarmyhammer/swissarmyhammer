@@ -485,7 +485,7 @@ fn test_shell_action_timeout_validation() {
     // Test default timeout when none specified
     let action = ShellAction::new("echo test".to_string());
     let timeout = action.validate_timeout().unwrap();
-    assert_eq!(timeout, ActionTimeouts::default().action_timeout); // DEFAULT_TIMEOUT
+    assert_eq!(timeout, Duration::from_secs(3600)); // DEFAULT_TIMEOUT
 }
 
 // Integration tests for security validation in execute method
@@ -1468,7 +1468,7 @@ mod timeout_and_process_management_tests {
         // Test default timeout
         let action = ShellAction::new("echo test".to_string());
         let timeout = action.validate_timeout().unwrap();
-        assert_eq!(timeout, ActionTimeouts::default().action_timeout);
+        assert_eq!(timeout, Duration::from_secs(3600));
     }
 
     #[tokio::test]

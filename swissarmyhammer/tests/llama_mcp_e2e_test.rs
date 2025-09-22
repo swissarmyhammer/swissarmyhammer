@@ -4,6 +4,7 @@
 //! the in-process HTTP MCP server to read the Cargo.toml file. It proves the
 //! complete integration: local model → HTTP MCP server → MCP tool → file system.
 
+use serial_test::serial;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::Duration;
@@ -72,6 +73,8 @@ fn validate_cargo_toml_response(response: &str) -> Result<(), String> {
 /// 3. Validates model makes correct MCP tool call to its own server and receives file contents
 /// 4. Verifies response contains actual Cargo.toml content
 #[test_log::test(tokio::test)]
+// needs to be serial -- model download
+#[serial]
 async fn test_llama_mcp_cargo_toml_integration() {
     let _guard = IsolatedTestEnvironment::new().expect("Failed to create test environment");
 
@@ -166,6 +169,8 @@ async fn test_llama_mcp_cargo_toml_integration() {
 
 /// Tests LlamaAgent MCP server integration by validating configuration
 #[test_log::test(tokio::test)]
+// needs to be serial -- model download
+#[serial]
 async fn test_llama_mcp_server_connectivity() {
     let _guard = IsolatedTestEnvironment::new().expect("Failed to create test environment");
 

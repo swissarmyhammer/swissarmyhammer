@@ -106,21 +106,6 @@ pub enum ActionError {
 /// Result type for action operations
 pub type ActionResult<T> = std::result::Result<T, ActionError>;
 
-/// Configuration for action timeouts
-#[derive(Debug, Clone)]
-pub struct ActionTimeouts {
-    /// Default timeout for all action types
-    pub action_timeout: Duration,
-}
-
-impl Default for ActionTimeouts {
-    fn default() -> Self {
-        Self {
-            action_timeout: Duration::from_secs(3600), // 1 hour default
-        }
-    }
-}
-
 /// Agent execution context for prompt execution
 #[derive(Debug)]
 pub struct AgentExecutionContext<'a> {
@@ -622,11 +607,9 @@ pub struct PromptAction {
     pub arguments: HashMap<String, String>,
     /// Variable name to store the result
     pub result_variable: Option<String>,
-    /// Timeout for the Claude execution
-    pub timeout: Duration,
     /// Whether to suppress stdout output (only log)
     ///
-    /// When set to `true`, the Claude response will only be logged using the tracing
+    /// When set to `true`, the response will only be logged using the tracing
     /// framework and will not be printed to stderr. This is useful for workflows
     /// that need to capture the response programmatically without cluttering the output.
     ///
@@ -637,12 +620,10 @@ pub struct PromptAction {
 impl PromptAction {
     /// Create a new prompt action
     pub fn new(prompt_name: String) -> Self {
-        let timeouts = ActionTimeouts::default();
         Self {
             prompt_name,
             arguments: HashMap::new(),
             result_variable: None,
-            timeout: timeouts.action_timeout,
             quiet: false, // Default to showing output
         }
     }
@@ -656,12 +637,6 @@ impl PromptAction {
     /// Set the result variable name
     pub fn with_result_variable(mut self, variable: String) -> Self {
         self.result_variable = Some(variable);
-        self
-    }
-
-    /// Set the timeout for execution
-    pub fn with_timeout(mut self, timeout: Duration) -> Self {
-        self.timeout = timeout;
         self
     }
 
@@ -856,8 +831,8 @@ impl PromptAction {
 
         // Execute the rendered prompt using the AgentExecutor trait
 
-        // Create execution context
-        let execution_context = AgentExecutionContext::new(context, self.timeout);
+        // Create execution context (LLM handles its own timeout)
+        let execution_context = AgentExecutionContext::new(context, Duration::from_secs(3600));
 
         // Get executor based on configuration
         let executor = self.get_executor(&execution_context).await?;
@@ -988,8 +963,7 @@ impl Action for WaitAction {
                 let mut line = String::new();
 
                 // Use configurable timeout for user input
-                let timeouts = ActionTimeouts::default();
-                match timeout(timeouts.action_timeout, reader.read_line(&mut line)).await {
+                match timeout(Duration::from_secs(3600), reader.read_line(&mut line)).await {
                     Ok(Ok(_)) => {
                         // Successfully read input
                     }
@@ -998,7 +972,7 @@ impl Action for WaitAction {
                     }
                     Err(_) => {
                         return Err(ActionError::Timeout {
-                            timeout: timeouts.action_timeout,
+                            timeout: Duration::from_secs(3600),
                         });
                     }
                 }
@@ -1270,12 +1244,11 @@ fn render_with_liquid_template(input: &str, context: &HashMap<String, Value>) ->
 impl SubWorkflowAction {
     /// Create a new sub-workflow action
     pub fn new(workflow_name: String) -> Self {
-        let timeouts = ActionTimeouts::default();
         Self {
             workflow_name,
             input_variables: HashMap::new(),
             result_variable: None,
-            timeout: timeouts.action_timeout,
+            timeout: Duration::from_secs(3600), // 1 hour default
         }
     }
 
@@ -1364,9 +1337,7 @@ impl ShellAction {
 
     /// Validate timeout duration according to security limits
     pub fn validate_timeout(&self) -> ActionResult<Duration> {
-        let timeout = self
-            .timeout
-            .unwrap_or(ActionTimeouts::default().action_timeout);
+        let timeout = self.timeout.unwrap_or(Duration::from_secs(3600));
 
         if timeout.as_millis() == 0 {
             return Err(ActionError::ExecutionError(
@@ -2578,7 +2549,7 @@ mod tests {
 
         // Verify basic properties (retry logic removed)
         assert_eq!(action.prompt_name, "test-prompt");
-        assert_eq!(action.timeout, ActionTimeouts::default().action_timeout);
+
         assert!(!action.quiet);
         assert!(action.arguments.is_empty());
         assert!(action.result_variable.is_none());
@@ -2591,12 +2562,9 @@ mod tests {
         assert_eq!(action.prompt_name, "test-prompt");
 
         // Test chaining with other builders (retry methods removed)
-        let action2 = PromptAction::new("test-prompt2".to_string())
-            .with_quiet(true)
-            .with_timeout(Duration::from_secs(60));
+        let action2 = PromptAction::new("test-prompt2".to_string()).with_quiet(true);
 
         assert!(action2.quiet);
-        assert_eq!(action2.timeout, Duration::from_secs(60));
     }
 
     #[test]
@@ -3433,7 +3401,6 @@ mod tests {
             prompt_name: "test-prompt".to_string(),
             arguments: HashMap::new(),
             result_variable: Some("test_result".to_string()),
-            timeout: Duration::from_secs(30),
             quiet: true, // Suppress output during tests
         };
 

@@ -3,7 +3,6 @@
 use crate::actions::*;
 use crate::WorkflowTemplateContext;
 use std::collections::HashMap;
-use std::time::Duration;
 
 #[test]
 fn test_prompt_action_creation() {
@@ -11,7 +10,6 @@ fn test_prompt_action_creation() {
     assert_eq!(action.prompt_name, "test-prompt");
     assert!(action.arguments.is_empty());
     assert!(action.result_variable.is_none());
-    assert_eq!(action.timeout, ActionTimeouts::default().action_timeout);
 }
 
 #[test]
@@ -30,14 +28,6 @@ fn test_prompt_action_with_result_variable() {
         PromptAction::new("test-prompt".to_string()).with_result_variable("result_var".to_string());
 
     assert_eq!(action.result_variable, Some("result_var".to_string()));
-}
-
-#[test]
-fn test_prompt_action_with_timeout() {
-    let timeout_duration = Duration::from_secs(60);
-    let action = PromptAction::new("test-prompt".to_string()).with_timeout(timeout_duration);
-
-    assert_eq!(action.timeout, timeout_duration);
 }
 
 #[test]

@@ -114,7 +114,10 @@ impl FlexibleBranchingTestEnvironment {
         )?;
 
         // Switch back to main
-        let main_branch = repo.find_branch("main", BranchType::Local)?;
+        let main_branch = match repo.find_branch("main", BranchType::Local) {
+            Ok(branch) => branch,
+            Err(_) => repo.branch("main", &head_commit, false).unwrap(),
+        };
         let main_ref = main_branch.get();
         let main_tree = main_ref.peel_to_tree()?;
         repo.checkout_tree(main_tree.as_object(), None)?;

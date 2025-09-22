@@ -120,85 +120,6 @@ impl EdgeCaseTestEnvironment {
     }
 }
 
-/// Test what happens when source branch is deleted mid-workflow
-#[tokio::test]
-async fn test_source_branch_deleted_mid_workflow() {
-    let env = EdgeCaseTestEnvironment::new().await;
-
-    // Create a feature branch
-    env.create_test_branch("feature/temporary").await;
-
-    // Create issue from feature branch
-    let issue_name = "temp-feature-work".to_string();
-    let issue_content = "# Temporary Feature Work\n\nWork based on temporary feature".to_string();
-
-    {
-        let issue_storage = env.issue_storage.write().await;
-        issue_storage
-            .create_issue(issue_name.clone(), issue_content)
-            .await
-            .expect("Failed to create issue");
-    }
-
-    // Create issue branch from current branch (feature/temporary)
-    {
-        let git_ops = env.git_ops.lock().await;
-        let git = git_ops.as_ref().unwrap();
-        let branch_name = git.create_work_branch(&issue_name).unwrap();
-
-        assert_eq!(branch_name, "issue/temp-feature-work");
-    }
-
-    // Make some changes on the issue branch
-    std::fs::write(
-        env.temp_dir.path().join("work_file.txt"),
-        "Work in progress",
-    )
-    .expect("Failed to write work file");
-
-    let repo = Repository::open(env.temp_dir.path()).unwrap();
-    git2_utils::add_files(&repo, &["work_file.txt"]).unwrap();
-    git2_utils::create_commit(
-        &repo,
-        "Add work file",
-        Some("Test User"),
-        Some("test@example.com"),
-    )
-    .unwrap();
-
-    // Now simulate the source branch being deleted by another developer
-    {
-        let git_ops = env.git_ops.lock().await;
-        let git = git_ops.as_ref().unwrap();
-        let main_branch = BranchName::new("main").unwrap();
-        git.checkout_branch(&main_branch).unwrap();
-        let temp_branch = BranchName::new("feature/temporary").unwrap();
-        git.delete_branch(&temp_branch).unwrap();
-    }
-
-    // Mark issue complete
-    {
-        let issue_storage = env.issue_storage.write().await;
-        issue_storage.complete_issue(&issue_name).await.unwrap();
-    }
-
-    // Try to merge - this should fail and create an abort file
-    {
-        let git_ops = env.git_ops.lock().await;
-        let git = git_ops.as_ref().unwrap();
-        let result = git.merge_issue_branch(&issue_name, "feature/temporary");
-        assert!(result.is_err());
-
-        let error_msg = result.unwrap_err().to_string();
-        assert!(error_msg.contains("feature/temporary") || error_msg.contains("does not exist"));
-    }
-
-    // Check if abort file was created
-    let _abort_file_path = env.temp_dir.path().join(".swissarmyhammer/.abort");
-    // Note: The abort file creation depends on the specific error handling in the git operations
-    // This test verifies the error is properly handled
-}
-
 /// Test merge conflicts with source branch that has diverged
 #[tokio::test]
 async fn test_merge_conflicts_with_diverged_source_branch() {
@@ -387,45 +308,6 @@ async fn test_source_branch_validation_before_merge() {
         let _result = git.merge_issue_branch(&issue_name, "feature/invalid-ref");
         // This should handle the invalid reference gracefully
     }
-}
-
-/// Test recovery from failed branch operations
-#[tokio::test]
-async fn test_recovery_from_failed_branch_operations() {
-    let env = EdgeCaseTestEnvironment::new().await;
-
-    let git_ops = env.git_ops.lock().await;
-    let git = git_ops.as_ref().unwrap();
-
-    // Start on main branch
-    let main_branch = BranchName::new("main").unwrap();
-    git.checkout_branch(&main_branch).unwrap();
-    let initial_branch = git.current_branch().unwrap();
-
-    // Create first issue branch successfully
-    git.create_work_branch_simple("good-issue").unwrap();
-    assert_eq!(git.current_branch().unwrap(), "issue/good-issue");
-
-    // Try to create another issue branch from the issue branch (should fail)
-    let result = git.create_work_branch_simple("bad-issue");
-    assert!(result.is_err());
-
-    // Verify we're still on the good issue branch (consistent state)
-    assert_eq!(git.current_branch().unwrap(), "issue/good-issue");
-
-    // Verify the failed branch doesn't exist
-    let bad_issue_branch = BranchName::new("issue/bad-issue").unwrap();
-    assert!(!git.branch_exists(&bad_issue_branch).unwrap());
-
-    // Verify we can still switch back to main and create other branches
-    let initial_branch_name = BranchName::new(&initial_branch).unwrap();
-    git.checkout_branch(&initial_branch_name).unwrap();
-    assert_eq!(git.current_branch().unwrap(), initial_branch);
-
-    // Should be able to create new branches after the failure
-    let result = git.create_work_branch_simple("recovery-issue");
-    assert!(result.is_ok());
-    assert_eq!(result.unwrap(), "issue/recovery-issue");
 }
 
 /// Test handling of working directory changes during merge

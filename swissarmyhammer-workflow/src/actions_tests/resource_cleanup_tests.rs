@@ -58,9 +58,8 @@ async fn test_action_cleanup_on_failure() {
 
 #[tokio::test]
 async fn test_prompt_action_cleanup_on_timeout() {
-    // Test that PromptAction cleans up resources on timeout
-    let mut action =
-        PromptAction::new("test-prompt".to_string()).with_timeout(Duration::from_millis(1)); // Very short timeout
+    // Test that PromptAction cleans up resources (timeout handling removed as redundant with LLM timeout)
+    let mut action = PromptAction::new("test-prompt".to_string());
 
     // Track if cleanup happened
     let cleanup_tracker = Arc::new(AtomicUsize::new(0));
@@ -78,8 +77,7 @@ async fn test_prompt_action_cleanup_on_timeout() {
     let _result = action.execute(&mut context).await;
 
     // Even if it doesn't actually timeout (no real Claude execution),
-    // verify the structure is correct for cleanup
-    assert!(action.timeout < Duration::from_secs(1));
+    // verify the structure is correct for cleanup (timeout handling removed as redundant with LLM timeout)
 }
 
 #[tokio::test]
