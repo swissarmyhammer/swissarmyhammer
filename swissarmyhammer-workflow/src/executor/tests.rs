@@ -1891,3 +1891,81 @@ async fn test_abort_file_not_present_normal_execution() {
     assert_eq!(run.current_state.as_str(), "end");
     assert_eq!(run.status, WorkflowRunStatus::Completed);
 }
+
+#[tokio::test]
+async fn test_linear_workflow_with_logging() {
+    let _test_env = IsolatedTestEnvironment::new().expect("Failed to create test environment");
+    let mut executor = WorkflowExecutor::new();
+
+    // Create a linear workflow with multiple logging steps
+    let workflow_markdown = r#"---
+name: "Linear Workflow Test"
+description: "A linear workflow that logs at each step"
+---
+
+# Linear Workflow Test
+
+```mermaid
+stateDiagram-v2
+    [*] --> step1
+    step1 --> step2
+    step2 --> step3
+    step3 --> step4
+    step4 --> complete
+    complete --> [*]
+```
+
+## Actions
+
+- step1: Log "Step 1: Starting linear workflow"
+- step2: Log "Step 2: Processing data"
+- step3: Log "Step 3: Validating results"
+- step4: Log "Step 4: Finalizing workflow"
+- complete: Log "Step 5: Linear workflow completed successfully"
+"#;
+
+    let workflow = crate::parser::MermaidParser::parse(workflow_markdown, "Linear Workflow Test").unwrap();
+    let run = executor.start_and_execute_workflow(workflow).await.unwrap();
+
+    // Verify the workflow completed successfully
+    assert_eq!(run.status, WorkflowRunStatus::Completed);
+    assert_eq!(run.current_state, StateId::new("complete"));
+    
+    // Check that all log messages appear in the execution history
+    let history = executor.get_history();
+
+    // Check that all log messages appear in the execution history  
+    let log_messages = [
+        "Step 1: Starting linear workflow",
+        "Step 2: Processing data", 
+        "Step 3: Validating results",
+        "Step 4: Finalizing workflow",
+        "Step 5: Linear workflow completed successfully",
+    ];
+
+    for message in log_messages {
+        assert!(
+            history.iter().any(|e| e.details.contains(message)),
+            "Expected log message '{}' not found in execution history", 
+            message
+        );
+    }
+
+    // Verify the states were executed in order by checking entry/exit logging
+    let entry_logs: Vec<_> = history.iter()
+        .filter(|e| e.details.contains("ENTERING state:"))
+        .collect();
+    let exit_logs: Vec<_> = history.iter()
+        .filter(|e| e.details.contains("EXITING state:"))
+        .collect();
+
+    // Should have entry and exit logs for each state
+    assert!(entry_logs.len() >= 5, "Expected at least 5 ENTERING logs, found {}", entry_logs.len());
+    assert!(exit_logs.len() >= 5, "Expected at least 5 EXITING logs, found {}", exit_logs.len());
+
+    // Verify no error logs were generated
+    let error_logs: Vec<_> = history.iter()
+        .filter(|e| e.details.contains("ERROR in state:"))
+        .collect();
+    assert_eq!(error_logs.len(), 0, "Expected no ERROR logs, but found {}", error_logs.len());
+}

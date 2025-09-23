@@ -19,7 +19,7 @@ use tracing::info;
 
 // Test timeout constants
 const INTEGRATION_TEST_TIMEOUT_SECS: u64 = 300; // 5 minutes for complete integration test
-const MODEL_EXECUTION_TIMEOUT_SECS: u64 = 180; // 3 minutes for model execution
+
 
 // Test prompt template - dynamically constructed with absolute path
 const SYSTEM_PROMPT: &str = "You are a helpful assistant that can use tools to read files. Always use absolute file paths when calling tools.";
@@ -88,8 +88,8 @@ async fn test_llama_mcp_cargo_toml_integration() {
         let context = WorkflowTemplateContext::with_vars(HashMap::new())?;
         let mut context_with_config = context;
         context_with_config.set_agent_config(agent_config);
-        let model_timeout = Duration::from_secs(MODEL_EXECUTION_TIMEOUT_SECS);
-        let execution_context = AgentExecutionContext::new(&context_with_config, model_timeout);
+
+        let execution_context = AgentExecutionContext::new(&context_with_config);
 
         info!("Creating LlamaAgent executor with integrated MCP server");
         let mut executor = AgentExecutorFactory::create_executor(&execution_context).await?;
@@ -184,8 +184,7 @@ async fn test_llama_mcp_server_connectivity() {
         WorkflowTemplateContext::with_vars(HashMap::new()).expect("Failed to create context");
     let mut context_with_config = context;
     context_with_config.set_agent_config(agent_config);
-    let model_timeout = Duration::from_secs(MODEL_EXECUTION_TIMEOUT_SECS);
-    let execution_context = AgentExecutionContext::new(&context_with_config, model_timeout);
+    let execution_context = AgentExecutionContext::new(&context_with_config);
 
     info!("Creating LlamaAgent executor which will start integrated MCP server");
     let mut executor = AgentExecutorFactory::create_executor(&execution_context)

@@ -111,16 +111,13 @@ pub type ActionResult<T> = std::result::Result<T, ActionError>;
 pub struct AgentExecutionContext<'a> {
     /// Reference to the workflow template context
     pub workflow_context: &'a WorkflowTemplateContext,
-    /// Timeout for prompt execution
-    pub timeout: Duration,
 }
 
 impl<'a> AgentExecutionContext<'a> {
     /// Create a new agent execution context
-    pub fn new(workflow_context: &'a WorkflowTemplateContext, timeout: Duration) -> Self {
+    pub fn new(workflow_context: &'a WorkflowTemplateContext) -> Self {
         Self {
             workflow_context,
-            timeout,
         }
     }
 
@@ -321,7 +318,6 @@ impl ClaudeCodeExecutor {
         claude_path: &std::path::PathBuf,
         prompt: String,
         system_prompt: Option<String>,
-        timeout_duration: Duration,
     ) -> ActionResult<AgentResponse> {
         use tokio::io::AsyncWriteExt;
         use tokio::process::Command;
@@ -370,22 +366,10 @@ impl ClaudeCodeExecutor {
             })?;
         }
 
-        // Wait for command completion with timeout
-        let output = match timeout(timeout_duration, child.wait_with_output()).await {
-            Ok(Ok(output)) => output,
-            Ok(Err(e)) => {
-                return Err(ActionError::ClaudeError(format!(
-                    "Failed to wait for Claude: {e}"
-                )));
-            }
-            Err(_) => {
-                // Timeout occurred - we can't kill after wait_with_output consumes child
-                tracing::warn!("Claude command timed out after {:?}", timeout_duration);
-                return Err(ActionError::Timeout {
-                    timeout: timeout_duration,
-                });
-            }
-        };
+        // Wait for command completion
+        let output = child.wait_with_output().await.map_err(|e| {
+            ActionError::ClaudeError(format!("Failed to wait for Claude: {e}"))
+        })?;
 
         // Check if Claude execution was successful
         if !output.status.success() {
@@ -455,7 +439,6 @@ impl AgentExecutor for ClaudeCodeExecutor {
             &claude_path_buf,
             rendered_prompt,
             system_prompt_opt,
-            context.timeout,
         )
         .await
     }
@@ -832,7 +815,7 @@ impl PromptAction {
         // Execute the rendered prompt using the AgentExecutor trait
 
         // Create execution context (LLM handles its own timeout)
-        let execution_context = AgentExecutionContext::new(context, Duration::from_secs(3600));
+        let execution_context = AgentExecutionContext::new(context);
 
         // Get executor based on configuration
         let executor = self.get_executor(&execution_context).await?;
@@ -844,7 +827,15 @@ impl PromptAction {
                 user_prompt,
                 &execution_context,
             )
-            .await?;
+            .await;
+
+        let response = match response {
+            Ok(resp) => resp,
+            Err(e) => {
+                tracing::error!("Prompt execution failed: {:?}", e);
+                return Err(e);
+            }
+        };
 
         // Extract response text for logging
         let response_text = response.content.clone();
@@ -2252,7 +2243,7 @@ mod tests {
         // Set up agent config
         context.set_agent_config(AgentConfig::default());
 
-        let execution_context = AgentExecutionContext::new(&context, Duration::from_secs(30));
+        let execution_context = AgentExecutionContext::new(&context);
         assert_eq!(
             execution_context.executor_type(),
             AgentExecutorType::ClaudeCode
@@ -2305,7 +2296,7 @@ mod tests {
         let mut context = WorkflowTemplateContext::with_vars_for_test(HashMap::new());
         context.set_agent_config(AgentConfig::default());
 
-        let execution_context = AgentExecutionContext::new(&context, Duration::from_secs(30));
+        let execution_context = AgentExecutionContext::new(&context);
 
         // This test may fail if claude CLI is not available - that's expected
         match AgentExecutorFactory::create_executor(&execution_context).await {
@@ -2327,7 +2318,7 @@ mod tests {
         let llama_config = LlamaAgentConfig::for_testing();
         context.set_agent_config(AgentConfig::llama_agent(llama_config));
 
-        let execution_context = AgentExecutionContext::new(&context, Duration::from_secs(30));
+        let execution_context = AgentExecutionContext::new(&context);
 
         // LlamaAgent should now create successfully
         match AgentExecutorFactory::create_executor(&execution_context).await {
@@ -3440,7 +3431,7 @@ mod tests {
         let mut context = WorkflowTemplateContext::with_vars_for_test(HashMap::new());
         context.set_agent_config(swissarmyhammer_config::agent::AgentConfig::claude_code());
 
-        let execution_context = AgentExecutionContext::new(&context, Duration::from_secs(30));
+        let execution_context = AgentExecutionContext::new(&context);
 
         match AgentExecutorFactory::create_executor(&execution_context).await {
             Ok(executor) => {
@@ -3466,7 +3457,7 @@ mod tests {
             llama_config,
         ));
 
-        let execution_context = AgentExecutionContext::new(&context, Duration::from_secs(30));
+        let execution_context = AgentExecutionContext::new(&context);
 
         // Debug: Print the executor type and config
         println!(

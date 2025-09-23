@@ -2,7 +2,7 @@
 
 use serde_json::json;
 use std::collections::HashMap;
-use std::time::Duration;
+
 use swissarmyhammer::test_utils::IsolatedTestEnvironment;
 use swissarmyhammer_config::agent::{AgentConfig, LlamaAgentConfig};
 use swissarmyhammer_workflow::actions::{AgentExecutionContext, AgentExecutorFactory};
@@ -58,7 +58,7 @@ async fn test_multi_step_workflow_simulation() {
             let mut context_with_config = context;
             context_with_config.set_agent_config(config.clone());
             let execution_context =
-                AgentExecutionContext::new(&context_with_config, Duration::from_secs(30));
+                AgentExecutionContext::new(&context_with_config);
 
             // Attempt to create executor for this step
             match AgentExecutorFactory::create_executor(&execution_context).await {
@@ -120,7 +120,7 @@ async fn test_error_recovery_scenarios() {
             let mut context_with_config = context;
             context_with_config.set_agent_config(config);
             let execution_context =
-                AgentExecutionContext::new(&context_with_config, Duration::from_secs(30));
+                AgentExecutionContext::new(&context_with_config);
 
             match AgentExecutorFactory::create_executor(&execution_context).await {
                 Ok(_executor) => {
@@ -174,7 +174,7 @@ async fn test_variable_templating_patterns() {
         let mut context_with_config = context;
         context_with_config.set_agent_config(AgentConfig::claude_code());
         let execution_context =
-            AgentExecutionContext::new(&context_with_config, Duration::from_secs(30));
+            AgentExecutionContext::new(&context_with_config);
 
         // Test that complex variables don't break context creation
         match AgentExecutorFactory::create_executor(&execution_context).await {
@@ -237,7 +237,7 @@ async fn test_conditional_execution_simulation() {
             let mut context_with_config = context;
             context_with_config.set_agent_config(config);
             let execution_context =
-                AgentExecutionContext::new(&context_with_config, Duration::from_secs(30));
+                AgentExecutionContext::new(&context_with_config);
 
             // Test conditional execution
             if should_execute {
@@ -321,7 +321,7 @@ async fn test_workflow_state_persistence() {
         let mut context_with_config = context;
         context_with_config.set_agent_config(AgentConfig::claude_code());
         let execution_context =
-            AgentExecutionContext::new(&context_with_config, Duration::from_secs(30));
+            AgentExecutionContext::new(&context_with_config);
 
         match AgentExecutorFactory::create_executor(&execution_context).await {
             Ok(_executor) => {
@@ -386,7 +386,7 @@ async fn test_intentional_error_handling() {
                 let mut context_with_config = ctx;
                 context_with_config.set_agent_config(AgentConfig::claude_code());
                 let execution_context =
-                    AgentExecutionContext::new(&context_with_config, Duration::from_secs(30));
+                    AgentExecutionContext::new(&context_with_config);
 
                 match AgentExecutorFactory::create_executor(&execution_context).await {
                     Ok(_executor) => {
