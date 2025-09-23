@@ -42,9 +42,9 @@ fn test_sub_workflow_action_with_result_variable() {
 #[test]
 fn test_sub_workflow_action_with_timeout() {
     let timeout_duration = Duration::from_secs(300);
-    let action = SubWorkflowAction::new("test-workflow".to_string()).with_timeout(timeout_duration);
+    let action = SubWorkflowAction::new("test-workflow".to_string());
 
-    assert_eq!(action.timeout, timeout_duration);
+    // Timeout functionality has been removed
 }
 
 // Note: Variable substitution is tested through the public execute() method
