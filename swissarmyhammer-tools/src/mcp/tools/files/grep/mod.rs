@@ -571,7 +571,7 @@ impl McpTool for GrepFileTool {
         let search_dir = match &request.path {
             Some(path_str) => {
                 // Use comprehensive security validation
-                let validated_path = validator.validate_absolute_path(path_str)?;
+                let validated_path = validator.validate_path(path_str)?;
                 if !validated_path.exists() {
                     return Err(McpError::invalid_request(
                         format!("Search path does not exist: {}", validated_path.display()),

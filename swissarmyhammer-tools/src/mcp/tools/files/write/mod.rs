@@ -164,12 +164,6 @@ impl McpTool for WriteFileTool {
 
         // Basic path validation for write operations
         let path_buf = PathBuf::from(&request.file_path);
-        if !path_buf.is_absolute() {
-            return Err(McpError::invalid_request(
-                "File path must be absolute, not relative".to_string(),
-                None,
-            ));
-        }
 
         // Check for dangerous patterns
         if request.file_path.contains("..") || request.file_path.contains("./") {
@@ -384,16 +378,23 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_write_relative_path_rejection() {
+    async fn test_write_relative_path_acceptance() {
+        let temp_dir = TempDir::new().unwrap();
+        std::env::set_current_dir(temp_dir.path()).unwrap();
+        
         let tool = WriteFileTool::new();
         let context = create_test_context();
-        let args = create_test_arguments("relative/path/file.txt", "test content");
+        let args = create_test_arguments("relative_file.txt", "test content");
 
         let result = tool.execute(args, &context).await;
-        assert!(result.is_err());
-
-        let error = result.unwrap_err();
-        assert!(format!("{:?}", error).contains("must be absolute"));
+        assert!(result.is_ok(), "Relative paths should now be accepted");
+        
+        // Verify file was created
+        let file_path = temp_dir.path().join("relative_file.txt");
+        assert!(file_path.exists(), "File should have been created");
+        
+        let content = std::fs::read_to_string(&file_path).unwrap();
+        assert_eq!(content, "test content");
     }
 
     #[tokio::test]

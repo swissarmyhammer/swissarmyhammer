@@ -4,7 +4,7 @@ use crate::actions::*;
 use crate::WorkflowTemplateContext;
 use serde_json::Value;
 use std::collections::HashMap;
-use std::time::Duration;
+
 use swissarmyhammer_common::test_utils::IsolatedTestEnvironment;
 
 #[test]
@@ -41,10 +41,7 @@ fn test_sub_workflow_action_with_result_variable() {
 
 #[test]
 fn test_sub_workflow_action_with_timeout() {
-    let timeout_duration = Duration::from_secs(300);
-    let action = SubWorkflowAction::new("test-workflow".to_string());
-
-    // Timeout functionality has been removed
+    // Timeout functionality has been removed - this test is now a no-op
 }
 
 // Note: Variable substitution is tested through the public execute() method

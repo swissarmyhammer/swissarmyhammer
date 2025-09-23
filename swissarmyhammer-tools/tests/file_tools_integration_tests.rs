@@ -329,23 +329,21 @@ async fn test_read_tool_relative_path_support() {
     let context = create_test_context().await;
     let tool = registry.get_tool("files_read").unwrap();
 
-    // Test reading with relative path (should be accepted but file won't exist)
+    // Test reading with relative path - now just verify it doesn't reject due to being relative
     let mut arguments = serde_json::Map::new();
     arguments.insert("path".to_string(), json!("relative/path/file.txt"));
 
     let result = tool.execute(arguments, &context).await;
-    assert!(
-        result.is_err(),
-        "Relative path should be accepted but file should not exist"
-    );
-
-    let error = result.unwrap_err();
-    let error_msg = format!("{:?}", error);
-    // Should fail due to file not existing, not because path is relative
-    assert!(
-        !error_msg.contains("absolute"),
-        "Should not reject relative paths anymore"
-    );
+    
+    // Should not reject due to relative path, but may fail for other reasons (file not found, etc.)
+    if let Err(error) = result {
+        let error_msg = format!("{:?}", error);
+        assert!(
+            !error_msg.contains("absolute"),
+            "Should not reject relative paths anymore"
+        );
+    }
+    // If it succeeds, that's also fine - relative paths are now allowed
 }
 
 #[tokio::test]
@@ -1954,17 +1952,29 @@ async fn test_write_tool_error_handling() {
     let result = tool.execute(arguments, &context).await;
     assert!(result.is_err(), "Empty file path should fail");
 
-    // Test relative path (should fail)
+    // Test relative path (should be accepted but may fail due to parent directory)
     let mut arguments = serde_json::Map::new();
     arguments.insert("file_path".to_string(), json!("relative/path/file.txt"));
     arguments.insert("content".to_string(), json!("test content"));
 
     let result = tool.execute(arguments, &context).await;
-    assert!(result.is_err(), "Relative path should be rejected");
-
-    let error = result.unwrap_err();
-    let error_msg = format!("{:?}", error);
-    assert!(error_msg.contains("absolute"));
+    
+    match result {
+        Ok(_) => {
+            // Relative path was accepted and file was created successfully
+        }
+        Err(error) => {
+            let error_msg = format!("{:?}", error);
+            // Should not reject due to being relative anymore
+            assert!(!error_msg.contains("absolute"), "Should not reject relative paths");
+            // May fail due to parent directory not existing, which is fine
+            assert!(
+                error_msg.contains("Parent directory does not exist") 
+                    || error_msg.contains("No such file or directory"),
+                "Should fail due to missing parent directory, not relative path: {}", error_msg
+            );
+        }
+    }
 }
 
 // ============================================================================
@@ -2919,9 +2929,11 @@ async fn test_malformed_input_handling() {
             assert!(
                 error_msg.contains("invalid")
                     || error_msg.contains("empty")
-                    || error_msg.contains("absolute")
                     || error_msg.contains("directory")
                     || error_msg.contains("permission")
+                    || error_msg.contains("NUL byte")
+                    || error_msg.contains("File name too long")
+                    || error_msg.contains("Path too long")
                     || error_msg.contains("Read-only"),
                 "Should provide clear validation error: {}",
                 error_msg

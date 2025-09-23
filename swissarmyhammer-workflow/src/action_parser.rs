@@ -590,36 +590,7 @@ impl ActionParser {
     }
 
     /// Parse timeout value from string (supports formats like "100ms", "5s", "2m", etc.)
-    fn parse_timeout_value(&self, value: &str) -> ActionResult<Duration> {
-        let value = value.trim();
 
-        // Handle milliseconds (ms)
-        if let Some(ms_str) = value.strip_suffix("ms") {
-            if let Ok(ms) = ms_str.parse::<u64>() {
-                return Ok(Duration::from_millis(ms));
-            }
-        }
-
-        // Handle other units using existing parser
-        if let Some(unit_char) = value.chars().last() {
-            if unit_char.is_alphabetic() {
-                // Extract number and unit
-                let (number_part, unit_part) = value.split_at(value.len() - 1);
-                if let Ok(num) = number_part.parse::<u64>() {
-                    return self.parse_duration_unit(num, unit_part);
-                }
-            }
-        }
-
-        // If no unit specified, assume seconds
-        if let Ok(secs) = value.parse::<u64>() {
-            return Ok(Duration::from_secs(secs));
-        }
-
-        Err(ActionError::ParseError(format!(
-            "Invalid timeout format: '{value}'. Expected formats like '100ms', '5s', '2m', '1h'"
-        )))
-    }
 
     /// Validate that an argument key is safe for command-line use
     fn is_valid_argument_key(&self, key: &str) -> bool {

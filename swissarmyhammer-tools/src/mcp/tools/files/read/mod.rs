@@ -48,6 +48,7 @@
 //! ```
 
 use crate::mcp::tool_registry::{BaseToolImpl, McpTool, ToolContext};
+use crate::mcp::tools::files::shared_utils::{FilePathValidator, SecureFileAccess};
 use async_trait::async_trait;
 use rmcp::model::CallToolResult;
 use rmcp::ErrorData as McpError;
@@ -213,19 +214,24 @@ impl McpTool for ReadFileTool {
             ));
         }
 
+        // Validate path using consistent validator approach
+        let validator = FilePathValidator::default();
+        let validated_path = validator.validate_path(&request.path)?;
+
         // Create secure file access with enhanced security validation
         let secure_access = SecureFileAccess::default_secure();
 
         // Log file access attempt for security auditing
         info!(
             path = %request.path,
+            validated_path = %validated_path.display(),
             offset = request.offset,
             limit = request.limit,
             "Attempting to read file"
         );
 
         // Perform secure read operation
-        let content = secure_access.read(&request.path, request.offset, request.limit)?;
+        let content = secure_access.read(&validated_path.to_string_lossy(), request.offset, request.limit)?;
 
         debug!(
             path = %request.path,
