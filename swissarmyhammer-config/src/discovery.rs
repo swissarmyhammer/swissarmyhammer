@@ -1,6 +1,6 @@
 use crate::error::{ConfigurationError, ConfigurationResult};
 use std::path::{Path, PathBuf};
-use tracing::debug;
+use tracing::{debug, trace, error, info};
 
 /// Configuration file discovery paths
 #[derive(Debug, Clone)]
@@ -97,10 +97,10 @@ impl ConfigurationDiscovery {
             Some(home) => {
                 let config_dir = home.join(".swissarmyhammer");
                 if config_dir.is_dir() {
-                    debug!("Found global config directory: {}", config_dir.display());
+                    trace!("Found global config directory: {}", config_dir.display());
                     Ok(Some(config_dir))
                 } else {
-                    debug!(
+                    error!(
                         "Global config directory not found: {}",
                         config_dir.display()
                     );
@@ -108,7 +108,7 @@ impl ConfigurationDiscovery {
                 }
             }
             None => {
-                debug!("Could not determine home directory");
+                error!("Could not determine home directory");
                 Ok(None)
             }
         }
@@ -127,7 +127,7 @@ impl ConfigurationDiscovery {
         let current_dir = match std::env::current_dir() {
             Ok(dir) => dir,
             Err(e) => {
-                debug!(
+                error!(
                     "Could not get current directory ({}), no project config directories found",
                     e
                 );
@@ -141,13 +141,13 @@ impl ConfigurationDiscovery {
         while let Some(current) = dir {
             let config_dir = current.join(".swissarmyhammer");
             if config_dir.is_dir() {
-                debug!("Found project config directory: {}", config_dir.display());
+                trace!("Found project config directory: {}", config_dir.display());
                 config_dirs.push(config_dir);
             }
 
             // Stop at git repository root
             if current.join(".git").exists() {
-                debug!("Reached git repository root");
+                trace!("Reached git repository root");
                 break;
             }
 
@@ -158,9 +158,9 @@ impl ConfigurationDiscovery {
         config_dirs.reverse();
 
         if config_dirs.is_empty() {
-            debug!("No project config directories found");
+            trace!("No project config directories found");
         } else {
-            debug!("Found {} project config directories", config_dirs.len());
+            trace!("Found {} project config directories", config_dirs.len());
         }
 
         Ok(config_dirs)
@@ -180,7 +180,7 @@ impl ConfigurationDiscovery {
                 let filename = format!("{}.{}", base_name, extension);
                 let file_path = dir.join(&filename);
                 if file_path.is_file() {
-                    debug!("Found config file: {}", file_path.display());
+                    info!("Found config file: {}", file_path.display());
                     files.push(file_path);
                 }
             }
@@ -206,29 +206,6 @@ impl ConfigurationDiscovery {
                 "Configuration file is not readable: {}",
                 path.display()
             )));
-        }
-
-        // On Unix systems, check file permissions
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let mode = metadata.permissions().mode();
-
-            // Check if file is world-readable (others can read)
-            if mode & 0o004 != 0 {
-                debug!(
-                    "Warning: Configuration file is world-readable: {}",
-                    path.display()
-                );
-            }
-
-            // Check if file is world-writable (others can write)
-            if mode & 0o002 != 0 {
-                return Err(ConfigurationError::discovery(format!(
-                    "Configuration file is world-writable (security risk): {}",
-                    path.display()
-                )));
-            }
         }
 
         Ok(())

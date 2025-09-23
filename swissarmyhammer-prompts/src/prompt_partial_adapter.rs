@@ -28,47 +28,47 @@ impl PromptPartialAdapter {
 
 impl swissarmyhammer_templating::PartialLoader for PromptPartialAdapter {
     fn contains(&self, name: &str) -> bool {
-        tracing::debug!(
+        tracing::trace!(
             "PromptPartialAdapter::contains called with name: '{}'",
             name
         );
 
         // Try the requested name and all normalized variants
         let candidates = normalize_partial_name(name);
-        tracing::debug!("Trying candidates: {:?}", candidates);
+        tracing::trace!("Trying candidates: {:?}", candidates);
 
         for candidate in candidates {
             if self.library.get(&candidate).is_ok() {
-                tracing::debug!("Found matching partial: '{}'", candidate);
+                tracing::trace!("Found matching partial: '{}'", candidate);
                 return true;
             }
         }
 
-        tracing::debug!("No matching partial found for: '{}'", name);
+        tracing::error!("No matching partial found for: '{}'", name);
         false
     }
 
     fn names(&self) -> Vec<String> {
         let names = self.library.list_names().unwrap_or_default();
-        tracing::debug!("PromptPartialAdapter::names returning: {:?}", names);
+        tracing::trace!("PromptPartialAdapter::names returning: {:?}", names);
         names
     }
 
     fn try_get(&self, name: &str) -> Option<Cow<'_, str>> {
-        tracing::debug!("PromptPartialAdapter::try_get called with name: '{}'", name);
+        tracing::trace!("PromptPartialAdapter::try_get called with name: '{}'", name);
 
         // Try the requested name and all normalized variants
         let candidates = normalize_partial_name(name);
-        tracing::debug!("Trying candidates: {:?}", candidates);
+        tracing::trace!("Trying candidates: {:?}", candidates);
 
         for candidate in candidates {
             if let Ok(prompt) = self.library.get(&candidate) {
-                tracing::debug!("Found matching partial: '{}'", candidate);
+                tracing::trace!("Found matching partial: '{}'", candidate);
                 return Some(Cow::Owned(prompt.template.clone()));
             }
         }
 
-        tracing::debug!("No matching partial found for: '{}'", name);
+        tracing::error!("No matching partial found for: '{}'", name);
         None
     }
 }

@@ -158,7 +158,7 @@ impl<T: PartialLoader> PartialLoaderAdapter<T> {
 
 impl<T: PartialLoader> liquid::partials::PartialSource for PartialLoaderAdapter<T> {
     fn contains(&self, name: &str) -> bool {
-        tracing::debug!(
+        tracing::trace!(
             "PartialLoaderAdapter::contains called with name: '{}'",
             name
         );
@@ -167,12 +167,12 @@ impl<T: PartialLoader> liquid::partials::PartialSource for PartialLoaderAdapter<
         let candidates = normalize_partial_name(name);
         for candidate in candidates {
             if self.loader.contains(&candidate) {
-                tracing::debug!("Found partial: '{}'", candidate);
+                tracing::trace!("Found partial: '{}'", candidate);
                 return true;
             }
         }
 
-        tracing::debug!("No match found for partial '{}'", name);
+        tracing::error!("No match found for partial '{}'", name);
         false
     }
 
@@ -181,18 +181,18 @@ impl<T: PartialLoader> liquid::partials::PartialSource for PartialLoaderAdapter<
     }
 
     fn try_get(&self, name: &str) -> Option<Cow<'_, str>> {
-        tracing::debug!("PartialLoaderAdapter::try_get called with name: '{}'", name);
+        tracing::trace!("PartialLoaderAdapter::try_get called with name: '{}'", name);
 
         // Try exact name and normalized variants
         let candidates = normalize_partial_name(name);
         for candidate in candidates {
             if let Some(content) = self.loader.try_get(&candidate) {
-                tracing::debug!("Loaded partial: '{}'", candidate);
+                tracing::trace!("Loaded partial: '{}'", candidate);
                 return Some(content);
             }
         }
 
-        tracing::debug!("No match found for partial '{}'", name);
+        tracing::error!("No match found for partial '{}'", name);
         None
     }
 }
