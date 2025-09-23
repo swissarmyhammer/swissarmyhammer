@@ -1,6 +1,6 @@
 use crate::error::{ConfigurationError, ConfigurationResult};
 use std::path::{Path, PathBuf};
-use tracing::{debug, trace, error, info};
+use tracing::{debug, error, info, trace};
 
 /// Configuration file discovery paths
 #[derive(Debug, Clone)]

@@ -6,13 +6,14 @@
 use crate::actions::{
     ActionError, ActionResult, AgentExecutionContext, AgentExecutor, AgentResponse,
 };
+use crate::agents::transcript::TranscriptRecorder;
 use async_trait::async_trait;
 
 use std::sync::Arc;
-use std::time::Duration;
+
 use swissarmyhammer_config::agent::AgentExecutorType;
 use swissarmyhammer_config::{LlamaAgentConfig, ModelSource};
-use tokio::sync::OnceCell;
+use tokio::sync::{Mutex, OnceCell};
 
 pub use llama_agent::{
     types::{
@@ -236,16 +237,22 @@ pub struct LlamaAgentExecutor {
     mcp_server: Option<McpServerHandle>,
     /// The actual LlamaAgent server when using real implementation
     agent_server: Option<Arc<AgentServer>>,
+    /// Transcript recorder for session recording (Arc<Mutex> for interior mutability)
+    transcript_recorder: Arc<Mutex<TranscriptRecorder>>,
 }
 
 impl LlamaAgentExecutor {
     /// Create a new LlamaAgent executor with the given configuration
     pub fn new(config: LlamaAgentConfig) -> Self {
+        // Initialize transcript recorder in .swissarmyhammer directory
+        let transcript_recorder = Arc::new(Mutex::new(TranscriptRecorder::new(".swissarmyhammer")));
+
         Self {
             config,
             initialized: false,
             mcp_server: None,
             agent_server: None,
+            transcript_recorder,
         }
     }
 
@@ -715,7 +722,7 @@ impl AgentExecutor for LlamaAgentExecutor {
         &self,
         system_prompt: String,
         rendered_prompt: String,
-        context: &AgentExecutionContext<'_>,
+        _context: &AgentExecutionContext<'_>,
     ) -> ActionResult<AgentResponse> {
         if !self.initialized {
             return Err(ActionError::ExecutionError(
@@ -730,9 +737,8 @@ impl AgentExecutor for LlamaAgentExecutor {
         };
 
         tracing::info!(
-            "Executing LlamaAgent with MCP server at {} (timeout: {}s)",
-            mcp_server_info,
-            context.timeout.as_secs()
+            "Executing LlamaAgent with MCP server at {}",
+            mcp_server_info
         );
         tracing::debug!("System prompt length: {}", system_prompt.len());
         tracing::debug!("Rendered prompt length: {}", rendered_prompt.len());
@@ -751,7 +757,6 @@ impl AgentExecutor for LlamaAgentExecutor {
                     agent_server,
                     system_prompt,
                     rendered_prompt,
-                    context.timeout,
                     execution_start,
                 )
                 .await;
@@ -771,9 +776,19 @@ impl LlamaAgentExecutor {
         agent_server: &Arc<AgentServer>,
         system_prompt: String,
         rendered_prompt: String,
-        timeout: Duration,
         execution_start: std::time::Instant,
     ) -> ActionResult<AgentResponse> {
+        // Start transcript session
+        let mut transcript_recorder = self.transcript_recorder.lock().await;
+        let transcript_session_result = transcript_recorder
+            .start_session(self.get_model_display_name())
+            .await;
+
+        if let Err(e) = &transcript_session_result {
+            tracing::warn!("Failed to start transcript session: {}", e);
+        }
+        drop(transcript_recorder); // Release the lock early
+
         // Create a new session
         let mut session = agent_server
             .create_session()
@@ -790,7 +805,7 @@ impl LlamaAgentExecutor {
         if !system_prompt.is_empty() {
             let system_message = Message {
                 role: MessageRole::System,
-                content: system_prompt,
+                content: system_prompt.clone(),
                 tool_call_id: None,
                 tool_name: None,
                 timestamp: std::time::SystemTime::now(),
@@ -801,12 +816,24 @@ impl LlamaAgentExecutor {
                 .map_err(|e| {
                     ActionError::ExecutionError(format!("Failed to add system message: {}", e))
                 })?;
+
+            // Record system message in transcript
+            if transcript_session_result.is_ok() {
+                if let Ok(mut recorder) = self.transcript_recorder.try_lock() {
+                    if let Err(e) = recorder
+                        .add_message("system".to_string(), system_prompt, None)
+                        .await
+                    {
+                        tracing::warn!("Failed to record system message in transcript: {}", e);
+                    }
+                }
+            }
         }
 
         // Add user message
         let user_message = Message {
             role: MessageRole::User,
-            content: rendered_prompt,
+            content: rendered_prompt.clone(),
             tool_call_id: None,
             tool_name: None,
             timestamp: std::time::SystemTime::now(),
@@ -818,16 +845,28 @@ impl LlamaAgentExecutor {
                 ActionError::ExecutionError(format!("Failed to add user message: {}", e))
             })?;
 
+        // Record user message in transcript
+        if transcript_session_result.is_ok() {
+            if let Ok(mut recorder) = self.transcript_recorder.try_lock() {
+                if let Err(e) = recorder
+                    .add_message("user".to_string(), rendered_prompt, None)
+                    .await
+                {
+                    tracing::warn!("Failed to record user message in transcript: {}", e);
+                }
+            }
+        }
+
         // Create generation request with repetition detection
         let stopping_config = self.create_stopping_config();
         let session_id = session.id;
         let generation_request =
             GenerationRequest::new(session_id).with_stopping_config(stopping_config);
 
-        // Generate response with timeout
-        let result = tokio::time::timeout(timeout, agent_server.generate(generation_request))
+        // Generate response
+        let result = agent_server
+            .generate(generation_request)
             .await
-            .map_err(|_| ActionError::ExecutionError("Generation request timed out".to_string()))?
             .map_err(|e| ActionError::ExecutionError(format!("Generation failed: {}", e)))?;
 
         let execution_time = execution_start.elapsed();
@@ -839,6 +878,83 @@ impl LlamaAgentExecutor {
             result.tokens_generated
         );
 
+        // Record assistant response in transcript
+        if transcript_session_result.is_ok() {
+            if let Ok(mut recorder) = self.transcript_recorder.try_lock() {
+                // Create metadata for assistant response
+                let mut metadata = std::collections::HashMap::new();
+                metadata.insert(
+                    "tokens_generated".to_string(),
+                    serde_json::Value::Number(serde_json::Number::from(result.tokens_generated)),
+                );
+                metadata.insert(
+                    "generation_time_ms".to_string(),
+                    serde_json::Value::Number(serde_json::Number::from(
+                        result.generation_time.as_millis() as u64,
+                    )),
+                );
+                metadata.insert(
+                    "finish_reason".to_string(),
+                    serde_json::Value::String(format!("{:?}", result.finish_reason)),
+                );
+
+                if let Err(e) = recorder
+                    .add_message(
+                        "assistant".to_string(),
+                        result.generated_text.clone(),
+                        Some(metadata),
+                    )
+                    .await
+                {
+                    tracing::warn!("Failed to record assistant message in transcript: {}", e);
+                }
+
+                // Add session-level metadata
+                let mut session_metadata = std::collections::HashMap::new();
+                session_metadata.insert(
+                    "execution_time_ms".to_string(),
+                    serde_json::Value::Number(serde_json::Number::from(
+                        execution_time.as_millis() as u64
+                    )),
+                );
+
+                session_metadata.insert(
+                    "mcp_server_url".to_string(),
+                    serde_json::Value::String(mcp_url.clone()),
+                );
+                if let Some(port) = self.mcp_server_port() {
+                    session_metadata.insert(
+                        "mcp_server_port".to_string(),
+                        serde_json::Value::Number(serde_json::Number::from(port)),
+                    );
+                }
+                session_metadata.insert(
+                    "llama_session_id".to_string(),
+                    serde_json::Value::String(session.id.to_string()),
+                );
+                session_metadata.insert(
+                    "tools_available".to_string(),
+                    serde_json::Value::Number(serde_json::Number::from(
+                        session.available_tools.len(),
+                    )),
+                );
+
+                for (key, value) in session_metadata {
+                    if let Err(e) = recorder.add_session_metadata(key, value).await {
+                        tracing::warn!("Failed to add session metadata to transcript: {}", e);
+                        break; // Don't spam logs if there's a persistent issue
+                    }
+                }
+
+                // End transcript session
+                if let Err(e) = recorder.end_session().await {
+                    tracing::warn!("Failed to end transcript session: {}", e);
+                } else {
+                    tracing::debug!("Transcript session ended successfully");
+                }
+            }
+        }
+
         // Return response in expected format
         let response = serde_json::json!({
             "status": "success",
@@ -848,7 +964,7 @@ impl LlamaAgentExecutor {
                 "mcp_server_url": mcp_url,
                 "mcp_server_port": self.mcp_server_port(),
                 "execution_time_ms": execution_time.as_millis(),
-                "timeout_seconds": timeout.as_secs(),
+
                 "model": self.get_model_display_name(),
                 "tokens_generated": result.tokens_generated,
                 "generation_time_ms": result.generation_time.as_millis(),
@@ -1088,7 +1204,7 @@ mod tests {
 
         // Create a test execution context
         let workflow_context = create_test_context();
-        let context = AgentExecutionContext::new(&workflow_context, Duration::from_secs(30));
+        let context = AgentExecutionContext::new(&workflow_context);
 
         // Try to execute without initialization - should fail
         let result = executor
@@ -1122,7 +1238,7 @@ mod tests {
 
         // Create a test execution context
         let workflow_context = create_test_context();
-        let context = AgentExecutionContext::new(&workflow_context, Duration::from_secs(30));
+        let context = AgentExecutionContext::new(&workflow_context);
 
         // Execute prompt
         let result = executor

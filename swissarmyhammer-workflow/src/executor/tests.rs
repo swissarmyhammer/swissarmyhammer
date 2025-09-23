@@ -1924,20 +1924,21 @@ stateDiagram-v2
 - complete: Log "Step 5: Linear workflow completed successfully"
 "#;
 
-    let workflow = crate::parser::MermaidParser::parse(workflow_markdown, "Linear Workflow Test").unwrap();
+    let workflow =
+        crate::parser::MermaidParser::parse(workflow_markdown, "Linear Workflow Test").unwrap();
     let run = executor.start_and_execute_workflow(workflow).await.unwrap();
 
     // Verify the workflow completed successfully
     assert_eq!(run.status, WorkflowRunStatus::Completed);
     assert_eq!(run.current_state, StateId::new("complete"));
-    
+
     // Check that all log messages appear in the execution history
     let history = executor.get_history();
 
-    // Check that all log messages appear in the execution history  
+    // Check that all log messages appear in the execution history
     let log_messages = [
         "Step 1: Starting linear workflow",
-        "Step 2: Processing data", 
+        "Step 2: Processing data",
         "Step 3: Validating results",
         "Step 4: Finalizing workflow",
         "Step 5: Linear workflow completed successfully",
@@ -1946,26 +1947,42 @@ stateDiagram-v2
     for message in log_messages {
         assert!(
             history.iter().any(|e| e.details.contains(message)),
-            "Expected log message '{}' not found in execution history", 
+            "Expected log message '{}' not found in execution history",
             message
         );
     }
 
     // Verify the states were executed in order by checking entry/exit logging
-    let entry_logs: Vec<_> = history.iter()
+    let entry_logs: Vec<_> = history
+        .iter()
         .filter(|e| e.details.contains("ENTERING state:"))
         .collect();
-    let exit_logs: Vec<_> = history.iter()
+    let exit_logs: Vec<_> = history
+        .iter()
         .filter(|e| e.details.contains("EXITING state:"))
         .collect();
 
     // Should have entry and exit logs for each state
-    assert!(entry_logs.len() >= 5, "Expected at least 5 ENTERING logs, found {}", entry_logs.len());
-    assert!(exit_logs.len() >= 5, "Expected at least 5 EXITING logs, found {}", exit_logs.len());
+    assert!(
+        entry_logs.len() >= 5,
+        "Expected at least 5 ENTERING logs, found {}",
+        entry_logs.len()
+    );
+    assert!(
+        exit_logs.len() >= 5,
+        "Expected at least 5 EXITING logs, found {}",
+        exit_logs.len()
+    );
 
     // Verify no error logs were generated
-    let error_logs: Vec<_> = history.iter()
+    let error_logs: Vec<_> = history
+        .iter()
         .filter(|e| e.details.contains("ERROR in state:"))
         .collect();
-    assert_eq!(error_logs.len(), 0, "Expected no ERROR logs, but found {}", error_logs.len());
+    assert_eq!(
+        error_logs.len(),
+        0,
+        "Expected no ERROR logs, but found {}",
+        error_logs.len()
+    );
 }

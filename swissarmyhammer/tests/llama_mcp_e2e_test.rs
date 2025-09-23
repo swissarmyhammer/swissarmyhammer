@@ -20,7 +20,6 @@ use tracing::info;
 // Test timeout constants
 const INTEGRATION_TEST_TIMEOUT_SECS: u64 = 300; // 5 minutes for complete integration test
 
-
 // Test prompt template - dynamically constructed with absolute path
 const SYSTEM_PROMPT: &str = "You are a helpful assistant that can use tools to read files. Always use absolute file paths when calling tools.";
 

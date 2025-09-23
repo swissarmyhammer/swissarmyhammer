@@ -381,10 +381,17 @@ impl WorkflowExecutor {
         );
 
         // Log entry to state
-        tracing::info!("ENTERING state: {} for workflow {}", current_state_id, run.workflow.name);
+        tracing::info!(
+            "ENTERING state: {} for workflow {}",
+            current_state_id,
+            run.workflow.name
+        );
         self.log_event(
             ExecutionEventType::StateExecution,
-            format!("ENTERING state: {} for workflow {}", current_state_id, run.workflow.name),
+            format!(
+                "ENTERING state: {} for workflow {}",
+                current_state_id, run.workflow.name
+            ),
         );
 
         // Record state execution timing
@@ -396,22 +403,37 @@ impl WorkflowExecutor {
             current_state_id,
             state_description
         );
-        
+
         let action_result = self.execute_state_action(run, &state_description).await;
         let action_executed = match action_result {
             Ok(executed) => {
-                tracing::info!("EXITING state: {} for workflow {} (success)", current_state_id, run.workflow.name);
+                tracing::info!(
+                    "EXITING state: {} for workflow {} (success)",
+                    current_state_id,
+                    run.workflow.name
+                );
                 self.log_event(
                     ExecutionEventType::StateExecution,
-                    format!("EXITING state: {} for workflow {} (success)", current_state_id, run.workflow.name),
+                    format!(
+                        "EXITING state: {} for workflow {} (success)",
+                        current_state_id, run.workflow.name
+                    ),
                 );
                 executed
             }
             Err(e) => {
-                tracing::error!("ERROR in state: {} for workflow {} - {}", current_state_id, run.workflow.name, e);
+                tracing::error!(
+                    "ERROR in state: {} for workflow {} - {}",
+                    current_state_id,
+                    run.workflow.name,
+                    e
+                );
                 self.log_event(
                     ExecutionEventType::Failed,
-                    format!("ERROR in state: {} for workflow {} - {}", current_state_id, run.workflow.name, e),
+                    format!(
+                        "ERROR in state: {} for workflow {} - {}",
+                        current_state_id, run.workflow.name, e
+                    ),
                 );
                 return Err(e);
             }

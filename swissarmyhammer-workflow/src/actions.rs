@@ -17,12 +17,13 @@ use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
+use tokio::time::timeout;
 use syntect::easy::HighlightLines;
 use syntect::highlighting::ThemeSet;
 use syntect::parsing::SyntaxSet;
 use syntect::util::as_24_bit_terminal_escaped;
 use thiserror::Error;
-use tokio::time::timeout;
+
 
 use async_trait::async_trait;
 use swissarmyhammer_config::agent::{AgentConfig, AgentExecutorConfig, AgentExecutorType};
@@ -116,9 +117,7 @@ pub struct AgentExecutionContext<'a> {
 impl<'a> AgentExecutionContext<'a> {
     /// Create a new agent execution context
     pub fn new(workflow_context: &'a WorkflowTemplateContext) -> Self {
-        Self {
-            workflow_context,
-        }
+        Self { workflow_context }
     }
 
     /// Get agent configuration from workflow context
@@ -367,9 +366,10 @@ impl ClaudeCodeExecutor {
         }
 
         // Wait for command completion
-        let output = child.wait_with_output().await.map_err(|e| {
-            ActionError::ClaudeError(format!("Failed to wait for Claude: {e}"))
-        })?;
+        let output = child
+            .wait_with_output()
+            .await
+            .map_err(|e| ActionError::ClaudeError(format!("Failed to wait for Claude: {e}")))?;
 
         // Check if Claude execution was successful
         if !output.status.success() {
@@ -378,7 +378,7 @@ impl ClaudeCodeExecutor {
 
             // Check for rate limiting
             if stderr.contains("rate limit") || stderr.contains("Rate limit") {
-                let wait_time = Duration::from_secs(60); // Default wait time
+                let wait_time = std::time::Duration::from_secs(60); // Default wait time
                 return Err(ActionError::RateLimit {
                     message: stderr.to_string(),
                     wait_time,
@@ -435,12 +435,8 @@ impl AgentExecutor for ClaudeCodeExecutor {
         };
 
         // Execute Claude command using the same approach as the original implementation
-        self.execute_claude_command(
-            &claude_path_buf,
-            rendered_prompt,
-            system_prompt_opt,
-        )
-        .await
+        self.execute_claude_command(&claude_path_buf, rendered_prompt, system_prompt_opt)
+            .await
     }
 
     fn executor_type(&self) -> AgentExecutorType {

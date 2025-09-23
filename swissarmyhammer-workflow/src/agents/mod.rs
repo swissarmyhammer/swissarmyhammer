@@ -4,4 +4,7 @@
 //! be used to execute prompts and interact with AI systems.
 
 pub mod llama_agent_executor;
+pub mod transcript;
+
 pub use llama_agent_executor::LlamaAgentExecutor;
+
