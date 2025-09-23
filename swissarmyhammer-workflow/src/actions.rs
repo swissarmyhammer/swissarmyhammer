@@ -17,7 +17,7 @@ use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::time::timeout;
+
 use syntect::easy::HighlightLines;
 use syntect::highlighting::ThemeSet;
 use syntect::parsing::SyntaxSet;
@@ -77,11 +77,7 @@ pub enum ActionError {
     #[error("Action parsing failed: {0}")]
     ParseError(String),
     /// Action execution timed out
-    #[error("Action execution timed out after {timeout:?}")]
-    Timeout {
-        /// The timeout duration that was exceeded
-        timeout: Duration,
-    },
+
     /// Generic action execution error
     #[error("Action execution failed: {0}")]
     ExecutionError(String),
@@ -949,18 +945,13 @@ impl Action for WaitAction {
                 let mut reader = BufReader::new(stdin());
                 let mut line = String::new();
 
-                // Use configurable timeout for user input
-                match timeout(Duration::from_secs(3600), reader.read_line(&mut line)).await {
-                    Ok(Ok(_)) => {
+                // Read user input
+                match reader.read_line(&mut line).await {
+                    Ok(_) => {
                         // Successfully read input
                     }
-                    Ok(Err(e)) => {
+                    Err(e) => {
                         return Err(ActionError::IoError(e));
-                    }
-                    Err(_) => {
-                        return Err(ActionError::Timeout {
-                            timeout: Duration::from_secs(3600),
-                        });
                     }
                 }
             }
@@ -1084,8 +1075,7 @@ pub struct SubWorkflowAction {
     pub input_variables: HashMap<String, String>,
     /// Variable name to store the result
     pub result_variable: Option<String>,
-    /// Timeout for the sub-workflow execution
-    pub timeout: Duration,
+
 }
 
 impl SetVariableAction {
@@ -1235,7 +1225,6 @@ impl SubWorkflowAction {
             workflow_name,
             input_variables: HashMap::new(),
             result_variable: None,
-            timeout: Duration::from_secs(3600), // 1 hour default
         }
     }
 
@@ -1251,11 +1240,7 @@ impl SubWorkflowAction {
         self
     }
 
-    /// Set the timeout for execution
-    pub fn with_timeout(mut self, timeout: Duration) -> Self {
-        self.timeout = timeout;
-        self
-    }
+
 
     /// Substitute variables in input values using the context
     fn substitute_variables(&self, context: &WorkflowTemplateContext) -> HashMap<String, String> {
@@ -1683,27 +1668,17 @@ impl Action for SubWorkflowAction {
             );
         }
 
-        // Execute the workflow with timeout
-        let execution_future = executor.execute_state(&mut run);
-
-        let _result = match timeout(self.timeout, execution_future).await {
-            Ok(Ok(_)) => {
-                // Workflow executed successfully
-                tracing::info!(
-                    "Sub-workflow '{}' completed with status: {:?}",
-                    self.workflow_name,
-                    run.status
-                );
-                Ok(())
-            }
-            Ok(Err(e)) => Err(ActionError::ExecutionError(format!(
+        // Execute the workflow
+        executor.execute_state(&mut run).await
+            .map_err(|e| ActionError::ExecutionError(format!(
                 "Sub-workflow '{}' execution failed: {}",
                 self.workflow_name, e
-            ))),
-            Err(_) => Err(ActionError::Timeout {
-                timeout: self.timeout,
-            }),
-        }?;
+            )))?;
+            
+        tracing::info!(
+            "Sub-workflow '{}' completed",
+            self.workflow_name
+        );
 
         // Check the workflow status
         match run.status {

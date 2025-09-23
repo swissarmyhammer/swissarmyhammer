@@ -377,9 +377,7 @@ impl ActionParser {
                         if key == "result" {
                             action = action.with_result_variable(value);
                         } else if key == "timeout" {
-                            // Parse timeout value
-                            let timeout_duration = self.parse_timeout_value(&value)?;
-                            action = action.with_timeout(timeout_duration);
+                            // Timeout is no longer supported - ignore
                         } else {
                             if !self.is_valid_argument_key(&key) {
                                 return Err(ActionError::ParseError(
