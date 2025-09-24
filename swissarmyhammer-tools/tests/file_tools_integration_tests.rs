@@ -2887,18 +2887,22 @@ async fn test_malformed_input_handling() {
     let glob_tool = registry.get_tool("files_glob").unwrap();
     let grep_tool = registry.get_tool("files_grep").unwrap();
 
-    // Test various malformed inputs
+    // Create dedicated test directory for malformed file tests
+    let test_dir = tempfile::tempdir().expect("Failed to create temp directory");
+    let test_dir_path = test_dir.path();
+
+    // Test various malformed inputs - use safe test directory paths
     let long_path = "extremely_long_path_".repeat(1000);
     let malformed_inputs = vec![
         "",   // Empty string
         "\0", // Null byte
-        "/path/with\0null",
-        "path\nwith\nnewlines",
-        "path\rwith\rcarriage\rreturns",
-        "path\twith\ttabs",
-        "path with spaces and special chars: <>|\"*?",
-        "\u{FEFF}path_with_bom", // BOM character
-        long_path.as_str(),      // Very long path
+        &format!("{}/path/with\0null", test_dir_path.display()),
+        &format!("{}/path\nwith\nnewlines", test_dir_path.display()),
+        &format!("{}/path\rwith\rcarriage\rreturns", test_dir_path.display()),
+        &format!("{}/path\twith\ttabs", test_dir_path.display()),
+        &format!("{}/path with spaces and special chars: <>|\"*?", test_dir_path.display()),
+        &format!("{}/\u{FEFF}path_with_bom", test_dir_path.display()), // BOM character
+        &format!("{}/{}", test_dir_path.display(), long_path),      // Very long path
     ];
 
     for malformed_input in &malformed_inputs {

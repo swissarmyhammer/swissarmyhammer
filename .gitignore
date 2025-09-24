@@ -44,6 +44,12 @@ TEST_RESULTS_SUMMARY.md
 swissarmyhammer/issues/
 tests/test-home
 
+# Test files with special characters created by file tools tests
+swissarmyhammer-tools/path*
+swissarmyhammer-tools/relative/
+swissarmyhammer-tools/*path*
+swissarmyhammer-tools/*.test
+
 # PropTest regression files
 proptest-regressions/
 *.proptest-regressions

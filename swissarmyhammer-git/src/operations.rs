@@ -658,7 +658,7 @@ impl GitOperations {
         eprintln!("Total candidate branches: {}", branches.len());
 
         let mut best_target = None;
-        let mut best_merge_base_time = 0i64; // Track most recent merge base
+        let mut best_score = 0i64; // Track best match score
 
         // For each potential target branch, find the merge base
         for branch_name in branches {
@@ -690,35 +690,39 @@ impl GitOperations {
             };
 
             let merge_base_time = merge_base_commit.time().seconds();
+            let is_perfect_match = merge_base == target_commit;
 
             eprintln!(
-                "Branch '{}': merge_base = {}, target_head = {}, merge_base_time = {}, match = {}",
+                "Branch '{}': merge_base = {}, target_head = {}, merge_base_time = {}, perfect_match = {}",
                 branch_name,
                 merge_base,
                 target_commit,
                 merge_base_time,
-                merge_base == target_commit
+                is_perfect_match
             );
 
-            // PERFECT MATCH: If merge base equals the target's HEAD, this is definitely the source
-            // This means the issue branched directly from the tip of this branch
-            if merge_base == target_commit {
-                eprintln!(
-                    "Perfect match found: issue branched directly from tip of '{}'",
-                    branch_name
-                );
-                // Don't break - there might be multiple perfect matches, we want the most recent one
-                if merge_base_time > best_merge_base_time {
-                    best_merge_base_time = merge_base_time;
-                    best_target = Some(branch_name);
-                }
-                continue; // Continue to check all candidates
+            // Calculate distance from merge base to issue branch (how many commits ahead is the issue)
+            let issue_distance = self
+                .count_commits_between(merge_base, issue_commit)
+                .unwrap_or(usize::MAX);
+            
+            // Calculate score: prioritize shortest distance, with perfect match as tie-breaker
+            // Distance is most important - closer = more direct parent relationship
+            let distance_score = (1000 - issue_distance as i64).max(0) * 1000; // Distance gets high weight
+            let perfect_match_bonus = if is_perfect_match { 100 } else { 0 }; // Small bonus for perfect match
+            let recency_score = merge_base_time / 1000; // Small component for recency
+            
+            let score = distance_score + perfect_match_bonus + recency_score;
+
+            if is_perfect_match {
+                eprintln!("Perfect match found: issue branched directly from tip of '{}'", branch_name);
             }
 
-            // OTHERWISE: Track the branch with the most recent merge base
-            // This handles cases where the source branch has moved forward since the issue was created
-            if merge_base_time > best_merge_base_time {
-                best_merge_base_time = merge_base_time;
+            eprintln!("Branch '{}': distance = {}, score = {}", branch_name, issue_distance, score);
+
+            if score > best_score {
+                best_score = score;
+                eprintln!("New best target: {} (score: {})", branch_name, score);
                 best_target = Some(branch_name);
             }
         }
@@ -1043,7 +1047,7 @@ mod tests {
             .expect("Failed to create signature");
 
         // Helper function to create a commit
-        let mut create_commit = |message: &str, content: &str| {
+        let create_commit = |message: &str, content: &str| {
             std::fs::write(repo_path.join("file.txt"), content)
                 .expect("Failed to write file");
             let mut index = repo.index().expect("Failed to get index");

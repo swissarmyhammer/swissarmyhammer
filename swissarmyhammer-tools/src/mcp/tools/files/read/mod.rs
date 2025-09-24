@@ -48,7 +48,7 @@
 //! ```
 
 use crate::mcp::tool_registry::{BaseToolImpl, McpTool, ToolContext};
-use crate::mcp::tools::files::shared_utils::{FilePathValidator, SecureFileAccess};
+use crate::mcp::tools::files::shared_utils::FilePathValidator;
 use async_trait::async_trait;
 use rmcp::model::CallToolResult;
 use rmcp::ErrorData as McpError;
