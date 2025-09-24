@@ -48,7 +48,7 @@
 //! ```
 
 use crate::mcp::tool_registry::{BaseToolImpl, McpTool, ToolContext};
-use crate::mcp::tools::files::shared_utils::{FilePathValidator, SecureFileAccess};
+use crate::mcp::tools::files::shared_utils::FilePathValidator;
 use async_trait::async_trait;
 use rmcp::model::CallToolResult;
 use rmcp::ErrorData as McpError;
@@ -231,7 +231,11 @@ impl McpTool for ReadFileTool {
         );
 
         // Perform secure read operation
-        let content = secure_access.read(&validated_path.to_string_lossy(), request.offset, request.limit)?;
+        let content = secure_access.read(
+            &validated_path.to_string_lossy(),
+            request.offset,
+            request.limit,
+        )?;
 
         debug!(
             path = %request.path,

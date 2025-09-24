@@ -6,14 +6,13 @@
 use crate::actions::{
     ActionError, ActionResult, AgentExecutionContext, AgentExecutor, AgentResponse,
 };
-use crate::agents::transcript::TranscriptRecorder;
 use async_trait::async_trait;
 
 use std::sync::Arc;
 
 use swissarmyhammer_config::agent::AgentExecutorType;
 use swissarmyhammer_config::{LlamaAgentConfig, ModelSource};
-use tokio::sync::{Mutex, OnceCell};
+use tokio::sync::OnceCell;
 
 pub use llama_agent::{
     types::{
@@ -237,22 +236,16 @@ pub struct LlamaAgentExecutor {
     mcp_server: Option<McpServerHandle>,
     /// The actual LlamaAgent server when using real implementation
     agent_server: Option<Arc<AgentServer>>,
-    /// Transcript recorder for session recording (Arc<Mutex> for interior mutability)
-    transcript_recorder: Arc<Mutex<TranscriptRecorder>>,
 }
 
 impl LlamaAgentExecutor {
     /// Create a new LlamaAgent executor with the given configuration
     pub fn new(config: LlamaAgentConfig) -> Self {
-        // Initialize transcript recorder in .swissarmyhammer directory
-        let transcript_recorder = Arc::new(Mutex::new(TranscriptRecorder::new(".swissarmyhammer")));
-
         Self {
             config,
             initialized: false,
             mcp_server: None,
             agent_server: None,
-            transcript_recorder,
         }
     }
 
@@ -778,17 +771,6 @@ impl LlamaAgentExecutor {
         rendered_prompt: String,
         execution_start: std::time::Instant,
     ) -> ActionResult<AgentResponse> {
-        // Start transcript session
-        let mut transcript_recorder = self.transcript_recorder.lock().await;
-        let transcript_session_result = transcript_recorder
-            .start_session(self.get_model_display_name())
-            .await;
-
-        if let Err(e) = &transcript_session_result {
-            tracing::warn!("Failed to start transcript session: {}", e);
-        }
-        drop(transcript_recorder); // Release the lock early
-
         // Create a new session
         let mut session = agent_server
             .create_session()
@@ -816,18 +798,6 @@ impl LlamaAgentExecutor {
                 .map_err(|e| {
                     ActionError::ExecutionError(format!("Failed to add system message: {}", e))
                 })?;
-
-            // Record system message in transcript
-            if transcript_session_result.is_ok() {
-                if let Ok(mut recorder) = self.transcript_recorder.try_lock() {
-                    if let Err(e) = recorder
-                        .add_message("system".to_string(), system_prompt, None)
-                        .await
-                    {
-                        tracing::warn!("Failed to record system message in transcript: {}", e);
-                    }
-                }
-            }
         }
 
         // Add user message
@@ -844,18 +814,6 @@ impl LlamaAgentExecutor {
             .map_err(|e| {
                 ActionError::ExecutionError(format!("Failed to add user message: {}", e))
             })?;
-
-        // Record user message in transcript
-        if transcript_session_result.is_ok() {
-            if let Ok(mut recorder) = self.transcript_recorder.try_lock() {
-                if let Err(e) = recorder
-                    .add_message("user".to_string(), rendered_prompt, None)
-                    .await
-                {
-                    tracing::warn!("Failed to record user message in transcript: {}", e);
-                }
-            }
-        }
 
         // Create generation request with repetition detection
         let stopping_config = self.create_stopping_config();
@@ -877,112 +835,6 @@ impl LlamaAgentExecutor {
             execution_time.as_millis(),
             result.tokens_generated
         );
-
-        // Record all session messages in transcript (including tool calls/responses)
-        if transcript_session_result.is_ok() {
-            if let Ok(mut recorder) = self.transcript_recorder.try_lock() {
-                // Record all new messages from the session that aren't already in the transcript
-                for message in &session.messages {
-                    let role = match message.role {
-                        MessageRole::System => "system",
-                        MessageRole::User => "user", 
-                        MessageRole::Assistant => "assistant",
-                        MessageRole::Tool => "tool",
-                    };
-
-                    let mut message_metadata = std::collections::HashMap::new();
-                    
-                    // Add tool-specific metadata if this is a tool call or tool response
-                    if let Some(ref tool_call_id) = message.tool_call_id {
-                        message_metadata.insert(
-                            "tool_call_id".to_string(),
-                            serde_json::Value::String(tool_call_id.to_string()),
-                        );
-                    }
-                    if let Some(ref tool_name) = message.tool_name {
-                        message_metadata.insert(
-                            "tool_name".to_string(),
-                            serde_json::Value::String(tool_name.clone()),
-                        );
-                    }
-
-                    // Add generation metadata for assistant messages
-                    if matches!(message.role, MessageRole::Assistant) {
-                        message_metadata.insert(
-                            "tokens_generated".to_string(),
-                            serde_json::Value::Number(serde_json::Number::from(result.tokens_generated)),
-                        );
-                        message_metadata.insert(
-                            "generation_time_ms".to_string(),
-                            serde_json::Value::Number(serde_json::Number::from(
-                                result.generation_time.as_millis() as u64,
-                            )),
-                        );
-                        message_metadata.insert(
-                            "finish_reason".to_string(),
-                            serde_json::Value::String(format!("{:?}", result.finish_reason)),
-                        );
-                    }
-
-                    let metadata = if message_metadata.is_empty() {
-                        None
-                    } else {
-                        Some(message_metadata)
-                    };
-
-                    if let Err(e) = recorder
-                        .add_message(role.to_string(), message.content.clone(), metadata)
-                        .await
-                    {
-                        tracing::warn!("Failed to record {} message in transcript: {}", role, e);
-                    }
-                }
-
-                // Add session-level metadata
-                let mut session_metadata = std::collections::HashMap::new();
-                session_metadata.insert(
-                    "execution_time_ms".to_string(),
-                    serde_json::Value::Number(serde_json::Number::from(
-                        execution_time.as_millis() as u64
-                    )),
-                );
-
-                session_metadata.insert(
-                    "mcp_server_url".to_string(),
-                    serde_json::Value::String(mcp_url.clone()),
-                );
-                if let Some(port) = self.mcp_server_port() {
-                    session_metadata.insert(
-                        "mcp_server_port".to_string(),
-                        serde_json::Value::Number(serde_json::Number::from(port)),
-                    );
-                }
-                session_metadata.insert(
-                    "llama_session_id".to_string(),
-                    serde_json::Value::String(session.id.to_string()),
-                );
-                session_metadata.insert(
-                    "tools_available".to_string(),
-                    serde_json::Value::Number(serde_json::Number::from(
-                        session.available_tools.len(),
-                    )),
-                );
-
-                for (key, value) in session_metadata {
-                    if let Err(e) = recorder.add_session_metadata(key, value).await {
-                        tracing::warn!("Failed to add session metadata to transcript: {}", e);
-                        break; // Don't spam logs if there's a persistent issue
-                    }
-                }
-
-                // End transcript session
-                if let Err(e) = recorder.end_session().await {
-                    tracing::warn!("Failed to end transcript session: {}", e);
-                } else {
-                    tracing::debug!("Transcript session ended successfully");
-                }
-            }
-        }
 
         // Return response in expected format
         let response = serde_json::json!({
