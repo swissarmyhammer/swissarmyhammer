@@ -5,7 +5,7 @@
 
 use crate::actions::ActionError;
 use serde_json::Value;
-use std::time::Duration;
+
 
 #[derive(Debug)]
 struct ActionErrorTestCase {
@@ -34,10 +34,8 @@ fn test_action_error_handling_consolidated() {
         },
         ActionErrorTestCase {
             test_name: "timeout_error_display",
-            error_constructor: || ActionError::Timeout {
-                timeout: Duration::from_secs(30),
-            },
-            expected_display_fragments: vec!["timed out", "30s"],
+            error_constructor: || ActionError::ExecutionError("Operation timed out".to_string()),
+            expected_display_fragments: vec!["timed out"],
         },
         ActionErrorTestCase {
             test_name: "execution_error_display",

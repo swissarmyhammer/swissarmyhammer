@@ -878,35 +878,64 @@ impl LlamaAgentExecutor {
             result.tokens_generated
         );
 
-        // Record assistant response in transcript
+        // Record all session messages in transcript (including tool calls/responses)
         if transcript_session_result.is_ok() {
             if let Ok(mut recorder) = self.transcript_recorder.try_lock() {
-                // Create metadata for assistant response
-                let mut metadata = std::collections::HashMap::new();
-                metadata.insert(
-                    "tokens_generated".to_string(),
-                    serde_json::Value::Number(serde_json::Number::from(result.tokens_generated)),
-                );
-                metadata.insert(
-                    "generation_time_ms".to_string(),
-                    serde_json::Value::Number(serde_json::Number::from(
-                        result.generation_time.as_millis() as u64,
-                    )),
-                );
-                metadata.insert(
-                    "finish_reason".to_string(),
-                    serde_json::Value::String(format!("{:?}", result.finish_reason)),
-                );
+                // Record all new messages from the session that aren't already in the transcript
+                for message in &session.messages {
+                    let role = match message.role {
+                        MessageRole::System => "system",
+                        MessageRole::User => "user", 
+                        MessageRole::Assistant => "assistant",
+                        MessageRole::Tool => "tool",
+                    };
 
-                if let Err(e) = recorder
-                    .add_message(
-                        "assistant".to_string(),
-                        result.generated_text.clone(),
-                        Some(metadata),
-                    )
-                    .await
-                {
-                    tracing::warn!("Failed to record assistant message in transcript: {}", e);
+                    let mut message_metadata = std::collections::HashMap::new();
+                    
+                    // Add tool-specific metadata if this is a tool call or tool response
+                    if let Some(ref tool_call_id) = message.tool_call_id {
+                        message_metadata.insert(
+                            "tool_call_id".to_string(),
+                            serde_json::Value::String(tool_call_id.to_string()),
+                        );
+                    }
+                    if let Some(ref tool_name) = message.tool_name {
+                        message_metadata.insert(
+                            "tool_name".to_string(),
+                            serde_json::Value::String(tool_name.clone()),
+                        );
+                    }
+
+                    // Add generation metadata for assistant messages
+                    if matches!(message.role, MessageRole::Assistant) {
+                        message_metadata.insert(
+                            "tokens_generated".to_string(),
+                            serde_json::Value::Number(serde_json::Number::from(result.tokens_generated)),
+                        );
+                        message_metadata.insert(
+                            "generation_time_ms".to_string(),
+                            serde_json::Value::Number(serde_json::Number::from(
+                                result.generation_time.as_millis() as u64,
+                            )),
+                        );
+                        message_metadata.insert(
+                            "finish_reason".to_string(),
+                            serde_json::Value::String(format!("{:?}", result.finish_reason)),
+                        );
+                    }
+
+                    let metadata = if message_metadata.is_empty() {
+                        None
+                    } else {
+                        Some(message_metadata)
+                    };
+
+                    if let Err(e) = recorder
+                        .add_message(role.to_string(), message.content.clone(), metadata)
+                        .await
+                    {
+                        tracing::warn!("Failed to record {} message in transcript: {}", role, e);
+                    }
                 }
 
                 // Add session-level metadata

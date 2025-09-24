@@ -66,18 +66,32 @@ pub fn validate_file_path(path: &str) -> Result<PathBuf, McpError> {
         ));
     }
 
-    let path_buf = PathBuf::from(path);
-
-    // Require absolute paths for security
-    if !path_buf.is_absolute() {
+    // Check path length to prevent system issues
+    const MAX_PATH_LENGTH: usize = 4096; // Unix PATH_MAX standard
+    if path.len() > MAX_PATH_LENGTH {
         return Err(McpError::invalid_request(
-            "File path must be absolute, not relative".to_string(),
+            format!("Path too long ({} characters, maximum {}): {}", 
+                path.len(), MAX_PATH_LENGTH, path),
             None,
         ));
     }
 
+    let path_buf = PathBuf::from(path);
+
+    // Resolve relative paths to absolute paths before canonicalization
+    let resolved_path = if path_buf.is_absolute() {
+        path_buf
+    } else {
+        std::env::current_dir()
+            .map_err(|e| McpError::invalid_request(
+                format!("Failed to get current working directory: {}", e),
+                None,
+            ))?
+            .join(path_buf)
+    };
+
     // Canonicalize path to resolve symlinks and relative components
-    match path_buf.canonicalize() {
+    match resolved_path.canonicalize() {
         Ok(canonical_path) => Ok(canonical_path),
         Err(e) => {
             // Provide specific error messages based on error kind
@@ -85,7 +99,7 @@ pub fn validate_file_path(path: &str) -> Result<PathBuf, McpError> {
             match e.kind() {
                 ErrorKind::NotFound => {
                     // Path doesn't exist - check if parent exists for better error messaging
-                    if let Some(parent) = path_buf.parent() {
+                    if let Some(parent) = resolved_path.parent() {
                         if !parent.exists() {
                             return Err(McpError::invalid_request(
                                 format!("Parent directory does not exist: {}", parent.display()),
@@ -93,19 +107,19 @@ pub fn validate_file_path(path: &str) -> Result<PathBuf, McpError> {
                             ));
                         }
                     }
-                    // For operations like write, this is acceptable - return the absolute path
-                    Ok(path_buf)
+                    // For operations like write, this is acceptable - return the resolved path
+                    Ok(resolved_path)
                 }
                 ErrorKind::PermissionDenied => Err(McpError::invalid_request(
-                    format!("Permission denied accessing path: {}", path_buf.display()),
+                    format!("Permission denied accessing path: {}", resolved_path.display()),
                     None,
                 )),
                 ErrorKind::InvalidInput => Err(McpError::invalid_request(
-                    format!("Invalid path format: {}", path_buf.display()),
+                    format!("Invalid path format: {}", resolved_path.display()),
                     None,
                 )),
                 _ => Err(McpError::invalid_request(
-                    format!("Failed to resolve path '{}': {}", path_buf.display(), e),
+                    format!("Failed to resolve path '{}': {}", resolved_path.display(), e),
                     None,
                 )),
             }
@@ -247,10 +261,10 @@ pub enum FileOperation {
 /// let validator = FilePathValidator::with_workspace_root("/home/user/project".into());
 ///
 /// // Valid path within workspace
-/// let safe_path = validator.validate_absolute_path("/home/user/project/src/main.rs")?;
+/// let safe_path = validator.validate_path("/home/user/project/src/main.rs")?;
 ///
 /// // This would fail - outside workspace boundary
-/// let result = validator.validate_absolute_path("/etc/passwd");
+/// let result = validator.validate_path("/etc/passwd");
 /// assert!(result.is_err());
 /// ```
 #[derive(Debug, Clone)]
@@ -365,8 +379,18 @@ impl FilePathValidator {
     /// - Free of dangerous patterns
     /// - Within workspace boundaries (if configured)
     /// - Safe from known path traversal attacks
-    pub fn validate_absolute_path(&self, path: &str) -> Result<PathBuf, McpError> {
-        // Step 0: Check for blocked patterns early
+    pub fn validate_path(&self, path: &str) -> Result<PathBuf, McpError> {
+        // Step 0: Check path length to prevent system issues
+        const MAX_PATH_LENGTH: usize = 4096; // Unix PATH_MAX standard
+        if path.len() > MAX_PATH_LENGTH {
+            return Err(McpError::invalid_request(
+                format!("Path too long ({} characters, maximum {}): {}", 
+                    path.len(), MAX_PATH_LENGTH, path),
+                None,
+            ));
+        }
+
+        // Step 1: Check for blocked patterns early
         self.check_blocked_patterns(path)?;
 
         // Step 1: Resolve path (absolute or relative) to absolute path
@@ -696,7 +720,7 @@ impl SecureFileAccess {
         tracing::debug!("SecureFileAccess::read called with path: {}", path);
 
         // Validate path through security framework
-        let validated_path = match self.validator.validate_absolute_path(path) {
+        let validated_path = match self.validator.validate_path(path) {
             Ok(p) => {
                 tracing::debug!("Path validation successful: {}", p.display());
                 p
@@ -771,7 +795,7 @@ impl SecureFileAccess {
     /// * `Result<(), McpError>` - Success or error
     pub fn write(&self, path: &str, content: &str) -> Result<(), McpError> {
         // Validate path through security framework
-        let validated_path = self.validator.validate_absolute_path(path)?;
+        let validated_path = self.validator.validate_path(path)?;
 
         // Check permissions for write operation
         check_file_permissions(&validated_path, FileOperation::Write)?;
@@ -808,7 +832,7 @@ impl SecureFileAccess {
         replace_all: bool,
     ) -> Result<(), McpError> {
         // Validate path through security framework
-        let validated_path = self.validator.validate_absolute_path(path)?;
+        let validated_path = self.validator.validate_path(path)?;
 
         // Check permissions for edit operation
         check_file_permissions(&validated_path, FileOperation::Edit)?;
@@ -864,14 +888,51 @@ mod tests {
 
     #[test]
     fn test_validate_file_path_relative() {
+        use std::fs;
+        use tempfile::TempDir;
+
+        let temp_dir = TempDir::new().unwrap();
+        let original_dir = std::env::current_dir().unwrap();
+        std::env::set_current_dir(temp_dir.path()).unwrap();
+
+        // Create test files
+        fs::create_dir_all("relative").unwrap();
+        fs::write("relative/path", "test content").unwrap();
+        fs::create_dir_all("current").unwrap();
+        fs::write("current/path", "test content").unwrap();
+
+        // Relative paths should now be accepted and resolved to absolute paths
         let result = validate_file_path("relative/path");
-        assert!(result.is_err());
+        assert!(result.is_ok(), "Simple relative paths should be accepted");
+        let resolved = result.unwrap();
+        assert!(resolved.is_absolute(), "Should be resolved to absolute path");
 
         let result = validate_file_path("./current/path");
-        assert!(result.is_err());
+        assert!(result.is_ok(), "Current directory relative paths should be accepted");
+        let resolved = result.unwrap();
+        assert!(resolved.is_absolute(), "Should be resolved to absolute path");
 
+        // Parent directory paths should still be blocked by dangerous pattern checking
         let result = validate_file_path("../parent/path");
-        assert!(result.is_err());
+        assert!(result.is_err(), "Parent directory traversal should still be blocked");
+
+        // Restore original directory
+        std::env::set_current_dir(original_dir).unwrap();
+    }
+
+    #[test]
+    fn test_validate_file_path_extremely_long() {
+        // Test extremely long path that exceeds PATH_MAX
+        let extremely_long_path = "a".repeat(5000);
+        let result = validate_file_path(&extremely_long_path);
+        assert!(result.is_err(), "Extremely long paths should be rejected");
+        
+        let error_msg = format!("{:?}", result.unwrap_err());
+        println!("Error message: {}", error_msg);
+        assert!(
+            error_msg.contains("Path too long") || error_msg.contains("path too long"),
+            "Should mention path length issue"
+        );
     }
 
     #[test]
@@ -972,7 +1033,7 @@ mod tests {
         ];
 
         for dangerous_path in dangerous_paths {
-            let result = validator.validate_absolute_path(&dangerous_path);
+            let result = validator.validate_path(&dangerous_path);
             assert!(
                 result.is_err(),
                 "Should block dangerous path: {}",
@@ -996,7 +1057,7 @@ mod tests {
         std::env::set_current_dir(temp_dir.path()).unwrap();
 
         // Test basic relative path resolution
-        let result = validator.validate_absolute_path("test_file.txt");
+        let result = validator.validate_path("test_file.txt");
         assert!(result.is_ok(), "Should accept simple relative path");
         let resolved = result.unwrap();
         assert!(resolved.is_absolute(), "Resolved path should be absolute");
@@ -1006,11 +1067,11 @@ mod tests {
         );
 
         // Test current directory relative path
-        let result = validator.validate_absolute_path("./test_file.txt");
+        let result = validator.validate_path("./test_file.txt");
         assert!(result.is_ok(), "Should accept ./ relative path");
 
         // Test parent directory (should be blocked by dangerous patterns)
-        let result = validator.validate_absolute_path("../test_file.txt");
+        let result = validator.validate_path("../test_file.txt");
         assert!(result.is_err(), "Should block ../ path traversal");
 
         // Test nested relative path
@@ -1019,7 +1080,7 @@ mod tests {
         let nested_file = nested_dir.join("nested_file.txt");
         fs::write(&nested_file, "nested content").unwrap();
 
-        let result = validator.validate_absolute_path("nested/nested_file.txt");
+        let result = validator.validate_path("nested/nested_file.txt");
         assert!(result.is_ok(), "Should accept nested relative path");
 
         // Restore original directory
@@ -1041,7 +1102,7 @@ mod tests {
         std::env::set_current_dir(&workspace_root).unwrap();
 
         // Test relative path within workspace
-        let result = validator.validate_absolute_path("workspace_file.txt");
+        let result = validator.validate_path("workspace_file.txt");
         assert!(
             result.is_ok(),
             "Should accept relative path within workspace"
@@ -1055,7 +1116,7 @@ mod tests {
         // Change to outside directory and try relative path (should fail workspace check)
         if outside_dir.path().exists() {
             std::env::set_current_dir(&outside_dir).unwrap();
-            let result = validator.validate_absolute_path("outside_file.txt");
+            let result = validator.validate_path("outside_file.txt");
             assert!(
                 result.is_err(),
                 "Should reject relative path outside workspace"
@@ -1079,11 +1140,11 @@ mod tests {
         fs::write(&safe_file, "safe content").unwrap();
 
         // This should succeed - within workspace
-        let result = validator.validate_absolute_path(&safe_file.to_string_lossy());
+        let result = validator.validate_path(&safe_file.to_string_lossy());
         assert!(result.is_ok());
 
         // This should fail - outside workspace (system file)
-        let result = validator.validate_absolute_path("/etc/passwd");
+        let result = validator.validate_path("/etc/passwd");
         assert!(result.is_err());
 
         // Test with a path outside workspace that exists
@@ -1091,7 +1152,7 @@ mod tests {
         let outside_file = outside_dir.path().join("outside.txt");
         fs::write(&outside_file, "outside content").unwrap();
 
-        let result = validator.validate_absolute_path(&outside_file.to_string_lossy());
+        let result = validator.validate_path(&outside_file.to_string_lossy());
         assert!(result.is_err());
     }
 
@@ -1105,11 +1166,11 @@ mod tests {
         let dangerous_file = temp_dir.path().join("secret_file.txt");
 
         // Safe file should pass
-        let result = validator.validate_absolute_path(&safe_file.to_string_lossy());
+        let result = validator.validate_path(&safe_file.to_string_lossy());
         assert!(result.is_ok());
 
         // File with blocked pattern should fail
-        let result = validator.validate_absolute_path(&dangerous_file.to_string_lossy());
+        let result = validator.validate_path(&dangerous_file.to_string_lossy());
         assert!(result.is_err());
         assert!(format!("{:?}", result).contains("blocked pattern"));
     }
@@ -1131,7 +1192,7 @@ mod tests {
                 if symlink_file.is_symlink() {
                     // Test with symlinks disabled (default)
                     let validator = FilePathValidator::new();
-                    let result = validator.validate_absolute_path(&symlink_file.to_string_lossy());
+                    let result = validator.validate_path(&symlink_file.to_string_lossy());
                     assert!(
                         result.is_err(),
                         "Symlink should be rejected when symlinks are disabled"
@@ -1140,7 +1201,7 @@ mod tests {
                     // Test with symlinks enabled
                     let mut validator = FilePathValidator::new();
                     validator.set_allow_symlinks(true);
-                    let result = validator.validate_absolute_path(&symlink_file.to_string_lossy());
+                    let result = validator.validate_path(&symlink_file.to_string_lossy());
                     assert!(
                         result.is_ok(),
                         "Symlink should be allowed when symlinks are enabled"
@@ -1165,11 +1226,11 @@ mod tests {
         let validator = FilePathValidator::new();
 
         // Test null byte rejection
-        let result = validator.validate_absolute_path("/tmp/file\0.txt");
+        let result = validator.validate_path("/tmp/file\0.txt");
         assert!(result.is_err());
 
         // Test other control characters
-        let result = validator.validate_absolute_path("/tmp/file\x01.txt");
+        let result = validator.validate_path("/tmp/file\x01.txt");
         assert!(result.is_err());
     }
 
@@ -1363,7 +1424,7 @@ mod tests {
 
         for pattern in attack_patterns {
             let full_path = format!("{}/{}", temp_dir.path().display(), pattern);
-            let result = validator.validate_absolute_path(&full_path);
+            let result = validator.validate_path(&full_path);
             assert!(
                 result.is_err(),
                 "Should block path traversal attack: {}",

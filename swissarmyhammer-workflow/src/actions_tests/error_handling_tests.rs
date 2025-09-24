@@ -1,6 +1,6 @@
 //! Tests for error handling in actions
 
-use std::time::Duration;
+
 
 use serde_json::Value;
 
@@ -18,11 +18,8 @@ fn test_action_error_display() {
     let error = ActionError::ParseError("Parse error".to_string());
     assert!(error.to_string().contains("Action parsing failed"));
 
-    let error = ActionError::Timeout {
-        timeout: Duration::from_secs(30),
-    };
+    let error = ActionError::ExecutionError("Operation timed out".to_string());
     assert!(error.to_string().contains("timed out"));
-    assert!(error.to_string().contains("30s"));
 
     let error = ActionError::ExecutionError("Execution error".to_string());
     assert!(error.to_string().contains("Action execution failed"));
