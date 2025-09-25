@@ -2894,15 +2894,15 @@ async fn test_malformed_input_handling() {
     // Test various malformed inputs - use safe test directory paths
     let long_path = "extremely_long_path_".repeat(1000);
     let malformed_inputs = vec![
-        "",   // Empty string
-        "\0", // Null byte
-        &format!("{}/path/with\0null", test_dir_path.display()),
-        &format!("{}/path\nwith\nnewlines", test_dir_path.display()),
-        &format!("{}/path\rwith\rcarriage\rreturns", test_dir_path.display()),
-        &format!("{}/path\twith\ttabs", test_dir_path.display()),
-        &format!("{}/path with spaces and special chars: <>|\"*?", test_dir_path.display()),
-        &format!("{}/\u{FEFF}path_with_bom", test_dir_path.display()), // BOM character
-        &format!("{}/{}", test_dir_path.display(), long_path),      // Very long path
+        "".to_string(),   // Empty string
+        "\0".to_string(), // Null byte
+        format!("{}/path/with\0null", test_dir_path.display()),
+        format!("{}/path\nwith\nnewlines", test_dir_path.display()),
+        format!("{}/path\rwith\rcarriage\rreturns", test_dir_path.display()),
+        format!("{}/path\twith\ttabs", test_dir_path.display()),
+        format!("{}/path with spaces and special chars: <>|\"*?", test_dir_path.display()),
+        format!("{}/\u{FEFF}path_with_bom", test_dir_path.display()), // BOM character
+        format!("{}/{}", test_dir_path.display(), long_path),      // Very long path
     ];
 
     for malformed_input in &malformed_inputs {
