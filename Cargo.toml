@@ -171,7 +171,6 @@ codegen-units = 256 # More codegen units for parallel compilation
 inherits = "release"
 lto = true
 codegen-units = 16
-panic = "abort"
 strip = true
 
 # Fast test profile - use with CARGO_PROFILE=fast-test
