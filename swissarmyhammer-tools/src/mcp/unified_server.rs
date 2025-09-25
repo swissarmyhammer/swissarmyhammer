@@ -36,20 +36,20 @@ async fn health_check() -> axum::response::Json<serde_json::Value> {
 /// This is particularly important for debugging MCP communication issues.
 ///
 /// # Thread Safety
-/// 
+///
 /// Multiple threads can safely write to the same `FileWriterGuard` instance. Each write
 /// operation acquires the mutex, writes the data, flushes to OS buffers, and syncs to disk
 /// before releasing the lock.
 ///
 /// # Performance Considerations
-/// 
+///
 /// The immediate flush/sync strategy prioritizes reliability over performance. Each write
 /// operation results in a system call, which may impact performance for high-frequency logging.
 /// However, this trade-off is acceptable for MCP debugging scenarios where log reliability
 /// is more important than maximum throughput.
 ///
 /// # Error Handling
-/// 
+///
 /// Write operations use `expect()` calls for error handling rather than returning `Result`
 /// values because the `std::io::Write` trait requires specific signatures. In practice,
 /// write failures to local files are extremely rare and typically indicate severe system
@@ -60,7 +60,7 @@ async fn health_check() -> axum::response::Json<serde_json::Value> {
 /// use std::sync::{Arc, Mutex};
 /// use std::fs::File;
 /// use swissarmyhammer_tools::mcp::unified_server::FileWriterGuard;
-/// 
+///
 /// let file = File::create("debug.log").unwrap();
 /// let shared_file = Arc::new(Mutex::new(file));
 /// let mut guard = FileWriterGuard::new(shared_file);
@@ -72,10 +72,10 @@ pub struct FileWriterGuard {
 
 impl FileWriterGuard {
     /// Creates a new `FileWriterGuard` wrapping the given file.
-    /// 
+    ///
     /// # Arguments
     /// * `file` - Arc<Mutex<File>> for thread-safe access to the underlying file
-    /// 
+    ///
     /// # Returns
     /// A new `FileWriterGuard` instance that will ensure immediate flushing for all writes
     pub fn new(file: Arc<Mutex<std::fs::File>>) -> Self {
@@ -102,7 +102,7 @@ impl std::io::Write for FileWriterGuard {
 /// Global flag to ensure MCP logging is configured only once per process
 static MCP_LOGGING_INIT: Once = Once::new();
 
-/// Configure MCP logging to write to `.swissarmyhammer/mcp.log` 
+/// Configure MCP logging to write to `.swissarmyhammer/mcp.log`
 ///
 /// This function sets up file-based logging similar to what `sah serve` does,
 /// ensuring that in-process MCP servers have the same debugging capabilities.
@@ -111,7 +111,7 @@ static MCP_LOGGING_INIT: Once = Once::new();
 ///
 /// # Arguments
 /// * `log_filter` - Optional log filter string (defaults to "ort=warn,rmcp=warn,debug")
-/// 
+///
 /// # Behavior
 /// - Creates `.swissarmyhammer/` directory if it doesn't exist
 /// - Sets up tracing subscriber with file output to `mcp.log`
@@ -124,13 +124,12 @@ static MCP_LOGGING_INIT: Once = Once::new();
 /// - File creation failures: Falls back gracefully to stderr with warning message
 /// - Global subscriber conflicts: Handles gracefully when already set (e.g., in tests)
 pub fn configure_mcp_logging(log_filter: Option<&str>) {
-    use tracing::Level;
     use tracing_subscriber::{fmt, prelude::*, registry, EnvFilter};
 
     MCP_LOGGING_INIT.call_once(|| {
         let filter_str = log_filter.unwrap_or("ort=warn,rmcp=warn,debug");
         let filter = EnvFilter::new(filter_str);
-        
+
         // Create .swissarmyhammer directory for logs
         let log_dir = std::path::PathBuf::from(".swissarmyhammer");
         if let Err(e) = std::fs::create_dir_all(&log_dir) {
@@ -143,7 +142,7 @@ pub fn configure_mcp_logging(log_filter: Option<&str>) {
                 }
                 _ => "Unknown filesystem error - check disk space and parent directory permissions"
             };
-            eprintln!("Warning: Could not create MCP log directory {}: {} ({})", 
+            eprintln!("Warning: Could not create MCP log directory {}: {} ({})",
                      log_dir.display(), e, error_context);
             return;
         }
@@ -152,7 +151,7 @@ pub fn configure_mcp_logging(log_filter: Option<&str>) {
         match std::fs::File::create(&log_file_path) {
             Ok(file) => {
                 let shared_file = Arc::new(Mutex::new(file));
-                
+
                 // Try to set global subscriber, handle case where it's already set (e.g., in tests)
                 let subscriber = registry()
                     .with(filter)
@@ -264,7 +263,7 @@ pub async fn start_mcp_server(
 ) -> Result<McpServerHandle> {
     // Configure MCP logging to match sah serve behavior
     configure_mcp_logging(None);
-    
+
     match mode {
         McpServerMode::Stdio => start_stdio_server(library).await,
         McpServerMode::Http { port } => start_http_server(port, library).await,
