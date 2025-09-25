@@ -1,51 +1,53 @@
 name: CI
 
 on:
-  push:
-  pull_request:
-    branches: [main]
+    push:
+        branches: [main]
+    pull_request:
+        branches: [main]
+    workflow_dispatch:
 
 env:
-  CARGO_TERM_COLOR: always
+    CARGO_TERM_COLOR: always
 
 jobs:
-  test:
-    name: Test
-    runs-on: self-hosted
-    strategy:
-      matrix:
-        rust:
-          - stable
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: ${{ matrix.rust }}
-      - uses: Swatinem/rust-cache@v2
-      - name: Install dependencies
-        run: cargo install cargo-nextest --force
-      - name: Run tests
-        run: cargo nextest run --no-fail-fast
+    test:
+        name: Test
+        runs-on: self-hosted
+        strategy:
+            matrix:
+                rust:
+                    - stable
+        steps:
+            - uses: actions/checkout@v4
+            - uses: dtolnay/rust-toolchain@master
+              with:
+                  toolchain: ${{ matrix.rust }}
+            - uses: Swatinem/rust-cache@v2
+            - name: Install dependencies
+              run: cargo install cargo-nextest --force
+            - name: Run tests
+              run: cargo nextest run --no-fail-fast
 
-  fmt:
-    name: Rustfmt
-    runs-on: self-hosted
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt
-      - name: Enforce formatting
-        run: cargo fmt --check
+    fmt:
+        name: Rustfmt
+        runs-on: self-hosted
+        steps:
+            - uses: actions/checkout@v4
+            - uses: dtolnay/rust-toolchain@stable
+              with:
+                  components: rustfmt
+            - name: Enforce formatting
+              run: cargo fmt --check
 
-  clippy:
-    name: Clippy
-    runs-on: self-hosted
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy
-      - uses: Swatinem/rust-cache@v2
-      - name: Linting
-        run: cargo clippy -- -D warnings
+    clippy:
+        name: Clippy
+        runs-on: self-hosted
+        steps:
+            - uses: actions/checkout@v4
+            - uses: dtolnay/rust-toolchain@stable
+              with:
+                  components: clippy
+            - uses: Swatinem/rust-cache@v2
+            - name: Linting
+              run: cargo clippy -- -D warnings
