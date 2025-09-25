@@ -13,6 +13,7 @@ installers = ["homebrew"]
 tap = "swissarmyhammer/homebrew-tap"
 # Target platforms to build apps for (Rust target-triple syntax)
 targets = ["aarch64-apple-darwin"]
+host = ["aarch64-apple-darwin"]
 # Publish jobs to run in CI
 publish-jobs = ["homebrew"]
 allow-dirty = ["ci", "msi"]

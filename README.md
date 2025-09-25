@@ -67,12 +67,25 @@ Built for real software development, not toy examples:
 **Build a weather CLI that fetches data from OpenWeatherMap - from idea to working code in minutes:**
 
 ### 1. Installation
+
+```bash
+brew install swissarmyhammer/tap/swissarmyhammer-cli
+```
+
+OR
+
 ```bash
 # Install SwissArmyHammer
 cargo install --git https://github.com/swissarmyhammer/swissarmyhammer swissarmyhammer-cli
 
 # Add to Claude Code as MCP server
 claude mcp add --scope user sah sah serve
+```
+
+THEN
+
+```
+sah doctor
 ```
 
 ### 2. Create Your Project

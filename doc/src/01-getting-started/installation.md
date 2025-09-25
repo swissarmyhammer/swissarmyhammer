@@ -8,12 +8,10 @@ Install SwissArmyHammer and configure it for use with Claude Code.
 - **Claude Code** - For MCP integration (recommended)
 - **Git** - For issue management features
 
-## Install from Git
-
-Currently the only supported installation method:
+## Install from HomeBrew
 
 ```bash
-cargo install --git https://github.com/swissarmyhammer/swissarmyhammer swissarmyhammer-cli
+brew install swissarmyhammer/tap/swissarmyhammer-cli
 ```
 
 ## Verify Installation
@@ -51,7 +49,7 @@ mkdir -p ~/.swissarmyhammer/prompts
 mkdir -p ~/.swissarmyhammer/workflows
 ```
 
-### Project Directory (Optional)  
+### Project Directory (Optional)
 ```bash
 # Project-specific prompts and workflows
 mkdir -p .swissarmyhammer/prompts
@@ -68,7 +66,7 @@ Add shell completions for better CLI experience:
 # Bash
 sah completions bash > ~/.bash_completion.d/sah
 
-# Zsh  
+# Zsh
 sah completions zsh > ~/.zfunc/_sah
 
 # Fish
@@ -83,7 +81,7 @@ SwissArmyHammer works with sensible defaults. Optionally create `~/.swissarmyham
 [general]
 auto_reload = true
 
-[logging]  
+[logging]
 level = "info"
 
 [mcp]
