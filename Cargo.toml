@@ -167,6 +167,13 @@ debug = 1           # Minimal debug info to reduce binary size
 incremental = true  # Enable incremental compilation
 codegen-units = 256 # More codegen units for parallel compilation
 
+[profile.dist]
+inherits = "release"
+lto = true
+codegen-units = 16
+panic = "abort"
+strip = true
+
 # Fast test profile - use with CARGO_PROFILE=fast-test
 [profile.fast-test]
 inherits = "test"
