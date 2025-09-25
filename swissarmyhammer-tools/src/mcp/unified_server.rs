@@ -12,6 +12,7 @@ use rmcp::transport::streamable_http_server::{
     session::local::LocalSessionManager, StreamableHttpService,
 };
 use serde::{Deserialize, Serialize};
+use std::sync::{Arc, Mutex, Once};
 use swissarmyhammer_common::Result;
 use swissarmyhammer_prompts::PromptLibrary;
 
@@ -26,6 +27,157 @@ async fn health_check() -> axum::response::Json<serde_json::Value> {
         "status": "healthy",
         "service": "swissarmyhammer-mcp"
     }))
+}
+
+/// Thread-safe file writer with immediate flush and sync for reliable debugging logs
+///
+/// This writer ensures that every write operation is immediately flushed to the OS buffer
+/// and synced to disk, providing reliable log output even if the process crashes unexpectedly.
+/// This is particularly important for debugging MCP communication issues.
+///
+/// # Thread Safety
+/// 
+/// Multiple threads can safely write to the same `FileWriterGuard` instance. Each write
+/// operation acquires the mutex, writes the data, flushes to OS buffers, and syncs to disk
+/// before releasing the lock.
+///
+/// # Performance Considerations
+/// 
+/// The immediate flush/sync strategy prioritizes reliability over performance. Each write
+/// operation results in a system call, which may impact performance for high-frequency logging.
+/// However, this trade-off is acceptable for MCP debugging scenarios where log reliability
+/// is more important than maximum throughput.
+///
+/// # Error Handling
+/// 
+/// Write operations use `expect()` calls for error handling rather than returning `Result`
+/// values because the `std::io::Write` trait requires specific signatures. In practice,
+/// write failures to local files are extremely rare and typically indicate severe system
+/// issues (disk full, permissions, hardware failure) that should terminate the process.
+///
+/// # Example Usage
+/// ```rust,ignore
+/// use std::sync::{Arc, Mutex};
+/// use std::fs::File;
+/// use swissarmyhammer_tools::mcp::unified_server::FileWriterGuard;
+/// 
+/// let file = File::create("debug.log").unwrap();
+/// let shared_file = Arc::new(Mutex::new(file));
+/// let mut guard = FileWriterGuard::new(shared_file);
+/// writeln!(guard, "Debug message").unwrap();
+/// ```
+pub struct FileWriterGuard {
+    file: Arc<Mutex<std::fs::File>>,
+}
+
+impl FileWriterGuard {
+    /// Creates a new `FileWriterGuard` wrapping the given file.
+    /// 
+    /// # Arguments
+    /// * `file` - Arc<Mutex<File>> for thread-safe access to the underlying file
+    /// 
+    /// # Returns
+    /// A new `FileWriterGuard` instance that will ensure immediate flushing for all writes
+    pub fn new(file: Arc<Mutex<std::fs::File>>) -> Self {
+        Self { file }
+    }
+}
+
+impl std::io::Write for FileWriterGuard {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        let mut file = self.file.lock().expect("FileWriterGuard mutex was poisoned - this indicates a panic occurred while another thread held the lock");
+        let result = file.write(buf)?;
+        file.flush()?;
+        file.sync_all()?; // Ensure data is actually written to disk for debugging reliability
+        Ok(result)
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        let mut file = self.file.lock().expect("FileWriterGuard flush mutex was poisoned - this indicates a panic occurred while another thread held the lock");
+        file.flush()?;
+        file.sync_all()
+    }
+}
+
+/// Global flag to ensure MCP logging is configured only once per process
+static MCP_LOGGING_INIT: Once = Once::new();
+
+/// Configure MCP logging to write to `.swissarmyhammer/mcp.log` 
+///
+/// This function sets up file-based logging similar to what `sah serve` does,
+/// ensuring that in-process MCP servers have the same debugging capabilities.
+/// Uses `std::sync::Once` to ensure logging is only configured once per process,
+/// even if multiple MCP servers are started.
+///
+/// # Arguments
+/// * `log_filter` - Optional log filter string (defaults to "ort=warn,rmcp=warn,debug")
+/// 
+/// # Behavior
+/// - Creates `.swissarmyhammer/` directory if it doesn't exist
+/// - Sets up tracing subscriber with file output to `mcp.log`
+/// - Falls back to stderr logging if file creation fails
+/// - Only configures logging once per process (subsequent calls are no-op)
+/// - Uses debug-level logging for comprehensive MCP debugging
+///
+/// # Error Handling
+/// - Directory creation failures: Provides specific error context based on error kind
+/// - File creation failures: Falls back gracefully to stderr with warning message
+/// - Global subscriber conflicts: Handles gracefully when already set (e.g., in tests)
+pub fn configure_mcp_logging(log_filter: Option<&str>) {
+    use tracing::Level;
+    use tracing_subscriber::{fmt, prelude::*, registry, EnvFilter};
+
+    MCP_LOGGING_INIT.call_once(|| {
+        let filter_str = log_filter.unwrap_or("ort=warn,rmcp=warn,debug");
+        let filter = EnvFilter::new(filter_str);
+        
+        // Create .swissarmyhammer directory for logs
+        let log_dir = std::path::PathBuf::from(".swissarmyhammer");
+        if let Err(e) = std::fs::create_dir_all(&log_dir) {
+            let error_context = match e.kind() {
+                std::io::ErrorKind::PermissionDenied => {
+                    "Permission denied - check directory permissions"
+                }
+                std::io::ErrorKind::AlreadyExists => {
+                    "Directory creation conflict - this shouldn't happen with create_dir_all"
+                }
+                _ => "Unknown filesystem error - check disk space and parent directory permissions"
+            };
+            eprintln!("Warning: Could not create MCP log directory {}: {} ({})", 
+                     log_dir.display(), e, error_context);
+            return;
+        }
+
+        let log_file_path = log_dir.join("mcp.log");
+        match std::fs::File::create(&log_file_path) {
+            Ok(file) => {
+                let shared_file = Arc::new(Mutex::new(file));
+                
+                // Try to set global subscriber, handle case where it's already set (e.g., in tests)
+                let subscriber = registry()
+                    .with(filter)
+                    .with(
+                        fmt::layer()
+                            .with_writer(move || {
+                                let file = shared_file.clone();
+                                Box::new(FileWriterGuard::new(file)) as Box<dyn std::io::Write>
+                            })
+                            .with_ansi(false) // No color codes in file
+                    );
+
+                if let Err(_) = tracing::subscriber::set_global_default(subscriber) {
+                    // This can happen in test environments where global subscriber is already set
+                    tracing::debug!("Global tracing subscriber already set - MCP logging configuration skipped");
+                }
+            }
+            Err(e) => {
+                eprintln!(
+                    "Warning: Could not create MCP log file {}: {}. MCP server will use existing logging configuration.",
+                    log_file_path.display(), e
+                );
+            }
+        }
+    });
 }
 
 /// MCP server transport mode configuration
@@ -110,6 +262,9 @@ pub async fn start_mcp_server(
     mode: McpServerMode,
     library: Option<PromptLibrary>,
 ) -> Result<McpServerHandle> {
+    // Configure MCP logging to match sah serve behavior
+    configure_mcp_logging(None);
+    
     match mode {
         McpServerMode::Stdio => start_stdio_server(library).await,
         McpServerMode::Http { port } => start_http_server(port, library).await,

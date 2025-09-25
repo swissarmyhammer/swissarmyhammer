@@ -15,3 +15,4 @@ tap = "swissarmyhammer/homebrew-tap"
 targets = ["aarch64-apple-darwin"]
 # Publish jobs to run in CI
 publish-jobs = ["homebrew"]
+allow-dirty = ["ci", "msi"]

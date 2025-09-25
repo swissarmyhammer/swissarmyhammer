@@ -9,6 +9,7 @@ edition.workspace = true
 authors.workspace = true
 license.workspace = true
 repository.workspace = true
+homepage.workspace = true
 description = "Command-line interface for SwissArmyHammer prompt management"
 default-run = "sah"
 

@@ -25,12 +25,14 @@ resolver = "2"
 [workspace.metadata.release]
 publish = false  # Don't auto-publish
 
+
 [workspace.package]
 version = "0.1.1"
 edition = "2021"
 authors = ["SwissArmyHammer Team"]
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/swissarmyhammer/swissarmyhammer"
+homepage = "https://github.com/swissarmyhammer/swissarmyhammer/blob/main/README.md"
 
 [workspace.dependencies]
 # Core dependencies
