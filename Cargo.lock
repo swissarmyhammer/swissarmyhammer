@@ -6527,7 +6527,7 @@ checksum = "13c2bddecc57b384dee18652358fb23172facb8a2c51ccc10d74c157bdea3292"
 
 [[package]]
 name = "swissarmyhammer"
-version = "0.1.1-beta.1"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -6601,7 +6601,7 @@ dependencies = [
 
 [[package]]
 name = "swissarmyhammer-cli"
-version = "0.1.1-beta.1"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "arboard",
@@ -6647,7 +6647,7 @@ dependencies = [
 
 [[package]]
 name = "swissarmyhammer-common"
-version = "0.1.1-beta.1"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "dashmap",
@@ -6670,7 +6670,7 @@ dependencies = [
 
 [[package]]
 name = "swissarmyhammer-config"
-version = "0.1.1-beta.1"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "dirs 5.0.1",
@@ -6690,7 +6690,7 @@ dependencies = [
 
 [[package]]
 name = "swissarmyhammer-git"
-version = "0.1.1-beta.1"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -6706,7 +6706,7 @@ dependencies = [
 
 [[package]]
 name = "swissarmyhammer-issues"
-version = "0.1.1-beta.1"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -6727,7 +6727,7 @@ dependencies = [
 
 [[package]]
 name = "swissarmyhammer-memoranda"
-version = "0.1.1-beta.1"
+version = "0.1.1"
 dependencies = [
  "async-trait",
  "chrono",
@@ -6744,7 +6744,7 @@ dependencies = [
 
 [[package]]
 name = "swissarmyhammer-outline"
-version = "0.1.1-beta.1"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -6774,7 +6774,7 @@ dependencies = [
 
 [[package]]
 name = "swissarmyhammer-prompts"
-version = "0.1.1-beta.1"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "chrono",
@@ -6805,7 +6805,7 @@ dependencies = [
 
 [[package]]
 name = "swissarmyhammer-search"
-version = "0.1.1-beta.1"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -6843,7 +6843,7 @@ dependencies = [
 
 [[package]]
 name = "swissarmyhammer-shell"
-version = "0.1.1-beta.1"
+version = "0.1.1"
 dependencies = [
  "regex",
  "serde",
@@ -6858,7 +6858,7 @@ dependencies = [
 
 [[package]]
 name = "swissarmyhammer-templating"
-version = "0.1.1-beta.1"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "liquid",
@@ -6878,7 +6878,7 @@ dependencies = [
 
 [[package]]
 name = "swissarmyhammer-todo"
-version = "0.1.1-beta.1"
+version = "0.1.1"
 dependencies = [
  "serde",
  "serde_yaml",
@@ -6892,7 +6892,7 @@ dependencies = [
 
 [[package]]
 name = "swissarmyhammer-tools"
-version = "0.1.1-beta.1"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -6951,7 +6951,7 @@ dependencies = [
 
 [[package]]
 name = "swissarmyhammer-workflow"
-version = "0.1.1-beta.1"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "async-trait",
