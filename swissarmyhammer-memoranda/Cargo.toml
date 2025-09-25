@@ -8,7 +8,7 @@ repository.workspace = true
 description = "Memo management system for SwissArmyHammer"
 
 [dependencies]
-swissarmyhammer-common = { path = "../swissarmyhammer-common", version = "0.1.0" }
+swissarmyhammer-common = { path = "../swissarmyhammer-common", version = "0.1.1-beta.1" }
 serde = { workspace = true }
 async-trait = { workspace = true }
 tokio = { workspace = true }
