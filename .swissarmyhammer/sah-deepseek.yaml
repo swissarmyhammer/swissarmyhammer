@@ -7,5 +7,5 @@ agent:
       model:
         source:
           HuggingFace:
-            repo: "unsloth/Qwen3-Coder-480B-A35B-Instruct-GGUF"
+            repo: "unsloth/DeepSeek-V3.1-Terminus-GGUF"
             folder: "Q4_1"

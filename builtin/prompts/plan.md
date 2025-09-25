@@ -40,10 +40,10 @@ Generate a multiple step plan with multiple issues folder of multiple `<nnnnnn>_
 - Review the existing memos and think deeply about how they apply to the plan.
 - Review the existing code to determine what parts of the specification might already be implemented.  Unless explicitly instructed otherwise in the specification, do not add new systems/services when existing patterns and systems can be extended to achieve the goals.
 - Draft a detailed, step-by-step plan to meet the specification, write this out to a temp file `.swissarmyhammer/tmp/DRAFT_PLAN.md`, refer to this draft plan to refresh your memory.
-- Then, once you have a draft plan, break it down into small, iterative chunks that build on each other incrementally.
-- Look at these chunks and then go another round to break it into small steps.
-- From here you should have the foundation to provide an in order series of issue files that describes the work to do at each step
+- Then, once you have a draft plan, break it down into small, iterative steps build on each other incrementally.
+- Look at these chunks and then go another round to break it into smaller steps, still working in your `.swissarmyhammer/tmp/DRAFT_PLAN.md`.
 - Review the results and make sure that the steps are small enough to be implemented safely, but big enough to move the project forward
-- When creating issue steps for the plan, make sure to prefix and number them padded with 0's so they run in order
-  - Example, assuming your spec file is called `FOO.md`, make issue files called `FOO_<nnnnnn>_name.md`, so that your plan steps are in order
+- Use the issue_create tool to turn each of the steps into an issue.
   - Use the issue_create tool, specifying the name, again making sure they are named so that they run in order
+  - When creating issues for the plan, make sure to prefix and number them padded with 0's so they run in order
+  - Example, assuming your spec file is called `FOO.md`, make issue files called `FOO_<nnnnnn>_name.md`, so that your plan steps are in order

@@ -8,4 +8,4 @@ agent:
         source:
           HuggingFace:
             repo: "unsloth/Qwen3-235B-A22B-Instruct-2507-GGUF"
-            folder: "Q4_K_M"
+            folder: "Q4_1"

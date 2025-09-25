@@ -8,4 +8,4 @@ agent:
         source:
           HuggingFace:
             repo: "unsloth/Qwen3-Coder-30B-A3B-Instruct-GGUF"
-            filename: "Qwen3-Coder-30B-A3B-Instruct-Q4_K_M.gguf"
+            filename: "Qwen3-Coder-30B-A3B-Instruct-Q4_1.gguf"
