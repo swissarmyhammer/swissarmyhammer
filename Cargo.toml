@@ -22,6 +22,9 @@ members = [
 ]
 resolver = "2"
 
+[workspace.metadata.release]
+publish = false  # Don't auto-publish
+
 [workspace.package]
 version = "0.1.0"
 edition = "2021"
