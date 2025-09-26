@@ -589,6 +589,9 @@ async fn configure_logging(verbose: bool, debug: bool, quiet: bool, is_mcp_mode:
     let create_filter = || EnvFilter::new(format!("ort=warn,rmcp=warn,{log_level}"));
 
     if is_mcp_mode {
+        // Set flag to prevent unified server from also configuring logging
+        std::env::set_var("SAH_CLI_MODE", "1");
+        
         // In MCP mode, write logs to .swissarmyhammer/mcp.log for debugging
         use std::fs;
         use std::path::PathBuf;

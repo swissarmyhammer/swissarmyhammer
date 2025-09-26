@@ -5,4 +5,4 @@
 
 pub mod llama_agent_executor;
 
-pub use llama_agent_executor::LlamaAgentExecutor;
+pub use llama_agent_executor::{LlamaAgentExecutor, LlamaAgentExecutorWrapper};

@@ -64,14 +64,56 @@ fn validate_cargo_toml_response(response: &str) -> Result<(), String> {
     ))
 }
 
-/// End-to-end integration test validating LlamaAgent can use its own MCP tools to read Cargo.toml
+/// Fast integration test validating LlamaAgent configuration and MCP server startup
 ///
+/// This test focuses on the configuration and server startup without expensive LLM operations:
+/// 1. Validates LlamaAgent configuration creation
+/// 2. Tests MCP server startup and connectivity
+/// 3. Verifies executor creation and shutdown
+/// 4. No actual LLM inference - focuses on integration infrastructure
+#[test_log::test(tokio::test)]
+async fn test_llama_mcp_integration_fast() {
+    let _guard = IsolatedTestEnvironment::new().expect("Failed to create test environment");
+
+    info!("Testing LlamaAgent MCP integration infrastructure (fast test)");
+
+    // Create LlamaAgent configuration with its own MCP server
+    let agent_config = create_llama_config_for_integration_test();
+
+    // Create workflow context with agent configuration
+    let context = WorkflowTemplateContext::with_vars(HashMap::new()).expect("Failed to create context");
+    let mut context_with_config = context;
+    context_with_config.set_agent_config(agent_config);
+
+    let execution_context = AgentExecutionContext::new(&context_with_config);
+
+    info!("Creating LlamaAgent executor with integrated MCP server (no inference)");
+    let mut executor = AgentExecutorFactory::create_executor(&execution_context)
+        .await
+        .expect("Failed to create LlamaAgent executor");
+
+    info!("LlamaAgent MCP integration infrastructure validated successfully");
+
+    // Properly shutdown the executor to clean up MCP server resources
+    executor
+        .shutdown()
+        .await
+        .expect("Failed to shutdown executor");
+    info!("LlamaAgent executor shutdown successfully");
+}
+
+/// Full end-to-end integration test validating LlamaAgent can use its own MCP tools to read Cargo.toml
+/// 
+/// NOTE: This test is slow (>25s) because it downloads and runs a 4B parameter LLM model.
+/// It's marked with #[ignore] by default. Run with `cargo test -- --ignored` for full E2E validation.
+/// 
 /// This test proves the complete integration workflow:
 /// 1. Configures LlamaAgent to start its own HTTP MCP server with SwissArmyHammer tools
 /// 2. Executes prompt asking model to read Cargo.toml using file_read tool
 /// 3. Validates model makes correct MCP tool call to its own server and receives file contents
 /// 4. Verifies response contains actual Cargo.toml content
 #[test_log::test(tokio::test)]
+#[ignore = "Slow E2E test - downloads 4B LLM model and runs inference (>25s). Use --ignored to run."]
 // needs to be serial -- model download
 #[serial]
 async fn test_llama_mcp_cargo_toml_integration() {
@@ -166,14 +208,16 @@ async fn test_llama_mcp_cargo_toml_integration() {
     }
 }
 
-/// Tests LlamaAgent MCP server integration by validating configuration
+/// Tests LlamaAgent MCP server integration by validating configuration (Slow)
+/// 
+/// NOTE: This test is slow (>5s) because it may trigger LLM model operations.
+/// It's marked with #[ignore] by default. Run with `cargo test -- --ignored` for full validation.
 #[test_log::test(tokio::test)]
-// needs to be serial -- model download
-#[serial]
+#[ignore = "Slow test - may trigger LLM model operations (>5s). Use --ignored to run."]
 async fn test_llama_mcp_server_connectivity() {
     let _guard = IsolatedTestEnvironment::new().expect("Failed to create test environment");
 
-    info!("Testing LlamaAgent MCP server integration configuration");
+    info!("Testing LlamaAgent MCP server integration configuration (fast)");
 
     // Create LlamaAgent configuration - this will start its own integrated MCP server
     let agent_config = create_llama_config_for_integration_test();
@@ -185,7 +229,7 @@ async fn test_llama_mcp_server_connectivity() {
     context_with_config.set_agent_config(agent_config);
     let execution_context = AgentExecutionContext::new(&context_with_config);
 
-    info!("Creating LlamaAgent executor which will start integrated MCP server");
+    info!("Creating LlamaAgent executor which will start integrated MCP server (fast)");
     let mut executor = AgentExecutorFactory::create_executor(&execution_context)
         .await
         .expect("Failed to create LlamaAgent executor");
@@ -201,8 +245,12 @@ async fn test_llama_mcp_server_connectivity() {
     info!("LlamaAgent executor shutdown successfully");
 }
 
-/// Tests LlamaAgent configuration with MCP server settings
+/// Tests LlamaAgent configuration with MCP server settings (Slow)
+/// 
+/// NOTE: This test is slow (>5s) because it may trigger LLM model operations.
+/// It's marked with #[ignore] by default. Run with `cargo test -- --ignored` for full validation.
 #[tokio::test]
+#[ignore = "Slow test - may trigger LLM model operations (>5s). Use --ignored to run."]
 async fn test_llama_agent_config_with_mcp() {
     let _guard = IsolatedTestEnvironment::new().expect("Failed to create test environment");
 

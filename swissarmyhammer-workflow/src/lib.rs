@@ -42,7 +42,7 @@ pub use actions::{
     LogAction, LogLevel, PromptAction, SetVariableAction, ShellAction, SubWorkflowAction,
     WaitAction,
 };
-pub use agents::LlamaAgentExecutor;
+pub use agents::{LlamaAgentExecutor, LlamaAgentExecutorWrapper};
 
 pub use definition::{Workflow, WorkflowError, WorkflowName, WorkflowResult};
 pub use error_utils::{
