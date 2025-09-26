@@ -244,7 +244,7 @@ impl AgentExecutorFactory {
                 Ok(Box::new(executor))
             }
             AgentExecutorType::LlamaAgent => {
-                tracing::info!("Using LlamaAgent");
+                tracing::info!("Using LlamaAgent with singleton pattern");
                 let agent_config = context.agent_config();
                 let llama_config = match agent_config.executor {
                     AgentExecutorConfig::LlamaAgent(config) => config,
@@ -254,7 +254,7 @@ impl AgentExecutorFactory {
                         ))
                     }
                 };
-                let mut executor = crate::agents::LlamaAgentExecutor::new(llama_config);
+                let mut executor = crate::agents::LlamaAgentExecutorWrapper::new(llama_config);
                 executor.initialize().await?;
                 Ok(Box::new(executor))
             }

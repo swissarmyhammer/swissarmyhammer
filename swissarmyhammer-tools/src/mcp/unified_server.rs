@@ -102,7 +102,7 @@ impl std::io::Write for FileWriterGuard {
 /// Global flag to ensure MCP logging is configured only once per process
 static MCP_LOGGING_INIT: Once = Once::new();
 
-/// Configure MCP logging to write to `.swissarmyhammer/mcp.log` 
+/// Configure MCP logging to write to `.swissarmyhammer/` directory
 ///
 /// This function sets up file-based logging similar to what `sah serve` does,
 /// ensuring that in-process MCP servers have the same debugging capabilities.
@@ -114,7 +114,7 @@ static MCP_LOGGING_INIT: Once = Once::new();
 /// 
 /// # Behavior
 /// - Creates `.swissarmyhammer/` directory if it doesn't exist
-/// - Sets up tracing subscriber with file output to `mcp.log`
+/// - Sets up tracing subscriber with file output (uses `SWISSARMYHAMMER_LOG_FILE` env var or defaults to `mcp.log`)
 /// - Falls back to stderr logging if file creation fails
 /// - Only configures logging once per process (subsequent calls are no-op)
 /// - Uses debug-level logging for comprehensive MCP debugging
@@ -124,7 +124,6 @@ static MCP_LOGGING_INIT: Once = Once::new();
 /// - File creation failures: Falls back gracefully to stderr with warning message
 /// - Global subscriber conflicts: Handles gracefully when already set (e.g., in tests)
 pub fn configure_mcp_logging(log_filter: Option<&str>) {
-    use tracing::Level;
     use tracing_subscriber::{fmt, prelude::*, registry, EnvFilter};
 
     MCP_LOGGING_INIT.call_once(|| {
@@ -148,10 +147,12 @@ pub fn configure_mcp_logging(log_filter: Option<&str>) {
             return;
         }
 
-        let log_file_path = log_dir.join("mcp.log");
+        let log_file_name = std::env::var("SWISSARMYHAMMER_LOG_FILE").unwrap_or_else(|_| "mcp.log".to_string());
+        let log_file_path = log_dir.join(log_file_name);
         match std::fs::File::create(&log_file_path) {
             Ok(file) => {
                 let shared_file = Arc::new(Mutex::new(file));
+                let shared_file_for_cleanup = shared_file.clone();
                 
                 // Try to set global subscriber, handle case where it's already set (e.g., in tests)
                 let subscriber = registry()
@@ -165,9 +166,13 @@ pub fn configure_mcp_logging(log_filter: Option<&str>) {
                             .with_ansi(false) // No color codes in file
                     );
 
-                if let Err(_) = tracing::subscriber::set_global_default(subscriber) {
+                if tracing::subscriber::set_global_default(subscriber).is_err() {
                     // This can happen in test environments where global subscriber is already set
                     tracing::debug!("Global tracing subscriber already set - MCP logging configuration skipped");
+                    
+                    // If we can't set the subscriber, we should clean up the file we created
+                    drop(shared_file_for_cleanup);
+                    let _ = std::fs::remove_file(&log_file_path);
                 }
             }
             Err(e) => {
@@ -263,7 +268,11 @@ pub async fn start_mcp_server(
     library: Option<PromptLibrary>,
 ) -> Result<McpServerHandle> {
     // Configure MCP logging to match sah serve behavior
-    configure_mcp_logging(None);
+    // NOTE: Skip logging configuration when called from CLI as main.rs already handles it
+    // Only configure logging when used as library (e.g., in tests or embedded scenarios)
+    if std::env::var("SAH_CLI_MODE").is_err() {
+        configure_mcp_logging(None);
+    }
     
     match mode {
         McpServerMode::Stdio => start_stdio_server(library).await,

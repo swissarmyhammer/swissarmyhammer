@@ -39,6 +39,7 @@ rmcp = { workspace = true }
 
 # Logging
 tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
 test-log = { workspace = true }
 
 # Async traits
