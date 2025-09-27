@@ -180,6 +180,9 @@
 
 /// Agent configuration types and infrastructure
 pub mod agent;
+
+// Include generated builtin agents at build time
+include!(concat!(env!("OUT_DIR"), "/builtin_agents.rs"));
 /// File discovery logic for configuration files
 pub mod discovery;
 /// Environment variable processing and substitution
