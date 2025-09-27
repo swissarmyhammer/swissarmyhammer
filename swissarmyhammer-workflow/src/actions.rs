@@ -24,7 +24,6 @@ use syntect::parsing::SyntaxSet;
 use syntect::util::as_24_bit_terminal_escaped;
 use thiserror::Error;
 
-
 use async_trait::async_trait;
 use swissarmyhammer_config::agent::{AgentConfig, AgentExecutorConfig, AgentExecutorType};
 use swissarmyhammer_prompts::{PromptLibrary, PromptResolver};
@@ -1075,7 +1074,6 @@ pub struct SubWorkflowAction {
     pub input_variables: HashMap<String, String>,
     /// Variable name to store the result
     pub result_variable: Option<String>,
-
 }
 
 impl SetVariableAction {
@@ -1239,8 +1237,6 @@ impl SubWorkflowAction {
         self.result_variable = Some(variable);
         self
     }
-
-
 
     /// Substitute variables in input values using the context
     fn substitute_variables(&self, context: &WorkflowTemplateContext) -> HashMap<String, String> {
@@ -1669,16 +1665,14 @@ impl Action for SubWorkflowAction {
         }
 
         // Execute the workflow
-        executor.execute_state(&mut run).await
-            .map_err(|e| ActionError::ExecutionError(format!(
+        executor.execute_state(&mut run).await.map_err(|e| {
+            ActionError::ExecutionError(format!(
                 "Sub-workflow '{}' execution failed: {}",
                 self.workflow_name, e
-            )))?;
-            
-        tracing::info!(
-            "Sub-workflow '{}' completed",
-            self.workflow_name
-        );
+            ))
+        })?;
+
+        tracing::info!("Sub-workflow '{}' completed", self.workflow_name);
 
         // Check the workflow status
         match run.status {

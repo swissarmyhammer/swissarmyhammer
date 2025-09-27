@@ -381,18 +381,18 @@ mod tests {
     async fn test_write_relative_path_acceptance() {
         let temp_dir = TempDir::new().unwrap();
         std::env::set_current_dir(temp_dir.path()).unwrap();
-        
+
         let tool = WriteFileTool::new();
         let context = create_test_context();
         let args = create_test_arguments("relative_file.txt", "test content");
 
         let result = tool.execute(args, &context).await;
         assert!(result.is_ok(), "Relative paths should now be accepted");
-        
+
         // Verify file was created
         let file_path = temp_dir.path().join("relative_file.txt");
         assert!(file_path.exists(), "File should have been created");
-        
+
         let content = std::fs::read_to_string(&file_path).unwrap();
         assert_eq!(content, "test content");
     }

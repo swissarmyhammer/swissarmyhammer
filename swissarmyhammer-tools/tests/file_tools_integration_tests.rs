@@ -334,7 +334,7 @@ async fn test_read_tool_relative_path_support() {
     arguments.insert("path".to_string(), json!("relative/path/file.txt"));
 
     let result = tool.execute(arguments, &context).await;
-    
+
     // Should not reject due to relative path, but may fail for other reasons (file not found, etc.)
     if let Err(error) = result {
         let error_msg = format!("{:?}", error);
@@ -1958,7 +1958,7 @@ async fn test_write_tool_error_handling() {
     arguments.insert("content".to_string(), json!("test content"));
 
     let result = tool.execute(arguments, &context).await;
-    
+
     match result {
         Ok(_) => {
             // Relative path was accepted and file was created successfully
@@ -1966,12 +1966,16 @@ async fn test_write_tool_error_handling() {
         Err(error) => {
             let error_msg = format!("{:?}", error);
             // Should not reject due to being relative anymore
-            assert!(!error_msg.contains("absolute"), "Should not reject relative paths");
+            assert!(
+                !error_msg.contains("absolute"),
+                "Should not reject relative paths"
+            );
             // May fail due to parent directory not existing, which is fine
             assert!(
-                error_msg.contains("Parent directory does not exist") 
+                error_msg.contains("Parent directory does not exist")
                     || error_msg.contains("No such file or directory"),
-                "Should fail due to missing parent directory, not relative path: {}", error_msg
+                "Should fail due to missing parent directory, not relative path: {}",
+                error_msg
             );
         }
     }
@@ -2900,9 +2904,12 @@ async fn test_malformed_input_handling() {
         format!("{}/path\nwith\nnewlines", test_dir_path.display()),
         format!("{}/path\rwith\rcarriage\rreturns", test_dir_path.display()),
         format!("{}/path\twith\ttabs", test_dir_path.display()),
-        format!("{}/path with spaces and special chars: <>|\"*?", test_dir_path.display()),
+        format!(
+            "{}/path with spaces and special chars: <>|\"*?",
+            test_dir_path.display()
+        ),
         format!("{}/\u{FEFF}path_with_bom", test_dir_path.display()), // BOM character
-        format!("{}/{}", test_dir_path.display(), long_path),      // Very long path
+        format!("{}/{}", test_dir_path.display(), long_path),         // Very long path
     ];
 
     for malformed_input in &malformed_inputs {

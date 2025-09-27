@@ -70,8 +70,12 @@ pub fn validate_file_path(path: &str) -> Result<PathBuf, McpError> {
     const MAX_PATH_LENGTH: usize = 4096; // Unix PATH_MAX standard
     if path.len() > MAX_PATH_LENGTH {
         return Err(McpError::invalid_request(
-            format!("Path too long ({} characters, maximum {}): {}", 
-                path.len(), MAX_PATH_LENGTH, path),
+            format!(
+                "Path too long ({} characters, maximum {}): {}",
+                path.len(),
+                MAX_PATH_LENGTH,
+                path
+            ),
             None,
         ));
     }
@@ -83,10 +87,12 @@ pub fn validate_file_path(path: &str) -> Result<PathBuf, McpError> {
         path_buf
     } else {
         std::env::current_dir()
-            .map_err(|e| McpError::invalid_request(
-                format!("Failed to get current working directory: {}", e),
-                None,
-            ))?
+            .map_err(|e| {
+                McpError::invalid_request(
+                    format!("Failed to get current working directory: {}", e),
+                    None,
+                )
+            })?
             .join(path_buf)
     };
 
@@ -111,7 +117,10 @@ pub fn validate_file_path(path: &str) -> Result<PathBuf, McpError> {
                     Ok(resolved_path)
                 }
                 ErrorKind::PermissionDenied => Err(McpError::invalid_request(
-                    format!("Permission denied accessing path: {}", resolved_path.display()),
+                    format!(
+                        "Permission denied accessing path: {}",
+                        resolved_path.display()
+                    ),
                     None,
                 )),
                 ErrorKind::InvalidInput => Err(McpError::invalid_request(
@@ -119,7 +128,11 @@ pub fn validate_file_path(path: &str) -> Result<PathBuf, McpError> {
                     None,
                 )),
                 _ => Err(McpError::invalid_request(
-                    format!("Failed to resolve path '{}': {}", resolved_path.display(), e),
+                    format!(
+                        "Failed to resolve path '{}': {}",
+                        resolved_path.display(),
+                        e
+                    ),
                     None,
                 )),
             }
@@ -384,8 +397,12 @@ impl FilePathValidator {
         const MAX_PATH_LENGTH: usize = 4096; // Unix PATH_MAX standard
         if path.len() > MAX_PATH_LENGTH {
             return Err(McpError::invalid_request(
-                format!("Path too long ({} characters, maximum {}): {}", 
-                    path.len(), MAX_PATH_LENGTH, path),
+                format!(
+                    "Path too long ({} characters, maximum {}): {}",
+                    path.len(),
+                    MAX_PATH_LENGTH,
+                    path
+                ),
                 None,
             ));
         }
@@ -905,16 +922,28 @@ mod tests {
         let result = validate_file_path("relative/path");
         assert!(result.is_ok(), "Simple relative paths should be accepted");
         let resolved = result.unwrap();
-        assert!(resolved.is_absolute(), "Should be resolved to absolute path");
+        assert!(
+            resolved.is_absolute(),
+            "Should be resolved to absolute path"
+        );
 
         let result = validate_file_path("./current/path");
-        assert!(result.is_ok(), "Current directory relative paths should be accepted");
+        assert!(
+            result.is_ok(),
+            "Current directory relative paths should be accepted"
+        );
         let resolved = result.unwrap();
-        assert!(resolved.is_absolute(), "Should be resolved to absolute path");
+        assert!(
+            resolved.is_absolute(),
+            "Should be resolved to absolute path"
+        );
 
         // Parent directory paths should still be blocked by dangerous pattern checking
         let result = validate_file_path("../parent/path");
-        assert!(result.is_err(), "Parent directory traversal should still be blocked");
+        assert!(
+            result.is_err(),
+            "Parent directory traversal should still be blocked"
+        );
 
         // Restore original directory
         std::env::set_current_dir(original_dir).unwrap();
@@ -926,7 +955,7 @@ mod tests {
         let extremely_long_path = "a".repeat(5000);
         let result = validate_file_path(&extremely_long_path);
         assert!(result.is_err(), "Extremely long paths should be rejected");
-        
+
         let error_msg = format!("{:?}", result.unwrap_err());
         println!("Error message: {}", error_msg);
         assert!(

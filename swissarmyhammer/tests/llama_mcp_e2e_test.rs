@@ -81,7 +81,8 @@ async fn test_llama_mcp_integration_fast() {
     let agent_config = create_llama_config_for_integration_test();
 
     // Create workflow context with agent configuration
-    let context = WorkflowTemplateContext::with_vars(HashMap::new()).expect("Failed to create context");
+    let context =
+        WorkflowTemplateContext::with_vars(HashMap::new()).expect("Failed to create context");
     let mut context_with_config = context;
     context_with_config.set_agent_config(agent_config);
 
@@ -103,10 +104,10 @@ async fn test_llama_mcp_integration_fast() {
 }
 
 /// Full end-to-end integration test validating LlamaAgent can use its own MCP tools to read Cargo.toml
-/// 
+///
 /// NOTE: This test is slow (>25s) because it downloads and runs a 4B parameter LLM model.
 /// It's marked with #[ignore] by default. Run with `cargo test -- --ignored` for full E2E validation.
-/// 
+///
 /// This test proves the complete integration workflow:
 /// 1. Configures LlamaAgent to start its own HTTP MCP server with SwissArmyHammer tools
 /// 2. Executes prompt asking model to read Cargo.toml using file_read tool
@@ -209,7 +210,7 @@ async fn test_llama_mcp_cargo_toml_integration() {
 }
 
 /// Tests LlamaAgent MCP server integration by validating configuration (Slow)
-/// 
+///
 /// NOTE: This test is slow (>5s) because it may trigger LLM model operations.
 /// It's marked with #[ignore] by default. Run with `cargo test -- --ignored` for full validation.
 #[test_log::test(tokio::test)]
@@ -246,7 +247,7 @@ async fn test_llama_mcp_server_connectivity() {
 }
 
 /// Tests LlamaAgent configuration with MCP server settings (Slow)
-/// 
+///
 /// NOTE: This test is slow (>5s) because it may trigger LLM model operations.
 /// It's marked with #[ignore] by default. Run with `cargo test -- --ignored` for full validation.
 #[tokio::test]
