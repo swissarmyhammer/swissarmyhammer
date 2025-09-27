@@ -4,7 +4,7 @@
 //! supporting hierarchical configuration with proper fallback chains.
 
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use thiserror::Error;
 
 /// Agent executor type enumeration
@@ -361,6 +361,172 @@ pub fn parse_agent_description(content: &str) -> Option<String> {
     }
 
     None
+}
+
+/// Agent Manager for discovery and loading of agents from various sources
+///
+/// Provides functionality to load agents from built-in sources, user directories,
+/// and project directories with proper precedence handling.
+pub struct AgentManager;
+
+impl AgentManager {
+    /// Load all built-in agents compiled into the binary
+    ///
+    /// Uses the build-time generated `get_builtin_agents()` function to access
+    /// agents embedded from the `builtin/agents/` directory.
+    ///
+    /// # Returns
+    /// * `Result<Vec<AgentInfo>, AgentError>` - Vector of built-in agent information
+    ///
+    /// # Examples
+    /// ```
+    /// use swissarmyhammer_config::agent::AgentManager;
+    ///
+    /// let builtin_agents = AgentManager::load_builtin_agents()?;
+    /// for agent in builtin_agents {
+    ///     println!("Built-in agent: {} ({})", agent.name, 
+    ///              agent.description.unwrap_or_default());
+    /// }
+    /// # Ok::<(), swissarmyhammer_config::AgentError>(())
+    /// ```
+    pub fn load_builtin_agents() -> Result<Vec<AgentInfo>, AgentError> {
+        let builtin_agents = crate::get_builtin_agents();
+        let mut agents = Vec::with_capacity(builtin_agents.len());
+
+        for (name, content) in builtin_agents {
+            let description = parse_agent_description(content);
+            agents.push(AgentInfo {
+                name: name.to_string(),
+                content: content.to_string(),
+                source: AgentSource::Builtin,
+                description,
+            });
+        }
+
+        Ok(agents)
+    }
+
+    /// Load agents from a specific directory
+    ///
+    /// Scans the given directory for `.yaml` agent configuration files and loads them
+    /// with the specified source type. Missing directories are handled gracefully by
+    /// returning an empty vector.
+    ///
+    /// # Arguments
+    /// * `dir_path` - Path to the directory to scan for agent files
+    /// * `source` - The source type to assign to loaded agents
+    ///
+    /// # Returns
+    /// * `Result<Vec<AgentInfo>, AgentError>` - Vector of agent information from the directory
+    ///
+    /// # Examples
+    /// ```no_run
+    /// use swissarmyhammer_config::agent::{AgentManager, AgentSource};
+    /// use std::path::Path;
+    ///
+    /// let agents = AgentManager::load_agents_from_dir(
+    ///     Path::new("./agents"), 
+    ///     AgentSource::Project
+    /// )?;
+    /// # Ok::<(), swissarmyhammer_config::AgentError>(())
+    /// ```
+    pub fn load_agents_from_dir(
+        dir_path: &Path,
+        source: AgentSource,
+    ) -> Result<Vec<AgentInfo>, AgentError> {
+        // Handle missing directory gracefully
+        if !dir_path.exists() || !dir_path.is_dir() {
+            return Ok(Vec::new());
+        }
+
+        let mut agents = Vec::new();
+
+        let entries = std::fs::read_dir(dir_path)
+            .map_err(AgentError::IoError)?;
+
+        for entry in entries {
+            let entry = entry.map_err(AgentError::IoError)?;
+            let path = entry.path();
+
+            // Only process .yaml files
+            if path.is_file() && path.extension().and_then(|ext| ext.to_str()) == Some("yaml") {
+                // Use filename stem as agent name
+                if let Some(agent_name) = path.file_stem().and_then(|name| name.to_str()) {
+                    match std::fs::read_to_string(&path) {
+                        Ok(content) => {
+                            let description = parse_agent_description(&content);
+                            agents.push(AgentInfo {
+                                name: agent_name.to_string(),
+                                content,
+                                source: source.clone(),
+                                description,
+                            });
+                        }
+                        Err(e) => {
+                            return Err(AgentError::IoError(e));
+                        }
+                    }
+                } else {
+                    return Err(AgentError::InvalidPath(path));
+                }
+            }
+        }
+
+        Ok(agents)
+    }
+
+    /// Load user-defined agents from ~/.swissarmyhammer/agents/
+    ///
+    /// Scans the user's home directory `.swissarmyhammer/agents/` for agent configuration
+    /// files. Missing directory is handled gracefully by returning an empty vector.
+    ///
+    /// # Returns
+    /// * `Result<Vec<AgentInfo>, AgentError>` - Vector of user-defined agent information
+    ///
+    /// # Examples
+    /// ```no_run
+    /// use swissarmyhammer_config::agent::AgentManager;
+    ///
+    /// let user_agents = AgentManager::load_user_agents()?;
+    /// for agent in user_agents {
+    ///     println!("User agent: {}", agent.name);
+    /// }
+    /// # Ok::<(), swissarmyhammer_config::AgentError>(())
+    /// ```
+    pub fn load_user_agents() -> Result<Vec<AgentInfo>, AgentError> {
+        if let Some(home_dir) = dirs::home_dir() {
+            let user_agents_dir = home_dir.join(".swissarmyhammer").join("agents");
+            Self::load_agents_from_dir(&user_agents_dir, AgentSource::User)
+        } else {
+            // No home directory available (rare case)
+            Ok(Vec::new())
+        }
+    }
+
+    /// Load project-specific agents from ./agents/
+    ///
+    /// Scans the current working directory's `agents/` subdirectory for agent configuration
+    /// files. Missing directory is handled gracefully by returning an empty vector.
+    ///
+    /// # Returns
+    /// * `Result<Vec<AgentInfo>, AgentError>` - Vector of project-specific agent information
+    ///
+    /// # Examples
+    /// ```no_run
+    /// use swissarmyhammer_config::agent::AgentManager;
+    ///
+    /// let project_agents = AgentManager::load_project_agents()?;
+    /// for agent in project_agents {
+    ///     println!("Project agent: {}", agent.name);
+    /// }
+    /// # Ok::<(), swissarmyhammer_config::AgentError>(())
+    /// ```
+    pub fn load_project_agents() -> Result<Vec<AgentInfo>, AgentError> {
+        let project_agents_dir = std::env::current_dir()
+            .map_err(AgentError::IoError)?
+            .join("agents");
+        Self::load_agents_from_dir(&project_agents_dir, AgentSource::Project)
+    }
 }
 
 #[cfg(test)]
@@ -861,5 +1027,117 @@ type: claude-code"#;
 
         let description = parse_agent_description(content);
         assert_eq!(description, Some("First line".to_string()));
+    }
+
+    #[test]
+    fn test_agent_manager_load_builtin_agents() {
+        let agents = AgentManager::load_builtin_agents().expect("Failed to load builtin agents");
+
+        // Should contain at least the known builtin agents
+        assert!(!agents.is_empty(), "Builtin agents should not be empty");
+
+        // All agents should have Builtin source
+        for agent in &agents {
+            assert_eq!(agent.source, AgentSource::Builtin);
+            assert!(!agent.name.is_empty(), "Agent name should not be empty");
+            assert!(!agent.content.is_empty(), "Agent content should not be empty");
+        }
+
+        // Check for known builtin agents
+        let agent_names: Vec<&str> = agents.iter().map(|a| a.name.as_str()).collect();
+        assert!(agent_names.contains(&"claude-code"), "Should contain claude-code agent");
+        assert!(agent_names.contains(&"qwen-coder"), "Should contain qwen-coder agent");
+    }
+
+    #[test]
+    fn test_agent_manager_load_agents_from_missing_dir() {
+        use std::path::Path;
+        
+        let non_existent_dir = Path::new("/non/existent/directory");
+        let result = AgentManager::load_agents_from_dir(non_existent_dir, AgentSource::User);
+
+        assert!(result.is_ok(), "Should handle missing directory gracefully");
+        let agents = result.unwrap();
+        assert!(agents.is_empty(), "Should return empty vector for missing directory");
+    }
+
+    #[test]
+    fn test_agent_manager_load_agents_from_dir_with_temp_files() {
+        use tempfile::TempDir;
+        use std::fs;
+
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+        let temp_path = temp_dir.path();
+
+        // Create test agent files
+        let agent1_content = r#"---
+description: "Test agent 1"
+---
+type: claude-code
+config: {}"#;
+        fs::write(temp_path.join("test-agent-1.yaml"), agent1_content)
+            .expect("Failed to write test agent 1");
+
+        let agent2_content = r#"# Description: Test agent 2
+type: llama-agent
+config: {}"#;
+        fs::write(temp_path.join("test-agent-2.yaml"), agent2_content)
+            .expect("Failed to write test agent 2");
+
+        // Create a non-YAML file that should be ignored
+        fs::write(temp_path.join("not-an-agent.txt"), "ignored content")
+            .expect("Failed to write non-yaml file");
+
+        let result = AgentManager::load_agents_from_dir(temp_path, AgentSource::Project);
+        assert!(result.is_ok(), "Should load agents from directory successfully");
+
+        let agents = result.unwrap();
+        assert_eq!(agents.len(), 2, "Should load exactly 2 YAML files");
+
+        // Check that all agents have correct source
+        for agent in &agents {
+            assert_eq!(agent.source, AgentSource::Project);
+        }
+
+        // Find specific agents
+        let agent1 = agents.iter().find(|a| a.name == "test-agent-1");
+        let agent2 = agents.iter().find(|a| a.name == "test-agent-2");
+
+        assert!(agent1.is_some(), "Should find test-agent-1");
+        assert!(agent2.is_some(), "Should find test-agent-2");
+
+        let agent1 = agent1.unwrap();
+        let agent2 = agent2.unwrap();
+
+        assert_eq!(agent1.description, Some("Test agent 1".to_string()));
+        assert_eq!(agent2.description, Some("Test agent 2".to_string()));
+    }
+
+    #[test]
+    fn test_agent_manager_load_user_agents() {
+        let result = AgentManager::load_user_agents();
+        
+        // Should not fail even if no user agents exist
+        assert!(result.is_ok(), "Should handle user agent loading gracefully");
+        
+        let agents = result.unwrap();
+        // All agents should have User source
+        for agent in &agents {
+            assert_eq!(agent.source, AgentSource::User);
+        }
+    }
+
+    #[test]
+    fn test_agent_manager_load_project_agents() {
+        let result = AgentManager::load_project_agents();
+        
+        // Should not fail even if no project agents exist
+        assert!(result.is_ok(), "Should handle project agent loading gracefully");
+        
+        let agents = result.unwrap();
+        // All agents should have Project source
+        for agent in &agents {
+            assert_eq!(agent.source, AgentSource::Project);
+        }
     }
 }
