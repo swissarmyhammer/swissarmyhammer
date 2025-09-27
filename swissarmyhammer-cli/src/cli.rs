@@ -207,6 +207,12 @@ the specification or requirements to be planned.")]
     /// Execute the implement workflow for autonomous issue resolution
     #[command(long_about = commands::implement::DESCRIPTION)]
     Implement,
+    /// Manage and interact with agents
+    #[command(long_about = commands::agent::DESCRIPTION)]
+    Agent {
+        #[command(subcommand)]
+        subcommand: AgentSubcommand,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -358,6 +364,21 @@ for better discoverability and clearer intent.
         /// Quiet mode - only show errors
         #[arg(short, long)]
         quiet: bool,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+pub enum AgentSubcommand {
+    /// List available agents
+    List {
+        /// Output format
+        #[arg(long, value_enum, default_value = "table")]
+        format: Option<OutputFormat>,
+    },
+    /// Use a specific agent
+    Use {
+        /// Name of the agent to use
+        agent_name: String,
     },
 }
 

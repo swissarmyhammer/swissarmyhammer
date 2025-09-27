@@ -734,6 +734,9 @@ Examples:
                 ),
         );
 
+        // Add agent command with subcommands
+        cli = cli.subcommand(Self::build_agent_command());
+
         cli
     }
 
@@ -1121,6 +1124,57 @@ When variables are not provided via --var, the command prompts interactively:
                             .long("quiet")
                             .help("Quiet mode - only show errors")
                             .action(ArgAction::SetTrue),
+                    ),
+            )
+    }
+
+    /// Build the agent command with all its subcommands
+    fn build_agent_command() -> Command {
+        Command::new("agent")
+            .about("Manage and interact with agents")
+            .long_about(
+                "
+Manage and interact with agents in the SwissArmyHammer system.
+Agents provide specialized functionality through dedicated workflows
+and tools for specific use cases.
+
+The agent system provides two main commands:
+• list - Display all available agents from all sources
+• use - Apply or execute a specific agent
+
+Use global arguments to control output:
+  --verbose         Show detailed information
+  --format FORMAT   Output format: table, json, yaml
+  --debug           Enable debug mode
+  --quiet           Suppress output except errors
+
+Examples:
+  sah agent list                           # List all agents
+  sah --verbose agent list                 # Show detailed information  
+  sah --format=json agent list             # Output as JSON
+  sah agent use code-reviewer              # Apply code-reviewer agent
+  sah --debug agent use planner            # Use agent with debug output
+                ",
+            )
+            .subcommand(
+                Command::new("list")
+                    .about("List available agents")
+                    .arg(
+                        Arg::new("format")
+                            .long("format")
+                            .help("Output format")
+                            .value_parser(["table", "json", "yaml"])
+                            .default_value("table"),
+                    ),
+            )
+            .subcommand(
+                Command::new("use")
+                    .about("Use a specific agent")
+                    .arg(
+                        Arg::new("agent_name")
+                            .help("Name of the agent to use")
+                            .value_name("AGENT_NAME")
+                            .required(true),
                     ),
             )
     }

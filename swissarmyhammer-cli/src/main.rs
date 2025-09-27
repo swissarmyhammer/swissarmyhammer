@@ -260,6 +260,7 @@ async fn handle_dynamic_matches(
         Some(("validate", sub_matches)) => handle_validate_command(sub_matches, &context).await,
         Some(("plan", sub_matches)) => handle_plan_command(sub_matches, &context).await,
         Some(("implement", _sub_matches)) => handle_implement_command(&context).await,
+        Some(("agent", sub_matches)) => handle_agent_command(sub_matches, &context).await,
         Some((category, sub_matches)) => match sub_matches.subcommand() {
             Some((tool_name, tool_matches)) => {
                 handle_dynamic_tool_command(category, tool_name, tool_matches, cli_tool_context)
@@ -568,6 +569,33 @@ async fn handle_plan_command(matches: &clap::ArgMatches, context: &CliContext) -
 
 async fn handle_implement_command(context: &CliContext) -> i32 {
     commands::implement::handle_command(context).await
+}
+
+async fn handle_agent_command(matches: &clap::ArgMatches, context: &CliContext) -> i32 {
+    use crate::cli::{AgentSubcommand, OutputFormat};
+
+    let subcommand = match matches.subcommand() {
+        Some(("list", sub_matches)) => {
+            let format = match sub_matches.get_one::<String>("format").map(|s| s.as_str()) {
+                Some("json") => Some(OutputFormat::Json),
+                Some("yaml") => Some(OutputFormat::Yaml),
+                Some("table") => Some(OutputFormat::Table),
+                _ => Some(OutputFormat::Table),
+            };
+
+            AgentSubcommand::List { format }
+        }
+        Some(("use", sub_matches)) => {
+            let agent_name = sub_matches.get_one::<String>("agent_name").cloned().unwrap();
+            AgentSubcommand::Use { agent_name }
+        }
+        _ => {
+            eprintln!("No agent subcommand specified");
+            return EXIT_ERROR;
+        }
+    };
+
+    commands::agent::handle_command(subcommand, context).await
 }
 
 async fn configure_logging(verbose: bool, debug: bool, quiet: bool, is_mcp_mode: bool) {
