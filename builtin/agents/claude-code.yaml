@@ -1,0 +1,4 @@
+agent:
+  quiet: false
+  executor:
+    type: claude-code

@@ -1,4 +1,3 @@
-project_name: SwissArmyHammer
 agent:
   quiet: false
   executor:

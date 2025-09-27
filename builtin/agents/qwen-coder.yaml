@@ -1,4 +1,3 @@
-project_name: SwissArmyHammer
 agent:
   quiet: false
   executor:
@@ -7,5 +6,5 @@ agent:
       model:
         source:
           HuggingFace:
-            repo: "unsloth/Qwen3-235B-A22B-Instruct-2507-GGUF"
+            repo: "unsloth/Qwen3-Coder-480B-A35B-Instruct-GGUF"
             folder: "Q4_K_M"
