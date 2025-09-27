@@ -307,6 +307,9 @@ pub enum AgentError {
     /// Configuration parsing error
     #[error("Parse error: {0}")]
     ParseError(#[from] serde_yaml::Error),
+    /// Configuration validation error
+    #[error("Configuration error: {0}")]
+    ConfigError(String),
 }
 
 /// Agent information structure
@@ -364,13 +367,13 @@ pub fn parse_agent_description(content: &str) -> Option<String> {
 }
 
 /// Extracts the agent configuration portion from content that may have YAML frontmatter
-/// 
+///
 /// Handles two formats:
 /// 1. Frontmatter format: `---\ndescription: "..."\n---\nactual_config`
 /// 2. Pure config format: just the AgentConfig YAML
 pub fn parse_agent_config(content: &str) -> Result<AgentConfig, serde_yaml::Error> {
     let content = content.trim();
-    
+
     // Check for YAML front matter
     if let Some(stripped) = content.strip_prefix("---") {
         if let Some(end_pos) = stripped.find("---") {
@@ -379,7 +382,7 @@ pub fn parse_agent_config(content: &str) -> Result<AgentConfig, serde_yaml::Erro
             return serde_yaml::from_str::<AgentConfig>(config_content);
         }
     }
-    
+
     // Fall back to parsing entire content as AgentConfig
     serde_yaml::from_str::<AgentConfig>(content)
 }
@@ -756,6 +759,202 @@ impl AgentManager {
             .map_err(AgentError::IoError)?
             .join("agents");
         Self::load_agents_from_dir(&project_agents_dir, AgentSource::Project)
+    }
+
+    /// Find a specific agent by name from all available sources
+    ///
+    /// Searches through all available agents (built-in, project, and user) with proper precedence
+    /// handling. Returns the first agent found with the given name, respecting the precedence
+    /// hierarchy where user agents override project agents which override built-in agents.
+    ///
+    /// # Arguments
+    /// * `agent_name` - The name of the agent to search for
+    ///
+    /// # Returns
+    /// * `Result<AgentInfo, AgentError>` - The found agent information or NotFound error
+    ///
+    /// # Examples
+    /// ```no_run
+    /// use swissarmyhammer_config::agent::AgentManager;
+    ///
+    /// let agent = AgentManager::find_agent_by_name("claude-code")?;
+    /// println!("Found agent: {} from {:?}", agent.name, agent.source);
+    /// # Ok::<(), swissarmyhammer_config::agent::AgentError>(())
+    /// ```
+    pub fn find_agent_by_name(agent_name: &str) -> Result<AgentInfo, AgentError> {
+        let agents = Self::list_agents()?;
+
+        agents
+            .into_iter()
+            .find(|agent| agent.name == agent_name)
+            .ok_or_else(|| AgentError::NotFound(agent_name.to_string()))
+    }
+
+    /// Detect existing project configuration file
+    ///
+    /// Checks for existing project configuration files in the current working directory,
+    /// preferring YAML format over TOML. Returns the path to the first configuration
+    /// file found or None if no configuration exists.
+    ///
+    /// # Search Order
+    /// 1. `.swissarmyhammer/sah.yaml` (preferred)
+    /// 2. `.swissarmyhammer/sah.toml` (fallback)
+    ///
+    /// # Returns
+    /// * `Option<PathBuf>` - Path to existing config file or None if not found
+    ///
+    /// # Examples
+    /// ```no_run
+    /// use swissarmyhammer_config::agent::AgentManager;
+    ///
+    /// match AgentManager::detect_config_file() {
+    ///     Some(config_path) => println!("Found config: {}", config_path.display()),
+    ///     None => println!("No existing config found"),
+    /// }
+    /// ```
+    pub fn detect_config_file() -> Option<PathBuf> {
+        let current_dir = std::env::current_dir().ok()?;
+        let sah_dir = current_dir.join(".swissarmyhammer");
+
+        // Check for YAML config first (preferred)
+        let yaml_config = sah_dir.join("sah.yaml");
+        if yaml_config.exists() && yaml_config.is_file() {
+            return Some(yaml_config);
+        }
+
+        // Fall back to TOML config
+        let toml_config = sah_dir.join("sah.toml");
+        if toml_config.exists() && toml_config.is_file() {
+            return Some(toml_config);
+        }
+
+        None
+    }
+
+    /// Ensure project configuration directory structure exists
+    ///
+    /// Creates the `.swissarmyhammer/` directory if it doesn't exist and returns the path
+    /// to the configuration file that should be used. If an existing configuration file
+    /// is found, returns that path. Otherwise, returns the path for a new YAML configuration.
+    ///
+    /// # Returns
+    /// * `Result<PathBuf, AgentError>` - Path to config file (existing or new) or error
+    ///
+    /// # Examples
+    /// ```no_run
+    /// use swissarmyhammer_config::agent::AgentManager;
+    ///
+    /// let config_path = AgentManager::ensure_config_structure()?;
+    /// println!("Config file path: {}", config_path.display());
+    /// # Ok::<(), swissarmyhammer_config::agent::AgentError>(())
+    /// ```
+    pub fn ensure_config_structure() -> Result<PathBuf, AgentError> {
+        let current_dir = std::env::current_dir().map_err(AgentError::IoError)?;
+        let sah_dir = current_dir.join(".swissarmyhammer");
+
+        // Create .swissarmyhammer directory if it doesn't exist
+        if !sah_dir.exists() {
+            std::fs::create_dir_all(&sah_dir).map_err(AgentError::IoError)?;
+            tracing::debug!("Created .swissarmyhammer directory: {}", sah_dir.display());
+        }
+
+        // Check for existing config file first
+        if let Some(existing_config) = Self::detect_config_file() {
+            tracing::debug!("Found existing config file: {}", existing_config.display());
+            return Ok(existing_config);
+        }
+
+        // Return path for new YAML config (don't create the file yet)
+        let new_config = sah_dir.join("sah.yaml");
+        tracing::debug!("Will use new config file: {}", new_config.display());
+        Ok(new_config)
+    }
+
+    /// Apply an agent configuration to the project
+    ///
+    /// Finds the specified agent by name, loads or creates the project configuration file,
+    /// and updates the agent section with the selected agent's configuration. Preserves
+    /// all other sections in existing configuration files.
+    ///
+    /// # Arguments
+    /// * `agent_name` - Name of the agent to apply
+    ///
+    /// # Returns
+    /// * `Result<(), AgentError>` - Success or error details
+    ///
+    /// # Examples
+    /// ```no_run
+    /// use swissarmyhammer_config::agent::AgentManager;
+    ///
+    /// // Apply built-in claude-code agent to project
+    /// AgentManager::use_agent("claude-code")?;
+    ///
+    /// // Apply a custom user agent
+    /// AgentManager::use_agent("my-custom-agent")?;
+    /// # Ok::<(), swissarmyhammer_config::agent::AgentError>(())
+    /// ```
+    pub fn use_agent(agent_name: &str) -> Result<(), AgentError> {
+        tracing::info!("Applying agent '{}' to project configuration", agent_name);
+
+        // Step 1: Find the agent by name
+        let agent_info = Self::find_agent_by_name(agent_name)?;
+        tracing::debug!(
+            "Found agent '{}' from source: {:?}",
+            agent_info.name,
+            agent_info.source
+        );
+
+        // Step 2: Parse agent configuration to validate it
+        let agent_config = parse_agent_config(&agent_info.content)?;
+        tracing::debug!(
+            "Successfully parsed agent configuration for '{}'",
+            agent_name
+        );
+
+        // Step 3: Ensure config structure exists and get config file path
+        let config_path = Self::ensure_config_structure()?;
+        tracing::debug!("Using config file: {}", config_path.display());
+
+        // Step 4: Load existing config or create new one
+        let mut project_config = if config_path.exists() {
+            tracing::debug!(
+                "Loading existing configuration from {}",
+                config_path.display()
+            );
+            let config_content =
+                std::fs::read_to_string(&config_path).map_err(AgentError::IoError)?;
+            serde_yaml::from_str::<serde_yaml::Value>(&config_content)?
+        } else {
+            tracing::debug!("Creating new configuration file");
+            serde_yaml::Value::Mapping(serde_yaml::Mapping::new())
+        };
+
+        // Step 5: Convert agent config to YAML value and update project config
+        let agent_yaml = serde_yaml::to_value(&agent_config)?;
+
+        match &mut project_config {
+            serde_yaml::Value::Mapping(ref mut map) => {
+                map.insert(serde_yaml::Value::String("agent".to_string()), agent_yaml);
+                tracing::debug!("Updated agent section in project configuration");
+            }
+            _ => {
+                return Err(AgentError::ConfigError(
+                    "Project configuration must be a YAML mapping".to_string(),
+                ));
+            }
+        }
+
+        // Step 6: Write updated config back to file
+        let updated_content = serde_yaml::to_string(&project_config)?;
+        std::fs::write(&config_path, &updated_content).map_err(AgentError::IoError)?;
+
+        tracing::info!(
+            "Successfully applied agent '{}' to project config: {}",
+            agent_name,
+            config_path.display()
+        );
+
+        Ok(())
     }
 }
 
@@ -1308,8 +1507,6 @@ quiet: false"#;
         assert_eq!(config.quiet, false);
     }
 
-
-
     #[test]
     fn test_parse_agent_config_pure_yaml() {
         let content = r#"executor:
@@ -1792,5 +1989,432 @@ quiet: false"#;
         assert_eq!(agents.len(), 1, "Should load only the YAML file");
         assert_eq!(agents[0].name, "real-agent");
         assert_eq!(agents[0].source, AgentSource::User);
+    }
+
+    #[test]
+    fn test_agent_manager_find_agent_by_name_existing() {
+        let result = AgentManager::find_agent_by_name("claude-code");
+        assert!(result.is_ok(), "Should find existing claude-code agent");
+
+        let agent = result.unwrap();
+        assert_eq!(agent.name, "claude-code");
+        assert_eq!(agent.source, AgentSource::Builtin);
+        assert!(!agent.content.is_empty());
+    }
+
+    #[test]
+    fn test_agent_manager_find_agent_by_name_not_found() {
+        let result = AgentManager::find_agent_by_name("non-existent-agent");
+        assert!(
+            result.is_err(),
+            "Should return error for non-existent agent"
+        );
+
+        match result {
+            Err(AgentError::NotFound(name)) => {
+                assert_eq!(name, "non-existent-agent");
+            }
+            _ => panic!("Should return NotFound error"),
+        }
+    }
+
+    #[test]
+    fn test_agent_manager_find_agent_by_name_precedence() {
+        // This test will pass the existing agent names from builtin agents
+        // Test with known builtin agent
+        let result = AgentManager::find_agent_by_name("qwen-coder");
+        assert!(result.is_ok(), "Should find qwen-coder agent");
+
+        let agent = result.unwrap();
+        assert_eq!(agent.name, "qwen-coder");
+        // Should be builtin unless overridden by project or user agents
+        assert_eq!(agent.source, AgentSource::Builtin);
+    }
+
+    #[test]
+    fn test_agent_manager_detect_config_file_no_config() {
+        use std::env;
+        use tempfile::TempDir;
+
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+        let original_dir = env::current_dir().expect("Failed to get current dir");
+        env::set_current_dir(&temp_dir).expect("Failed to change to temp dir");
+
+        let result = AgentManager::detect_config_file();
+        assert!(
+            result.is_none(),
+            "Should return None when no config files exist"
+        );
+
+        env::set_current_dir(&original_dir).expect("Failed to restore original dir");
+    }
+
+    #[test]
+    fn test_agent_manager_detect_config_file_yaml_exists() {
+        use std::env;
+        use std::fs;
+        use tempfile::TempDir;
+
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+        let original_dir = env::current_dir().expect("Failed to get current dir");
+        env::set_current_dir(&temp_dir).expect("Failed to change to temp dir");
+
+        // Create .swissarmyhammer directory and yaml config
+        let sah_dir = temp_dir.path().join(".swissarmyhammer");
+        fs::create_dir_all(&sah_dir).expect("Failed to create .swissarmyhammer dir");
+        let yaml_path = sah_dir.join("sah.yaml");
+        fs::write(&yaml_path, "agent: {}\n").expect("Failed to write yaml config");
+
+        let result = AgentManager::detect_config_file();
+        assert!(result.is_some(), "Should find yaml config file");
+
+        let found_path = result.unwrap();
+        assert_eq!(
+            found_path.file_name(),
+            Some(std::ffi::OsStr::new("sah.yaml")),
+            "Should find sah.yaml file"
+        );
+        assert!(
+            found_path.ends_with(".swissarmyhammer/sah.yaml"),
+            "Should end with .swissarmyhammer/sah.yaml"
+        );
+
+        env::set_current_dir(&original_dir).expect("Failed to restore original dir");
+    }
+
+    #[test]
+    fn test_agent_manager_detect_config_file_toml_fallback() {
+        use std::env;
+        use std::fs;
+        use tempfile::TempDir;
+
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+        let original_dir = env::current_dir().expect("Failed to get current dir");
+        env::set_current_dir(&temp_dir).expect("Failed to change to temp dir");
+
+        // Create .swissarmyhammer directory and toml config only
+        let sah_dir = temp_dir.path().join(".swissarmyhammer");
+        fs::create_dir_all(&sah_dir).expect("Failed to create .swissarmyhammer dir");
+        let toml_path = sah_dir.join("sah.toml");
+        fs::write(&toml_path, "[agent]\n").expect("Failed to write toml config");
+
+        let result = AgentManager::detect_config_file();
+        assert!(result.is_some(), "Should find toml config file");
+
+        let found_path = result.unwrap();
+        assert_eq!(
+            found_path.file_name(),
+            Some(std::ffi::OsStr::new("sah.toml")),
+            "Should find sah.toml file"
+        );
+        assert!(
+            found_path.ends_with(".swissarmyhammer/sah.toml"),
+            "Should end with .swissarmyhammer/sah.toml"
+        );
+
+        env::set_current_dir(&original_dir).expect("Failed to restore original dir");
+    }
+
+    #[test]
+    fn test_agent_manager_detect_config_file_yaml_precedence() {
+        use std::env;
+        use std::fs;
+        use tempfile::TempDir;
+
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+        let original_dir = env::current_dir().expect("Failed to get current dir");
+        env::set_current_dir(&temp_dir).expect("Failed to change to temp dir");
+
+        // Create .swissarmyhammer directory with both yaml and toml configs
+        let sah_dir = temp_dir.path().join(".swissarmyhammer");
+        fs::create_dir_all(&sah_dir).expect("Failed to create .swissarmyhammer dir");
+        let yaml_path = sah_dir.join("sah.yaml");
+        let toml_path = sah_dir.join("sah.toml");
+        fs::write(&yaml_path, "agent: {}\n").expect("Failed to write yaml config");
+        fs::write(&toml_path, "[agent]\n").expect("Failed to write toml config");
+
+        let result = AgentManager::detect_config_file();
+        assert!(result.is_some(), "Should find config file");
+
+        let found_path = result.unwrap();
+        assert_eq!(
+            found_path.file_name(),
+            Some(std::ffi::OsStr::new("sah.yaml")),
+            "Should prefer yaml over toml"
+        );
+        assert!(
+            found_path.ends_with(".swissarmyhammer/sah.yaml"),
+            "Should end with .swissarmyhammer/sah.yaml"
+        );
+
+        env::set_current_dir(&original_dir).expect("Failed to restore original dir");
+    }
+
+    #[test]
+    fn test_agent_manager_ensure_config_structure_creates_directory() {
+        use std::env;
+        use tempfile::TempDir;
+
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+        let original_dir = env::current_dir().expect("Failed to get current dir");
+        env::set_current_dir(&temp_dir).expect("Failed to change to temp dir");
+
+        let result = AgentManager::ensure_config_structure();
+        assert!(
+            result.is_ok(),
+            "Should successfully create config structure"
+        );
+
+        let config_path = result.unwrap();
+        assert_eq!(
+            config_path.file_name(),
+            Some(std::ffi::OsStr::new("sah.yaml")),
+            "Should return path to sah.yaml"
+        );
+        assert!(
+            config_path.ends_with(".swissarmyhammer/sah.yaml"),
+            "Should end with .swissarmyhammer/sah.yaml"
+        );
+
+        // Check that the directory was created
+        let sah_dir = temp_dir.path().join(".swissarmyhammer");
+        assert!(sah_dir.exists(), "Should create .swissarmyhammer directory");
+        assert!(sah_dir.is_dir(), "Should create directory, not file");
+
+        env::set_current_dir(&original_dir).expect("Failed to restore original dir");
+    }
+
+    #[test]
+    fn test_agent_manager_ensure_config_structure_existing_directory() {
+        use std::env;
+        use std::fs;
+        use tempfile::TempDir;
+
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+        let original_dir = env::current_dir().expect("Failed to get current dir");
+        env::set_current_dir(&temp_dir).expect("Failed to change to temp dir");
+
+        // Pre-create the directory
+        let sah_dir = temp_dir.path().join(".swissarmyhammer");
+        fs::create_dir_all(&sah_dir).expect("Failed to pre-create directory");
+
+        let result = AgentManager::ensure_config_structure();
+        assert!(
+            result.is_ok(),
+            "Should handle existing directory gracefully"
+        );
+
+        let config_path = result.unwrap();
+        assert_eq!(
+            config_path.file_name(),
+            Some(std::ffi::OsStr::new("sah.yaml")),
+            "Should return path to sah.yaml"
+        );
+        assert!(
+            config_path.ends_with(".swissarmyhammer/sah.yaml"),
+            "Should end with .swissarmyhammer/sah.yaml"
+        );
+
+        env::set_current_dir(&original_dir).expect("Failed to restore original dir");
+    }
+
+    #[test]
+    fn test_agent_manager_ensure_config_structure_with_existing_config() {
+        use std::env;
+        use std::fs;
+        use tempfile::TempDir;
+
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+        let original_dir = env::current_dir().expect("Failed to get current dir");
+        env::set_current_dir(&temp_dir).expect("Failed to change to temp dir");
+
+        // Pre-create directory and existing config file
+        let sah_dir = temp_dir.path().join(".swissarmyhammer");
+        fs::create_dir_all(&sah_dir).expect("Failed to pre-create directory");
+        let existing_config = sah_dir.join("sah.toml");
+        fs::write(&existing_config, "[existing]\nvalue = true\n")
+            .expect("Failed to write existing config");
+
+        let result = AgentManager::ensure_config_structure();
+        assert!(result.is_ok(), "Should handle existing config gracefully");
+
+        let config_path = result.unwrap();
+        // Should return existing toml config path, not create new yaml
+        assert_eq!(
+            config_path.file_name(),
+            Some(std::ffi::OsStr::new("sah.toml")),
+            "Should return existing config file"
+        );
+        assert!(
+            config_path.ends_with(".swissarmyhammer/sah.toml"),
+            "Should return existing toml config"
+        );
+
+        env::set_current_dir(&original_dir).expect("Failed to restore original dir");
+    }
+
+    #[test]
+    fn test_agent_manager_use_agent_creates_new_config() {
+        use std::env;
+        use std::fs;
+        use tempfile::TempDir;
+
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+        let original_dir = env::current_dir().expect("Failed to get current dir");
+        env::set_current_dir(&temp_dir).expect("Failed to change to temp dir");
+
+        // Use a known builtin agent
+        let result = AgentManager::use_agent("claude-code");
+        assert!(result.is_ok(), "Should successfully use claude-code agent");
+
+        // Check that config file was created
+        let config_path = temp_dir.path().join(".swissarmyhammer").join("sah.yaml");
+        assert!(config_path.exists(), "Should create config file");
+
+        // Read and verify config content
+        let config_content = fs::read_to_string(&config_path).expect("Failed to read config");
+        assert!(
+            config_content.contains("agent:"),
+            "Should contain agent section"
+        );
+        assert!(
+            config_content.contains("executor:"),
+            "Should contain executor config"
+        );
+
+        env::set_current_dir(&original_dir).expect("Failed to restore original dir");
+    }
+
+    #[test]
+    fn test_agent_manager_use_agent_updates_existing_config() {
+        use std::env;
+        use std::fs;
+        use tempfile::TempDir;
+
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+        let original_dir = env::current_dir().expect("Failed to get current dir");
+        env::set_current_dir(&temp_dir).expect("Failed to change to temp dir");
+
+        // Create existing config with other sections
+        let sah_dir = temp_dir.path().join(".swissarmyhammer");
+        fs::create_dir_all(&sah_dir).expect("Failed to create sah dir");
+        let config_path = sah_dir.join("sah.yaml");
+        let existing_config = r#"# Existing config
+other_section:
+  value: "preserved"
+  number: 42
+"#;
+        fs::write(&config_path, existing_config).expect("Failed to write existing config");
+
+        // Use agent
+        let result = AgentManager::use_agent("claude-code");
+        if let Err(e) = &result {
+            panic!("Failed to use claude-code agent: {:?}", e);
+        }
+        assert!(result.is_ok(), "Should successfully update existing config");
+
+        // Read and verify updated config
+        println!("About to read config file: {}", config_path.display());
+        println!("Config file exists: {}", config_path.exists());
+        let updated_config =
+            fs::read_to_string(&config_path).expect("Failed to read updated config");
+        println!("Updated config content:\n{}", updated_config);
+        println!("Config length: {}", updated_config.len());
+        assert!(
+            updated_config.contains("other_section:"),
+            "Should preserve existing sections"
+        );
+        assert!(
+            updated_config.contains("value: preserved"),
+            "Should preserve existing values"
+        );
+        assert!(
+            updated_config.contains("agent:"),
+            "Should add agent section"
+        );
+        assert!(
+            updated_config.contains("executor:"),
+            "Should contain executor config"
+        );
+
+        env::set_current_dir(&original_dir).expect("Failed to restore original dir");
+    }
+
+    #[test]
+    fn test_agent_manager_use_agent_replaces_existing_agent() {
+        use std::env;
+        use std::fs;
+        use tempfile::TempDir;
+
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+        let original_dir = env::current_dir().expect("Failed to get current dir");
+        env::set_current_dir(&temp_dir).expect("Failed to change to temp dir");
+
+        // Create config with existing agent section
+        let sah_dir = temp_dir.path().join(".swissarmyhammer");
+        fs::create_dir_all(&sah_dir).expect("Failed to create sah dir");
+        let config_path = sah_dir.join("sah.yaml");
+        let existing_config = r#"# Config with existing agent
+other_section:
+  value: "preserved"
+agent:
+  executor:
+    type: llama-agent
+    config: {}
+  quiet: true
+"#;
+        fs::write(&config_path, existing_config).expect("Failed to write existing config");
+
+        // Use different agent
+        let result = AgentManager::use_agent("claude-code");
+        assert!(result.is_ok(), "Should successfully replace existing agent");
+
+        // Read and verify updated config
+        let updated_config =
+            fs::read_to_string(&config_path).expect("Failed to read updated config");
+        assert!(
+            updated_config.contains("other_section:"),
+            "Should preserve other sections"
+        );
+        assert!(
+            updated_config.contains("value: preserved"),
+            "Should preserve existing values"
+        );
+        assert!(
+            updated_config.contains("agent:"),
+            "Should have agent section"
+        );
+        assert!(
+            updated_config.contains("claude-code"),
+            "Should contain new agent config"
+        );
+        assert!(
+            !updated_config.contains("llama-agent"),
+            "Should replace old agent config"
+        );
+
+        env::set_current_dir(&original_dir).expect("Failed to restore original dir");
+    }
+
+    #[test]
+    fn test_agent_manager_use_agent_not_found() {
+        use std::env;
+        use tempfile::TempDir;
+
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+        let original_dir = env::current_dir().expect("Failed to get current dir");
+        env::set_current_dir(&temp_dir).expect("Failed to change to temp dir");
+
+        let result = AgentManager::use_agent("non-existent-agent");
+        assert!(result.is_err(), "Should fail for non-existent agent");
+
+        match result {
+            Err(AgentError::NotFound(name)) => {
+                assert_eq!(name, "non-existent-agent");
+            }
+            _ => panic!("Should return NotFound error"),
+        }
+
+        env::set_current_dir(&original_dir).expect("Failed to restore original dir");
     }
 }

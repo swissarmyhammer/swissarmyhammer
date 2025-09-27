@@ -20,11 +20,6 @@ fn test_builtin_agents_generation() {
         assert!(!name.is_empty(), "Agent name should not be empty");
         assert!(!content.is_empty(), "Agent content should not be empty");
         assert!(
-            content.contains("agent:"),
-            "Agent content should contain 'agent:' key for {}",
-            name
-        );
-        assert!(
             content.contains("executor:"),
             "Agent content should contain 'executor:' key for {}",
             name

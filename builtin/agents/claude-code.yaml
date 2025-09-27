@@ -1,4 +1,4 @@
-agent:
-  quiet: false
-  executor:
-    type: claude-code
+quiet: false
+executor:
+  type: claude-code
+  config: {}
