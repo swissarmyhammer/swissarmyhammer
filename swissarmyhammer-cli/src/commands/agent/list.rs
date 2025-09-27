@@ -25,7 +25,7 @@ pub async fn execute_list_command(
     context: &CliContext,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     tracing::debug!("Starting agent list command");
-    
+
     // Load all agents using AgentManager
     let agents = match AgentManager::list_agents() {
         Ok(agents) => agents,
@@ -64,10 +64,14 @@ pub async fn execute_list_command(
         .iter()
         .map(|agent| AgentDisplayRow {
             name: agent.name.clone(),
-            description: agent.description.as_deref().unwrap_or("No description").to_string(),
+            description: agent
+                .description
+                .as_deref()
+                .unwrap_or("No description")
+                .to_string(),
             source: match agent.source {
                 AgentSource::Builtin => "builtin".to_string(),
-                AgentSource::Project => "project".to_string(), 
+                AgentSource::Project => "project".to_string(),
                 AgentSource::User => "user".to_string(),
             },
         })
@@ -75,7 +79,7 @@ pub async fn execute_list_command(
 
     // Handle different output formats
     let output_format = format.unwrap_or(OutputFormat::Table);
-    
+
     match output_format {
         OutputFormat::Table => {
             display_agents_table(&agents, &source_counts)?;
@@ -103,17 +107,17 @@ fn display_agents_table(
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // Show summary line
     println!("🤖 Agents: {} total", agents.len());
-    
+
     // Show source breakdown
     let builtin_count = source_counts.get(&AgentSource::Builtin).unwrap_or(&0);
     let project_count = source_counts.get(&AgentSource::Project).unwrap_or(&0);
     let user_count = source_counts.get(&AgentSource::User).unwrap_or(&0);
-    
+
     println!(
         "📦 Built-in: {}, 📁 Project: {}, 👤 User: {}",
         builtin_count, project_count, user_count
     );
-    
+
     if !agents.is_empty() {
         println!(); // Blank line before entries
     }
@@ -125,19 +129,20 @@ fn display_agents_table(
         }
 
         // First line: Name | Description (colored by source)
-        let name_desc = format!("{} | {}", 
-            agent.name, 
+        let name_desc = format!(
+            "{} | {}",
+            agent.name,
             agent.description.as_deref().unwrap_or("No description")
         );
-        
+
         let colored_line = match agent.source {
             AgentSource::Builtin => name_desc.green(),
             AgentSource::Project => name_desc.yellow(),
             AgentSource::User => name_desc.blue(),
         };
-        
+
         println!("{}", colored_line);
-        
+
         // Second line: source info (dimmed)
         let source_name = match agent.source {
             AgentSource::Builtin => "builtin",

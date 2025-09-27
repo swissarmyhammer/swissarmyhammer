@@ -586,7 +586,10 @@ async fn handle_agent_command(matches: &clap::ArgMatches, context: &CliContext) 
             AgentSubcommand::List { format }
         }
         Some(("use", sub_matches)) => {
-            let agent_name = sub_matches.get_one::<String>("agent_name").cloned().unwrap();
+            let agent_name = sub_matches
+                .get_one::<String>("agent_name")
+                .cloned()
+                .unwrap();
             AgentSubcommand::Use { agent_name }
         }
         _ => {

@@ -1157,25 +1157,21 @@ Examples:
                 ",
             )
             .subcommand(
-                Command::new("list")
-                    .about("List available agents")
-                    .arg(
-                        Arg::new("format")
-                            .long("format")
-                            .help("Output format")
-                            .value_parser(["table", "json", "yaml"])
-                            .default_value("table"),
-                    ),
+                Command::new("list").about("List available agents").arg(
+                    Arg::new("format")
+                        .long("format")
+                        .help("Output format")
+                        .value_parser(["table", "json", "yaml"])
+                        .default_value("table"),
+                ),
             )
             .subcommand(
-                Command::new("use")
-                    .about("Use a specific agent")
-                    .arg(
-                        Arg::new("agent_name")
-                            .help("Name of the agent to use")
-                            .value_name("AGENT_NAME")
-                            .required(true),
-                    ),
+                Command::new("use").about("Use a specific agent").arg(
+                    Arg::new("agent_name")
+                        .help("Name of the agent to use")
+                        .value_name("AGENT_NAME")
+                        .required(true),
+                ),
             )
     }
 }
