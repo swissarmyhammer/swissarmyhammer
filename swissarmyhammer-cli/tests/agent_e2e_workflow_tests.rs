@@ -263,7 +263,7 @@ quiet: false"#;
     
     // Step 1: List agents from project directory (should show hierarchy)
     let list_output = run_sah_command(&["agent", "list", "--format", "json"], 
-                                      Some(&project_root)).await?;
+                                      Some(project_root)).await?;
     assert!(list_output.status.success(), "Should list agents with hierarchy");
     
     let agents_json = parse_agent_list_json(&String::from_utf8_lossy(&list_output.stdout))?;

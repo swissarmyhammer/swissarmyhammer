@@ -1,7 +1,170 @@
 //! Agent configuration types and infrastructure
 //!
-//! This module defines the type system for agent configuration in SwissArmyHammer,
-//! supporting hierarchical configuration with proper fallback chains.
+//! This module provides comprehensive agent management for SwissArmyHammer, enabling
+//! dynamic switching between different AI execution environments and configurations.
+//!
+//! # Overview
+//!
+//! Agents in SwissArmyHammer represent different AI execution contexts, from cloud-based
+//! Claude Code integration to local model execution with LlamaAgent. The agent system
+//! provides a flexible, hierarchical configuration approach that allows users to:
+//!
+//! - Switch between different AI models and execution environments
+//! - Customize agent behavior per project or globally
+//! - Override built-in configurations with user-defined alternatives
+//! - Manage complex multi-model workflows
+//!
+//! # Agent Architecture
+//!
+//! The system supports multiple executor types:
+//!
+//! - **Claude Code**: Shell execution using Claude Code CLI (default)
+//! - **LlamaAgent**: In-process execution with local models via llama.cpp
+//!
+//! ## Hierarchical Discovery
+//!
+//! Agents are loaded from multiple sources with precedence:
+//!
+//! 1. **Built-in agents** (lowest precedence) - Embedded in binary
+//! 2. **Project agents** (medium precedence) - `./agents/*.yaml`
+//! 3. **User agents** (highest precedence) - `~/.swissarmyhammer/agents/*.yaml`
+//!
+//! Higher precedence agents override lower ones by name, enabling customization
+//! while preserving defaults.
+//!
+//! # Configuration Format
+//!
+//! Agent configurations use YAML format with optional frontmatter:
+//!
+//! ```yaml
+//! ---
+//! description: "Custom Claude Code agent with project-specific settings"
+//! ---
+//! executor:
+//!   type: claude-code
+//!   config:
+//!     claude_path: /usr/local/bin/claude
+//!     args: ["--project-mode"]
+//! quiet: false
+//! ```
+//!
+//! # Quick Start
+//!
+//! ## Basic Agent Management
+//!
+//! ```no_run
+//! use swissarmyhammer_config::agent::AgentManager;
+//!
+//! // List all available agents
+//! let agents = AgentManager::list_agents()?;
+//! for agent in agents {
+//!     println!("{}: {:?} - {}", 
+//!         agent.name, 
+//!         agent.source,
+//!         agent.description.unwrap_or_default()
+//!     );
+//! }
+//!
+//! // Find specific agent
+//! let claude_agent = AgentManager::find_agent_by_name("claude-code")?;
+//! println!("Found: {}", claude_agent.name);
+//!
+//! // Apply agent to project
+//! AgentManager::use_agent("claude-code")?;
+//! # Ok::<(), swissarmyhammer_config::agent::AgentError>(())
+//! ```
+//!
+//! ## Creating Custom Agents
+//!
+//! Create a project-specific agent in `./agents/my-agent.yaml`:
+//!
+//! ```yaml
+//! ---
+//! description: "Custom agent for data analysis tasks"
+//! ---
+//! executor:
+//!   type: llama-agent
+//!   config:
+//!     model:
+//!       source:
+//!         HuggingFace:
+//!           repo: "microsoft/DialoGPT-medium"
+//!           filename: "model.gguf"
+//!     mcp_server:
+//!       port: 8080
+//!       timeout_seconds: 300
+//! quiet: false
+//! ```
+//!
+//! ## Configuration Loading
+//!
+//! ```no_run
+//! use swissarmyhammer_config::agent::{parse_agent_config, parse_agent_description};
+//!
+//! let agent_content = std::fs::read_to_string("./agents/my-agent.yaml")?;
+//!
+//! // Extract description
+//! let description = parse_agent_description(&agent_content);
+//! println!("Description: {:?}", description);
+//!
+//! // Parse configuration
+//! let config = parse_agent_config(&agent_content)?;
+//! println!("Executor: {:?}", config.executor_type());
+//! # Ok::<(), Box<dyn std::error::Error>>(())
+//! ```
+//!
+//! # Built-in Agents
+//!
+//! SwissArmyHammer includes these built-in agents:
+//!
+//! ## claude-code
+//! 
+//! Default integration with Claude Code CLI:
+//! ```yaml
+//! executor:
+//!   type: claude-code
+//!   config:
+//!     claude_path: null  # Use system PATH
+//!     args: []
+//! quiet: false
+//! ```
+//!
+//! ## qwen-coder
+//!
+//! Local execution with Qwen3-Coder model:
+//! ```yaml
+//! executor:
+//!   type: llama-agent
+//!   config:
+//!     model:
+//!       source:
+//!         HuggingFace:
+//!           repo: "unsloth/Qwen3-Coder-30B-A3B-Instruct-GGUF"
+//!           filename: "Qwen3-Coder-30B-A3B-Instruct-UD-Q6_K_XL.gguf"
+//! ```
+//!
+//! # Error Handling
+//!
+//! The agent system provides comprehensive error handling:
+//!
+//! ```no_run
+//! use swissarmyhammer_config::agent::{AgentManager, AgentError};
+//!
+//! match AgentManager::find_agent_by_name("nonexistent") {
+//!     Ok(agent) => println!("Found: {}", agent.name),
+//!     Err(AgentError::NotFound(name)) => {
+//!         eprintln!("Agent '{}' not found", name);
+//!         // Show available agents as suggestion
+//!         let agents = AgentManager::list_agents()?;
+//!         eprintln!("Available agents:");
+//!         for agent in agents {
+//!             eprintln!("  - {}", agent.name);
+//!         }
+//!     },
+//!     Err(e) => eprintln!("Error: {}", e),
+//! }
+//! # Ok::<(), AgentError>(())
+//! ```
 
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};

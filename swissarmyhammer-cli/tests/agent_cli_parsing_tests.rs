@@ -416,24 +416,21 @@ fn test_command_hierarchy_structure() {
 fn test_global_flags_with_agent_commands() {
     // Test global verbose flag with agent commands
     let result = try_parse_cli(&["--verbose", "agent", "list"]);
-    if result.is_ok() {
-        let cli = result.unwrap();
+    if let Ok(cli) = result {
         assert!(cli.verbose || cli.debug, "Global verbose flag should be parsed");
         assert!(matches!(cli.command, Some(Commands::Agent { .. })));
     }
     
     // Test global quiet flag with agent commands
     let result = try_parse_cli(&["--quiet", "agent", "use", "test"]);
-    if result.is_ok() {
-        let cli = result.unwrap();
+    if let Ok(cli) = result {
         assert!(cli.quiet, "Global quiet flag should be parsed");
         assert!(matches!(cli.command, Some(Commands::Agent { .. })));
     }
     
     // Test global debug flag with agent commands
     let result = try_parse_cli(&["--debug", "agent", "list", "--format", "json"]);
-    if result.is_ok() {
-        let cli = result.unwrap();
+    if let Ok(cli) = result {
         assert!(cli.debug, "Global debug flag should be parsed");
         match cli.command {
             Some(Commands::Agent { subcommand }) => {
