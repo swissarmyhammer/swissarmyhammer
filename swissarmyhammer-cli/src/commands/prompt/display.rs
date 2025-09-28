@@ -6,6 +6,20 @@
 use serde::{Deserialize, Serialize};
 use tabled::Tabled;
 
+/// Convert FileSource to emoji representation for consistent display across all listing commands.
+/// This ensures all three table displays (prompt, flow, agent) use the same emoji mapping:
+/// - 📦 Built-in: System-provided built-in items
+/// - 📁 Project: Project-specific items from .swissarmyhammer directory  
+/// - 👤 User: User-specific items from user's home directory
+fn file_source_to_emoji(source: Option<&swissarmyhammer::FileSource>) -> &'static str {
+    match source {
+        Some(swissarmyhammer::FileSource::Builtin) => "📦 Built-in",
+        Some(swissarmyhammer::FileSource::Local) => "📁 Project",
+        Some(swissarmyhammer::FileSource::User) => "👤 User",
+        Some(swissarmyhammer::FileSource::Dynamic) | None => "📦 Built-in", // Default fallback
+    }
+}
+
 /// Basic prompt information for standard list output
 #[derive(Tabled, Serialize, Deserialize, Debug, Clone)]
 pub struct PromptRow {
@@ -74,6 +88,31 @@ impl From<&swissarmyhammer_prompts::Prompt> for VerbosePromptRow {
     }
 }
 
+impl VerbosePromptRow {
+    /// Create a VerbosePromptRow with FileSource information for emoji-based source display
+    pub fn from_prompt_with_source(
+        prompt: &swissarmyhammer_prompts::Prompt, 
+        file_source: Option<&swissarmyhammer::FileSource>
+    ) -> Self {
+        Self {
+            name: prompt.name.clone(),
+            title: prompt
+                .metadata
+                .get("title")
+                .and_then(|v| v.as_str())
+                .unwrap_or("No title")
+                .to_string(),
+            description: prompt
+                .description
+                .as_deref()
+                .unwrap_or("No description")
+                .to_string(),
+            source: file_source_to_emoji(file_source).to_string(),
+            category: prompt.category.clone().unwrap_or_default(),
+        }
+    }
+}
+
 /// Convert prompts to appropriate display format based on verbose flag
 pub fn prompts_to_display_rows(
     prompts: Vec<swissarmyhammer_prompts::Prompt>,
@@ -81,6 +120,27 @@ pub fn prompts_to_display_rows(
 ) -> DisplayRows {
     if verbose {
         DisplayRows::Verbose(prompts.iter().map(VerbosePromptRow::from).collect())
+    } else {
+        DisplayRows::Standard(prompts.iter().map(PromptRow::from).collect())
+    }
+}
+
+/// Convert prompts with source information to appropriate display format with emoji-based sources
+pub fn prompts_to_display_rows_with_sources(
+    prompts: Vec<swissarmyhammer_prompts::Prompt>,
+    sources: &std::collections::HashMap<String, swissarmyhammer::FileSource>,
+    verbose: bool,
+) -> DisplayRows {
+    if verbose {
+        DisplayRows::Verbose(
+            prompts
+                .iter()
+                .map(|prompt| {
+                    let file_source = sources.get(&prompt.name);
+                    VerbosePromptRow::from_prompt_with_source(prompt, file_source)
+                })
+                .collect()
+        )
     } else {
         DisplayRows::Standard(prompts.iter().map(PromptRow::from).collect())
     }

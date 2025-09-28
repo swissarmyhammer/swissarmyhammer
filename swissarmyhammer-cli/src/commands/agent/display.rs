@@ -7,6 +7,19 @@ use serde::{Deserialize, Serialize};
 use swissarmyhammer_config::agent::{AgentInfo, AgentSource};
 use tabled::Tabled;
 
+/// Convert source types to emoji representation for consistent display across all listing commands.
+/// This ensures all three table displays (prompt, flow, agent) use the same emoji mapping:
+/// - 📦 Built-in: System-provided built-in items
+/// - 📁 Project: Project-specific items from .swissarmyhammer directory  
+/// - 👤 User: User-specific items from user's home directory
+fn source_to_emoji(source: &AgentSource) -> &'static str {
+    match source {
+        AgentSource::Builtin => "📦 Built-in",
+        AgentSource::Project => "📁 Project", 
+        AgentSource::User => "👤 User",
+    }
+}
+
 /// Basic agent information for standard list output
 #[derive(Tabled, Serialize, Deserialize, Debug, Clone)]
 pub struct AgentRow {
@@ -45,11 +58,7 @@ impl From<&AgentInfo> for AgentRow {
                 .as_deref()
                 .unwrap_or("No description")
                 .to_string(),
-            source: match agent.source {
-                AgentSource::Builtin => "builtin".to_string(),
-                AgentSource::Project => "project".to_string(),
-                AgentSource::User => "user".to_string(),
-            },
+            source: source_to_emoji(&agent.source).to_string(),
         }
     }
 }
@@ -63,11 +72,7 @@ impl From<&AgentInfo> for VerboseAgentRow {
                 .as_deref()
                 .unwrap_or("No description")
                 .to_string(),
-            source: match agent.source {
-                AgentSource::Builtin => "builtin".to_string(),
-                AgentSource::Project => "project".to_string(),
-                AgentSource::User => "user".to_string(),
-            },
+            source: source_to_emoji(&agent.source).to_string(),
             content_size: format!("{} chars", agent.content.len()),
         }
     }
@@ -126,7 +131,7 @@ mod tests {
         let row = AgentRow::from(&agent);
         assert_eq!(row.name, "test-agent");
         assert_eq!(row.description, "Test description");
-        assert_eq!(row.source, "builtin");
+        assert_eq!(row.source, "📦 Built-in");
     }
 
     #[test]
@@ -135,7 +140,7 @@ mod tests {
         let row = AgentRow::from(&agent);
         assert_eq!(row.name, "complete-agent");
         assert_eq!(row.description, "Complete agent description");
-        assert_eq!(row.source, "project");
+        assert_eq!(row.source, "📁 Project");
     }
 
     #[test]
@@ -144,7 +149,7 @@ mod tests {
         let row = AgentRow::from(&agent);
         assert_eq!(row.name, "minimal-agent");
         assert_eq!(row.description, "No description");
-        assert_eq!(row.source, "user");
+        assert_eq!(row.source, "👤 User");
     }
 
     #[test]
@@ -153,7 +158,7 @@ mod tests {
         let row = VerboseAgentRow::from(&agent);
         assert_eq!(row.name, "test-agent");
         assert_eq!(row.description, "Test description");
-        assert_eq!(row.source, "builtin");
+        assert_eq!(row.source, "📦 Built-in");
         assert_eq!(row.content_size, "32 chars");
     }
 
@@ -163,7 +168,7 @@ mod tests {
         let row = VerboseAgentRow::from(&agent);
         assert_eq!(row.name, "complete-agent");
         assert_eq!(row.description, "Complete agent description");
-        assert_eq!(row.source, "project");
+        assert_eq!(row.source, "📁 Project");
         assert_eq!(row.content_size, "54 chars");
     }
 
@@ -173,7 +178,7 @@ mod tests {
         let row = VerboseAgentRow::from(&agent);
         assert_eq!(row.name, "minimal-agent");
         assert_eq!(row.description, "No description");
-        assert_eq!(row.source, "user");
+        assert_eq!(row.source, "👤 User");
         assert_eq!(row.content_size, "0 chars");
     }
 
@@ -260,19 +265,19 @@ mod tests {
         let row = AgentRow {
             name: "test".to_string(),
             description: "Test Description".to_string(),
-            source: "builtin".to_string(),
+            source: "📦 Built-in".to_string(),
         };
 
         let json = serde_json::to_string(&row).expect("Should serialize to JSON");
         assert!(json.contains("test"));
         assert!(json.contains("Test Description"));
-        assert!(json.contains("builtin"));
+        assert!(json.contains("📦 Built-in"));
 
         let deserialized: AgentRow =
             serde_json::from_str(&json).expect("Should deserialize from JSON");
         assert_eq!(deserialized.name, "test");
         assert_eq!(deserialized.description, "Test Description");
-        assert_eq!(deserialized.source, "builtin");
+        assert_eq!(deserialized.source, "📦 Built-in");
     }
 
     #[test]
@@ -280,21 +285,21 @@ mod tests {
         let row = VerboseAgentRow {
             name: "test".to_string(),
             description: "Test Description".to_string(),
-            source: "builtin".to_string(),
+            source: "📦 Built-in".to_string(),
             content_size: "100 chars".to_string(),
         };
 
         let json = serde_json::to_string(&row).expect("Should serialize to JSON");
         assert!(json.contains("test"));
         assert!(json.contains("Test Description"));
-        assert!(json.contains("builtin"));
+        assert!(json.contains("📦 Built-in"));
         assert!(json.contains("100 chars"));
 
         let deserialized: VerboseAgentRow =
             serde_json::from_str(&json).expect("Should deserialize from JSON");
         assert_eq!(deserialized.name, "test");
         assert_eq!(deserialized.description, "Test Description");
-        assert_eq!(deserialized.source, "builtin");
+        assert_eq!(deserialized.source, "📦 Built-in");
         assert_eq!(deserialized.content_size, "100 chars");
     }
 
@@ -332,12 +337,12 @@ mod tests {
         };
 
         // Test all source types convert correctly
-        assert_eq!(AgentRow::from(&builtin_agent).source, "builtin");
-        assert_eq!(AgentRow::from(&project_agent).source, "project");
-        assert_eq!(AgentRow::from(&user_agent).source, "user");
+        assert_eq!(AgentRow::from(&builtin_agent).source, "📦 Built-in");
+        assert_eq!(AgentRow::from(&project_agent).source, "📁 Project");
+        assert_eq!(AgentRow::from(&user_agent).source, "👤 User");
 
-        assert_eq!(VerboseAgentRow::from(&builtin_agent).source, "builtin");
-        assert_eq!(VerboseAgentRow::from(&project_agent).source, "project");
-        assert_eq!(VerboseAgentRow::from(&user_agent).source, "user");
+        assert_eq!(VerboseAgentRow::from(&builtin_agent).source, "📦 Built-in");
+        assert_eq!(VerboseAgentRow::from(&project_agent).source, "📁 Project");
+        assert_eq!(VerboseAgentRow::from(&user_agent).source, "👤 User");
     }
 }

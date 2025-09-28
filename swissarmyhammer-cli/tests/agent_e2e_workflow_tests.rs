@@ -273,7 +273,7 @@ quiet: false"#;
         .expect("Should have qwen-coder agent");
     
     // qwen-coder should come from project source (project override)  
-    assert_eq!(qwen_agent["source"].as_str(), Some("project"),
+    assert_eq!(qwen_agent["source"].as_str(), Some("📁 Project"),
                "qwen-coder should be from project source due to override");
     assert!(qwen_agent["description"].as_str().unwrap()
             .contains("Project-optimized"), 
@@ -315,11 +315,11 @@ async fn test_custom_agent_workflow() -> Result<()> {
         .expect("Should have custom project agent");
     
     // Verify agent metadata
-    assert_eq!(user_agent["source"].as_str(), Some("user"));
+    assert_eq!(user_agent["source"].as_str(), Some("👤 User"));
     assert!(user_agent["description"].as_str().unwrap()
             .contains("Custom user agent"));
     
-    assert_eq!(project_agent["source"].as_str(), Some("project"));
+    assert_eq!(project_agent["source"].as_str(), Some("📁 Project"));
     assert!(project_agent["description"].as_str().unwrap()
             .contains("Development-optimized"));
     

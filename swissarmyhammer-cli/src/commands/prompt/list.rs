@@ -18,9 +18,17 @@ pub async fn execute_list_command(cli_context: &CliContext) -> Result<()> {
     // Build a basic filter - no source or category filtering for simplified list command
     let filter = PromptFilter::new();
 
-    // Apply filter and get prompts - pass empty file sources since we're using all sources
-    let file_sources = HashMap::new();
-    let all_prompts = library.list_filtered(&filter, &file_sources)?;
+    // Get file sources from resolver for emoji-based display
+    let mut file_sources = HashMap::new();
+    let mut prompt_sources = HashMap::new();
+    for (name, source) in &resolver.prompt_sources {
+        file_sources.insert(name.clone(), source.clone());
+        // Convert FileSource to PromptSource for the library API
+        let prompt_source: swissarmyhammer_prompts::PromptSource = source.clone().into();
+        prompt_sources.insert(name.clone(), prompt_source);
+    }
+    
+    let all_prompts = library.list_filtered(&filter, &prompt_sources)?;
 
     // Filter out partial templates
     let prompts: Vec<_> = all_prompts
@@ -28,8 +36,12 @@ pub async fn execute_list_command(cli_context: &CliContext) -> Result<()> {
         .filter(|prompt| !prompt.is_partial_template())
         .collect();
 
-    // Convert to display objects and use context's display_prompts method
-    let display_rows = super::display::prompts_to_display_rows(prompts, cli_context.verbose);
+    // Convert to display objects using emoji-based sources and use context's display_prompts method
+    let display_rows = super::display::prompts_to_display_rows_with_sources(
+        prompts, 
+        &file_sources, 
+        cli_context.verbose
+    );
     cli_context.display_prompts(display_rows)?;
 
     Ok(())
