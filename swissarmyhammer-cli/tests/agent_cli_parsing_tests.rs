@@ -49,7 +49,7 @@ fn test_agent_command_basic_parsing() {
             Some(Commands::Agent { subcommand }) => {
                 match subcommand {
                     AgentSubcommand::List { format } => {
-                        assert_eq!(format, Some(OutputFormat::Table), "Default format should be Table");
+                        assert_eq!(format, OutputFormat::Table, "Default format should be Table");
                     }
                     _ => panic!("Should parse as List subcommand"),
                 }
@@ -88,7 +88,7 @@ fn test_agent_list_format_parsing() {
             Some(Commands::Agent { subcommand }) => {
                 match subcommand {
                     AgentSubcommand::List { format } => {
-                        assert_eq!(format, Some(OutputFormat::Table));
+                        assert_eq!(format, OutputFormat::Table);
                     }
                     _ => panic!("Should parse as List subcommand"),
                 }
@@ -106,7 +106,7 @@ fn test_agent_list_format_parsing() {
             Some(Commands::Agent { subcommand }) => {
                 match subcommand {
                     AgentSubcommand::List { format } => {
-                        assert_eq!(format, Some(OutputFormat::Json));
+                        assert_eq!(format, OutputFormat::Json);
                     }
                     _ => panic!("Should parse as List subcommand"),
                 }
@@ -124,7 +124,7 @@ fn test_agent_list_format_parsing() {
             Some(Commands::Agent { subcommand }) => {
                 match subcommand {
                     AgentSubcommand::List { format } => {
-                        assert_eq!(format, Some(OutputFormat::Yaml));
+                        assert_eq!(format, OutputFormat::Yaml);
                     }
                     _ => panic!("Should parse as List subcommand"),
                 }
@@ -436,7 +436,7 @@ fn test_global_flags_with_agent_commands() {
             Some(Commands::Agent { subcommand }) => {
                 match subcommand {
                     AgentSubcommand::List { format } => {
-                        assert_eq!(format, Some(OutputFormat::Json));
+                        assert_eq!(format, OutputFormat::Json);
                     }
                     _ => panic!("Should maintain subcommand parsing with global flags"),
                 }
@@ -464,9 +464,7 @@ fn test_output_format_enum_completeness() {
                 Some(Commands::Agent { subcommand }) => {
                     match subcommand {
                         AgentSubcommand::List { format: parsed_format } => {
-                            assert!(parsed_format.is_some(), "Format should be parsed");
-                            let format_value = parsed_format.unwrap();
-                            match format_value {
+                            match parsed_format {
                                 OutputFormat::Table => assert_eq!(*format, "table"),
                                 OutputFormat::Json => assert_eq!(*format, "json"),
                                 OutputFormat::Yaml => assert_eq!(*format, "yaml"),
@@ -554,7 +552,7 @@ fn test_argument_order_flexibility() {
                     (AgentSubcommand::List { format: fmt1 }, 
                      AgentSubcommand::List { format: fmt2 }) => {
                         assert_eq!(fmt1, fmt2, "Format should be parsed consistently");
-                        assert_eq!(fmt1, Some(OutputFormat::Json));
+                        assert_eq!(fmt1, OutputFormat::Json);
                     }
                     _ => panic!("Both should parse as List commands"),
                 }

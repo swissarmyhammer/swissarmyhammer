@@ -410,7 +410,7 @@ Examples:
     List {
         /// Output format
         #[arg(long, value_enum, default_value = "table")]
-        format: Option<OutputFormat>,
+        format: OutputFormat,
     },
     /// Use a specific agent
     #[command(long_about = "

@@ -177,6 +177,19 @@ impl CliContext {
             DisplayRows::Verbose(items) => self.display(items),
         }
     }
+
+    /// Display different types based on verbose flag using agent display rows enum
+    pub fn display_agents(
+        &self,
+        rows: crate::commands::agent::display::DisplayRows,
+    ) -> Result<()> {
+        use crate::commands::agent::display::DisplayRows;
+
+        match rows {
+            DisplayRows::Standard(items) => self.display(items),
+            DisplayRows::Verbose(items) => self.display(items),
+        }
+    }
 }
 
 impl CliContextBuilder {

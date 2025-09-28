@@ -576,12 +576,17 @@ async fn handle_agent_command(matches: &clap::ArgMatches, context: &CliContext) 
 
     let subcommand = match matches.subcommand() {
         Some(("list", sub_matches)) => {
-            let format = match sub_matches.get_one::<String>("format").map(|s| s.as_str()) {
-                Some("json") => Some(OutputFormat::Json),
-                Some("yaml") => Some(OutputFormat::Yaml),
-                Some("table") => Some(OutputFormat::Table),
-                _ => Some(OutputFormat::Table),
-            };
+            // Since we have default_value="table" and non-optional format,
+            // clap should always provide a value
+            let format = sub_matches
+                .get_one::<String>("format")
+                .map(|s| match s.as_str() {
+                    "json" => OutputFormat::Json,
+                    "yaml" => OutputFormat::Yaml,
+                    "table" => OutputFormat::Table,
+                    _ => OutputFormat::Table,
+                })
+                .unwrap_or(OutputFormat::Table);
 
             AgentSubcommand::List { format }
         }

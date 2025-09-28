@@ -2,6 +2,7 @@
 //!
 //! Manages and interacts with agents in the SwissArmyHammer system
 
+pub mod display;
 pub mod list;
 pub mod use_command;
 

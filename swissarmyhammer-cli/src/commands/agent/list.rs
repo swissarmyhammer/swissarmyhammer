@@ -2,26 +2,12 @@
 
 use crate::cli::OutputFormat;
 use crate::context::CliContext;
-use colored::Colorize;
-use serde::Serialize;
-use std::collections::HashMap;
+use anyhow::Result;
 use swissarmyhammer_config::agent::{AgentManager, AgentSource};
-use tabled::Tabled;
 
-/// Display row for agent information in table format
-#[derive(Debug, Clone, Serialize, Tabled)]
-pub struct AgentDisplayRow {
-    #[tabled(rename = "Name")]
-    pub name: String,
-    #[tabled(rename = "Description")]
-    pub description: String,
-    #[tabled(rename = "Source")]
-    pub source: String,
-}
-
-/// Execute the agent list command
+/// Execute the agent list command - shows all available agents
 pub async fn execute_list_command(
-    format: Option<OutputFormat>,
+    format: OutputFormat,
     context: &CliContext,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     tracing::debug!("Starting agent list command");
@@ -35,122 +21,111 @@ pub async fn execute_list_command(
         }
     };
 
-    // Check if we have any agents
-    if agents.is_empty() {
-        match format.unwrap_or(OutputFormat::Table) {
-            OutputFormat::Table => {
-                println!("No agents found");
-                return Ok(());
-            }
-            OutputFormat::Json => {
-                let empty: Vec<AgentDisplayRow> = vec![];
-                return context.display(empty).map_err(Into::into);
-            }
-            OutputFormat::Yaml => {
-                let empty: Vec<AgentDisplayRow> = vec![];
-                return context.display(empty).map_err(Into::into);
-            }
+    // Use the provided format directly
+    let output_format = format;
+    
+    // For table format, show summary information
+    if matches!(output_format, OutputFormat::Table) {
+        display_agent_summary_and_table(&agents, context.verbose)?;
+    } else {
+        // For JSON/YAML formats, just display the data directly
+        let display_rows = super::display::agents_to_display_rows(agents, context.verbose);
+        match display_rows {
+            super::display::DisplayRows::Standard(items) => display_items_with_format(&items, output_format)?,
+            super::display::DisplayRows::Verbose(items) => display_items_with_format(&items, output_format)?,
         }
     }
 
-    // Count agents by source for summary
-    let mut source_counts = HashMap::new();
-    for agent in &agents {
-        *source_counts.entry(&agent.source).or_insert(0) += 1;
+    Ok(())
+}
+
+/// Display agent summary information followed by a table
+fn display_agent_summary_and_table(
+    agents: &[swissarmyhammer_config::agent::AgentInfo], 
+    verbose: bool
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    // Count agents by source
+    let mut builtin_count = 0;
+    let mut project_count = 0;
+    let mut user_count = 0;
+    
+    for agent in agents {
+        match agent.source {
+            AgentSource::Builtin => builtin_count += 1,
+            AgentSource::Project => project_count += 1,
+            AgentSource::User => user_count += 1,
+        }
     }
 
-    // Convert to display rows
-    let display_rows: Vec<AgentDisplayRow> = agents
-        .iter()
-        .map(|agent| AgentDisplayRow {
-            name: agent.name.clone(),
-            description: agent
-                .description
-                .as_deref()
-                .unwrap_or("No description")
-                .to_string(),
-            source: match agent.source {
-                AgentSource::Builtin => "builtin".to_string(),
-                AgentSource::Project => "project".to_string(),
-                AgentSource::User => "user".to_string(),
-            },
-        })
-        .collect();
+    // Display summary information that tests expect
+    println!("Agents: {}", agents.len());
+    
+    if builtin_count > 0 {
+        println!("Built-in: {}", builtin_count);
+    }
+    if project_count > 0 {
+        println!("Project: {}", project_count);
+    }
+    if user_count > 0 {
+        println!("User: {}", user_count);
+    }
+    
+    println!(); // Empty line before table
 
-    // Handle different output formats
-    let output_format = format.unwrap_or(OutputFormat::Table);
+    // Display the table
+    let display_rows = super::display::agents_to_display_rows(agents.to_vec(), verbose);
+    match display_rows {
+        super::display::DisplayRows::Standard(items) => {
+            if items.is_empty() {
+                println!("No agents available");
+            } else {
+                println!(
+                    "{}",
+                    tabled::Table::new(&items).with(tabled::settings::Style::modern())
+                );
+            }
+        }
+        super::display::DisplayRows::Verbose(items) => {
+            if items.is_empty() {
+                println!("No agents available");
+            } else {
+                println!(
+                    "{}",
+                    tabled::Table::new(&items).with(tabled::settings::Style::modern())
+                );
+            }
+        }
+    }
+    
+    Ok(())
+}
 
-    match output_format {
+/// Display items using the specified format (for JSON/YAML)
+fn display_items_with_format<T>(items: &[T], format: OutputFormat) -> Result<(), Box<dyn std::error::Error + Send + Sync>>
+where
+    T: serde::Serialize + tabled::Tabled,
+{
+    match format {
         OutputFormat::Table => {
-            display_agents_table(&agents, &source_counts)?;
+            if items.is_empty() {
+                println!("No items to display");
+            } else {
+                println!(
+                    "{}",
+                    tabled::Table::new(items).with(tabled::settings::Style::modern())
+                );
+            }
         }
         OutputFormat::Json => {
-            let json = serde_json::to_string_pretty(&display_rows)
-                .map_err(|e| format!("Failed to serialize to JSON: {}", e))?;
+            let json = serde_json::to_string_pretty(items)?;
             println!("{}", json);
         }
         OutputFormat::Yaml => {
-            let yaml = serde_yaml::to_string(&display_rows)
-                .map_err(|e| format!("Failed to serialize to YAML: {}", e))?;
+            let yaml = serde_yaml::to_string(items)?;
             println!("{}", yaml);
         }
     }
-
-    tracing::debug!("Agent list command completed successfully");
     Ok(())
 }
 
-/// Display agents in table format with colors and summary
-fn display_agents_table(
-    agents: &[swissarmyhammer_config::agent::AgentInfo],
-    source_counts: &HashMap<&AgentSource, usize>,
-) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    // Show summary line
-    println!("🤖 Agents: {} total", agents.len());
 
-    // Show source breakdown
-    let builtin_count = source_counts.get(&AgentSource::Builtin).unwrap_or(&0);
-    let project_count = source_counts.get(&AgentSource::Project).unwrap_or(&0);
-    let user_count = source_counts.get(&AgentSource::User).unwrap_or(&0);
-
-    println!(
-        "📦 Built-in: {}, 📁 Project: {}, 👤 User: {}",
-        builtin_count, project_count, user_count
-    );
-
-    if !agents.is_empty() {
-        println!(); // Blank line before entries
-    }
-
-    // Display each agent with two-line format and colors
-    for (i, agent) in agents.iter().enumerate() {
-        if i > 0 {
-            println!(); // Blank line between entries
-        }
-
-        // First line: Name | Description (colored by source)
-        let name_desc = format!(
-            "{} | {}",
-            agent.name,
-            agent.description.as_deref().unwrap_or("No description")
-        );
-
-        let colored_line = match agent.source {
-            AgentSource::Builtin => name_desc.green(),
-            AgentSource::Project => name_desc.yellow(),
-            AgentSource::User => name_desc.blue(),
-        };
-
-        println!("{}", colored_line);
-
-        // Second line: source info (dimmed)
-        let source_name = match agent.source {
-            AgentSource::Builtin => "builtin",
-            AgentSource::Project => "project",
-            AgentSource::User => "user",
-        };
-        println!("  {}", format!("source: {}", source_name).dimmed());
-    }
-
-    Ok(())
-}
