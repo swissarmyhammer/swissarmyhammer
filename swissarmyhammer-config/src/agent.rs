@@ -1488,7 +1488,7 @@ quiet: false"#;
         let config = parse_agent_config(content);
         assert!(config.is_ok(), "Should parse frontmatter agent config");
         let config = config.unwrap();
-        assert_eq!(config.quiet, false);
+        assert!(!config.quiet);
     }
 
     #[test]
@@ -1504,7 +1504,7 @@ quiet: false"#;
         let config = parse_agent_config(content);
         assert!(config.is_ok(), "Should parse comment format agent config");
         let config = config.unwrap();
-        assert_eq!(config.quiet, false);
+        assert!(!config.quiet);
     }
 
     #[test]
@@ -1517,7 +1517,7 @@ quiet: true"#;
         let config = parse_agent_config(content);
         assert!(config.is_ok(), "Should parse pure YAML agent config");
         let config = config.unwrap();
-        assert_eq!(config.quiet, true);
+        assert!(config.quiet);
     }
 
     #[test]

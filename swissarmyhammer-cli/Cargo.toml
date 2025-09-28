@@ -73,6 +73,7 @@ regex = { workspace = true }
 once_cell = { workspace = true }
 libc = { workspace = true }
 derive_builder = "0.20"
+scopeguard = "1.2"
 
 # Git integration
 git2 = { workspace = true }

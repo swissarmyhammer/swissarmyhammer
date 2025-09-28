@@ -6622,6 +6622,7 @@ dependencies = [
  "predicates",
  "regex",
  "rmcp",
+ "scopeguard",
  "serde",
  "serde_json",
  "serde_yaml",
