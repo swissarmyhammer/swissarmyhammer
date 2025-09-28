@@ -113,17 +113,7 @@ impl VerbosePromptRow {
     }
 }
 
-/// Convert prompts to appropriate display format based on verbose flag
-pub fn prompts_to_display_rows(
-    prompts: Vec<swissarmyhammer_prompts::Prompt>,
-    verbose: bool,
-) -> DisplayRows {
-    if verbose {
-        DisplayRows::Verbose(prompts.iter().map(VerbosePromptRow::from).collect())
-    } else {
-        DisplayRows::Standard(prompts.iter().map(PromptRow::from).collect())
-    }
-}
+
 
 /// Convert prompts with source information to appropriate display format with emoji-based sources
 pub fn prompts_to_display_rows_with_sources(
@@ -310,7 +300,8 @@ mod tests {
     #[test]
     fn test_prompts_to_display_rows_standard() {
         let prompts = vec![create_test_prompt()];
-        let rows = prompts_to_display_rows(prompts, false);
+        let sources = std::collections::HashMap::new();
+        let rows = prompts_to_display_rows_with_sources(prompts, &sources, false);
 
         match rows {
             DisplayRows::Standard(standard_rows) => {
@@ -324,7 +315,8 @@ mod tests {
     #[test]
     fn test_prompts_to_display_rows_verbose() {
         let prompts = vec![create_test_prompt()];
-        let rows = prompts_to_display_rows(prompts, true);
+        let sources = std::collections::HashMap::new();
+        let rows = prompts_to_display_rows_with_sources(prompts, &sources, true);
 
         match rows {
             DisplayRows::Verbose(verbose_rows) => {
@@ -344,7 +336,8 @@ mod tests {
             create_empty_prompt(),
         ];
 
-        let standard_rows = prompts_to_display_rows(prompts.clone(), false);
+        let sources = std::collections::HashMap::new();
+        let standard_rows = prompts_to_display_rows_with_sources(prompts.clone(), &sources, false);
         match standard_rows {
             DisplayRows::Standard(rows) => {
                 assert_eq!(rows.len(), 3);
@@ -355,7 +348,7 @@ mod tests {
             _ => panic!("Expected Standard rows"),
         }
 
-        let verbose_rows = prompts_to_display_rows(prompts, true);
+        let verbose_rows = prompts_to_display_rows_with_sources(prompts, &sources, true);
         match verbose_rows {
             DisplayRows::Verbose(rows) => {
                 assert_eq!(rows.len(), 3);
@@ -370,14 +363,15 @@ mod tests {
     #[test]
     fn test_prompts_to_display_rows_empty_list() {
         let prompts = vec![];
+        let sources = std::collections::HashMap::new();
 
-        let standard_rows = prompts_to_display_rows(prompts.clone(), false);
+        let standard_rows = prompts_to_display_rows_with_sources(prompts.clone(), &sources, false);
         match standard_rows {
             DisplayRows::Standard(rows) => assert!(rows.is_empty()),
             _ => panic!("Expected Standard rows"),
         }
 
-        let verbose_rows = prompts_to_display_rows(prompts, true);
+        let verbose_rows = prompts_to_display_rows_with_sources(prompts, &sources, true);
         match verbose_rows {
             DisplayRows::Verbose(rows) => assert!(rows.is_empty()),
             _ => panic!("Expected Verbose rows"),
@@ -457,7 +451,8 @@ mod tests {
     #[test]
     fn test_display_rows_debug_format() {
         let prompts = vec![create_test_prompt()];
-        let rows = prompts_to_display_rows(prompts, false);
+        let sources = std::collections::HashMap::new();
+        let rows = prompts_to_display_rows_with_sources(prompts, &sources, false);
 
         let debug_str = format!("{:?}", rows);
         assert!(debug_str.contains("Standard"));

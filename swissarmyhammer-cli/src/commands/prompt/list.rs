@@ -305,7 +305,8 @@ mod tests {
             .collect();
 
         // Test standard conversion
-        let display_rows = super::super::display::prompts_to_display_rows(filtered.clone(), false);
+        let sources = std::collections::HashMap::new();
+        let display_rows = super::super::display::prompts_to_display_rows_with_sources(filtered.clone(), &sources, false);
         match display_rows {
             super::super::display::DisplayRows::Standard(rows) => {
                 assert_eq!(rows.len(), 2);
@@ -316,7 +317,7 @@ mod tests {
         }
 
         // Test verbose conversion
-        let display_rows = super::super::display::prompts_to_display_rows(filtered, true);
+        let display_rows = super::super::display::prompts_to_display_rows_with_sources(filtered, &sources, true);
         match display_rows {
             super::super::display::DisplayRows::Verbose(rows) => {
                 assert_eq!(rows.len(), 2);
