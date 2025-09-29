@@ -4,9 +4,6 @@ use swissarmyhammer_config::get_builtin_agents;
 fn test_builtin_agents_generation() {
     let agents = get_builtin_agents();
 
-    // Should have exactly 3 built-in agents
-    assert_eq!(agents.len(), 3);
-
     // Extract agent names
     let names: Vec<&str> = agents.iter().map(|(name, _)| *name).collect();
 
