@@ -796,7 +796,6 @@ impl WorkflowExecutor {
     /// Format action error for logging
     fn format_action_error(&self, action_error: &ActionError) -> String {
         match action_error {
-
             ActionError::ClaudeError(msg) => format!("Claude command failed: {msg}"),
             ActionError::VariableError(msg) => {
                 format!("Variable operation failed: {msg}")

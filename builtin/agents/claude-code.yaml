@@ -1,0 +1,4 @@
+quiet: false
+executor:
+  type: claude-code
+  config: {}

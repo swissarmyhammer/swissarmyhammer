@@ -1,7 +1,5 @@
 //! Tests for error handling in actions
 
-
-
 use serde_json::Value;
 
 use crate::ActionError;

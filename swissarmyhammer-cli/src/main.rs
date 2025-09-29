@@ -260,6 +260,7 @@ async fn handle_dynamic_matches(
         Some(("validate", sub_matches)) => handle_validate_command(sub_matches, &context).await,
         Some(("plan", sub_matches)) => handle_plan_command(sub_matches, &context).await,
         Some(("implement", _sub_matches)) => handle_implement_command(&context).await,
+        Some(("agent", sub_matches)) => handle_agent_command(sub_matches, &context).await,
         Some((category, sub_matches)) => match sub_matches.subcommand() {
             Some((tool_name, tool_matches)) => {
                 handle_dynamic_tool_command(category, tool_name, tool_matches, cli_tool_context)
@@ -570,6 +571,41 @@ async fn handle_implement_command(context: &CliContext) -> i32 {
     commands::implement::handle_command(context).await
 }
 
+async fn handle_agent_command(matches: &clap::ArgMatches, context: &CliContext) -> i32 {
+    use crate::cli::{AgentSubcommand, OutputFormat};
+
+    let subcommand = match matches.subcommand() {
+        Some(("list", sub_matches)) => {
+            // Since we have default_value="table" and non-optional format,
+            // clap should always provide a value
+            let format = sub_matches
+                .get_one::<String>("format")
+                .map(|s| match s.as_str() {
+                    "json" => OutputFormat::Json,
+                    "yaml" => OutputFormat::Yaml,
+                    "table" => OutputFormat::Table,
+                    _ => OutputFormat::Table,
+                })
+                .unwrap_or(OutputFormat::Table);
+
+            AgentSubcommand::List { format }
+        }
+        Some(("use", sub_matches)) => {
+            let agent_name = sub_matches
+                .get_one::<String>("agent_name")
+                .cloned()
+                .unwrap();
+            AgentSubcommand::Use { agent_name }
+        }
+        _ => {
+            eprintln!("No agent subcommand specified");
+            return EXIT_ERROR;
+        }
+    };
+
+    commands::agent::handle_command(subcommand, context).await
+}
+
 async fn configure_logging(verbose: bool, debug: bool, quiet: bool, is_mcp_mode: bool) {
     use tracing::Level;
     use tracing_subscriber::{fmt, prelude::*, registry, EnvFilter};
@@ -591,7 +627,7 @@ async fn configure_logging(verbose: bool, debug: bool, quiet: bool, is_mcp_mode:
     if is_mcp_mode {
         // Set flag to prevent unified server from also configuring logging
         std::env::set_var("SAH_CLI_MODE", "1");
-        
+
         // In MCP mode, write logs to .swissarmyhammer/mcp.log for debugging
         use std::fs;
         use std::path::PathBuf;

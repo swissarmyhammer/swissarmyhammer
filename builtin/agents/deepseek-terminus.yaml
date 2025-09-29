@@ -1,0 +1,8 @@
+quiet: false
+executor:
+  type: llama-agent
+  config:
+    model:
+      source: !HuggingFace
+        repo: "unsloth/DeepSeek-V3.1-Terminus-GGUF"
+        folder: "Q4_K_M"

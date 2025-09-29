@@ -6,6 +6,25 @@
 use serde::{Deserialize, Serialize};
 use tabled::Tabled;
 
+// Emoji constants for source display consistency across all listing commands
+const BUILTIN_EMOJI: &str = "📦 Built-in";
+const PROJECT_EMOJI: &str = "📁 Project";  
+const USER_EMOJI: &str = "👤 User";
+
+/// Convert FileSource to emoji representation for consistent display across all listing commands.
+/// This ensures all three table displays (prompt, flow, agent) use the same emoji mapping:
+/// - 📦 Built-in: System-provided built-in items
+/// - 📁 Project: Project-specific items from .swissarmyhammer directory  
+/// - 👤 User: User-specific items from user's home directory
+fn file_source_to_emoji(source: Option<&swissarmyhammer::FileSource>) -> &'static str {
+    match source {
+        Some(swissarmyhammer::FileSource::Builtin) => BUILTIN_EMOJI,
+        Some(swissarmyhammer::FileSource::Local) => PROJECT_EMOJI,
+        Some(swissarmyhammer::FileSource::User) => USER_EMOJI,
+        Some(swissarmyhammer::FileSource::Dynamic) | None => BUILTIN_EMOJI, // Default fallback
+    }
+}
+
 /// Basic prompt information for standard list output
 #[derive(Tabled, Serialize, Deserialize, Debug, Clone)]
 pub struct PromptRow {
@@ -14,6 +33,9 @@ pub struct PromptRow {
 
     #[tabled(rename = "Title")]
     pub title: String,
+
+    #[tabled(rename = "Source")]
+    pub source: String,
 }
 
 /// Detailed prompt information for verbose list output  
@@ -45,6 +67,30 @@ impl From<&swissarmyhammer_prompts::Prompt> for PromptRow {
                 .and_then(|v| v.as_str())
                 .unwrap_or("No title")
                 .to_string(),
+            source: prompt
+                .source
+                .as_ref()
+                .map(|s| s.display().to_string())
+                .unwrap_or("Unknown".to_string()),
+        }
+    }
+}
+
+impl PromptRow {
+    /// Create a PromptRow with FileSource information for emoji-based source display
+    pub fn from_prompt_with_source(
+        prompt: &swissarmyhammer_prompts::Prompt, 
+        file_source: Option<&swissarmyhammer::FileSource>
+    ) -> Self {
+        Self {
+            name: prompt.name.clone(),
+            title: prompt
+                .metadata
+                .get("title")
+                .and_then(|v| v.as_str())
+                .unwrap_or("No title")
+                .to_string(),
+            source: file_source_to_emoji(file_source).to_string(),
         }
     }
 }
@@ -74,15 +120,59 @@ impl From<&swissarmyhammer_prompts::Prompt> for VerbosePromptRow {
     }
 }
 
-/// Convert prompts to appropriate display format based on verbose flag
-pub fn prompts_to_display_rows(
+impl VerbosePromptRow {
+    /// Create a VerbosePromptRow with FileSource information for emoji-based source display
+    pub fn from_prompt_with_source(
+        prompt: &swissarmyhammer_prompts::Prompt, 
+        file_source: Option<&swissarmyhammer::FileSource>
+    ) -> Self {
+        Self {
+            name: prompt.name.clone(),
+            title: prompt
+                .metadata
+                .get("title")
+                .and_then(|v| v.as_str())
+                .unwrap_or("No title")
+                .to_string(),
+            description: prompt
+                .description
+                .as_deref()
+                .unwrap_or("No description")
+                .to_string(),
+            source: file_source_to_emoji(file_source).to_string(),
+            category: prompt.category.clone().unwrap_or_default(),
+        }
+    }
+}
+
+
+
+/// Convert prompts with source information to appropriate display format with emoji-based sources
+pub fn prompts_to_display_rows_with_sources(
     prompts: Vec<swissarmyhammer_prompts::Prompt>,
+    sources: &std::collections::HashMap<String, swissarmyhammer::FileSource>,
     verbose: bool,
 ) -> DisplayRows {
     if verbose {
-        DisplayRows::Verbose(prompts.iter().map(VerbosePromptRow::from).collect())
+        DisplayRows::Verbose(
+            prompts
+                .iter()
+                .map(|prompt| {
+                    let file_source = sources.get(&prompt.name);
+                    VerbosePromptRow::from_prompt_with_source(prompt, file_source)
+                })
+                .collect()
+        )
     } else {
-        DisplayRows::Standard(prompts.iter().map(PromptRow::from).collect())
+        DisplayRows::Standard(
+            prompts
+                .iter()
+                .map(|prompt| {
+                    let file_source = sources.get(&prompt.name);
+                    PromptRow::from_prompt_with_source(prompt, file_source)
+                })
+                .collect()
+        )
     }
 }
 
@@ -157,6 +247,7 @@ mod tests {
         let row = PromptRow::from(&prompt);
         assert_eq!(row.name, "test-prompt");
         assert_eq!(row.title, "Test Title");
+        assert_eq!(row.source, "/test/path/test-prompt.md");
     }
 
     #[test]
@@ -165,6 +256,7 @@ mod tests {
         let row = PromptRow::from(&prompt);
         assert_eq!(row.name, "complete-prompt");
         assert_eq!(row.title, "Complete Title");
+        assert_eq!(row.source, "/complete/path/complete-prompt.md");
     }
 
     #[test]
@@ -173,6 +265,7 @@ mod tests {
         let row = PromptRow::from(&prompt);
         assert_eq!(row.name, "empty-prompt");
         assert_eq!(row.title, "No title");
+        assert_eq!(row.source, "Unknown");
     }
 
     #[test]
@@ -224,6 +317,7 @@ mod tests {
         let row = PromptRow::from(&prompt);
         assert_eq!(row.name, "test-prompt");
         assert_eq!(row.title, "No title");
+        assert_eq!(row.source, "Unknown");
     }
 
     #[test]
@@ -250,7 +344,8 @@ mod tests {
     #[test]
     fn test_prompts_to_display_rows_standard() {
         let prompts = vec![create_test_prompt()];
-        let rows = prompts_to_display_rows(prompts, false);
+        let sources = std::collections::HashMap::new();
+        let rows = prompts_to_display_rows_with_sources(prompts, &sources, false);
 
         match rows {
             DisplayRows::Standard(standard_rows) => {
@@ -264,7 +359,8 @@ mod tests {
     #[test]
     fn test_prompts_to_display_rows_verbose() {
         let prompts = vec![create_test_prompt()];
-        let rows = prompts_to_display_rows(prompts, true);
+        let sources = std::collections::HashMap::new();
+        let rows = prompts_to_display_rows_with_sources(prompts, &sources, true);
 
         match rows {
             DisplayRows::Verbose(verbose_rows) => {
@@ -284,7 +380,8 @@ mod tests {
             create_empty_prompt(),
         ];
 
-        let standard_rows = prompts_to_display_rows(prompts.clone(), false);
+        let sources = std::collections::HashMap::new();
+        let standard_rows = prompts_to_display_rows_with_sources(prompts.clone(), &sources, false);
         match standard_rows {
             DisplayRows::Standard(rows) => {
                 assert_eq!(rows.len(), 3);
@@ -295,7 +392,7 @@ mod tests {
             _ => panic!("Expected Standard rows"),
         }
 
-        let verbose_rows = prompts_to_display_rows(prompts, true);
+        let verbose_rows = prompts_to_display_rows_with_sources(prompts, &sources, true);
         match verbose_rows {
             DisplayRows::Verbose(rows) => {
                 assert_eq!(rows.len(), 3);
@@ -310,14 +407,15 @@ mod tests {
     #[test]
     fn test_prompts_to_display_rows_empty_list() {
         let prompts = vec![];
+        let sources = std::collections::HashMap::new();
 
-        let standard_rows = prompts_to_display_rows(prompts.clone(), false);
+        let standard_rows = prompts_to_display_rows_with_sources(prompts.clone(), &sources, false);
         match standard_rows {
             DisplayRows::Standard(rows) => assert!(rows.is_empty()),
             _ => panic!("Expected Standard rows"),
         }
 
-        let verbose_rows = prompts_to_display_rows(prompts, true);
+        let verbose_rows = prompts_to_display_rows_with_sources(prompts, &sources, true);
         match verbose_rows {
             DisplayRows::Verbose(rows) => assert!(rows.is_empty()),
             _ => panic!("Expected Verbose rows"),
@@ -329,16 +427,19 @@ mod tests {
         let row = PromptRow {
             name: "test".to_string(),
             title: "Test Title".to_string(),
+            source: "Test Source".to_string(),
         };
 
         let json = serde_json::to_string(&row).expect("Should serialize to JSON");
         assert!(json.contains("test"));
         assert!(json.contains("Test Title"));
+        assert!(json.contains("Test Source"));
 
         let deserialized: PromptRow =
             serde_json::from_str(&json).expect("Should deserialize from JSON");
         assert_eq!(deserialized.name, "test");
         assert_eq!(deserialized.title, "Test Title");
+        assert_eq!(deserialized.source, "Test Source");
     }
 
     #[test]
@@ -388,6 +489,7 @@ mod tests {
         let row = PromptRow::from(&prompt);
         assert_eq!(row.name, "edge-case-prompt");
         assert_eq!(row.title, "No title"); // Should fallback when value is not a string
+        assert_eq!(row.source, "/edge/path.md");
 
         let verbose_row = VerbosePromptRow::from(&prompt);
         assert_eq!(verbose_row.name, "edge-case-prompt");
@@ -397,10 +499,65 @@ mod tests {
     #[test]
     fn test_display_rows_debug_format() {
         let prompts = vec![create_test_prompt()];
-        let rows = prompts_to_display_rows(prompts, false);
+        let sources = std::collections::HashMap::new();
+        let rows = prompts_to_display_rows_with_sources(prompts, &sources, false);
 
         let debug_str = format!("{:?}", rows);
         assert!(debug_str.contains("Standard"));
         assert!(debug_str.contains("test-prompt"));
+    }
+
+    #[test]
+    fn test_prompt_row_with_source_emoji_mapping() {
+        let prompt = create_test_prompt();
+        
+        // Test built-in source
+        let builtin_row = PromptRow::from_prompt_with_source(&prompt, Some(&swissarmyhammer::FileSource::Builtin));
+        assert_eq!(builtin_row.source, "📦 Built-in");
+        
+        // Test project source  
+        let project_row = PromptRow::from_prompt_with_source(&prompt, Some(&swissarmyhammer::FileSource::Local));
+        assert_eq!(project_row.source, "📁 Project");
+        
+        // Test user source
+        let user_row = PromptRow::from_prompt_with_source(&prompt, Some(&swissarmyhammer::FileSource::User));
+        assert_eq!(user_row.source, "👤 User");
+        
+        // Test dynamic source (should default to built-in)
+        let dynamic_row = PromptRow::from_prompt_with_source(&prompt, Some(&swissarmyhammer::FileSource::Dynamic));
+        assert_eq!(dynamic_row.source, "📦 Built-in");
+        
+        // Test no source (should default to built-in)
+        let no_source_row = PromptRow::from_prompt_with_source(&prompt, None);
+        assert_eq!(no_source_row.source, "📦 Built-in");
+    }
+
+    #[test]
+    fn test_prompts_to_display_rows_with_sources_emoji_mapping() {
+        let prompts = vec![create_test_prompt()];
+        let mut sources = std::collections::HashMap::new();
+        sources.insert("test-prompt".to_string(), swissarmyhammer::FileSource::Local);
+
+        // Test standard mode uses emoji mapping
+        let standard_rows = prompts_to_display_rows_with_sources(prompts.clone(), &sources, false);
+        match standard_rows {
+            DisplayRows::Standard(rows) => {
+                assert_eq!(rows.len(), 1);
+                assert_eq!(rows[0].name, "test-prompt");
+                assert_eq!(rows[0].source, "📁 Project");
+            }
+            _ => panic!("Expected Standard rows"),
+        }
+
+        // Test verbose mode uses emoji mapping
+        let verbose_rows = prompts_to_display_rows_with_sources(prompts, &sources, true);
+        match verbose_rows {
+            DisplayRows::Verbose(rows) => {
+                assert_eq!(rows.len(), 1);
+                assert_eq!(rows[0].name, "test-prompt");
+                assert_eq!(rows[0].source, "📁 Project");
+            }
+            _ => panic!("Expected Verbose rows"),
+        }
     }
 }

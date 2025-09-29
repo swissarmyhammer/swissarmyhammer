@@ -168,7 +168,7 @@ pub fn configure_mcp_logging(log_filter: Option<&str>) {
                 if tracing::subscriber::set_global_default(subscriber).is_err() {
                     // This can happen in test environments where global subscriber is already set
                     tracing::debug!("Global tracing subscriber already set - MCP logging configuration skipped");
-                    
+
                     // If we can't set the subscriber, we should clean up the file we created
                     drop(shared_file_for_cleanup);
                     let _ = std::fs::remove_file(&log_file_path);

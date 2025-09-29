@@ -177,6 +177,7 @@ impl CliContext {
             DisplayRows::Verbose(items) => self.display(items),
         }
     }
+
 }
 
 impl CliContextBuilder {

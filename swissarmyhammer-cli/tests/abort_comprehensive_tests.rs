@@ -15,6 +15,7 @@
 
 use anyhow::Result;
 use std::path::Path;
+use serial_test::serial;
 
 mod in_process_test_utils;
 use in_process_test_utils::run_sah_command_in_process;
@@ -145,7 +146,7 @@ async fn test_multiple_cli_commands_ignore_stale_abort_file() -> Result<()> {
 }
 
 #[tokio::test]
-
+#[serial]
 async fn test_abort_file_cleanup_between_command_runs() -> Result<()> {
     // Force cleanup multiple times to handle race conditions from parallel tests
     for _ in 0..3 {

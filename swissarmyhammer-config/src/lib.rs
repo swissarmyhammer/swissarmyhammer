@@ -180,6 +180,9 @@
 
 /// Agent configuration types and infrastructure
 pub mod agent;
+
+// Include generated builtin agents at build time
+include!(concat!(env!("OUT_DIR"), "/builtin_agents.rs"));
 /// File discovery logic for configuration files
 pub mod discovery;
 /// Environment variable processing and substitution
@@ -193,8 +196,9 @@ pub mod template_context;
 
 // Re-export main types for easier access
 pub use agent::{
-    AgentConfig, AgentExecutorConfig, AgentExecutorType, ClaudeCodeConfig, LlamaAgentConfig,
-    McpServerConfig, ModelConfig, ModelSource,
+    parse_agent_description, AgentConfig, AgentError, AgentExecutorConfig, AgentExecutorType,
+    AgentInfo, AgentSource, ClaudeCodeConfig, LlamaAgentConfig, McpServerConfig, ModelConfig,
+    ModelSource,
 };
 pub use discovery::{ConfigurationDiscovery, DiscoveryPaths};
 pub use env_vars::EnvVarSubstitution;

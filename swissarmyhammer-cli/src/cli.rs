@@ -58,12 +58,26 @@ Global arguments can be used with any command to control output and behavior:
   --debug       Enable debug mode with comprehensive tracing
   --quiet       Suppress all output except errors
 
+Main commands:
+  serve         Run as MCP server (default when invoked via stdio)
+  doctor        Diagnose configuration and setup issues
+  prompt        Manage and test prompts with interactive capabilities
+  flow          Execute and manage workflows for complex task automation
+  agent         Manage and interact with specialized agents for specific use cases
+  validate      Validate prompt files and workflows for syntax and best practices
+  plan          Plan a specific specification file for implementation
+  implement     Execute autonomous issue resolution workflow
+  completion    Generate shell completion scripts
+
 Example usage:
   swissarmyhammer serve                           # Run as MCP server
   swissarmyhammer doctor                          # Check configuration
   swissarmyhammer --verbose prompt list          # List prompts with details
   swissarmyhammer --format=json prompt list      # List prompts as JSON
   swissarmyhammer --debug prompt test help       # Test prompt with debug info
+  swissarmyhammer agent list                     # List available agents
+  swissarmyhammer agent use claude-code          # Apply Claude Code agent to project
+  swissarmyhammer flow run code-review           # Execute code review workflow
 ")]
 pub struct Cli {
     #[command(subcommand)]
@@ -207,6 +221,12 @@ the specification or requirements to be planned.")]
     /// Execute the implement workflow for autonomous issue resolution
     #[command(long_about = commands::implement::DESCRIPTION)]
     Implement,
+    /// Manage and interact with agents
+    #[command(long_about = commands::agent::DESCRIPTION)]
+    Agent {
+        #[command(subcommand)]
+        subcommand: AgentSubcommand,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -358,6 +378,72 @@ for better discoverability and clearer intent.
         /// Quiet mode - only show errors
         #[arg(short, long)]
         quiet: bool,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+pub enum AgentSubcommand {
+    /// List available agents
+    #[command(long_about = "
+List all available agents from built-in, project, and user sources.
+
+Agents are discovered with hierarchical precedence where user agents override
+project agents, which override built-in agents. This command shows all available
+agents with their sources and descriptions.
+
+Built-in agents are embedded in the binary and provide default configurations
+for common workflows. Project agents (./agents/*.yaml) allow customization for
+specific projects. User agents (~/.swissarmyhammer/agents/*.yaml) provide
+personal configurations that apply across all projects.
+
+Output includes:
+• Agent name and source (built-in, project, or user)
+• Description when available
+• Current agent status (if one is applied to the project)
+
+Examples:
+  sah agent list                           # List all agents in table format
+  sah agent list --format json            # Output as JSON for processing
+  sah --verbose agent list                 # Include detailed descriptions
+  sah --quiet agent list                   # Only show agent names
+")]
+    List {
+        /// Output format
+        #[arg(long, value_enum, default_value = "table")]
+        format: OutputFormat,
+    },
+    /// Use a specific agent
+    #[command(long_about = "
+Apply a specific agent configuration to the current project.
+
+This command finds the specified agent by name and applies its configuration
+to the project by creating or updating .swissarmyhammer/sah.yaml. The agent
+configuration determines how SwissArmyHammer executes AI workflows in your
+project, including which AI model to use and how to execute tools.
+
+Agent precedence (highest to lowest):
+• User agents: ~/.swissarmyhammer/agents/<name>.yaml
+• Project agents: ./agents/<name>.yaml  
+• Built-in agents: embedded in the binary
+
+The command preserves any existing configuration sections while updating
+only the agent configuration. This allows you to maintain project-specific
+settings alongside agent configurations.
+
+Common agent types:
+• claude-code    - Uses Claude Code CLI for AI execution
+• qwen-coder     - Uses local Qwen3-Coder model with in-process execution
+• custom agents  - User-defined configurations for specialized workflows
+
+Examples:
+  sah agent use claude-code                # Apply Claude Code agent
+  sah agent use qwen-coder                 # Switch to local Qwen model
+  sah agent use my-custom-agent            # Apply user-defined agent
+  sah --debug agent use claude-code        # Apply with debug output
+")]
+    Use {
+        /// Name of the agent to use
+        agent_name: String,
     },
 }
 

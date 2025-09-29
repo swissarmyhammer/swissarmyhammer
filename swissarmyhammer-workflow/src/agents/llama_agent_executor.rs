@@ -894,11 +894,11 @@ impl LlamaAgentExecutorWrapper {
 impl AgentExecutor for LlamaAgentExecutorWrapper {
     async fn initialize(&mut self) -> ActionResult<()> {
         tracing::info!("Initializing LlamaAgent wrapper with singleton pattern");
-        
+
         // Get or create the global singleton executor
         let global_executor = LlamaAgentExecutor::get_global_executor(self.config.clone()).await?;
         self.global_executor = Some(global_executor);
-        
+
         tracing::info!("LlamaAgent wrapper initialized - using global singleton");
         Ok(())
     }
@@ -920,16 +920,17 @@ impl AgentExecutor for LlamaAgentExecutorWrapper {
         rendered_prompt: String,
         context: &AgentExecutionContext<'_>,
     ) -> ActionResult<AgentResponse> {
-        let global_executor = self.global_executor.as_ref()
-            .ok_or_else(|| ActionError::ExecutionError(
-                "LlamaAgent wrapper not initialized".to_string()
-            ))?;
-        
+        let global_executor = self.global_executor.as_ref().ok_or_else(|| {
+            ActionError::ExecutionError("LlamaAgent wrapper not initialized".to_string())
+        })?;
+
         tracing::debug!("Delegating to global LlamaAgent executor");
-        
+
         // Delegate to the global singleton
         let executor_guard = global_executor.lock().await;
-        executor_guard.execute_prompt(system_prompt, rendered_prompt, context).await
+        executor_guard
+            .execute_prompt(system_prompt, rendered_prompt, context)
+            .await
     }
 }
 
@@ -1500,8 +1501,14 @@ mod tests {
         let mut wrapper2 = LlamaAgentExecutorWrapper::new(config2);
 
         // Initialize both wrappers
-        wrapper1.initialize().await.expect("Wrapper1 initialization should succeed");
-        wrapper2.initialize().await.expect("Wrapper2 initialization should succeed");
+        wrapper1
+            .initialize()
+            .await
+            .expect("Wrapper1 initialization should succeed");
+        wrapper2
+            .initialize()
+            .await
+            .expect("Wrapper2 initialization should succeed");
 
         // Both wrappers should have references to global executors
         assert!(wrapper1.global_executor.is_some());
@@ -1510,11 +1517,20 @@ mod tests {
         // The underlying global executors should be the same instance (singleton pattern)
         let global1 = wrapper1.global_executor.as_ref().unwrap();
         let global2 = wrapper2.global_executor.as_ref().unwrap();
-        assert!(Arc::ptr_eq(global1, global2), "Both wrappers should reference the same global singleton");
+        assert!(
+            Arc::ptr_eq(global1, global2),
+            "Both wrappers should reference the same global singleton"
+        );
 
         // Shutdown wrappers (should not affect the global singleton)
-        wrapper1.shutdown().await.expect("Wrapper1 shutdown should succeed");
-        wrapper2.shutdown().await.expect("Wrapper2 shutdown should succeed");
+        wrapper1
+            .shutdown()
+            .await
+            .expect("Wrapper1 shutdown should succeed");
+        wrapper2
+            .shutdown()
+            .await
+            .expect("Wrapper2 shutdown should succeed");
 
         assert!(wrapper1.global_executor.is_none());
         assert!(wrapper2.global_executor.is_none());
@@ -1541,7 +1557,7 @@ mod tests {
         assert!(result.unwrap_err().to_string().contains("not initialized"));
     }
 
-    #[tokio::test] 
+    #[tokio::test]
     #[serial]
     async fn test_wrapper_execute_with_init() {
         let config = LlamaAgentConfig::for_testing();
@@ -1550,7 +1566,10 @@ mod tests {
         // Initialize the wrapper
         let init_result = wrapper.initialize().await;
         if init_result.is_err() {
-            tracing::warn!("Skipping test - wrapper initialization failed: {:?}", init_result.err());
+            tracing::warn!(
+                "Skipping test - wrapper initialization failed: {:?}",
+                init_result.err()
+            );
             return;
         }
 
@@ -1572,6 +1591,9 @@ mod tests {
         assert!(!response.content.is_empty());
 
         // Shutdown wrapper
-        wrapper.shutdown().await.expect("Wrapper shutdown should succeed");
+        wrapper
+            .shutdown()
+            .await
+            .expect("Wrapper shutdown should succeed");
     }
 }

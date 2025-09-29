@@ -6,7 +6,6 @@
 use crate::actions::ActionError;
 use serde_json::Value;
 
-
 #[derive(Debug)]
 struct ActionErrorTestCase {
     test_name: &'static str,

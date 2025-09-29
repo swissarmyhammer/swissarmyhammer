@@ -59,6 +59,7 @@ proptest-regressions/
 
 swissarmyhammer/.swissarmyhammer
 swissarmyhammer-cli/.swissarmyhammer
+swissarmyhammer-workflow/.swissarmyhammer
 
 .work
 
@@ -94,3 +95,4 @@ test_validation
 
 # Claude Code usage tracking files
 cc.json
+swissarmyhammer-config/.swissarmyhammer/

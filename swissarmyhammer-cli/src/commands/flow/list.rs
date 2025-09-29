@@ -48,14 +48,24 @@ pub async fn execute_list_command(
     // Sort by name for consistent output
     workflow_infos.sort_by(|a, b| a.0.name.as_str().cmp(b.0.name.as_str()));
 
-    // Convert to display objects based on verbose flag
+    // Convert to display objects based on verbose flag using emoji-based sources
     if verbose {
-        let verbose_workflows: Vec<VerboseWorkflowInfo> =
-            workflow_infos.iter().map(|(w, _)| w.into()).collect();
+        let verbose_workflows: Vec<VerboseWorkflowInfo> = workflow_infos
+            .iter()
+            .map(|(workflow, _)| {
+                let file_source = resolver.workflow_sources.get(&workflow.name);
+                VerboseWorkflowInfo::from_workflow_with_source(workflow, file_source)
+            })
+            .collect();
         context.display(verbose_workflows)?;
     } else {
-        let workflow_info: Vec<WorkflowInfo> =
-            workflow_infos.iter().map(|(w, _)| w.into()).collect();
+        let workflow_info: Vec<WorkflowInfo> = workflow_infos
+            .iter()
+            .map(|(workflow, _)| {
+                let file_source = resolver.workflow_sources.get(&workflow.name);
+                WorkflowInfo::from_workflow_with_source(workflow, file_source)
+            })
+            .collect();
         context.display(workflow_info)?;
     }
 

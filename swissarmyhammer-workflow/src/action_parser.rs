@@ -590,8 +590,6 @@ impl ActionParser {
     }
 
     /// Parse timeout value from string (supports formats like "100ms", "5s", "2m", etc.)
-
-
     /// Validate that an argument key is safe for command-line use
     fn is_valid_argument_key(&self, key: &str) -> bool {
         !key.is_empty()

@@ -118,7 +118,7 @@ async fn test_mcp_server_basic_functionality() {
 }
 
 /// Test that MCP server loads prompts from the same directories as CLI (Fast In-Process)
-/// 
+///
 /// Optimized version that tests MCP server prompt loading without subprocess overhead:
 /// - Uses in-process MCP server instead of spawning subprocess
 /// - No cargo build/run overhead
@@ -140,35 +140,47 @@ async fn test_mcp_server_prompt_loading() {
     .unwrap();
 
     // Test MCP server directly using the library instead of subprocess
-    use swissarmyhammer_tools::mcp::unified_server::{start_mcp_server, McpServerMode};
     use swissarmyhammer_prompts::PromptLibrary;
+    use swissarmyhammer_tools::mcp::unified_server::{start_mcp_server, McpServerMode};
 
     // Create prompt library that loads from the test environment
     let library = PromptLibrary::default();
-    
+
     // Start in-process MCP server (much faster than subprocess)
     let mut server_handle = start_mcp_server(McpServerMode::Http { port: None }, Some(library))
         .await
         .expect("Failed to start in-process MCP server");
 
-    println!("✅ In-process MCP server started at: {}", server_handle.url());
-    
+    println!(
+        "✅ In-process MCP server started at: {}",
+        server_handle.url()
+    );
+
     // Test basic server connectivity
-    assert!(server_handle.port().unwrap() > 0, "Server should have valid port");
-    assert!(server_handle.url().contains("http://"), "Server should have HTTP URL");
+    assert!(
+        server_handle.port().unwrap() > 0,
+        "Server should have valid port"
+    );
+    assert!(
+        server_handle.url().contains("http://"),
+        "Server should have HTTP URL"
+    );
 
     // For now, test that server starts successfully - full prompt loading test
     // would require MCP client implementation or HTTP requests
     // This validates the critical server startup path without subprocess overhead
 
     // Clean shutdown
-    server_handle.shutdown().await.expect("Failed to shutdown server");
+    server_handle
+        .shutdown()
+        .await
+        .expect("Failed to shutdown server");
 
     println!("✅ Fast MCP prompt loading test passed!");
 }
 
 /// Test that MCP server loads prompts from the same directories as CLI (Slow Subprocess E2E)
-/// 
+///
 /// NOTE: This test is slow (>25s) because it spawns a subprocess and does full IPC.
 /// It's marked with #[ignore] by default. Run with `cargo test -- --ignored` for full E2E validation.
 /// The fast in-process test above covers the same functionality more efficiently.

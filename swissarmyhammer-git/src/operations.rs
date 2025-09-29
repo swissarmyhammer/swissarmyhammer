@@ -614,7 +614,10 @@ impl GitOperations {
     /// Find the best merge target for an issue branch using git merge-base
     /// This determines which branch the issue branch should merge back to
     pub fn find_merge_target_for_issue(&self, issue_branch: &BranchName) -> GitResult<String> {
-        eprintln!("ENTERING find_merge_target_for_issue for branch: {}", issue_branch);
+        eprintln!(
+            "ENTERING find_merge_target_for_issue for branch: {}",
+            issue_branch
+        );
         debug!("Finding merge target for issue branch: {}", issue_branch);
 
         // Get the commit for the issue branch
@@ -705,20 +708,26 @@ impl GitOperations {
             let issue_distance = self
                 .count_commits_between(merge_base, issue_commit)
                 .unwrap_or(usize::MAX);
-            
+
             // Calculate score: prioritize shortest distance, with perfect match as tie-breaker
             // Distance is most important - closer = more direct parent relationship
             let distance_score = (1000 - issue_distance as i64).max(0) * 1000; // Distance gets high weight
             let perfect_match_bonus = if is_perfect_match { 100 } else { 0 }; // Small bonus for perfect match
             let recency_score = merge_base_time / 1000; // Small component for recency
-            
+
             let score = distance_score + perfect_match_bonus + recency_score;
 
             if is_perfect_match {
-                eprintln!("Perfect match found: issue branched directly from tip of '{}'", branch_name);
+                eprintln!(
+                    "Perfect match found: issue branched directly from tip of '{}'",
+                    branch_name
+                );
             }
 
-            eprintln!("Branch '{}': distance = {}, score = {}", branch_name, issue_distance, score);
+            eprintln!(
+                "Branch '{}': distance = {}, score = {}",
+                branch_name, issue_distance, score
+            );
 
             if score > best_score {
                 best_score = score;
@@ -1048,24 +1057,28 @@ mod tests {
 
         // Helper function to create a commit
         let create_commit = |message: &str, content: &str| {
-            std::fs::write(repo_path.join("file.txt"), content)
-                .expect("Failed to write file");
+            std::fs::write(repo_path.join("file.txt"), content).expect("Failed to write file");
             let mut index = repo.index().expect("Failed to get index");
-            index.add_path(std::path::Path::new("file.txt"))
+            index
+                .add_path(std::path::Path::new("file.txt"))
                 .expect("Failed to add file to index");
             index.write().expect("Failed to write index");
             let tree_id = index.write_tree().expect("Failed to write tree");
             let tree = repo.find_tree(tree_id).expect("Failed to find tree");
-            
+
             let parent_commit = match repo.head() {
                 Ok(head) => {
                     let parent_oid = head.target().expect("Failed to get head target");
-                    Some(repo.find_commit(parent_oid).expect("Failed to find parent commit"))
+                    Some(
+                        repo.find_commit(parent_oid)
+                            .expect("Failed to find parent commit"),
+                    )
                 }
                 Err(_) => None, // First commit
             };
-            
-            let parents: Vec<&git2::Commit> = parent_commit.as_ref().map(|c| vec![c]).unwrap_or_default();
+
+            let parents: Vec<&git2::Commit> =
+                parent_commit.as_ref().map(|c| vec![c]).unwrap_or_default();
             repo.commit(
                 Some("HEAD"),
                 &signature,
@@ -1073,7 +1086,8 @@ mod tests {
                 message,
                 &tree,
                 &parents,
-            ).expect("Failed to create commit")
+            )
+            .expect("Failed to create commit")
         };
 
         // Create initial commit on main
@@ -1086,7 +1100,7 @@ mod tests {
         let feature_branch = BranchName::new("my-feature").expect("Invalid branch name");
         git_ops.create_and_checkout_branch(&feature_branch).unwrap();
         eprintln!("Created my-feature branch");
-        
+
         // Add commits to my-feature
         let _feature_commit1 = create_commit("Feature commit 1", "feature content 1");
         let _feature_commit2 = create_commit("Feature commit 2", "feature content 2");
@@ -1095,25 +1109,25 @@ mod tests {
         let issue_branch = BranchName::new("issue/task1").expect("Invalid branch name");
         git_ops.create_and_checkout_branch(&issue_branch).unwrap();
         eprintln!("Created issue/task1 branch");
-        
+
         // Add commit to issue branch
         let _issue_commit = create_commit("Issue task1 work", "task1 content");
 
         // Test 1: Issue branch should merge back to my-feature (perfect match)
         let merge_target = git_ops.find_merge_target_for_issue(&issue_branch).unwrap();
-        
+
         // For now, just verify that the function completes and returns something reasonable
         // We'll debug why it's returning main instead of my-feature
         eprintln!("ACTUAL result: {} (expected: my-feature)", merge_target);
-        
+
         // Temporarily comment out the assertion to see more debug info
-        // assert_eq!(merge_target, "my-feature", 
+        // assert_eq!(merge_target, "my-feature",
         //     "Issue branch should merge back to my-feature, but got: {}", merge_target);
 
         // Test 2: Move my-feature forward and test again
         git_ops.checkout_branch(&feature_branch).unwrap();
         let _feature_commit3 = create_commit("Feature moved forward", "feature content 3");
-        
+
         // Issue should still merge back to my-feature (most recent merge base)
         let merge_target = git_ops.find_merge_target_for_issue(&issue_branch).unwrap();
         assert_eq!(merge_target, "my-feature",
@@ -1126,7 +1140,10 @@ mod tests {
         let _issue2_commit = create_commit("Issue task2 work", "task2 content");
 
         let merge_target = git_ops.find_merge_target_for_issue(&issue2_branch).unwrap();
-        assert_eq!(merge_target, "main",
-            "Issue branch from main should merge back to main, but got: {}", merge_target);
+        assert_eq!(
+            merge_target, "main",
+            "Issue branch from main should merge back to main, but got: {}",
+            merge_target
+        );
     }
 }
