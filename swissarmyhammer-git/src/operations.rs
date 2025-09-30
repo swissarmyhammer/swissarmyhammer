@@ -100,6 +100,77 @@ impl GitOperations {
         Ok(branch_names)
     }
 
+    /// Get list of files changed on current branch relative to parent branch
+    ///
+    /// Uses merge-base to find the common ancestor commit, then diffs from that
+    /// point to the current branch HEAD to identify all changed files.
+    pub fn get_changed_files_from_parent(
+        &self,
+        current_branch: &str,
+        parent_branch: &str,
+    ) -> GitResult<Vec<String>> {
+        let repo = self.repo.inner();
+
+        // Find branch references
+        let current_branch_ref = repo
+            .find_branch(current_branch, BranchType::Local)
+            .map_err(|e| convert_git2_error("find_current_branch", e))?;
+
+        let parent_branch_ref = repo
+            .find_branch(parent_branch, BranchType::Local)
+            .map_err(|e| convert_git2_error("find_parent_branch", e))?;
+
+        // Get commit OIDs from branches
+        let current_commit = current_branch_ref
+            .get()
+            .peel_to_commit()
+            .map_err(|e| convert_git2_error("peel_current_branch", e))?;
+
+        let parent_commit = parent_branch_ref
+            .get()
+            .peel_to_commit()
+            .map_err(|e| convert_git2_error("peel_parent_branch", e))?;
+
+        // Find merge-base (common ancestor)
+        let merge_base = repo
+            .merge_base(current_commit.id(), parent_commit.id())
+            .map_err(|e| convert_git2_error("merge_base", e))?;
+
+        // Get tree objects for diff
+        let merge_base_commit = repo
+            .find_commit(merge_base)
+            .map_err(|e| convert_git2_error("find_merge_base_commit", e))?;
+
+        let merge_base_tree = merge_base_commit
+            .tree()
+            .map_err(|e| convert_git2_error("get_merge_base_tree", e))?;
+
+        let current_tree = current_commit
+            .tree()
+            .map_err(|e| convert_git2_error("get_current_tree", e))?;
+
+        // Compute diff from merge-base to current branch HEAD
+        let diff = repo
+            .diff_tree_to_tree(Some(&merge_base_tree), Some(&current_tree), None)
+            .map_err(|e| convert_git2_error("diff_tree_to_tree", e))?;
+
+        // Extract file paths from diff deltas
+        let mut changed_files = Vec::new();
+        for delta in diff.deltas() {
+            if let Some(path) = delta.new_file().path() {
+                if let Some(path_str) = path.to_str() {
+                    changed_files.push(path_str.to_string());
+                }
+            }
+        }
+
+        // Deduplicate (shouldn't be necessary with diff deltas, but being defensive)
+        changed_files.sort();
+        changed_files.dedup();
+
+        Ok(changed_files)
+    }
+
     /// Check if a branch exists
     pub fn branch_exists(&self, branch_name: &BranchName) -> GitResult<bool> {
         let repo = self.repo.inner();
@@ -1145,5 +1216,102 @@ mod tests {
             "Issue branch from main should merge back to main, but got: {}",
             merge_target
         );
+    }
+
+    #[test]
+    fn test_get_changed_files_from_parent() {
+        use std::fs;
+
+        // Create a test repository with main and feature branches
+        let temp_dir = TempDir::new().expect("Failed to create temp directory");
+        let repo_path = temp_dir.path();
+
+        // Initialize repository
+        let repo = Repository::init(repo_path).expect("Failed to init repository");
+        let mut config = repo.config().expect("Failed to get config");
+        config
+            .set_str("user.name", "Test User")
+            .expect("Failed to set user.name");
+        config
+            .set_str("user.email", "test@example.com")
+            .expect("Failed to set user.email");
+
+        let signature =
+            git2::Signature::now("Test User", "test@example.com").expect("Failed to create signature");
+
+        // Helper function to create a commit
+        let create_commit = |message: &str, files: Vec<(&str, &str)>| {
+            for (filename, content) in files {
+                let file_path = repo_path.join(filename);
+                if let Some(parent) = file_path.parent() {
+                    fs::create_dir_all(parent).expect("Failed to create parent directory");
+                }
+                fs::write(&file_path, content).expect("Failed to write file");
+            }
+
+            let mut index = repo.index().expect("Failed to get index");
+            index.add_all(["."].iter(), git2::IndexAddOption::DEFAULT, None)
+                .expect("Failed to add files to index");
+            index.write().expect("Failed to write index");
+            let tree_id = index.write_tree().expect("Failed to write tree");
+            let tree = repo.find_tree(tree_id).expect("Failed to find tree");
+
+            let parent_commit = match repo.head() {
+                Ok(head) => {
+                    let parent_oid = head.target().expect("Failed to get head target");
+                    Some(repo.find_commit(parent_oid).expect("Failed to find parent commit"))
+                }
+                Err(_) => None,
+            };
+
+            let parents: Vec<&git2::Commit> = parent_commit.as_ref().map(|c| vec![c]).unwrap_or_default();
+            repo.commit(Some("HEAD"), &signature, &signature, message, &tree, &parents)
+                .expect("Failed to create commit")
+        };
+
+        // Create initial commit on main
+        create_commit("Initial commit", vec![("README.md", "Initial content")]);
+
+        // Create feature branch from main
+        let feature_branch = repo
+            .branch("feature", &repo.head().unwrap().peel_to_commit().unwrap(), false)
+            .expect("Failed to create feature branch");
+        repo.set_head(feature_branch.get().name().unwrap())
+            .expect("Failed to set HEAD");
+        repo.checkout_head(None).expect("Failed to checkout");
+
+        // Make changes on feature branch
+        create_commit(
+            "Feature commit 1",
+            vec![("src/main.rs", "fn main() {}"), ("src/lib.rs", "pub fn hello() {}")],
+        );
+
+        create_commit("Feature commit 2", vec![("docs/guide.md", "# Guide")]);
+
+        create_commit(
+            "Feature commit 3",
+            vec![
+                ("src/main.rs", "fn main() { println!(\"Hello\"); }"),
+                ("tests/test.rs", "#[test] fn test_main() {}"),
+            ],
+        );
+
+        // Now test the function
+        let git_ops = GitOperations::with_work_dir(repo_path.to_path_buf())
+            .expect("Failed to create GitOperations");
+
+        let changed_files = git_ops
+            .get_changed_files_from_parent("feature", "main")
+            .expect("Failed to get changed files");
+
+        // Verify we got all the files changed on feature branch
+        assert_eq!(changed_files.len(), 4, "Expected 4 changed files");
+        assert!(changed_files.contains(&"src/main.rs".to_string()));
+        assert!(changed_files.contains(&"src/lib.rs".to_string()));
+        assert!(changed_files.contains(&"docs/guide.md".to_string()));
+        assert!(changed_files.contains(&"tests/test.rs".to_string()));
+
+        // Verify README.md is not in the list (it was in the initial commit)
+        assert!(!changed_files.contains(&"README.md".to_string()));
     }
 }
