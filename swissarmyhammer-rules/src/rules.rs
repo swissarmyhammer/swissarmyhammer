@@ -22,7 +22,7 @@
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::{Result, Severity};
 use swissarmyhammer_common::SwissArmyHammerError;
@@ -476,5 +476,439 @@ mod tests {
         let json = serde_json::to_string(&rule).unwrap();
         // Source should not appear in JSON
         assert!(!json.contains("/path/to/rule.md"));
+    }
+}
+
+/// Manages a collection of rules with storage and retrieval capabilities
+///
+/// RuleLibrary provides methods to load rules from directories, search through them,
+/// and manage them programmatically. Uses a pluggable storage backend system.
+///
+/// # Examples
+///
+/// ```
+/// use swissarmyhammer_rules::RuleLibrary;
+///
+/// // Create a new library with in-memory storage
+/// let mut library = RuleLibrary::new();
+///
+/// // Add rules from a directory
+/// let count = library.add_directory("./.swissarmyhammer/rules").unwrap();
+/// println!("Loaded {} rules", count);
+///
+/// // Get a specific rule
+/// let rule = library.get("no-hardcoded-secrets").unwrap();
+/// ```
+pub struct RuleLibrary {
+    storage: Box<dyn crate::StorageBackend>,
+}
+
+impl std::fmt::Debug for RuleLibrary {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RuleLibrary")
+            .field("storage", &"<StorageBackend>")
+            .finish()
+    }
+}
+
+impl RuleLibrary {
+    /// Creates a new rule library with default in-memory storage
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use swissarmyhammer_rules::RuleLibrary;
+    ///
+    /// let library = RuleLibrary::new();
+    /// ```
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            storage: Box::new(crate::storage::MemoryStorage::new()),
+        }
+    }
+
+    /// Creates a rule library with a custom storage backend
+    ///
+    /// # Arguments
+    ///
+    /// * `storage` - The storage backend to use
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use swissarmyhammer_rules::{RuleLibrary, MemoryStorage};
+    ///
+    /// let storage = Box::new(MemoryStorage::new());
+    /// let library = RuleLibrary::with_storage(storage);
+    /// ```
+    #[must_use]
+    pub fn with_storage(storage: Box<dyn crate::StorageBackend>) -> Self {
+        Self { storage }
+    }
+
+    /// Loads all rules from a directory and adds them to the library
+    ///
+    /// Recursively scans the directory for markdown files with rule definitions.
+    ///
+    /// # Arguments
+    ///
+    /// * `path` - Path to the directory containing rule files
+    ///
+    /// # Returns
+    ///
+    /// The number of rules successfully loaded
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if directory does not exist or storage fails
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use swissarmyhammer_rules::RuleLibrary;
+    ///
+    /// let mut library = RuleLibrary::new();
+    /// let count = library.add_directory("./.swissarmyhammer/rules").unwrap();
+    /// println!("Loaded {} rules", count);
+    /// ```
+    pub fn add_directory(&mut self, path: impl AsRef<Path>) -> Result<usize> {
+        let loader = crate::RuleLoader::new();
+        let rules = loader.load_directory(path)?;
+        let count = rules.len();
+
+        for rule in rules {
+            self.storage.store(&rule.name, &rule)?;
+        }
+
+        Ok(count)
+    }
+
+    /// Adds a single rule to the library
+    ///
+    /// # Arguments
+    ///
+    /// * `rule` - The rule to add
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if storage backend fails
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use swissarmyhammer_rules::{RuleLibrary, Rule, Severity};
+    ///
+    /// let mut library = RuleLibrary::new();
+    /// let rule = Rule::new(
+    ///     "test-rule".to_string(),
+    ///     "Check something".to_string(),
+    ///     Severity::Error,
+    /// );
+    /// library.add(rule).unwrap();
+    /// ```
+    pub fn add(&mut self, rule: Rule) -> Result<()> {
+        self.storage.store(&rule.name, &rule)
+    }
+
+    /// Retrieves a rule by its name
+    ///
+    /// # Arguments
+    ///
+    /// * `name` - The unique name of the rule
+    ///
+    /// # Returns
+    ///
+    /// The rule if found
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if rule not found or storage fails
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use swissarmyhammer_rules::{RuleLibrary, Rule, Severity};
+    ///
+    /// let mut library = RuleLibrary::new();
+    /// let rule = Rule::new("test".to_string(), "Template".to_string(), Severity::Error);
+    /// library.add(rule).unwrap();
+    ///
+    /// let retrieved = library.get("test").unwrap();
+    /// assert_eq!(retrieved.name, "test");
+    /// ```
+    pub fn get(&self, name: &str) -> Result<Rule> {
+        self.storage
+            .get(name)?
+            .ok_or_else(|| SwissArmyHammerError::Other {
+                message: format!("Rule '{}' not found", name),
+            })
+    }
+
+    /// Lists all rules in the library
+    ///
+    /// # Returns
+    ///
+    /// A vector of all rules in the library
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if storage backend fails
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use swissarmyhammer_rules::{RuleLibrary, Rule, Severity};
+    ///
+    /// let mut library = RuleLibrary::new();
+    /// library.add(Rule::new("test1".to_string(), "T1".to_string(), Severity::Error)).unwrap();
+    /// library.add(Rule::new("test2".to_string(), "T2".to_string(), Severity::Warning)).unwrap();
+    ///
+    /// let rules = library.list().unwrap();
+    /// assert_eq!(rules.len(), 2);
+    /// ```
+    pub fn list(&self) -> Result<Vec<Rule>> {
+        self.storage.list()
+    }
+
+    /// Lists all rule names in the library
+    ///
+    /// # Returns
+    ///
+    /// A vector of all rule names
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if storage backend fails
+    pub fn list_names(&self) -> Result<Vec<String>> {
+        self.storage.list_keys()
+    }
+
+    /// Removes a rule from the library
+    ///
+    /// # Arguments
+    ///
+    /// * `name` - The name of the rule to remove
+    ///
+    /// # Returns
+    ///
+    /// `true` if the rule was removed, `false` if it didn't exist
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if storage backend fails
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use swissarmyhammer_rules::{RuleLibrary, Rule, Severity};
+    ///
+    /// let mut library = RuleLibrary::new();
+    /// let rule = Rule::new("test".to_string(), "T".to_string(), Severity::Error);
+    /// library.add(rule).unwrap();
+    ///
+    /// assert!(library.remove("test").unwrap());
+    /// assert!(!library.remove("test").unwrap());
+    /// ```
+    pub fn remove(&mut self, name: &str) -> Result<bool> {
+        self.storage.remove(name)
+    }
+
+    /// Searches for rules by name pattern
+    ///
+    /// # Arguments
+    ///
+    /// * `pattern` - The pattern to match against rule names
+    ///
+    /// # Returns
+    ///
+    /// A vector of matching rules
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if storage backend fails
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use swissarmyhammer_rules::{RuleLibrary, Rule, Severity};
+    ///
+    /// let mut library = RuleLibrary::new();
+    /// library.add(Rule::new("no-secrets".to_string(), "T".to_string(), Severity::Error)).unwrap();
+    /// library.add(Rule::new("no-eval".to_string(), "T".to_string(), Severity::Error)).unwrap();
+    ///
+    /// let results = library.search("no-").unwrap();
+    /// assert_eq!(results.len(), 2);
+    /// ```
+    pub fn search(&self, pattern: &str) -> Result<Vec<Rule>> {
+        let all_rules = self.list()?;
+        let filtered = all_rules
+            .into_iter()
+            .filter(|rule| rule.name.contains(pattern))
+            .collect();
+        Ok(filtered)
+    }
+
+    /// Lists rules with filtering applied
+    ///
+    /// # Arguments
+    ///
+    /// * `filter` - The filter criteria to apply
+    /// * `sources` - Map of rule names to their sources
+    ///
+    /// # Returns
+    ///
+    /// A vector of filtered rules
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if storage backend fails
+    pub fn list_filtered(
+        &self,
+        filter: &crate::RuleFilter,
+        sources: &HashMap<String, crate::RuleSource>,
+    ) -> Result<Vec<Rule>> {
+        let all_rules = self.list()?;
+        let rule_refs: Vec<&Rule> = all_rules.iter().collect();
+        Ok(filter.apply(rule_refs, sources))
+    }
+}
+
+impl Default for RuleLibrary {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[cfg(test)]
+mod library_tests {
+    use super::*;
+
+    #[test]
+    fn test_rule_library_new() {
+        let library = RuleLibrary::new();
+        let rules = library.list().unwrap();
+        assert!(rules.is_empty());
+    }
+
+    #[test]
+    fn test_rule_library_add_and_get() {
+        let mut library = RuleLibrary::new();
+        let rule = Rule::new(
+            "test-rule".to_string(),
+            "Check something".to_string(),
+            Severity::Error,
+        );
+
+        library.add(rule.clone()).unwrap();
+
+        let retrieved = library.get("test-rule").unwrap();
+        assert_eq!(retrieved.name, "test-rule");
+        assert_eq!(retrieved.severity, Severity::Error);
+    }
+
+    #[test]
+    fn test_rule_library_list() {
+        let mut library = RuleLibrary::new();
+
+        library
+            .add(Rule::new(
+                "rule1".to_string(),
+                "Template 1".to_string(),
+                Severity::Error,
+            ))
+            .unwrap();
+        library
+            .add(Rule::new(
+                "rule2".to_string(),
+                "Template 2".to_string(),
+                Severity::Warning,
+            ))
+            .unwrap();
+
+        let rules = library.list().unwrap();
+        assert_eq!(rules.len(), 2);
+    }
+
+    #[test]
+    fn test_rule_library_list_names() {
+        let mut library = RuleLibrary::new();
+
+        library
+            .add(Rule::new(
+                "rule1".to_string(),
+                "T1".to_string(),
+                Severity::Error,
+            ))
+            .unwrap();
+        library
+            .add(Rule::new(
+                "rule2".to_string(),
+                "T2".to_string(),
+                Severity::Error,
+            ))
+            .unwrap();
+
+        let names = library.list_names().unwrap();
+        assert_eq!(names.len(), 2);
+        assert!(names.contains(&"rule1".to_string()));
+        assert!(names.contains(&"rule2".to_string()));
+    }
+
+    #[test]
+    fn test_rule_library_remove() {
+        let mut library = RuleLibrary::new();
+        let rule = Rule::new("test".to_string(), "T".to_string(), Severity::Error);
+
+        library.add(rule).unwrap();
+        assert!(library.get("test").is_ok());
+
+        assert!(library.remove("test").unwrap());
+        assert!(library.get("test").is_err());
+
+        assert!(!library.remove("test").unwrap());
+    }
+
+    #[test]
+    fn test_rule_library_search() {
+        let mut library = RuleLibrary::new();
+
+        library
+            .add(Rule::new(
+                "no-secrets".to_string(),
+                "T".to_string(),
+                Severity::Error,
+            ))
+            .unwrap();
+        library
+            .add(Rule::new(
+                "no-eval".to_string(),
+                "T".to_string(),
+                Severity::Error,
+            ))
+            .unwrap();
+        library
+            .add(Rule::new(
+                "function-length".to_string(),
+                "T".to_string(),
+                Severity::Warning,
+            ))
+            .unwrap();
+
+        let results = library.search("no-").unwrap();
+        assert_eq!(results.len(), 2);
+
+        let results = library.search("function").unwrap();
+        assert_eq!(results.len(), 1);
+
+        let results = library.search("nonexistent").unwrap();
+        assert!(results.is_empty());
+    }
+
+    #[test]
+    fn test_rule_library_get_not_found() {
+        let library = RuleLibrary::new();
+        let result = library.get("nonexistent");
+        assert!(result.is_err());
     }
 }
