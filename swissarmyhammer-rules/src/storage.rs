@@ -316,7 +316,7 @@ impl StorageBackend for FileStorage {
 
         // Parse the file using the frontmatter parser
         let parsed = crate::parse_frontmatter(&content)?;
-        
+
         // Extract metadata from frontmatter if present
         let metadata = parsed.metadata.ok_or_else(|| SwissArmyHammerError::Other {
             message: format!("Rule file {} missing frontmatter", file_path.display()),
@@ -332,12 +332,7 @@ impl StorageBackend for FileStorage {
         let severity = metadata
             .get("severity")
             .and_then(|v| v.as_str())
-            .and_then(|s| match s {
-                "Error" => Some(crate::Severity::Error),
-                "Warning" => Some(crate::Severity::Warning),
-                "Info" => Some(crate::Severity::Info),
-                _ => None,
-            })
+            .and_then(|s| s.parse::<crate::Severity>().ok())
             .unwrap_or(crate::Severity::Info);
 
         // Build the rule using RuleBuilder
@@ -414,11 +409,7 @@ impl StorageBackend for FileStorage {
         }
 
         std::fs::remove_file(&file_path).map_err(|e| SwissArmyHammerError::Other {
-            message: format!(
-                "Failed to remove rule file {}: {}",
-                file_path.display(),
-                e
-            ),
+            message: format!("Failed to remove rule file {}: {}", file_path.display(), e),
         })?;
 
         Ok(true)
@@ -627,13 +618,21 @@ mod tests {
 
         let mut storage = FileStorage::new(&temp_dir);
 
-        let rule1 = Rule::new("rule1".to_string(), "Template 1".to_string(), Severity::Error);
+        let rule1 = Rule::new(
+            "rule1".to_string(),
+            "Template 1".to_string(),
+            Severity::Error,
+        );
         let rule2 = Rule::new(
             "rule2".to_string(),
             "Template 2".to_string(),
             Severity::Warning,
         );
-        let rule3 = Rule::new("rule3".to_string(), "Template 3".to_string(), Severity::Info);
+        let rule3 = Rule::new(
+            "rule3".to_string(),
+            "Template 3".to_string(),
+            Severity::Info,
+        );
 
         storage.store("rule1", &rule1).unwrap();
         storage.store("rule2", &rule2).unwrap();
@@ -678,7 +677,11 @@ mod tests {
 
         let mut storage = FileStorage::new(&temp_dir);
 
-        let rule1 = Rule::new("rule1".to_string(), "Template 1".to_string(), Severity::Error);
+        let rule1 = Rule::new(
+            "rule1".to_string(),
+            "Template 1".to_string(),
+            Severity::Error,
+        );
         let rule2 = Rule::new(
             "rule2".to_string(),
             "Template 2".to_string(),

@@ -17,12 +17,14 @@ use swissarmyhammer_common::SwissArmyHammerError;
 
 // Declare modules
 mod frontmatter;
+mod rule_loader;
 mod rules;
 mod severity;
 mod storage;
 
 // Re-export public types
 pub use frontmatter::{parse_frontmatter, FrontmatterResult};
+pub use rule_loader::RuleLoader;
 pub use rules::{Rule, RuleBuilder};
 pub use severity::Severity;
 pub use storage::{FileStorage, MemoryStorage, StorageBackend};

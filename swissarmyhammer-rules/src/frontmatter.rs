@@ -248,7 +248,7 @@ tags: [a, b, c]
     fn test_parse_rule_severity_field() {
         let content = "---\nname: test\nseverity: Error\n---\nContent";
         let result = parse_frontmatter(content).unwrap();
-        
+
         let metadata = result.metadata.unwrap();
         let severity = metadata.get("severity").and_then(|v| v.as_str()).unwrap();
         assert_eq!(severity, "Error");
@@ -258,7 +258,7 @@ tags: [a, b, c]
     fn test_parse_rule_auto_fix_field() {
         let content = "---\nname: test\nauto_fix: true\n---\nContent";
         let result = parse_frontmatter(content).unwrap();
-        
+
         let metadata = result.metadata.unwrap();
         let auto_fix = metadata.get("auto_fix").and_then(|v| v.as_bool()).unwrap();
         assert!(auto_fix);
@@ -282,14 +282,23 @@ metadata:
 Check for {{pattern}} in the code."#;
 
         let result = parse_frontmatter(content).unwrap();
-        
+
         let metadata = result.metadata.unwrap();
-        
+
         // Verify all fields
-        assert_eq!(metadata.get("name").and_then(|v| v.as_str()), Some("security-check"));
-        assert_eq!(metadata.get("description").and_then(|v| v.as_str()), Some("Check for security issues"));
-        assert_eq!(metadata.get("category").and_then(|v| v.as_str()), Some("security"));
-        
+        assert_eq!(
+            metadata.get("name").and_then(|v| v.as_str()),
+            Some("security-check")
+        );
+        assert_eq!(
+            metadata.get("description").and_then(|v| v.as_str()),
+            Some("Check for security issues")
+        );
+        assert_eq!(
+            metadata.get("category").and_then(|v| v.as_str()),
+            Some("security")
+        );
+
         let tags: Vec<String> = metadata
             .get("tags")
             .and_then(|v| v.as_array())
@@ -300,14 +309,29 @@ Check for {{pattern}} in the code."#;
             })
             .unwrap_or_default();
         assert_eq!(tags, vec!["critical", "automated"]);
-        
-        assert_eq!(metadata.get("severity").and_then(|v| v.as_str()), Some("Error"));
-        assert_eq!(metadata.get("auto_fix").and_then(|v| v.as_bool()), Some(false));
-        
-        let rule_metadata = metadata.get("metadata").and_then(|v| v.as_object()).unwrap();
-        assert_eq!(rule_metadata.get("author").and_then(|v| v.as_str()), Some("test-user"));
-        assert_eq!(rule_metadata.get("version").and_then(|v| v.as_str()), Some("1.0.0"));
-        
+
+        assert_eq!(
+            metadata.get("severity").and_then(|v| v.as_str()),
+            Some("Error")
+        );
+        assert_eq!(
+            metadata.get("auto_fix").and_then(|v| v.as_bool()),
+            Some(false)
+        );
+
+        let rule_metadata = metadata
+            .get("metadata")
+            .and_then(|v| v.as_object())
+            .unwrap();
+        assert_eq!(
+            rule_metadata.get("author").and_then(|v| v.as_str()),
+            Some("test-user")
+        );
+        assert_eq!(
+            rule_metadata.get("version").and_then(|v| v.as_str()),
+            Some("1.0.0")
+        );
+
         assert_eq!(result.content, "Check for {{pattern}} in the code.");
     }
 
@@ -331,7 +355,7 @@ Check for {{pattern}} in the code."#;
     fn test_parse_rule_auto_fix_false() {
         let content = "---\nauto_fix: false\n---\nContent";
         let result = parse_frontmatter(content).unwrap();
-        
+
         let metadata = result.metadata.unwrap();
         let auto_fix = metadata.get("auto_fix").and_then(|v| v.as_bool()).unwrap();
         assert!(!auto_fix);
@@ -341,7 +365,7 @@ Check for {{pattern}} in the code."#;
     fn test_parse_rule_optional_fields_missing() {
         let content = "---\nname: minimal\nseverity: Info\n---\nContent";
         let result = parse_frontmatter(content).unwrap();
-        
+
         let metadata = result.metadata.unwrap();
         assert!(metadata.get("description").is_none());
         assert!(metadata.get("category").is_none());
