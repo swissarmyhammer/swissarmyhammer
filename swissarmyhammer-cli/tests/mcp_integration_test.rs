@@ -10,7 +10,7 @@ use test_utils::ProcessGuard;
 
 /// Simple MCP integration test that verifies the server works correctly
 #[tokio::test]
-#[ignore = "slow test - run with --ignored to enable"]
+#[serial_test::serial]
 async fn test_mcp_server_basic_functionality() {
     // Start the MCP server process
     let child = Command::new("cargo")
@@ -182,10 +182,9 @@ async fn test_mcp_server_prompt_loading() {
 /// Test that MCP server loads prompts from the same directories as CLI (Slow Subprocess E2E)
 ///
 /// NOTE: This test is slow (>25s) because it spawns a subprocess and does full IPC.
-/// It's marked with #[ignore] by default. Run with `cargo test -- --ignored` for full E2E validation.
 /// The fast in-process test above covers the same functionality more efficiently.
 #[tokio::test]
-#[ignore = "Slow E2E test - spawns subprocess and does full IPC (>25s). Use --ignored to run."]
+#[serial_test::serial]
 async fn test_mcp_server_prompt_loading_e2e() {
     let _guard = IsolatedTestEnvironment::new().expect("Failed to create test environment");
     let home_path = std::env::var("HOME").expect("HOME should be set");
@@ -310,7 +309,7 @@ async fn test_mcp_server_prompt_loading_e2e() {
 
 /// Test that MCP server loads built-in prompts
 #[tokio::test]
-#[ignore = "slow test - run with --ignored to enable"]
+#[serial_test::serial]
 async fn test_mcp_server_builtin_prompts() {
     // Start MCP server
     let child = Command::new("cargo")

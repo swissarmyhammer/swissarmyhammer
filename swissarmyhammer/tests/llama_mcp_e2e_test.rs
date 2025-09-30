@@ -114,7 +114,6 @@ async fn test_llama_mcp_integration_fast() {
 /// 3. Validates model makes correct MCP tool call to its own server and receives file contents
 /// 4. Verifies response contains actual Cargo.toml content
 #[test_log::test(tokio::test)]
-#[ignore = "Slow E2E test - downloads 4B LLM model and runs inference (>25s). Use --ignored to run."]
 // needs to be serial -- model download
 #[serial]
 async fn test_llama_mcp_cargo_toml_integration() {
@@ -212,9 +211,7 @@ async fn test_llama_mcp_cargo_toml_integration() {
 /// Tests LlamaAgent MCP server integration by validating configuration (Slow)
 ///
 /// NOTE: This test is slow (>5s) because it may trigger LLM model operations.
-/// It's marked with #[ignore] by default. Run with `cargo test -- --ignored` for full validation.
 #[test_log::test(tokio::test)]
-#[ignore = "Slow test - may trigger LLM model operations (>5s). Use --ignored to run."]
 async fn test_llama_mcp_server_connectivity() {
     let _guard = IsolatedTestEnvironment::new().expect("Failed to create test environment");
 
@@ -249,9 +246,7 @@ async fn test_llama_mcp_server_connectivity() {
 /// Tests LlamaAgent configuration with MCP server settings (Slow)
 ///
 /// NOTE: This test is slow (>5s) because it may trigger LLM model operations.
-/// It's marked with #[ignore] by default. Run with `cargo test -- --ignored` for full validation.
 #[tokio::test]
-#[ignore = "Slow test - may trigger LLM model operations (>5s). Use --ignored to run."]
 async fn test_llama_agent_config_with_mcp() {
     let _guard = IsolatedTestEnvironment::new().expect("Failed to create test environment");
 

@@ -97,4 +97,5 @@ tempfile = { workspace = true }
 futures-util = { workspace = true }
 tracing-subscriber = { workspace = true }
 proptest = "1.4"
+serial_test = "3.1"
 git2 = { workspace = true }

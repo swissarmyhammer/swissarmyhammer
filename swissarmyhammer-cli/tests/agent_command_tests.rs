@@ -318,6 +318,7 @@ async fn test_agent_use_empty_name() -> Result<()> {
 // =============================================================================
 
 #[tokio::test]
+#[serial_test::serial]
 async fn test_agent_precedence_user_over_builtin() -> Result<()> {
     let temp_dir = TempDir::new()?;
     let temp_home = temp_dir.path();
@@ -513,6 +514,7 @@ async fn test_agent_use_permission_denied() -> Result<()> {
 }
 
 #[tokio::test]
+#[serial_test::serial]
 async fn test_agent_list_with_invalid_agent_files() -> Result<()> {
     let temp_dir = TempDir::new()?;
     let temp_home = temp_dir.path();

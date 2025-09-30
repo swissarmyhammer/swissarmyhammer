@@ -53,13 +53,11 @@ async fn test_stdio_server_with_rmcp_client() {
     println!("✅ Fast MCP server functionality test PASSED!");
 }
 
-/// Full E2E RMCP integration test using subprocess (Slow)
+/// Full E2E RMCP integration test using subprocess
 ///
-/// NOTE: This test is slow (>25s) because it spawns a subprocess and does full MCP protocol.
-/// It's marked with #[ignore] by default. Run with `cargo test -- --ignored` for full E2E validation.
 /// The fast in-process test above covers the same functionality more efficiently.
 #[tokio::test]
-#[ignore = "Slow E2E test - spawns subprocess and does full RMCP protocol (>25s). Use --ignored to run."]
+#[serial_test::serial]
 async fn test_stdio_server_with_rmcp_client_e2e() {
     // Use rmcp client to connect to our stdio server running as subprocess
     let service = ()
