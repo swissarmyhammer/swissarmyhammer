@@ -17,6 +17,7 @@ use swissarmyhammer_common::SwissArmyHammerError;
 
 // Declare modules
 mod frontmatter;
+mod language;
 mod rule_filter;
 mod rule_loader;
 mod rule_resolver;
@@ -26,6 +27,7 @@ mod storage;
 
 // Re-export public types
 pub use frontmatter::{parse_frontmatter, FrontmatterResult};
+pub use language::detect_language;
 pub use rule_filter::RuleFilter;
 pub use rule_loader::RuleLoader;
 pub use rule_resolver::RuleResolver;
