@@ -107,8 +107,9 @@ impl McpTool for GitChangesTool {
         context: &ToolContext,
     ) -> std::result::Result<CallToolResult, rmcp::ErrorData> {
         // Parse request
-        let request: GitChangesRequest = serde_json::from_value(serde_json::Value::Object(arguments))
-            .map_err(|e| rmcp::ErrorData::invalid_params(e.to_string(), None))?;
+        let request: GitChangesRequest =
+            serde_json::from_value(serde_json::Value::Object(arguments))
+                .map_err(|e| rmcp::ErrorData::invalid_params(e.to_string(), None))?;
 
         // Get git operations from context
         let git_ops_guard = context.git_ops.lock().await;
@@ -120,28 +121,44 @@ impl McpTool for GitChangesTool {
         let parent_branch = if request.branch.starts_with("issue/") {
             // For issue branches, try to find the parent branch
             use swissarmyhammer_git::BranchName;
-            let branch_name = BranchName::new(&request.branch)
-                .map_err(|e| rmcp::ErrorData::invalid_params(format!("Invalid branch name: {}", e), None))?;
-            match git_ops.find_merge_target_for_issue(&branch_name) {
-                Ok(parent) => Some(parent),
-                Err(_) => None, // If we can't find parent, treat as main branch
-            }
+            let branch_name = BranchName::new(&request.branch).map_err(|e| {
+                rmcp::ErrorData::invalid_params(format!("Invalid branch name: {}", e), None)
+            })?;
+            git_ops.find_merge_target_for_issue(&branch_name).ok()
         } else {
             None
         };
 
         // Get changed files based on whether we have a parent branch
-        let files = if let Some(ref parent) = parent_branch {
+        let mut files = if let Some(ref parent) = parent_branch {
             // Feature/issue branch: get files changed from parent
             git_ops
                 .get_changed_files_from_parent(&request.branch, parent)
-                .map_err(|e| rmcp::ErrorData::internal_error(format!("Failed to get changed files: {}", e), None))?
+                .map_err(|e| {
+                    rmcp::ErrorData::internal_error(
+                        format!("Failed to get changed files: {}", e),
+                        None,
+                    )
+                })?
         } else {
             // Main/trunk branch: get all tracked files
-            git_ops
-                .get_all_tracked_files()
-                .map_err(|e| rmcp::ErrorData::internal_error(format!("Failed to get tracked files: {}", e), None))?
+            git_ops.get_all_tracked_files().map_err(|e| {
+                rmcp::ErrorData::internal_error(format!("Failed to get tracked files: {}", e), None)
+            })?
         };
+
+        // Merge in uncommitted changes
+        let uncommitted = get_uncommitted_changes(git_ops).map_err(|e| {
+            rmcp::ErrorData::internal_error(
+                format!("Failed to get uncommitted changes: {}", e),
+                None,
+            )
+        })?;
+        files.extend(uncommitted);
+
+        // Deduplicate and sort for consistent output
+        files.sort();
+        files.dedup();
 
         // Build response
         let response = GitChangesResponse {
@@ -151,8 +168,9 @@ impl McpTool for GitChangesTool {
         };
 
         // Serialize to JSON and create response
-        let response_json = serde_json::to_string_pretty(&response)
-            .map_err(|e| rmcp::ErrorData::internal_error(format!("Failed to serialize response: {}", e), None))?;
+        let response_json = serde_json::to_string_pretty(&response).map_err(|e| {
+            rmcp::ErrorData::internal_error(format!("Failed to serialize response: {}", e), None)
+        })?;
 
         Ok(CallToolResult {
             content: vec![rmcp::model::Annotated::new(
@@ -172,9 +190,9 @@ impl McpTool for GitChangesTool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::Path;
     use swissarmyhammer_git::GitOperations;
     use tempfile::TempDir;
-    use std::path::Path;
 
     /// Helper function to initialize a git repository with config
     fn setup_test_repo(repo_path: &Path) {
@@ -438,7 +456,10 @@ mod tests {
         // Execute tool
         let tool = GitChangesTool::new();
         let mut arguments = serde_json::Map::new();
-        arguments.insert("branch".to_string(), serde_json::json!("issue/test-feature"));
+        arguments.insert(
+            "branch".to_string(),
+            serde_json::json!("issue/test-feature"),
+        );
 
         let result = tool.execute(arguments, &context).await;
         assert!(result.is_ok());
@@ -507,5 +528,129 @@ mod tests {
         assert_eq!(deserialized.branch, "issue/test");
         assert_eq!(deserialized.parent_branch, Some("main".to_string()));
         assert_eq!(deserialized.files.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn test_git_changes_tool_includes_uncommitted_changes() {
+        let temp_dir = TempDir::new().unwrap();
+        let repo_path = temp_dir.path();
+
+        setup_test_repo(repo_path);
+        create_initial_commit(repo_path, "committed.txt", "committed content");
+
+        // Create issue branch and add a committed file
+        std::process::Command::new("git")
+            .args(["checkout", "-b", "issue/test-uncommitted"])
+            .current_dir(repo_path)
+            .output()
+            .unwrap();
+        std::fs::write(repo_path.join("committed_on_branch.txt"), "committed").unwrap();
+        std::process::Command::new("git")
+            .args(["add", "."])
+            .current_dir(repo_path)
+            .output()
+            .unwrap();
+        std::process::Command::new("git")
+            .args(["commit", "-m", "Add committed file"])
+            .current_dir(repo_path)
+            .output()
+            .unwrap();
+
+        // Create an uncommitted file
+        std::fs::write(repo_path.join("uncommitted.txt"), "uncommitted content").unwrap();
+
+        // Create test context with git ops
+        let git_ops = GitOperations::with_work_dir(repo_path).unwrap();
+        let context = crate::test_utils::create_test_context().await;
+        *context.git_ops.lock().await = Some(git_ops);
+
+        // Execute tool
+        let tool = GitChangesTool::new();
+        let mut arguments = serde_json::Map::new();
+        arguments.insert(
+            "branch".to_string(),
+            serde_json::json!("issue/test-uncommitted"),
+        );
+
+        let result = tool.execute(arguments, &context).await;
+        assert!(result.is_ok());
+
+        let response = result.unwrap();
+        assert_eq!(response.is_error, Some(false));
+
+        // Parse response
+        let response_text = match &response.content[0].raw {
+            rmcp::model::RawContent::Text(text) => &text.text,
+            _ => panic!("Expected text content"),
+        };
+        let parsed: GitChangesResponse = serde_json::from_str(response_text).unwrap();
+
+        // Verify both committed and uncommitted files are included
+        assert_eq!(parsed.branch, "issue/test-uncommitted");
+        assert_eq!(parsed.parent_branch, Some("main".to_string()));
+        assert_eq!(parsed.files.len(), 2);
+        assert!(parsed
+            .files
+            .contains(&"committed_on_branch.txt".to_string()));
+        assert!(parsed.files.contains(&"uncommitted.txt".to_string()));
+
+        // Base file should not be included
+        assert!(!parsed.files.contains(&"committed.txt".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_git_changes_tool_main_branch_includes_uncommitted() {
+        let temp_dir = TempDir::new().unwrap();
+        let repo_path = temp_dir.path();
+
+        setup_test_repo(repo_path);
+
+        // Create and commit files on main
+        std::fs::write(repo_path.join("file1.txt"), "content1").unwrap();
+        std::fs::write(repo_path.join("file2.txt"), "content2").unwrap();
+        std::process::Command::new("git")
+            .args(["add", "."])
+            .current_dir(repo_path)
+            .output()
+            .unwrap();
+        std::process::Command::new("git")
+            .args(["commit", "-m", "Initial commit"])
+            .current_dir(repo_path)
+            .output()
+            .unwrap();
+
+        // Create an uncommitted file
+        std::fs::write(repo_path.join("uncommitted.txt"), "uncommitted").unwrap();
+
+        // Create test context with git ops
+        let git_ops = GitOperations::with_work_dir(repo_path).unwrap();
+        let context = crate::test_utils::create_test_context().await;
+        *context.git_ops.lock().await = Some(git_ops);
+
+        // Execute tool
+        let tool = GitChangesTool::new();
+        let mut arguments = serde_json::Map::new();
+        arguments.insert("branch".to_string(), serde_json::json!("main"));
+
+        let result = tool.execute(arguments, &context).await;
+        assert!(result.is_ok());
+
+        let response = result.unwrap();
+        assert_eq!(response.is_error, Some(false));
+
+        // Parse response
+        let response_text = match &response.content[0].raw {
+            rmcp::model::RawContent::Text(text) => &text.text,
+            _ => panic!("Expected text content"),
+        };
+        let parsed: GitChangesResponse = serde_json::from_str(response_text).unwrap();
+
+        // Verify all tracked files and uncommitted files are included
+        assert_eq!(parsed.branch, "main");
+        assert_eq!(parsed.parent_branch, None);
+        assert_eq!(parsed.files.len(), 3);
+        assert!(parsed.files.contains(&"file1.txt".to_string()));
+        assert!(parsed.files.contains(&"file2.txt".to_string()));
+        assert!(parsed.files.contains(&"uncommitted.txt".to_string()));
     }
 }
