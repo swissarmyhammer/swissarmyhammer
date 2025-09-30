@@ -29,7 +29,9 @@ pub async fn handle_command(subcommand: AgentSubcommand, context: &CliContext) -
             let error_msg = e.to_string();
             if !error_msg.starts_with("❌") && !error_msg.contains("Failed to") {
                 tracing::error!("Agent operation failed: {}", e);
-                tracing::error!("Run 'sah agent list' to see available agents or 'sah agent --help' for usage.");
+                tracing::error!(
+                    "Run 'sah agent list' to see available agents or 'sah agent --help' for usage."
+                );
             }
             EXIT_ERROR
         }

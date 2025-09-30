@@ -14,8 +14,8 @@
 //! concurrently due to shared test state and directory cleanup timing.
 
 use anyhow::Result;
-use std::path::Path;
 use serial_test::serial;
+use std::path::Path;
 
 mod in_process_test_utils;
 use in_process_test_utils::run_sah_command_in_process;

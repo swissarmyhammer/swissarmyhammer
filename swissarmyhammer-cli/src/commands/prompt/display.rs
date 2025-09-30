@@ -8,7 +8,7 @@ use tabled::Tabled;
 
 // Emoji constants for source display consistency across all listing commands
 const BUILTIN_EMOJI: &str = "📦 Built-in";
-const PROJECT_EMOJI: &str = "📁 Project";  
+const PROJECT_EMOJI: &str = "📁 Project";
 const USER_EMOJI: &str = "👤 User";
 
 /// Convert FileSource to emoji representation for consistent display across all listing commands.
@@ -79,8 +79,8 @@ impl From<&swissarmyhammer_prompts::Prompt> for PromptRow {
 impl PromptRow {
     /// Create a PromptRow with FileSource information for emoji-based source display
     pub fn from_prompt_with_source(
-        prompt: &swissarmyhammer_prompts::Prompt, 
-        file_source: Option<&swissarmyhammer::FileSource>
+        prompt: &swissarmyhammer_prompts::Prompt,
+        file_source: Option<&swissarmyhammer::FileSource>,
     ) -> Self {
         Self {
             name: prompt.name.clone(),
@@ -123,8 +123,8 @@ impl From<&swissarmyhammer_prompts::Prompt> for VerbosePromptRow {
 impl VerbosePromptRow {
     /// Create a VerbosePromptRow with FileSource information for emoji-based source display
     pub fn from_prompt_with_source(
-        prompt: &swissarmyhammer_prompts::Prompt, 
-        file_source: Option<&swissarmyhammer::FileSource>
+        prompt: &swissarmyhammer_prompts::Prompt,
+        file_source: Option<&swissarmyhammer::FileSource>,
     ) -> Self {
         Self {
             name: prompt.name.clone(),
@@ -145,8 +145,6 @@ impl VerbosePromptRow {
     }
 }
 
-
-
 /// Convert prompts with source information to appropriate display format with emoji-based sources
 pub fn prompts_to_display_rows_with_sources(
     prompts: Vec<swissarmyhammer_prompts::Prompt>,
@@ -161,7 +159,7 @@ pub fn prompts_to_display_rows_with_sources(
                     let file_source = sources.get(&prompt.name);
                     VerbosePromptRow::from_prompt_with_source(prompt, file_source)
                 })
-                .collect()
+                .collect(),
         )
     } else {
         DisplayRows::Standard(
@@ -171,7 +169,7 @@ pub fn prompts_to_display_rows_with_sources(
                     let file_source = sources.get(&prompt.name);
                     PromptRow::from_prompt_with_source(prompt, file_source)
                 })
-                .collect()
+                .collect(),
         )
     }
 }
@@ -510,23 +508,31 @@ mod tests {
     #[test]
     fn test_prompt_row_with_source_emoji_mapping() {
         let prompt = create_test_prompt();
-        
+
         // Test built-in source
-        let builtin_row = PromptRow::from_prompt_with_source(&prompt, Some(&swissarmyhammer::FileSource::Builtin));
+        let builtin_row = PromptRow::from_prompt_with_source(
+            &prompt,
+            Some(&swissarmyhammer::FileSource::Builtin),
+        );
         assert_eq!(builtin_row.source, "📦 Built-in");
-        
-        // Test project source  
-        let project_row = PromptRow::from_prompt_with_source(&prompt, Some(&swissarmyhammer::FileSource::Local));
+
+        // Test project source
+        let project_row =
+            PromptRow::from_prompt_with_source(&prompt, Some(&swissarmyhammer::FileSource::Local));
         assert_eq!(project_row.source, "📁 Project");
-        
+
         // Test user source
-        let user_row = PromptRow::from_prompt_with_source(&prompt, Some(&swissarmyhammer::FileSource::User));
+        let user_row =
+            PromptRow::from_prompt_with_source(&prompt, Some(&swissarmyhammer::FileSource::User));
         assert_eq!(user_row.source, "👤 User");
-        
+
         // Test dynamic source (should default to built-in)
-        let dynamic_row = PromptRow::from_prompt_with_source(&prompt, Some(&swissarmyhammer::FileSource::Dynamic));
+        let dynamic_row = PromptRow::from_prompt_with_source(
+            &prompt,
+            Some(&swissarmyhammer::FileSource::Dynamic),
+        );
         assert_eq!(dynamic_row.source, "📦 Built-in");
-        
+
         // Test no source (should default to built-in)
         let no_source_row = PromptRow::from_prompt_with_source(&prompt, None);
         assert_eq!(no_source_row.source, "📦 Built-in");
@@ -536,7 +542,10 @@ mod tests {
     fn test_prompts_to_display_rows_with_sources_emoji_mapping() {
         let prompts = vec![create_test_prompt()];
         let mut sources = std::collections::HashMap::new();
-        sources.insert("test-prompt".to_string(), swissarmyhammer::FileSource::Local);
+        sources.insert(
+            "test-prompt".to_string(),
+            swissarmyhammer::FileSource::Local,
+        );
 
         // Test standard mode uses emoji mapping
         let standard_rows = prompts_to_display_rows_with_sources(prompts.clone(), &sources, false);

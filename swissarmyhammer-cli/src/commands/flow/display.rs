@@ -10,7 +10,7 @@ use tabled::Tabled;
 fn file_source_to_emoji(source: Option<&swissarmyhammer::FileSource>) -> &'static str {
     match source {
         Some(swissarmyhammer::FileSource::Builtin) => "📦 Built-in",
-        Some(swissarmyhammer::FileSource::Local) => "📁 Project", 
+        Some(swissarmyhammer::FileSource::Local) => "📁 Project",
         Some(swissarmyhammer::FileSource::User) => "👤 User",
         Some(swissarmyhammer::FileSource::Dynamic) | None => "📦 Built-in", // Default fallback
     }
@@ -69,7 +69,7 @@ impl WorkflowInfo {
     /// Create WorkflowInfo with FileSource information for emoji-based source display
     pub fn from_workflow_with_source(
         workflow: &Workflow,
-        file_source: Option<&swissarmyhammer::FileSource>
+        file_source: Option<&swissarmyhammer::FileSource>,
     ) -> Self {
         Self {
             name: workflow.name.as_str().to_string(),
@@ -119,7 +119,7 @@ impl VerboseWorkflowInfo {
     /// Create VerboseWorkflowInfo with FileSource information for emoji-based source display
     pub fn from_workflow_with_source(
         workflow: &Workflow,
-        file_source: Option<&swissarmyhammer::FileSource>
+        file_source: Option<&swissarmyhammer::FileSource>,
     ) -> Self {
         let title = workflow
             .metadata

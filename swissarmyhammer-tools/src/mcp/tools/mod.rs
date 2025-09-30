@@ -37,6 +37,7 @@
 
 pub mod abort;
 pub mod files;
+pub mod git;
 pub mod issues;
 pub mod memoranda;
 pub mod notify;

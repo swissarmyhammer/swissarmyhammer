@@ -58,8 +58,8 @@
 //! // List all available agents
 //! let agents = AgentManager::list_agents()?;
 //! for agent in agents {
-//!     println!("{}: {:?} - {}", 
-//!         agent.name, 
+//!     println!("{}: {:?} - {}",
+//!         agent.name,
 //!         agent.source,
 //!         agent.description.unwrap_or_default()
 //!     );
@@ -118,7 +118,7 @@
 //! SwissArmyHammer includes these built-in agents:
 //!
 //! ## claude-code
-//! 
+//!
 //! Default integration with Claude Code CLI:
 //! ```yaml
 //! executor:

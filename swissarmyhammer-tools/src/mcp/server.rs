@@ -25,10 +25,10 @@ use tokio::sync::{Mutex, RwLock};
 
 use super::tool_handlers::ToolHandlers;
 use super::tool_registry::{
-    register_abort_tools, register_file_tools, register_issue_tools, register_memo_tools,
-    register_notify_tools, register_outline_tools, register_search_tools, register_shell_tools,
-    register_todo_tools, register_web_fetch_tools, register_web_search_tools, ToolContext,
-    ToolRegistry,
+    register_abort_tools, register_file_tools, register_git_tools, register_issue_tools,
+    register_memo_tools, register_notify_tools, register_outline_tools, register_search_tools,
+    register_shell_tools, register_todo_tools, register_web_fetch_tools, register_web_search_tools,
+    ToolContext, ToolRegistry,
 };
 
 /// MCP server for all SwissArmyHammer functionality.
@@ -171,6 +171,7 @@ impl McpServer {
         // Register all available tools
         register_abort_tools(&mut tool_registry);
         register_file_tools(&mut tool_registry);
+        register_git_tools(&mut tool_registry);
         register_issue_tools(&mut tool_registry);
         register_memo_tools(&mut tool_registry);
         register_notify_tools(&mut tool_registry);
