@@ -11,6 +11,9 @@ use swissarmyhammer_memoranda::{MarkdownMemoStorage, MemoStorage};
 use tempfile::TempDir;
 use tokio::sync::{Mutex as TokioMutex, RwLock};
 
+/// Git-specific test helpers
+pub mod git_test_helpers;
+
 /// Creates a test context with mock storage backends for testing MCP tools
 ///
 /// This function creates a ToolContext similar to the one in swissarmyhammer,
