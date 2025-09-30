@@ -17,11 +17,37 @@ workspace = true
 [dependencies]
 # Core dependencies
 serde = { workspace = true }
+serde_yaml = { workspace = true }
 serde_json = { workspace = true }
+anyhow = { workspace = true }
 thiserror = { workspace = true }
+tracing = { workspace = true }
+tokio = { workspace = true }
 
 # SwissArmyHammer domain dependencies
 swissarmyhammer-common = { path = "../swissarmyhammer-common" }
+swissarmyhammer-config = { path = "../swissarmyhammer-config" }
+swissarmyhammer-templating = { path = "../swissarmyhammer-templating" }
+swissarmyhammer-prompts = { path = "../swissarmyhammer-prompts" }
+swissarmyhammer-workflow = { path = "../swissarmyhammer-workflow" }
+
+# File system and utilities
+walkdir = { workspace = true }
+regex = { workspace = true }
+chrono = { workspace = true }
+ulid = { workspace = true }
+glob = { workspace = true }
+ignore = { workspace = true }
+dirs = { workspace = true }
+
+# Template engine
+liquid = { workspace = true }
+
+# Include functionality for builtin rules
+include_dir = "0.7"
+
+# Language detection - reuse existing tree-sitter
+tree-sitter = { workspace = true }
 
 [dev-dependencies]
 serde_json = { workspace = true }

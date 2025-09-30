@@ -6808,13 +6808,31 @@ dependencies = [
 name = "swissarmyhammer-rules"
 version = "0.1.1"
 dependencies = [
+ "anyhow",
+ "chrono",
+ "dirs 5.0.1",
+ "glob",
+ "ignore",
+ "include_dir",
+ "liquid",
+ "regex",
  "serde",
  "serde_json",
+ "serde_yaml",
  "serial_test",
  "swissarmyhammer-common",
+ "swissarmyhammer-config",
+ "swissarmyhammer-prompts",
+ "swissarmyhammer-templating",
+ "swissarmyhammer-workflow",
  "tempfile",
  "thiserror 1.0.69",
+ "tokio",
  "tokio-test",
+ "tracing",
+ "tree-sitter",
+ "ulid",
+ "walkdir",
 ]
 
 [[package]]
