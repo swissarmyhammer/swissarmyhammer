@@ -16,12 +16,16 @@ use serde::{Deserialize, Serialize};
 use swissarmyhammer_common::SwissArmyHammerError;
 
 // Declare modules
+mod frontmatter;
 mod rules;
 mod severity;
+mod storage;
 
 // Re-export public types
+pub use frontmatter::{parse_frontmatter, FrontmatterResult};
 pub use rules::{Rule, RuleBuilder};
 pub use severity::Severity;
+pub use storage::{FileStorage, MemoryStorage, StorageBackend};
 
 /// Result type for rule operations
 pub type Result<T> = std::result::Result<T, SwissArmyHammerError>;
