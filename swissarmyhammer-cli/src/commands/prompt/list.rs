@@ -27,7 +27,7 @@ pub async fn execute_list_command(cli_context: &CliContext) -> Result<()> {
         let prompt_source: swissarmyhammer_prompts::PromptSource = source.clone().into();
         prompt_sources.insert(name.clone(), prompt_source);
     }
-    
+
     let all_prompts = library.list_filtered(&filter, &prompt_sources)?;
 
     // Filter out partial templates
@@ -38,9 +38,9 @@ pub async fn execute_list_command(cli_context: &CliContext) -> Result<()> {
 
     // Convert to display objects using emoji-based sources and use context's display_prompts method
     let display_rows = super::display::prompts_to_display_rows_with_sources(
-        prompts, 
-        &file_sources, 
-        cli_context.verbose
+        prompts,
+        &file_sources,
+        cli_context.verbose,
     );
     cli_context.display_prompts(display_rows)?;
 
@@ -306,7 +306,11 @@ mod tests {
 
         // Test standard conversion
         let sources = std::collections::HashMap::new();
-        let display_rows = super::super::display::prompts_to_display_rows_with_sources(filtered.clone(), &sources, false);
+        let display_rows = super::super::display::prompts_to_display_rows_with_sources(
+            filtered.clone(),
+            &sources,
+            false,
+        );
         match display_rows {
             super::super::display::DisplayRows::Standard(rows) => {
                 assert_eq!(rows.len(), 2);
@@ -317,7 +321,8 @@ mod tests {
         }
 
         // Test verbose conversion
-        let display_rows = super::super::display::prompts_to_display_rows_with_sources(filtered, &sources, true);
+        let display_rows =
+            super::super::display::prompts_to_display_rows_with_sources(filtered, &sources, true);
         match display_rows {
             super::super::display::DisplayRows::Verbose(rows) => {
                 assert_eq!(rows.len(), 2);

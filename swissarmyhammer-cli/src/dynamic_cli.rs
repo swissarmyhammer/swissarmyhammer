@@ -110,7 +110,10 @@ impl CliBuilder {
             // Create category command data
             let category_cmd_data = CommandData {
                 name: category_name.clone(),
-                about: Some(format!("{} management commands (MCP Tool)", category.to_uppercase())),
+                about: Some(format!(
+                    "{} management commands (MCP Tool)",
+                    category.to_uppercase()
+                )),
                 long_about: None,
                 args: Vec::new(),
             };

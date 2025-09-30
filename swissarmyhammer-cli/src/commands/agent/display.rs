@@ -15,7 +15,7 @@ use tabled::Tabled;
 fn source_to_emoji(source: &AgentSource) -> &'static str {
     match source {
         AgentSource::Builtin => "📦 Built-in",
-        AgentSource::Project => "📁 Project", 
+        AgentSource::Project => "📁 Project",
         AgentSource::User => "👤 User",
     }
 }

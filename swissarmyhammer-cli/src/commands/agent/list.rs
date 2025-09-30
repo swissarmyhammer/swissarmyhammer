@@ -23,7 +23,7 @@ pub async fn execute_list_command(
 
     // Use the provided format directly
     let output_format = format;
-    
+
     // For table format, show summary information
     if matches!(output_format, OutputFormat::Table) {
         display_agent_summary_and_table(&agents, context.verbose)?;
@@ -31,8 +31,12 @@ pub async fn execute_list_command(
         // For JSON/YAML formats, just display the data directly
         let display_rows = super::display::agents_to_display_rows(agents, context.verbose);
         match display_rows {
-            super::display::DisplayRows::Standard(items) => display_items_with_format(&items, output_format)?,
-            super::display::DisplayRows::Verbose(items) => display_items_with_format(&items, output_format)?,
+            super::display::DisplayRows::Standard(items) => {
+                display_items_with_format(&items, output_format)?
+            }
+            super::display::DisplayRows::Verbose(items) => {
+                display_items_with_format(&items, output_format)?
+            }
         }
     }
 
@@ -41,14 +45,14 @@ pub async fn execute_list_command(
 
 /// Display agent summary information followed by a table
 fn display_agent_summary_and_table(
-    agents: &[swissarmyhammer_config::agent::AgentInfo], 
-    verbose: bool
+    agents: &[swissarmyhammer_config::agent::AgentInfo],
+    verbose: bool,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // Count agents by source
     let mut builtin_count = 0;
     let mut project_count = 0;
     let mut user_count = 0;
-    
+
     for agent in agents {
         match agent.source {
             AgentSource::Builtin => builtin_count += 1,
@@ -59,7 +63,7 @@ fn display_agent_summary_and_table(
 
     // Display summary information that tests expect
     println!("Agents: {}", agents.len());
-    
+
     if builtin_count > 0 {
         println!("Built-in: {}", builtin_count);
     }
@@ -69,7 +73,7 @@ fn display_agent_summary_and_table(
     if user_count > 0 {
         println!("User: {}", user_count);
     }
-    
+
     println!(); // Empty line before table
 
     // Display the table
@@ -96,12 +100,15 @@ fn display_agent_summary_and_table(
             }
         }
     }
-    
+
     Ok(())
 }
 
 /// Display items using the specified format (for JSON/YAML)
-fn display_items_with_format<T>(items: &[T], format: OutputFormat) -> Result<(), Box<dyn std::error::Error + Send + Sync>>
+fn display_items_with_format<T>(
+    items: &[T],
+    format: OutputFormat,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>>
 where
     T: serde::Serialize + tabled::Tabled,
 {
@@ -127,5 +134,3 @@ where
     }
     Ok(())
 }
-
-

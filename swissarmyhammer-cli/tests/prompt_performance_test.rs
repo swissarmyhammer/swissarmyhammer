@@ -377,7 +377,8 @@ async fn test_display_conversion_performance() {
 
     // Test standard display conversion
     let sources = std::collections::HashMap::new();
-    let display_rows = display::prompts_to_display_rows_with_sources(prompts.clone(), &sources, false);
+    let display_rows =
+        display::prompts_to_display_rows_with_sources(prompts.clone(), &sources, false);
     match display_rows {
         display::DisplayRows::Standard(rows) => {
             assert_eq!(rows.len(), 1000, "Should convert all prompts");
