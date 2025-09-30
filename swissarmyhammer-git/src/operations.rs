@@ -737,11 +737,10 @@ impl GitOperations {
     /// Find the best merge target for an issue branch using git merge-base
     /// This determines which branch the issue branch should merge back to
     pub fn find_merge_target_for_issue(&self, issue_branch: &BranchName) -> GitResult<String> {
-        eprintln!(
-            "ENTERING find_merge_target_for_issue for branch: {}",
+        debug!(
+            "Finding merge target for branch: {}",
             issue_branch
         );
-        debug!("Finding merge target for issue branch: {}", issue_branch);
 
         // Get the commit for the issue branch
         let issue_commit = match self
@@ -759,13 +758,23 @@ impl GitOperations {
             Err(e) => return Err(convert_git2_error("find_branch", e)),
         };
 
-        // Get all local branches except the issue branch itself
+        // Get all local branches except the current branch itself
         let mut branches = Vec::new();
         let branch_iter = self
             .repo
             .inner()
             .branches(Some(git2::BranchType::Local))
             .map_err(|e| convert_git2_error("branches", e))?;
+
+        // Extract branch prefix (e.g., "feature/" from "feature/foo") to filter out sibling branches
+        // with the same prefix. This prevents merging feature/ branches back to other feature/ branches,
+        // or issue/ branches back to other issue/ branches, ensuring we find the actual parent branch
+        // from a different hierarchy level (e.g., feature/foo should merge to main, not feature/bar).
+        let branch_prefix = issue_branch.as_str()
+            .split('/')
+            .next()
+            .filter(|_prefix| issue_branch.as_str().contains('/'))
+            .map(|s| format!("{}/", s));
 
         for branch_result in branch_iter {
             let (branch, _) = branch_result.map_err(|e| convert_git2_error("branch_iter", e))?;
@@ -774,21 +783,32 @@ impl GitOperations {
                 .name()
                 .map_err(|e| convert_git2_error("branch_name", e))?
             {
-                // Skip the issue branch itself and other issue branches
-                if branch_name != issue_branch.as_str() && !branch_name.starts_with("issue/") {
-                    branches.push(branch_name.to_string());
-                    eprintln!("Found candidate branch: {}", branch_name);
+                // Skip the current branch itself
+                if branch_name == issue_branch.as_str() {
+                    continue;
                 }
+
+                // Skip branches with the same prefix (e.g., don't merge issue/ to issue/, feature/ to feature/)
+                if let Some(ref prefix) = branch_prefix {
+                    if branch_name.starts_with(prefix) {
+                        continue;
+                    }
+                }
+
+                branches.push(branch_name.to_string());
+                debug!("Found candidate branch: {}", branch_name);
             }
         }
-        eprintln!("Total candidate branches: {}", branches.len());
+        debug!("Total candidate branches: {}", branches.len());
+        
+        let had_candidates = !branches.is_empty();
 
         let mut best_target = None;
         let mut best_score = 0i64; // Track best match score
 
         // For each potential target branch, find the merge base
         for branch_name in branches {
-            eprintln!("Processing branch: {}", branch_name);
+            debug!("Processing branch: {}", branch_name);
             let target_commit = match self
                 .repo
                 .inner()
@@ -818,7 +838,7 @@ impl GitOperations {
             let merge_base_time = merge_base_commit.time().seconds();
             let is_perfect_match = merge_base == target_commit;
 
-            eprintln!(
+            debug!(
                 "Branch '{}': merge_base = {}, target_head = {}, merge_base_time = {}, perfect_match = {}",
                 branch_name,
                 merge_base,
@@ -841,33 +861,53 @@ impl GitOperations {
             let score = distance_score + perfect_match_bonus + recency_score;
 
             if is_perfect_match {
-                eprintln!(
-                    "Perfect match found: issue branched directly from tip of '{}'",
+                debug!(
+                    "Perfect match found: branch branched directly from tip of '{}'",
                     branch_name
                 );
             }
 
-            eprintln!(
+            debug!(
                 "Branch '{}': distance = {}, score = {}",
                 branch_name, issue_distance, score
             );
 
             if score > best_score {
                 best_score = score;
-                eprintln!("New best target: {} (score: {})", branch_name, score);
+                debug!("New best target: {} (score: {})", branch_name, score);
                 best_target = Some(branch_name);
             }
         }
 
-        // Return the best target, or fall back to main branch
+        // Return the best target, or fall back to main branch only if there were no candidates at all
         match best_target {
             Some(target) => {
-                eprintln!("Selected merge target: {}", target);
+                debug!("Selected merge target: {}", target);
                 Ok(target)
             }
             None => {
-                eprintln!("No suitable merge target found, falling back to main branch");
-                self.main_branch()
+                // If we had candidate branches but found no valid merge-base, it's an orphan or unrelated branch
+                if had_candidates {
+                    debug!("No valid merge-base found with any candidate - likely orphan branch or unrelated history");
+                    return Err(GitError::generic(format!(
+                        "Branch '{}' has no common history with other branches (orphan branch)",
+                        issue_branch
+                    )));
+                }
+
+                // If we had NO candidates at all, fall back to main branch
+                debug!("No candidate branches found, falling back to main branch");
+                let main = self.main_branch()?;
+                
+                // If this branch IS the main branch, return error
+                if issue_branch.as_str() == main {
+                    return Err(GitError::generic(format!(
+                        "Branch '{}' is the main branch and has no parent",
+                        issue_branch
+                    )));
+                }
+                
+                Ok(main)
             }
         }
     }
@@ -944,6 +984,9 @@ mod tests {
     use git2::Repository;
     use tempfile::TempDir;
 
+    /// Tests that attempting to create an issue branch from another issue branch fails.
+    /// This validates the business rule that issue branches should only be created from
+    /// feature or main branches, not from other issue branches.
     #[test]
     fn debug_branch_creation_issue() {
         // Create a simple temporary repo without using setup_test_repo

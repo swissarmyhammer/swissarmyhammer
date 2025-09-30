@@ -117,16 +117,18 @@ impl McpTool for GitChangesTool {
             .as_ref()
             .ok_or_else(|| rmcp::ErrorData::internal_error("Git operations not available", None))?;
 
-        // Try to find parent branch using find_merge_target_for_issue
-        let parent_branch = if request.branch.starts_with("issue/") {
-            // For issue branches, try to find the parent branch
+        // Try to find parent branch for any branch
+        let parent_branch = {
             use swissarmyhammer_git::BranchName;
             let branch_name = BranchName::new(&request.branch).map_err(|e| {
                 rmcp::ErrorData::invalid_params(format!("Invalid branch name: {}", e), None)
             })?;
-            git_ops.find_merge_target_for_issue(&branch_name).ok()
-        } else {
-            None
+            
+            // Try to find merge target, but if it returns the branch itself or fails, treat as no parent
+            match git_ops.find_merge_target_for_issue(&branch_name) {
+                Ok(target) if target != request.branch => Some(target),
+                _ => None,
+            }
         };
 
         // Get changed files based on whether we have a parent branch
@@ -816,5 +818,68 @@ mod tests {
         assert!(parsed.files.contains(&"orphan2.txt".to_string()));
         // Main branch file should not be present
         assert!(!parsed.files.contains(&"main_file.txt".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_git_changes_tool_feature_branch_detects_parent() {
+        let temp_dir = TempDir::new().unwrap();
+        let repo_path = temp_dir.path();
+
+        setup_test_repo(repo_path);
+        create_initial_commit(repo_path, "base.txt", "base content");
+
+        // Create feature branch (not issue/) and add files
+        std::process::Command::new("git")
+            .args(["checkout", "-b", "feature/new-feature"])
+            .current_dir(repo_path)
+            .output()
+            .unwrap();
+        std::fs::write(repo_path.join("feature1.txt"), "feature content").unwrap();
+        std::fs::write(repo_path.join("feature2.txt"), "more features").unwrap();
+        std::process::Command::new("git")
+            .args(["add", "."])
+            .current_dir(repo_path)
+            .output()
+            .unwrap();
+        std::process::Command::new("git")
+            .args(["commit", "-m", "Add features"])
+            .current_dir(repo_path)
+            .output()
+            .unwrap();
+
+        // Create test context with git ops
+        let git_ops = GitOperations::with_work_dir(repo_path).unwrap();
+        let context = crate::test_utils::create_test_context().await;
+        *context.git_ops.lock().await = Some(git_ops);
+
+        // Execute tool
+        let tool = GitChangesTool::new();
+        let mut arguments = serde_json::Map::new();
+        arguments.insert(
+            "branch".to_string(),
+            serde_json::json!("feature/new-feature"),
+        );
+
+        let result = tool.execute(arguments, &context).await;
+        assert!(result.is_ok());
+
+        let response = result.unwrap();
+        assert_eq!(response.is_error, Some(false));
+
+        // Parse response
+        let response_text = match &response.content[0].raw {
+            rmcp::model::RawContent::Text(text) => &text.text,
+            _ => panic!("Expected text content"),
+        };
+        let parsed: GitChangesResponse = serde_json::from_str(response_text).unwrap();
+
+        // Feature branch should detect main as parent and show only changed files
+        assert_eq!(parsed.branch, "feature/new-feature");
+        assert_eq!(parsed.parent_branch, Some("main".to_string()));
+        assert_eq!(parsed.files.len(), 2);
+        assert!(parsed.files.contains(&"feature1.txt".to_string()));
+        assert!(parsed.files.contains(&"feature2.txt".to_string()));
+        // Base file should not be included
+        assert!(!parsed.files.contains(&"base.txt".to_string()));
     }
 }
