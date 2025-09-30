@@ -169,7 +169,10 @@ fn test_check_prompt_renders_with_parameters() {
         "target_content".to_string(),
         serde_json::json!("fn foo() {}\nfn bar() {}"),
     );
-    template_context.set("target_path".to_string(), serde_json::json!("src/example.rs"));
+    template_context.set(
+        "target_path".to_string(),
+        serde_json::json!("src/example.rs"),
+    );
     template_context.set("language".to_string(), serde_json::json!("rust"));
 
     // Render the .check prompt

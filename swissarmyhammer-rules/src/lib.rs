@@ -16,9 +16,11 @@ use serde::{Deserialize, Serialize};
 use swissarmyhammer_common::SwissArmyHammerError;
 
 // Declare modules
+mod rules;
 mod severity;
 
-// Re-export severity types
+// Re-export public types
+pub use rules::{Rule, RuleBuilder};
 pub use severity::Severity;
 
 /// Result type for rule operations
