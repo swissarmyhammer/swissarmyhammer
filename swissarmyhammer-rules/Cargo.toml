@@ -1,0 +1,33 @@
+[package]
+name = "swissarmyhammer-rules"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Define and check coding standards and best practices"
+documentation = "https://docs.rs/swissarmyhammer-rules"
+readme = "../README.md"
+keywords = ["rule", "template", "ai", "linter", "domain"]
+categories = ["template-engine", "development-tools"]
+
+[lints]
+workspace = true
+
+[dependencies]
+# Core dependencies
+serde = { workspace = true }
+thiserror = { workspace = true }
+
+# SwissArmyHammer domain dependencies
+swissarmyhammer-common = { path = "../swissarmyhammer-common" }
+
+[dev-dependencies]
+serde_json = { workspace = true }
+tempfile = { workspace = true }
+tokio-test = "0.4"
+serial_test = "3.1"
+
+# NEVER add features or feature flags to this Cargo.toml!
+# SwissArmyHammer provides ALL functionality ALL the time.
+# This is a SwissArmyHammer - every tool, every time!

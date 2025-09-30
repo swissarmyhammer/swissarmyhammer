@@ -6805,6 +6805,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "swissarmyhammer-rules"
+version = "0.1.1"
+dependencies = [
+ "serde",
+ "serde_json",
+ "serial_test",
+ "swissarmyhammer-common",
+ "tempfile",
+ "thiserror 1.0.69",
+ "tokio-test",
+]
+
+[[package]]
 name = "swissarmyhammer-search"
 version = "0.1.1"
 dependencies = [
