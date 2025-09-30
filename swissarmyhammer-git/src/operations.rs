@@ -171,6 +171,58 @@ impl GitOperations {
         Ok(changed_files)
     }
 
+    /// Get all tracked files in the repository
+    ///
+    /// Returns a sorted list of all files currently tracked in the repository's HEAD commit.
+    /// This walks the tree recursively and collects all blob (file) entries, excluding directories.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - The repository has no HEAD (empty repository)
+    /// - Failed to read the HEAD commit or its tree
+    /// - Failed to walk the tree structure
+    pub fn get_all_tracked_files(&self) -> GitResult<Vec<String>> {
+        let repo = self.repo.inner();
+
+        // Get HEAD reference
+        let head = repo.head().map_err(|e| convert_git2_error("get_head", e))?;
+
+        // Get HEAD commit
+        let head_commit = head
+            .peel_to_commit()
+            .map_err(|e| convert_git2_error("peel_head_to_commit", e))?;
+
+        // Get tree from HEAD commit
+        let tree = head_commit
+            .tree()
+            .map_err(|e| convert_git2_error("get_head_tree", e))?;
+
+        // Collect all file paths by walking the tree
+        let mut file_paths = Vec::new();
+
+        tree.walk(git2::TreeWalkMode::PreOrder, |root, entry| {
+            // Only include blobs (files), not trees (directories)
+            if let Some(git2::ObjectType::Blob) = entry.kind() {
+                if let Some(name) = entry.name() {
+                    let full_path = if root.is_empty() {
+                        name.to_string()
+                    } else {
+                        format!("{}{}", root, name)
+                    };
+                    file_paths.push(full_path);
+                }
+            }
+            git2::TreeWalkResult::Ok
+        })
+        .map_err(|e| convert_git2_error("walk_tree", e))?;
+
+        // Sort for consistent ordering
+        file_paths.sort();
+
+        Ok(file_paths)
+    }
+
     /// Check if a branch exists
     pub fn branch_exists(&self, branch_name: &BranchName) -> GitResult<bool> {
         let repo = self.repo.inner();
@@ -1236,8 +1288,8 @@ mod tests {
             .set_str("user.email", "test@example.com")
             .expect("Failed to set user.email");
 
-        let signature =
-            git2::Signature::now("Test User", "test@example.com").expect("Failed to create signature");
+        let signature = git2::Signature::now("Test User", "test@example.com")
+            .expect("Failed to create signature");
 
         // Helper function to create a commit
         let create_commit = |message: &str, files: Vec<(&str, &str)>| {
@@ -1250,7 +1302,8 @@ mod tests {
             }
 
             let mut index = repo.index().expect("Failed to get index");
-            index.add_all(["."].iter(), git2::IndexAddOption::DEFAULT, None)
+            index
+                .add_all(["."].iter(), git2::IndexAddOption::DEFAULT, None)
                 .expect("Failed to add files to index");
             index.write().expect("Failed to write index");
             let tree_id = index.write_tree().expect("Failed to write tree");
@@ -1259,14 +1312,25 @@ mod tests {
             let parent_commit = match repo.head() {
                 Ok(head) => {
                     let parent_oid = head.target().expect("Failed to get head target");
-                    Some(repo.find_commit(parent_oid).expect("Failed to find parent commit"))
+                    Some(
+                        repo.find_commit(parent_oid)
+                            .expect("Failed to find parent commit"),
+                    )
                 }
                 Err(_) => None,
             };
 
-            let parents: Vec<&git2::Commit> = parent_commit.as_ref().map(|c| vec![c]).unwrap_or_default();
-            repo.commit(Some("HEAD"), &signature, &signature, message, &tree, &parents)
-                .expect("Failed to create commit")
+            let parents: Vec<&git2::Commit> =
+                parent_commit.as_ref().map(|c| vec![c]).unwrap_or_default();
+            repo.commit(
+                Some("HEAD"),
+                &signature,
+                &signature,
+                message,
+                &tree,
+                &parents,
+            )
+            .expect("Failed to create commit")
         };
 
         // Create initial commit on main
@@ -1274,7 +1338,11 @@ mod tests {
 
         // Create feature branch from main
         let feature_branch = repo
-            .branch("feature", &repo.head().unwrap().peel_to_commit().unwrap(), false)
+            .branch(
+                "feature",
+                &repo.head().unwrap().peel_to_commit().unwrap(),
+                false,
+            )
             .expect("Failed to create feature branch");
         repo.set_head(feature_branch.get().name().unwrap())
             .expect("Failed to set HEAD");
@@ -1283,7 +1351,10 @@ mod tests {
         // Make changes on feature branch
         create_commit(
             "Feature commit 1",
-            vec![("src/main.rs", "fn main() {}"), ("src/lib.rs", "pub fn hello() {}")],
+            vec![
+                ("src/main.rs", "fn main() {}"),
+                ("src/lib.rs", "pub fn hello() {}"),
+            ],
         );
 
         create_commit("Feature commit 2", vec![("docs/guide.md", "# Guide")]);
@@ -1313,5 +1384,110 @@ mod tests {
 
         // Verify README.md is not in the list (it was in the initial commit)
         assert!(!changed_files.contains(&"README.md".to_string()));
+    }
+
+    #[test]
+    fn test_get_all_tracked_files() {
+        use std::fs;
+
+        // Create a test repository with multiple files in nested directories
+        let temp_dir = TempDir::new().expect("Failed to create temp directory");
+        let repo_path = temp_dir.path();
+
+        // Initialize repository
+        let repo = Repository::init(repo_path).expect("Failed to init repository");
+        let mut config = repo.config().expect("Failed to get config");
+        config
+            .set_str("user.name", "Test User")
+            .expect("Failed to set user.name");
+        config
+            .set_str("user.email", "test@example.com")
+            .expect("Failed to set user.email");
+
+        let signature = git2::Signature::now("Test User", "test@example.com")
+            .expect("Failed to create signature");
+
+        // Helper function to create a commit
+        let create_commit = |message: &str, files: Vec<(&str, &str)>| {
+            for (filename, content) in files {
+                let file_path = repo_path.join(filename);
+                if let Some(parent) = file_path.parent() {
+                    fs::create_dir_all(parent).expect("Failed to create parent directory");
+                }
+                fs::write(&file_path, content).expect("Failed to write file");
+            }
+
+            let mut index = repo.index().expect("Failed to get index");
+            index
+                .add_all(["."].iter(), git2::IndexAddOption::DEFAULT, None)
+                .expect("Failed to add files to index");
+            index.write().expect("Failed to write index");
+            let tree_id = index.write_tree().expect("Failed to write tree");
+            let tree = repo.find_tree(tree_id).expect("Failed to find tree");
+
+            let parent_commit = match repo.head() {
+                Ok(head) => {
+                    let parent_oid = head.target().expect("Failed to get head target");
+                    Some(
+                        repo.find_commit(parent_oid)
+                            .expect("Failed to find parent commit"),
+                    )
+                }
+                Err(_) => None,
+            };
+
+            let parents: Vec<&git2::Commit> =
+                parent_commit.as_ref().map(|c| vec![c]).unwrap_or_default();
+            repo.commit(
+                Some("HEAD"),
+                &signature,
+                &signature,
+                message,
+                &tree,
+                &parents,
+            )
+            .expect("Failed to create commit")
+        };
+
+        // Create multiple commits with various files
+        create_commit(
+            "Initial commit",
+            vec![
+                ("README.md", "# Project"),
+                ("src/main.rs", "fn main() {}"),
+                ("src/lib.rs", "pub fn hello() {}"),
+            ],
+        );
+
+        create_commit(
+            "Add more files",
+            vec![
+                ("docs/guide.md", "# Guide"),
+                ("tests/test.rs", "#[test] fn test() {}"),
+                ("config/settings.toml", "[settings]"),
+            ],
+        );
+
+        // Now test the function
+        let git_ops = GitOperations::with_work_dir(repo_path.to_path_buf())
+            .expect("Failed to create GitOperations");
+
+        let all_files = git_ops
+            .get_all_tracked_files()
+            .expect("Failed to get all tracked files");
+
+        // Verify we got all 6 tracked files
+        assert_eq!(all_files.len(), 6, "Expected 6 tracked files");
+        assert!(all_files.contains(&"README.md".to_string()));
+        assert!(all_files.contains(&"src/main.rs".to_string()));
+        assert!(all_files.contains(&"src/lib.rs".to_string()));
+        assert!(all_files.contains(&"docs/guide.md".to_string()));
+        assert!(all_files.contains(&"tests/test.rs".to_string()));
+        assert!(all_files.contains(&"config/settings.toml".to_string()));
+
+        // Verify files are sorted
+        let mut sorted_files = all_files.clone();
+        sorted_files.sort();
+        assert_eq!(all_files, sorted_files, "Files should be sorted");
     }
 }
