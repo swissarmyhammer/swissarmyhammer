@@ -162,6 +162,21 @@ async fn handle_http_serve(matches: &clap::ArgMatches, cli_context: &CliContext)
         return EXIT_WARNING;
     }
 
+    // Wait for server task to complete to prevent orphaned processes
+    if let Err(e) = server_handle.wait_for_completion().await {
+        tracing::error!("Error waiting for server task completion: {}", e);
+        display_server_status(
+            cli_context,
+            "HTTP",
+            "Error",
+            "-",
+            None,
+            0,
+            &format!("Warning: Server task completion error: {}", e),
+        );
+        return EXIT_WARNING;
+    }
+
     display_server_status(
         cli_context,
         "HTTP",
@@ -225,14 +240,46 @@ async fn handle_stdio_serve(cli_context: &CliContext) -> i32 {
         }
     };
 
-    // The stdio server runs in a spawned task, but we need to wait for shutdown signals
-    // to keep the main process alive
+    // Wait for either shutdown signal or natural server completion (EOF on stdin)
     use crate::signal_handler::wait_for_shutdown;
-    wait_for_shutdown().await;
 
-    // Attempt graceful shutdown
-    if let Err(e) = server_handle.shutdown().await {
-        tracing::warn!("Error during server shutdown: {}", e);
+    // The server task will complete when:
+    // 1. EOF is received on stdin (natural exit) - signals via completion_rx
+    // 2. Shutdown signal is sent (via shutdown_tx) - triggered by SIGTERM/CTRL+C
+    //
+    // The tokio::select! macro will complete as soon as ONE of these branches resolves:
+    // - Signal branch: Triggered by SIGTERM/CTRL+C, sends shutdown to server task
+    // - Completion branch: Triggered by EOF on stdin, indicates server already exited
+    //
+    // This ensures the process exits cleanly in both scenarios without requiring
+    // both events to occur (avoiding the hang when EOF occurs but no signal arrives).
+    let mut completion_rx = server_handle.take_completion_rx();
+    
+    tokio::select! {
+        _ = wait_for_shutdown() => {
+            tracing::info!("Received shutdown signal (SIGTERM/CTRL+C)");
+            // Signal the server to shut down
+            if let Err(e) = server_handle.shutdown().await {
+                tracing::warn!("Error sending shutdown signal: {}", e);
+            }
+        }
+        _ = async {
+            if let Some(rx) = completion_rx.as_mut() {
+                let _ = rx.await;
+            } else {
+                // If no completion receiver, wait forever (shouldn't happen for stdio mode)
+                std::future::pending::<()>().await
+            }
+        } => {
+            tracing::info!("Server completed naturally (EOF on stdin)");
+            // No need to call shutdown() here - server already exited
+        }
+    }
+
+    // Wait for server task to complete to prevent orphaned processes
+    if let Err(e) = server_handle.wait_for_completion().await {
+        tracing::error!("Error waiting for server task completion: {}", e);
+        return EXIT_ERROR;
     }
 
     tracing::info!("MCP stdio server completed successfully");

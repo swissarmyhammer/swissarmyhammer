@@ -13,7 +13,7 @@ use rmcp::transport::streamable_http_server::{
 };
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex, Once};
-use swissarmyhammer_common::Result;
+use swissarmyhammer_common::{Result, SwissArmyHammerError};
 use swissarmyhammer_prompts::PromptLibrary;
 
 use tokio::net::TcpListener;
@@ -206,12 +206,38 @@ pub struct McpServerInfo {
 }
 
 /// Handle for managing HTTP MCP server lifecycle
-#[derive(Debug)]
 pub struct McpServerHandle {
     /// Server information
     pub info: McpServerInfo,
     /// Shutdown sender for graceful shutdown
     shutdown_tx: Option<oneshot::Sender<()>>,
+    /// Server task handle (only for stdio mode)
+    server_task: Option<tokio::task::JoinHandle<()>>,
+    /// Server instance for cleanup operations
+    server: Option<Arc<McpServer>>,
+    /// Completion receiver to detect when server exits naturally (stdio mode)
+    completion_rx: Option<oneshot::Receiver<()>>,
+}
+
+impl std::fmt::Debug for McpServerHandle {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("McpServerHandle")
+            .field("info", &self.info)
+            .field("has_shutdown_tx", &self.shutdown_tx.is_some())
+            .field("has_server_task", &self.server_task.is_some())
+            .field("has_server", &self.server.is_some())
+            .field("has_completion_rx", &self.completion_rx.is_some())
+            .finish()
+    }
+}
+
+/// Parameters for creating an MCP server handle with a server task
+struct McpServerHandleParams {
+    info: McpServerInfo,
+    shutdown_tx: oneshot::Sender<()>,
+    server_task: tokio::task::JoinHandle<()>,
+    server: Arc<McpServer>,
+    completion_rx: oneshot::Receiver<()>,
 }
 
 impl McpServerHandle {
@@ -220,6 +246,20 @@ impl McpServerHandle {
         Self {
             info,
             shutdown_tx: Some(shutdown_tx),
+            server_task: None,
+            server: None,
+            completion_rx: None,
+        }
+    }
+
+    /// Create a new MCP server handle with a server task (for stdio mode)
+    fn new_with_task(params: McpServerHandleParams) -> Self {
+        Self {
+            info: params.info,
+            shutdown_tx: Some(params.shutdown_tx),
+            server_task: Some(params.server_task),
+            server: Some(params.server),
+            completion_rx: Some(params.completion_rx),
         }
     }
 
@@ -240,12 +280,54 @@ impl McpServerHandle {
 
     /// Shutdown the server gracefully
     pub async fn shutdown(&mut self) -> Result<()> {
+        // Stop file watcher if server instance is available
+        if let Some(server) = &self.server {
+            server.stop_file_watching().await;
+            tracing::debug!("File watcher stopped");
+        }
+
+        // Send shutdown signal
         if let Some(tx) = self.shutdown_tx.take() {
             if tx.send(()).is_err() {
                 tracing::warn!("Server shutdown signal receiver already dropped");
             }
         }
         Ok(())
+    }
+
+    /// Check if this handle has a server task (stdio mode)
+    pub fn has_server_task(&self) -> bool {
+        self.server_task.is_some()
+    }
+
+    /// Wait for the server task to complete (stdio mode only)
+    ///
+    /// This method should be called after shutdown to ensure the spawned
+    /// server task completes before the process exits, preventing orphaned processes.
+    ///
+    /// # Returns
+    ///
+    /// * `Result<()>` - Ok if task completed successfully, error if task panicked or no task exists
+    pub async fn wait_for_completion(&mut self) -> Result<()> {
+        if let Some(task) = self.server_task.take() {
+            task.await.map_err(|e| SwissArmyHammerError::Other {
+                message: format!("Server task panicked: {}", e),
+            })?;
+            tracing::debug!("Server task completed successfully");
+        }
+        Ok(())
+    }
+
+    /// Take the completion receiver to detect natural server exit (stdio mode only)
+    ///
+    /// This method should be called to get the receiver that will signal when
+    /// the server task completes naturally (e.g., EOF on stdin).
+    ///
+    /// # Returns
+    ///
+    /// * `Option<oneshot::Receiver<()>>` - The completion receiver if available
+    pub fn take_completion_rx(&mut self) -> Option<oneshot::Receiver<()>> {
+        self.completion_rx.take()
     }
 }
 
@@ -286,28 +368,49 @@ async fn start_stdio_server(library: Option<PromptLibrary>) -> Result<McpServerH
 
     tracing::info!("Starting unified MCP server in stdio mode");
 
-    // Create a dummy shutdown channel for API consistency (stdio doesn't need shutdown)
-    let (shutdown_tx, _shutdown_rx) = oneshot::channel();
+    // Create shutdown channel for cleanup coordination
+    let (shutdown_tx, mut shutdown_rx) = oneshot::channel();
+    
+    // Create completion channel to signal when server exits naturally
+    let (completion_tx, completion_rx) = oneshot::channel();
 
-    // For stdio mode, the server blocks on stdin/stdout until client disconnects
-    // This is the correct behavior for stdio transport
-    tokio::spawn(async move {
-        match serve_server(server, stdio()).await {
+    // Wrap server in Arc for sharing between handle and task
+    let server_arc = Arc::new(server);
+    let server_clone = server_arc.clone();
+
+    // Spawn server task and store the handle to prevent orphaning
+    let server_task = tokio::spawn(async move {
+        match serve_server((*server_clone).clone(), stdio()).await {
             Ok(running_service) => {
                 tracing::info!("MCP stdio server started successfully");
-                match running_service.waiting().await {
-                    Ok(quit_reason) => {
-                        tracing::info!("MCP stdio server completed: {:?}", quit_reason);
+
+                // Wait for either EOF on stdin or shutdown signal
+                tokio::select! {
+                    result = running_service.waiting() => {
+                        match result {
+                            Ok(quit_reason) => {
+                                tracing::info!("MCP stdio server completed naturally: {:?}", quit_reason);
+                            }
+                            Err(e) => {
+                                tracing::error!("MCP stdio server task error: {}", e);
+                            }
+                        }
+                        // Signal completion on natural exit (EOF)
+                        let _ = completion_tx.send(());
                     }
-                    Err(e) => {
-                        tracing::error!("MCP stdio server task error: {}", e);
+                    _ = &mut shutdown_rx => {
+                        tracing::info!("MCP stdio server received shutdown signal");
+                        // Don't signal completion on manual shutdown
                     }
                 }
             }
             Err(e) => {
                 tracing::error!("Failed to start stdio server: {}", e);
+                // Signal completion even on error to unblock main task
+                let _ = completion_tx.send(());
             }
         }
+        tracing::info!("MCP stdio server task exiting");
     });
 
     let info = McpServerInfo {
@@ -316,7 +419,13 @@ async fn start_stdio_server(library: Option<PromptLibrary>) -> Result<McpServerH
         port: None,
     };
 
-    Ok(McpServerHandle::new(info, shutdown_tx))
+    Ok(McpServerHandle::new_with_task(McpServerHandleParams {
+        info,
+        shutdown_tx,
+        server_task,
+        server: server_arc,
+        completion_rx,
+    }))
 }
 
 /// Start MCP server with HTTP transport using rmcp SseServer
@@ -370,9 +479,13 @@ async fn start_http_server(
     server.initialize().await?;
     tracing::debug!("MCP server initialized");
 
+    // Wrap server in Arc for sharing between service and handle
+    let server_arc = Arc::new(server);
+    let server_for_service = server_arc.clone();
+
     // Use StreamableHttpService for /mcp endpoint (matches client example)
     let service = StreamableHttpService::new(
-        move || Ok(server.clone()),
+        move || Ok((*server_for_service).clone()),
         LocalSessionManager::default().into(),
         Default::default(),
     );
@@ -389,12 +502,27 @@ async fn start_http_server(
     let connection_url = format!("http://127.0.0.1:{}/mcp", actual_port); // Full URL with /mcp
     tracing::info!("Unified HTTP MCP server ready on {}", connection_url);
 
-    // Create shutdown channel
-    let (shutdown_tx, _shutdown_rx) = oneshot::channel();
+    // Create shutdown channel for graceful shutdown
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
 
-    // Start the server
-    tokio::spawn(async move {
-        axum::serve(listener, router).await.unwrap();
+    // Start the server with graceful shutdown
+    let server_task = tokio::spawn(async move {
+        let result = axum::serve(listener, router)
+            .with_graceful_shutdown(async {
+                shutdown_rx.await.ok();
+                tracing::info!("HTTP server received shutdown signal");
+            })
+            .await;
+        
+        match result {
+            Ok(_) => {
+                tracing::info!("HTTP server stopped successfully");
+            }
+            Err(e) => {
+                tracing::error!("HTTP server error: {}", e);
+            }
+        }
+        tracing::info!("HTTP server task exiting");
     });
 
     let info = McpServerInfo {
@@ -405,7 +533,11 @@ async fn start_http_server(
         port: Some(actual_port),
     };
 
-    Ok(McpServerHandle::new(info, shutdown_tx))
+    // Return handle with server task for proper joining on shutdown
+    let mut handle = McpServerHandle::new(info, shutdown_tx);
+    handle.server_task = Some(server_task);
+    handle.server = Some(server_arc);
+    Ok(handle)
 }
 
 #[cfg(test)]
@@ -562,6 +694,29 @@ mod tests {
         }
 
         server.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    #[test_log::test]
+    async fn test_stdio_server_task_completion() {
+        // Test that stdio server task handle is stored and can be awaited
+        let mode = McpServerMode::Stdio;
+        let mut server = start_mcp_server(mode, None).await.unwrap();
+
+        // Server should have a task handle for stdio mode
+        assert!(server.has_server_task(), "Stdio server should have task handle");
+
+        // Shutdown and wait for completion should succeed within timeout
+        server.shutdown().await.unwrap();
+
+        // Use timeout to prevent hanging if server doesn't shut down
+        let completion_result = tokio::time::timeout(
+            tokio::time::Duration::from_secs(2),
+            server.wait_for_completion()
+        ).await;
+
+        assert!(completion_result.is_ok(), "Server task should complete within timeout");
+        assert!(completion_result.unwrap().is_ok(), "Server task should complete cleanly");
     }
 
     // NOTE: Multiple concurrent server test removed to avoid port conflicts and timeouts

@@ -27,24 +27,44 @@ pub use llama_agent::{
 const RANDOM_PORT_DISPLAY: &str = "random";
 
 /// HTTP MCP server handle for managing server lifecycle
-#[derive(Debug, Clone)]
 pub struct McpServerHandle {
     /// Actual bound port (important when using port 0 for random port)
     port: u16,
     /// Full HTTP URL for connecting to the server
     url: String,
-    /// Shutdown sender for graceful shutdown
-    shutdown_tx: std::sync::Arc<tokio::sync::Mutex<Option<tokio::sync::oneshot::Sender<()>>>>,
+    /// Real unified server handle (keeps server alive)
+    _unified_handle: Arc<tokio::sync::Mutex<Option<swissarmyhammer_tools::mcp::unified_server::McpServerHandle>>>,
+}
+
+impl std::fmt::Debug for McpServerHandle {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("McpServerHandle")
+            .field("port", &self.port)
+            .field("url", &self.url)
+            .field("has_unified_handle", &self._unified_handle.try_lock().map(|h| h.is_some()).unwrap_or(false))
+            .finish()
+    }
+}
+
+impl Clone for McpServerHandle {
+    fn clone(&self) -> Self {
+        Self {
+            port: self.port,
+            url: self.url.clone(),
+            _unified_handle: self._unified_handle.clone(),
+        }
+    }
 }
 
 impl McpServerHandle {
-    /// Create a new MCP server handle
-    fn new(port: u16, host: String, shutdown_tx: tokio::sync::oneshot::Sender<()>) -> Self {
-        let url = format!("http://{}:{}", host, port); // Base URL - MCP service is nested at /mcp
+    /// Create a new MCP server handle from unified server handle
+    fn from_unified(unified_handle: swissarmyhammer_tools::mcp::unified_server::McpServerHandle) -> Self {
+        let port = unified_handle.info().port.unwrap_or(0);
+        let url = format!("http://127.0.0.1:{}", port); // Base URL - MCP service is nested at /mcp
         Self {
             port,
             url,
-            shutdown_tx: std::sync::Arc::new(tokio::sync::Mutex::new(Some(shutdown_tx))),
+            _unified_handle: Arc::new(tokio::sync::Mutex::new(Some(unified_handle))),
         }
     }
 
@@ -60,11 +80,9 @@ impl McpServerHandle {
 
     /// Shutdown the server gracefully
     pub async fn shutdown(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        let mut guard = self.shutdown_tx.lock().await;
-        if let Some(tx) = guard.take() {
-            if tx.send(()).is_err() {
-                tracing::warn!("Server shutdown signal receiver already dropped");
-            }
+        let mut guard = self._unified_handle.lock().await;
+        if let Some(mut handle) = guard.take() {
+            handle.shutdown().await.map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?;
         }
         Ok(())
     }
@@ -81,7 +99,7 @@ async fn start_in_process_mcp_server(
     tracing::info!("Starting REAL unified HTTP MCP server with full tool registry");
 
     // Use the real unified server implementation with correct signature
-    let handle = start_mcp_server(
+    let unified_handle = start_mcp_server(
         McpServerMode::Http {
             port: if config.port == 0 {
                 None
@@ -97,18 +115,13 @@ async fn start_in_process_mcp_server(
         e
     })?;
 
-    tracing::info!(
-        "Real unified HTTP MCP server started on port {}",
-        handle.info.port.unwrap_or(0)
-    );
+    let port = unified_handle.info().port.unwrap_or(0);
+    tracing::info!("Real unified HTTP MCP server started on port {}", port);
 
-    // Convert to our handle type
-    let (dummy_tx, _dummy_rx) = tokio::sync::oneshot::channel();
-    let mcp_handle = McpServerHandle::new(
-        handle.info.port.unwrap_or(0),
-        "127.0.0.1".to_string(),
-        dummy_tx,
-    );
+    // Convert to our handle type, keeping the unified handle alive
+    let mcp_handle = McpServerHandle::from_unified(unified_handle);
+    
+    tracing::info!("MCP handle wrapper created for port {}", port);
 
     Ok(mcp_handle)
 }
@@ -158,13 +171,16 @@ async fn start_http_mcp_server(
         port_display
     );
 
-    match start_in_process_mcp_server(config).await {
+    let result = start_in_process_mcp_server(config).await;
+    
+    match result {
         Ok(handle) => {
             tracing::info!(
                 "HTTP MCP server successfully started on port {} (URL: {})",
                 handle.port(),
                 handle.url()
             );
+            tracing::info!("Returning MCP server handle from start_http_mcp_server");
             Ok(handle)
         }
         Err(e) => {
@@ -374,11 +390,47 @@ impl LlamaAgentExecutor {
             mcp_handle.url()
         );
 
-        self.mcp_server = Some(mcp_handle);
+        self.mcp_server = Some(mcp_handle.clone());
+        
+        tracing::info!("MCP server handle stored in executor, waiting for server readiness");
 
-        // Give the HTTP MCP server a moment to fully initialize
-        // This prevents race conditions with llama-agent connecting too quickly
-        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+        // Wait for HTTP MCP server to be ready by polling health endpoint
+        // This prevents race conditions with llama-agent connecting before server is ready
+        let health_url = format!("{}/health", mcp_handle.url().strip_suffix("/mcp").unwrap_or(mcp_handle.url()));
+        let client = reqwest::Client::new();
+        
+        for attempt in 1..=10 {
+            match client.get(&health_url).send().await {
+                Ok(resp) if resp.status().is_success() => {
+                    tracing::info!("MCP server health check passed on attempt {}", attempt);
+                    break;
+                }
+                Ok(resp) => {
+                    tracing::debug!("Health check attempt {} returned status {}", attempt, resp.status());
+                    if attempt < 10 {
+                        tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+                    } else {
+                        return Err(ActionError::ExecutionError(format!(
+                            "MCP server health check failed after {} attempts: status {}",
+                            attempt, resp.status()
+                        )));
+                    }
+                }
+                Err(e) => {
+                    tracing::debug!("Health check attempt {} failed: {}", attempt, e);
+                    if attempt < 10 {
+                        tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+                    } else {
+                        return Err(ActionError::ExecutionError(format!(
+                            "MCP server failed to become ready after {} attempts: {}",
+                            attempt, e
+                        )));
+                    }
+                }
+            }
+        }
+        
+        tracing::info!("MCP server ready, proceeding with llama-agent initialization");
 
         // Convert config to llama-agent format
         let agent_config = self.to_llama_agent_config()?;
