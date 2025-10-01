@@ -177,6 +177,16 @@ impl CliContext {
             DisplayRows::Verbose(items) => self.display(items),
         }
     }
+
+    /// Display rules using display rows enum
+    pub fn display_rules(&self, rows: crate::commands::rule::display::DisplayRows) -> Result<()> {
+        use crate::commands::rule::display::DisplayRows;
+
+        match rows {
+            DisplayRows::Standard(items) => self.display(items),
+            DisplayRows::Verbose(items) => self.display(items),
+        }
+    }
 }
 
 impl CliContextBuilder {

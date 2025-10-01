@@ -256,6 +256,7 @@ async fn handle_dynamic_matches(
         }
         Some(("doctor", _)) => handle_doctor_command(&context).await,
         Some(("prompt", sub_matches)) => handle_prompt_command(sub_matches, &context).await,
+        Some(("rule", sub_matches)) => handle_rule_command(sub_matches, &context).await,
         Some(("flow", sub_matches)) => handle_flow_command(sub_matches, &context).await,
         Some(("validate", sub_matches)) => handle_validate_command(sub_matches, &context).await,
         Some(("plan", sub_matches)) => handle_plan_command(sub_matches, &context).await,
@@ -440,6 +441,24 @@ async fn handle_prompt_command(matches: &clap::ArgMatches, context: &CliContext)
 
     // Use the new typed handler
     commands::prompt::handle_command_typed(command, context).await
+}
+
+/// Handle the rule subcommand
+///
+/// # Arguments
+/// * `matches` - Clap argument matches for the rule subcommand
+/// * `context` - CliContext containing global configuration and rule library access
+///
+/// # Returns
+/// Exit code (0 for success, non-zero for error)
+async fn handle_rule_command(matches: &clap::ArgMatches, context: &CliContext) -> i32 {
+    use crate::commands::rule::cli;
+
+    // Parse using the proper CLI parsing function
+    let command = cli::parse_rule_command(matches);
+
+    // Use the new typed handler
+    commands::rule::handle_command_typed(command, context).await
 }
 
 async fn handle_flow_command(sub_matches: &clap::ArgMatches, context: &CliContext) -> i32 {
