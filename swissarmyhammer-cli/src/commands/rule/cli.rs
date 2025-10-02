@@ -89,7 +89,7 @@ pub fn parse_rule_command(matches: &ArgMatches) -> RuleCommand {
         Some(("list", _sub_matches)) => RuleCommand::List(ListCommand {}),
         Some(("validate", sub_matches)) => {
             let validate_cmd = ValidateCommand {
-                rule_name: sub_matches.get_one::<String>("rule_name").cloned(),
+                rule_name: sub_matches.get_one::<String>("rule").cloned(),
                 file: sub_matches.get_one::<String>("file").cloned(),
             };
             RuleCommand::Validate(validate_cmd)
@@ -150,10 +150,10 @@ mod tests {
         let matches = Command::new("rule")
             .subcommand(
                 Command::new("validate")
-                    .arg(Arg::new("rule_name").index(1))
-                    .arg(Arg::new("file").short('f').long("file")),
+                    .arg(Arg::new("rule").long("rule").value_name("NAME"))
+                    .arg(Arg::new("file").long("file").value_name("FILE")),
             )
-            .try_get_matches_from(["rule", "validate", "my-rule"])
+            .try_get_matches_from(["rule", "validate", "--rule", "my-rule"])
             .unwrap();
 
         let parsed = parse_rule_command(&matches);
@@ -171,8 +171,8 @@ mod tests {
         let matches = Command::new("rule")
             .subcommand(
                 Command::new("validate")
-                    .arg(Arg::new("rule_name").index(1))
-                    .arg(Arg::new("file").short('f').long("file")),
+                    .arg(Arg::new("rule").long("rule").value_name("NAME"))
+                    .arg(Arg::new("file").long("file").value_name("FILE")),
             )
             .try_get_matches_from(["rule", "validate", "--file", "rule.md"])
             .unwrap();
