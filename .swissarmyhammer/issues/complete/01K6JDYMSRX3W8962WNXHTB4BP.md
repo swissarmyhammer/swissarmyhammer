@@ -108,3 +108,65 @@ pub fn file_source_emoji(source: &FileSource) -> &'static str {
 - No breaking changes to user interface
 - Improves maintainability
 - Ensures consistency across all commands
+
+
+
+## Implementation Plan
+
+After analyzing the codebase, I will implement Option 1 (adding a method to FileSource) as it's the cleanest approach.
+
+### Steps:
+1. Add `display_emoji()` method to `FileSource` enum in `swissarmyhammer-common/src/file_loader.rs`
+2. Update all duplicate locations to use the centralized method:
+   - `swissarmyhammer-cli/src/commands/agent/display.rs` - Replace `source_to_emoji()` function
+   - `swissarmyhammer-cli/src/commands/flow/display.rs` - Replace inline match
+   - `swissarmyhammer-cli/src/commands/prompt/display.rs` - Replace constants and `file_source_to_emoji()`
+   - `swissarmyhammer-cli/src/commands/rule/display.rs` - Replace constants
+   - `swissarmyhammer-cli/src/commands/rule/validate.rs` - Replace inline match
+3. Write tests to verify consistent display across all commands
+4. Verify no breaking changes to user-facing output
+
+### Key Decisions:
+- Using `&'static str` return type for zero-cost abstraction
+- Mapping `FileSource::Dynamic` to "📦 Built-in" (consistent with current behavior)
+- Method name `display_emoji()` is clear and discoverable
+
+
+
+## Implementation Complete
+
+Successfully implemented centralized emoji display for file sources.
+
+### What Was Done
+
+1. **Added `display_emoji()` method to `FileSource`** in `swissarmyhammer-common/src/file_loader.rs:56-73`
+   - Returns `&'static str` for zero-cost abstraction
+   - Maps: Builtin/Dynamic → "📦 Built-in", Local → "📁 Project", User → "👤 User"
+   - Added comprehensive tests at line 507
+
+2. **Added `display_emoji()` method to `AgentSource`** in `swissarmyhammer-config/src/agent.rs:456-476`
+   - Similar implementation for agent-specific source enum
+   - Added comprehensive tests at line 1415
+
+3. **Removed duplicate code from 5 files:**
+   - `swissarmyhammer-cli/src/commands/agent/display.rs` - Removed `source_to_emoji()` function
+   - `swissarmyhammer-cli/src/commands/flow/display.rs` - Removed `file_source_to_emoji()` function
+   - `swissarmyhammer-cli/src/commands/prompt/display.rs` - Removed constants and `file_source_to_emoji()` function
+   - `swissarmyhammer-cli/src/commands/rule/display.rs` - Removed constants and `file_source_to_emoji()` function
+   - `swissarmyhammer-cli/src/commands/rule/validate.rs` - Replaced inline match expression
+
+4. **Updated all call sites** to use centralized methods:
+   - All locations now call `.display_emoji()` on source types
+   - Consistent handling of `Option<&FileSource>` with `.map(|s| s.display_emoji()).unwrap_or("📦 Built-in")`
+
+### Test Results
+- All 3225 tests passed
+- Build succeeded with no warnings
+- Zero-cost abstraction maintained
+
+### Benefits Achieved
+- Single source of truth for emoji mappings
+- Consistent display across all commands
+- Easy to maintain and update
+- Type-safe approach using methods on enums
+- Better IDE discoverability via autocomplete

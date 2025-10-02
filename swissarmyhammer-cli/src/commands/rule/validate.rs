@@ -9,7 +9,6 @@ use super::cli::ValidateCommand;
 
 /// Execute the validate command to check rule syntax
 pub async fn execute_validate_command(cmd: ValidateCommand, context: &CliContext) -> CliResult<()> {
-    use swissarmyhammer_common::file_loader::FileSource;
     use swissarmyhammer_rules::{Rule, RuleResolver};
 
     // Load all rules from all sources
@@ -64,12 +63,7 @@ pub async fn execute_validate_command(cmd: ValidateCommand, context: &CliContext
                 let source = resolver
                     .rule_sources
                     .get(&rule.name)
-                    .map(|s| match s {
-                        FileSource::Builtin => "📦 Built-in",
-                        FileSource::Local => "📁 Project",
-                        FileSource::User => "👤 User",
-                        FileSource::Dynamic => "📦 Built-in",
-                    })
+                    .map(|s| s.display_emoji())
                     .unwrap_or("Unknown");
 
                 invalid_rules.push((rule.name.clone(), source, rule.source.clone(), e));

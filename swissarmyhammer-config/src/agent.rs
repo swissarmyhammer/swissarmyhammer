@@ -453,6 +453,31 @@ pub enum AgentSource {
     User,
 }
 
+impl AgentSource {
+    /// Get emoji-based display string for the agent source
+    ///
+    /// - 📦 Built-in: System-provided built-in agents
+    /// - 📁 Project: Project-specific agents from agents/ directory
+    /// - 👤 User: User-defined agents from .swissarmyhammer/agents/
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use swissarmyhammer_config::agent::AgentSource;
+    ///
+    /// assert_eq!(AgentSource::Builtin.display_emoji(), "📦 Built-in");
+    /// assert_eq!(AgentSource::Project.display_emoji(), "📁 Project");
+    /// assert_eq!(AgentSource::User.display_emoji(), "👤 User");
+    /// ```
+    pub fn display_emoji(&self) -> &'static str {
+        match self {
+            AgentSource::Builtin => "📦 Built-in",
+            AgentSource::Project => "📁 Project",
+            AgentSource::User => "👤 User",
+        }
+    }
+}
+
 /// Agent-specific error types
 ///
 /// Comprehensive error handling for agent discovery, parsing, and management operations.
@@ -1386,6 +1411,13 @@ mod tests {
         assert_ne!(AgentSource::Builtin, AgentSource::Project);
         assert_ne!(AgentSource::Builtin, AgentSource::User);
         assert_ne!(AgentSource::Project, AgentSource::User);
+    }
+
+    #[test]
+    fn test_agent_source_display_emoji() {
+        assert_eq!(AgentSource::Builtin.display_emoji(), "📦 Built-in");
+        assert_eq!(AgentSource::Project.display_emoji(), "📁 Project");
+        assert_eq!(AgentSource::User.display_emoji(), "👤 User");
     }
 
     #[test]

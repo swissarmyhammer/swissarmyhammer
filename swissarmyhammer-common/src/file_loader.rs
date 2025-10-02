@@ -46,6 +46,32 @@ pub enum FileSource {
     Dynamic,
 }
 
+impl FileSource {
+    /// Get emoji-based display string for the file source
+    ///
+    /// - 📦 Built-in: System-provided built-in items
+    /// - 📁 Project: Project-specific items from .swissarmyhammer directory
+    /// - 👤 User: User-specific items from user's home directory
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use swissarmyhammer_common::file_loader::FileSource;
+    ///
+    /// assert_eq!(FileSource::Builtin.display_emoji(), "📦 Built-in");
+    /// assert_eq!(FileSource::Local.display_emoji(), "📁 Project");
+    /// assert_eq!(FileSource::User.display_emoji(), "👤 User");
+    /// assert_eq!(FileSource::Dynamic.display_emoji(), "📦 Built-in");
+    /// ```
+    pub fn display_emoji(&self) -> &'static str {
+        match self {
+            FileSource::Builtin | FileSource::Dynamic => "📦 Built-in",
+            FileSource::Local => "📁 Project",
+            FileSource::User => "👤 User",
+        }
+    }
+}
+
 impl std::fmt::Display for FileSource {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -450,6 +476,14 @@ mod tests {
         assert_eq!(FileSource::User.to_string(), "user");
         assert_eq!(FileSource::Local.to_string(), "local");
         assert_eq!(FileSource::Dynamic.to_string(), "dynamic");
+    }
+
+    #[test]
+    fn test_file_source_display_emoji() {
+        assert_eq!(FileSource::Builtin.display_emoji(), "📦 Built-in");
+        assert_eq!(FileSource::User.display_emoji(), "👤 User");
+        assert_eq!(FileSource::Local.display_emoji(), "📁 Project");
+        assert_eq!(FileSource::Dynamic.display_emoji(), "📦 Built-in");
     }
 
     #[test]

@@ -4,21 +4,10 @@
 //! output formatting across table, JSON, and YAML formats.
 
 use serde::{Deserialize, Serialize};
-use swissarmyhammer_config::agent::{AgentInfo, AgentSource};
+use swissarmyhammer_config::agent::AgentInfo;
 use tabled::Tabled;
 
-/// Convert source types to emoji representation for consistent display across all listing commands.
-/// This ensures all three table displays (prompt, flow, agent) use the same emoji mapping:
-/// - 📦 Built-in: System-provided built-in items
-/// - 📁 Project: Project-specific items from .swissarmyhammer directory  
-/// - 👤 User: User-specific items from user's home directory
-fn source_to_emoji(source: &AgentSource) -> &'static str {
-    match source {
-        AgentSource::Builtin => "📦 Built-in",
-        AgentSource::Project => "📁 Project",
-        AgentSource::User => "👤 User",
-    }
-}
+
 
 /// Basic agent information for standard list output
 #[derive(Tabled, Serialize, Deserialize, Debug, Clone)]
@@ -58,7 +47,7 @@ impl From<&AgentInfo> for AgentRow {
                 .as_deref()
                 .unwrap_or("No description")
                 .to_string(),
-            source: source_to_emoji(&agent.source).to_string(),
+            source: agent.source.display_emoji().to_string(),
         }
     }
 }
@@ -72,7 +61,7 @@ impl From<&AgentInfo> for VerboseAgentRow {
                 .as_deref()
                 .unwrap_or("No description")
                 .to_string(),
-            source: source_to_emoji(&agent.source).to_string(),
+            source: agent.source.display_emoji().to_string(),
             content_size: format!("{} chars", agent.content.len()),
         }
     }
@@ -97,6 +86,7 @@ pub enum DisplayRows {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use swissarmyhammer_config::agent::AgentSource;
 
     fn create_test_agent() -> AgentInfo {
         AgentInfo {

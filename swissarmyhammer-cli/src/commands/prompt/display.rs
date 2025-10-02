@@ -6,24 +6,7 @@
 use serde::{Deserialize, Serialize};
 use tabled::Tabled;
 
-// Emoji constants for source display consistency across all listing commands
-const BUILTIN_EMOJI: &str = "📦 Built-in";
-const PROJECT_EMOJI: &str = "📁 Project";
-const USER_EMOJI: &str = "👤 User";
 
-/// Convert FileSource to emoji representation for consistent display across all listing commands.
-/// This ensures all three table displays (prompt, flow, agent) use the same emoji mapping:
-/// - 📦 Built-in: System-provided built-in items
-/// - 📁 Project: Project-specific items from .swissarmyhammer directory  
-/// - 👤 User: User-specific items from user's home directory
-fn file_source_to_emoji(source: Option<&swissarmyhammer::FileSource>) -> &'static str {
-    match source {
-        Some(swissarmyhammer::FileSource::Builtin) => BUILTIN_EMOJI,
-        Some(swissarmyhammer::FileSource::Local) => PROJECT_EMOJI,
-        Some(swissarmyhammer::FileSource::User) => USER_EMOJI,
-        Some(swissarmyhammer::FileSource::Dynamic) | None => BUILTIN_EMOJI, // Default fallback
-    }
-}
 
 /// Basic prompt information for standard list output
 #[derive(Tabled, Serialize, Deserialize, Debug, Clone)]
@@ -90,7 +73,10 @@ impl PromptRow {
                 .and_then(|v| v.as_str())
                 .unwrap_or("No title")
                 .to_string(),
-            source: file_source_to_emoji(file_source).to_string(),
+            source: file_source
+                .map(|s| s.display_emoji())
+                .unwrap_or("📦 Built-in")
+                .to_string(),
         }
     }
 }
@@ -139,7 +125,10 @@ impl VerbosePromptRow {
                 .as_deref()
                 .unwrap_or("No description")
                 .to_string(),
-            source: file_source_to_emoji(file_source).to_string(),
+            source: file_source
+                .map(|s| s.display_emoji())
+                .unwrap_or("📦 Built-in")
+                .to_string(),
             category: prompt.category.clone().unwrap_or_default(),
         }
     }
