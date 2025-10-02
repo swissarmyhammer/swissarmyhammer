@@ -1,9 +1,9 @@
-//! Rule checking with two-stage rendering and LLM agent execution
+//! Rule checking with two-stage rendering and agent execution
 //!
 //! This module provides the `RuleChecker` which performs rule checks against files:
 //! 1. Stage 1: Renders rule templates with context (language, target_path, etc.)
 //! 2. Stage 2: Renders .check prompt with rendered rule content
-//! 3. Executes via LlamaAgentExecutor
+//! 3. Executes via AgentExecutor (ClaudeCode or LlamaAgent)
 //! 4. Parses responses and fails fast on violations
 
 use crate::{detect_language, Result, Rule, RuleError, RuleViolation};
@@ -13,7 +13,7 @@ use std::sync::Arc;
 use swissarmyhammer_config::TemplateContext;
 use swissarmyhammer_prompts::{PromptLibrary, PromptResolver};
 use swissarmyhammer_templating::TemplateEngine;
-use swissarmyhammer_workflow::{AgentExecutionContext, AgentExecutor, LlamaAgentExecutorWrapper};
+use swissarmyhammer_workflow::{AgentExecutionContext, AgentExecutor};
 
 /// Core rule checker that performs two-stage rendering and executes checks via LLM agent
 ///
@@ -27,28 +27,30 @@ use swissarmyhammer_workflow::{AgentExecutionContext, AgentExecutor, LlamaAgentE
 ///
 /// ```no_run
 /// use swissarmyhammer_rules::{RuleChecker, Rule, Severity};
-/// use swissarmyhammer_config::LlamaAgentConfig;
-/// use swissarmyhammer_workflow::agents::LlamaAgentExecutorWrapper;
+/// use swissarmyhammer_workflow::{WorkflowTemplateContext, AgentExecutorFactory, AgentExecutionContext};
 /// use std::sync::Arc;
 /// use std::path::PathBuf;
 ///
 /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
-/// // Create agent wrapper
-/// let config = LlamaAgentConfig::for_testing();
-/// let agent = Arc::new(LlamaAgentExecutorWrapper::new(config));
+/// // Load agent configuration (respects SAH_AGENT_EXECUTOR env, defaults to ClaudeCode)
+/// let workflow_context = WorkflowTemplateContext::load_with_agent_config()?;
+/// let agent_context = AgentExecutionContext::new(&workflow_context);
+///
+/// // Create and initialize executor
+/// let mut executor = AgentExecutorFactory::create_executor(&agent_context).await?;
+/// executor.initialize().await?;
 ///
 /// // Create checker
+/// let agent = Arc::from(executor);
 /// let mut checker = RuleChecker::new(agent)?;
 /// checker.initialize().await?;
 ///
-/// // Create a rule
+/// // Create a rule and check a file
 /// let rule = Rule::new(
 ///     "no-todos".to_string(),
 ///     "Check for TODO comments in {{language}} code".to_string(),
 ///     Severity::Warning,
 /// );
-///
-/// // Check a file
 /// let target = PathBuf::from("src/main.rs");
 /// checker.check_file(&rule, &target).await?;
 /// # Ok(())
@@ -56,7 +58,7 @@ use swissarmyhammer_workflow::{AgentExecutionContext, AgentExecutor, LlamaAgentE
 /// ```
 pub struct RuleChecker {
     /// LLM agent executor for running checks
-    agent: Arc<LlamaAgentExecutorWrapper>,
+    agent: Arc<dyn AgentExecutor>,
     /// Prompt library containing the .check prompt
     prompt_library: PromptLibrary,
 }
@@ -69,7 +71,7 @@ impl RuleChecker {
     ///
     /// # Arguments
     ///
-    /// * `agent` - LlamaAgentExecutor wrapped in Arc for shared ownership
+    /// * `agent` - Agent executor wrapped in Arc for shared ownership
     ///
     /// # Returns
     ///
@@ -86,18 +88,24 @@ impl RuleChecker {
     ///
     /// ```no_run
     /// use swissarmyhammer_rules::RuleChecker;
-    /// use swissarmyhammer_config::LlamaAgentConfig;
-    /// use swissarmyhammer_workflow::agents::LlamaAgentExecutorWrapper;
+    /// use swissarmyhammer_workflow::{WorkflowTemplateContext, AgentExecutorFactory, AgentExecutionContext};
     /// use std::sync::Arc;
     ///
-    /// # fn example() -> Result<(), Box<dyn std::error::Error>> {
-    /// let config = LlamaAgentConfig::for_testing();
-    /// let agent = Arc::new(LlamaAgentExecutorWrapper::new(config));
+    /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+    /// // Load agent configuration (respects SAH_AGENT_EXECUTOR env, defaults to ClaudeCode)
+    /// let workflow_context = WorkflowTemplateContext::load_with_agent_config()?;
+    /// let agent_context = AgentExecutionContext::new(&workflow_context);
+    ///
+    /// // Create and initialize executor
+    /// let mut executor = AgentExecutorFactory::create_executor(&agent_context).await?;
+    /// executor.initialize().await?;
+    ///
+    /// let agent = Arc::from(executor);
     /// let checker = RuleChecker::new(agent)?;
     /// # Ok(())
     /// # }
     /// ```
-    pub fn new(agent: Arc<LlamaAgentExecutorWrapper>) -> Result<Self> {
+    pub fn new(agent: Arc<dyn AgentExecutor>) -> Result<Self> {
         tracing::info!("Creating RuleChecker");
 
         // Load all prompts including the builtin .check prompt
@@ -164,13 +172,15 @@ impl RuleChecker {
     ///
     /// ```no_run
     /// # use swissarmyhammer_rules::{RuleChecker, Rule, Severity};
-    /// # use swissarmyhammer_config::LlamaAgentConfig;
-    /// # use swissarmyhammer_workflow::agents::LlamaAgentExecutorWrapper;
+    /// # use swissarmyhammer_workflow::{WorkflowTemplateContext, AgentExecutorFactory, AgentExecutionContext};
     /// # use std::sync::Arc;
     /// # use std::path::PathBuf;
     /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
-    /// # let config = LlamaAgentConfig::for_testing();
-    /// # let agent = Arc::new(LlamaAgentExecutorWrapper::new(config));
+    /// # let workflow_context = WorkflowTemplateContext::load_with_agent_config()?;
+    /// # let agent_context = AgentExecutionContext::new(&workflow_context);
+    /// # let mut executor = AgentExecutorFactory::create_executor(&agent_context).await?;
+    /// # executor.initialize().await?;
+    /// # let agent = Arc::from(executor);
     /// # let mut checker = RuleChecker::new(agent)?;
     /// # checker.initialize().await?;
     /// let rule = Rule::new(
@@ -310,13 +320,15 @@ impl RuleChecker {
     ///
     /// ```no_run
     /// # use swissarmyhammer_rules::{RuleChecker, Rule, Severity};
-    /// # use swissarmyhammer_config::LlamaAgentConfig;
-    /// # use swissarmyhammer_workflow::agents::LlamaAgentExecutorWrapper;
+    /// # use swissarmyhammer_workflow::{WorkflowTemplateContext, AgentExecutorFactory, AgentExecutionContext};
     /// # use std::sync::Arc;
     /// # use std::path::PathBuf;
     /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
-    /// # let config = LlamaAgentConfig::for_testing();
-    /// # let agent = Arc::new(LlamaAgentExecutorWrapper::new(config));
+    /// # let workflow_context = WorkflowTemplateContext::load_with_agent_config()?;
+    /// # let agent_context = AgentExecutionContext::new(&workflow_context);
+    /// # let mut executor = AgentExecutorFactory::create_executor(&agent_context).await?;
+    /// # executor.initialize().await?;
+    /// # let agent = Arc::from(executor);
     /// # let mut checker = RuleChecker::new(agent)?;
     /// # checker.initialize().await?;
     /// let rules = vec![
@@ -358,9 +370,10 @@ mod tests {
     use super::*;
     use crate::Severity;
     use swissarmyhammer_config::LlamaAgentConfig;
+    use swissarmyhammer_workflow::LlamaAgentExecutorWrapper;
     use tempfile::TempDir;
 
-    fn create_test_agent() -> Arc<LlamaAgentExecutorWrapper> {
+    fn create_test_agent() -> Arc<dyn AgentExecutor> {
         let config = LlamaAgentConfig::for_testing();
         Arc::new(LlamaAgentExecutorWrapper::new(config))
     }

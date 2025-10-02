@@ -1,0 +1,1 @@
+remove the consistent-naming rule, that is redundant with standard linters

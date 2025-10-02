@@ -7,11 +7,13 @@ use crate::error::{CliError, CliResult};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
-use swissarmyhammer_config::{LlamaAgentConfig, TemplateContext};
+use swissarmyhammer_config::TemplateContext;
 use swissarmyhammer_prompts::{PromptLibrary, PromptResolver};
 use swissarmyhammer_rules::{detect_language, RuleChecker, RuleResolver};
 use swissarmyhammer_templating::TemplateEngine;
-use swissarmyhammer_workflow::{AgentExecutionContext, AgentExecutor, LlamaAgentExecutorWrapper};
+use swissarmyhammer_workflow::{
+    AgentExecutionContext, AgentExecutor, AgentExecutorFactory, WorkflowTemplateContext,
+};
 
 use super::cli::TestCommand;
 
@@ -131,25 +133,29 @@ pub async fn execute_test_command(cmd: TestCommand, context: &CliContext) -> Cli
     }
 
     // Phase 6: Execute via agent (REAL LLM CALL)
-    println!("5. Executing check via LLM agent...");
-    println!("   (This will make a real LLM API call)\n");
+    println!("5. Executing check via agent...");
+    println!("   (This will make a real API call)\n");
 
-    let agent_config = LlamaAgentConfig::for_small_model();
-    let agent = Arc::new(LlamaAgentExecutorWrapper::new(agent_config));
-    let mut checker = RuleChecker::new(agent.clone())
-        .map_err(|e| CliError::new(format!("Failed to create rule checker: {}", e), 1))?;
+    // Load agent configuration (respects SAH_AGENT_EXECUTOR env var, defaults to ClaudeCode)
+    let workflow_context = WorkflowTemplateContext::load_with_agent_config()
+        .map_err(|e| CliError::new(format!("Failed to load agent config: {}", e), 1))?;
+    
+    let agent_context = AgentExecutionContext::new(&workflow_context);
 
-    checker
+    // Create executor using factory (ClaudeCode or LlamaAgent based on config)
+    let mut executor = AgentExecutorFactory::create_executor(&agent_context)
+        .await
+        .map_err(|e| CliError::new(format!("Failed to create agent executor: {}", e), 1))?;
+    
+    // Initialize the executor
+    executor
         .initialize()
         .await
-        .map_err(|e| CliError::new(format!("Failed to initialize checker: {}", e), 1))?;
+        .map_err(|e| CliError::new(format!("Failed to initialize agent executor: {}", e), 1))?;
 
-    let workflow_context =
-        swissarmyhammer_workflow::template_context::WorkflowTemplateContext::with_vars(
-            HashMap::new(),
-        )
-        .map_err(|e| CliError::new(format!("Failed to create workflow context: {}", e), 1))?;
-    let agent_context = AgentExecutionContext::new(&workflow_context);
+    let agent: Arc<dyn AgentExecutor> = Arc::from(executor);
+    let _checker = RuleChecker::new(agent.clone())
+        .map_err(|e| CliError::new(format!("Failed to create rule checker: {}", e), 1))?;
 
     let response = agent
         .execute_prompt(String::new(), check_prompt, &agent_context)

@@ -7,9 +7,10 @@ use crate::error::{CliError, CliResult};
 use ignore::WalkBuilder;
 use std::path::PathBuf;
 use std::sync::Arc;
-use swissarmyhammer_config::LlamaAgentConfig;
 use swissarmyhammer_rules::{RuleChecker, RuleResolver, Severity};
-use swissarmyhammer_workflow::LlamaAgentExecutorWrapper;
+use swissarmyhammer_workflow::{
+    AgentExecutionContext, AgentExecutor, AgentExecutorFactory, WorkflowTemplateContext,
+};
 
 use super::cli::CheckCommand;
 
@@ -245,18 +246,27 @@ pub async fn execute_check_command(cmd: CheckCommand, context: &CliContext) -> C
         );
     }
 
-    // Phase 5: Create RuleChecker with agent
-    // Use small model configuration for rule checking
-    let agent_config = LlamaAgentConfig::for_small_model();
-    let agent = Arc::new(LlamaAgentExecutorWrapper::new(agent_config));
-    let mut checker = RuleChecker::new(agent)
-        .map_err(|e| CliError::new(format!("Failed to create rule checker: {}", e), 1))?;
+    // Phase 5: Create RuleChecker with agent from configuration
+    // Load agent configuration (respects SAH_AGENT_EXECUTOR env var, defaults to ClaudeCode)
+    let workflow_context = WorkflowTemplateContext::load_with_agent_config()
+        .map_err(|e| CliError::new(format!("Failed to load agent config: {}", e), 1))?;
+    
+    let agent_context = AgentExecutionContext::new(&workflow_context);
 
-    // Initialize the checker
-    checker
+    // Create executor using factory (ClaudeCode or LlamaAgent based on config)
+    let mut executor = AgentExecutorFactory::create_executor(&agent_context)
+        .await
+        .map_err(|e| CliError::new(format!("Failed to create agent executor: {}", e), 1))?;
+    
+    // Initialize the executor
+    executor
         .initialize()
         .await
-        .map_err(|e| CliError::new(format!("Failed to initialize checker: {}", e), 1))?;
+        .map_err(|e| CliError::new(format!("Failed to initialize agent executor: {}", e), 1))?;
+
+    let agent: Arc<dyn AgentExecutor> = Arc::from(executor);
+    let checker = RuleChecker::new(agent)
+        .map_err(|e| CliError::new(format!("Failed to create rule checker: {}", e), 1))?;
 
     // Phase 6: Run check_all with fail-fast behavior
     match checker.check_all(rules, target_files).await {

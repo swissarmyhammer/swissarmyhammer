@@ -1,0 +1,1 @@
+there is no testing of partials, or partials defined in the builtin rules
