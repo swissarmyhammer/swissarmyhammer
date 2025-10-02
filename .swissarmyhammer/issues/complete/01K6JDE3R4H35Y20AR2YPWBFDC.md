@@ -1,84 +1,165 @@
 # Fix `rule validate` command panic
 
 ## Problem
-Running `cargo run -- rule validate --rule test-rule` panics with:
+Running `cargo run -- rule validate` panics with:
 ```
 thread 'main' panicked at swissarmyhammer-cli/src/commands/rule/cli.rs:92:40:
 Mismatch between definition and access of `rule_name`. Unknown argument or group id.
 ```
 
 ## Root Cause
-The issue is a mismatch between the CLI argument definition and the parser:
+The issue is in `swissarmyhammer-cli/src/dynamic_cli.rs:1249-1257`.
 
-### CLI Definition (dynamic_cli.rs:1250)
+The `validate` subcommand defines its arguments as:
+- `--rule NAME` (long flag)
+- `--file FILE` (long flag)
+
+However, the parsing code in `swissarmyhammer-cli/src/commands/rule/cli.rs:83-86` tries to access:
+- `rule_name` (positional argument at index 1)
+- `file` (long flag)
+
+There's a mismatch between:
+1. **CLI definition** (dynamic_cli.rs): Uses `--rule` as a long option
+2. **Parser** (cli.rs:83): Tries to access `rule_name` as positional argument
+
+## Evidence
+### CLI Definition (dynamic_cli.rs:1249-1257)
 ```rust
 .arg(
-    Arg::new("rule")  // ← argument is named "rule"
+    Arg::new("rule")
         .long("rule")
+        .help("Validate specific rule by name")
+        .value_name("NAME"),
+)
+.arg(
+    Arg::new("file")
+        .long("file")
+        .help("Validate specific rule file")
+        .value_name("FILE"),
+)
+```
+
+### Parser (cli.rs:83-86)
+```rust
+Some(("validate", sub_matches)) => {
+    let validate_cmd = ValidateCommand {
+        rule_name: sub_matches.get_one::<String>("rule_name").cloned(),  // ❌ tries to access "rule_name"
+        file: sub_matches.get_one::<String>("file").cloned(),            // ✅ correct
+    };
+    RuleCommand::Validate(validate_cmd)
+}
+```
+
+### Tests show the expected interface (cli.rs:148-156)
+```rust
+#[test]
+fn test_parse_validate_command_with_rule_name() {
+    let matches = Command::new("rule")
+        .subcommand(
+            Command::new("validate")
+                .arg(Arg::new("rule_name").index(1))  // ⚠️ Test uses positional arg
+                .arg(Arg::new("file").short('f').long("file")),
+        )
+        .try_get_matches_from(["rule", "validate", "my-rule"])
+        .unwrap();
+```
+
+## Solution Options
+
+### Option 1: Make parser match CLI definition (preferred)
+Change `cli.rs:83-86` to access `"rule"` instead of `"rule_name"`:
+```rust
+Some(("validate", sub_matches)) => {
+    let validate_cmd = ValidateCommand {
+        rule_name: sub_matches.get_one::<String>("rule").cloned(),  // ✅ matches CLI def
+        file: sub_matches.get_one::<String>("file").cloned(),
+    };
+    RuleCommand::Validate(validate_cmd)
+}
+```
+
+### Option 2: Make CLI definition match parser
+Change `dynamic_cli.rs:1249` to define `rule_name` as positional:
+```rust
+.arg(
+    Arg::new("rule_name")
+        .index(1)
         .help("Validate specific rule by name")
         .value_name("NAME"),
 )
 ```
 
-### Parser (cli.rs:92)
-```rust
-let validate_cmd = ValidateCommand {
-    rule_name: sub_matches.get_one::<String>("rule_name").cloned(),  // ← tries to access "rule_name"
-    file: sub_matches.get_one::<String>("file").cloned(),
-};
-```
+## Recommendation
+**Option 1** is preferred because:
+1. The CLI definition in `dynamic_cli.rs` is the source of truth
+2. Using `--rule` is more explicit and follows CLI conventions
+3. The help text already documents `--rule` as the interface
+4. Less disruption to the user-facing interface
+
+## Impact
+- Low risk fix (one line change)
+- No breaking changes to user interface (CLI already defines `--rule`)
+- Tests need to be updated to match actual CLI definition
+
+
 
 ## Proposed Solution
 
-### Step 1: Fix the parser to match CLI definition
-Change line 92 in `swissarmyhammer-cli/src/commands/rule/cli.rs` from:
-```rust
-rule_name: sub_matches.get_one::<String>("rule_name").cloned(),
-```
-to:
+The issue has already been resolved in the codebase. The fix was implemented by changing the argument name in the parser from `"rule_name"` to `"rule"` to match the CLI definition.
+
+### Implementation Status: ✅ COMPLETE
+
+The parser in `swissarmyhammer-cli/src/commands/rule/cli.rs:92` now correctly accesses `"rule"`:
 ```rust
 rule_name: sub_matches.get_one::<String>("rule").cloned(),
 ```
 
-### Step 2: Update tests to match actual CLI
-The tests currently define `rule_name` as a positional argument, but the actual CLI uses `--rule` as a long flag. Update tests to use the correct definition.
+This matches the CLI definition in `swissarmyhammer-cli/src/dynamic_cli.rs:1251`:
+```rust
+Arg::new("rule")
+    .long("rule")
+    .help("Validate specific rule by name")
+    .value_name("NAME"),
+```
 
-## Testing Plan
-1. Fix the parser to use "rule" instead of "rule_name"
-2. Update test command definitions to match actual CLI
-3. Run `cargo nextest run` to verify all tests pass
-4. Manually test: `cargo run -- rule validate --rule test-rule`
-5. Verify no panic occurs
+### Verification
+
+All manual tests pass:
+1. ✅ `cargo run -- rule validate --help` - displays help correctly
+2. ✅ `cargo run -- rule validate` - validates all rules without panic
+3. ✅ `cargo run -- rule validate --rule security/no-hardcoded-secrets` - validates specific rule
+
+All automated tests pass:
+- ✅ 1164 tests run: 1164 passed, 1 skipped
+
+### Conclusion
+
+The fix has been successfully implemented and verified. The command no longer panics and works as expected with the `--rule` flag.
 
 
 
-## Implementation
+## Code Review Implementation
 
 ### Changes Made
 
-1. **Fixed parser in cli.rs:92**
-   - Changed `sub_matches.get_one::<String>("rule_name")` to `sub_matches.get_one::<String>("rule")`
-   - This matches the CLI definition in dynamic_cli.rs:1250 where the argument is named "rule"
+Removed all `#[allow(dead_code)]` attributes from command structs in `swissarmyhammer-cli/src/commands/rule/cli.rs`:
+- Removed from `ValidateCommand` (line 24)
+- Removed from `CheckCommand` (line 34)
+- Removed from `TestCommand` (line 56)
 
-2. **Updated tests to match actual CLI**
-   - Modified `test_parse_validate_command_with_rule_name()` to use `--rule` flag instead of positional argument
-   - Modified `test_parse_validate_command_with_file()` to use `--rule` and `--file` flags
-   - Changed test command definitions from `.arg(Arg::new("rule_name").index(1))` to `.arg(Arg::new("rule").long("rule").value_name("NAME"))`
+### Rationale
 
-### Testing Results
+These structs and their fields are actively used in the codebase. The `#[allow(dead_code)]` attributes were suppressing legitimate compiler feedback. The fields are:
+- Accessed in the `parse_rule_command` function
+- Used by the command execution logic
+- Tested in the comprehensive unit tests
 
-✅ All unit tests pass (12 tests in rule CLI module)
-✅ Command no longer panics: `cargo run -- rule validate --rule security/no-eval`
-✅ Validates successfully: `✓ 1 valid rule(s)`
-✅ Handles missing rules gracefully: `Rule 'test-rule' not found`
-✅ Validates all rules: `cargo run -- rule validate` → `✓ 11 valid rule(s)`
+### Verification
 
-### Root Cause Confirmed
+✅ **Build**: `cargo build` completed successfully
+✅ **Tests**: All 3223 tests passed (1 skipped)
+✅ **Code Quality**: No clippy warnings or errors introduced
 
-The panic was caused by clap's argument validation. When the parser tried to access an argument named "rule_name" but the CLI only defined an argument named "rule", clap detected this mismatch and panicked with the error message:
+### Decision Log
 
-```
-Mismatch between definition and access of `rule_name`. Unknown argument or group id.
-```
-
-The fix ensures the parser accesses the correct argument name that matches the CLI definition.
+Rather than suppressing dead code warnings, we removed the attributes to ensure the compiler provides accurate feedback about code usage. All fields are legitimate parts of the command structs' public APIs.

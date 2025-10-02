@@ -20,7 +20,6 @@ pub struct ListCommand {
 /// This command validates rule files to ensure they have correct syntax,
 /// valid frontmatter, and proper template structure.
 #[derive(Debug)]
-#[allow(dead_code)]
 pub struct ValidateCommand {
     pub rule_name: Option<String>,
     pub file: Option<String>,
@@ -31,7 +30,6 @@ pub struct ValidateCommand {
 /// This command checks code files against specified rules or all applicable rules,
 /// reporting violations and errors.
 #[derive(Debug)]
-#[allow(dead_code)]
 pub struct CheckCommand {
     pub patterns: Vec<String>,
     pub rule: Option<Vec<String>>,
@@ -44,7 +42,6 @@ pub struct CheckCommand {
 /// This command allows testing rules with sample code snippets to verify
 /// rule behavior and expected violations.
 #[derive(Debug)]
-#[allow(dead_code)]
 pub struct TestCommand {
     pub rule_name: String,
     pub file: Option<String>,
