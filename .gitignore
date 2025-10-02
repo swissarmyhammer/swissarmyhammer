@@ -26,6 +26,7 @@ Thumbs.db
 semantic.db
 semantic.db.wal
 semantic.db-wal
+search.db
 
 # Logs
 *.log

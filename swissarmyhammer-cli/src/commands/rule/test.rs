@@ -69,7 +69,10 @@ pub async fn execute_test_command(cmd: TestCommand, context: &CliContext) -> Cli
         let temp_path = PathBuf::from("test.rs");
         (code.clone(), temp_path)
     } else {
-        return Err(CliError::new("Either --file or --code must be provided".to_string(), 1));
+        return Err(CliError::new(
+            "Either --file or --code must be provided".to_string(),
+            1,
+        ));
     };
 
     // Phase 3: Detect language
@@ -108,7 +111,10 @@ pub async fn execute_test_command(cmd: TestCommand, context: &CliContext) -> Cli
     let mut check_context = TemplateContext::new();
     check_context.set("rule_content".to_string(), rendered_rule.into());
     check_context.set("target_content".to_string(), target_content.clone().into());
-    check_context.set("target_path".to_string(), target_path.display().to_string().into());
+    check_context.set(
+        "target_path".to_string(),
+        target_path.display().to_string().into(),
+    );
     check_context.set("language".to_string(), language.into());
 
     let check_prompt = prompt_library
