@@ -1317,7 +1317,6 @@ Run rules against code files and report violations.
                             .value_name("CATEGORY"),
                     ),
             )
-
     }
 
     /// Build the agent command with all its subcommands

@@ -72,7 +72,9 @@ If no issues found, respond with "PASS".
 
     // Load the rule using RuleLoader (simpler for testing)
     let rule_loader = swissarmyhammer_rules::RuleLoader::new();
-    let rule = rule_loader.load_file(&rule_path).expect("Rule should be loaded");
+    let rule = rule_loader
+        .load_file(&rule_path)
+        .expect("Rule should be loaded");
 
     // Create a test file to check
     let test_file = temp_dir.path().join("test.rs");

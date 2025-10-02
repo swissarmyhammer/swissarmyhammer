@@ -127,9 +127,9 @@ impl RuleChecker {
         let mut rule_library = crate::RuleLibrary::new();
         let mut rule_resolver = crate::RuleResolver::new();
         let mut all_rules = Vec::new();
-        rule_resolver
-            .load_all_rules(&mut all_rules)
-            .map_err(|e| RuleError::CheckError(format!("Failed to load rules for partials: {}", e)))?;
+        rule_resolver.load_all_rules(&mut all_rules).map_err(|e| {
+            RuleError::CheckError(format!("Failed to load rules for partials: {}", e))
+        })?;
 
         // Add all rules to the library for partial lookups
         for r in all_rules {

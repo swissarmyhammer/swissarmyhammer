@@ -1,1 +1,0 @@
-make sure each of the subcommand description.md is accurate and really sells the feature

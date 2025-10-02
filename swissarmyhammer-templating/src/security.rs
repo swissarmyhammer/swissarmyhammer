@@ -152,8 +152,6 @@ mod tests {
         assert!(result.unwrap_err().to_string().contains("too large"));
     }
 
-
-
     #[test]
     fn test_validate_template_security_excessive_nesting() {
         let deeply_nested = "{% if a %}{% if b %}{% if c %}{% if d %}{% if e %}{% if f %}{% if g %}{% if h %}{% if i %}{% if j %}{% if k %}deep{% endif %}{% endif %}{% endif %}{% endif %}{% endif %}{% endif %}{% endif %}{% endif %}{% endif %}{% endif %}{% endif %}";

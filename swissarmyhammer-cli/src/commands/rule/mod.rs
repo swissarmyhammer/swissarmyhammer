@@ -140,5 +140,4 @@ mod tests {
         // Should succeed when no files match patterns
         assert!(result.is_ok());
     }
-
 }

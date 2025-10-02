@@ -252,15 +252,15 @@ pub async fn execute_check_command(cmd: CheckCommand, context: &CliContext) -> C
             .suffix(".rs")
             .tempfile()
             .map_err(|e| CliError::new(format!("Failed to create temp file: {}", e), 1))?;
-        
+
         // Write the inline code to the temp file
         temp_file
             .write_all(code.as_bytes())
             .map_err(|e| CliError::new(format!("Failed to write temp file: {}", e), 1))?;
-        
+
         // Get the path before moving ownership
         let temp_path = temp_file.path().to_path_buf();
-        
+
         // Return both the temp file (to keep it alive) and the path
         (Some(temp_file), vec![temp_path])
     } else {
