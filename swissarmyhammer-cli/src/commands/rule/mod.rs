@@ -115,9 +115,10 @@ mod tests {
         use crate::context::CliContextBuilder;
 
         let command = RuleCommand::Check(cli::CheckCommand {
-            rule_name: None,
-            files: vec!["test.rs".to_string()],
-            fix: false,
+            patterns: vec!["/nonexistent/**/*.rs".to_string()],
+            rule: None,
+            severity: None,
+            category: None,
         });
 
         let template_context = TemplateContext::new();
@@ -130,13 +131,14 @@ mod tests {
             .format_option(None)
             .verbose(false)
             .debug(false)
-            .quiet(false)
+            .quiet(true)
             .matches(matches)
             .build_async()
             .await
             .unwrap();
 
         let result = run_rule_command_typed(command, &context).await;
+        // Should succeed when no files match patterns
         assert!(result.is_ok());
     }
 

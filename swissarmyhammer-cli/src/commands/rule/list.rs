@@ -23,8 +23,11 @@ pub async fn execute_list_command(cli_context: &CliContext) -> Result<()> {
         .collect();
 
     // Convert to display objects using emoji-based sources and use context's display_rules method
-    let display_rows =
-        super::display::rules_to_display_rows_with_sources(rules, file_sources, cli_context.verbose);
+    let display_rows = super::display::rules_to_display_rows_with_sources(
+        rules,
+        file_sources,
+        cli_context.verbose,
+    );
 
     // Use context's display_rules method
     cli_context.display_rules(display_rows)?;

@@ -8,10 +8,7 @@ use crate::error::CliResult;
 use super::cli::ValidateCommand;
 
 /// Execute the validate command to check rule syntax
-pub async fn execute_validate_command(
-    cmd: ValidateCommand,
-    context: &CliContext,
-) -> CliResult<()> {
+pub async fn execute_validate_command(cmd: ValidateCommand, context: &CliContext) -> CliResult<()> {
     use swissarmyhammer_common::file_loader::FileSource;
     use swissarmyhammer_rules::{Rule, RuleResolver};
 
@@ -22,10 +19,7 @@ pub async fn execute_validate_command(
 
     // Filter rules if specific rule name or file requested
     let rules_to_validate: Vec<&Rule> = if let Some(ref rule_name) = cmd.rule_name {
-        all_rules
-            .iter()
-            .filter(|r| r.name == *rule_name)
-            .collect()
+        all_rules.iter().filter(|r| r.name == *rule_name).collect()
     } else if let Some(ref file_path) = cmd.file {
         all_rules
             .iter()

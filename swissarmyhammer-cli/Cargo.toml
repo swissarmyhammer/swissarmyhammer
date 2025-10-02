@@ -68,6 +68,8 @@ rmcp = { workspace = true }
 # File operations
 walkdir = { workspace = true }
 tempfile = { workspace = true }
+glob = { workspace = true }
+ignore = { workspace = true }
 
 # Utils
 regex = { workspace = true }
