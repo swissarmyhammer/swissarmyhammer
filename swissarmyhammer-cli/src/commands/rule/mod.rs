@@ -9,7 +9,7 @@ pub mod list;
 pub mod test;
 pub mod validate;
 
-use crate::error::{CliError, CliResult};
+use crate::error::CliResult;
 use crate::exit_codes::EXIT_SUCCESS;
 
 pub use cli::RuleCommand;
@@ -39,18 +39,12 @@ async fn run_rule_command_typed(
     match command {
         RuleCommand::List(_) => list::execute_list_command(context)
             .await
-            .map_err(|e| CliError::new(e.to_string(), 1)),
+            .map_err(|e| crate::error::CliError::new(e.to_string(), 1)),
         RuleCommand::Validate(validate_cmd) => {
-            validate::execute_validate_command(validate_cmd, context)
-                .await
-                .map_err(|e| CliError::new(e.to_string(), 1))
+            validate::execute_validate_command(validate_cmd, context).await
         }
-        RuleCommand::Check(check_cmd) => check::execute_check_command(check_cmd, context)
-            .await
-            .map_err(|e| CliError::new(e.to_string(), 1)),
-        RuleCommand::Test(test_cmd) => test::execute_test_command(test_cmd, context)
-            .await
-            .map_err(|e| CliError::new(e.to_string(), 1)),
+        RuleCommand::Check(check_cmd) => check::execute_check_command(check_cmd, context).await,
+        RuleCommand::Test(test_cmd) => test::execute_test_command(test_cmd, context).await,
     }
 }
 
@@ -105,14 +99,15 @@ mod tests {
             .format_option(None)
             .verbose(false)
             .debug(false)
-            .quiet(false)
+            .quiet(true) // Quiet to suppress error output in tests
             .matches(matches)
             .build_async()
             .await
             .unwrap();
 
         let result = run_rule_command_typed(command, &context).await;
-        assert!(result.is_ok());
+        // Should return error when rule not found
+        assert!(result.is_err());
     }
 
     #[tokio::test]
