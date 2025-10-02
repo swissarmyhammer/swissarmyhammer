@@ -1137,31 +1137,8 @@ When variables are not provided via --var, the command prompts interactively:
     /// Build the rule command with all its subcommands
     pub fn build_rule_command() -> Command {
         Command::new("rule")
-            .about("Manage and test AI-powered linting rules")
-            .long_about(
-                "
-Manage and test AI-powered linting rules for automated code quality checks.
-
-The rule system provides four main commands:
-• list     - Display all available rules from all sources
-• validate - Validate rule syntax and structure
-• check    - Run rules against code files
-• test     - Test rules with sample code snippets
-
-Use global arguments to control output:
-  --verbose         Show detailed information
-  --format FORMAT   Output format: table, json, yaml
-  --debug           Enable debug mode
-  --quiet           Suppress output except errors
-
-Examples:
-  sah rule list                              # List all rules
-  sah --verbose rule list                    # Show detailed information
-  sah rule validate                          # Validate all rules
-  sah rule check \"src/**/*.rs\"              # Check Rust files
-  sah rule test no-hardcoded-secrets test.rs # Test a specific rule
-",
-            )
+            .about("Manage and test code quality rules")
+            .long_about(crate::commands::rule::DESCRIPTION)
             .subcommand(
                 Command::new("list")
                     .about("Display all available rules from all sources")

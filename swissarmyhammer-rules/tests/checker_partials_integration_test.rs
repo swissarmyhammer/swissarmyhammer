@@ -4,6 +4,7 @@
 //! shared partial templates from the rule library.
 
 use std::sync::Arc;
+use swissarmyhammer_common::error::SwissArmyHammerError;
 use swissarmyhammer_config::LlamaAgentConfig;
 use swissarmyhammer_rules::{Rule, RuleChecker, Severity};
 use swissarmyhammer_workflow::LlamaAgentExecutorWrapper;
@@ -18,7 +19,7 @@ fn create_test_agent() -> Arc<LlamaAgentExecutorWrapper> {
 /// Check if an error is due to agent unavailability and skip test if so
 ///
 /// Returns true if the test should be skipped, false otherwise.
-fn skip_if_agent_unavailable(err: &anyhow::Error) -> bool {
+fn skip_if_agent_unavailable(err: &SwissArmyHammerError) -> bool {
     let err_string = err.to_string();
     if err_string.contains("agent") || err_string.contains("Agent") {
         eprintln!("Skipping test - agent not available: {}", err);

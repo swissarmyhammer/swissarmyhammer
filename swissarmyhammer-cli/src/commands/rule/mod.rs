@@ -13,10 +13,10 @@ use crate::exit_codes::EXIT_SUCCESS;
 
 pub use cli::RuleCommand;
 
+/// Help text for the rule command
+pub const DESCRIPTION: &str = include_str!("description.md");
+
 /// Handle rule command using the new CLI module types
-///
-/// Note: Help text for the rule command is loaded from description.md
-/// and available for reference but no longer used in CLI definitions
 pub async fn handle_command_typed(
     command: RuleCommand,
     context: &crate::context::CliContext,
@@ -24,7 +24,7 @@ pub async fn handle_command_typed(
     match run_rule_command_typed(command, context).await {
         Ok(_) => EXIT_SUCCESS,
         Err(e) => {
-            eprintln!("Rule command failed: {}", e);
+            tracing::error!("Rule command failed: {}", e);
             e.exit_code
         }
     }

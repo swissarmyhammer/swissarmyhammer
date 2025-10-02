@@ -1,0 +1,1 @@
+i do not want a --code flag on rule check, we will only check files
