@@ -1268,6 +1268,7 @@ Run rules against code files and report violations.
 
 ## Usage
   sah rule check <PATTERNS>... [OPTIONS]
+  sah rule check --code <CODE> --rule <RULE> [OPTIONS]
 
 ## Arguments
 
@@ -1275,6 +1276,7 @@ Run rules against code files and report violations.
 
 ## Options
 
+- --code <CODE> - Inline code snippet to check (alternative to file patterns)
 - --rule <NAME> - Only run specific rule(s) (can be used multiple times)
 - --severity <LEVEL> - Filter by severity level (error, warning, info, hint)
 - --category <CAT> - Filter by category
@@ -1289,6 +1291,9 @@ Run rules against code files and report violations.
 
   # Check with specific rule
   sah rule check --rule no-hardcoded-secrets \"**/*.rs\"
+
+  # Check inline code with specific rule
+  sah rule check --code 'fn main() { let key = \"sk-1234\"; }' --rule no-hardcoded-secrets
 
   # Check only errors
   sah rule check --severity error \"**/*.rs\"
@@ -1306,8 +1311,13 @@ Run rules against code files and report violations.
                         Arg::new("patterns")
                             .help("Glob patterns for files to check")
                             .value_name("PATTERNS")
-                            .required(true)
                             .action(ArgAction::Append),
+                    )
+                    .arg(
+                        Arg::new("code")
+                            .long("code")
+                            .help("Inline code snippet to check")
+                            .value_name("CODE"),
                     )
                     .arg(
                         Arg::new("rule")
@@ -1330,73 +1340,7 @@ Run rules against code files and report violations.
                             .value_name("CATEGORY"),
                     ),
             )
-            .subcommand(
-                Command::new("test")
-                    .about("Test rules with sample code snippets")
-                    .long_about(
-                        "
-Test rules with sample code snippets to verify rule behavior.
-This command executes the full rule checking process including real LLM execution.
 
-## Usage
-  sah rule test <RULE_NAME> [OPTIONS]
-
-## Arguments
-
-- <RULE_NAME> - Name of the rule to test
-
-## Options
-
-- --file <FILE> - Path to code file to test against
-- --code <CODE> - Inline code snippet to test against
-
-## Examples
-
-  # Test with a file
-  sah rule test no-hardcoded-secrets src/main.rs
-
-  # Test with inline code
-  sah rule test function-length --code 'fn main() { println!(\"hello\"); }'
-
-  # Quiet mode (skips LLM execution)
-  sah --quiet rule test no-hardcoded-secrets test.rs
-
-## Output
-
-The test command shows:
-1. Rule validation status
-2. File/code reading
-3. Language detection
-4. Rendered rule template
-5. Rendered .check prompt
-6. LLM execution and response (unless --quiet)
-7. Parsed result (PASS or violation)
-
-## Notes
-
-- Executes real LLM API calls unless --quiet is used
-- Use --quiet to validate template rendering without LLM costs
-",
-                    )
-                    .arg(
-                        Arg::new("rule_name")
-                            .help("Name of the rule to test")
-                            .value_name("RULE_NAME")
-                            .required(true),
-                    )
-                    .arg(
-                        Arg::new("file")
-                            .long("file")
-                            .help("Path to code file to test")
-                            .value_name("FILE"),
-                    )
-                    .arg(
-                        Arg::new("code")
-                            .long("code")
-                            .help("Inline code snippet to test")
-                            .value_name("CODE"),
-                    ),
-            )
     }
 
     /// Build the agent command with all its subcommands

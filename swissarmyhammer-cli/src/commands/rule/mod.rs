@@ -1,12 +1,11 @@
 //! Rule command implementation
 //!
-//! Manages and tests rules with support for listing, validating, checking, and testing
+//! Manages and tests rules with support for listing, validating, and checking
 
 pub mod check;
 pub mod cli;
 pub mod display;
 pub mod list;
-pub mod test;
 pub mod validate;
 
 use crate::error::CliResult;
@@ -44,7 +43,6 @@ async fn run_rule_command_typed(
             validate::execute_validate_command(validate_cmd, context).await
         }
         RuleCommand::Check(check_cmd) => check::execute_check_command(check_cmd, context).await,
-        RuleCommand::Test(test_cmd) => test::execute_test_command(test_cmd, context).await,
     }
 }
 
@@ -119,6 +117,7 @@ mod tests {
             rule: None,
             severity: None,
             category: None,
+            code: None,
         });
 
         let template_context = TemplateContext::new();
@@ -142,34 +141,4 @@ mod tests {
         assert!(result.is_ok());
     }
 
-    #[tokio::test]
-    async fn test_run_rule_command_typed_test() {
-        use crate::context::CliContextBuilder;
-
-        let command = RuleCommand::Test(cli::TestCommand {
-            rule_name: "test-rule".to_string(),
-            file: None,
-            code: Some("fn main() {}".to_string()),
-        });
-
-        let template_context = TemplateContext::new();
-        let matches = clap::Command::new("test")
-            .try_get_matches_from(["test"])
-            .unwrap();
-        let context = CliContextBuilder::default()
-            .template_context(template_context)
-            .format(crate::cli::OutputFormat::Table)
-            .format_option(None)
-            .verbose(false)
-            .debug(false)
-            .quiet(true) // Quiet to skip LLM execution
-            .matches(matches)
-            .build_async()
-            .await
-            .unwrap();
-
-        let result = run_rule_command_typed(command, &context).await;
-        // Will fail because rule doesn't exist, which is expected
-        assert!(result.is_err());
-    }
 }

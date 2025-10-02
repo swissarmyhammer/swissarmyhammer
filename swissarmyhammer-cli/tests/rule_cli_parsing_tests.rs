@@ -37,11 +37,7 @@ fn test_rule_command_has_subcommands() {
         subcommands.contains(&"check"),
         "Should have 'check' subcommand"
     );
-    assert!(
-        subcommands.contains(&"test"),
-        "Should have 'test' subcommand"
-    );
-    assert_eq!(subcommands.len(), 4, "Should have exactly 4 subcommands");
+    assert_eq!(subcommands.len(), 3, "Should have exactly 3 subcommands");
 }
 
 #[test]
@@ -129,39 +125,6 @@ fn test_rule_check_subcommand_structure() {
     assert!(
         has_rule && has_severity && has_category,
         "check should have rule, severity, and category arguments"
-    );
-}
-
-#[test]
-fn test_rule_test_subcommand_structure() {
-    let rule_cmd = get_rule_command();
-    let test_cmd = rule_cmd
-        .find_subcommand("test")
-        .expect("test subcommand should exist");
-
-    assert_eq!(test_cmd.get_name(), "test");
-    assert!(
-        test_cmd.get_about().is_some(),
-        "test should have about text"
-    );
-
-    // Test should have required rule_name argument
-    let has_rule_name = test_cmd
-        .get_arguments()
-        .any(|arg| arg.get_id().as_str() == "rule_name" || arg.get_id().as_str() == "rule-name");
-    assert!(has_rule_name, "test should have rule_name argument");
-
-    // Test should have optional file and code arguments
-    let has_file = test_cmd
-        .get_arguments()
-        .any(|arg| arg.get_id().as_str() == "file");
-    let has_code = test_cmd
-        .get_arguments()
-        .any(|arg| arg.get_id().as_str() == "code");
-
-    assert!(
-        has_file && has_code,
-        "test should have file and code arguments"
     );
 }
 
@@ -328,25 +291,6 @@ fn test_check_subcommand_help_content() {
     );
 }
 
-#[test]
-fn test_test_subcommand_help_content() {
-    let rule_cmd = get_rule_command();
-    let test_cmd = rule_cmd
-        .find_subcommand("test")
-        .expect("test subcommand should exist");
-
-    let help = test_cmd
-        .get_about()
-        .or_else(|| test_cmd.get_long_about())
-        .expect("test should have help text");
-    let help_str = help.to_string();
-
-    assert!(
-        help_str.contains("test") || help_str.contains("Test"),
-        "help should mention testing"
-    );
-}
-
 // =============================================================================
 // COMMAND CONSISTENCY TESTS
 // =============================================================================
@@ -382,32 +326,6 @@ fn test_all_subcommands_have_about_or_long_about() {
 // =============================================================================
 // ARGUMENT VALIDATION TESTS
 // =============================================================================
-
-#[test]
-fn test_test_command_rule_name_is_positional() {
-    let rule_cmd = get_rule_command();
-    let test_cmd = rule_cmd
-        .find_subcommand("test")
-        .expect("test subcommand should exist");
-
-    // Find the rule_name argument
-    let rule_name_arg = test_cmd
-        .get_arguments()
-        .find(|arg| arg.get_id().as_str() == "rule_name" || arg.get_id().as_str() == "rule-name")
-        .expect("test should have rule_name argument");
-
-    // Check if it's a positional argument (not a flag)
-    let is_positional = !rule_name_arg.get_id().as_str().starts_with('-')
-        && !rule_name_arg
-            .get_long()
-            .map(|s| s.starts_with("--"))
-            .unwrap_or(false);
-
-    assert!(
-        is_positional || rule_name_arg.is_positional(),
-        "rule_name should be a positional argument"
-    );
-}
 
 #[test]
 fn test_validate_command_accepts_rule_name_or_file() {

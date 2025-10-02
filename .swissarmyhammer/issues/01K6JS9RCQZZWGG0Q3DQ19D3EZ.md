@@ -1,0 +1,1 @@
+the rule command needs a description.md like the other subcommands

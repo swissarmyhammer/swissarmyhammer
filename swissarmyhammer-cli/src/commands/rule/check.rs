@@ -174,8 +174,24 @@ fn expand_glob_patterns(patterns: &[String]) -> CliResult<Vec<PathBuf>> {
 /// sah rule check "**/*.rs"
 /// sah rule check --severity error "src/**/*.rs"
 /// sah rule check --rule no-unwrap --category style "*.rs"
+/// sah rule check --code "fn main() {}" --rule no-unwrap
 /// ```
 pub async fn execute_check_command(cmd: CheckCommand, context: &CliContext) -> CliResult<()> {
+    // Validate command arguments first
+    if cmd.code.is_some() && !cmd.patterns.is_empty() {
+        return Err(CliError::new(
+            "Cannot specify both --code and file patterns".to_string(),
+            1,
+        ));
+    }
+
+    if cmd.code.is_some() && cmd.rule.as_ref().map_or(true, |r| r.is_empty()) {
+        return Err(CliError::new(
+            "The --rule flag is required when using --code".to_string(),
+            1,
+        ));
+    }
+
     // Phase 1: Load all rules via RuleResolver
     if !context.quiet {
         println!("Loading rules...");
@@ -228,8 +244,29 @@ pub async fn execute_check_command(cmd: CheckCommand, context: &CliContext) -> C
         return Ok(());
     }
 
-    // Phase 4: Expand glob patterns to file paths
-    let target_files = expand_glob_patterns(&cmd.patterns)?;
+    // Phase 4: Get target files - either from patterns or inline code
+    let (_temp_file_guard, target_files) = if let Some(code) = &cmd.code {
+        // When --code is provided, create a temporary file with the inline code
+        use std::io::Write;
+        let mut temp_file = tempfile::Builder::new()
+            .suffix(".rs")
+            .tempfile()
+            .map_err(|e| CliError::new(format!("Failed to create temp file: {}", e), 1))?;
+        
+        // Write the inline code to the temp file
+        temp_file
+            .write_all(code.as_bytes())
+            .map_err(|e| CliError::new(format!("Failed to write temp file: {}", e), 1))?;
+        
+        // Get the path before moving ownership
+        let temp_path = temp_file.path().to_path_buf();
+        
+        // Return both the temp file (to keep it alive) and the path
+        (Some(temp_file), vec![temp_path])
+    } else {
+        // Expand glob patterns to file paths
+        (None, expand_glob_patterns(&cmd.patterns)?)
+    };
 
     if target_files.is_empty() {
         if !context.quiet {
@@ -449,6 +486,7 @@ mod tests {
             rule: Some(vec!["nonexistent-rule".to_string()]),
             severity: None,
             category: None,
+            code: None,
         };
 
         let result = execute_check_command(cmd, &context).await;
@@ -479,6 +517,7 @@ mod tests {
             rule: None,
             severity: None,
             category: None,
+            code: None,
         };
 
         let result = execute_check_command(cmd, &context).await;
@@ -509,6 +548,7 @@ mod tests {
             rule: None,
             severity: Some("error".to_string()),
             category: None,
+            code: None,
         };
 
         let result = execute_check_command(cmd, &context).await;
@@ -539,6 +579,7 @@ mod tests {
             rule: None,
             severity: None,
             category: Some("security".to_string()),
+            code: None,
         };
 
         let result = execute_check_command(cmd, &context).await;
@@ -569,6 +610,7 @@ mod tests {
             rule: Some(vec!["specific-rule".to_string()]),
             severity: None,
             category: None,
+            code: None,
         };
 
         let result = execute_check_command(cmd, &context).await;
@@ -599,10 +641,112 @@ mod tests {
             rule: Some(vec!["specific-rule".to_string()]),
             severity: Some("error".to_string()),
             category: Some("security".to_string()),
+            code: None,
         };
 
         let result = execute_check_command(cmd, &context).await;
         // Should succeed - applies all filters
         assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_execute_check_command_with_inline_code() {
+        let template_context = TemplateContext::new();
+        let matches = clap::Command::new("test")
+            .try_get_matches_from(["test"])
+            .unwrap();
+        let context = CliContextBuilder::default()
+            .template_context(template_context)
+            .format(crate::cli::OutputFormat::Table)
+            .format_option(None)
+            .verbose(false)
+            .debug(false)
+            .quiet(true)
+            .matches(matches)
+            .build_async()
+            .await
+            .unwrap();
+
+        let cmd = super::super::cli::CheckCommand {
+            patterns: vec![],
+            rule: Some(vec!["nonexistent-rule".to_string()]),
+            severity: None,
+            category: None,
+            code: Some("fn main() { println!(\"hello\"); }".to_string()),
+        };
+
+        let result = execute_check_command(cmd, &context).await;
+        // Should succeed when no rules match filters (nonexistent rule)
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_execute_check_command_inline_code_requires_rule() {
+        let template_context = TemplateContext::new();
+        let matches = clap::Command::new("test")
+            .try_get_matches_from(["test"])
+            .unwrap();
+        let context = CliContextBuilder::default()
+            .template_context(template_context)
+            .format(crate::cli::OutputFormat::Table)
+            .format_option(None)
+            .verbose(false)
+            .debug(false)
+            .quiet(true)
+            .matches(matches)
+            .build_async()
+            .await
+            .unwrap();
+
+        let cmd = super::super::cli::CheckCommand {
+            patterns: vec![],
+            rule: None,
+            severity: None,
+            category: None,
+            code: Some("fn main() { println!(\"hello\"); }".to_string()),
+        };
+
+        let result = execute_check_command(cmd, &context).await;
+        // Should fail when --code is provided without --rule
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("--rule flag is required"));
+    }
+
+    #[tokio::test]
+    async fn test_execute_check_command_code_and_patterns_mutually_exclusive() {
+        let template_context = TemplateContext::new();
+        let matches = clap::Command::new("test")
+            .try_get_matches_from(["test"])
+            .unwrap();
+        let context = CliContextBuilder::default()
+            .template_context(template_context)
+            .format(crate::cli::OutputFormat::Table)
+            .format_option(None)
+            .verbose(false)
+            .debug(false)
+            .quiet(true)
+            .matches(matches)
+            .build_async()
+            .await
+            .unwrap();
+
+        let cmd = super::super::cli::CheckCommand {
+            patterns: vec!["*.rs".to_string()],
+            rule: Some(vec!["some-rule".to_string()]),
+            severity: None,
+            category: None,
+            code: Some("fn main() {}".to_string()),
+        };
+
+        let result = execute_check_command(cmd, &context).await;
+        // Should fail when both --code and patterns are provided
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Cannot specify both"));
     }
 }
