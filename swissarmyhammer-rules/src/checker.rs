@@ -12,7 +12,6 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use swissarmyhammer_config::TemplateContext;
 use swissarmyhammer_prompts::{PromptLibrary, PromptResolver};
-use swissarmyhammer_templating::TemplateEngine;
 use swissarmyhammer_workflow::{AgentExecutionContext, AgentExecutor};
 
 /// Core rule checker that performs two-stage rendering and executes checks via LLM agent
@@ -61,6 +60,8 @@ pub struct RuleChecker {
     agent: Arc<dyn AgentExecutor>,
     /// Prompt library containing the .check prompt
     prompt_library: PromptLibrary,
+    /// Rule library for partial template support (loaded once for performance)
+    rule_library: Arc<crate::RuleLibrary>,
 }
 
 impl RuleChecker {
@@ -122,9 +123,27 @@ impl RuleChecker {
 
         tracing::debug!(".check prompt loaded successfully");
 
+        // Load all rules into a library for partial support (once, for performance)
+        let mut rule_library = crate::RuleLibrary::new();
+        let mut rule_resolver = crate::RuleResolver::new();
+        let mut all_rules = Vec::new();
+        rule_resolver
+            .load_all_rules(&mut all_rules)
+            .map_err(|e| RuleError::CheckError(format!("Failed to load rules for partials: {}", e)))?;
+
+        // Add all rules to the library for partial lookups
+        for r in all_rules {
+            rule_library.add(r).map_err(|e| {
+                RuleError::CheckError(format!("Failed to add rule to library: {}", e))
+            })?;
+        }
+
+        tracing::debug!("Rule library loaded for partial support");
+
         Ok(Self {
             agent,
             prompt_library,
+            rule_library: Arc::new(rule_library),
         })
     }
 
@@ -213,19 +232,36 @@ impl RuleChecker {
         let language = detect_language(target_path, &target_content)?;
         tracing::debug!("Detected language: {}", language);
 
-        // STAGE 1: Render the rule template with context variables
-        let mut rule_args = HashMap::new();
-        rule_args.insert("target_content".to_string(), target_content.clone());
-        rule_args.insert("target_path".to_string(), target_path.display().to_string());
-        rule_args.insert("language".to_string(), language.clone());
+        // STAGE 1: Render the rule template with context variables and partial support
+        let mut rule_context = TemplateContext::new();
+        rule_context.set("target_content".to_string(), target_content.clone().into());
+        rule_context.set(
+            "target_path".to_string(),
+            target_path.display().to_string().into(),
+        );
+        rule_context.set("language".to_string(), language.clone().into());
 
-        let engine = TemplateEngine::new();
-        let rendered_rule = engine.render(&rule.template, &rule_args).map_err(|e| {
-            RuleError::CheckError(format!(
-                "Failed to render rule template for {}: {}",
-                rule.name, e
-            ))
-        })?;
+        // Create partial adapter from pre-loaded rule library
+        let partial_adapter = crate::RulePartialAdapter::new(Arc::clone(&self.rule_library));
+
+        // Use Template::with_partials for rendering with partial support
+        let template_with_partials =
+            swissarmyhammer_templating::Template::with_partials(&rule.template, partial_adapter)
+                .map_err(|e| {
+                    RuleError::CheckError(format!(
+                        "Failed to create template with partials for {}: {}",
+                        rule.name, e
+                    ))
+                })?;
+
+        let rendered_rule = template_with_partials
+            .render_with_context(&rule_context)
+            .map_err(|e| {
+                RuleError::CheckError(format!(
+                    "Failed to render rule template for {}: {}",
+                    rule.name, e
+                ))
+            })?;
 
         tracing::debug!("Stage 1 complete: rule template rendered");
 

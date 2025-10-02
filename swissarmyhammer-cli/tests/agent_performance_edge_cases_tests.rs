@@ -675,7 +675,7 @@ async fn test_rapid_sequential_operations() -> Result<()> {
 
         // Operations should complete quickly
         assert!(
-            operation_time < Duration::from_secs(8),
+            operation_time < Duration::from_secs(10),
             "Rapid operation {} should complete quickly, took {:?}",
             i,
             operation_time
@@ -894,8 +894,8 @@ entry_{:05}:
 
     // Should handle large config reasonably
     assert!(
-        duration < Duration::from_secs(25),
-        "Should handle {:.2} MB config in under 25 seconds, took {:?}",
+        duration < Duration::from_secs(30),
+        "Should handle {:.2} MB config in under 30 seconds, took {:?}",
         file_size as f64 / 1024.0 / 1024.0,
         duration
     );

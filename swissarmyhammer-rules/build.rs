@@ -47,11 +47,7 @@ fn collect_rules(dir: &Path, prefix: &str, code: &mut String) {
             let name = path.file_name().unwrap().to_string_lossy();
 
             if path.is_dir() {
-                // Skip _partials directory for now (will be handled in future)
-                if name == "_partials" {
-                    continue;
-                }
-                // Recursively collect from subdirectories
+                // Recursively collect from subdirectories, including _partials
                 let new_prefix = if prefix.is_empty() {
                     name.to_string()
                 } else {
