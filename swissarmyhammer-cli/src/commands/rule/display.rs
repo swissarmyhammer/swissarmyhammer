@@ -6,8 +6,6 @@
 use serde::{Deserialize, Serialize};
 use tabled::Tabled;
 
-
-
 /// Basic rule information for standard list output
 #[derive(Tabled, Serialize, Deserialize, Debug, Clone)]
 pub struct RuleRow {

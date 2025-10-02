@@ -2,8 +2,6 @@ use serde::Serialize;
 use swissarmyhammer::Workflow;
 use tabled::Tabled;
 
-
-
 /// Returns a default description when the provided description is empty
 fn get_description_or_default(description: &str) -> String {
     if description.is_empty() {

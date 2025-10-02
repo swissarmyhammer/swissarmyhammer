@@ -32,15 +32,14 @@ File types to check:
 
 If this file is clearly a template, example, or documentation file (contains "example", "template", "sample" in name or has placeholder values), respond with "PASS".
 
+{% include "_partials/report-format" %}
+
 If you find actual credentials:
-- Report the line number
 - Identify the type of credential
-- DO NOT display the actual credential value
 - Suggest using environment variables or a secrets manager
 
-If no plaintext credentials are found, respond with "PASS".
+{% include "_partials/no-display-secrets" %}
 
-Code to analyze:
-```
-{{ target_content }}
-```
+{% include "_partials/pass-response" %}
+
+{% include "_partials/code-block" %}

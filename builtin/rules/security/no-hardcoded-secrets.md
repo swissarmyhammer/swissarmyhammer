@@ -18,15 +18,14 @@ Look for:
 
 If this file type doesn't contain code (e.g., markdown, documentation files), respond with "PASS".
 
+{% include "_partials/report-format" %}
+
 If you find potential hardcoded secrets:
-- Report the line number
 - Describe what type of secret was found
 - Suggest moving to environment variables or a secrets manager
-- DO NOT display the actual secret value in your response
 
-If no secrets are found, respond with "PASS".
+{% include "_partials/no-display-secrets" %}
 
-Code to analyze:
-```
-{{ target_content }}
-```
+{% include "_partials/pass-response" %}
+
+{% include "_partials/code-block" %}

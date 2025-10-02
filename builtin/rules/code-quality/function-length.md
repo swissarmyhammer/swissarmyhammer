@@ -10,9 +10,11 @@ Check {{ language }} code for functions longer than 50 lines.
 
 Count actual code lines (excluding comments and blank lines).
 
+{% include "_partials/report-format" %}
+
 Report any functions over 50 lines with:
 - Function name
 - Current line count
 - Suggestion to break into smaller functions
 
-If this file doesn't define functions, respond with "PASS".
+{% include "_partials/pass-response" %}

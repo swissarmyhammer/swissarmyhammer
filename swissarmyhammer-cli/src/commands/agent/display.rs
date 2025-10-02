@@ -7,8 +7,6 @@ use serde::{Deserialize, Serialize};
 use swissarmyhammer_config::agent::AgentInfo;
 use tabled::Tabled;
 
-
-
 /// Basic agent information for standard list output
 #[derive(Tabled, Serialize, Deserialize, Debug, Clone)]
 pub struct AgentRow {

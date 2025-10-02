@@ -139,14 +139,14 @@ pub async fn execute_test_command(cmd: TestCommand, context: &CliContext) -> Cli
     // Load agent configuration (respects SAH_AGENT_EXECUTOR env var, defaults to ClaudeCode)
     let workflow_context = WorkflowTemplateContext::load_with_agent_config()
         .map_err(|e| CliError::new(format!("Failed to load agent config: {}", e), 1))?;
-    
+
     let agent_context = AgentExecutionContext::new(&workflow_context);
 
     // Create executor using factory (ClaudeCode or LlamaAgent based on config)
     let mut executor = AgentExecutorFactory::create_executor(&agent_context)
         .await
         .map_err(|e| CliError::new(format!("Failed to create agent executor: {}", e), 1))?;
-    
+
     // Initialize the executor
     executor
         .initialize()
