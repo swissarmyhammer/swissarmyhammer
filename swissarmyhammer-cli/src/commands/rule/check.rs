@@ -247,7 +247,6 @@ pub async fn execute_check_command(cmd: CheckCommand, context: &CliContext) -> C
 
     // Phase 5: Create RuleChecker with agent
     // Use small model configuration for rule checking
-    // TODO: Make this configurable via CLI flags or config file
     let agent_config = LlamaAgentConfig::for_small_model();
     let agent = Arc::new(LlamaAgentExecutorWrapper::new(agent_config));
     let mut checker = RuleChecker::new(agent)
