@@ -117,7 +117,6 @@ mod tests {
             rule: None,
             severity: None,
             category: None,
-            code: None,
         });
 
         let template_context = TemplateContext::new();

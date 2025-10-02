@@ -35,7 +35,6 @@ pub struct CheckCommand {
     pub rule: Option<Vec<String>>,
     pub severity: Option<String>,
     pub category: Option<String>,
-    pub code: Option<String>,
 }
 
 /// Command enum representing all available rule subcommands.
@@ -91,7 +90,6 @@ pub fn parse_rule_command(matches: &ArgMatches) -> RuleCommand {
                     .map(|vals| vals.cloned().collect()),
                 severity: sub_matches.get_one::<String>("severity").cloned(),
                 category: sub_matches.get_one::<String>("category").cloned(),
-                code: sub_matches.get_one::<String>("code").cloned(),
             };
             RuleCommand::Check(check_cmd)
         }
@@ -176,8 +174,7 @@ mod tests {
                     )
                     .arg(Arg::new("patterns").action(ArgAction::Append))
                     .arg(Arg::new("severity").short('s').long("severity"))
-                    .arg(Arg::new("category").short('c').long("category"))
-                    .arg(Arg::new("code").long("code")),
+                    .arg(Arg::new("category").short('c').long("category")),
             )
             .try_get_matches_from(["rule", "check", "file1.rs", "file2.rs"])
             .unwrap();
@@ -189,7 +186,6 @@ mod tests {
                 assert_eq!(check_cmd.patterns, vec!["file1.rs", "file2.rs"]);
                 assert_eq!(check_cmd.severity, None);
                 assert_eq!(check_cmd.category, None);
-                assert_eq!(check_cmd.code, None);
             }
             _ => panic!("Expected Check command"),
         }
@@ -208,8 +204,7 @@ mod tests {
                     )
                     .arg(Arg::new("patterns").action(ArgAction::Append))
                     .arg(Arg::new("severity").short('s').long("severity"))
-                    .arg(Arg::new("category").short('c').long("category"))
-                    .arg(Arg::new("code").long("code")),
+                    .arg(Arg::new("category").short('c').long("category")),
             )
             .try_get_matches_from([
                 "rule",
@@ -228,7 +223,6 @@ mod tests {
                 assert_eq!(check_cmd.patterns, vec!["file.rs"]);
                 assert_eq!(check_cmd.severity, Some("error".to_string()));
                 assert_eq!(check_cmd.category, Some("security".to_string()));
-                assert_eq!(check_cmd.code, None);
             }
             _ => panic!("Expected Check command"),
         }
@@ -274,7 +268,6 @@ mod tests {
             rule: Some(vec!["test-rule".to_string()]),
             severity: Some("error".to_string()),
             category: Some("security".to_string()),
-            code: None,
         };
 
         match RuleCommand::Check(check_cmd) {
@@ -283,7 +276,6 @@ mod tests {
                 assert_eq!(cmd.rule, Some(vec!["test-rule".to_string()]));
                 assert_eq!(cmd.severity, Some("error".to_string()));
                 assert_eq!(cmd.category, Some("security".to_string()));
-                assert_eq!(cmd.code, None);
             }
             _ => panic!("CheckCommand should match RuleCommand::Check"),
         }

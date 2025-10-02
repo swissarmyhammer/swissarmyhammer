@@ -1245,7 +1245,6 @@ Run rules against code files and report violations.
 
 ## Usage
   sah rule check <PATTERNS>... [OPTIONS]
-  sah rule check --code <CODE> --rule <RULE> [OPTIONS]
 
 ## Arguments
 
@@ -1253,7 +1252,6 @@ Run rules against code files and report violations.
 
 ## Options
 
-- --code <CODE> - Inline code snippet to check (alternative to file patterns)
 - --rule <NAME> - Only run specific rule(s) (can be used multiple times)
 - --severity <LEVEL> - Filter by severity level (error, warning, info, hint)
 - --category <CAT> - Filter by category
@@ -1268,9 +1266,6 @@ Run rules against code files and report violations.
 
   # Check with specific rule
   sah rule check --rule no-hardcoded-secrets \"**/*.rs\"
-
-  # Check inline code with specific rule
-  sah rule check --code 'fn main() { let key = \"sk-1234\"; }' --rule no-hardcoded-secrets
 
   # Check only errors
   sah rule check --severity error \"**/*.rs\"
@@ -1289,12 +1284,6 @@ Run rules against code files and report violations.
                             .help("Glob patterns for files to check")
                             .value_name("PATTERNS")
                             .action(ArgAction::Append),
-                    )
-                    .arg(
-                        Arg::new("code")
-                            .long("code")
-                            .help("Inline code snippet to check")
-                            .value_name("CODE"),
                     )
                     .arg(
                         Arg::new("rule")

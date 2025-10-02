@@ -76,14 +76,12 @@ Options:
   -r, --rule NAME        Check only specific rules (can be repeated)
   -s, --severity LEVEL   Filter by severity: error, warning, info
   -c, --category CAT     Filter by category: security, style, performance, correctness
-  --code CODE            Check inline code instead of files (requires --rule)
 
 Examples:
   sah rule check "**/*.rs"                    # Check all Rust files
   sah rule check --severity error "src/**/*.rs" # Only error-level rules
   sah rule check --rule no-unwrap "*.rs"      # Check specific rule
   sah rule check --category security "**/*.rs" # Only security rules
-  sah rule check --code "fn main() { panic!() }" --rule no-panic # Check inline code
 
 CHECK BEHAVIOR
 
@@ -108,9 +106,6 @@ COMMON WORKFLOWS
 
 4. Check specific concerns:
    sah rule check --category security --severity error "**/*.rs"
-
-5. Test a rule against inline code:
-   sah rule check --code "let x = vec![1]; x[0];" --rule bounds-checking
 
 Use global arguments to control output:
   --verbose         Show detailed information and descriptions
