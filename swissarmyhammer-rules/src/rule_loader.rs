@@ -181,6 +181,9 @@ impl RuleLoader {
 
         let mut rule = if let Some(ref metadata_value) = metadata {
             // Parse severity from metadata
+            // Default to Warning when frontmatter exists but severity is not specified
+            // This assumes the author intentionally added frontmatter and would have
+            // specified Error if they wanted it, so Warning is a safer default
             let severity = metadata_value
                 .get("severity")
                 .and_then(|v| v.as_str())
@@ -189,7 +192,9 @@ impl RuleLoader {
 
             Rule::new(name.to_string(), template.clone(), severity)
         } else {
-            // No metadata, default to Error severity
+            // No frontmatter at all - default to Error severity
+            // Rules without frontmatter are considered more critical and should
+            // fail loudly to ensure they are properly configured with metadata
             Rule::new(name.to_string(), template.clone(), Severity::Error)
         };
 
@@ -500,7 +505,10 @@ Check something
         let rule = loader.load_from_string("test", content).unwrap();
         assert_eq!(rule.name, "test");
         assert_eq!(rule.severity, Severity::Warning); // Default when frontmatter exists but no severity
-        assert_eq!(rule.description, Some("Rule with frontmatter but no severity field".to_string()));
+        assert_eq!(
+            rule.description,
+            Some("Rule with frontmatter but no severity field".to_string())
+        );
     }
 
     #[test]

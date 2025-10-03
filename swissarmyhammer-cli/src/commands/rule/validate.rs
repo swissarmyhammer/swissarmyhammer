@@ -16,6 +16,9 @@ pub async fn execute_validate_command(cmd: ValidateCommand, context: &CliContext
     let mut all_rules = Vec::new();
     resolver.load_all_rules(&mut all_rules)?;
 
+    // Filter out partials - they are not standalone rules
+    all_rules.retain(|r| !r.is_partial());
+
     // Filter rules if specific rule name or file requested
     let rules_to_validate: Vec<&Rule> = if let Some(ref rule_name) = cmd.rule_name {
         all_rules.iter().filter(|r| r.name == *rule_name).collect()
@@ -246,6 +249,81 @@ Check for test issues
         };
 
         // Should succeed when validating a specific valid rule
+        let result = execute_validate_command(cmd, &context).await;
+
+        // Restore original directory
+        std::env::set_current_dir(original_dir).unwrap();
+
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_validate_excludes_partials() {
+        use std::fs;
+        use tempfile::TempDir;
+
+        // Create a temporary directory with rules and partials
+        let temp_dir = TempDir::new().unwrap();
+        let git_dir = temp_dir.path().join(".git");
+        fs::create_dir_all(&git_dir).unwrap();
+
+        let local_rules_dir = temp_dir.path().join(".swissarmyhammer").join("rules");
+        fs::create_dir_all(&local_rules_dir).unwrap();
+
+        // Create a normal rule
+        let rule_file = local_rules_dir.join("normal-rule.md");
+        fs::write(
+            &rule_file,
+            r#"---
+title: Normal Rule
+description: A normal rule for testing
+severity: error
+---
+
+Check for issues
+"#,
+        )
+        .unwrap();
+
+        // Create a partial
+        let partials_dir = local_rules_dir.join("_partials");
+        fs::create_dir_all(&partials_dir).unwrap();
+        let partial_file = partials_dir.join("test-partial.md");
+        fs::write(
+            &partial_file,
+            r#"{% partial %}
+
+This is a partial template
+"#,
+        )
+        .unwrap();
+
+        // Change to temp directory
+        let original_dir = std::env::current_dir().unwrap();
+        std::env::set_current_dir(temp_dir.path()).unwrap();
+
+        let template_context = TemplateContext::new();
+        let matches = clap::Command::new("test")
+            .try_get_matches_from(["test"])
+            .unwrap();
+        let context = CliContextBuilder::default()
+            .template_context(template_context)
+            .format(crate::cli::OutputFormat::Table)
+            .format_option(None)
+            .verbose(false)
+            .debug(false)
+            .quiet(true)
+            .matches(matches)
+            .build_async()
+            .await
+            .unwrap();
+
+        let cmd = ValidateCommand {
+            rule_name: None,
+            file: None,
+        };
+
+        // Should succeed and only validate the normal rule, not the partial
         let result = execute_validate_command(cmd, &context).await;
 
         // Restore original directory
