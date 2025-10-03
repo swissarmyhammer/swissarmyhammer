@@ -189,8 +189,8 @@ impl RuleLoader {
 
             Rule::new(name.to_string(), template.clone(), severity)
         } else {
-            // No metadata, default to info severity for partials
-            Rule::new(name.to_string(), template.clone(), Severity::Info)
+            // No metadata, default to Error severity
+            Rule::new(name.to_string(), template.clone(), Severity::Error)
         };
 
         // Parse metadata fields
@@ -436,7 +436,7 @@ Check for test issues
 
         let rule = loader.load_from_string("simple", content).unwrap();
         assert_eq!(rule.name, "simple");
-        assert_eq!(rule.severity, Severity::Info); // Default for no metadata
+        assert_eq!(rule.severity, Severity::Error); // Default for no metadata
         assert_eq!(rule.template, "Just some content without frontmatter");
     }
 
@@ -484,5 +484,33 @@ Fix this automatically
         let loader = RuleLoader::new();
         let result = loader.load_directory("/nonexistent/path");
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_load_from_string_frontmatter_without_severity() {
+        let loader = RuleLoader::new();
+        let content = r#"---
+title: Test Rule Without Severity
+description: Rule with frontmatter but no severity field
+---
+
+Check something
+"#;
+
+        let rule = loader.load_from_string("test", content).unwrap();
+        assert_eq!(rule.name, "test");
+        assert_eq!(rule.severity, Severity::Warning); // Default when frontmatter exists but no severity
+        assert_eq!(rule.description, Some("Rule with frontmatter but no severity field".to_string()));
+    }
+
+    #[test]
+    fn test_load_from_string_no_frontmatter_defaults_to_error() {
+        let loader = RuleLoader::new();
+        let content = "Check for security issues in the code";
+
+        let rule = loader.load_from_string("security-check", content).unwrap();
+        assert_eq!(rule.name, "security-check");
+        assert_eq!(rule.severity, Severity::Error); // No frontmatter defaults to Error
+        assert_eq!(rule.template, "Check for security issues in the code");
     }
 }
