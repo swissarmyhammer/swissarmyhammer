@@ -33,6 +33,8 @@ nonzero_ext.workspace = true
 # File system operations
 walkdir.workspace = true
 dirs.workspace = true
+glob.workspace = true
+ignore.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

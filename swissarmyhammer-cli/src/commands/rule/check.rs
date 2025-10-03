@@ -4,9 +4,9 @@
 
 use crate::context::CliContext;
 use crate::error::{CliError, CliResult};
-use ignore::WalkBuilder;
 use std::path::PathBuf;
 use std::sync::Arc;
+use swissarmyhammer_common::glob_utils::{expand_glob_patterns as common_expand_glob_patterns, GlobExpansionConfig};
 use swissarmyhammer_rules::{RuleChecker, RuleResolver, Severity};
 use swissarmyhammer_workflow::{
     AgentExecutionContext, AgentExecutor, AgentExecutorFactory, WorkflowTemplateContext,
@@ -14,141 +14,11 @@ use swissarmyhammer_workflow::{
 
 use super::cli::CheckCommand;
 
-/// Maximum number of files to return from glob expansion
-const MAX_FILES: usize = 10_000;
-
 /// Expand glob patterns to file paths with gitignore support
 fn expand_glob_patterns(patterns: &[String]) -> CliResult<Vec<PathBuf>> {
-    let mut target_files = Vec::new();
-    let current_dir = std::env::current_dir()
-        .map_err(|e| CliError::new(format!("Failed to get current directory: {}", e), 1))?;
-
-    for pattern in patterns {
-        // Check if this is a direct file or directory path
-        let path = PathBuf::from(pattern);
-        if path.is_file() {
-            target_files.push(path);
-            continue;
-        } else if path.is_dir() {
-            // Use WalkBuilder to respect gitignore when walking directories
-            let walker = WalkBuilder::new(&path)
-                .git_ignore(true)
-                .git_global(true)
-                .git_exclude(true)
-                .ignore(true)
-                .parents(true)
-                .hidden(false)
-                .build();
-
-            for entry in walker {
-                if target_files.len() >= MAX_FILES {
-                    break;
-                }
-                if let Ok(dir_entry) = entry {
-                    let entry_path = dir_entry.path();
-                    if entry_path.is_file() {
-                        target_files.push(entry_path.to_path_buf());
-                    }
-                }
-            }
-            continue;
-        }
-
-        // Otherwise treat as a glob pattern
-        let glob_pattern = if path.is_absolute() {
-            pattern.clone()
-        } else {
-            current_dir.join(pattern).to_string_lossy().to_string()
-        };
-
-        // Configure glob options
-        let mut glob_options = glob::MatchOptions::new();
-        glob_options.case_sensitive = false;
-        glob_options.require_literal_separator = false;
-        glob_options.require_literal_leading_dot = false;
-
-        // For patterns like **/*.rs, we need to use WalkBuilder with pattern matching
-        if pattern.contains("**") || pattern.contains('*') || pattern.contains('?') {
-            // Use WalkBuilder for gitignore support with glob pattern matching
-            let search_dir = if path.is_absolute() {
-                path.parent().unwrap_or(&current_dir).to_path_buf()
-            } else {
-                current_dir.clone()
-            };
-
-            let walker = WalkBuilder::new(&search_dir)
-                .git_ignore(true)
-                .git_global(true)
-                .git_exclude(true)
-                .ignore(true)
-                .parents(true)
-                .hidden(false)
-                .build();
-
-            // Compile glob pattern
-            let glob_pattern_obj = glob::Pattern::new(pattern).map_err(|e| {
-                CliError::new(format!("Invalid glob pattern '{}': {}", pattern, e), 1)
-            })?;
-
-            for entry in walker {
-                if target_files.len() >= MAX_FILES {
-                    break;
-                }
-                if let Ok(dir_entry) = entry {
-                    let entry_path = dir_entry.path();
-                    if !entry_path.is_file() {
-                        continue;
-                    }
-
-                    let mut matched = false;
-
-                    // For patterns like "*.txt", match against filename
-                    if !pattern.contains('/') && !pattern.starts_with("**") {
-                        if let Some(file_name) = entry_path.file_name() {
-                            if glob_pattern_obj
-                                .matches_with(&file_name.to_string_lossy(), glob_options)
-                            {
-                                matched = true;
-                            }
-                        }
-                    }
-
-                    // For patterns like "**/*.rs" or "src/**/*.py", match against relative path
-                    if !matched {
-                        if let Ok(relative_path) = entry_path.strip_prefix(&search_dir) {
-                            if glob_pattern_obj
-                                .matches_with(&relative_path.to_string_lossy(), glob_options)
-                            {
-                                matched = true;
-                            }
-                        }
-                    }
-
-                    if matched {
-                        target_files.push(entry_path.to_path_buf());
-                    }
-                }
-            }
-        } else {
-            // Use basic glob for simple patterns
-            let entries = glob::glob_with(&glob_pattern, glob_options).map_err(|e| {
-                CliError::new(format!("Invalid glob pattern '{}': {}", pattern, e), 1)
-            })?;
-
-            for entry in entries {
-                if target_files.len() >= MAX_FILES {
-                    break;
-                }
-                if let Ok(path) = entry {
-                    if path.is_file() {
-                        target_files.push(path);
-                    }
-                }
-            }
-        }
-    }
-
-    Ok(target_files)
+    let config = GlobExpansionConfig::default();
+    common_expand_glob_patterns(patterns, &config)
+        .map_err(|e| CliError::new(format!("Failed to expand glob patterns: {}", e), 1))
 }
 
 /// Execute the check command to verify code against rules
