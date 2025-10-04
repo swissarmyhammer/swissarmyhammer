@@ -318,12 +318,7 @@ impl RuleChecker {
                 response.content,
             );
 
-            tracing::warn!(
-                "Violation found in {} for rule {}: {}",
-                target_path.display(),
-                rule.name,
-                violation.message
-            );
+            tracing::warn!("{}", violation);
 
             Err(RuleError::Violation(violation).into())
         }

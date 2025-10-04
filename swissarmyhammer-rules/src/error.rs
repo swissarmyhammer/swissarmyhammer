@@ -44,7 +44,7 @@ impl fmt::Display for RuleViolation {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "Rule '{}' violated in {} (severity: {}): {}",
+            "Violation\nRule: {}\nFile: {}\nSeverity: {}\nMessage: {}",
             self.rule_name,
             self.file_path.display(),
             self.severity,
