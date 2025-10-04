@@ -274,6 +274,7 @@ impl RuleChecker {
             target_path.display().to_string().into(),
         );
         check_context.set("language".to_string(), language.into());
+        check_context.set("rule_name".to_string(), rule.name.clone().into());
 
         let check_prompt_text = self
             .prompt_library
@@ -497,5 +498,70 @@ mod tests {
         let targets = vec![];
         let result = checker.check_all(rules, targets).await;
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_check_prompt_includes_rule_name() {
+        let agent = create_test_agent();
+        let checker = RuleChecker::new(agent).unwrap();
+
+        // Create a test rule with a specific name
+        let rule_name = "test-rule-name-123";
+        let rule = Rule::new(
+            rule_name.to_string(),
+            "Check for test violations".to_string(),
+            Severity::Error,
+        );
+
+        // Create a temp file
+        let temp_dir = TempDir::new().unwrap();
+        let test_file = temp_dir.path().join("test.rs");
+        std::fs::write(&test_file, "fn main() {}").unwrap();
+
+        // Build the check context as done in check_file
+        let target_content = std::fs::read_to_string(&test_file).unwrap();
+        let language = detect_language(&test_file, &target_content).unwrap();
+
+        // Stage 1: Render rule template
+        let mut rule_context = TemplateContext::new();
+        rule_context.set("target_content".to_string(), target_content.clone().into());
+        rule_context.set(
+            "target_path".to_string(),
+            test_file.display().to_string().into(),
+        );
+        rule_context.set("language".to_string(), language.clone().into());
+
+        let partial_adapter = crate::RulePartialAdapter::new(Arc::clone(&checker.rule_library));
+        let template_with_partials =
+            swissarmyhammer_templating::Template::with_partials(&rule.template, partial_adapter)
+                .unwrap();
+        let rendered_rule = template_with_partials
+            .render_with_context(&rule_context)
+            .unwrap();
+
+        // Stage 2: Build check context (this is what we're testing)
+        let mut check_context = TemplateContext::new();
+        check_context.set("rule_content".to_string(), rendered_rule.into());
+        check_context.set("target_content".to_string(), target_content.into());
+        check_context.set(
+            "target_path".to_string(),
+            test_file.display().to_string().into(),
+        );
+        check_context.set("language".to_string(), language.clone().into());
+        check_context.set("rule_name".to_string(), rule.name.clone().into());
+
+        // Render the .check prompt
+        let rendered_prompt = checker
+            .prompt_library
+            .render(".check", &check_context)
+            .unwrap();
+
+        // Verify the rule name appears in the rendered prompt
+        assert!(
+            rendered_prompt.contains(rule_name),
+            "Rendered check prompt should contain rule_name '{}', but got:\n{}",
+            rule_name,
+            rendered_prompt
+        );
     }
 }
