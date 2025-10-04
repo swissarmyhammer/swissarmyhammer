@@ -77,7 +77,7 @@ pub async fn execute_check_command(cmd: CheckCommand, context: &CliContext) -> C
     }
 
     if !context.quiet {
-        println!("✓ All {} rules are valid\n", rules.len());
+        println!("✓ All rules are valid\n");
     }
 
     // Phase 3: Apply filters

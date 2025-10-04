@@ -76,12 +76,12 @@ pub async fn execute_validate_command(cmd: ValidateCommand, context: &CliContext
 
     // Display results
     if !context.quiet {
-        if valid_count > 0 {
-            println!("✓ {} valid rule(s)", valid_count);
+        if valid_count > 0 && invalid_rules.is_empty() {
+            println!("✓ All rules valid");
         }
 
         if !invalid_rules.is_empty() {
-            println!("\n✗ {} invalid rule(s):\n", invalid_rules.len());
+            println!("✗ {} invalid rule(s):\n", invalid_rules.len());
 
             for (name, source, file_path, error) in &invalid_rules {
                 println!("  Rule: {}", name);

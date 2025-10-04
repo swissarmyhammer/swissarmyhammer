@@ -174,10 +174,7 @@ fn test_check_prompt_renders_with_parameters() {
         serde_json::json!("src/example.rs"),
     );
     template_context.set("language".to_string(), serde_json::json!("rust"));
-    template_context.set(
-        "rule_name".to_string(),
-        serde_json::json!("test-rule-name"),
-    );
+    template_context.set("rule_name".to_string(), serde_json::json!("test-rule-name"));
 
     // Render the .check prompt
     let rendered = library
