@@ -55,10 +55,14 @@ impl Default for GlobExpansionConfig {
 /// let config = GlobExpansionConfig::default();
 /// let files = expand_glob_patterns(&patterns, &config)?;
 /// ```
-pub fn expand_glob_patterns(patterns: &[String], config: &GlobExpansionConfig) -> Result<Vec<PathBuf>> {
+pub fn expand_glob_patterns(
+    patterns: &[String],
+    config: &GlobExpansionConfig,
+) -> Result<Vec<PathBuf>> {
     let mut target_files = Vec::new();
-    let current_dir = std::env::current_dir()
-        .map_err(|e| SwissArmyHammerError::Other { message: format!("Failed to get current directory: {}", e) })?;
+    let current_dir = std::env::current_dir().map_err(|e| SwissArmyHammerError::Other {
+        message: format!("Failed to get current directory: {}", e),
+    })?;
 
     for pattern in patterns {
         // Check if this is a direct file or directory path
@@ -123,9 +127,10 @@ pub fn expand_glob_patterns(patterns: &[String], config: &GlobExpansionConfig) -
                 .build();
 
             // Compile glob pattern
-            let glob_pattern_obj = glob::Pattern::new(pattern).map_err(|e| {
-                SwissArmyHammerError::Other { message: format!("Invalid glob pattern '{}': {}", pattern, e) }
-            })?;
+            let glob_pattern_obj =
+                glob::Pattern::new(pattern).map_err(|e| SwissArmyHammerError::Other {
+                    message: format!("Invalid glob pattern '{}': {}", pattern, e),
+                })?;
 
             for entry in walker {
                 if target_files.len() >= config.max_files {
@@ -169,7 +174,9 @@ pub fn expand_glob_patterns(patterns: &[String], config: &GlobExpansionConfig) -
         } else {
             // Use basic glob for simple patterns
             let entries = glob::glob_with(&glob_pattern, glob_options).map_err(|e| {
-                SwissArmyHammerError::Other { message: format!("Invalid glob pattern '{}': {}", pattern, e) }
+                SwissArmyHammerError::Other {
+                    message: format!("Invalid glob pattern '{}': {}", pattern, e),
+                }
             })?;
 
             for entry in entries {
@@ -236,8 +243,8 @@ pub fn validate_glob_pattern(pattern: &str) -> Result<()> {
     }
 
     // Validate pattern syntax by trying to compile it
-    glob::Pattern::new(pattern).map_err(|e| {
-        SwissArmyHammerError::Other { message: format!("Invalid glob pattern: {}", e) }
+    glob::Pattern::new(pattern).map_err(|e| SwissArmyHammerError::Other {
+        message: format!("Invalid glob pattern: {}", e),
     })?;
 
     Ok(())
@@ -254,8 +261,8 @@ pub fn validate_glob_pattern(pattern: &str) -> Result<()> {
 /// * `Ok(bool)` - True if the path matches the pattern
 /// * `Err` - If the pattern is invalid
 pub fn matches_glob_pattern(path: &Path, pattern: &str, case_sensitive: bool) -> Result<bool> {
-    let glob_pattern = glob::Pattern::new(pattern).map_err(|e| {
-        SwissArmyHammerError::Other { message: format!("Invalid glob pattern '{}': {}", pattern, e) }
+    let glob_pattern = glob::Pattern::new(pattern).map_err(|e| SwissArmyHammerError::Other {
+        message: format!("Invalid glob pattern '{}': {}", pattern, e),
     })?;
 
     let mut match_options = glob::MatchOptions::new();

@@ -6,7 +6,9 @@ use crate::context::CliContext;
 use crate::error::{CliError, CliResult};
 use std::path::PathBuf;
 use std::sync::Arc;
-use swissarmyhammer_common::glob_utils::{expand_glob_patterns as common_expand_glob_patterns, GlobExpansionConfig};
+use swissarmyhammer_common::glob_utils::{
+    expand_glob_patterns as common_expand_glob_patterns, GlobExpansionConfig,
+};
 use swissarmyhammer_rules::{RuleChecker, RuleResolver, Severity};
 use swissarmyhammer_workflow::{
     AgentExecutionContext, AgentExecutor, AgentExecutorFactory, WorkflowTemplateContext,
@@ -46,7 +48,6 @@ fn expand_glob_patterns(patterns: &[String]) -> CliResult<Vec<PathBuf>> {
 /// sah rule check --rule no-unwrap --category style "*.rs"
 /// ```
 pub async fn execute_check_command(cmd: CheckCommand, context: &CliContext) -> CliResult<()> {
-
     // Phase 1: Load all rules via RuleResolver
     if !context.quiet {
         println!("Loading rules...");
@@ -57,6 +58,9 @@ pub async fn execute_check_command(cmd: CheckCommand, context: &CliContext) -> C
     resolver
         .load_all_rules(&mut rules)
         .map_err(|e| CliError::new(format!("Failed to load rules: {}", e), 1))?;
+
+    // Filter out partials - they are not standalone rules
+    rules.retain(|r| !r.is_partial());
 
     // Phase 2: Validate all rules first (fail if any invalid)
     if !context.quiet {
@@ -477,5 +481,92 @@ mod tests {
         assert!(result.is_ok());
     }
 
+    #[tokio::test]
+    async fn test_execute_check_command_excludes_partials() {
+        use std::fs;
+        use tempfile::TempDir;
 
+        // Create a temporary directory with rules and partials
+        let temp_dir = TempDir::new().unwrap();
+        let git_dir = temp_dir.path().join(".git");
+        fs::create_dir_all(&git_dir).unwrap();
+
+        let local_rules_dir = temp_dir.path().join(".swissarmyhammer").join("rules");
+        fs::create_dir_all(&local_rules_dir).unwrap();
+
+        // Create a normal rule
+        let rule_file = local_rules_dir.join("normal-rule.md");
+        fs::write(
+            &rule_file,
+            r#"---
+title: Normal Rule
+description: A normal rule for testing
+severity: error
+---
+
+Check for issues
+"#,
+        )
+        .unwrap();
+
+        // Create a partial
+        let partials_dir = local_rules_dir.join("_partials");
+        fs::create_dir_all(&partials_dir).unwrap();
+        let partial_file = partials_dir.join("test-partial.md");
+        fs::write(
+            &partial_file,
+            r#"{% partial %}
+
+This is a partial template
+"#,
+        )
+        .unwrap();
+
+        // Create a test file to check
+        let test_file = temp_dir.path().join("test.rs");
+        fs::write(&test_file, "fn main() {}").unwrap();
+
+        // Change to temp directory
+        let original_dir = std::env::current_dir().unwrap();
+        std::env::set_current_dir(temp_dir.path()).unwrap();
+
+        let template_context = TemplateContext::new();
+        let matches = clap::Command::new("test")
+            .try_get_matches_from(["test"])
+            .unwrap();
+        let context = CliContextBuilder::default()
+            .template_context(template_context)
+            .format(crate::cli::OutputFormat::Table)
+            .format_option(None)
+            .verbose(false)
+            .debug(false)
+            .quiet(true)
+            .matches(matches)
+            .build_async()
+            .await
+            .unwrap();
+
+        let cmd = super::super::cli::CheckCommand {
+            patterns: vec!["test.rs".to_string()],
+            rule: None,
+            severity: None,
+            category: None,
+        };
+
+        // Should succeed - partials should be excluded from checking
+        // Since we can't run actual LLM checks in unit tests, we verify the command
+        // successfully loads rules without trying to check the partial
+        let result = execute_check_command(cmd, &context).await;
+
+        // Restore original directory
+        std::env::set_current_dir(original_dir).unwrap();
+
+        // Should succeed because partials are filtered out, leaving no rules to check
+        // The function returns Ok(()) early when no rules match after filtering
+        assert!(
+            result.is_ok(),
+            "Expected success when partials are filtered out, but got: {:?}",
+            result
+        );
+    }
 }
