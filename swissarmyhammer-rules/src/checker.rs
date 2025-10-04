@@ -303,8 +303,8 @@ impl RuleChecker {
 
         // Parse result - check for PASS or VIOLATION
         let result_text = response.content.trim();
-        if result_text == "PASS" {
-            tracing::debug!(
+        if result_text.starts_with("PASS") {
+            tracing::info!(
                 "Check passed for {} against rule {}",
                 target_path.display(),
                 rule.name
@@ -562,6 +562,52 @@ mod tests {
             "Rendered check prompt should contain rule_name '{}', but got:\n{}",
             rule_name,
             rendered_prompt
+        );
+    }
+
+    #[test]
+    fn test_pass_response_parsing_exact() {
+        let response_text = "PASS";
+        assert_eq!(response_text.trim(), "PASS");
+        assert!(
+            response_text.trim() == "PASS",
+            "Exact PASS should match with =="
+        );
+    }
+
+    #[test]
+    fn test_pass_response_parsing_with_explanation() {
+        let response_text =
+            "PASS\n\nThis is a Rust build script that generates code at compile time.";
+        let trimmed = response_text.trim();
+
+        // Current bug: this will fail with == but pass with starts_with
+        assert_ne!(
+            trimmed, "PASS",
+            "Multi-line PASS response should NOT equal exact 'PASS'"
+        );
+        assert!(
+            trimmed.starts_with("PASS"),
+            "Multi-line PASS response should start with 'PASS'"
+        );
+    }
+
+    #[test]
+    fn test_violation_response_parsing() {
+        let response_text = "VIOLATION\n\nFound TODO comment on line 5";
+        let trimmed = response_text.trim();
+
+        assert_ne!(
+            trimmed, "PASS",
+            "VIOLATION response should not equal 'PASS'"
+        );
+        assert!(
+            !trimmed.starts_with("PASS"),
+            "VIOLATION response should not start with 'PASS'"
+        );
+        assert!(
+            trimmed.starts_with("VIOLATION"),
+            "VIOLATION response should start with 'VIOLATION'"
         );
     }
 }
