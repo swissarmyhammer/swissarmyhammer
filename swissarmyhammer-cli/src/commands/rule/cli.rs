@@ -37,6 +37,21 @@ pub struct CheckCommand {
     pub category: Option<String>,
 }
 
+/// Cache command for managing the rule evaluation cache.
+///
+/// This command provides operations for managing the cache of rule evaluation results.
+#[derive(Debug)]
+pub struct CacheCommand {
+    pub action: CacheAction,
+}
+
+/// Actions available for cache management
+#[derive(Debug)]
+pub enum CacheAction {
+    /// Clear all cache entries
+    Clear,
+}
+
 /// Command enum representing all available rule subcommands.
 ///
 /// This enum wraps all rule-related commands and provides type-safe
@@ -47,6 +62,7 @@ pub enum RuleCommand {
     List(ListCommand),
     Validate(ValidateCommand),
     Check(CheckCommand),
+    Cache(CacheCommand),
 }
 
 /// Parse clap matches into strongly-typed command structs.
@@ -92,6 +108,17 @@ pub fn parse_rule_command(matches: &ArgMatches) -> RuleCommand {
                 category: sub_matches.get_one::<String>("category").cloned(),
             };
             RuleCommand::Check(check_cmd)
+        }
+        Some(("cache", sub_matches)) => {
+            match sub_matches.subcommand() {
+                Some(("clear", _)) => RuleCommand::Cache(CacheCommand {
+                    action: CacheAction::Clear,
+                }),
+                _ => {
+                    // Default to list when no valid cache subcommand
+                    RuleCommand::List(ListCommand {})
+                }
+            }
         }
         _ => {
             // Default to list command when no subcommand is provided

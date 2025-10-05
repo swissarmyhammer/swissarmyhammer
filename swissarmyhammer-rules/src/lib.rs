@@ -16,6 +16,7 @@ use serde::{Deserialize, Serialize};
 use swissarmyhammer_common::SwissArmyHammerError;
 
 // Declare modules
+mod cache;
 mod checker;
 mod error;
 mod frontmatter;
@@ -29,6 +30,7 @@ mod severity;
 mod storage;
 
 // Re-export public types
+pub use cache::{CachedResult, RuleCache};
 pub use checker::RuleChecker;
 pub use error::{RuleError, RuleViolation};
 pub use frontmatter::{parse_frontmatter, FrontmatterResult};

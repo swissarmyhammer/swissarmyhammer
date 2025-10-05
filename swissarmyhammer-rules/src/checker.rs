@@ -6,7 +6,7 @@
 //! 3. Executes via AgentExecutor (ClaudeCode or LlamaAgent)
 //! 4. Parses responses and fails fast on violations
 
-use crate::{detect_language, Result, Rule, RuleError, RuleViolation, Severity};
+use crate::{detect_language, CachedResult, Result, Rule, RuleCache, RuleError, RuleViolation, Severity};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -62,6 +62,8 @@ pub struct RuleChecker {
     prompt_library: PromptLibrary,
     /// Rule library for partial template support (loaded once for performance)
     rule_library: Arc<crate::RuleLibrary>,
+    /// Cache for rule evaluation results
+    cache: RuleCache,
 }
 
 impl RuleChecker {
@@ -140,10 +142,16 @@ impl RuleChecker {
 
         tracing::debug!("Rule library loaded for partial support");
 
+        // Initialize cache
+        let cache = RuleCache::new().map_err(|e| {
+            RuleError::CheckError(format!("Failed to initialize cache: {}", e))
+        })?;
+
         Ok(Self {
             agent,
             prompt_library,
             rule_library: Arc::new(rule_library),
+            cache,
         })
     }
 
@@ -228,6 +236,46 @@ impl RuleChecker {
             ))
         })?;
 
+        // Calculate cache key from file content + rule template
+        let cache_key = RuleCache::calculate_cache_key(&target_content, &rule.template);
+
+        // Check cache before proceeding with LLM evaluation
+        if let Some(cached_result) = self.cache.get(&cache_key)? {
+            tracing::info!(
+                "Cache hit for {} against rule {} - skipping LLM call",
+                target_path.display(),
+                rule.name
+            );
+
+            // Return cached result
+            match cached_result {
+                CachedResult::Pass => {
+                    tracing::info!(
+                        "Cached check passed for {} against rule {}",
+                        target_path.display(),
+                        rule.name
+                    );
+                    return Ok(());
+                }
+                CachedResult::Violation { violation } => {
+                    // Log the violation with appropriate severity
+                    match violation.severity {
+                        Severity::Error => tracing::error!("{}", violation),
+                        Severity::Warning => tracing::warn!("{}", violation),
+                        Severity::Info => tracing::info!("{}", violation),
+                        Severity::Hint => tracing::debug!("{}", violation),
+                    }
+                    return Err(RuleError::Violation(violation).into());
+                }
+            }
+        }
+
+        tracing::debug!(
+            "Cache miss for {} against rule {} - proceeding with LLM check",
+            target_path.display(),
+            rule.name
+        );
+
         // Detect language from file extension/content
         let language = detect_language(target_path, &target_content)?;
         tracing::debug!("Detected language: {}", language);
@@ -309,6 +357,13 @@ impl RuleChecker {
                 target_path.display(),
                 rule.name
             );
+
+            // Cache the PASS result
+            let cached_result = CachedResult::Pass;
+            if let Err(e) = self.cache.store(&cache_key, &cached_result) {
+                tracing::warn!("Failed to cache result: {}", e);
+            }
+
             Ok(())
         } else {
             // Violation found - create RuleViolation and return error for fail-fast
@@ -324,6 +379,14 @@ impl RuleChecker {
                 Severity::Warning => tracing::warn!("{}", violation),
                 Severity::Info => tracing::info!("{}", violation),
                 Severity::Hint => tracing::debug!("{}", violation),
+            }
+
+            // Cache the VIOLATION result
+            let cached_result = CachedResult::Violation {
+                violation: violation.clone(),
+            };
+            if let Err(e) = self.cache.store(&cache_key, &cached_result) {
+                tracing::warn!("Failed to cache result: {}", e);
             }
 
             Err(RuleError::Violation(violation).into())
@@ -415,17 +478,20 @@ mod tests {
         Arc::new(LlamaAgentExecutorWrapper::new(config))
     }
 
+    fn create_test_checker() -> RuleChecker {
+        let agent = create_test_agent();
+        RuleChecker::new(agent).expect("Failed to create test checker")
+    }
+
     #[test]
     fn test_rule_checker_creation() {
-        let agent = create_test_agent();
-        let checker = RuleChecker::new(agent);
-        assert!(checker.is_ok());
+        let checker = create_test_checker();
+        assert!(checker.prompt_library.get(".check").is_ok());
     }
 
     #[test]
     fn test_rule_checker_creation_loads_check_prompt() {
-        let agent = create_test_agent();
-        let checker = RuleChecker::new(agent).unwrap();
+        let checker = create_test_checker();
 
         // Verify .check prompt is loaded
         let check_prompt = checker.prompt_library.get(".check");
@@ -437,8 +503,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_rule_checker_two_stage_rendering() {
-        let agent = create_test_agent();
-        let checker = RuleChecker::new(agent).unwrap();
+        let checker = create_test_checker();
 
         // Create a test rule with template variables
         let _rule = Rule::new(
@@ -472,8 +537,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_check_file_with_nonexistent_file() {
-        let agent = create_test_agent();
-        let checker = RuleChecker::new(agent).unwrap();
+        let checker = create_test_checker();
 
         let rule = Rule::new(
             "test-rule".to_string(),
@@ -490,8 +554,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_check_all_empty_lists() {
-        let agent = create_test_agent();
-        let mut checker = RuleChecker::new(agent).unwrap();
+        let mut checker = create_test_checker();
 
         // Initialize is required
         if checker.initialize().await.is_err() {
@@ -507,8 +570,7 @@ mod tests {
 
     #[test]
     fn test_check_prompt_includes_rule_name() {
-        let agent = create_test_agent();
-        let checker = RuleChecker::new(agent).unwrap();
+        let checker = create_test_checker();
 
         // Create a test rule with a specific name
         let rule_name = "test-rule-name-123";

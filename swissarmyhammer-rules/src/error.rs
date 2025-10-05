@@ -85,6 +85,9 @@ pub enum RuleError {
     /// Glob pattern expansion failed
     GlobExpansionError(String),
 
+    /// Cache operation failed
+    CacheError(String),
+
     /// Rule violation found (for fail-fast behavior)
     Violation(RuleViolation),
 }
@@ -102,6 +105,7 @@ impl fmt::Display for RuleError {
             RuleError::GlobExpansionError(msg) => {
                 write!(f, "Glob pattern expansion failed: {}", msg)
             }
+            RuleError::CacheError(msg) => write!(f, "Cache operation failed: {}", msg),
             RuleError::Violation(violation) => write!(f, "{}", violation),
         }
     }

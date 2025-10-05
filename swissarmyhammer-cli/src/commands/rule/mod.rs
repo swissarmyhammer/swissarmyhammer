@@ -2,6 +2,7 @@
 //!
 //! Manages and tests rules with support for listing, validating, and checking
 
+pub mod cache;
 pub mod check;
 pub mod cli;
 pub mod display;
@@ -43,6 +44,7 @@ async fn run_rule_command_typed(
             validate::execute_validate_command(validate_cmd, context).await
         }
         RuleCommand::Check(check_cmd) => check::execute_check_command(check_cmd, context).await,
+        RuleCommand::Cache(cache_cmd) => cache::execute_cache_command(cache_cmd, context).await,
     }
 }
 
