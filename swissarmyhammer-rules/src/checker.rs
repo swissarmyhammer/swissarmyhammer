@@ -6,7 +6,7 @@
 //! 3. Executes via AgentExecutor (ClaudeCode or LlamaAgent)
 //! 4. Parses responses and fails fast on violations
 
-use crate::{detect_language, Result, Rule, RuleError, RuleViolation};
+use crate::{detect_language, Result, Rule, RuleError, RuleViolation, Severity};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -319,7 +319,12 @@ impl RuleChecker {
                 response.content,
             );
 
-            tracing::warn!("{}", violation);
+            match violation.severity {
+                Severity::Error => tracing::error!("{}", violation),
+                Severity::Warning => tracing::warn!("{}", violation),
+                Severity::Info => tracing::info!("{}", violation),
+                Severity::Hint => tracing::debug!("{}", violation),
+            }
 
             Err(RuleError::Violation(violation).into())
         }
@@ -609,5 +614,32 @@ mod tests {
             trimmed.starts_with("VIOLATION"),
             "VIOLATION response should start with 'VIOLATION'"
         );
+    }
+
+    #[test]
+    fn test_violation_preserves_severity() {
+        use crate::RuleViolation;
+
+        // Test that RuleViolation preserves severity levels
+        let severities = vec![
+            Severity::Error,
+            Severity::Warning,
+            Severity::Info,
+            Severity::Hint,
+        ];
+
+        for severity in severities {
+            let violation = RuleViolation::new(
+                "test-rule".to_string(),
+                PathBuf::from("test.rs"),
+                severity,
+                "Test violation".to_string(),
+            );
+
+            assert_eq!(
+                violation.severity, severity,
+                "Violation should preserve severity level"
+            );
+        }
     }
 }

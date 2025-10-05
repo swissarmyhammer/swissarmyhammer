@@ -300,7 +300,7 @@ mod tests {
     fn test_rule_violation_error() {
         let error = SwissArmyHammerError::rule_violation("test violation".to_string());
         match error {
-            SwissArmyHammerError::RuleViolation(msg) => {
+            SwissArmyHammerError::RuleViolation(ref msg) => {
                 assert_eq!(msg, "test violation");
             }
             _ => panic!("Expected RuleViolation variant"),
