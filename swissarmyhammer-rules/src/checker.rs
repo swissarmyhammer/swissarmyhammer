@@ -107,7 +107,7 @@ impl RuleChecker {
     /// # }
     /// ```
     pub fn new(agent: Arc<dyn AgentExecutor>) -> Result<Self> {
-        tracing::info!("Creating RuleChecker");
+        tracing::trace!("Creating RuleChecker");
 
         // Load all prompts including the builtin .check prompt
         let mut prompt_library = PromptLibrary::new();

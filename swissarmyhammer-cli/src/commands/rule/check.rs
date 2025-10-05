@@ -49,10 +49,6 @@ fn expand_glob_patterns(patterns: &[String]) -> CliResult<Vec<PathBuf>> {
 /// ```
 pub async fn execute_check_command(cmd: CheckCommand, context: &CliContext) -> CliResult<()> {
     // Phase 1: Load all rules via RuleResolver
-    if !context.quiet {
-        println!("Loading rules...");
-    }
-
     let mut rules = Vec::new();
     let mut resolver = RuleResolver::new();
     resolver
@@ -63,9 +59,6 @@ pub async fn execute_check_command(cmd: CheckCommand, context: &CliContext) -> C
     rules.retain(|r| !r.is_partial());
 
     // Phase 2: Validate all rules first (fail if any invalid)
-    if !context.quiet {
-        println!("Validating rules...");
-    }
 
     for rule in &rules {
         rule.validate().map_err(|e| {
@@ -74,10 +67,6 @@ pub async fn execute_check_command(cmd: CheckCommand, context: &CliContext) -> C
                 1,
             )
         })?;
-    }
-
-    if !context.quiet {
-        println!("✓ All rules are valid\n");
     }
 
     // Phase 3: Apply filters
@@ -107,18 +96,7 @@ pub async fn execute_check_command(cmd: CheckCommand, context: &CliContext) -> C
     let target_files = expand_glob_patterns(&cmd.patterns)?;
 
     if target_files.is_empty() {
-        if !context.quiet {
-            println!("No files matched the patterns");
-        }
         return Ok(());
-    }
-
-    if !context.quiet {
-        println!(
-            "Checking {} rules against {} files...\n",
-            rules.len(),
-            target_files.len()
-        );
     }
 
     // Phase 5: Create RuleChecker with agent from configuration
@@ -145,22 +123,14 @@ pub async fn execute_check_command(cmd: CheckCommand, context: &CliContext) -> C
 
     // Phase 6: Run check_all with fail-fast behavior
     match checker.check_all(rules, target_files).await {
-        Ok(()) => {
-            if !context.quiet {
-                println!("✅ All checks passed");
-            }
-            Ok(())
-        }
+        Ok(()) => Ok(()),
         Err(e) => {
             // Check if this is a violation error by looking for the pattern
             // RuleViolation displays as "Rule 'name' violated in path (severity: level): message"
             let error_string = e.to_string();
             if error_string.contains("violated in") && error_string.contains("(severity:") {
-                eprintln!("❌ Rule violation found:");
-                eprintln!("{}", error_string);
                 Err(CliError::new("Rule violation found".to_string(), 1))
             } else {
-                eprintln!("❌ Check failed: {}", e);
                 Err(CliError::new(format!("Check failed: {}", e), 1))
             }
         }
