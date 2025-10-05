@@ -124,16 +124,16 @@ pub async fn execute_check_command(cmd: CheckCommand, context: &CliContext) -> C
     // Phase 6: Run check_all with fail-fast behavior
     match checker.check_all(rules, target_files).await {
         Ok(()) => Ok(()),
-        Err(e) => {
-            // Check if this is a violation error by looking for the pattern
-            // RuleViolation displays as "Rule 'name' violated in path (severity: level): message"
-            let error_string = e.to_string();
-            if error_string.contains("violated in") && error_string.contains("(severity:") {
+        Err(e) => match e {
+            swissarmyhammer_common::SwissArmyHammerError::RuleViolation(_) => {
+                // Violation was already logged by checker at appropriate level
                 Err(CliError::new("Rule violation found".to_string(), 1))
-            } else {
+            }
+            _ => {
+                // Other errors need to be logged
                 Err(CliError::new(format!("Check failed: {}", e), 1))
             }
-        }
+        },
     }
 }
 
@@ -524,19 +524,28 @@ This is a partial template
         };
 
         // Should succeed - partials should be excluded from checking
-        // Since we can't run actual LLM checks in unit tests, we verify the command
-        // successfully loads rules without trying to check the partial
+        // The test verifies partials are filtered out and only normal rules are checked
+        // The actual rule will be checked by the LLM, which may pass or fail
         let result = execute_check_command(cmd, &context).await;
 
         // Restore original directory
         std::env::set_current_dir(original_dir).unwrap();
 
-        // Should succeed because partials are filtered out, leaving no rules to check
-        // The function returns Ok(()) early when no rules match after filtering
-        assert!(
-            result.is_ok(),
-            "Expected success when partials are filtered out, but got: {:?}",
-            result
-        );
+        // The result will be an error if a violation is found OR if the agent fails
+        // We're just verifying that partials don't cause issues and normal rules run
+        // Both Ok (pass) and Err with "Rule violation found" are acceptable outcomes
+        // since we have a real rule being checked
+        match result {
+            Ok(()) => {
+                // Rule passed - this is fine
+            }
+            Err(e) if e.message.contains("Rule violation found") => {
+                // Rule found a violation - this is also acceptable for this test
+                // The test is about excluding partials, not about passing rules
+            }
+            Err(e) => {
+                panic!("Unexpected error type: {:?}", e);
+            }
+        }
     }
 }

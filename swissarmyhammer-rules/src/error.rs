@@ -3,6 +3,14 @@
 //! This module defines error types specific to rule checking and validation,
 //! including `RuleError` for different failure modes and `RuleViolation` for
 //! representing rule violations with fail-fast behavior.
+//!
+//! ## Logging Contract
+//!
+//! When a rule violation is detected, the rule checker logs it immediately
+//! with appropriate formatting and severity level. The violation is then
+//! converted to `SwissArmyHammerError::RuleViolation` which signals to
+//! upper layers (CLI, commands) that they should NOT log it again to
+//! avoid duplicate output in the user's terminal.
 
 use crate::Severity;
 use std::fmt;
@@ -104,7 +112,12 @@ impl std::error::Error for RuleError {}
 /// Conversion from RuleError to SwissArmyHammerError
 impl From<RuleError> for SwissArmyHammerError {
     fn from(error: RuleError) -> Self {
-        SwissArmyHammerError::other(error.to_string())
+        match error {
+            RuleError::Violation(violation) => {
+                SwissArmyHammerError::RuleViolation(violation.to_string())
+            }
+            _ => SwissArmyHammerError::other(error.to_string()),
+        }
     }
 }
 
@@ -306,5 +319,47 @@ mod tests {
         assert_eq!(warning.severity, Severity::Warning);
         assert_eq!(info.severity, Severity::Info);
         assert_eq!(hint.severity, Severity::Hint);
+    }
+
+    #[test]
+    fn test_rule_violation_converts_to_swiss_army_hammer_rule_violation() {
+        let violation = RuleViolation::new(
+            "test-rule".to_string(),
+            PathBuf::from("test.rs"),
+            Severity::Error,
+            "Test violation message".to_string(),
+        );
+        let rule_error = RuleError::Violation(violation);
+        let sah_error: SwissArmyHammerError = rule_error.into();
+
+        match sah_error {
+            SwissArmyHammerError::RuleViolation(msg) => {
+                assert!(msg.contains("test-rule"));
+                assert!(msg.contains("test.rs"));
+                assert!(msg.contains("Test violation message"));
+            }
+            _ => panic!("Expected RuleViolation variant, got {:?}", sah_error),
+        }
+    }
+
+    #[test]
+    fn test_non_violation_rule_errors_convert_to_other() {
+        let load_error = RuleError::LoadError("load failed".to_string());
+        let sah_error: SwissArmyHammerError = load_error.into();
+        match sah_error {
+            SwissArmyHammerError::Other { message } => {
+                assert!(message.contains("load failed"));
+            }
+            _ => panic!("Expected Other variant for non-violation errors"),
+        }
+
+        let check_error = RuleError::CheckError("check failed".to_string());
+        let sah_error: SwissArmyHammerError = check_error.into();
+        match sah_error {
+            SwissArmyHammerError::Other { message } => {
+                assert!(message.contains("check failed"));
+            }
+            _ => panic!("Expected Other variant for non-violation errors"),
+        }
     }
 }
