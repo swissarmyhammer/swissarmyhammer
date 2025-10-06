@@ -3,6 +3,17 @@
 //! This module provides caching for rule evaluation results to avoid re-checking
 //! unchanged file/rule pairs. Cache keys are SHA-256 hashes of file content + rule template,
 //! ensuring automatic invalidation when either changes.
+//!
+//! ## Cache Key Strategy
+//!
+//! The cache uses SHA-256 hashes rather than file timestamps or modification times because:
+//! - **Git operations** can reset file timestamps, causing false cache misses
+//! - **File system operations** (copy, move) can preserve or modify timestamps unpredictably
+//! - **Content-based hashing** provides deterministic cache keys that only change when actual content changes
+//! - **Rule template inclusion** ensures cache invalidation when rule definitions are updated
+//!
+//! This approach trades a small hash computation cost for reliable cache behavior across
+//! different workflows and environments.
 
 use crate::{Result, RuleError, RuleViolation, Severity};
 use chrono::{DateTime, Utc};
@@ -191,19 +202,13 @@ impl RuleCache {
         }
 
         // Read and parse cache file
-        let content = fs::read_to_string(&cache_file).map_err(|e| {
-            RuleError::CacheError(format!("Failed to read cache file: {}", e))
-        })?;
+        let content = fs::read_to_string(&cache_file)
+            .map_err(|e| RuleError::CacheError(format!("Failed to read cache file: {}", e)))?;
 
-        let entry: CacheEntry = serde_json::from_str(&content).map_err(|e| {
-            RuleError::CacheError(format!("Failed to parse cache file: {}", e))
-        })?;
+        let entry: CacheEntry = serde_json::from_str(&content)
+            .map_err(|e| RuleError::CacheError(format!("Failed to parse cache file: {}", e)))?;
 
-        tracing::debug!(
-            "Cache hit for key: {} (cached at {})",
-            key,
-            entry.timestamp
-        );
+        tracing::debug!("Cache hit for key: {} (cached at {})", key, entry.timestamp);
 
         Ok(Some(entry.result.into()))
     }
@@ -230,9 +235,8 @@ impl RuleCache {
             RuleError::CacheError(format!("Failed to serialize cache entry: {}", e))
         })?;
 
-        fs::write(&cache_file, content).map_err(|e| {
-            RuleError::CacheError(format!("Failed to write cache file: {}", e))
-        })?;
+        fs::write(&cache_file, content)
+            .map_err(|e| RuleError::CacheError(format!("Failed to write cache file: {}", e)))?;
 
         tracing::debug!("Cached result for key: {}", key);
 
@@ -258,9 +262,9 @@ impl RuleCache {
 
         let mut count = 0;
 
-        for entry in fs::read_dir(&self.cache_dir).map_err(|e| {
-            RuleError::CacheError(format!("Failed to read cache directory: {}", e))
-        })? {
+        for entry in fs::read_dir(&self.cache_dir)
+            .map_err(|e| RuleError::CacheError(format!("Failed to read cache directory: {}", e)))?
+        {
             let entry = entry.map_err(|e| {
                 RuleError::CacheError(format!("Failed to read directory entry: {}", e))
             })?;

@@ -6,7 +6,9 @@
 //! 3. Executes via AgentExecutor (ClaudeCode or LlamaAgent)
 //! 4. Parses responses and fails fast on violations
 
-use crate::{detect_language, CachedResult, Result, Rule, RuleCache, RuleError, RuleViolation, Severity};
+use crate::{
+    detect_language, CachedResult, Result, Rule, RuleCache, RuleError, RuleViolation, Severity,
+};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -143,9 +145,8 @@ impl RuleChecker {
         tracing::debug!("Rule library loaded for partial support");
 
         // Initialize cache
-        let cache = RuleCache::new().map_err(|e| {
-            RuleError::CheckError(format!("Failed to initialize cache: {}", e))
-        })?;
+        let cache = RuleCache::new()
+            .map_err(|e| RuleError::CheckError(format!("Failed to initialize cache: {}", e)))?;
 
         Ok(Self {
             agent,
@@ -265,7 +266,20 @@ impl RuleChecker {
                         Severity::Info => tracing::info!("{}", violation),
                         Severity::Hint => tracing::debug!("{}", violation),
                     }
-                    return Err(RuleError::Violation(violation).into());
+
+                    // Apply same severity-based behavior as fresh evaluation
+                    // Only fail-fast for Error severity
+                    match violation.severity {
+                        Severity::Error => return Err(RuleError::Violation(violation).into()),
+                        Severity::Warning | Severity::Info | Severity::Hint => {
+                            tracing::debug!(
+                                "Cached non-error violation logged, continuing execution: {} in {}",
+                                violation.rule_name,
+                                target_path.display()
+                            );
+                            return Ok(());
+                        }
+                    }
                 }
             }
         }
@@ -366,7 +380,7 @@ impl RuleChecker {
 
             Ok(())
         } else {
-            // Violation found - create RuleViolation and return error for fail-fast
+            // Violation found - create RuleViolation
             let violation = RuleViolation::new(
                 rule.name.clone(),
                 target_path.to_path_buf(),
@@ -374,6 +388,7 @@ impl RuleChecker {
                 response.content,
             );
 
+            // Log the violation at appropriate level
             match violation.severity {
                 Severity::Error => tracing::error!("{}", violation),
                 Severity::Warning => tracing::warn!("{}", violation),
@@ -389,7 +404,19 @@ impl RuleChecker {
                 tracing::warn!("Failed to cache result: {}", e);
             }
 
-            Err(RuleError::Violation(violation).into())
+            // Only fail-fast for Error severity
+            // Warnings, Info, and Hint are logged but don't stop execution
+            match violation.severity {
+                Severity::Error => Err(RuleError::Violation(violation).into()),
+                Severity::Warning | Severity::Info | Severity::Hint => {
+                    tracing::debug!(
+                        "Non-error violation logged, continuing execution: {} in {}",
+                        violation.rule_name,
+                        target_path.display()
+                    );
+                    Ok(())
+                }
+            }
         }
     }
 
