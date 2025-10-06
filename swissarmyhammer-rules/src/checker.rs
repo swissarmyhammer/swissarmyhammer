@@ -12,9 +12,69 @@ use crate::{
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use swissarmyhammer_common::glob_utils::{expand_glob_patterns, GlobExpansionConfig};
 use swissarmyhammer_config::TemplateContext;
 use swissarmyhammer_prompts::{PromptLibrary, PromptResolver};
 use swissarmyhammer_workflow::{AgentExecutionContext, AgentExecutor};
+
+/// Request structure for rule checking with filtering and pattern expansion
+///
+/// This provides a high-level API for checking rules that handles:
+/// - Rule loading and filtering
+/// - Glob pattern expansion
+/// - Validation
+///
+/// # Examples
+///
+/// ```no_run
+/// use swissarmyhammer_rules::RuleCheckRequest;
+///
+/// // Check all rules against Rust files
+/// let request = RuleCheckRequest {
+///     rule_names: None,
+///     severity: None,
+///     category: None,
+///     patterns: vec!["**/*.rs".to_string()],
+/// };
+/// ```
+#[derive(Debug, Clone)]
+pub struct RuleCheckRequest {
+    /// Optional list of rule names to check (None = all rules)
+    pub rule_names: Option<Vec<String>>,
+    /// Optional severity filter
+    pub severity: Option<Severity>,
+    /// Optional category filter
+    pub category: Option<String>,
+    /// File paths or glob patterns to check
+    pub patterns: Vec<String>,
+}
+
+/// Result structure from rule checking operations
+///
+/// Contains statistics and violation information from a check operation.
+///
+/// # Examples
+///
+/// ```no_run
+/// use swissarmyhammer_rules::RuleCheckResult;
+///
+/// fn handle_result(result: RuleCheckResult) {
+///     println!("Checked {} rules against {} files", 
+///              result.rules_checked, result.files_checked);
+///     if !result.violations.is_empty() {
+///         println!("Found {} violations", result.violations.len());
+///     }
+/// }
+/// ```
+#[derive(Debug, Clone)]
+pub struct RuleCheckResult {
+    /// Number of rules checked
+    pub rules_checked: usize,
+    /// Number of files checked
+    pub files_checked: usize,
+    /// List of violations found (empty if all checks passed)
+    pub violations: Vec<RuleViolation>,
+}
 
 /// Core rule checker that performs two-stage rendering and executes checks via LLM agent
 ///
@@ -490,6 +550,137 @@ impl RuleChecker {
         tracing::info!("All checks passed");
         Ok(())
     }
+
+    /// High-level API for checking rules with filtering and pattern expansion
+    ///
+    /// This method provides a complete rule checking workflow:
+    /// 1. Loads all rules via RuleResolver
+    /// 2. Filters rules by name, severity, and category
+    /// 3. Validates all rules
+    /// 4. Expands glob patterns to file paths
+    /// 5. Executes checks via check_all
+    /// 6. Returns structured results
+    ///
+    /// # Arguments
+    ///
+    /// * `request` - RuleCheckRequest with filters and patterns
+    ///
+    /// # Returns
+    ///
+    /// Returns a RuleCheckResult with statistics and any violations found.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - Rule loading fails
+    /// - Rule validation fails
+    /// - Pattern expansion fails
+    /// - Check execution fails
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use swissarmyhammer_rules::{RuleChecker, RuleCheckRequest};
+    /// # use swissarmyhammer_workflow::{WorkflowTemplateContext, AgentExecutorFactory, AgentExecutionContext};
+    /// # use std::sync::Arc;
+    /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+    /// # let workflow_context = WorkflowTemplateContext::load_with_agent_config()?;
+    /// # let agent_context = AgentExecutionContext::new(&workflow_context);
+    /// # let mut executor = AgentExecutorFactory::create_executor(&agent_context).await?;
+    /// # executor.initialize().await?;
+    /// # let agent = Arc::from(executor);
+    /// # let mut checker = RuleChecker::new(agent)?;
+    /// # checker.initialize().await?;
+    /// let request = RuleCheckRequest {
+    ///     rule_names: None,
+    ///     severity: None,
+    ///     category: None,
+    ///     patterns: vec!["**/*.rs".to_string()],
+    /// };
+    /// let result = checker.check_with_filters(request).await?;
+    /// println!("Checked {} files", result.files_checked);
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn check_with_filters(&self, request: RuleCheckRequest) -> Result<RuleCheckResult> {
+        tracing::info!("Starting rule check with filters");
+
+        // Phase 1: Load all rules via RuleResolver
+        let mut rules = Vec::new();
+        let mut resolver = crate::RuleResolver::new();
+        resolver
+            .load_all_rules(&mut rules)
+            .map_err(|e| RuleError::CheckError(format!("Failed to load rules: {}", e)))?;
+
+        // Filter out partials - they are not standalone rules
+        rules.retain(|r| !r.is_partial());
+
+        // Phase 2: Validate all rules first (fail if any invalid)
+        for rule in &rules {
+            rule.validate().map_err(|e| {
+                RuleError::CheckError(format!("Rule validation failed for '{}': {}", rule.name, e))
+            })?;
+        }
+
+        // Phase 3: Apply filters
+        if let Some(rule_names) = &request.rule_names {
+            rules.retain(|r| rule_names.contains(&r.name));
+        }
+
+        if let Some(severity) = &request.severity {
+            rules.retain(|r| &r.severity == severity);
+        }
+
+        if let Some(category) = &request.category {
+            rules.retain(|r| r.category.as_ref() == Some(category));
+        }
+
+        let rules_checked = rules.len();
+
+        if rules.is_empty() {
+            tracing::info!("No rules matched the filters");
+            return Ok(RuleCheckResult {
+                rules_checked: 0,
+                files_checked: 0,
+                violations: Vec::new(),
+            });
+        }
+
+        // Phase 4: Expand glob patterns to get target files
+        let config = GlobExpansionConfig::default();
+        let target_files = expand_glob_patterns(&request.patterns, &config).map_err(|e| {
+            RuleError::CheckError(format!("Failed to expand glob patterns: {}", e))
+        })?;
+
+        let files_checked = target_files.len();
+
+        if target_files.is_empty() {
+            tracing::info!("No files matched the patterns");
+            return Ok(RuleCheckResult {
+                rules_checked,
+                files_checked: 0,
+                violations: Vec::new(),
+            });
+        }
+
+        // Phase 5: Run checks
+        // Note: check_all currently fails fast on Error violations
+        match self.check_all(rules, target_files).await {
+            Ok(()) => {
+                // All checks passed
+                Ok(RuleCheckResult {
+                    rules_checked,
+                    files_checked,
+                    violations: Vec::new(),
+                })
+            }
+            Err(e) => {
+                // Propagate the error as-is
+                // The error is already logged by check_file
+                Err(e)
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -730,5 +921,117 @@ mod tests {
                 "Violation should preserve severity level"
             );
         }
+    }
+
+    #[tokio::test]
+    async fn test_check_with_filters_no_matching_rules() {
+        let checker = create_test_checker();
+
+        let request = RuleCheckRequest {
+            rule_names: Some(vec!["nonexistent-rule".to_string()]),
+            severity: None,
+            category: None,
+            patterns: vec!["test.rs".to_string()],
+        };
+
+        let result = checker.check_with_filters(request).await;
+        assert!(result.is_ok());
+        let check_result = result.unwrap();
+        assert_eq!(check_result.rules_checked, 0);
+        assert_eq!(check_result.files_checked, 0);
+        assert_eq!(check_result.violations.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_check_with_filters_no_matching_files() {
+        let checker = create_test_checker();
+
+        let request = RuleCheckRequest {
+            rule_names: None,
+            severity: None,
+            category: None,
+            patterns: vec!["/nonexistent/**/*.rs".to_string()],
+        };
+
+        let result = checker.check_with_filters(request).await;
+        assert!(result.is_ok());
+        let check_result = result.unwrap();
+        assert_eq!(check_result.files_checked, 0);
+    }
+
+    #[tokio::test]
+    async fn test_check_with_filters_severity_filter() {
+        let checker = create_test_checker();
+
+        let request = RuleCheckRequest {
+            rule_names: None,
+            severity: Some(Severity::Error),
+            category: None,
+            patterns: vec!["test.rs".to_string()],
+        };
+
+        let result = checker.check_with_filters(request).await;
+        // Should succeed - filters to only error-level rules
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_check_with_filters_category_filter() {
+        let checker = create_test_checker();
+
+        let request = RuleCheckRequest {
+            rule_names: None,
+            severity: None,
+            category: Some("security".to_string()),
+            patterns: vec!["test.rs".to_string()],
+        };
+
+        let result = checker.check_with_filters(request).await;
+        // Should succeed - filters to only security category rules
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_check_with_filters_combined_filters() {
+        let checker = create_test_checker();
+
+        let request = RuleCheckRequest {
+            rule_names: Some(vec!["specific-rule".to_string()]),
+            severity: Some(Severity::Error),
+            category: Some("security".to_string()),
+            patterns: vec!["test.rs".to_string()],
+        };
+
+        let result = checker.check_with_filters(request).await;
+        // Should succeed - applies all filters
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_rule_check_request_creation() {
+        let request = RuleCheckRequest {
+            rule_names: Some(vec!["test-rule".to_string()]),
+            severity: Some(Severity::Warning),
+            category: Some("style".to_string()),
+            patterns: vec!["**/*.rs".to_string()],
+        };
+
+        assert_eq!(request.rule_names, Some(vec!["test-rule".to_string()]));
+        assert_eq!(request.severity, Some(Severity::Warning));
+        assert_eq!(request.category, Some("style".to_string()));
+        assert_eq!(request.patterns, vec!["**/*.rs"]);
+    }
+
+    #[test]
+    fn test_rule_check_result_creation() {
+        let result = RuleCheckResult {
+            rules_checked: 5,
+            files_checked: 10,
+            violations: Vec::new(),
+        };
+
+        assert_eq!(result.rules_checked, 5);
+        assert_eq!(result.files_checked, 10);
+        assert_eq!(result.violations.len(), 0);
     }
 }

@@ -4,34 +4,23 @@
 
 use crate::context::CliContext;
 use crate::error::{CliError, CliResult};
-use std::path::PathBuf;
 use std::sync::Arc;
-use swissarmyhammer_common::glob_utils::{
-    expand_glob_patterns as common_expand_glob_patterns, GlobExpansionConfig,
-};
-use swissarmyhammer_rules::{RuleChecker, RuleResolver, Severity};
+use swissarmyhammer_rules::{RuleCheckRequest, RuleChecker};
 use swissarmyhammer_workflow::{
     AgentExecutionContext, AgentExecutor, AgentExecutorFactory, WorkflowTemplateContext,
 };
 
 use super::cli::CheckCommand;
 
-/// Expand glob patterns to file paths with gitignore support
-fn expand_glob_patterns(patterns: &[String]) -> CliResult<Vec<PathBuf>> {
-    let config = GlobExpansionConfig::default();
-    common_expand_glob_patterns(patterns, &config)
-        .map_err(|e| CliError::new(format!("Failed to expand glob patterns: {}", e), 1))
-}
-
 /// Execute the check command to verify code against rules
 ///
-/// This command goes through multiple phases:
-/// 1. Load all available rules from the rules directory
-/// 2. Validate all rules to ensure they're well-formed
-/// 3. Apply user-specified filters (rule names, severity, category)
-/// 4. Expand glob patterns to get target files
-/// 5. Create rule checker with LLM agent
-/// 6. Run checks with fail-fast behavior on violations
+/// This command delegates to the rules crate's high-level API which:
+/// 1. Loads all available rules from the rules directory
+/// 2. Validates all rules to ensure they're well-formed
+/// 3. Applies user-specified filters (rule names, severity, category)
+/// 4. Expands glob patterns to get target files
+/// 5. Creates rule checker with LLM agent
+/// 6. Runs checks with fail-fast behavior on violations
 ///
 /// # Arguments
 /// * `cmd` - The parsed CheckCommand with patterns and filters
@@ -48,58 +37,6 @@ fn expand_glob_patterns(patterns: &[String]) -> CliResult<Vec<PathBuf>> {
 /// sah rule check --rule no-unwrap --category style "*.rs"
 /// ```
 pub async fn execute_check_command(cmd: CheckCommand, context: &CliContext) -> CliResult<()> {
-    // Phase 1: Load all rules via RuleResolver
-    let mut rules = Vec::new();
-    let mut resolver = RuleResolver::new();
-    resolver
-        .load_all_rules(&mut rules)
-        .map_err(|e| CliError::new(format!("Failed to load rules: {}", e), 1))?;
-
-    // Filter out partials - they are not standalone rules
-    rules.retain(|r| !r.is_partial());
-
-    // Phase 2: Validate all rules first (fail if any invalid)
-
-    for rule in &rules {
-        rule.validate().map_err(|e| {
-            CliError::new(
-                format!("Rule validation failed for '{}': {}", rule.name, e),
-                1,
-            )
-        })?;
-    }
-
-    // Phase 3: Apply filters
-    if let Some(rule_names) = &cmd.rule {
-        rules.retain(|r| rule_names.contains(&r.name));
-    }
-
-    if let Some(severity_str) = &cmd.severity {
-        let severity: Severity = severity_str
-            .parse()
-            .map_err(|e: String| CliError::new(e, 1))?;
-        rules.retain(|r| r.severity == severity);
-    }
-
-    if let Some(category) = &cmd.category {
-        rules.retain(|r| r.category.as_ref() == Some(category));
-    }
-
-    if rules.is_empty() {
-        if !context.quiet {
-            println!("No rules matched the filters");
-        }
-        return Ok(());
-    }
-
-    // Phase 4: Get target files from patterns
-    let target_files = expand_glob_patterns(&cmd.patterns)?;
-
-    if target_files.is_empty() {
-        return Ok(());
-    }
-
-    // Phase 5: Create RuleChecker with agent from configuration
     // Load agent configuration (respects SAH_AGENT_EXECUTOR env var, defaults to ClaudeCode)
     let workflow_context = WorkflowTemplateContext::load_with_agent_config()
         .map_err(|e| CliError::new(format!("Failed to load agent config: {}", e), 1))?;
@@ -121,9 +58,33 @@ pub async fn execute_check_command(cmd: CheckCommand, context: &CliContext) -> C
     let checker = RuleChecker::new(agent)
         .map_err(|e| CliError::new(format!("Failed to create rule checker: {}", e), 1))?;
 
-    // Phase 6: Run check_all with fail-fast behavior
-    match checker.check_all(rules, target_files).await {
-        Ok(()) => Ok(()),
+    // Parse severity from string if provided
+    let severity = cmd
+        .severity
+        .as_ref()
+        .map(|s| {
+            s.parse()
+                .map_err(|e: String| CliError::new(e, 1))
+        })
+        .transpose()?;
+
+    // Create request with filters
+    let request = RuleCheckRequest {
+        rule_names: cmd.rule,
+        severity,
+        category: cmd.category,
+        patterns: cmd.patterns,
+    };
+
+    // Run check with filters - this handles all the logic
+    match checker.check_with_filters(request).await {
+        Ok(result) => {
+            // Print results if not quiet
+            if !context.quiet && result.rules_checked == 0 {
+                println!("No rules matched the filters");
+            }
+            Ok(())
+        }
         Err(e) => match e {
             swissarmyhammer_common::SwissArmyHammerError::RuleViolation(_) => {
                 // Violation was already logged by checker at appropriate level
@@ -141,135 +102,7 @@ pub async fn execute_check_command(cmd: CheckCommand, context: &CliContext) -> C
 mod tests {
     use super::*;
     use crate::context::CliContextBuilder;
-    use std::fs;
     use swissarmyhammer_config::TemplateContext;
-    use tempfile::TempDir;
-
-    #[test]
-    fn test_expand_glob_patterns_single_file() {
-        let temp_dir = TempDir::new().unwrap();
-        let file_path = temp_dir.path().join("test.rs");
-        fs::write(&file_path, "fn main() {}").unwrap();
-
-        let patterns = vec![file_path.to_string_lossy().to_string()];
-        let result = expand_glob_patterns(&patterns).unwrap();
-
-        assert_eq!(result.len(), 1);
-        assert_eq!(result[0], file_path);
-    }
-
-    #[test]
-    fn test_expand_glob_patterns_directory() {
-        let temp_dir = TempDir::new().unwrap();
-        fs::write(temp_dir.path().join("file1.rs"), "fn main() {}").unwrap();
-        fs::write(temp_dir.path().join("file2.rs"), "fn test() {}").unwrap();
-
-        let patterns = vec![temp_dir.path().to_string_lossy().to_string()];
-        let result = expand_glob_patterns(&patterns).unwrap();
-
-        assert_eq!(result.len(), 2);
-    }
-
-    #[test]
-    fn test_expand_glob_patterns_wildcard() {
-        let temp_dir = TempDir::new().unwrap();
-        fs::write(temp_dir.path().join("file1.rs"), "fn main() {}").unwrap();
-        fs::write(temp_dir.path().join("file2.rs"), "fn test() {}").unwrap();
-        fs::write(temp_dir.path().join("file3.txt"), "text").unwrap();
-
-        // Change to temp directory and use relative pattern
-        let orig_dir = std::env::current_dir().unwrap();
-        std::env::set_current_dir(temp_dir.path()).unwrap();
-
-        let patterns = vec!["*.rs".to_string()];
-        let result = expand_glob_patterns(&patterns).unwrap();
-
-        std::env::set_current_dir(orig_dir).unwrap();
-
-        assert_eq!(result.len(), 2);
-        assert!(result.iter().all(|p| p.extension().unwrap() == "rs"));
-    }
-
-    #[test]
-    fn test_expand_glob_patterns_recursive() {
-        let temp_dir = TempDir::new().unwrap();
-        let subdir = temp_dir.path().join("src");
-        fs::create_dir(&subdir).unwrap();
-        fs::write(temp_dir.path().join("root.rs"), "fn main() {}").unwrap();
-        fs::write(subdir.join("lib.rs"), "fn test() {}").unwrap();
-
-        // Change to temp directory and use relative pattern
-        let orig_dir = std::env::current_dir().unwrap();
-        std::env::set_current_dir(temp_dir.path()).unwrap();
-
-        let patterns = vec!["**/*.rs".to_string()];
-        let result = expand_glob_patterns(&patterns).unwrap();
-
-        std::env::set_current_dir(orig_dir).unwrap();
-
-        assert_eq!(result.len(), 2);
-    }
-
-    #[test]
-    fn test_expand_glob_patterns_multiple_patterns() {
-        let temp_dir = TempDir::new().unwrap();
-        fs::write(temp_dir.path().join("file1.rs"), "fn main() {}").unwrap();
-        fs::write(temp_dir.path().join("file2.txt"), "text").unwrap();
-
-        // Change to temp directory and use relative patterns
-        let orig_dir = std::env::current_dir().unwrap();
-        std::env::set_current_dir(temp_dir.path()).unwrap();
-
-        let patterns = vec!["*.rs".to_string(), "*.txt".to_string()];
-        let result = expand_glob_patterns(&patterns).unwrap();
-
-        std::env::set_current_dir(orig_dir).unwrap();
-
-        assert_eq!(result.len(), 2);
-    }
-
-    #[test]
-    fn test_expand_glob_patterns_respects_gitignore() {
-        use std::process::Command;
-
-        let temp_dir = TempDir::new().unwrap();
-
-        // Initialize git repo for gitignore to work
-        Command::new("git")
-            .args(["init"])
-            .current_dir(temp_dir.path())
-            .output()
-            .unwrap();
-
-        fs::write(temp_dir.path().join(".gitignore"), "ignored.rs\n").unwrap();
-        fs::write(temp_dir.path().join("included.rs"), "fn main() {}").unwrap();
-        fs::write(temp_dir.path().join("ignored.rs"), "fn test() {}").unwrap();
-
-        // Use directory pattern which triggers WalkBuilder with gitignore support
-        let patterns = vec![temp_dir.path().to_string_lossy().to_string()];
-        let result = expand_glob_patterns(&patterns).unwrap();
-
-        // Check that ignored.rs is not in results and included.rs is
-        assert!(result.iter().any(|p| p.ends_with("included.rs")));
-        assert!(!result.iter().any(|p| p.ends_with("ignored.rs")));
-    }
-
-    #[test]
-    fn test_expand_glob_patterns_empty_on_no_match() {
-        let temp_dir = TempDir::new().unwrap();
-        fs::write(temp_dir.path().join("file.txt"), "text").unwrap();
-
-        // Change to temp directory and use relative pattern
-        let orig_dir = std::env::current_dir().unwrap();
-        std::env::set_current_dir(temp_dir.path()).unwrap();
-
-        let patterns = vec!["*.rs".to_string()];
-        let result = expand_glob_patterns(&patterns).unwrap();
-
-        std::env::set_current_dir(orig_dir).unwrap();
-
-        assert_eq!(result.len(), 0);
-    }
 
     #[tokio::test]
     async fn test_execute_check_command_no_rules() {

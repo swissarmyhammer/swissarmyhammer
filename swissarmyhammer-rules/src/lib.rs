@@ -31,7 +31,7 @@ mod storage;
 
 // Re-export public types
 pub use cache::{CachedResult, RuleCache};
-pub use checker::RuleChecker;
+pub use checker::{RuleCheckRequest, RuleCheckResult, RuleChecker};
 pub use error::{RuleError, RuleViolation};
 pub use frontmatter::{parse_frontmatter, FrontmatterResult};
 pub use language::detect_language;
