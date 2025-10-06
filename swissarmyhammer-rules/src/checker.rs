@@ -59,7 +59,7 @@ pub struct RuleCheckRequest {
 /// use swissarmyhammer_rules::RuleCheckResult;
 ///
 /// fn handle_result(result: RuleCheckResult) {
-///     println!("Checked {} rules against {} files", 
+///     println!("Checked {} rules against {} files",
 ///              result.rules_checked, result.files_checked);
 ///     if !result.violations.is_empty() {
 ///         println!("Found {} violations", result.violations.len());
@@ -648,9 +648,8 @@ impl RuleChecker {
 
         // Phase 4: Expand glob patterns to get target files
         let config = GlobExpansionConfig::default();
-        let target_files = expand_glob_patterns(&request.patterns, &config).map_err(|e| {
-            RuleError::CheckError(format!("Failed to expand glob patterns: {}", e))
-        })?;
+        let target_files = expand_glob_patterns(&request.patterns, &config)
+            .map_err(|e| RuleError::CheckError(format!("Failed to expand glob patterns: {}", e)))?;
 
         let files_checked = target_files.len();
 

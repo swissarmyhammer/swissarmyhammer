@@ -62,10 +62,7 @@ pub async fn execute_check_command(cmd: CheckCommand, context: &CliContext) -> C
     let severity = cmd
         .severity
         .as_ref()
-        .map(|s| {
-            s.parse()
-                .map_err(|e: String| CliError::new(e, 1))
-        })
+        .map(|s| s.parse().map_err(|e: String| CliError::new(e, 1)))
         .transpose()?;
 
     // Create request with filters

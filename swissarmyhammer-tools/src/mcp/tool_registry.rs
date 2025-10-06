@@ -1272,6 +1272,12 @@ pub fn register_outline_tools(registry: &mut ToolRegistry) {
     outline::register_outline_tools(registry);
 }
 
+/// Register all rules-related tools with the registry
+pub fn register_rules_tools(registry: &mut ToolRegistry) {
+    use super::tools::rules;
+    rules::register_rules_tools(registry);
+}
+
 /// Register all shell-related tools with the registry
 pub fn register_shell_tools(registry: &mut ToolRegistry) {
     use super::tools::shell;
