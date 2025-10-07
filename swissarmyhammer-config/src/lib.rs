@@ -365,7 +365,13 @@ pub fn load_configuration_for_cli() -> ConfigurationResult<TemplateContext> {
 ///
 /// Used in conjunction with [`DEFAULT_TEST_LLM_MODEL_FILENAME`] to configure
 /// test LlamaAgent instances across all packages.
-pub const DEFAULT_TEST_LLM_MODEL_REPO: &str = "unsloth/Qwen3-4B-Instruct-2507-GGUF";
+///
+/// Uses the 1.5B Qwen2.5-Coder model which is:
+/// - Small enough for fast test execution (~900MB)
+/// - Capable enough for basic tool calling and reasoning tests
+/// - Well-balanced between speed and quality with Q4_K_M quantization
+/// - 128K context length support
+pub const DEFAULT_TEST_LLM_MODEL_REPO: &str = "unsloth/Qwen2.5-Coder-1.5B-Instruct-128K-GGUF";
 
 /// Default LLM model filename for testing
 ///
@@ -373,7 +379,8 @@ pub const DEFAULT_TEST_LLM_MODEL_REPO: &str = "unsloth/Qwen3-4B-Instruct-2507-GG
 /// defined by [`DEFAULT_TEST_LLM_MODEL_REPO`].
 ///
 /// This file will be automatically downloaded by llama.cpp when first accessed.
-pub const DEFAULT_TEST_LLM_MODEL_FILENAME: &str = "Qwen3-4B-Instruct-2507-UD-Q4_K_XL.gguf";
+/// Q4_K_M quantization provides a good balance between model size and quality.
+pub const DEFAULT_TEST_LLM_MODEL_FILENAME: &str = "Qwen2.5-Coder-1.5B-Instruct-Q4_K_M.gguf";
 
 /// Default embedding model for testing
 ///

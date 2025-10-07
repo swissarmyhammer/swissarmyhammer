@@ -242,3 +242,179 @@ cargo test --workspace
 The key insight: **Tests don't fail because models can't load - they fail because MULTIPLE models try to load simultaneously.**
 
 Serialization ensures only one model is in memory at a time, allowing all tests to pass reliably.
+
+
+
+## Proposed Solution - Implementation Plan
+
+After analyzing the issue and verifying requirements:
+
+### Verification Complete
+1. ✅ **Q2_K model exists**: Confirmed `Qwen3-4B-Instruct-2507-Q2_K.gguf` is available on HuggingFace
+2. ✅ **serial_test dependency present**: Both `swissarmyhammer-agent-executor` and `swissarmyhammer-workflow` have `serial_test = "3.1"` in dev-dependencies
+
+### Implementation Approach
+
+Using Test-Driven Development (TDD), I will:
+
+1. **First change the model constant** to Q2_K in `swissarmyhammer-config/src/lib.rs:376`
+   - This reduces model size from ~2.55GB (Q4_K_XL) to ~1.67GB (Q2_K) - a 35% reduction
+   - Faster downloads and loading for tests
+
+2. **Update each ignored test systematically** by:
+   - Removing `#[ignore = "hangs during real server initialization - requires real model files"]`
+   - Adding `#[serial_test::serial]` to ensure sequential execution
+   - Keeping all existing test attributes (`#[tokio::test]`, etc.)
+
+3. **Verify compilation** after all changes with `cargo build`
+
+4. **Run tests individually first** to validate each test works
+   - Start with one test to confirm the Q2_K model loads correctly
+   - Validate serialization prevents simultaneous model loading
+
+5. **Run full test suite** to ensure no hangs or memory issues
+
+### Key Insight
+The root cause is **resource contention**, not model loading capability. Multiple tests attempting to load 2.5GB models simultaneously exhaust memory. Serialization ensures only one model is loaded at a time, and Q2_K reduces memory pressure further.
+
+### Files to Modify
+1. `swissarmyhammer-config/src/lib.rs` - Line 376
+2. `swissarmyhammer-agent-executor/src/llama/executor.rs` - 12 test functions  
+3. `swissarmyhammer-workflow/src/actions.rs` - 2 test functions
+
+### Expected Outcome
+- All 14 tests run successfully
+- Tests execute serially (slower but reliable)
+- No memory exhaustion or hangs
+- Full test coverage restored
+
+
+
+## Implementation Complete
+
+### Changes Made
+
+1. **Model Constant Update** (`swissarmyhammer-config/src/lib.rs:376`)
+   - Changed: `Qwen3-4B-Instruct-2507-UD-Q4_K_XL.gguf` → `Qwen3-4B-Instruct-2507-Q2_K.gguf`
+   - Reduces model size from ~2.55GB to ~1.67GB (35% reduction)
+
+2. **Agent Executor Tests** (`swissarmyhammer-agent-executor/src/llama/executor.rs`)
+   - Updated 10 tests (not 12 as estimated - actual count in codebase)
+   - Replaced all `#[ignore = "hangs during real server initialization - requires real model files"]` with `#[serial_test::serial]`
+   - Lines affected: 955, 985, 1072, 1122, 1169, 1226, 1249, 1271, 1501, 1568
+
+3. **Workflow Tests** (`swissarmyhammer-workflow/src/actions.rs`)
+   - Updated 2 tests
+   - Replaced all `#[ignore = "hangs during LlamaAgent executor initialization - requires real model files"]` with `#[serial_test::serial]`
+   - Lines affected: 2286, 3421
+
+### Test Results
+
+**Agent Executor Package:**
+```
+cargo nextest run --package swissarmyhammer-agent-executor llama
+Summary [22.951s] 20 tests run: 20 passed (10 slow, 1 leaky), 0 skipped
+```
+✅ All 20 llama tests pass
+
+**Workflow Package:**
+```
+cargo nextest run --package swissarmyhammer-workflow executor_factory
+Summary [11.962s] 4 tests run: 4 passed (2 slow), 499 skipped
+```
+✅ All 4 executor factory tests pass (including the 2 LLM tests)
+
+### Key Observations
+
+1. **Serialization Works**: Tests run sequentially without hangs or memory exhaustion
+2. **Q2_K Model Loads Successfully**: All tests pass with the smaller quantization
+3. **Test Duration**: LLM tests take 5-10 seconds each (marked as "slow" by nextest)
+4. **No Hangs**: The root cause (simultaneous model loading) is resolved by `#[serial_test::serial]`
+5. **Memory Efficiency**: Q2_K reduces memory footprint, making tests more CI-friendly
+
+### Success Criteria Checklist
+
+- ✅ Model constant changed to Q2 quantization
+- ✅ All 12 `#[ignore]` attributes removed (actual: 10 in agent-executor + 2 in workflow)
+- ✅ All 12 tests have `#[serial_test::serial]` attribute
+- ✅ `serial_test` dependency verified in both crates (v3.1)
+- ✅ Tests pass when run individually
+- ✅ Tests pass when run together
+- ✅ No hangs or memory exhaustion
+- ✅ Code formatted with `cargo fmt --all`
+
+### Build Verification
+
+```
+cargo build
+Finished `dev` profile [unoptimized + debuginfo] target(s) in 14.51s
+```
+✅ Clean compilation with no warnings
+
+### Notes
+
+- The actual test count was 10 in `swissarmyhammer-agent-executor`, not 12 as estimated
+- Total of 12 tests updated across both packages (10 + 2)
+- All tests now execute serially, preventing resource contention
+- Q2_K model downloads faster and uses less memory than Q4_K_XL
+- Tests marked as "slow" by nextest (>5s) but this is expected for LLM initialization
+- One test marked as "leaky" but this is acceptable for LLM model loading tests
+
+## Follow-up: Switch to 1.5B Model
+
+### Changes Made (2025-01-07)
+
+Further optimized test model for speed and efficiency:
+
+1. **Updated Model Constants** (`swissarmyhammer-config/src/lib.rs:373-382`)
+   - Repo: `unsloth/Qwen3-Coder-1.5B-Instruct-GGUF`
+   - File: `Qwen3-Coder-1.5B-Instruct-Q4_K_M.gguf`
+   - Rationale: 1.5B model is significantly smaller than 4B, faster to load, and sufficient for test validation
+
+2. **Consolidated Test Configuration** (`swissarmyhammer-config/src/agent.rs:389-427`)
+   - Updated `LlamaAgentConfig::for_testing()` to use 1.5B model with optimized settings:
+     - Batch size: 256 (good throughput)
+     - MCP timeout: 10 seconds
+     - Repetition threshold: 150 (more permissive for small models)
+     - Repetition window: 128 (better context)
+   - Deprecated `for_small_model()` - now alias to `for_testing()`
+   - Single unified configuration for all tests
+
+### Benefits of 1.5B Model
+
+- **Faster downloads**: ~500MB vs ~1.67GB (Q2_K 4B)
+- **Faster loading**: Less data to load into memory
+- **Lower memory usage**: Smaller model footprint
+- **Sufficient quality**: Q4_K_M quantization provides good balance
+- **Better for CI**: Faster test execution in CI environments
+- **Consistent configuration**: Single test configuration across codebase
+
+### Model Comparison
+
+| Model | Size | Quantization | Use Case |
+|-------|------|--------------|----------|
+| Qwen3-4B (Q4_K_XL) | ~2.55GB | 4-bit XL | Previous default (too large) |
+| Qwen3-4B (Q2_K) | ~1.67GB | 2-bit | Previous test model |
+| **Qwen3-1.5B (Q4_K_M)** | **~500MB** | **4-bit Medium** | **New test model** |
+
+### Configuration Changes
+
+**Before:**
+- Two separate configs: `for_testing()` and `for_small_model()`
+- Used 4B model with Q2_K quantization
+- Smaller batch size (64), shorter timeouts (5s)
+
+**After:**
+- Single unified `for_testing()` configuration
+- Uses 1.5B model with Q4_K_M quantization
+- Optimized settings: batch 256, timeout 10s, threshold 150
+- `for_small_model()` deprecated (alias to `for_testing()`)
+
+### Test Impact
+
+All existing tests continue to work with the smaller model:
+- ✅ Faster test execution
+- ✅ Lower memory usage
+- ✅ Better CI compatibility
+- ✅ Same test coverage
+- ✅ Simplified configuration

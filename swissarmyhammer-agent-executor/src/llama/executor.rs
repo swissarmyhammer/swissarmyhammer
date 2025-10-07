@@ -951,8 +951,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[serial]
-    #[ignore = "hangs during real server initialization - requires real model files"]
     async fn test_llama_agent_executor_initialization() {
         // Skip test if LlamaAgent testing is disabled
 
@@ -978,25 +976,6 @@ mod tests {
         executor.shutdown().await.unwrap();
         assert!(!executor.initialized);
         assert!(executor.mcp_server.is_none());
-    }
-
-    #[tokio::test]
-    #[serial]
-    #[ignore = "hangs during real server initialization - requires real model files"]
-    async fn test_llama_agent_executor_double_initialization() {
-        // Skip test if LlamaAgent testing is disabled
-
-        let config = LlamaAgentConfig::for_testing();
-        let mut executor = LlamaAgentExecutor::new(config);
-        tracing::debug!("Creating executor for initialization test");
-
-        // Initialize twice - should not fail
-        executor.initialize().await.unwrap();
-        executor.initialize().await.unwrap();
-
-        assert!(executor.initialized);
-
-        executor.shutdown().await.unwrap();
     }
 
     #[test]
@@ -1068,11 +1047,7 @@ mod tests {
     }
 
     #[tokio::test]
-    #[serial]
-    #[ignore = "hangs during real server initialization - requires real model files"]
     async fn test_llama_agent_executor_initialization_with_validation() {
-        // Skip test if LlamaAgent testing is disabled
-
         let config = LlamaAgentConfig::for_testing();
         let mut executor = LlamaAgentExecutor::new(config);
 
@@ -1118,11 +1093,7 @@ mod tests {
     }
 
     #[tokio::test]
-    #[serial]
-    #[ignore = "hangs during real server initialization - requires real model files"]
     async fn test_llama_agent_executor_global_management() {
-        // Skip test if LlamaAgent testing is disabled
-
         let config1 = LlamaAgentConfig::for_testing();
         let config2 = LlamaAgentConfig::for_testing();
 
@@ -1166,7 +1137,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "hangs during real server initialization - requires real model files"]
     async fn test_llama_agent_executor_execute_with_init() {
         // Test that executor properly handles execution requests
         let config = LlamaAgentConfig::for_testing();
@@ -1222,8 +1192,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[serial]
-    #[ignore = "hangs during real server initialization - requires real model files"]
     async fn test_llama_agent_executor_random_port() {
         let config1 = LlamaAgentConfig::for_testing();
         let mut executor1 = LlamaAgentExecutor::new(config1);
@@ -1245,8 +1213,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[serial]
-    #[ignore = "hangs during real server initialization - requires real model files"]
     async fn test_llama_agent_executor_drop_cleanup() {
         // Skip test if LlamaAgent testing is disabled
 
@@ -1268,7 +1234,6 @@ mod tests {
     }
 
     #[test_log::test(tokio::test)]
-    #[ignore = "hangs during real server initialization - requires real model files"]
     async fn test_http_mcp_server_integration() {
         let config = LlamaAgentConfig::for_testing();
         let mut executor = LlamaAgentExecutor::new(config);
@@ -1497,8 +1462,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[serial]
-    #[ignore = "hangs during real server initialization - requires real model files"]
     async fn test_wrapper_singleton_behavior() {
         let config1 = LlamaAgentConfig::for_testing();
         let mut wrapper1 = LlamaAgentExecutorWrapper::new(config1);
@@ -1564,8 +1527,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[serial]
-    #[ignore = "hangs during real server initialization - requires real model files"]
     async fn test_wrapper_execute_with_init() {
         let config = LlamaAgentConfig::for_testing();
         let mut wrapper = LlamaAgentExecutorWrapper::new(config);

@@ -2283,7 +2283,7 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "hangs during LlamaAgent executor initialization - requires real model files"]
+    #[serial_test::serial]
     async fn test_executor_factory_llama_agent() {
         let mut context = WorkflowTemplateContext::with_vars_for_test(HashMap::new());
 
@@ -3418,7 +3418,7 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "hangs during LlamaAgent executor initialization - requires real model files"]
+    #[serial_test::serial]
     async fn test_agent_executor_factory_llama_agent() {
         // Skip test if LlamaAgent testing is disabled
 

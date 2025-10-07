@@ -386,7 +386,13 @@ impl AgentConfig {
 }
 
 impl LlamaAgentConfig {
-    /// Configuration for unit testing with a small model - optimized for speed
+    /// Configuration optimized for testing with small, fast models
+    ///
+    /// Uses the 1.5B Qwen3-Coder model with Q4_K_M quantization which provides:
+    /// - Fast test execution (small model size)
+    /// - Good tool calling capabilities
+    /// - Reasonable output quality for testing
+    /// - Balanced settings to avoid repetition issues
     pub fn for_testing() -> Self {
         Self {
             model: ModelConfig {
@@ -395,38 +401,11 @@ impl LlamaAgentConfig {
                     filename: Some(crate::DEFAULT_TEST_LLM_MODEL_FILENAME.to_string()),
                     folder: None,
                 },
-                batch_size: 64, // Much smaller batch size for faster testing
-                use_hf_params: true,
-                debug: false, // Disable debug to reduce output overhead
-            },
-            mcp_server: McpServerConfig {
-                port: 0,
-                timeout_seconds: 5, // Shorter timeout for tests
-            },
-
-            repetition_detection: RepetitionDetectionConfig {
-                enabled: true,             // Keep enabled to match test expectations
-                repetition_penalty: 1.05,  // Lower penalty for small models
-                repetition_threshold: 100, // Higher threshold to be more permissive
-                repetition_window: 32,     // Smaller window for testing
-            },
-        }
-    }
-
-    /// Configuration optimized for small models like Qwen3-1.7B
-    pub fn for_small_model() -> Self {
-        Self {
-            model: ModelConfig {
-                source: ModelSource::HuggingFace {
-                    repo: "unsloth/Qwen3-Coder-1.5B-Instruct-GGUF".to_string(),
-                    filename: Some("Qwen3-Coder-1.5B-Instruct-Q4_K_M.gguf".to_string()),
-                    folder: None,
-                },
-                batch_size: 256,
+                batch_size: 256, // Good balance for test throughput
                 use_hf_params: true,
                 debug: false,
             },
-            mcp_server: McpServerConfig::default(),
+            mcp_server: McpServerConfig::default(), // Use default settings
 
             repetition_detection: RepetitionDetectionConfig {
                 enabled: true,
@@ -435,6 +414,12 @@ impl LlamaAgentConfig {
                 repetition_window: 128,    // Larger window for better context
             },
         }
+    }
+
+    /// Alias for `for_testing()` - kept for backwards compatibility
+    #[deprecated(since = "0.1.0", note = "Use `for_testing()` instead")]
+    pub fn for_small_model() -> Self {
+        Self::for_testing()
     }
 }
 
@@ -1201,7 +1186,7 @@ mod tests {
             ModelSource::Local { .. } => panic!("Testing config should be HuggingFace"),
         }
         assert_eq!(config.mcp_server.port, 0);
-        assert_eq!(config.mcp_server.timeout_seconds, 5);
+        assert_eq!(config.mcp_server.timeout_seconds, 900); // Default timeout
         // Removed test_mode field - now always uses real models
     }
 
@@ -1230,7 +1215,7 @@ mod tests {
 
         match config.executor {
             AgentExecutorConfig::LlamaAgent(agent_config) => {
-                assert_eq!(agent_config.mcp_server.timeout_seconds, 5);
+                assert_eq!(agent_config.mcp_server.timeout_seconds, 900);
             }
             AgentExecutorConfig::ClaudeCode(_) => panic!("Should be LlamaAgent config"),
         }

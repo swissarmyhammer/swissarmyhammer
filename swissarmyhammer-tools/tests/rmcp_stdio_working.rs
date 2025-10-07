@@ -4,7 +4,8 @@
 
 use rmcp::model::CallToolRequestParam;
 use swissarmyhammer_tools::mcp::{
-    test_utils::create_test_client, unified_server::{start_mcp_server, McpServerMode},
+    test_utils::create_test_client,
+    unified_server::{start_mcp_server, McpServerMode},
 };
 
 /// Test RMCP client lists tools and prompts (Fast In-Process)

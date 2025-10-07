@@ -208,8 +208,8 @@ async fn test_repetition_detection_configuration() {
     let test_config = LlamaAgentConfig::for_testing();
     assert!(test_config.repetition_detection.enabled);
     assert_eq!(test_config.repetition_detection.repetition_penalty, 1.05); // Lower penalty
-    assert_eq!(test_config.repetition_detection.repetition_threshold, 100); // Higher threshold
-    assert_eq!(test_config.repetition_detection.repetition_window, 32); // Smaller window
+    assert_eq!(test_config.repetition_detection.repetition_threshold, 150); // Higher threshold
+    assert_eq!(test_config.repetition_detection.repetition_window, 128); // Smaller window
     println!("✓ Test repetition detection configuration validated");
 
     // Test small model configuration (should be most permissive)

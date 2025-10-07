@@ -1,6 +1,7 @@
 use swissarmyhammer_common::test_utils::IsolatedTestEnvironment;
 use swissarmyhammer_tools::mcp::{
-    test_utils::create_test_client, unified_server::{start_mcp_server, McpServerMode},
+    test_utils::create_test_client,
+    unified_server::{start_mcp_server, McpServerMode},
 };
 
 /// Test MCP server basic functionality (Fast In-Process)
