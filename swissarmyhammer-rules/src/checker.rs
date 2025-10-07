@@ -9,13 +9,12 @@
 use crate::{
     detect_language, CachedResult, Result, Rule, RuleCache, RuleError, RuleViolation, Severity,
 };
-use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use swissarmyhammer_agent_executor::{AgentExecutionContext, AgentExecutor};
 use swissarmyhammer_common::glob_utils::{expand_glob_patterns, GlobExpansionConfig};
 use swissarmyhammer_config::TemplateContext;
 use swissarmyhammer_prompts::{PromptLibrary, PromptResolver};
-use swissarmyhammer_workflow::{AgentExecutionContext, AgentExecutor};
 
 /// Request structure for rule checking with filtering and pattern expansion
 ///
@@ -88,7 +87,7 @@ pub struct RuleCheckResult {
 ///
 /// ```no_run
 /// use swissarmyhammer_rules::{RuleChecker, Rule, Severity};
-/// use swissarmyhammer_workflow::{WorkflowTemplateContext, AgentExecutorFactory, AgentExecutionContext};
+/// use swissarmyhammer_agent_executor::{AgentExecutorFactory, AgentExecutionContext};
 /// use std::sync::Arc;
 /// use std::path::PathBuf;
 ///
@@ -153,7 +152,7 @@ impl RuleChecker {
     ///
     /// ```no_run
     /// use swissarmyhammer_rules::RuleChecker;
-    /// use swissarmyhammer_workflow::{WorkflowTemplateContext, AgentExecutorFactory, AgentExecutionContext};
+    /// use swissarmyhammer_agent_executor::{AgentExecutorFactory, AgentExecutionContext};
     /// use std::sync::Arc;
     ///
     /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
@@ -260,7 +259,7 @@ impl RuleChecker {
     ///
     /// ```no_run
     /// # use swissarmyhammer_rules::{RuleChecker, Rule, Severity};
-    /// # use swissarmyhammer_workflow::{WorkflowTemplateContext, AgentExecutorFactory, AgentExecutionContext};
+    /// # use swissarmyhammer_agent_executor::{AgentExecutorFactory, AgentExecutionContext};
     /// # use std::sync::Arc;
     /// # use std::path::PathBuf;
     /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
@@ -406,14 +405,9 @@ impl RuleChecker {
         tracing::debug!("Stage 2 complete: .check prompt rendered");
 
         // Execute via agent (LLM)
-        let workflow_context =
-            swissarmyhammer_workflow::template_context::WorkflowTemplateContext::with_vars(
-                HashMap::new(),
-            )
-            .map_err(|e| {
-                RuleError::CheckError(format!("Failed to create workflow context: {}", e))
-            })?;
-        let agent_context = AgentExecutionContext::new(&workflow_context);
+        // Create a simple agent config for rule checking
+        let agent_config = swissarmyhammer_config::agent::AgentConfig::default();
+        let agent_context = AgentExecutionContext::new(&agent_config);
 
         let response = self
             .agent
@@ -507,7 +501,7 @@ impl RuleChecker {
     ///
     /// ```no_run
     /// # use swissarmyhammer_rules::{RuleChecker, Rule, Severity};
-    /// # use swissarmyhammer_workflow::{WorkflowTemplateContext, AgentExecutorFactory, AgentExecutionContext};
+    /// # use swissarmyhammer_agent_executor::{AgentExecutorFactory, AgentExecutionContext};
     /// # use std::sync::Arc;
     /// # use std::path::PathBuf;
     /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
@@ -581,7 +575,7 @@ impl RuleChecker {
     ///
     /// ```no_run
     /// # use swissarmyhammer_rules::{RuleChecker, RuleCheckRequest};
-    /// # use swissarmyhammer_workflow::{WorkflowTemplateContext, AgentExecutorFactory, AgentExecutionContext};
+    /// # use swissarmyhammer_agent_executor::{AgentExecutorFactory, AgentExecutionContext};
     /// # use std::sync::Arc;
     /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
     /// # let workflow_context = WorkflowTemplateContext::load_with_agent_config()?;
@@ -686,8 +680,8 @@ impl RuleChecker {
 mod tests {
     use super::*;
     use crate::Severity;
+    use swissarmyhammer_agent_executor::LlamaAgentExecutorWrapper;
     use swissarmyhammer_config::LlamaAgentConfig;
-    use swissarmyhammer_workflow::LlamaAgentExecutorWrapper;
     use tempfile::TempDir;
 
     fn create_test_agent() -> Arc<dyn AgentExecutor> {

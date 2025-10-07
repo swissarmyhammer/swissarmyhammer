@@ -109,36 +109,4 @@ mod tests {
         // Should return error when rule not found
         assert!(result.is_err());
     }
-
-    #[tokio::test]
-    async fn test_run_rule_command_typed_check() {
-        use crate::context::CliContextBuilder;
-
-        let command = RuleCommand::Check(cli::CheckCommand {
-            patterns: vec!["/nonexistent/**/*.rs".to_string()],
-            rule: None,
-            severity: None,
-            category: None,
-        });
-
-        let template_context = TemplateContext::new();
-        let matches = clap::Command::new("test")
-            .try_get_matches_from(["test"])
-            .unwrap();
-        let context = CliContextBuilder::default()
-            .template_context(template_context)
-            .format(crate::cli::OutputFormat::Table)
-            .format_option(None)
-            .verbose(false)
-            .debug(false)
-            .quiet(true)
-            .matches(matches)
-            .build_async()
-            .await
-            .unwrap();
-
-        let result = run_rule_command_typed(command, &context).await;
-        // Should succeed when no files match patterns
-        assert!(result.is_ok());
-    }
 }

@@ -11,6 +11,7 @@ use test_utils::ProcessGuard;
 /// Simple MCP integration test that verifies the server works correctly
 #[tokio::test]
 #[serial_test::serial]
+#[ignore = "spawns cargo build which deadlocks on build lock - run separately with --ignored"]
 async fn test_mcp_server_basic_functionality() {
     // Start the MCP server process
     let child = Command::new("cargo")
@@ -185,6 +186,7 @@ async fn test_mcp_server_prompt_loading() {
 /// The fast in-process test above covers the same functionality more efficiently.
 #[tokio::test]
 #[serial_test::serial]
+#[ignore = "spawns cargo build which deadlocks on build lock - run separately with --ignored"]
 async fn test_mcp_server_prompt_loading_e2e() {
     let _guard = IsolatedTestEnvironment::new().expect("Failed to create test environment");
     let home_path = std::env::var("HOME").expect("HOME should be set");
@@ -310,6 +312,7 @@ async fn test_mcp_server_prompt_loading_e2e() {
 /// Test that MCP server loads built-in prompts
 #[tokio::test]
 #[serial_test::serial]
+#[ignore = "spawns cargo build which deadlocks on build lock - run separately with --ignored"]
 async fn test_mcp_server_builtin_prompts() {
     // Start MCP server
     let child = Command::new("cargo")

@@ -58,6 +58,7 @@ async fn test_stdio_rmcp_client_lists_tools_and_prompts() {
 /// The fast in-process test above covers the same functionality more efficiently.
 #[tokio::test]
 #[serial_test::serial]
+#[ignore = "spawns cargo build which deadlocks on build lock - run separately with --ignored"]
 async fn test_stdio_rmcp_client_lists_tools_and_prompts_e2e() {
     // Use exact rmcp pattern from documentation
     let service = ()

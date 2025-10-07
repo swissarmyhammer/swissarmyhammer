@@ -33,6 +33,7 @@ swissarmyhammer-issues = { path = "../swissarmyhammer-issues" }
 swissarmyhammer-prompts = { path = "../swissarmyhammer-prompts" }
 swissarmyhammer-rules = { path = "../swissarmyhammer-rules" }
 swissarmyhammer-templating = { path = "../swissarmyhammer-templating" }
+swissarmyhammer-agent-executor = { path = "../swissarmyhammer-agent-executor" }
 swissarmyhammer-workflow = { path = "../swissarmyhammer-workflow" }
 
 # CLI dependencies

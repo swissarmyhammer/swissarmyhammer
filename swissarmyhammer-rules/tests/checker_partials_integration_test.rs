@@ -4,10 +4,10 @@
 //! shared partial templates from the rule library.
 
 use std::sync::Arc;
+use swissarmyhammer_agent_executor::LlamaAgentExecutorWrapper;
 use swissarmyhammer_common::error::SwissArmyHammerError;
 use swissarmyhammer_config::LlamaAgentConfig;
 use swissarmyhammer_rules::{Rule, RuleChecker, Severity};
-use swissarmyhammer_workflow::LlamaAgentExecutorWrapper;
 use tempfile::TempDir;
 
 /// Create a test agent with default configuration

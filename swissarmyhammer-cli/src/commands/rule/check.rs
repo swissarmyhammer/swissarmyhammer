@@ -5,10 +5,9 @@
 use crate::context::CliContext;
 use crate::error::{CliError, CliResult};
 use std::sync::Arc;
+use swissarmyhammer_agent_executor::{AgentExecutionContext, AgentExecutor, AgentExecutorFactory};
+use swissarmyhammer_config::agent::AgentConfig;
 use swissarmyhammer_rules::{RuleCheckRequest, RuleChecker};
-use swissarmyhammer_workflow::{
-    AgentExecutionContext, AgentExecutor, AgentExecutorFactory, WorkflowTemplateContext,
-};
 
 use super::cli::CheckCommand;
 
@@ -37,13 +36,20 @@ use super::cli::CheckCommand;
 /// sah rule check --rule no-unwrap --category style "*.rs"
 /// ```
 pub async fn execute_check_command(cmd: CheckCommand, context: &CliContext) -> CliResult<()> {
+    execute_check_command_with_config(cmd, context, None).await
+}
+
+async fn execute_check_command_with_config(
+    cmd: CheckCommand,
+    context: &CliContext,
+    agent_config: Option<AgentConfig>,
+) -> CliResult<()> {
     // Load agent configuration (respects SAH_AGENT_EXECUTOR env var, defaults to ClaudeCode)
-    let workflow_context = WorkflowTemplateContext::load_with_agent_config()
-        .map_err(|e| CliError::new(format!("Failed to load agent config: {}", e), 1))?;
+    // For tests, use provided config (LlamaAgent), otherwise use default
+    let agent_config = agent_config.unwrap_or_default();
+    let agent_context = AgentExecutionContext::new(&agent_config);
 
-    let agent_context = AgentExecutionContext::new(&workflow_context);
-
-    // Create executor using factory (ClaudeCode or LlamaAgent based on config)
+    // Create executor using factory (LlamaAgent based on config)
     let mut executor = AgentExecutorFactory::create_executor(&agent_context)
         .await
         .map_err(|e| CliError::new(format!("Failed to create agent executor: {}", e), 1))?;
@@ -99,7 +105,7 @@ pub async fn execute_check_command(cmd: CheckCommand, context: &CliContext) -> C
 mod tests {
     use super::*;
     use crate::context::CliContextBuilder;
-    use swissarmyhammer_config::TemplateContext;
+    use swissarmyhammer_config::{LlamaAgentConfig, TemplateContext};
 
     #[tokio::test]
     async fn test_execute_check_command_no_rules() {
@@ -126,7 +132,8 @@ mod tests {
             category: None,
         };
 
-        let result = execute_check_command(cmd, &context).await;
+        let test_config = AgentConfig::llama_agent(LlamaAgentConfig::for_testing());
+        let result = execute_check_command_with_config(cmd, &context, Some(test_config)).await;
         // Should succeed when no rules match filters
         assert!(result.is_ok());
     }
@@ -156,7 +163,8 @@ mod tests {
             category: None,
         };
 
-        let result = execute_check_command(cmd, &context).await;
+        let test_config = AgentConfig::llama_agent(LlamaAgentConfig::for_testing());
+        let result = execute_check_command_with_config(cmd, &context, Some(test_config)).await;
         // Should succeed when no files match patterns
         assert!(result.is_ok());
     }
@@ -186,7 +194,8 @@ mod tests {
             category: None,
         };
 
-        let result = execute_check_command(cmd, &context).await;
+        let test_config = AgentConfig::llama_agent(LlamaAgentConfig::for_testing());
+        let result = execute_check_command_with_config(cmd, &context, Some(test_config)).await;
         // Should succeed - filters to only error-level rules
         assert!(result.is_ok());
     }
@@ -216,7 +225,8 @@ mod tests {
             category: Some("security".to_string()),
         };
 
-        let result = execute_check_command(cmd, &context).await;
+        let test_config = AgentConfig::llama_agent(LlamaAgentConfig::for_testing());
+        let result = execute_check_command_with_config(cmd, &context, Some(test_config)).await;
         // Should succeed - filters to only security category rules
         assert!(result.is_ok());
     }
@@ -246,7 +256,8 @@ mod tests {
             category: None,
         };
 
-        let result = execute_check_command(cmd, &context).await;
+        let test_config = AgentConfig::llama_agent(LlamaAgentConfig::for_testing());
+        let result = execute_check_command_with_config(cmd, &context, Some(test_config)).await;
         // Should succeed - filters to only specified rule
         assert!(result.is_ok());
     }
@@ -276,7 +287,8 @@ mod tests {
             category: Some("security".to_string()),
         };
 
-        let result = execute_check_command(cmd, &context).await;
+        let test_config = AgentConfig::llama_agent(LlamaAgentConfig::for_testing());
+        let result = execute_check_command_with_config(cmd, &context, Some(test_config)).await;
         // Should succeed - applies all filters
         assert!(result.is_ok());
     }
@@ -356,7 +368,8 @@ This is a partial template
         // Should succeed - partials should be excluded from checking
         // The test verifies partials are filtered out and only normal rules are checked
         // The actual rule will be checked by the LLM, which may pass or fail
-        let result = execute_check_command(cmd, &context).await;
+        let test_config = AgentConfig::llama_agent(LlamaAgentConfig::for_testing());
+        let result = execute_check_command_with_config(cmd, &context, Some(test_config)).await;
 
         // Restore original directory
         std::env::set_current_dir(original_dir).unwrap();

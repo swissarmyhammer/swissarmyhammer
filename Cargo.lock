@@ -6600,6 +6600,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "swissarmyhammer-agent-executor"
+version = "0.1.1"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "llama-agent",
+ "reqwest 0.12.23",
+ "serde",
+ "serde_json",
+ "serial_test",
+ "swissarmyhammer-config",
+ "swissarmyhammer-prompts",
+ "swissarmyhammer-tools",
+ "tempfile",
+ "test-log",
+ "thiserror 1.0.69",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "swissarmyhammer-cli"
 version = "0.1.1"
 dependencies = [
@@ -6630,6 +6652,7 @@ dependencies = [
  "serde_yaml",
  "serial_test",
  "swissarmyhammer",
+ "swissarmyhammer-agent-executor",
  "swissarmyhammer-common",
  "swissarmyhammer-config",
  "swissarmyhammer-git",
@@ -6826,11 +6849,11 @@ dependencies = [
  "serde_yaml",
  "serial_test",
  "sha2",
+ "swissarmyhammer-agent-executor",
  "swissarmyhammer-common",
  "swissarmyhammer-config",
  "swissarmyhammer-prompts",
  "swissarmyhammer-templating",
- "swissarmyhammer-workflow",
  "tempfile",
  "thiserror 1.0.69",
  "tokio",
@@ -7029,6 +7052,7 @@ dependencies = [
  "serde_json",
  "serde_yaml",
  "serial_test",
+ "swissarmyhammer-agent-executor",
  "swissarmyhammer-common",
  "swissarmyhammer-config",
  "swissarmyhammer-git",

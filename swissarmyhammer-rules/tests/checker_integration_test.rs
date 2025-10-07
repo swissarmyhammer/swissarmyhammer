@@ -5,9 +5,9 @@
 
 use std::path::PathBuf;
 use std::sync::Arc;
+use swissarmyhammer_agent_executor::LlamaAgentExecutorWrapper;
 use swissarmyhammer_config::LlamaAgentConfig;
 use swissarmyhammer_rules::{Rule, RuleChecker, Severity};
-use swissarmyhammer_workflow::LlamaAgentExecutorWrapper;
 use tempfile::TempDir;
 
 /// Create a test agent with default configuration

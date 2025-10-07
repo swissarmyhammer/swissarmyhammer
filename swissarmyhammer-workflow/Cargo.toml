@@ -34,6 +34,7 @@ swissarmyhammer-prompts = { path = "../swissarmyhammer-prompts" }
 swissarmyhammer-shell = { path = "../swissarmyhammer-shell" }
 swissarmyhammer-templating = { path = "../swissarmyhammer-templating" }
 swissarmyhammer-tools = { path = "../swissarmyhammer-tools" }
+swissarmyhammer-agent-executor = { path = "../swissarmyhammer-agent-executor" }
 
 # Template engine (legacy - being phased out)
 liquid = { workspace = true }

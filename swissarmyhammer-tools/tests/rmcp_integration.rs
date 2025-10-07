@@ -58,6 +58,7 @@ async fn test_stdio_server_with_rmcp_client() {
 /// The fast in-process test above covers the same functionality more efficiently.
 #[tokio::test]
 #[serial_test::serial]
+#[ignore = "spawns cargo build which deadlocks on build lock - run separately with --ignored"]
 async fn test_stdio_server_with_rmcp_client_e2e() {
     // Use rmcp client to connect to our stdio server running as subprocess
     let service = ()
