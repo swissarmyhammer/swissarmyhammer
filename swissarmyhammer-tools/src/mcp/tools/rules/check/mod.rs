@@ -87,10 +87,7 @@ impl RuleCheckTool {
     ) -> std::result::Result<RuleCheckResponse, McpError> {
         // Build the CLI command
         let mut cmd = Command::new("sah");
-        cmd.arg("--format")
-            .arg("json")
-            .arg("rule")
-            .arg("check");
+        cmd.arg("--format").arg("json").arg("rule").arg("check");
 
         // Add rule name filters if provided
         if let Some(ref rule_names) = request.rule_names {
@@ -107,15 +104,17 @@ impl RuleCheckTool {
         }
 
         // Configure command execution
-        cmd.stdout(Stdio::piped())
-            .stderr(Stdio::piped());
+        cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
 
         tracing::debug!("Executing CLI command: {:?}", cmd);
 
         // Execute the command
         let output = cmd.output().await.map_err(|e| {
             McpError::internal_error(
-                format!("Failed to execute sah command: {}. Ensure sah is in PATH.", e),
+                format!(
+                    "Failed to execute sah command: {}. Ensure sah is in PATH.",
+                    e
+                ),
                 None,
             )
         })?;

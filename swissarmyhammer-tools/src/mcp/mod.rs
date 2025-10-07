@@ -20,6 +20,8 @@ pub mod types;
 pub mod unified_server;
 pub mod utils;
 
+pub mod test_utils;
+
 #[cfg(test)]
 mod tests;
 
