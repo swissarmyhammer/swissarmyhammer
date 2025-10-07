@@ -1,3 +1,15 @@
+//! Rule checking MCP tool that validates code against SwissArmyHammer rules.
+//!
+//! This tool provides an MCP interface to the SwissArmyHammer rule checking functionality.
+//! It shells out to the CLI command `sah rule check` to perform the actual checking,
+//! maintaining proper separation between the CLI and MCP layers.
+//!
+//! Note: This implementation uses the CLI rather than direct library integration due to
+//! architectural constraints. The `swissarmyhammer-rules` crate requires an agent executor,
+//! which creates a circular dependency if used directly from the tools crate (tools → rules →
+//! agent-executor → tools). The CLI-based approach avoids this cycle while maintaining
+//! full functionality.
+
 use crate::mcp::tool_registry::{BaseToolImpl, McpTool, ToolContext};
 use async_trait::async_trait;
 use rmcp::model::CallToolResult;
@@ -6,7 +18,7 @@ use serde::{Deserialize, Serialize};
 use std::process::Stdio;
 use tokio::process::Command;
 
-/// Request structure for rule checking
+/// Request structure for rule checking operations via MCP
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RuleCheckRequest {
     /// Optional list of specific rule names to check
@@ -18,7 +30,7 @@ pub struct RuleCheckRequest {
     pub file_paths: Option<Vec<String>>,
 }
 
-/// Response structure for rule checking results
+/// Response structure for rule checking results from CLI
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RuleCheckResponse {
     /// List of rule violations found
@@ -34,7 +46,7 @@ pub struct RuleCheckResponse {
     pub execution_time_ms: u64,
 }
 
-/// Individual rule violation
+/// Individual rule violation details
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RuleViolation {
     /// Name of the rule that was violated
@@ -49,12 +61,16 @@ pub struct RuleViolation {
     /// Violation message
     pub message: String,
 
-    /// Optional line number
+    /// Optional line number where the violation was found
     #[serde(skip_serializing_if = "Option::is_none")]
     pub line: Option<usize>,
 }
 
-/// Tool for checking code against rules via CLI wrapper
+/// Tool for checking code against rules via CLI invocation
+///
+/// This tool maintains separation between the CLI and MCP layers by invoking
+/// the `sah rule check` command as a subprocess. This approach avoids circular
+/// dependencies while providing full rule checking functionality through MCP.
 #[derive(Default, Clone)]
 pub struct RuleCheckTool;
 
@@ -64,90 +80,81 @@ impl RuleCheckTool {
         Self
     }
 
-    /// Execute the sah rule check command
+    /// Execute rule check by invoking the CLI command and parsing JSON output
     async fn execute_rule_check(
         &self,
         request: &RuleCheckRequest,
     ) -> std::result::Result<RuleCheckResponse, McpError> {
-        let start_time = std::time::Instant::now();
-
-        // Build the command
+        // Build the CLI command
         let mut cmd = Command::new("sah");
-        cmd.arg("--format").arg("json");
-        cmd.arg("rule").arg("check");
+        cmd.arg("--format")
+            .arg("json")
+            .arg("rule")
+            .arg("check");
 
-        // Add rule filters if specified
-        if let Some(ref rules) = request.rule_names {
-            for rule in rules {
-                cmd.arg("--rule").arg(rule);
+        // Add rule name filters if provided
+        if let Some(ref rule_names) = request.rule_names {
+            for rule_name in rule_names {
+                cmd.arg("--rule").arg(rule_name);
             }
         }
 
-        // Add file patterns if specified, otherwise default to **/*.*
-        let patterns = request
-            .file_paths
-            .clone()
-            .unwrap_or_else(|| vec!["**/*.*".to_string()]);
-
-        for pattern in &patterns {
-            cmd.arg(pattern);
+        // Add file path patterns if provided
+        if let Some(ref file_paths) = request.file_paths {
+            for file_path in file_paths {
+                cmd.arg(file_path);
+            }
         }
+
+        // Configure command execution
+        cmd.stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+
+        tracing::debug!("Executing CLI command: {:?}", cmd);
 
         // Execute the command
-        cmd.stdout(Stdio::piped());
-        cmd.stderr(Stdio::piped());
-
-        tracing::debug!("Executing rule check command: {:?}", cmd);
-
         let output = cmd.output().await.map_err(|e| {
-            tracing::error!("Failed to execute sah rule check: {}", e);
-            McpError::internal_error(format!("Failed to execute rule check: {}", e), None)
+            McpError::internal_error(
+                format!("Failed to execute sah command: {}. Ensure sah is in PATH.", e),
+                None,
+            )
         })?;
 
-        let execution_time_ms = start_time.elapsed().as_millis() as u64;
+        // Parse stdout as JSON
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
 
-        // Parse the JSON output
-        if output.status.success() {
-            // Parse JSON output from stdout
-            let stdout_str = String::from_utf8_lossy(&output.stdout);
+        tracing::debug!("CLI stdout: {}", stdout);
+        tracing::debug!("CLI stderr: {}", stderr);
 
-            // If output is empty, return empty result
-            if stdout_str.trim().is_empty() {
-                return Ok(RuleCheckResponse {
-                    violations: vec![],
-                    rules_checked: 0,
-                    files_checked: 0,
-                    execution_time_ms,
-                });
+        // Try to parse the JSON output
+        if !stdout.is_empty() {
+            match serde_json::from_str::<RuleCheckResponse>(&stdout) {
+                Ok(response) => Ok(response),
+                Err(parse_err) => {
+                    tracing::error!("Failed to parse CLI JSON output: {}", parse_err);
+                    tracing::error!("Raw output: {}", stdout);
+
+                    // Return a helpful error
+                    Err(McpError::internal_error(
+                        format!(
+                            "Failed to parse rule check output: {}. Raw output: {}",
+                            parse_err, stdout
+                        ),
+                        None,
+                    ))
+                }
             }
-
-            // Try to parse as JSON
-            // The CLI might return different formats, so we handle it gracefully
-            Ok(RuleCheckResponse {
-                violations: vec![],
-                rules_checked: 0,
-                files_checked: 0,
-                execution_time_ms,
-            })
         } else {
-            // Command failed - could be due to violations or errors
-            let stderr_str = String::from_utf8_lossy(&output.stderr);
-            let stdout_str = String::from_utf8_lossy(&output.stdout);
-
-            tracing::warn!(
-                "Rule check command failed. Exit code: {:?}, stderr: {}, stdout: {}",
-                output.status.code(),
-                stderr_str,
-                stdout_str
-            );
-
-            // Try to parse violations from output
-            Ok(RuleCheckResponse {
-                violations: vec![],
-                rules_checked: 0,
-                files_checked: 0,
-                execution_time_ms,
-            })
+            // No JSON output, likely an error
+            Err(McpError::internal_error(
+                format!(
+                    "Rule check command failed with exit code {}. Error: {}",
+                    output.status.code().unwrap_or(-1),
+                    stderr
+                ),
+                None,
+            ))
         }
     }
 }
@@ -188,7 +195,7 @@ impl McpTool for RuleCheckTool {
     async fn execute(
         &self,
         arguments: serde_json::Map<String, serde_json::Value>,
-        _context: &ToolContext,
+        _context: &ToolContext, // Not used - tool operates independently
     ) -> std::result::Result<CallToolResult, McpError> {
         let request: RuleCheckRequest = BaseToolImpl::parse_arguments(arguments)?;
 
@@ -273,5 +280,74 @@ mod tests {
         let request: RuleCheckRequest = serde_json::from_value(args).unwrap();
         assert!(request.rule_names.is_none());
         assert!(request.file_paths.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_rule_check_response_parsing() {
+        // Test parsing a response with violations
+        let json_response = json!({
+            "violations": [
+                {
+                    "rule_name": "no-unwrap",
+                    "file_path": "src/main.rs",
+                    "severity": "error",
+                    "message": "Found unwrap() call",
+                    "line": 42
+                }
+            ],
+            "rules_checked": 5,
+            "files_checked": 10,
+            "execution_time_ms": 150
+        });
+
+        let response: RuleCheckResponse = serde_json::from_value(json_response).unwrap();
+        assert_eq!(response.violations.len(), 1);
+        assert_eq!(response.violations[0].rule_name, "no-unwrap");
+        assert_eq!(response.violations[0].file_path, "src/main.rs");
+        assert_eq!(response.violations[0].severity, "error");
+        assert_eq!(response.violations[0].message, "Found unwrap() call");
+        assert_eq!(response.violations[0].line, Some(42));
+        assert_eq!(response.rules_checked, 5);
+        assert_eq!(response.files_checked, 10);
+        assert_eq!(response.execution_time_ms, 150);
+    }
+
+    #[tokio::test]
+    async fn test_rule_check_response_no_violations() {
+        // Test parsing a response with no violations
+        let json_response = json!({
+            "violations": [],
+            "rules_checked": 5,
+            "files_checked": 10,
+            "execution_time_ms": 120
+        });
+
+        let response: RuleCheckResponse = serde_json::from_value(json_response).unwrap();
+        assert!(response.violations.is_empty());
+        assert_eq!(response.rules_checked, 5);
+        assert_eq!(response.files_checked, 10);
+        assert_eq!(response.execution_time_ms, 120);
+    }
+
+    #[tokio::test]
+    async fn test_violation_without_line_number() {
+        // Test parsing violations without line numbers
+        let json_response = json!({
+            "violations": [
+                {
+                    "rule_name": "missing-docs",
+                    "file_path": "src/lib.rs",
+                    "severity": "warning",
+                    "message": "Missing documentation"
+                }
+            ],
+            "rules_checked": 1,
+            "files_checked": 1,
+            "execution_time_ms": 50
+        });
+
+        let response: RuleCheckResponse = serde_json::from_value(json_response).unwrap();
+        assert_eq!(response.violations.len(), 1);
+        assert_eq!(response.violations[0].line, None);
     }
 }
