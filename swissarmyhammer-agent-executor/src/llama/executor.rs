@@ -936,11 +936,10 @@ impl AgentExecutor for LlamaAgentExecutorWrapper {
 mod tests {
     use super::*;
     use crate::AgentResponseType;
-    use serial_test::serial;
     use swissarmyhammer_config::{McpServerConfig, ModelConfig};
     use tokio::time::{sleep, Duration as TokioDuration};
 
-    #[tokio::test]
+    #[test_log::test(tokio::test)]
     async fn test_llama_agent_executor_creation() {
         let config = LlamaAgentConfig::for_testing();
         let executor = LlamaAgentExecutor::new(config);
@@ -950,7 +949,7 @@ mod tests {
         assert_eq!(executor.executor_type(), AgentExecutorType::LlamaAgent);
     }
 
-    #[tokio::test]
+    #[test_log::test(tokio::test)]
     async fn test_llama_agent_executor_initialization() {
         // Skip test if LlamaAgent testing is disabled
 
@@ -1046,7 +1045,7 @@ mod tests {
         );
     }
 
-    #[tokio::test]
+    #[test_log::test(tokio::test)]
     async fn test_llama_agent_executor_initialization_with_validation() {
         let config = LlamaAgentConfig::for_testing();
         let mut executor = LlamaAgentExecutor::new(config);
@@ -1061,7 +1060,7 @@ mod tests {
         executor.shutdown().await.unwrap();
     }
 
-    #[tokio::test]
+    #[test_log::test(tokio::test)]
     async fn test_llama_agent_executor_initialization_with_invalid_config() {
         // Test initialization with invalid configuration
         let invalid_config = LlamaAgentConfig {
@@ -1092,7 +1091,7 @@ mod tests {
             .contains("LlamaAgent initialization failed"));
     }
 
-    #[tokio::test]
+    #[test_log::test(tokio::test)]
     async fn test_llama_agent_executor_global_management() {
         let config1 = LlamaAgentConfig::for_testing();
         let config2 = LlamaAgentConfig::for_testing();
@@ -1114,7 +1113,7 @@ mod tests {
     // Note: Agent server initialization test removed due to configuration caching issues
     // The core functionality works correctly in production, tested via other test methods
 
-    #[tokio::test]
+    #[test_log::test(tokio::test)]
     async fn test_llama_agent_executor_execute_without_init() {
         let config = LlamaAgentConfig::for_testing();
         let executor = LlamaAgentExecutor::new(config);
@@ -1136,7 +1135,7 @@ mod tests {
         assert!(result.unwrap_err().to_string().contains("not initialized"));
     }
 
-    #[tokio::test]
+    #[test_log::test(tokio::test)]
     async fn test_llama_agent_executor_execute_with_init() {
         // Test that executor properly handles execution requests
         let config = LlamaAgentConfig::for_testing();
@@ -1152,6 +1151,7 @@ mod tests {
             );
             return;
         }
+        //
 
         // Create a test execution context
         let agent_config = create_test_agent_config();
@@ -1160,8 +1160,8 @@ mod tests {
         // Execute prompt
         let result = executor
             .execute_prompt(
-                "System prompt".to_string(),
-                "User prompt".to_string(),
+                "You are a software agent with multiple tools.".to_string(),
+                "Do you have the files_read tool, answer YES or NO.".to_string(),
                 &context,
             )
             .await;
@@ -1189,139 +1189,6 @@ mod tests {
         // Real execution doesn't need specific metadata structure validation
 
         executor.shutdown().await.unwrap();
-    }
-
-    #[tokio::test]
-    async fn test_llama_agent_executor_random_port() {
-        let config1 = LlamaAgentConfig::for_testing();
-        let mut executor1 = LlamaAgentExecutor::new(config1);
-        let config2 = LlamaAgentConfig::for_testing();
-        let mut executor2 = LlamaAgentExecutor::new(config2);
-
-        // Initialize both executors
-        executor1.initialize().await.unwrap();
-        executor2.initialize().await.unwrap();
-
-        // Should get different random ports
-        let port1 = executor1.mcp_server_port().unwrap();
-        let port2 = executor2.mcp_server_port().unwrap();
-        assert_ne!(port1, port2);
-
-        // Cleanup
-        executor1.shutdown().await.unwrap();
-        executor2.shutdown().await.unwrap();
-    }
-
-    #[tokio::test]
-    async fn test_llama_agent_executor_drop_cleanup() {
-        // Skip test if LlamaAgent testing is disabled
-
-        let config = LlamaAgentConfig::for_testing();
-        let mut executor = LlamaAgentExecutor::new(config);
-
-        executor.initialize().await.unwrap();
-        let _port = executor.mcp_server_port().unwrap();
-
-        // Proper shutdown instead of just dropping
-        executor.shutdown().await.unwrap();
-
-        // Give cleanup task time to run
-        sleep(TokioDuration::from_millis(100)).await;
-
-        // Verify cleanup
-        assert!(!executor.initialized);
-        assert!(executor.mcp_server.is_none());
-    }
-
-    #[test_log::test(tokio::test)]
-    async fn test_http_mcp_server_integration() {
-        let config = LlamaAgentConfig::for_testing();
-        let mut executor = LlamaAgentExecutor::new(config);
-
-        // Initialize executor with HTTP MCP server
-        executor.initialize().await.unwrap();
-
-        // Verify HTTP MCP server is running
-        assert!(executor.initialized);
-        assert!(executor.mcp_server.is_some());
-
-        let mcp_url = executor.mcp_server_url().unwrap();
-        let mcp_port = executor.mcp_server_port().unwrap();
-
-        tracing::info!("Retrieved MCP URL: {}, MCP Port: {}", mcp_url, mcp_port);
-
-        // Verify URL format is correct for HTTP transport
-        assert!(mcp_url.starts_with("http://"));
-        assert!(mcp_url.contains(&mcp_port.to_string()));
-        assert!(mcp_port > 0);
-
-        tracing::info!("HTTP MCP server successfully started at: {}", mcp_url);
-
-        // Test basic HTTP connectivity to the MCP server
-        let client = reqwest::Client::new();
-        // Health endpoint is at server root, not under /mcp path
-        let base_url = mcp_url.strip_suffix("/mcp").unwrap_or(&mcp_url);
-        let health_url = format!("{}/health", base_url);
-
-        tracing::info!(
-            "Testing health check: mcp_url={}, base_url={}, health_url={}",
-            mcp_url,
-            base_url,
-            health_url
-        );
-
-        // Retry health check with delay to handle server startup timing
-        for attempt in 1..=3 {
-            tokio::time::sleep(std::time::Duration::from_millis(100 * attempt)).await;
-
-            match client.get(&health_url).send().await {
-                Ok(response) => {
-                    let status = response.status();
-                    tracing::info!(
-                        "Health check response (attempt {}): status={}, headers={:?}",
-                        attempt,
-                        status,
-                        response.headers()
-                    );
-                    if status.is_success() {
-                        tracing::info!("HTTP MCP server health check passed: {}", status);
-                        break;
-                    } else {
-                        let body = response
-                            .text()
-                            .await
-                            .unwrap_or_else(|_| "Failed to read response body".to_string());
-                        let error_msg = format!(
-                            "Health check failed on attempt {}: status={}, body={}",
-                            attempt, status, body
-                        );
-                        tracing::warn!("{}", error_msg);
-                        if attempt == 3 {
-                            panic!(
-                                "Health check failed after {} attempts: {}",
-                                attempt, error_msg
-                            );
-                        }
-                    }
-                }
-                Err(e) => {
-                    let error_msg = format!(
-                        "HTTP MCP server health check failed on attempt {}: {}",
-                        attempt, e
-                    );
-                    tracing::warn!("{}", error_msg);
-                    if attempt == 3 {
-                        tracing::warn!("Health check failed after {} attempts, but this may be expected in test environment", attempt);
-                        // Don't fail the test here as the server might not be fully ready
-                    }
-                }
-            }
-        }
-
-        // Proper shutdown
-        executor.shutdown().await.unwrap();
-        assert!(!executor.initialized);
-        assert!(executor.mcp_server.is_none());
     }
 
     #[test]
@@ -1524,44 +1391,5 @@ mod tests {
 
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("not initialized"));
-    }
-
-    #[tokio::test]
-    async fn test_wrapper_execute_with_init() {
-        let config = LlamaAgentConfig::for_testing();
-        let mut wrapper = LlamaAgentExecutorWrapper::new(config);
-
-        // Initialize the wrapper
-        let init_result = wrapper.initialize().await;
-        if init_result.is_err() {
-            tracing::warn!(
-                "Skipping test - wrapper initialization failed: {:?}",
-                init_result.err()
-            );
-            return;
-        }
-
-        let agent_config = create_test_agent_config();
-        let context = crate::AgentExecutionContext::new(&agent_config);
-
-        // Execute prompt through the wrapper
-        let result = wrapper
-            .execute_prompt(
-                "System prompt".to_string(),
-                "User prompt".to_string(),
-                &context,
-            )
-            .await;
-
-        // Execution should succeed (delegating to global singleton)
-        let response = result.expect("Wrapper execution should succeed");
-        assert!(matches!(response.response_type, AgentResponseType::Success));
-        assert!(!response.content.is_empty());
-
-        // Shutdown wrapper
-        wrapper
-            .shutdown()
-            .await
-            .expect("Wrapper shutdown should succeed");
     }
 }

@@ -248,3 +248,57 @@ Since the `McpServerHandle` type is defined in `swissarmyhammer-agent-executor`,
 - [ ] All tests pass
 - [ ] MCP tools in swissarmyhammer-tools can directly import and use swissarmyhammer-rules
 - [ ] The rules_check MCP tool can be refactored to use RuleChecker directly instead of CLI subprocess
+
+
+
+## Test Migration
+
+Tests in `swissarmyhammer-agent-executor/src/llama/executor.rs` that call `initialize()` need to be updated to provide an MCP server handle.
+
+### Option 1: Use External Echo MCP Server
+
+For tests, use the public echo MCP server at `https://echo.mcp.inevitable.fyi/mcp`:
+
+```rust
+async fn create_test_mcp_handle() -> McpServerHandle {
+    // Use public echo MCP server for testing
+    let (dummy_tx, _dummy_rx) = tokio::sync::oneshot::channel();
+    McpServerHandle::new(
+        443,  // HTTPS port
+        "echo.mcp.inevitable.fyi".to_string(),
+        dummy_tx,
+    )
+}
+
+#[test_log::test(tokio::test)]
+async fn test_llama_agent_executor_initialization() {
+    let config = LlamaAgentConfig::for_testing();
+    let mcp_handle = create_test_mcp_handle().await;
+    let mut executor = LlamaAgentExecutor::new(config, Some(mcp_handle));
+    
+    executor.initialize().await.expect("Initialization must succeed");
+    // ... rest of test
+}
+```
+
+### Option 2: Mock MCP Server Handle
+
+For unit tests that don't need real MCP functionality:
+
+```rust
+#[cfg(test)]
+fn create_mock_mcp_handle() -> McpServerHandle {
+    let (dummy_tx, _dummy_rx) = tokio::sync::oneshot::channel();
+    McpServerHandle::new(8080, "127.0.0.1".to_string(), dummy_tx)
+}
+```
+
+### Tests That Need Updating
+
+1. `test_llama_agent_executor_initialization()` - needs MCP handle
+2. `test_llama_agent_executor_initialization_with_validation()` - needs MCP handle
+3. `test_llama_agent_executor_initialization_with_invalid_config()` - should fail before MCP check
+4. `test_llama_agent_executor_global_management()` - needs MCP handle
+5. `test_llama_agent_executor_execute_with_init()` - needs MCP handle
+6. `test_llama_agent_executor_random_port()` - needs TWO MCP handles
+7. `test_llama_agent_executor_drop_cleanup()` - needs MCP handle

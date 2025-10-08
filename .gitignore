@@ -59,6 +59,7 @@ proptest-regressions/
 .fastembed_cache/
 
 swissarmyhammer/.swissarmyhammer
+swissarmyhammer-agent-executor/.swissarmyhammer
 swissarmyhammer-cli/.swissarmyhammer
 swissarmyhammer-workflow/.swissarmyhammer
 
