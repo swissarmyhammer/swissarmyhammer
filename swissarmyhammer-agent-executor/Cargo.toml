@@ -23,6 +23,8 @@ anyhow = { workspace = true }
 tracing = { workspace = true }
 thiserror = { workspace = true }
 async-trait = { workspace = true }
+tempfile = { workspace = true }
+which = { workspace = true }
 
 # SwissArmyHammer dependencies
 swissarmyhammer-config = { path = "../swissarmyhammer-config" }
@@ -32,7 +34,6 @@ swissarmyhammer-prompts = { path = "../swissarmyhammer-prompts" }
 llama-agent = { workspace = true }
 
 [dev-dependencies]
-tempfile = { workspace = true }
 serial_test = "3.1"
 test-log = { workspace = true }
 tracing-subscriber = { workspace = true }
