@@ -26,6 +26,8 @@ swissarmyhammer-todo = { path = "../swissarmyhammer-todo" }
 swissarmyhammer-search = { path = "../swissarmyhammer-search" }
 swissarmyhammer-shell = { path = "../swissarmyhammer-shell" }
 swissarmyhammer-outline = { path = "../swissarmyhammer-outline" }
+swissarmyhammer-rules = { path = "../swissarmyhammer-rules" }
+swissarmyhammer-agent-executor = { path = "../swissarmyhammer-agent-executor" }
 
 
 # Async and JSON processing
