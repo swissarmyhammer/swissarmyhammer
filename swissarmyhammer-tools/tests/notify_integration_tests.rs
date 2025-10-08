@@ -7,6 +7,7 @@ use serde_json::json;
 
 use std::sync::Arc;
 
+use swissarmyhammer_config::agent::AgentConfig;
 use swissarmyhammer_git::GitOperations;
 use swissarmyhammer_issues::{FileSystemIssueStorage, IssueStorage};
 use swissarmyhammer_memoranda::{MarkdownMemoStorage, MemoStorage};
@@ -31,7 +32,13 @@ async fn create_test_context() -> ToolContext {
 
     let tool_handlers = Arc::new(ToolHandlers::new(memo_storage.clone()));
 
-    ToolContext::new(tool_handlers, issue_storage, git_ops, memo_storage)
+    ToolContext::new(
+        tool_handlers,
+        issue_storage,
+        git_ops,
+        memo_storage,
+        Arc::new(AgentConfig::default()),
+    )
 }
 
 /// Create a test tool registry with notify tool registered

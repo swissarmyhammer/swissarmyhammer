@@ -9,10 +9,58 @@ use rmcp::model::CallToolResult;
 use rmcp::ErrorData as McpError;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
-use swissarmyhammer_agent_executor::{AgentExecutor, LlamaAgentExecutorWrapper};
-use swissarmyhammer_config::LlamaAgentConfig;
+use swissarmyhammer_agent_executor::{
+    AgentExecutor, ClaudeCodeExecutor, LlamaAgentExecutorWrapper,
+};
+use swissarmyhammer_config::{AgentConfig, AgentExecutorConfig};
 use swissarmyhammer_rules::{RuleCheckRequest as DomainRuleCheckRequest, RuleChecker, Severity};
 use tokio::sync::OnceCell;
+
+/// Create an agent executor from agent configuration
+///
+/// This factory function instantiates the appropriate agent executor type based on
+/// the provided configuration. It handles both ClaudeCode and LlamaAgent executors,
+/// initializing them appropriately for rule checking operations.
+///
+/// # Arguments
+///
+/// * `config` - The agent configuration specifying which executor to use
+///
+/// # Returns
+///
+/// * `Result<Arc<dyn AgentExecutor>, McpError>` - The initialized agent executor
+///
+/// # Errors
+///
+/// Returns an error if agent initialization fails
+async fn create_agent_from_config(
+    config: &AgentConfig,
+) -> Result<Arc<dyn AgentExecutor>, McpError> {
+    match &config.executor {
+        AgentExecutorConfig::ClaudeCode(_claude_config) => {
+            tracing::debug!("Creating ClaudeCode executor for rule checking");
+            let mut executor = ClaudeCodeExecutor::new();
+            executor.initialize().await.map_err(|e| {
+                McpError::internal_error(
+                    format!("Failed to initialize ClaudeCode executor: {}", e),
+                    None,
+                )
+            })?;
+            Ok(Arc::new(executor) as Arc<dyn AgentExecutor>)
+        }
+        AgentExecutorConfig::LlamaAgent(llama_config) => {
+            tracing::debug!("Creating LlamaAgent executor for rule checking");
+            let mut executor = LlamaAgentExecutorWrapper::new(llama_config.clone());
+            executor.initialize().await.map_err(|e| {
+                McpError::internal_error(
+                    format!("Failed to initialize LlamaAgent executor: {}", e),
+                    None,
+                )
+            })?;
+            Ok(Arc::new(executor) as Arc<dyn AgentExecutor>)
+        }
+    }
+}
 
 /// Request structure for rule checking operations via MCP
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -52,18 +100,17 @@ impl RuleCheckTool {
         }
     }
 
-    /// Get or initialize the rule checker
-    async fn get_checker(&self) -> Result<&RuleChecker, McpError> {
-        self.checker
-            .get_or_try_init(|| async {
-                tracing::debug!("Initializing RuleChecker for MCP tool");
+    /// Get or initialize the rule checker using the provided context's agent configuration
+    async fn get_checker(&self, context: &ToolContext) -> Result<&RuleChecker, McpError> {
+        // Clone config for use in async closure
+        let agent_config = context.agent_config.clone();
 
-                // Use testing configuration for MCP context to avoid loading full production
-                // model weights. This provides fast initialization while maintaining rule
-                // checking functionality through the agent executor interface.
-                let config = LlamaAgentConfig::for_testing();
-                let agent: Arc<dyn AgentExecutor> =
-                    Arc::new(LlamaAgentExecutorWrapper::new(config));
+        self.checker
+            .get_or_try_init(|| async move {
+                tracing::debug!("Initializing RuleChecker for MCP tool with configured agent");
+
+                // Create agent executor from configuration
+                let agent = create_agent_from_config(&agent_config).await?;
 
                 // Create rule checker
                 let mut checker = RuleChecker::new(agent).map_err(|e| {
@@ -78,7 +125,10 @@ impl RuleCheckTool {
                     )
                 })?;
 
-                tracing::info!("RuleChecker initialized successfully");
+                tracing::info!(
+                    "RuleChecker initialized successfully with {:?} executor",
+                    agent_config.executor_type()
+                );
                 Ok(checker)
             })
             .await
@@ -137,14 +187,14 @@ impl McpTool for RuleCheckTool {
     async fn execute(
         &self,
         arguments: serde_json::Map<String, serde_json::Value>,
-        _context: &ToolContext,
+        context: &ToolContext,
     ) -> std::result::Result<CallToolResult, McpError> {
         let request: RuleCheckRequest = BaseToolImpl::parse_arguments(arguments)?;
 
         tracing::debug!("Executing rule check with request: {:?}", request);
 
-        // Get or initialize the rule checker
-        let checker = self.get_checker().await?;
+        // Get or initialize the rule checker with context's agent configuration
+        let checker = self.get_checker(context).await?;
 
         // Map MCP request to domain request
         let domain_request = DomainRuleCheckRequest {
@@ -255,9 +305,10 @@ mod tests {
     #[tokio::test]
     async fn test_rule_check_tool_initialization() {
         let tool = RuleCheckTool::new();
+        let context = crate::test_utils::create_test_context().await;
 
         // Get checker should initialize it
-        let checker_result = tool.get_checker().await;
+        let checker_result = tool.get_checker(&context).await;
 
         // In test environment without actual model, initialization may fail
         // which is expected - we're just testing the initialization pattern
@@ -277,18 +328,19 @@ mod tests {
     #[tokio::test]
     async fn test_rule_check_tool_lazy_initialization() {
         let tool = RuleCheckTool::new();
+        let context = crate::test_utils::create_test_context().await;
 
         // Checker should not be initialized yet
         assert!(tool.checker.get().is_none());
 
         // Calling get_checker should initialize it
-        let _ = tool.get_checker().await;
+        let _ = tool.get_checker(&context).await;
 
         // Now it should be initialized (or have attempted initialization)
         // We can't check the internal state directly, but a second call
         // should return the same instance (testing the OnceCell behavior)
-        let result1 = tool.get_checker().await;
-        let result2 = tool.get_checker().await;
+        let result1 = tool.get_checker(&context).await;
+        let result2 = tool.get_checker(&context).await;
 
         // Both results should have the same success/failure status
         assert_eq!(result1.is_ok(), result2.is_ok());

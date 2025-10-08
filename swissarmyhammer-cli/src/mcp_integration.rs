@@ -40,8 +40,16 @@ impl CliToolContext {
         let git_ops = Self::create_git_operations(working_dir);
         let memo_storage = Self::create_memo_storage(working_dir);
         let tool_handlers = Self::create_tool_handlers(memo_storage.clone());
+        let agent_config =
+            std::sync::Arc::new(swissarmyhammer_config::agent::AgentConfig::default());
 
-        let tool_context = ToolContext::new(tool_handlers, issue_storage, git_ops, memo_storage);
+        let tool_context = ToolContext::new(
+            tool_handlers,
+            issue_storage,
+            git_ops,
+            memo_storage,
+            agent_config,
+        );
 
         let tool_registry = Arc::new(Self::create_tool_registry());
 
@@ -298,7 +306,14 @@ mod tests {
         let tool_handlers = Arc::new(
             swissarmyhammer_tools::mcp::tool_handlers::ToolHandlers::new(memo_storage.clone()),
         );
+        let agent_config = Arc::new(swissarmyhammer_config::agent::AgentConfig::default());
 
-        ToolContext::new(tool_handlers, issue_storage, git_ops, memo_storage)
+        ToolContext::new(
+            tool_handlers,
+            issue_storage,
+            git_ops,
+            memo_storage,
+            agent_config,
+        )
     }
 }

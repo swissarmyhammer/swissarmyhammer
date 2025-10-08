@@ -1372,7 +1372,14 @@ mod tests {
         let tool_handlers = Arc::new(crate::mcp::tool_handlers::ToolHandlers::new(
             memo_storage.clone(),
         ));
-        ToolContext::new(tool_handlers, issue_storage, git_ops, memo_storage)
+        let agent_config = Arc::new(swissarmyhammer_config::agent::AgentConfig::default());
+        ToolContext::new(
+            tool_handlers,
+            issue_storage,
+            git_ops,
+            memo_storage,
+            agent_config,
+        )
     }
 
     #[test]
