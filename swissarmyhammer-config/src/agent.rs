@@ -1187,7 +1187,7 @@ mod tests {
         }
         assert_eq!(config.mcp_server.port, 0);
         assert_eq!(config.mcp_server.timeout_seconds, 900); // Default timeout
-        // Removed test_mode field - now always uses real models
+                                                            // Removed test_mode field - now always uses real models
     }
 
     #[test]

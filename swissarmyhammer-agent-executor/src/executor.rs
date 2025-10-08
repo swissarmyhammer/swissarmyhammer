@@ -2,7 +2,7 @@
 
 use crate::{ActionResult, AgentExecutionContext, AgentResponse};
 use async_trait::async_trait;
-use swissarmyhammer_config::agent::{AgentExecutorConfig, AgentExecutorType};
+use swissarmyhammer_config::agent::AgentExecutorType;
 
 /// Agent executor trait for abstracting prompt execution across different AI backends
 #[async_trait]
@@ -45,19 +45,12 @@ impl AgentExecutorFactory {
                 ))
             }
             AgentExecutorType::LlamaAgent => {
-                tracing::info!("Using LlamaAgent with singleton pattern");
-                let agent_config = context.agent_config();
-                let llama_config = match &agent_config.executor {
-                    AgentExecutorConfig::LlamaAgent(config) => config.clone(),
-                    _ => {
-                        return Err(crate::ActionError::ExecutionError(
-                            "Expected LlamaAgent configuration".to_string(),
-                        ))
-                    }
-                };
-                let mut executor = crate::llama::LlamaAgentExecutorWrapper::new(llama_config);
-                executor.initialize().await?;
-                Ok(Box::new(executor))
+                // LlamaAgent requires MCP server to be started first
+                // This factory is low-level and doesn't start MCP server
+                // Use swissarmyhammer_workflow::AgentExecutorFactory instead, which handles MCP server lifecycle
+                Err(crate::ActionError::ExecutionError(
+                    "LlamaAgent executor requires MCP server. Use swissarmyhammer_workflow::AgentExecutorFactory instead of agent-executor's factory.".to_string(),
+                ))
             }
         }
     }

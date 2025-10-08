@@ -260,7 +260,46 @@ impl AgentExecutorFactory {
                         ))
                     }
                 };
-                let mut executor = crate::agents::LlamaAgentExecutorWrapper::new(llama_config);
+
+                // Start MCP server in workflow layer (breaking circular dependency)
+                use swissarmyhammer_prompts::PromptLibrary;
+                use swissarmyhammer_tools::mcp::unified_server::{start_mcp_server, McpServerMode};
+
+                tracing::info!("Starting MCP server for LlamaAgent in workflow layer");
+                let tools_mcp_handle = start_mcp_server(
+                    McpServerMode::Http {
+                        port: if llama_config.mcp_server.port == 0 {
+                            None
+                        } else {
+                            Some(llama_config.mcp_server.port)
+                        },
+                    },
+                    Some(PromptLibrary::default()),
+                )
+                .await
+                .map_err(|e| {
+                    ActionError::ExecutionError(format!("Failed to start MCP server: {}", e))
+                })?;
+
+                tracing::info!(
+                    "MCP server started on port {:?}",
+                    tools_mcp_handle.info.port
+                );
+
+                // Convert tools McpServerHandle to agent-executor McpServerHandle
+                let port = tools_mcp_handle.info.port.unwrap_or(0);
+                let (dummy_tx, _dummy_rx) = tokio::sync::oneshot::channel();
+                let agent_mcp_handle = crate::agents::llama_agent_executor::McpServerHandle::new(
+                    port,
+                    "127.0.0.1".to_string(),
+                    dummy_tx,
+                );
+
+                // Create executor with pre-started MCP server
+                let mut executor = crate::agents::LlamaAgentExecutorWrapper::new_with_mcp(
+                    llama_config,
+                    Some(agent_mcp_handle),
+                );
                 executor.initialize().await?;
                 Ok(Box::new(executor))
             }

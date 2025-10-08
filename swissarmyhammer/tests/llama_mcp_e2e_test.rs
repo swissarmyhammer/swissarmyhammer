@@ -4,7 +4,6 @@
 //! the in-process HTTP MCP server to read the Cargo.toml file. It proves the
 //! complete integration: local model → HTTP MCP server → MCP tool → file system.
 
-use serial_test::serial;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::Duration;

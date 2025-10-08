@@ -27,7 +27,6 @@ async-trait = { workspace = true }
 # SwissArmyHammer dependencies
 swissarmyhammer-config = { path = "../swissarmyhammer-config" }
 swissarmyhammer-prompts = { path = "../swissarmyhammer-prompts" }
-swissarmyhammer-tools = { path = "../swissarmyhammer-tools" }
 
 # LlamaAgent integration for local AI execution
 llama-agent = { workspace = true }
@@ -38,6 +37,7 @@ serial_test = "3.1"
 test-log = { workspace = true }
 tracing-subscriber = { workspace = true }
 reqwest = { workspace = true }
+swissarmyhammer-tools = { path = "../swissarmyhammer-tools" }
 
 # NEVER add features or feature flags to this Cargo.toml!
 # SwissArmyHammer provides ALL functionality ALL the time.

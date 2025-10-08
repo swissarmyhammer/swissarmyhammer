@@ -16,4 +16,4 @@ pub use executor::{AgentExecutor, AgentExecutorFactory};
 pub use response::{AgentResponse, AgentResponseType};
 
 // Re-export llama types for convenience
-pub use llama::{LlamaAgentExecutor, LlamaAgentExecutorWrapper};
+pub use llama::{LlamaAgentExecutor, LlamaAgentExecutorWrapper, McpServerHandle};

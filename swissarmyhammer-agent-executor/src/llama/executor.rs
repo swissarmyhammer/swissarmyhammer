@@ -21,9 +21,6 @@ pub use llama_agent::{
     AgentServer,
 };
 
-/// Constant for random port allocation logging
-const RANDOM_PORT_DISPLAY: &str = "random";
-
 /// HTTP MCP server handle for managing server lifecycle
 #[derive(Debug, Clone)]
 pub struct McpServerHandle {
@@ -37,7 +34,7 @@ pub struct McpServerHandle {
 
 impl McpServerHandle {
     /// Create a new MCP server handle
-    fn new(port: u16, host: String, shutdown_tx: tokio::sync::oneshot::Sender<()>) -> Self {
+    pub fn new(port: u16, host: String, shutdown_tx: tokio::sync::oneshot::Sender<()>) -> Self {
         let url = format!("http://{}:{}", host, port); // Base URL - MCP service is nested at /mcp
         Self {
             port,
@@ -65,117 +62,6 @@ impl McpServerHandle {
             }
         }
         Ok(())
-    }
-}
-
-/// Start the real in-process MCP server with complete tool registry
-async fn start_in_process_mcp_server(
-    config: &swissarmyhammer_config::McpServerConfig,
-) -> Result<McpServerHandle, Box<dyn std::error::Error + Send + Sync>> {
-    // Use the REAL unified HTTP MCP server from swissarmyhammer-tools
-    use swissarmyhammer_prompts::PromptLibrary;
-    use swissarmyhammer_tools::mcp::unified_server::{start_mcp_server, McpServerMode};
-
-    tracing::info!("Starting REAL unified HTTP MCP server with full tool registry");
-
-    // Use the real unified server implementation with correct signature
-    let handle = start_mcp_server(
-        McpServerMode::Http {
-            port: if config.port == 0 {
-                None
-            } else {
-                Some(config.port)
-            },
-        },
-        Some(PromptLibrary::default()),
-    )
-    .await
-    .map_err(|e| {
-        tracing::error!("Failed to start real unified HTTP MCP server: {}", e);
-        e
-    })?;
-
-    tracing::info!(
-        "Real unified HTTP MCP server started on port {}",
-        handle.info.port.unwrap_or(0)
-    );
-
-    // Convert to our handle type
-    let (dummy_tx, _dummy_rx) = tokio::sync::oneshot::channel();
-    let mcp_handle = McpServerHandle::new(
-        handle.info.port.unwrap_or(0),
-        "127.0.0.1".to_string(),
-        dummy_tx,
-    );
-
-    Ok(mcp_handle)
-}
-
-/// Start the real HTTP MCP server for llama-agent integration
-///
-/// This function starts the actual swissarmyhammer-tools HTTP MCP server
-/// which provides full MCP protocol implementation over HTTP. The server
-/// enables llama-agent sessions to access SwissArmyHammer tools through
-/// the Model Context Protocol.
-///
-/// # Arguments
-///
-/// * `config` - MCP server configuration including port and timeout settings
-///
-/// # Returns
-///
-/// Returns a `Result` containing:
-/// - `Ok(McpServerHandle)` - Handle to the running HTTP MCP server with port information
-/// - `Err(ActionError)` - If server startup fails, with detailed error information
-///
-/// # Behavior
-///
-/// - If `config.port` is 0, the server binds to a random available port
-/// - If `config.port` is non-zero, attempts to bind to the specified port
-/// - Logs startup progress and success/failure information
-/// - Returns handle that can be used to query server URL and port
-///
-/// # Examples
-///
-/// ```rust,ignore
-/// let config = McpServerConfig { port: 0, timeout_seconds: 30 };
-/// let handle = start_http_mcp_server(&config).await?;
-/// println!("MCP server started on port {}", handle.port());
-/// ```
-async fn start_http_mcp_server(
-    config: &swissarmyhammer_config::McpServerConfig,
-) -> Result<McpServerHandle, ActionError> {
-    let port_display = if config.port == 0 {
-        RANDOM_PORT_DISPLAY.to_string()
-    } else {
-        config.port.to_string()
-    };
-
-    tracing::info!(
-        "Starting HTTP MCP server for llama-agent integration on port {}",
-        port_display
-    );
-
-    match start_in_process_mcp_server(config).await {
-        Ok(handle) => {
-            tracing::info!(
-                "HTTP MCP server successfully started on port {} (URL: {})",
-                handle.port(),
-                handle.url()
-            );
-            Ok(handle)
-        }
-        Err(e) => {
-            tracing::error!(
-                "Failed to start HTTP MCP server on port {}: {}",
-                port_display,
-                e
-            );
-            Err(ActionError::ExecutionError(format!(
-                "Failed to start MCP server on port {}: {}",
-                port_display, e
-            )))
-        }
     }
 }
 
@@ -237,12 +123,23 @@ pub struct LlamaAgentExecutor {
 }
 
 impl LlamaAgentExecutor {
-    /// Create a new LlamaAgent executor with the given configuration
-    pub fn new(config: LlamaAgentConfig) -> Self {
+    /// Create a new LlamaAgent executor with the given configuration and optional MCP server
+    ///
+    /// # Arguments
+    ///
+    /// * `config` - LlamaAgent configuration
+    /// * `mcp_server` - Optional pre-started MCP server handle. If None, initialization will fail.
+    ///
+    /// # Architecture Note
+    ///
+    /// The MCP server should be started by the workflow layer before creating the executor.
+    /// This ensures proper separation of concerns: the workflow layer manages infrastructure,
+    /// while the executor focuses on execution logic.
+    pub fn new(config: LlamaAgentConfig, mcp_server: Option<McpServerHandle>) -> Self {
         Self {
             config,
             initialized: false,
-            mcp_server: None,
+            mcp_server,
             agent_server: None,
         }
     }
@@ -363,16 +260,21 @@ impl LlamaAgentExecutor {
             self.get_model_display_name()
         );
 
-        // Start HTTP MCP server first
-        let mcp_handle = start_http_mcp_server(&self.config.mcp_server).await?;
+        // Validate that MCP server was provided before initialization
+        if self.mcp_server.is_none() {
+            return Err(ActionError::ExecutionError(
+                "MCP server must be provided before initialization. The workflow layer should start the MCP server and pass it to the executor constructor.".to_string()
+            ));
+        }
+
+        // MCP server is already running - just use it
+        let mcp_handle = self.mcp_server.as_ref().unwrap();
 
         tracing::info!(
-            "HTTP MCP server started successfully on port {} (URL: {})",
+            "Using pre-started HTTP MCP server on port {} (URL: {})",
             mcp_handle.port(),
             mcp_handle.url()
         );
-
-        self.mcp_server = Some(mcp_handle);
 
         // Give the HTTP MCP server a moment to fully initialize
         // This prevents race conditions with llama-agent connecting too quickly
@@ -621,6 +523,7 @@ impl LlamaAgentExecutor {
     /// # Arguments
     ///
     /// * `config` - The LlamaAgent configuration to use for initialization
+    /// * `mcp_server` - Optional pre-started MCP server handle (required for initialization)
     ///
     /// # Returns
     ///
@@ -628,10 +531,11 @@ impl LlamaAgentExecutor {
     /// access to the global executor instance, or an error if initialization fails.
     pub async fn get_global_executor(
         config: LlamaAgentConfig,
+        mcp_server: Option<McpServerHandle>,
     ) -> ActionResult<Arc<tokio::sync::Mutex<LlamaAgentExecutor>>> {
         GLOBAL_LLAMA_EXECUTOR
             .get_or_try_init(|| async {
-                let mut executor = LlamaAgentExecutor::new(config);
+                let mut executor = LlamaAgentExecutor::new(config, mcp_server);
                 executor.initialize().await?;
                 Ok(Arc::new(tokio::sync::Mutex::new(executor)))
             })
@@ -688,17 +592,9 @@ impl AgentExecutor for LlamaAgentExecutor {
             }
         }
 
-        // Shutdown HTTP MCP server
-        if let Some(mcp_server) = self.mcp_server.take() {
-            if let Err(e) = mcp_server.shutdown().await {
-                tracing::error!("Failed to shutdown MCP server: {}", e);
-                return Err(ActionError::ExecutionError(format!(
-                    "Failed to shutdown MCP server: {}",
-                    e
-                )));
-            }
-            tracing::info!("HTTP MCP server shutdown");
-        }
+        // Note: MCP server is owned by the workflow layer and should be shut down there
+        // The executor just releases its reference to the MCP server handle
+        // The actual MCP server lifecycle is managed by the workflow layer
 
         tracing::info!("LlamaAgent executor shutdown");
         self.initialized = false;
@@ -875,14 +771,25 @@ impl LlamaAgentExecutor {
 /// use the same global LlamaAgentExecutor instance, preventing repeated model loading.
 pub struct LlamaAgentExecutorWrapper {
     config: LlamaAgentConfig,
+    mcp_server: Option<McpServerHandle>,
     global_executor: Option<Arc<tokio::sync::Mutex<LlamaAgentExecutor>>>,
 }
 
 impl LlamaAgentExecutorWrapper {
-    /// Create a new wrapper instance
+    /// Create a new wrapper instance without MCP server (will fail on initialize)
     pub fn new(config: LlamaAgentConfig) -> Self {
         Self {
             config,
+            mcp_server: None,
+            global_executor: None,
+        }
+    }
+
+    /// Create a new wrapper instance with pre-started MCP server
+    pub fn new_with_mcp(config: LlamaAgentConfig, mcp_server: Option<McpServerHandle>) -> Self {
+        Self {
+            config,
+            mcp_server,
             global_executor: None,
         }
     }
@@ -893,8 +800,10 @@ impl AgentExecutor for LlamaAgentExecutorWrapper {
     async fn initialize(&mut self) -> ActionResult<()> {
         tracing::info!("Initializing LlamaAgent wrapper with singleton pattern");
 
-        // Get or create the global singleton executor
-        let global_executor = LlamaAgentExecutor::get_global_executor(self.config.clone()).await?;
+        // Get or create the global singleton executor with MCP server
+        let global_executor =
+            LlamaAgentExecutor::get_global_executor(self.config.clone(), self.mcp_server.clone())
+                .await?;
         self.global_executor = Some(global_executor);
 
         tracing::info!("LlamaAgent wrapper initialized - using global singleton");
@@ -937,12 +846,11 @@ mod tests {
     use super::*;
     use crate::AgentResponseType;
     use swissarmyhammer_config::{McpServerConfig, ModelConfig};
-    use tokio::time::{sleep, Duration as TokioDuration};
 
     #[test_log::test(tokio::test)]
     async fn test_llama_agent_executor_creation() {
         let config = LlamaAgentConfig::for_testing();
-        let executor = LlamaAgentExecutor::new(config);
+        let executor = LlamaAgentExecutor::new(config, None);
 
         assert!(!executor.initialized);
         assert!(executor.mcp_server.is_none());
@@ -951,10 +859,24 @@ mod tests {
 
     #[test_log::test(tokio::test)]
     async fn test_llama_agent_executor_initialization() {
-        // Skip test if LlamaAgent testing is disabled
+        // Start MCP server first (now done at workflow layer)
+        use swissarmyhammer_prompts::PromptLibrary;
+        use swissarmyhammer_tools::mcp::unified_server::{start_mcp_server, McpServerMode};
+
+        let tools_handle = start_mcp_server(
+            McpServerMode::Http { port: None },
+            Some(PromptLibrary::default()),
+        )
+        .await
+        .expect("Failed to start test MCP server");
+
+        // Convert to agent-executor handle
+        let port = tools_handle.info.port.unwrap_or(0);
+        let (dummy_tx, _dummy_rx) = tokio::sync::oneshot::channel();
+        let mcp_handle = McpServerHandle::new(port, "127.0.0.1".to_string(), dummy_tx);
 
         let config = LlamaAgentConfig::for_testing();
-        let mut executor = LlamaAgentExecutor::new(config);
+        let mut executor = LlamaAgentExecutor::new(config, Some(mcp_handle));
 
         // Initialize executor - must succeed for real test
         executor
@@ -974,7 +896,7 @@ mod tests {
         // Shutdown
         executor.shutdown().await.unwrap();
         assert!(!executor.initialized);
-        assert!(executor.mcp_server.is_none());
+        assert!(executor.mcp_server.is_some()); // MCP server handle remains but executor is not initialized
     }
 
     #[test]
@@ -995,7 +917,7 @@ mod tests {
 
             repetition_detection: Default::default(),
         };
-        let executor = LlamaAgentExecutor::new(config);
+        let executor = LlamaAgentExecutor::new(config, None);
         assert_eq!(
             executor.get_model_display_name(),
             "unsloth/Phi-4-mini-instruct-GGUF/Phi-4-mini-instruct-Q4_K_M.gguf"
@@ -1017,7 +939,7 @@ mod tests {
 
             repetition_detection: Default::default(),
         };
-        let executor = LlamaAgentExecutor::new(config);
+        let executor = LlamaAgentExecutor::new(config, None);
         assert_eq!(
             executor.get_model_display_name(),
             "unsloth/Phi-4-mini-instruct-GGUF"
@@ -1038,7 +960,7 @@ mod tests {
 
             repetition_detection: Default::default(),
         };
-        let executor = LlamaAgentExecutor::new(config);
+        let executor = LlamaAgentExecutor::new(config, None);
         assert_eq!(
             executor.get_model_display_name(),
             "local:/path/to/model.gguf"
@@ -1047,8 +969,23 @@ mod tests {
 
     #[test_log::test(tokio::test)]
     async fn test_llama_agent_executor_initialization_with_validation() {
+        // Start MCP server first
+        use swissarmyhammer_prompts::PromptLibrary;
+        use swissarmyhammer_tools::mcp::unified_server::{start_mcp_server, McpServerMode};
+
+        let tools_handle = start_mcp_server(
+            McpServerMode::Http { port: None },
+            Some(PromptLibrary::default()),
+        )
+        .await
+        .expect("Failed to start test MCP server");
+
+        let port = tools_handle.info.port.unwrap_or(0);
+        let (dummy_tx, _dummy_rx) = tokio::sync::oneshot::channel();
+        let mcp_handle = McpServerHandle::new(port, "127.0.0.1".to_string(), dummy_tx);
+
         let config = LlamaAgentConfig::for_testing();
-        let mut executor = LlamaAgentExecutor::new(config);
+        let mut executor = LlamaAgentExecutor::new(config, Some(mcp_handle));
 
         // Initialize must succeed for real test
         executor
@@ -1062,6 +999,21 @@ mod tests {
 
     #[test_log::test(tokio::test)]
     async fn test_llama_agent_executor_initialization_with_invalid_config() {
+        // Start MCP server first
+        use swissarmyhammer_prompts::PromptLibrary;
+        use swissarmyhammer_tools::mcp::unified_server::{start_mcp_server, McpServerMode};
+
+        let tools_handle = start_mcp_server(
+            McpServerMode::Http { port: None },
+            Some(PromptLibrary::default()),
+        )
+        .await
+        .expect("Failed to start test MCP server");
+
+        let port = tools_handle.info.port.unwrap_or(0);
+        let (dummy_tx, _dummy_rx) = tokio::sync::oneshot::channel();
+        let mcp_handle = McpServerHandle::new(port, "127.0.0.1".to_string(), dummy_tx);
+
         // Test initialization with invalid configuration
         let invalid_config = LlamaAgentConfig {
             model: ModelConfig {
@@ -1078,7 +1030,7 @@ mod tests {
 
             repetition_detection: Default::default(),
         };
-        let mut executor = LlamaAgentExecutor::new(invalid_config);
+        let mut executor = LlamaAgentExecutor::new(invalid_config, Some(mcp_handle));
 
         // Should fail during initialization - validation now handled by llama-agent
         let result = executor.initialize().await;
@@ -1093,15 +1045,34 @@ mod tests {
 
     #[test_log::test(tokio::test)]
     async fn test_llama_agent_executor_global_management() {
+        // Start MCP server for the global executor
+        use swissarmyhammer_prompts::PromptLibrary;
+        use swissarmyhammer_tools::mcp::unified_server::{start_mcp_server, McpServerMode};
+
+        let tools_handle = start_mcp_server(
+            McpServerMode::Http { port: None },
+            Some(PromptLibrary::default()),
+        )
+        .await
+        .expect("Failed to start test MCP server");
+
+        let port = tools_handle.info.port.unwrap_or(0);
+        let (dummy_tx, _dummy_rx) = tokio::sync::oneshot::channel();
+        let mcp_handle1 = McpServerHandle::new(port, "127.0.0.1".to_string(), dummy_tx);
+
+        // Clone for second call (dummy handles are cheap)
+        let (dummy_tx2, _dummy_rx2) = tokio::sync::oneshot::channel();
+        let mcp_handle2 = McpServerHandle::new(port, "127.0.0.1".to_string(), dummy_tx2);
+
         let config1 = LlamaAgentConfig::for_testing();
         let config2 = LlamaAgentConfig::for_testing();
 
         // First call should create and initialize the global executor
-        let global1 = LlamaAgentExecutor::get_global_executor(config1).await;
+        let global1 = LlamaAgentExecutor::get_global_executor(config1, Some(mcp_handle1)).await;
         assert!(global1.is_ok());
 
         // Second call should return the same global executor (singleton pattern)
-        let global2 = LlamaAgentExecutor::get_global_executor(config2).await;
+        let global2 = LlamaAgentExecutor::get_global_executor(config2, Some(mcp_handle2)).await;
         assert!(global2.is_ok());
 
         // Verify they are the same instance by comparing Arc pointers
@@ -1116,7 +1087,7 @@ mod tests {
     #[test_log::test(tokio::test)]
     async fn test_llama_agent_executor_execute_without_init() {
         let config = LlamaAgentConfig::for_testing();
-        let executor = LlamaAgentExecutor::new(config);
+        let executor = LlamaAgentExecutor::new(config, None);
 
         // Create a test execution context
         let agent_config = create_test_agent_config();
@@ -1137,9 +1108,24 @@ mod tests {
 
     #[test_log::test(tokio::test)]
     async fn test_llama_agent_executor_execute_with_init() {
+        // Start MCP server first
+        use swissarmyhammer_prompts::PromptLibrary;
+        use swissarmyhammer_tools::mcp::unified_server::{start_mcp_server, McpServerMode};
+
+        let tools_handle = start_mcp_server(
+            McpServerMode::Http { port: None },
+            Some(PromptLibrary::default()),
+        )
+        .await
+        .expect("Failed to start test MCP server");
+
+        let port = tools_handle.info.port.unwrap_or(0);
+        let (dummy_tx, _dummy_rx) = tokio::sync::oneshot::channel();
+        let mcp_handle = McpServerHandle::new(port, "127.0.0.1".to_string(), dummy_tx);
+
         // Test that executor properly handles execution requests
         let config = LlamaAgentConfig::for_testing();
-        let mut executor = LlamaAgentExecutor::new(config);
+        let mut executor = LlamaAgentExecutor::new(config, Some(mcp_handle));
 
         // Try to initialize executor - may fail in test environment without model files
         let init_result = executor.initialize().await;
@@ -1195,7 +1181,7 @@ mod tests {
     fn test_create_stopping_config() {
         // Test StoppingConfig creation (repetition detection has been removed from llama-agent)
         let config = LlamaAgentConfig::for_testing();
-        let executor = LlamaAgentExecutor::new(config);
+        let executor = LlamaAgentExecutor::new(config, None);
         let stopping_config = executor.create_stopping_config();
 
         // Verify the remaining fields
@@ -1221,7 +1207,7 @@ mod tests {
             repetition_detection: Default::default(),
         };
 
-        let executor = LlamaAgentExecutor::new(folder_model_config);
+        let executor = LlamaAgentExecutor::new(folder_model_config, None);
 
         // Test display name format for folder-based model
         assert_eq!(
@@ -1248,7 +1234,7 @@ mod tests {
             repetition_detection: Default::default(),
         };
 
-        let executor = LlamaAgentExecutor::new(single_file_config);
+        let executor = LlamaAgentExecutor::new(single_file_config, None);
 
         // Test display name format for single file model
         assert_eq!(
@@ -1276,7 +1262,7 @@ mod tests {
             repetition_detection: Default::default(),
         };
 
-        let executor_with_folder = LlamaAgentExecutor::new(config_with_folder);
+        let executor_with_folder = LlamaAgentExecutor::new(config_with_folder, None);
 
         // Test ModelSource::Local without explicit folder (should derive from filename)
         let config_without_folder = LlamaAgentConfig {
@@ -1293,7 +1279,7 @@ mod tests {
             repetition_detection: Default::default(),
         };
 
-        let executor_without_folder = LlamaAgentExecutor::new(config_without_folder);
+        let executor_without_folder = LlamaAgentExecutor::new(config_without_folder, None);
 
         // Both executors should have valid display names (just testing they don't panic)
         assert!(!executor_with_folder.get_model_display_name().is_empty());
@@ -1330,11 +1316,31 @@ mod tests {
 
     #[tokio::test]
     async fn test_wrapper_singleton_behavior() {
+        // Start MCP server for wrapper tests
+        use swissarmyhammer_prompts::PromptLibrary;
+        use swissarmyhammer_tools::mcp::unified_server::{start_mcp_server, McpServerMode};
+
+        let tools_handle = start_mcp_server(
+            McpServerMode::Http { port: None },
+            Some(PromptLibrary::default()),
+        )
+        .await
+        .expect("Failed to start test MCP server");
+
+        let port = tools_handle.info.port.unwrap_or(0);
+
+        // Create MCP handles for both wrappers
+        let (dummy_tx1, _dummy_rx1) = tokio::sync::oneshot::channel();
+        let mcp_handle1 = McpServerHandle::new(port, "127.0.0.1".to_string(), dummy_tx1);
+
+        let (dummy_tx2, _dummy_rx2) = tokio::sync::oneshot::channel();
+        let mcp_handle2 = McpServerHandle::new(port, "127.0.0.1".to_string(), dummy_tx2);
+
         let config1 = LlamaAgentConfig::for_testing();
-        let mut wrapper1 = LlamaAgentExecutorWrapper::new(config1);
+        let mut wrapper1 = LlamaAgentExecutorWrapper::new_with_mcp(config1, Some(mcp_handle1));
 
         let config2 = LlamaAgentConfig::for_testing();
-        let mut wrapper2 = LlamaAgentExecutorWrapper::new(config2);
+        let mut wrapper2 = LlamaAgentExecutorWrapper::new_with_mcp(config2, Some(mcp_handle2));
 
         // Initialize both wrappers
         wrapper1

@@ -15,6 +15,7 @@ use swissarmyhammer_config::LlamaAgentConfig;
 use swissarmyhammer_agent_executor::AgentExecutor as AgentExecutorTrait;
 
 // Re-export the actual implementations from agent-executor crate
+pub use swissarmyhammer_agent_executor::llama::executor::McpServerHandle;
 pub use swissarmyhammer_agent_executor::llama::{
     LlamaAgentExecutor as AgentExecutorLlamaAgentExecutor,
     LlamaAgentExecutorWrapper as AgentExecutorLlamaAgentExecutorWrapper,
@@ -26,10 +27,10 @@ pub struct LlamaAgentExecutor {
 }
 
 impl LlamaAgentExecutor {
-    /// Create a new LlamaAgent executor with the given configuration
-    pub fn new(config: LlamaAgentConfig) -> Self {
+    /// Create a new LlamaAgent executor with the given configuration and optional MCP server
+    pub fn new(config: LlamaAgentConfig, mcp_server: Option<McpServerHandle>) -> Self {
         Self {
-            inner: AgentExecutorLlamaAgentExecutor::new(config),
+            inner: AgentExecutorLlamaAgentExecutor::new(config, mcp_server),
         }
     }
 }
@@ -83,10 +84,27 @@ pub struct LlamaAgentExecutorWrapper {
 }
 
 impl LlamaAgentExecutorWrapper {
-    /// Create a new wrapper instance
+    /// Create a new wrapper instance without MCP server (will fail on initialize)
     pub fn new(config: LlamaAgentConfig) -> Self {
         Self {
             inner: AgentExecutorLlamaAgentExecutorWrapper::new(config),
+        }
+    }
+
+    /// Create a new wrapper instance with pre-started MCP server
+    ///
+    /// # Arguments
+    ///
+    /// * `config` - LlamaAgent configuration
+    /// * `mcp_server` - Optional pre-started MCP server handle from the workflow layer
+    ///
+    /// # Architecture Note
+    ///
+    /// This constructor is used by the workflow layer after starting the MCP server.
+    /// This ensures proper separation: workflow manages infrastructure, executor handles execution.
+    pub fn new_with_mcp(config: LlamaAgentConfig, mcp_server: Option<McpServerHandle>) -> Self {
+        Self {
+            inner: AgentExecutorLlamaAgentExecutorWrapper::new_with_mcp(config, mcp_server),
         }
     }
 }
