@@ -73,16 +73,11 @@ pub async fn execute_check_command(cmd: CheckCommand, context: &CliContext) -> C
 /// This function is identical to `execute_check_command` but accepts a request
 /// structure that can include agent configuration for testing purposes. In production
 /// use, the configuration is loaded from the environment. In tests, a test
-/// configuration can be provided to avoid expensive ClaudeCode initialization.
+/// configuration can be provided to avoid expensive executor initialization.
 ///
 /// # Arguments
 /// * `request` - CheckCommandRequest containing command and optional agent config
 /// * `context` - CLI context with output settings
-///
-/// # ClaudeCode Fallback
-/// If ClaudeCode executor is configured, this function automatically falls back to
-/// LlamaAgent to avoid circular dependency (claude CLI → agent → MCP → claude CLI).
-/// A warning is shown to the user unless `--quiet` is set.
 ///
 /// # Returns
 /// * `Ok(())` if all checks pass or no rules/files match filters
@@ -93,26 +88,9 @@ async fn execute_check_command_impl(
 ) -> CliResult<()> {
     // Load agent configuration (respects SAH_AGENT_EXECUTOR env var, defaults to ClaudeCode)
     // For tests, use provided config (LlamaAgent), otherwise use default
-    let mut agent_config = request.agent_config.unwrap_or_default();
-
-    // ClaudeCode is not supported for rule checking because it creates circular dependencies
-    // (claude CLI -> agent -> MCP -> tries to use claude CLI again)
-    // Auto-fallback to LlamaAgent with warning
-    if matches!(agent_config.executor, AgentExecutorConfig::ClaudeCode(_)) {
-        if !context.quiet {
-            eprintln!("⚠️  ClaudeCode executor cannot be used for rule checking (would create circular dependency)");
-            eprintln!(
-                "   Automatically falling back to LlamaAgent for programmatic rule checking."
-            );
-        }
-        tracing::warn!("ClaudeCode executor requested but not supported for rule checking. Falling back to LlamaAgent.");
-        agent_config =
-            AgentConfig::llama_agent(swissarmyhammer_config::LlamaAgentConfig::for_testing());
-    }
+    let agent_config = request.agent_config.unwrap_or_default();
 
     // Create and initialize executor based on type
-    // For LlamaAgent, we need to start MCP server first
-    // Note: ClaudeCode has already been converted to LlamaAgent by fallback logic above
     let executor: Box<dyn AgentExecutor> = match &agent_config.executor {
         AgentExecutorConfig::LlamaAgent(llama_config) => {
             // Start MCP server for LlamaAgent
@@ -161,8 +139,18 @@ async fn execute_check_command_impl(
             })?;
             Box::new(exec)
         }
-        AgentExecutorConfig::ClaudeCode(_) => {
-            unreachable!("ClaudeCode should have been converted to LlamaAgent by fallback logic")
+        AgentExecutorConfig::ClaudeCode(_claude_config) => {
+            use swissarmyhammer_agent_executor::ClaudeCodeExecutor;
+
+            tracing::info!("Using ClaudeCode executor for rule checking");
+            let mut exec = ClaudeCodeExecutor::new();
+            exec.initialize().await.map_err(|e| {
+                CliError::new(
+                    format!("Failed to initialize ClaudeCode executor: {}", e),
+                    1,
+                )
+            })?;
+            Box::new(exec)
         }
     };
 
@@ -341,7 +329,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_execute_check_command_with_claude_code_fallback() {
+    async fn test_execute_check_command_with_claude_code() {
         let context = setup_test_context().await;
 
         let cmd = super::super::cli::CheckCommand {
@@ -351,13 +339,13 @@ mod tests {
             category: None,
         };
 
-        // Request ClaudeCode but it should auto-fallback to LlamaAgent
+        // Request ClaudeCode - it should work now without fallback
         let request = CheckCommandRequest::with_config(cmd, AgentConfig::claude_code());
         let result = execute_check_command_impl(request, &context).await;
-        // Should succeed - ClaudeCode should fallback to LlamaAgent
+        // Should succeed - ClaudeCode is fully supported
         assert!(
             result.is_ok(),
-            "ClaudeCode should auto-fallback to LlamaAgent and succeed"
+            "ClaudeCode should work for rule checking without fallback"
         );
     }
 }
