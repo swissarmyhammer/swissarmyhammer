@@ -11,6 +11,34 @@ use swissarmyhammer_rules::{RuleCheckRequest, RuleChecker};
 
 use super::cli::CheckCommand;
 
+/// Request structure for check command execution
+///
+/// Combines the command parameters with optional agent configuration
+/// for testability and cleaner function signatures.
+struct CheckCommandRequest {
+    cmd: CheckCommand,
+    agent_config: Option<AgentConfig>,
+}
+
+impl CheckCommandRequest {
+    /// Create a new request with default agent configuration
+    fn new(cmd: CheckCommand) -> Self {
+        Self {
+            cmd,
+            agent_config: None,
+        }
+    }
+
+    /// Create a new request with explicit agent configuration (for testing)
+    #[cfg(test)]
+    fn with_config(cmd: CheckCommand, agent_config: AgentConfig) -> Self {
+        Self {
+            cmd,
+            agent_config: Some(agent_config),
+        }
+    }
+}
+
 /// Execute the check command to verify code against rules
 ///
 /// This command delegates to the rules crate's high-level API which:
@@ -36,27 +64,56 @@ use super::cli::CheckCommand;
 /// sah rule check --rule no-unwrap --category style "*.rs"
 /// ```
 pub async fn execute_check_command(cmd: CheckCommand, context: &CliContext) -> CliResult<()> {
-    execute_check_command_with_config(cmd, context, None).await
+    let request = CheckCommandRequest::new(cmd);
+    execute_check_command_impl(request, context).await
 }
 
-async fn execute_check_command_with_config(
-    cmd: CheckCommand,
+/// Internal implementation of check command with injectable agent configuration
+///
+/// This function is identical to `execute_check_command` but accepts a request
+/// structure that can include agent configuration for testing purposes. In production
+/// use, the configuration is loaded from the environment. In tests, a test
+/// configuration can be provided to avoid expensive ClaudeCode initialization.
+///
+/// # Arguments
+/// * `request` - CheckCommandRequest containing command and optional agent config
+/// * `context` - CLI context with output settings
+///
+/// # ClaudeCode Fallback
+/// If ClaudeCode executor is configured, this function automatically falls back to
+/// LlamaAgent to avoid circular dependency (claude CLI → agent → MCP → claude CLI).
+/// A warning is shown to the user unless `--quiet` is set.
+///
+/// # Returns
+/// * `Ok(())` if all checks pass or no rules/files match filters
+/// * `Err(CliError)` if validation fails or violations are found
+async fn execute_check_command_impl(
+    request: CheckCommandRequest,
     context: &CliContext,
-    agent_config: Option<AgentConfig>,
 ) -> CliResult<()> {
     // Load agent configuration (respects SAH_AGENT_EXECUTOR env var, defaults to ClaudeCode)
     // For tests, use provided config (LlamaAgent), otherwise use default
-    let agent_config = agent_config.unwrap_or_default();
+    let mut agent_config = request.agent_config.unwrap_or_default();
+
+    // ClaudeCode is not supported for rule checking because it creates circular dependencies
+    // (claude CLI -> agent -> MCP -> tries to use claude CLI again)
+    // Auto-fallback to LlamaAgent with warning
+    if matches!(agent_config.executor, AgentExecutorConfig::ClaudeCode(_)) {
+        if !context.quiet {
+            eprintln!("⚠️  ClaudeCode executor cannot be used for rule checking (would create circular dependency)");
+            eprintln!(
+                "   Automatically falling back to LlamaAgent for programmatic rule checking."
+            );
+        }
+        tracing::warn!("ClaudeCode executor requested but not supported for rule checking. Falling back to LlamaAgent.");
+        agent_config =
+            AgentConfig::llama_agent(swissarmyhammer_config::LlamaAgentConfig::for_testing());
+    }
 
     // Create and initialize executor based on type
     // For LlamaAgent, we need to start MCP server first
+    // Note: ClaudeCode has already been converted to LlamaAgent by fallback logic above
     let executor: Box<dyn AgentExecutor> = match &agent_config.executor {
-        AgentExecutorConfig::ClaudeCode(_) => {
-            return Err(CliError::new(
-                "ClaudeCode executor not supported in rule check CLI tests. Use LlamaAgent for testing.".to_string(),
-                1,
-            ));
-        }
         AgentExecutorConfig::LlamaAgent(llama_config) => {
             // Start MCP server for LlamaAgent
             use swissarmyhammer_agent_executor::llama::{
@@ -85,6 +142,9 @@ async fn execute_check_command_with_config(
             );
 
             // Convert tools McpServerHandle to agent-executor McpServerHandle
+            // The two types are structurally identical but from different crates.
+            // We create a dummy shutdown channel because the tools MCP handle manages
+            // the server lifecycle, and we only need the port/host info for the agent.
             let port = tools_mcp_handle.info.port.unwrap_or(0);
             let (dummy_tx, _dummy_rx) = tokio::sync::oneshot::channel();
             let agent_mcp_handle = McpServerHandle::new(port, "127.0.0.1".to_string(), dummy_tx);
@@ -101,6 +161,9 @@ async fn execute_check_command_with_config(
             })?;
             Box::new(exec)
         }
+        AgentExecutorConfig::ClaudeCode(_) => {
+            unreachable!("ClaudeCode should have been converted to LlamaAgent by fallback logic")
+        }
     };
 
     let agent: Arc<dyn AgentExecutor> = Arc::from(executor);
@@ -108,22 +171,23 @@ async fn execute_check_command_with_config(
         .map_err(|e| CliError::new(format!("Failed to create rule checker: {}", e), 1))?;
 
     // Parse severity from string if provided
-    let severity = cmd
+    let severity = request
+        .cmd
         .severity
         .as_ref()
         .map(|s| s.parse().map_err(|e: String| CliError::new(e, 1)))
         .transpose()?;
 
-    // Create request with filters
-    let request = RuleCheckRequest {
-        rule_names: cmd.rule,
+    // Create rule check request with filters
+    let rule_request = RuleCheckRequest {
+        rule_names: request.cmd.rule,
         severity,
-        category: cmd.category,
-        patterns: cmd.patterns,
+        category: request.cmd.category,
+        patterns: request.cmd.patterns,
     };
 
     // Run check with filters - this handles all the logic
-    match checker.check_with_filters(request).await {
+    match checker.check_with_filters(rule_request).await {
         Ok(result) => {
             // Print results if not quiet
             if !context.quiet && result.rules_checked == 0 {
@@ -150,13 +214,13 @@ mod tests {
     use crate::context::CliContextBuilder;
     use swissarmyhammer_config::{LlamaAgentConfig, TemplateContext};
 
-    #[tokio::test]
-    async fn test_execute_check_command_no_rules() {
+    /// Helper function to create a test CLI context with standard settings
+    async fn setup_test_context() -> CliContext {
         let template_context = TemplateContext::new();
         let matches = clap::Command::new("test")
             .try_get_matches_from(["test"])
             .unwrap();
-        let context = CliContextBuilder::default()
+        CliContextBuilder::default()
             .template_context(template_context)
             .format(crate::cli::OutputFormat::Table)
             .format_option(None)
@@ -166,7 +230,17 @@ mod tests {
             .matches(matches)
             .build_async()
             .await
-            .unwrap();
+            .unwrap()
+    }
+
+    /// Helper function to create a test agent configuration
+    fn setup_test_agent_config() -> AgentConfig {
+        AgentConfig::llama_agent(LlamaAgentConfig::for_testing())
+    }
+
+    #[tokio::test]
+    async fn test_execute_check_command_no_rules() {
+        let context = setup_test_context().await;
 
         let cmd = super::super::cli::CheckCommand {
             patterns: vec!["test.rs".to_string()],
@@ -175,29 +249,15 @@ mod tests {
             category: None,
         };
 
-        let test_config = AgentConfig::llama_agent(LlamaAgentConfig::for_testing());
-        let result = execute_check_command_with_config(cmd, &context, Some(test_config)).await;
+        let request = CheckCommandRequest::with_config(cmd, setup_test_agent_config());
+        let result = execute_check_command_impl(request, &context).await;
         // Should succeed when no rules match filters
         assert!(result.is_ok());
     }
 
     #[tokio::test]
     async fn test_execute_check_command_no_files() {
-        let template_context = TemplateContext::new();
-        let matches = clap::Command::new("test")
-            .try_get_matches_from(["test"])
-            .unwrap();
-        let context = CliContextBuilder::default()
-            .template_context(template_context)
-            .format(crate::cli::OutputFormat::Table)
-            .format_option(None)
-            .verbose(false)
-            .debug(false)
-            .quiet(true)
-            .matches(matches)
-            .build_async()
-            .await
-            .unwrap();
+        let context = setup_test_context().await;
 
         let cmd = super::super::cli::CheckCommand {
             patterns: vec!["/nonexistent/**/*.rs".to_string()],
@@ -206,29 +266,15 @@ mod tests {
             category: None,
         };
 
-        let test_config = AgentConfig::llama_agent(LlamaAgentConfig::for_testing());
-        let result = execute_check_command_with_config(cmd, &context, Some(test_config)).await;
+        let request = CheckCommandRequest::with_config(cmd, setup_test_agent_config());
+        let result = execute_check_command_impl(request, &context).await;
         // Should succeed when no files match patterns
         assert!(result.is_ok());
     }
 
     #[tokio::test]
     async fn test_execute_check_command_filter_by_severity() {
-        let template_context = TemplateContext::new();
-        let matches = clap::Command::new("test")
-            .try_get_matches_from(["test"])
-            .unwrap();
-        let context = CliContextBuilder::default()
-            .template_context(template_context)
-            .format(crate::cli::OutputFormat::Table)
-            .format_option(None)
-            .verbose(false)
-            .debug(false)
-            .quiet(true)
-            .matches(matches)
-            .build_async()
-            .await
-            .unwrap();
+        let context = setup_test_context().await;
 
         let cmd = super::super::cli::CheckCommand {
             patterns: vec!["test.rs".to_string()],
@@ -237,29 +283,15 @@ mod tests {
             category: None,
         };
 
-        let test_config = AgentConfig::llama_agent(LlamaAgentConfig::for_testing());
-        let result = execute_check_command_with_config(cmd, &context, Some(test_config)).await;
+        let request = CheckCommandRequest::with_config(cmd, setup_test_agent_config());
+        let result = execute_check_command_impl(request, &context).await;
         // Should succeed - filters to only error-level rules
         assert!(result.is_ok());
     }
 
     #[tokio::test]
     async fn test_execute_check_command_filter_by_category() {
-        let template_context = TemplateContext::new();
-        let matches = clap::Command::new("test")
-            .try_get_matches_from(["test"])
-            .unwrap();
-        let context = CliContextBuilder::default()
-            .template_context(template_context)
-            .format(crate::cli::OutputFormat::Table)
-            .format_option(None)
-            .verbose(false)
-            .debug(false)
-            .quiet(true)
-            .matches(matches)
-            .build_async()
-            .await
-            .unwrap();
+        let context = setup_test_context().await;
 
         let cmd = super::super::cli::CheckCommand {
             patterns: vec!["test.rs".to_string()],
@@ -268,29 +300,15 @@ mod tests {
             category: Some("security".to_string()),
         };
 
-        let test_config = AgentConfig::llama_agent(LlamaAgentConfig::for_testing());
-        let result = execute_check_command_with_config(cmd, &context, Some(test_config)).await;
+        let request = CheckCommandRequest::with_config(cmd, setup_test_agent_config());
+        let result = execute_check_command_impl(request, &context).await;
         // Should succeed - filters to only security category rules
         assert!(result.is_ok());
     }
 
     #[tokio::test]
     async fn test_execute_check_command_filter_by_rule_name() {
-        let template_context = TemplateContext::new();
-        let matches = clap::Command::new("test")
-            .try_get_matches_from(["test"])
-            .unwrap();
-        let context = CliContextBuilder::default()
-            .template_context(template_context)
-            .format(crate::cli::OutputFormat::Table)
-            .format_option(None)
-            .verbose(false)
-            .debug(false)
-            .quiet(true)
-            .matches(matches)
-            .build_async()
-            .await
-            .unwrap();
+        let context = setup_test_context().await;
 
         let cmd = super::super::cli::CheckCommand {
             patterns: vec!["test.rs".to_string()],
@@ -299,29 +317,15 @@ mod tests {
             category: None,
         };
 
-        let test_config = AgentConfig::llama_agent(LlamaAgentConfig::for_testing());
-        let result = execute_check_command_with_config(cmd, &context, Some(test_config)).await;
+        let request = CheckCommandRequest::with_config(cmd, setup_test_agent_config());
+        let result = execute_check_command_impl(request, &context).await;
         // Should succeed - filters to only specified rule
         assert!(result.is_ok());
     }
 
     #[tokio::test]
     async fn test_execute_check_command_combined_filters() {
-        let template_context = TemplateContext::new();
-        let matches = clap::Command::new("test")
-            .try_get_matches_from(["test"])
-            .unwrap();
-        let context = CliContextBuilder::default()
-            .template_context(template_context)
-            .format(crate::cli::OutputFormat::Table)
-            .format_option(None)
-            .verbose(false)
-            .debug(false)
-            .quiet(true)
-            .matches(matches)
-            .build_async()
-            .await
-            .unwrap();
+        let context = setup_test_context().await;
 
         let cmd = super::super::cli::CheckCommand {
             patterns: vec!["test.rs".to_string()],
@@ -330,9 +334,30 @@ mod tests {
             category: Some("security".to_string()),
         };
 
-        let test_config = AgentConfig::llama_agent(LlamaAgentConfig::for_testing());
-        let result = execute_check_command_with_config(cmd, &context, Some(test_config)).await;
+        let request = CheckCommandRequest::with_config(cmd, setup_test_agent_config());
+        let result = execute_check_command_impl(request, &context).await;
         // Should succeed - applies all filters
         assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_execute_check_command_with_claude_code_fallback() {
+        let context = setup_test_context().await;
+
+        let cmd = super::super::cli::CheckCommand {
+            patterns: vec!["test.rs".to_string()],
+            rule: Some(vec!["nonexistent-rule".to_string()]),
+            severity: None,
+            category: None,
+        };
+
+        // Request ClaudeCode but it should auto-fallback to LlamaAgent
+        let request = CheckCommandRequest::with_config(cmd, AgentConfig::claude_code());
+        let result = execute_check_command_impl(request, &context).await;
+        // Should succeed - ClaudeCode should fallback to LlamaAgent
+        assert!(
+            result.is_ok(),
+            "ClaudeCode should auto-fallback to LlamaAgent and succeed"
+        );
     }
 }
