@@ -46,6 +46,19 @@ impl RuleViolation {
             message,
         }
     }
+
+    /// Format the violation as a compact single-line summary
+    ///
+    /// This is used for error messages where a brief summary is needed.
+    /// The full details are available via the Display trait.
+    pub fn compact_format(&self) -> String {
+        format!(
+            "Rule '{}' violated in {} (severity: {})",
+            self.rule_name,
+            self.file_path.display(),
+            self.severity
+        )
+    }
 }
 
 impl fmt::Display for RuleViolation {
@@ -118,7 +131,7 @@ impl From<RuleError> for SwissArmyHammerError {
     fn from(error: RuleError) -> Self {
         match error {
             RuleError::Violation(violation) => {
-                SwissArmyHammerError::RuleViolation(violation.to_string())
+                SwissArmyHammerError::RuleViolation(violation.compact_format())
             }
             _ => SwissArmyHammerError::other(error.to_string()),
         }
@@ -338,9 +351,11 @@ mod tests {
 
         match sah_error {
             SwissArmyHammerError::RuleViolation(msg) => {
+                // Now uses compact format (single line summary)
                 assert!(msg.contains("test-rule"));
                 assert!(msg.contains("test.rs"));
-                assert!(msg.contains("Test violation message"));
+                assert!(msg.contains("error"));
+                assert!(!msg.contains('\n'), "Should use compact single-line format");
             }
             _ => panic!("Expected RuleViolation variant, got {:?}", sah_error),
         }
@@ -364,6 +379,75 @@ mod tests {
                 assert!(message.contains("check failed"));
             }
             _ => panic!("Expected Other variant for non-violation errors"),
+        }
+    }
+
+    #[test]
+    fn test_rule_violation_compact_format() {
+        let violation = RuleViolation::new(
+            "no-mocks".to_string(),
+            PathBuf::from("swissarmyhammer-rules/tests/partials_test.rs"),
+            Severity::Error,
+            "Mock object detected - MockPartialLoader simulates real PartialLoader behavior"
+                .to_string(),
+        );
+
+        let compact = violation.compact_format();
+        assert!(compact.contains("no-mocks"));
+        assert!(compact.contains("partials_test.rs"));
+        assert!(compact.contains("error"));
+        assert!(
+            !compact.contains('\n'),
+            "Compact format should be single line"
+        );
+    }
+
+    #[test]
+    fn test_rule_violation_compact_format_vs_display() {
+        let violation = RuleViolation::new(
+            "test-rule".to_string(),
+            PathBuf::from("test.rs"),
+            Severity::Warning,
+            "Detailed violation message".to_string(),
+        );
+
+        let compact = violation.compact_format();
+        let display = violation.to_string();
+
+        // Compact format should be one line
+        assert!(!compact.contains('\n'));
+
+        // Display format is multi-line
+        assert!(display.contains('\n'));
+
+        // Both should contain the rule name
+        assert!(compact.contains("test-rule"));
+        assert!(display.contains("test-rule"));
+    }
+
+    #[test]
+    fn test_rule_violation_conversion_uses_compact_format() {
+        let violation = RuleViolation::new(
+            "no-hardcoded-secrets".to_string(),
+            PathBuf::from("src/config.rs"),
+            Severity::Error,
+            "Found hardcoded API key on line 42".to_string(),
+        );
+
+        let rule_error = RuleError::Violation(violation);
+        let sah_error: SwissArmyHammerError = rule_error.into();
+
+        match sah_error {
+            SwissArmyHammerError::RuleViolation(msg) => {
+                // Should use compact format (single line)
+                assert!(!msg.contains('\n'), "Error message should be single line");
+                assert!(msg.contains("no-hardcoded-secrets"));
+                assert!(msg.contains("src/config.rs"));
+                assert!(msg.contains("error"));
+                // Should NOT contain the detailed message in the top-level error
+                assert!(!msg.contains("Found hardcoded API key"));
+            }
+            _ => panic!("Expected RuleViolation variant"),
         }
     }
 }
