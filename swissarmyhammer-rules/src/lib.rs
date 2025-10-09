@@ -21,6 +21,7 @@ mod checker;
 mod error;
 mod frontmatter;
 mod glob;
+pub mod ignore;
 mod language;
 mod rule_filter;
 mod rule_loader;

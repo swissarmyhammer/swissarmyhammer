@@ -296,6 +296,17 @@ impl RuleChecker {
             ))
         })?;
 
+        // Check for ignore directives in the file
+        let ignore_patterns = crate::ignore::parse_ignore_directives(&target_content);
+        if crate::ignore::should_ignore_rule(&rule.name, &ignore_patterns) {
+            tracing::debug!(
+                "Rule {} ignored in {} (file directive)",
+                rule.name,
+                target_path.display()
+            );
+            return Ok(());
+        }
+
         // Calculate cache key from file content + rule template + severity
         let cache_key =
             RuleCache::calculate_cache_key(&target_content, &rule.template, rule.severity);

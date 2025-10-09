@@ -175,8 +175,7 @@ fn test_partial_rendering_in_rule() {
     }
 
     // Create a RulePartialAdapter from the library
-    let adapter =
-        swissarmyhammer_rules::RulePartialAdapter::new(std::sync::Arc::new(library));
+    let adapter = swissarmyhammer_rules::RulePartialAdapter::new(std::sync::Arc::new(library));
 
     // Create a rule template that uses the partial
     let rule_template = r#"Check for issues in {{ language }} code.
@@ -229,8 +228,7 @@ fn test_partial_not_found_error() {
     }
 
     // Create a RulePartialAdapter from the empty library
-    let adapter =
-        swissarmyhammer_rules::RulePartialAdapter::new(std::sync::Arc::new(library));
+    let adapter = swissarmyhammer_rules::RulePartialAdapter::new(std::sync::Arc::new(library));
 
     // Create a rule template with a non-existent partial
     let rule_template = r#"Check for issues.
@@ -301,8 +299,7 @@ fn test_multiple_partials_in_rule() {
     }
 
     // Create a RulePartialAdapter from the library
-    let adapter =
-        swissarmyhammer_rules::RulePartialAdapter::new(std::sync::Arc::new(library));
+    let adapter = swissarmyhammer_rules::RulePartialAdapter::new(std::sync::Arc::new(library));
 
     // Create a rule template using multiple partials
     let rule_template = r#"Check for issues.
