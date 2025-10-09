@@ -35,3 +35,23 @@ Follow the pattern used in `test_load_partials_from_directory` which already dem
 
 ## Files to Modify
 - `swissarmyhammer-rules/tests/partials_test.rs`
+
+
+
+## Solution Approach
+
+Refactor the three tests to use real file system operations, following the pattern established in `test_load_partials_from_directory` and `test_rule_using_partial_via_include`:
+
+1. Create temporary directories with `_partials` subdirectories for each test
+2. Write actual partial markdown files to disk with proper `{% partial %}` markers
+3. Use `RuleLoader::load_directory()` to load partials from the temp directories
+4. Create `RuleLibrary` instances and add loaded rules
+5. Wrap libraries in `RulePartialAdapter` for template rendering
+6. Use `Template::with_partials()` with the real adapter for integration testing
+
+### Key Design Decisions
+
+- Use `tempfile::tempdir()` for temporary test directories (already in use)
+- Follow the existing pattern of creating files with `std::fs::write`
+- Use `RulePartialAdapter` wrapping `RuleLibrary` as the PartialLoader implementation
+- Ensure proper cleanup by using temporary directories that auto-cleanup
