@@ -191,26 +191,39 @@ impl McpTool for RuleCheckTool {
     ) -> std::result::Result<CallToolResult, McpError> {
         let request: RuleCheckRequest = BaseToolImpl::parse_arguments(arguments)?;
 
-        tracing::debug!("Executing rule check with request: {:?}", request);
+        tracing::info!("Executing rule check with request: {:?}", request);
+        tracing::info!("Rule names filter: {:?}", request.rule_names);
+        tracing::info!("File paths: {:?}", request.file_paths);
 
         // Get or initialize the rule checker with context's agent configuration
         let checker = self.get_checker(context).await?;
+        tracing::info!("RuleChecker initialized successfully");
 
         // Map MCP request to domain request
         let domain_request = DomainRuleCheckRequest {
-            rule_names: request.rule_names,
+            rule_names: request.rule_names.clone(),
             severity: request.severity,
-            category: request.category,
+            category: request.category.clone(),
             patterns: request
                 .file_paths
+                .clone()
                 .unwrap_or_else(|| vec!["**/*.*".to_string()]),
         };
+
+        tracing::info!("Domain request patterns: {:?}", domain_request.patterns);
+        tracing::info!("Domain request rule_names: {:?}", domain_request.rule_names);
 
         // Execute the rule check via library
         let result = checker
             .check_with_filters(domain_request)
             .await
             .map_err(|e| McpError::internal_error(format!("Rule check failed: {}", e), None))?;
+
+        tracing::info!(
+            "Check completed: {} rules checked against {} files",
+            result.rules_checked,
+            result.files_checked
+        );
 
         // Format the response
         let result_text = if result.violations.is_empty() {
@@ -344,5 +357,215 @@ mod tests {
 
         // Both results should have the same success/failure status
         assert_eq!(result1.is_ok(), result2.is_ok());
+    }
+
+    /// Integration test that verifies the full execute path works end-to-end
+    /// This test creates a temporary file, runs a real rule check via the MCP tool,
+    /// and verifies that rules are loaded and checked properly.
+    #[tokio::test]
+    async fn test_rule_check_tool_execute_integration() {
+        use std::fs;
+        use tempfile::TempDir;
+
+        // Create a temporary directory and test file
+        let temp_dir = TempDir::new().unwrap();
+        let test_file = temp_dir.path().join("test.rs");
+        fs::write(
+            &test_file,
+            r#"
+fn example() {
+    let x = vec![1, 2, 3];
+    let first = x.first().unwrap(); // This should trigger no-unwrap if that rule exists
+    println!("first: {}", first);
+}
+"#,
+        )
+        .unwrap();
+
+        // Create tool and context
+        let tool = RuleCheckTool::new();
+        let context = crate::test_utils::create_test_context().await;
+
+        // Create request to check a single rule against the test file for speed
+        // Use a simple rule that should pass quickly
+        let mut arguments = serde_json::Map::new();
+        arguments.insert(
+            "rule_names".to_string(),
+            json!(["code-quality/no-commented-code"]),
+        );
+        arguments.insert(
+            "file_paths".to_string(),
+            json!([test_file.to_string_lossy().to_string()]),
+        );
+
+        // Execute the tool
+        let result = tool.execute(arguments, &context).await;
+
+        // The result should succeed (even if violations are found, execute() returns Ok
+        // with the formatted result in the response text)
+        match result {
+            Ok(call_result) => {
+                // Verify we got some content back
+                assert!(
+                    !call_result.content.is_empty(),
+                    "Tool should return content"
+                );
+
+                // Extract text from the result - we know it's RawContent::Text from the response format
+                let text = if let Some(first_content) = call_result.content.first() {
+                    // Access the Annotated struct's raw field directly via debug formatting for now
+                    // In a real implementation, we'd use proper accessors
+                    format!("{:?}", first_content)
+                } else {
+                    String::from("No content returned")
+                };
+
+                // We should have checked exactly 1 rule against 1 file
+                assert!(
+                    text.contains("1 rules") || text.contains("1 rule"),
+                    "Result should show 1 rule checked: {}",
+                    text
+                );
+                assert!(
+                    text.contains("1 files") || text.contains("1 file"),
+                    "Result should show 1 file checked: {}",
+                    text
+                );
+
+                println!("Integration test result: {}", text);
+            }
+            Err(e) => {
+                panic!("Tool execution failed: {}", e);
+            }
+        }
+    }
+
+    /// Test that rule name filtering works correctly
+    /// This reproduces the issue where calling with specific rule names returns 0 rules
+    #[tokio::test]
+    async fn test_rule_check_tool_with_rule_name_filter() {
+        use std::fs;
+        use tempfile::TempDir;
+
+        // Create a temporary directory and test file
+        let temp_dir = TempDir::new().unwrap();
+        let test_file = temp_dir.path().join("test.rs");
+        fs::write(
+            &test_file,
+            r#"
+fn complex_function() {
+    if condition1 {
+        if condition2 {
+            if condition3 {
+                if condition4 {
+                    // Very nested logic
+                    do_something();
+                }
+            }
+        }
+    }
+}
+"#,
+        )
+        .unwrap();
+
+        // Create tool and context
+        let tool = RuleCheckTool::new();
+        let context = crate::test_utils::create_test_context().await;
+
+        // Create request with specific rule name filter
+        let mut arguments = serde_json::Map::new();
+        arguments.insert(
+            "rule_names".to_string(),
+            json!(["code-quality/cognitive-complexity"]),
+        );
+        arguments.insert(
+            "file_paths".to_string(),
+            json!([test_file.to_string_lossy().to_string()]),
+        );
+
+        // Execute the tool
+        let result = tool.execute(arguments, &context).await;
+
+        match result {
+            Ok(call_result) => {
+                let text = format!("{:?}", call_result);
+                println!("Rule filter test result: {}", text);
+
+                // The key assertion: we should NOT get "0 rules against 0 files"
+                if text.contains("Checked 0 rules against 0 files") {
+                    panic!(
+                        "Rule name filtering failed! Expected to find 'code-quality/cognitive-complexity' rule but got 0 rules.\nFull output: {}",
+                        text
+                    );
+                }
+
+                // We should have checked at least 1 rule and 1 file
+                assert!(
+                    text.contains("1 rules") || text.contains("rules"),
+                    "Should have checked the cognitive-complexity rule. Got: {}",
+                    text
+                );
+            }
+            Err(e) => {
+                panic!("Tool execution failed: {}", e);
+            }
+        }
+    }
+
+    /// Test rule checking against an actual repo file
+    /// Uses this crate's Cargo.toml which we know exists
+    #[tokio::test]
+    async fn test_rule_check_with_real_repo_file() {
+        // Use this crate's Cargo.toml
+        let cargo_toml = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml");
+
+        assert!(
+            cargo_toml.exists(),
+            "Cargo.toml should exist at {:?}",
+            cargo_toml
+        );
+
+        // Create tool and context
+        let tool = RuleCheckTool::new();
+        let context = crate::test_utils::create_test_context().await;
+
+        // Create request - check a specific builtin rule against Cargo.toml
+        let mut arguments = serde_json::Map::new();
+        arguments.insert(
+            "rule_names".to_string(),
+            json!(["code-quality/no-commented-code"]), // Use a specific builtin rule
+        );
+        arguments.insert(
+            "file_paths".to_string(),
+            json!([cargo_toml.to_string_lossy().to_string()]),
+        );
+
+        // Execute the tool
+        let result = tool.execute(arguments, &context).await;
+
+        match result {
+            Ok(call_result) => {
+                let text = format!("{:?}", call_result);
+                println!("Cargo.toml check result: {}", text);
+
+                // Should have loaded the specific rule
+                assert!(
+                    text.contains("1 rules") && text.contains("1 files"),
+                    "Should have loaded 'code-quality/no-commented-code' rule and checked Cargo.toml. Got: {}",
+                    text
+                );
+
+                // Should not show 0 rules
+                assert!(
+                    !text.contains("Checked 0 rules"),
+                    "Should have found the builtin rule 'code-quality/no-commented-code'. Got: {}",
+                    text
+                );
+            }
+            Err(e) => {
+                panic!("Tool execution failed: {}", e);
+            }
+        }
     }
 }

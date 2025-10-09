@@ -2,7 +2,7 @@
 title: No Magic Numbers
 description: Detect unexplained numeric literals in code
 category: code-quality
-severity: info
+severity: error
 tags: ["code-quality", "maintainability"]
 ---
 

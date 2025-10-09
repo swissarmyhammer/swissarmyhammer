@@ -296,12 +296,13 @@ impl RuleChecker {
             ))
         })?;
 
-        // Calculate cache key from file content + rule template
-        let cache_key = RuleCache::calculate_cache_key(&target_content, &rule.template);
+        // Calculate cache key from file content + rule template + severity
+        let cache_key =
+            RuleCache::calculate_cache_key(&target_content, &rule.template, rule.severity);
 
         // Check cache before proceeding with LLM evaluation
         if let Some(cached_result) = self.cache.get(&cache_key)? {
-            tracing::info!(
+            tracing::trace!(
                 "Cache hit for {} against rule {} - skipping LLM call",
                 target_path.display(),
                 rule.name
@@ -310,7 +311,7 @@ impl RuleChecker {
             // Return cached result
             match cached_result {
                 CachedResult::Pass => {
-                    tracing::info!(
+                    tracing::trace!(
                         "Cached check passed for {} against rule {}",
                         target_path.display(),
                         rule.name
@@ -343,7 +344,7 @@ impl RuleChecker {
             }
         }
 
-        tracing::debug!(
+        tracing::trace!(
             "Cache miss for {} against rule {} - proceeding with LLM check",
             target_path.display(),
             rule.name
@@ -418,8 +419,31 @@ impl RuleChecker {
         tracing::debug!("LLM execution complete");
 
         // Parse result - check for PASS or VIOLATION
+        // The agent may return detailed analysis followed by PASS or VIOLATION
+        // We need to check both the beginning and end of the response
         let result_text = response.content.trim();
-        if result_text.starts_with("PASS") {
+
+        // Check if response contains PASS (with or without markdown formatting)
+        // Look for PASS at the start or end, ignoring markdown asterisks
+        let normalized_text = result_text.trim_start_matches('*').trim_start();
+
+        // Strip trailing markdown formatting as well before checking
+        let trimmed_end = result_text.trim_end_matches('*').trim_end();
+        let ends_with_pass = trimmed_end.ends_with("PASS")
+            || result_text.contains("**PASS**")
+            || result_text.contains("*PASS*");
+
+        tracing::debug!(
+            "Response parsing - result_text length: {}",
+            result_text.len()
+        );
+        tracing::debug!(
+            "Response parsing - starts with PASS: {}",
+            normalized_text.starts_with("PASS")
+        );
+        tracing::debug!("Response parsing - ends_with_pass: {}", ends_with_pass);
+
+        if normalized_text.starts_with("PASS") || ends_with_pass {
             tracing::info!(
                 "Check passed for {} against rule {}",
                 target_path.display(),
@@ -606,8 +630,20 @@ impl RuleChecker {
             .load_all_rules(&mut rules)
             .map_err(|e| RuleError::CheckError(format!("Failed to load rules: {}", e)))?;
 
+        let total_files = rules.len();
+        let partials_count = rules.iter().filter(|r| r.is_partial()).count();
+
         // Filter out partials - they are not standalone rules
         rules.retain(|r| !r.is_partial());
+
+        let rule_names: Vec<&str> = rules.iter().map(|r| r.name.as_str()).collect();
+        tracing::info!(
+            "Loaded {} files ({} rules, {} partials). Rules: {:?}",
+            total_files,
+            rules.len(),
+            partials_count,
+            rule_names
+        );
 
         // Phase 2: Validate all rules first (fail if any invalid)
         for rule in &rules {
@@ -618,7 +654,13 @@ impl RuleChecker {
 
         // Phase 3: Apply filters
         if let Some(rule_names) = &request.rule_names {
+            tracing::info!("Filtering by rule_names: {:?}", rule_names);
+            tracing::info!(
+                "Available rule names before filter: {:?}",
+                rules.iter().map(|r| &r.name).collect::<Vec<_>>()
+            );
             rules.retain(|r| rule_names.contains(&r.name));
+            tracing::info!("After filtering by rule_names: {} rules", rules.len());
         }
 
         if let Some(severity) = &request.severity {

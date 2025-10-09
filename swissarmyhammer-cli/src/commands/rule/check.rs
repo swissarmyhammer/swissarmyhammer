@@ -184,9 +184,12 @@ async fn execute_check_command_impl(
             Ok(())
         }
         Err(e) => match e {
-            swissarmyhammer_common::SwissArmyHammerError::RuleViolation(_) => {
-                // Violation was already logged by checker at appropriate level
-                Err(CliError::new("Rule violation found".to_string(), 1))
+            swissarmyhammer_common::SwissArmyHammerError::RuleViolation(violation_msg) => {
+                // Violation was already logged by checker, pass through the message
+                Err(CliError::new(
+                    format!("Rule violation: {}", violation_msg),
+                    1,
+                ))
             }
             _ => {
                 // Other errors need to be logged

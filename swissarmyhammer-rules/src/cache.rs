@@ -150,15 +150,16 @@ impl RuleCache {
         Ok(cache_root.join("swissarmyhammer").join("rules"))
     }
 
-    /// Calculate SHA-256 cache key from file content and rule template
+    /// Calculate SHA-256 cache key from file content, rule template, and severity
     ///
-    /// The cache key uniquely identifies a file content + rule template pair.
-    /// When either changes, the hash changes, automatically invalidating the cache.
+    /// The cache key uniquely identifies a file content + rule template + severity tuple.
+    /// When any of these changes, the hash changes, automatically invalidating the cache.
     ///
     /// # Arguments
     ///
     /// * `file_content` - The content of the file being checked
     /// * `rule_template` - The template content of the rule
+    /// * `severity` - The severity level of the rule
     ///
     /// # Returns
     ///
@@ -167,15 +168,20 @@ impl RuleCache {
     /// # Examples
     ///
     /// ```
-    /// use swissarmyhammer_rules::RuleCache;
+    /// use swissarmyhammer_rules::{RuleCache, Severity};
     ///
-    /// let key = RuleCache::calculate_cache_key("fn main() {}", "Check for TODO");
+    /// let key = RuleCache::calculate_cache_key("fn main() {}", "Check for TODO", Severity::Error);
     /// assert_eq!(key.len(), 64); // SHA-256 produces 64 hex characters
     /// ```
-    pub fn calculate_cache_key(file_content: &str, rule_template: &str) -> String {
+    pub fn calculate_cache_key(
+        file_content: &str,
+        rule_template: &str,
+        severity: Severity,
+    ) -> String {
         let mut hasher = Sha256::new();
         hasher.update(file_content.as_bytes());
         hasher.update(rule_template.as_bytes());
+        hasher.update(format!("{:?}", severity).as_bytes());
         let hash = hasher.finalize();
         format!("{:x}", hash)
     }
@@ -305,10 +311,11 @@ mod tests {
 
     #[test]
     fn test_calculate_cache_key() {
-        let key1 = RuleCache::calculate_cache_key("content1", "rule1");
-        let key2 = RuleCache::calculate_cache_key("content1", "rule1");
-        let key3 = RuleCache::calculate_cache_key("content2", "rule1");
-        let key4 = RuleCache::calculate_cache_key("content1", "rule2");
+        let key1 = RuleCache::calculate_cache_key("content1", "rule1", Severity::Error);
+        let key2 = RuleCache::calculate_cache_key("content1", "rule1", Severity::Error);
+        let key3 = RuleCache::calculate_cache_key("content2", "rule1", Severity::Error);
+        let key4 = RuleCache::calculate_cache_key("content1", "rule2", Severity::Error);
+        let key5 = RuleCache::calculate_cache_key("content1", "rule1", Severity::Warning);
 
         // Same inputs produce same key
         assert_eq!(key1, key2);
@@ -317,13 +324,14 @@ mod tests {
         // Different inputs produce different keys
         assert_ne!(key1, key3);
         assert_ne!(key1, key4);
+        assert_ne!(key1, key5); // Different severity produces different key
     }
 
     #[test]
     fn test_cache_store_and_get_pass() {
         let (cache, _temp_dir) = create_test_cache();
 
-        let key = RuleCache::calculate_cache_key("test content", "test rule");
+        let key = RuleCache::calculate_cache_key("test content", "test rule", Severity::Error);
         let result = CachedResult::Pass;
 
         // Store result
@@ -338,7 +346,7 @@ mod tests {
     fn test_cache_store_and_get_violation() {
         let (cache, _temp_dir) = create_test_cache();
 
-        let key = RuleCache::calculate_cache_key("test content", "test rule");
+        let key = RuleCache::calculate_cache_key("test content", "test rule", Severity::Error);
         let violation = RuleViolation::new(
             "test-rule".to_string(),
             PathBuf::from("test.rs"),
@@ -367,7 +375,7 @@ mod tests {
     fn test_cache_miss() {
         let (cache, _temp_dir) = create_test_cache();
 
-        let key = RuleCache::calculate_cache_key("nonexistent", "content");
+        let key = RuleCache::calculate_cache_key("nonexistent", "content", Severity::Error);
         let result = cache.get(&key).unwrap();
         assert_eq!(result, None);
     }
@@ -377,8 +385,8 @@ mod tests {
         let (cache, _temp_dir) = create_test_cache();
 
         // Store multiple results
-        let key1 = RuleCache::calculate_cache_key("content1", "rule1");
-        let key2 = RuleCache::calculate_cache_key("content2", "rule2");
+        let key1 = RuleCache::calculate_cache_key("content1", "rule1", Severity::Error);
+        let key2 = RuleCache::calculate_cache_key("content2", "rule2", Severity::Error);
 
         cache.store(&key1, &CachedResult::Pass).unwrap();
         cache.store(&key2, &CachedResult::Pass).unwrap();
@@ -409,8 +417,8 @@ mod tests {
     fn test_cache_invalidation_on_file_change() {
         let (cache, _temp_dir) = create_test_cache();
 
-        let key1 = RuleCache::calculate_cache_key("original content", "rule");
-        let key2 = RuleCache::calculate_cache_key("modified content", "rule");
+        let key1 = RuleCache::calculate_cache_key("original content", "rule", Severity::Error);
+        let key2 = RuleCache::calculate_cache_key("modified content", "rule", Severity::Error);
 
         // Keys should be different when file content changes
         assert_ne!(key1, key2);
@@ -425,8 +433,8 @@ mod tests {
     fn test_cache_invalidation_on_rule_change() {
         let (cache, _temp_dir) = create_test_cache();
 
-        let key1 = RuleCache::calculate_cache_key("content", "original rule");
-        let key2 = RuleCache::calculate_cache_key("content", "modified rule");
+        let key1 = RuleCache::calculate_cache_key("content", "original rule", Severity::Error);
+        let key2 = RuleCache::calculate_cache_key("content", "modified rule", Severity::Error);
 
         // Keys should be different when rule changes
         assert_ne!(key1, key2);
@@ -438,10 +446,26 @@ mod tests {
     }
 
     #[test]
+    fn test_cache_invalidation_on_severity_change() {
+        let (cache, _temp_dir) = create_test_cache();
+
+        let key1 = RuleCache::calculate_cache_key("content", "rule", Severity::Error);
+        let key2 = RuleCache::calculate_cache_key("content", "rule", Severity::Warning);
+
+        // Keys should be different when severity changes
+        assert_ne!(key1, key2);
+
+        cache.store(&key1, &CachedResult::Pass).unwrap();
+
+        // Changed severity means different key, so cache miss
+        assert!(cache.get(&key2).unwrap().is_none());
+    }
+
+    #[test]
     fn test_cache_entry_includes_timestamp() {
         let (cache, _temp_dir) = create_test_cache();
 
-        let key = RuleCache::calculate_cache_key("content", "rule");
+        let key = RuleCache::calculate_cache_key("content", "rule", Severity::Error);
         let before = Utc::now();
 
         cache.store(&key, &CachedResult::Pass).unwrap();

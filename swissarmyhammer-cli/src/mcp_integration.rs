@@ -10,8 +10,9 @@ use std::sync::Arc;
 
 use swissarmyhammer_git::GitOperations;
 use swissarmyhammer_tools::{
-    register_file_tools, register_issue_tools, register_memo_tools, register_search_tools,
-    register_shell_tools, register_web_fetch_tools, register_web_search_tools,
+    register_file_tools, register_issue_tools, register_memo_tools, register_rules_tools,
+    register_search_tools, register_shell_tools, register_web_fetch_tools,
+    register_web_search_tools,
 };
 use swissarmyhammer_tools::{ToolContext, ToolRegistry};
 use tokio::sync::{Mutex, RwLock};
@@ -115,6 +116,7 @@ impl CliToolContext {
         register_file_tools(&mut tool_registry);
         register_issue_tools(&mut tool_registry);
         register_memo_tools(&mut tool_registry);
+        register_rules_tools(&mut tool_registry);
         register_search_tools(&mut tool_registry);
         register_shell_tools(&mut tool_registry);
         register_web_fetch_tools(&mut tool_registry);

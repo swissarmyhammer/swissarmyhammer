@@ -72,13 +72,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_clear_cache_with_entries() {
-        use swissarmyhammer_rules::{CachedResult, RuleCache};
+        use swissarmyhammer_rules::{CachedResult, RuleCache, Severity};
 
         let context = create_test_context().await;
 
         // Add some cache entries
         let cache = RuleCache::new().unwrap();
-        let key = RuleCache::calculate_cache_key("content", "rule");
+        let key = RuleCache::calculate_cache_key("content", "rule", Severity::Error);
         cache.store(&key, &CachedResult::Pass).unwrap();
 
         // Clear the cache

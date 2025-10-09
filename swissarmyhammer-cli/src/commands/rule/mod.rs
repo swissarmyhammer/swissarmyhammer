@@ -25,7 +25,7 @@ pub async fn handle_command_typed(
     match run_rule_command_typed(command, context).await {
         Ok(_) => EXIT_SUCCESS,
         Err(e) => {
-            tracing::error!("Rule command failed: {}", e);
+            tracing::error!("{}", e.full_chain());
             e.exit_code
         }
     }
