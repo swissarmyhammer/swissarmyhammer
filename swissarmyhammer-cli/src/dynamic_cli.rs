@@ -1304,6 +1304,12 @@ Run rules against code files and report violations.
                             .long("category")
                             .help("Filter by category")
                             .value_name("CATEGORY"),
+                    )
+                    .arg(
+                        Arg::new("create-issues")
+                            .long("create-issues")
+                            .help("Automatically create issues for ERROR level violations")
+                            .action(ArgAction::SetTrue),
                     ),
             )
     }

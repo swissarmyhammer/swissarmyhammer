@@ -35,6 +35,7 @@ pub struct CheckCommand {
     pub rule: Option<Vec<String>>,
     pub severity: Option<String>,
     pub category: Option<String>,
+    pub create_issues: bool,
 }
 
 /// Cache command for managing the rule evaluation cache.
@@ -106,6 +107,7 @@ pub fn parse_rule_command(matches: &ArgMatches) -> RuleCommand {
                     .map(|vals| vals.cloned().collect()),
                 severity: sub_matches.get_one::<String>("severity").cloned(),
                 category: sub_matches.get_one::<String>("category").cloned(),
+                create_issues: sub_matches.get_flag("create-issues"),
             };
             RuleCommand::Check(check_cmd)
         }
@@ -201,7 +203,12 @@ mod tests {
                     )
                     .arg(Arg::new("patterns").action(ArgAction::Append))
                     .arg(Arg::new("severity").short('s').long("severity"))
-                    .arg(Arg::new("category").short('c').long("category")),
+                    .arg(Arg::new("category").short('c').long("category"))
+                    .arg(
+                        Arg::new("create-issues")
+                            .long("create-issues")
+                            .action(ArgAction::SetTrue),
+                    ),
             )
             .try_get_matches_from(["rule", "check", "file1.rs", "file2.rs"])
             .unwrap();
@@ -213,6 +220,7 @@ mod tests {
                 assert_eq!(check_cmd.patterns, vec!["file1.rs", "file2.rs"]);
                 assert_eq!(check_cmd.severity, None);
                 assert_eq!(check_cmd.category, None);
+                assert!(!check_cmd.create_issues);
             }
             _ => panic!("Expected Check command"),
         }
@@ -231,7 +239,12 @@ mod tests {
                     )
                     .arg(Arg::new("patterns").action(ArgAction::Append))
                     .arg(Arg::new("severity").short('s').long("severity"))
-                    .arg(Arg::new("category").short('c').long("category")),
+                    .arg(Arg::new("category").short('c').long("category"))
+                    .arg(
+                        Arg::new("create-issues")
+                            .long("create-issues")
+                            .action(ArgAction::SetTrue),
+                    ),
             )
             .try_get_matches_from([
                 "rule",
@@ -250,6 +263,7 @@ mod tests {
                 assert_eq!(check_cmd.patterns, vec!["file.rs"]);
                 assert_eq!(check_cmd.severity, Some("error".to_string()));
                 assert_eq!(check_cmd.category, Some("security".to_string()));
+                assert!(!check_cmd.create_issues);
             }
             _ => panic!("Expected Check command"),
         }
@@ -295,6 +309,7 @@ mod tests {
             rule: Some(vec!["test-rule".to_string()]),
             severity: Some("error".to_string()),
             category: Some("security".to_string()),
+            create_issues: false,
         };
 
         match RuleCommand::Check(check_cmd) {
@@ -303,6 +318,7 @@ mod tests {
                 assert_eq!(cmd.rule, Some(vec!["test-rule".to_string()]));
                 assert_eq!(cmd.severity, Some("error".to_string()));
                 assert_eq!(cmd.category, Some("security".to_string()));
+                assert!(!cmd.create_issues);
             }
             _ => panic!("CheckCommand should match RuleCommand::Check"),
         }
@@ -325,5 +341,38 @@ mod tests {
         let rule_cmd = RuleCommand::List(list_cmd);
         let debug_str = format!("{:?}", rule_cmd);
         assert!(debug_str.contains("List"));
+    }
+
+    #[test]
+    fn test_parse_check_command_with_create_issues() {
+        let matches = Command::new("rule")
+            .subcommand(
+                Command::new("check")
+                    .arg(
+                        Arg::new("rule")
+                            .short('r')
+                            .long("rule")
+                            .action(ArgAction::Append),
+                    )
+                    .arg(Arg::new("patterns").action(ArgAction::Append))
+                    .arg(Arg::new("severity").short('s').long("severity"))
+                    .arg(Arg::new("category").short('c').long("category"))
+                    .arg(
+                        Arg::new("create-issues")
+                            .long("create-issues")
+                            .action(ArgAction::SetTrue),
+                    ),
+            )
+            .try_get_matches_from(["rule", "check", "--create-issues", "file.rs"])
+            .unwrap();
+
+        let parsed = parse_rule_command(&matches);
+        match parsed {
+            RuleCommand::Check(check_cmd) => {
+                assert_eq!(check_cmd.patterns, vec!["file.rs"]);
+                assert!(check_cmd.create_issues);
+            }
+            _ => panic!("Expected Check command"),
+        }
     }
 }

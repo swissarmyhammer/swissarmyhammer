@@ -1,13 +1,17 @@
 //! Check command implementation for rules
 //!
-//! Checks code files against rules to find violations
+//! Checks code files against rules to find violations and optionally creates
+//! issues for ERROR level violations when --create-issues flag is provided
 
 use crate::context::CliContext;
 use crate::error::{CliError, CliResult};
+use sha2::{Digest, Sha256};
+use std::path::Path;
 use std::sync::Arc;
 use swissarmyhammer_agent_executor::AgentExecutor;
 use swissarmyhammer_config::agent::{AgentConfig, AgentExecutorConfig};
-use swissarmyhammer_rules::{RuleCheckRequest, RuleChecker};
+use swissarmyhammer_issues::{FileSystemIssueStorage, IssueStorage};
+use swissarmyhammer_rules::{RuleCheckRequest, RuleChecker, RuleViolation};
 
 use super::cli::CheckCommand;
 
@@ -174,29 +178,165 @@ async fn execute_check_command_impl(
         patterns: request.cmd.patterns,
     };
 
-    // Run check with filters - this handles all the logic
-    match checker.check_with_filters(rule_request).await {
-        Ok(result) => {
-            // Print results if not quiet
-            if !context.quiet && result.rules_checked == 0 {
-                println!("No rules matched the filters");
+    // Choose behavior based on create_issues flag
+    if request.cmd.create_issues {
+        // Use collection mode to gather all ERROR violations
+        match checker.check_with_filters_collect(rule_request).await {
+            Ok(result) => {
+                // Print results if not quiet
+                if !context.quiet {
+                    if result.rules_checked == 0 {
+                        println!("No rules matched the filters");
+                    } else if result.violations.is_empty() {
+                        println!("All checks passed - no ERROR violations found");
+                    } else {
+                        println!(
+                            "Found {} ERROR violation(s), creating issues...",
+                            result.violations.len()
+                        );
+                    }
+                }
+
+                // Create issues for violations
+                if !result.violations.is_empty() {
+                    create_issues_for_violations(&result.violations, context).await?;
+                }
+
+                Ok(())
             }
-            Ok(())
-        }
-        Err(e) => match e {
-            swissarmyhammer_common::SwissArmyHammerError::RuleViolation(violation_msg) => {
-                // Violation was already logged by checker, pass through the message
-                Err(CliError::new(
-                    format!("Rule violation: {}", violation_msg),
-                    1,
-                ))
-            }
-            _ => {
+            Err(e) => {
                 // Other errors need to be logged
                 Err(CliError::new(format!("Check failed: {}", e), 1))
             }
-        },
+        }
+    } else {
+        // Use fail-fast mode (original behavior)
+        match checker.check_with_filters(rule_request).await {
+            Ok(result) => {
+                // Print results if not quiet
+                if !context.quiet && result.rules_checked == 0 {
+                    println!("No rules matched the filters");
+                }
+                Ok(())
+            }
+            Err(e) => match e {
+                swissarmyhammer_common::SwissArmyHammerError::RuleViolation(violation_msg) => {
+                    // Violation was already logged by checker, pass through the message
+                    Err(CliError::new(
+                        format!("Rule violation: {}", violation_msg),
+                        1,
+                    ))
+                }
+                _ => {
+                    // Other errors need to be logged
+                    Err(CliError::new(format!("Check failed: {}", e), 1))
+                }
+            },
+        }
     }
+}
+
+/// Number of characters to use from the file path hash in issue names
+const ISSUE_HASH_LENGTH: usize = 8;
+
+/// Generate a deterministic hash for a file path
+///
+/// Uses SHA-256 to hash the file path and returns the first 8 characters
+/// of the hex digest for use in issue filenames.
+fn generate_file_hash(file_path: &Path) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(file_path.to_string_lossy().as_bytes());
+    let result = hasher.finalize();
+    format!("{:x}", result)[..ISSUE_HASH_LENGTH].to_string()
+}
+
+/// Generate issue name from rule name and file path
+///
+/// Creates a name in the format: ~{rule_name}_{file_hash}
+/// The ~ prefix sorts issues to the end of the list.
+/// Replaces slashes in rule names with underscores for filesystem safety.
+fn generate_issue_name(rule_name: &str, file_path: &Path) -> String {
+    let file_hash = generate_file_hash(file_path);
+    let safe_rule_name = rule_name.replace('/', "_");
+    format!("~{}_{}", safe_rule_name, file_hash)
+}
+
+/// Format issue content from a rule violation
+///
+/// Creates a markdown-formatted issue body with violation details.
+fn format_issue_content(violation: &RuleViolation) -> String {
+    format!(
+        r#"# Rule Violation: {}
+
+**File**: {}
+**Severity**: ERROR
+
+## Violation Message
+
+{}
+
+---
+*This issue was automatically created by `sah rule check --create-issues`*
+"#,
+        violation.rule_name,
+        violation.file_path.display(),
+        violation.message
+    )
+}
+
+/// Create issues for all rule violations
+///
+/// Iterates through violations and creates an issue for each unique rule+file combination.
+/// Skips creating issues that already exist.
+async fn create_issues_for_violations(
+    violations: &[RuleViolation],
+    context: &CliContext,
+) -> CliResult<()> {
+    let storage = FileSystemIssueStorage::new_default()
+        .map_err(|e| CliError::new(format!("Failed to initialize issue storage: {}", e), 1))?;
+
+    let mut created_count = 0;
+    let mut skipped_count = 0;
+
+    for violation in violations {
+        let issue_name = generate_issue_name(&violation.rule_name, &violation.file_path);
+        let issue_content = format_issue_content(violation);
+
+        // Check if issue already exists
+        match storage.get_issue(&issue_name).await {
+            Ok(_existing) => {
+                tracing::debug!("Issue '{}' already exists, skipping", issue_name);
+                skipped_count += 1;
+            }
+            Err(_) => {
+                // Issue doesn't exist, create it
+                match storage
+                    .create_issue(issue_name.clone(), issue_content)
+                    .await
+                {
+                    Ok(_) => {
+                        if !context.quiet {
+                            println!("Created issue: {}", issue_name);
+                        }
+                        created_count += 1;
+                    }
+                    Err(e) => {
+                        // Log warning but continue processing other violations
+                        tracing::warn!("Failed to create issue '{}': {}", issue_name, e);
+                    }
+                }
+            }
+        }
+    }
+
+    if !context.quiet {
+        println!(
+            "\nIssue creation summary: {} created, {} skipped (already exist)",
+            created_count, skipped_count
+        );
+    }
+
+    Ok(())
 }
 
 #[cfg(test)]
@@ -238,6 +378,7 @@ mod tests {
             rule: Some(vec!["nonexistent-rule".to_string()]),
             severity: None,
             category: None,
+            create_issues: false,
         };
 
         let request = CheckCommandRequest::with_config(cmd, setup_test_agent_config());
@@ -255,6 +396,7 @@ mod tests {
             rule: None,
             severity: None,
             category: None,
+            create_issues: false,
         };
 
         let request = CheckCommandRequest::with_config(cmd, setup_test_agent_config());
@@ -272,6 +414,7 @@ mod tests {
             rule: None,
             severity: Some("error".to_string()),
             category: None,
+            create_issues: false,
         };
 
         let request = CheckCommandRequest::with_config(cmd, setup_test_agent_config());
@@ -289,6 +432,7 @@ mod tests {
             rule: None,
             severity: None,
             category: Some("security".to_string()),
+            create_issues: false,
         };
 
         let request = CheckCommandRequest::with_config(cmd, setup_test_agent_config());
@@ -306,6 +450,7 @@ mod tests {
             rule: Some(vec!["specific-rule".to_string()]),
             severity: None,
             category: None,
+            create_issues: false,
         };
 
         let request = CheckCommandRequest::with_config(cmd, setup_test_agent_config());
@@ -323,6 +468,7 @@ mod tests {
             rule: Some(vec!["specific-rule".to_string()]),
             severity: Some("error".to_string()),
             category: Some("security".to_string()),
+            create_issues: false,
         };
 
         let request = CheckCommandRequest::with_config(cmd, setup_test_agent_config());
@@ -340,6 +486,7 @@ mod tests {
             rule: Some(vec!["nonexistent-rule".to_string()]),
             severity: None,
             category: None,
+            create_issues: false,
         };
 
         // Request ClaudeCode - it should work now without fallback
@@ -350,5 +497,261 @@ mod tests {
             result.is_ok(),
             "ClaudeCode should work for rule checking without fallback"
         );
+    }
+
+    #[test]
+    fn test_generate_file_hash() {
+        let path1 = Path::new("src/main.rs");
+        let path2 = Path::new("src/lib.rs");
+        let path1_again = Path::new("src/main.rs");
+
+        let hash1 = generate_file_hash(path1);
+        let hash2 = generate_file_hash(path2);
+        let hash1_again = generate_file_hash(path1_again);
+
+        // Hash should be ISSUE_HASH_LENGTH characters
+        assert_eq!(hash1.len(), ISSUE_HASH_LENGTH);
+        assert_eq!(hash2.len(), ISSUE_HASH_LENGTH);
+
+        // Same path should produce same hash
+        assert_eq!(hash1, hash1_again);
+
+        // Different paths should produce different hashes
+        assert_ne!(hash1, hash2);
+    }
+
+    #[test]
+    fn test_generate_issue_name() {
+        let rule_name = "no-unwrap";
+        let file_path = Path::new("src/main.rs");
+
+        let issue_name = generate_issue_name(rule_name, file_path);
+
+        // Should start with ~
+        assert!(issue_name.starts_with('~'));
+
+        // Should contain rule name
+        assert!(issue_name.contains("no-unwrap"));
+
+        // Should contain underscore separator
+        assert!(issue_name.contains('_'));
+
+        // Should be deterministic
+        let issue_name_again = generate_issue_name(rule_name, file_path);
+        assert_eq!(issue_name, issue_name_again);
+    }
+
+    #[test]
+    fn test_generate_issue_name_with_slashes() {
+        let rule_name = "security/no-hardcoded-secrets";
+        let file_path = Path::new("test_violation.rs");
+
+        let issue_name = generate_issue_name(rule_name, file_path);
+
+        // Should start with ~
+        assert!(issue_name.starts_with('~'));
+
+        // Should replace slashes with underscores
+        assert!(issue_name.contains("security_no-hardcoded-secrets"));
+        assert!(!issue_name.contains('/'));
+
+        // Should contain hash
+        assert!(issue_name.contains('_'));
+
+        // Should be deterministic
+        let issue_name_again = generate_issue_name(rule_name, file_path);
+        assert_eq!(issue_name, issue_name_again);
+    }
+
+    #[test]
+    fn test_generate_issue_name_with_multiple_slashes() {
+        let rule_name = "category/subcategory/rule-name";
+        let file_path = Path::new("src/main.rs");
+
+        let issue_name = generate_issue_name(rule_name, file_path);
+
+        // Should replace all slashes with underscores
+        assert!(issue_name.contains("category_subcategory_rule-name"));
+        assert!(!issue_name.contains('/'));
+
+        // Should start with ~
+        assert!(issue_name.starts_with('~'));
+
+        // Should be deterministic
+        let issue_name_again = generate_issue_name(rule_name, file_path);
+        assert_eq!(issue_name, issue_name_again);
+    }
+
+    #[test]
+    fn test_generate_issue_name_with_consecutive_slashes() {
+        let rule_name = "security//no-secrets";
+        let file_path = Path::new("test.rs");
+
+        let issue_name = generate_issue_name(rule_name, file_path);
+
+        // Should replace consecutive slashes with underscores
+        assert!(issue_name.contains("security__no-secrets"));
+        assert!(!issue_name.contains('/'));
+
+        // Should start with ~
+        assert!(issue_name.starts_with('~'));
+    }
+
+    #[test]
+    fn test_generate_issue_name_with_leading_trailing_slashes() {
+        let rule_name = "/security/no-secrets/";
+        let file_path = Path::new("test.rs");
+
+        let issue_name = generate_issue_name(rule_name, file_path);
+
+        // Should replace all slashes including leading/trailing
+        assert!(issue_name.contains("_security_no-secrets_"));
+        assert!(!issue_name.contains('/'));
+
+        // Should start with ~
+        assert!(issue_name.starts_with('~'));
+    }
+
+    #[test]
+    fn test_format_issue_content() {
+        use std::path::PathBuf;
+        use swissarmyhammer_rules::{RuleViolation, Severity};
+
+        let violation = RuleViolation::new(
+            "no-unwrap".to_string(),
+            PathBuf::from("src/main.rs"),
+            Severity::Error,
+            "Found unwrap() call which can panic".to_string(),
+        );
+
+        let content = format_issue_content(&violation);
+
+        // Should contain rule name
+        assert!(content.contains("no-unwrap"));
+
+        // Should contain file path
+        assert!(content.contains("src/main.rs"));
+
+        // Should contain severity
+        assert!(content.contains("ERROR"));
+
+        // Should contain violation message
+        assert!(content.contains("Found unwrap() call which can panic"));
+
+        // Should be markdown formatted
+        assert!(content.contains("# Rule Violation"));
+
+        // Should contain footer
+        assert!(content.contains("automatically created"));
+    }
+
+    #[test]
+    fn test_format_issue_content_with_markdown_chars() {
+        use std::path::PathBuf;
+        use swissarmyhammer_rules::{RuleViolation, Severity};
+
+        let violation = RuleViolation::new(
+            "test-rule".to_string(),
+            PathBuf::from("test.rs"),
+            Severity::Error,
+            "Found *special* **markdown** chars: # ## ### `code` [link](url)".to_string(),
+        );
+
+        let content = format_issue_content(&violation);
+
+        // Should preserve markdown special characters in message
+        assert!(content.contains("Found *special* **markdown** chars"));
+        assert!(content.contains("`code`"));
+        assert!(content.contains("[link](url)"));
+
+        // Should still be properly structured markdown
+        assert!(content.contains("# Rule Violation"));
+    }
+
+    #[test]
+    fn test_format_issue_content_with_newlines() {
+        use std::path::PathBuf;
+        use swissarmyhammer_rules::{RuleViolation, Severity};
+
+        let violation = RuleViolation::new(
+            "test-rule".to_string(),
+            PathBuf::from("test.rs"),
+            Severity::Error,
+            "Multi-line message:\nLine 1\nLine 2\nLine 3".to_string(),
+        );
+
+        let content = format_issue_content(&violation);
+
+        // Should preserve newlines in message
+        assert!(content.contains("Multi-line message:\nLine 1\nLine 2\nLine 3"));
+
+        // Should still be properly structured
+        assert!(content.contains("# Rule Violation"));
+        assert!(content.contains("## Violation Message"));
+    }
+
+    #[test]
+    fn test_format_issue_content_with_code_block() {
+        use std::path::PathBuf;
+        use swissarmyhammer_rules::{RuleViolation, Severity};
+
+        let violation = RuleViolation::new(
+            "test-rule".to_string(),
+            PathBuf::from("test.rs"),
+            Severity::Error,
+            "Found issue in code:\n```rust\nfn main() {\n    println!(\"test\");\n}\n```"
+                .to_string(),
+        );
+
+        let content = format_issue_content(&violation);
+
+        // Should preserve code block formatting
+        assert!(content.contains("```rust"));
+        assert!(content.contains("fn main()"));
+
+        // Should still be properly structured
+        assert!(content.contains("# Rule Violation"));
+    }
+
+    #[test]
+    fn test_format_issue_content_with_very_long_message() {
+        use std::path::PathBuf;
+        use swissarmyhammer_rules::{RuleViolation, Severity};
+
+        // Create a very long message
+        let long_message = "A".repeat(10000);
+
+        let violation = RuleViolation::new(
+            "test-rule".to_string(),
+            PathBuf::from("test.rs"),
+            Severity::Error,
+            long_message.clone(),
+        );
+
+        let content = format_issue_content(&violation);
+
+        // Should include the entire message without truncation
+        assert!(content.contains(&long_message));
+
+        // Should still be properly structured
+        assert!(content.contains("# Rule Violation"));
+    }
+
+    #[tokio::test]
+    async fn test_execute_check_command_with_create_issues_flag() {
+        let context = setup_test_context().await;
+
+        let cmd = super::super::cli::CheckCommand {
+            patterns: vec!["test.rs".to_string()],
+            rule: Some(vec!["nonexistent-rule".to_string()]),
+            severity: None,
+            category: None,
+            create_issues: true,
+        };
+
+        let request = CheckCommandRequest::with_config(cmd, setup_test_agent_config());
+        let result = execute_check_command_impl(request, &context).await;
+        // Should succeed when no rules match (no violations to create issues for)
+        assert!(result.is_ok());
     }
 }
