@@ -11,7 +11,8 @@ use std::sync::Arc;
 use swissarmyhammer_agent_executor::AgentExecutor;
 use swissarmyhammer_config::agent::{AgentConfig, AgentExecutorConfig};
 use swissarmyhammer_issues::{FileSystemIssueStorage, IssueStorage};
-use swissarmyhammer_rules::{RuleCheckRequest, RuleChecker, RuleViolation};
+use futures_util::stream::StreamExt;
+use swissarmyhammer_rules::{CheckMode, RuleCheckRequest, RuleChecker, RuleViolation};
 
 use super::cli::CheckCommand;
 
@@ -170,19 +171,78 @@ async fn execute_check_command_impl(
         .map(|s| s.parse().map_err(|e: String| CliError::new(e, 1)))
         .transpose()?;
 
+    // Determine check mode from CLI flags
+    // Both --no-fail-fast and --create-issues enable CollectAll mode
+    let check_mode = if request.cmd.no_fail_fast || request.cmd.create_issues {
+        CheckMode::CollectAll
+    } else {
+        CheckMode::FailFast
+    };
+
     // Create rule check request with filters
     let rule_request = RuleCheckRequest {
         rule_names: request.cmd.rule,
         severity,
         category: request.cmd.category,
         patterns: request.cmd.patterns,
-        no_fail_fast: request.cmd.no_fail_fast,
+        check_mode,
     };
 
     // Choose behavior based on no_fail_fast or create_issues flags
-    // Both flags enable collection mode (no fail-fast)
-    if request.cmd.no_fail_fast || request.cmd.create_issues {
-        // Use collection mode to gather all ERROR violations
+    if request.cmd.create_issues {
+        // Use streaming mode for incremental issue creation
+        let mut stream = checker
+            .check_with_filters_stream(rule_request)
+            .await
+            .map_err(|e| CliError::new(format!("Failed to start rule check: {}", e), 1))?;
+
+        let storage = FileSystemIssueStorage::new_default()
+            .map_err(|e| CliError::new(format!("Failed to initialize issue storage: {}", e), 1))?;
+
+        let mut created_count = 0;
+        let mut skipped_count = 0;
+        let mut violation_count = 0;
+
+        // Process violations as they are discovered
+        while let Some(result) = stream.next().await {
+            match result {
+                Ok(violation) => {
+                    violation_count += 1;
+                    // Create issue immediately
+                    match create_issue_for_violation(&violation, &storage, context.quiet).await {
+                        Ok(true) => created_count += 1,
+                        Ok(false) => skipped_count += 1,
+                        Err(e) => {
+                            tracing::warn!("Failed to create issue: {}", e);
+                        }
+                    }
+                }
+                Err(e) => {
+                    // Non-violation error
+                    return Err(CliError::new(format!("Check failed: {}", e), 1));
+                }
+            }
+        }
+
+        // Print summary
+        if !context.quiet {
+            println!(
+                "\nIssue creation summary: {} created, {} skipped (already exist)",
+                created_count, skipped_count
+            );
+        }
+
+        // Return error if violations were found
+        if violation_count > 0 {
+            return Err(CliError::new(
+                format!("Found {} ERROR violation(s)", violation_count),
+                1,
+            ));
+        }
+
+        Ok(())
+    } else if request.cmd.no_fail_fast {
+        // Use collection mode to gather all ERROR violations for reporting
         match checker.check_with_filters_collect(rule_request).await {
             Ok(result) => {
                 // Print results if not quiet
@@ -191,22 +251,12 @@ async fn execute_check_command_impl(
                         println!("No rules matched the filters");
                     } else if result.violations.is_empty() {
                         println!("All checks passed - no ERROR violations found");
-                    } else if request.cmd.create_issues {
-                        println!(
-                            "Found {} ERROR violation(s), creating issues...",
-                            result.violations.len()
-                        );
                     } else {
                         println!(
                             "Found {} ERROR violation(s)",
                             result.violations.len()
                         );
                     }
-                }
-
-                // Create issues for violations only if --create-issues was used
-                if request.cmd.create_issues && !result.violations.is_empty() {
-                    create_issues_for_violations(&result.violations, context).await?;
                 }
 
                 // Return error if violations were found
@@ -299,59 +349,43 @@ fn format_issue_content(violation: &RuleViolation) -> String {
     )
 }
 
-/// Create issues for all rule violations
+/// Create an issue for a single rule violation
 ///
-/// Iterates through violations and creates an issue for each unique rule+file combination.
-/// Skips creating issues that already exist.
-async fn create_issues_for_violations(
-    violations: &[RuleViolation],
-    context: &CliContext,
-) -> CliResult<()> {
-    let storage = FileSystemIssueStorage::new_default()
-        .map_err(|e| CliError::new(format!("Failed to initialize issue storage: {}", e), 1))?;
+/// Creates an issue for the given violation if it doesn't already exist.
+///
+/// # Returns
+///
+/// Returns `Ok(true)` if an issue was created, `Ok(false)` if it already existed,
+/// or `Err` if issue creation failed.
+async fn create_issue_for_violation(
+    violation: &RuleViolation,
+    storage: &FileSystemIssueStorage,
+    quiet: bool,
+) -> CliResult<bool> {
+    let issue_name = generate_issue_name(&violation.rule_name, &violation.file_path);
+    let issue_content = format_issue_content(violation);
 
-    let mut created_count = 0;
-    let mut skipped_count = 0;
+    // Check if issue already exists
+    match storage.get_issue(&issue_name).await {
+        Ok(_existing) => {
+            tracing::debug!("Issue '{}' already exists, skipping", issue_name);
+            Ok(false)
+        }
+        Err(_) => {
+            // Issue doesn't exist, create it
+            storage
+                .create_issue(issue_name.clone(), issue_content)
+                .await
+                .map_err(|e| {
+                    CliError::new(format!("Failed to create issue '{}': {}", issue_name, e), 1)
+                })?;
 
-    for violation in violations {
-        let issue_name = generate_issue_name(&violation.rule_name, &violation.file_path);
-        let issue_content = format_issue_content(violation);
-
-        // Check if issue already exists
-        match storage.get_issue(&issue_name).await {
-            Ok(_existing) => {
-                tracing::debug!("Issue '{}' already exists, skipping", issue_name);
-                skipped_count += 1;
+            if !quiet {
+                println!("Created issue: {}", issue_name);
             }
-            Err(_) => {
-                // Issue doesn't exist, create it
-                match storage
-                    .create_issue(issue_name.clone(), issue_content)
-                    .await
-                {
-                    Ok(_) => {
-                        if !context.quiet {
-                            println!("Created issue: {}", issue_name);
-                        }
-                        created_count += 1;
-                    }
-                    Err(e) => {
-                        // Log warning but continue processing other violations
-                        tracing::warn!("Failed to create issue '{}': {}", issue_name, e);
-                    }
-                }
-            }
+            Ok(true)
         }
     }
-
-    if !context.quiet {
-        println!(
-            "\nIssue creation summary: {} created, {} skipped (already exist)",
-            created_count, skipped_count
-        );
-    }
-
-    Ok(())
 }
 
 #[cfg(test)]

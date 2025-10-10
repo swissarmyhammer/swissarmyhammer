@@ -49,6 +49,7 @@ tabled = { workspace = true }
 
 # Async runtime
 tokio = { workspace = true }
+futures-util = { workspace = true }
 
 # Serialization
 serde = { workspace = true }

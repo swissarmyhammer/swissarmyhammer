@@ -208,7 +208,7 @@ impl McpTool for RuleCheckTool {
                 .file_paths
                 .clone()
                 .unwrap_or_else(|| vec!["**/*.*".to_string()]),
-            no_fail_fast: false,
+            check_mode: swissarmyhammer_rules::CheckMode::FailFast,
         };
 
         tracing::info!("Domain request patterns: {:?}", domain_request.patterns);

@@ -9,12 +9,25 @@
 use crate::{
     detect_language, CachedResult, Result, Rule, RuleCache, RuleError, RuleViolation, Severity,
 };
+use futures_util::stream::{self, Stream, StreamExt};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use swissarmyhammer_agent_executor::{AgentExecutionContext, AgentExecutor};
 use swissarmyhammer_common::glob_utils::{expand_glob_patterns, GlobExpansionConfig};
 use swissarmyhammer_config::TemplateContext;
 use swissarmyhammer_prompts::{PromptLibrary, PromptResolver};
+
+/// Check mode controlling fail-fast behavior
+///
+/// Determines whether checking stops on the first ERROR violation or continues
+/// to check all files and collect all violations.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CheckMode {
+    /// Stop checking files after first ERROR violation is found
+    FailFast,
+    /// Check all files and collect all ERROR violations
+    CollectAll,
+}
 
 /// Request structure for rule checking with filtering and pattern expansion
 ///
@@ -26,15 +39,15 @@ use swissarmyhammer_prompts::{PromptLibrary, PromptResolver};
 /// # Examples
 ///
 /// ```no_run
-/// use swissarmyhammer_rules::RuleCheckRequest;
+/// use swissarmyhammer_rules::{RuleCheckRequest, CheckMode};
 ///
-/// // Check all rules against Rust files
+/// // Check all rules against Rust files with fail-fast
 /// let request = RuleCheckRequest {
 ///     rule_names: None,
 ///     severity: None,
 ///     category: None,
 ///     patterns: vec!["**/*.rs".to_string()],
-///     no_fail_fast: false,
+///     check_mode: CheckMode::FailFast,
 /// };
 /// ```
 #[derive(Debug, Clone)]
@@ -47,8 +60,8 @@ pub struct RuleCheckRequest {
     pub category: Option<String>,
     /// File paths or glob patterns to check
     pub patterns: Vec<String>,
-    /// Continue checking all files even when violations are found
-    pub no_fail_fast: bool,
+    /// Check mode controlling fail-fast behavior
+    pub check_mode: CheckMode,
 }
 
 /// Result structure from rule checking operations
@@ -983,6 +996,191 @@ impl RuleChecker {
             violations,
         })
     }
+
+    /// High-level API for checking rules with streaming violation results
+    ///
+    /// This method returns a stream that yields violations, enabling incremental
+    /// processing and issue creation. Note: The current implementation checks all
+    /// files before yielding violations (eager evaluation), which provides the
+    /// foundation for true lazy streaming while keeping the implementation simple.
+    /// The behavior depends on the check_mode in the request:
+    ///
+    /// - FailFast: Stops checking files after the first ERROR violation
+    /// - CollectAll: Checks all files and yields all ERROR violations
+    ///
+    /// # Arguments
+    ///
+    /// * `request` - RuleCheckRequest with filters, patterns, and check mode
+    ///
+    /// # Returns
+    ///
+    /// Returns a Stream that yields Result<RuleViolation>. Each item is either:
+    /// - Ok(violation) for a discovered ERROR violation
+    /// - Err(e) for non-violation errors (rule loading, validation, etc.)
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - Rule loading fails
+    /// - Rule validation fails
+    /// - Pattern expansion fails
+    /// - Check execution fails (for non-violation errors)
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use swissarmyhammer_rules::{RuleChecker, RuleCheckRequest, CheckMode};
+    /// # use futures_util::stream::StreamExt;
+    /// # use swissarmyhammer_agent_executor::{AgentExecutorFactory, AgentExecutionContext};
+    /// # use std::sync::Arc;
+    /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+    /// # let workflow_context = WorkflowTemplateContext::load_with_agent_config()?;
+    /// # let agent_context = AgentExecutionContext::new(&workflow_context);
+    /// # let mut executor = AgentExecutorFactory::create_executor(&agent_context).await?;
+    /// # executor.initialize().await?;
+    /// # let agent = Arc::from(executor);
+    /// # let mut checker = RuleChecker::new(agent)?;
+    /// # checker.initialize().await?;
+    /// let request = RuleCheckRequest {
+    ///     rule_names: None,
+    ///     severity: None,
+    ///     category: None,
+    ///     patterns: vec!["**/*.rs".to_string()],
+    ///     check_mode: CheckMode::CollectAll,
+    /// };
+    ///
+    /// let mut stream = checker.check_with_filters_stream(request).await?;
+    /// while let Some(result) = stream.next().await {
+    ///     match result {
+    ///         Ok(violation) => println!("Found violation: {}", violation.rule_name),
+    ///         Err(e) => return Err(e.into()),
+    ///     }
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn check_with_filters_stream(
+        &self,
+        request: RuleCheckRequest,
+    ) -> Result<impl Stream<Item = Result<RuleViolation>>> {
+        tracing::info!("Starting rule check with filters (streaming mode)");
+
+        // Phase 1: Load all rules via RuleResolver
+        let mut rules = Vec::new();
+        let mut resolver = crate::RuleResolver::new();
+        resolver
+            .load_all_rules(&mut rules)
+            .map_err(|e| RuleError::CheckError(format!("Failed to load rules: {}", e)))?;
+
+        let total_files = rules.len();
+        let partials_count = rules.iter().filter(|r| r.is_partial()).count();
+
+        // Filter out partials - they are not standalone rules
+        rules.retain(|r| !r.is_partial());
+
+        let rule_names: Vec<&str> = rules.iter().map(|r| r.name.as_str()).collect();
+        tracing::info!(
+            "Loaded {} files ({} rules, {} partials). Rules: {:?}",
+            total_files,
+            rules.len(),
+            partials_count,
+            rule_names
+        );
+
+        // Phase 2: Validate all rules first (fail if any invalid)
+        for rule in &rules {
+            rule.validate().map_err(|e| {
+                RuleError::CheckError(format!("Rule validation failed for '{}': {}", rule.name, e))
+            })?;
+        }
+
+        // Phase 3: Apply filters
+        if let Some(rule_names) = &request.rule_names {
+            tracing::info!("Filtering by rule_names: {:?}", rule_names);
+            tracing::info!(
+                "Available rule names before filter: {:?}",
+                rules.iter().map(|r| &r.name).collect::<Vec<_>>()
+            );
+            rules.retain(|r| rule_names.contains(&r.name));
+            tracing::info!("After filtering by rule_names: {} rules", rules.len());
+        }
+
+        if let Some(severity) = &request.severity {
+            rules.retain(|r| &r.severity == severity);
+        }
+
+        if let Some(category) = &request.category {
+            rules.retain(|r| r.category.as_ref() == Some(category));
+        }
+
+        if rules.is_empty() {
+            tracing::info!("No rules matched the filters");
+            // Return empty stream
+            return Ok(stream::iter(vec![]).boxed());
+        }
+
+        // Phase 4: Expand glob patterns to get target files
+        let config = GlobExpansionConfig::default();
+        let target_files = expand_glob_patterns(&request.patterns, &config)
+            .map_err(|e| RuleError::CheckError(format!("Failed to expand glob patterns: {}", e)))?;
+
+        if target_files.is_empty() {
+            tracing::info!("No files matched the patterns");
+            // Return empty stream
+            return Ok(stream::iter(vec![]).boxed());
+        }
+
+        // Phase 5: Create stream that yields violations as they're discovered
+        let check_mode = request.check_mode;
+        
+        // We need to capture self's fields but can't clone the entire RuleChecker
+        // Instead, we'll use a simplified approach: check all violations eagerly
+        // but yield them one at a time through a stream
+        let mut violations = Vec::new();
+        
+        // Check all rule x file combinations
+        for rule in &rules {
+            for target in &target_files {
+                match self.check_file(rule, target).await {
+                    Ok(()) => {
+                        // Check passed, continue
+                    }
+                    Err(e) => {
+                        if e.is_rule_violation() {
+                            // Extract violation information
+                            let error_msg = e.to_string();
+                            let violation_message = error_msg
+                                .strip_prefix("Rule violation: ")
+                                .unwrap_or(&error_msg);
+                            
+                            let violation = RuleViolation::new(
+                                rule.name.clone(),
+                                target.to_path_buf(),
+                                rule.severity,
+                                violation_message.to_string(),
+                            );
+                            
+                            // Only collect ERROR violations
+                            if violation.severity == Severity::Error {
+                                violations.push(Ok(violation));
+                                
+                                // In FailFast mode, stop after first ERROR violation
+                                if check_mode == CheckMode::FailFast {
+                                    tracing::info!("Fail-fast mode: stopping after first ERROR violation");
+                                    return Ok(stream::iter(violations).boxed());
+                                }
+                            }
+                        } else {
+                            // Non-violation errors should propagate immediately
+                            return Err(e);
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(stream::iter(violations).boxed())
+    }
 }
 
 #[cfg(test)]
@@ -1234,7 +1432,7 @@ mod tests {
             severity: None,
             category: None,
             patterns: vec!["test.rs".to_string()],
-            no_fail_fast: false,
+            check_mode: CheckMode::FailFast,
         };
 
         let result = checker.check_with_filters(request).await;
@@ -1254,7 +1452,7 @@ mod tests {
             severity: None,
             category: None,
             patterns: vec!["/nonexistent/**/*.rs".to_string()],
-            no_fail_fast: false,
+            check_mode: CheckMode::FailFast,
         };
 
         let result = checker.check_with_filters(request).await;
@@ -1272,7 +1470,7 @@ mod tests {
             severity: Some(Severity::Error),
             category: None,
             patterns: vec!["test.rs".to_string()],
-            no_fail_fast: false,
+            check_mode: CheckMode::FailFast,
         };
 
         let result = checker.check_with_filters(request).await;
@@ -1289,7 +1487,7 @@ mod tests {
             severity: None,
             category: Some("security".to_string()),
             patterns: vec!["test.rs".to_string()],
-            no_fail_fast: false,
+            check_mode: CheckMode::FailFast,
         };
 
         let result = checker.check_with_filters(request).await;
@@ -1306,7 +1504,7 @@ mod tests {
             severity: Some(Severity::Error),
             category: Some("security".to_string()),
             patterns: vec!["test.rs".to_string()],
-            no_fail_fast: false,
+            check_mode: CheckMode::FailFast,
         };
 
         let result = checker.check_with_filters(request).await;
@@ -1321,14 +1519,14 @@ mod tests {
             severity: Some(Severity::Warning),
             category: Some("style".to_string()),
             patterns: vec!["**/*.rs".to_string()],
-            no_fail_fast: false,
+            check_mode: CheckMode::FailFast,
         };
 
         assert_eq!(request.rule_names, Some(vec!["test-rule".to_string()]));
         assert_eq!(request.severity, Some(Severity::Warning));
         assert_eq!(request.category, Some("style".to_string()));
         assert_eq!(request.patterns, vec!["**/*.rs"]);
-        assert!(!request.no_fail_fast);
+        assert_eq!(request.check_mode, CheckMode::FailFast);
     }
 
     #[test]
