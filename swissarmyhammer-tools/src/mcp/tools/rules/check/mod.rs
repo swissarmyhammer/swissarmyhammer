@@ -208,6 +208,7 @@ impl McpTool for RuleCheckTool {
                 .file_paths
                 .clone()
                 .unwrap_or_else(|| vec!["**/*.*".to_string()]),
+            no_fail_fast: false,
         };
 
         tracing::info!("Domain request patterns: {:?}", domain_request.patterns);

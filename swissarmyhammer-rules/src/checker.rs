@@ -34,6 +34,7 @@ use swissarmyhammer_prompts::{PromptLibrary, PromptResolver};
 ///     severity: None,
 ///     category: None,
 ///     patterns: vec!["**/*.rs".to_string()],
+///     no_fail_fast: false,
 /// };
 /// ```
 #[derive(Debug, Clone)]
@@ -46,6 +47,8 @@ pub struct RuleCheckRequest {
     pub category: Option<String>,
     /// File paths or glob patterns to check
     pub patterns: Vec<String>,
+    /// Continue checking all files even when violations are found
+    pub no_fail_fast: bool,
 }
 
 /// Result structure from rule checking operations
@@ -1231,6 +1234,7 @@ mod tests {
             severity: None,
             category: None,
             patterns: vec!["test.rs".to_string()],
+            no_fail_fast: false,
         };
 
         let result = checker.check_with_filters(request).await;
@@ -1250,6 +1254,7 @@ mod tests {
             severity: None,
             category: None,
             patterns: vec!["/nonexistent/**/*.rs".to_string()],
+            no_fail_fast: false,
         };
 
         let result = checker.check_with_filters(request).await;
@@ -1267,6 +1272,7 @@ mod tests {
             severity: Some(Severity::Error),
             category: None,
             patterns: vec!["test.rs".to_string()],
+            no_fail_fast: false,
         };
 
         let result = checker.check_with_filters(request).await;
@@ -1283,6 +1289,7 @@ mod tests {
             severity: None,
             category: Some("security".to_string()),
             patterns: vec!["test.rs".to_string()],
+            no_fail_fast: false,
         };
 
         let result = checker.check_with_filters(request).await;
@@ -1299,6 +1306,7 @@ mod tests {
             severity: Some(Severity::Error),
             category: Some("security".to_string()),
             patterns: vec!["test.rs".to_string()],
+            no_fail_fast: false,
         };
 
         let result = checker.check_with_filters(request).await;
@@ -1313,12 +1321,14 @@ mod tests {
             severity: Some(Severity::Warning),
             category: Some("style".to_string()),
             patterns: vec!["**/*.rs".to_string()],
+            no_fail_fast: false,
         };
 
         assert_eq!(request.rule_names, Some(vec!["test-rule".to_string()]));
         assert_eq!(request.severity, Some(Severity::Warning));
         assert_eq!(request.category, Some("style".to_string()));
         assert_eq!(request.patterns, vec!["**/*.rs"]);
+        assert!(!request.no_fail_fast);
     }
 
     #[test]

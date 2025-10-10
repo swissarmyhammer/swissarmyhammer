@@ -176,10 +176,12 @@ async fn execute_check_command_impl(
         severity,
         category: request.cmd.category,
         patterns: request.cmd.patterns,
+        no_fail_fast: request.cmd.no_fail_fast,
     };
 
-    // Choose behavior based on create_issues flag
-    if request.cmd.create_issues {
+    // Choose behavior based on no_fail_fast or create_issues flags
+    // Both flags enable collection mode (no fail-fast)
+    if request.cmd.no_fail_fast || request.cmd.create_issues {
         // Use collection mode to gather all ERROR violations
         match checker.check_with_filters_collect(rule_request).await {
             Ok(result) => {
@@ -189,17 +191,30 @@ async fn execute_check_command_impl(
                         println!("No rules matched the filters");
                     } else if result.violations.is_empty() {
                         println!("All checks passed - no ERROR violations found");
-                    } else {
+                    } else if request.cmd.create_issues {
                         println!(
                             "Found {} ERROR violation(s), creating issues...",
+                            result.violations.len()
+                        );
+                    } else {
+                        println!(
+                            "Found {} ERROR violation(s)",
                             result.violations.len()
                         );
                     }
                 }
 
-                // Create issues for violations
-                if !result.violations.is_empty() {
+                // Create issues for violations only if --create-issues was used
+                if request.cmd.create_issues && !result.violations.is_empty() {
                     create_issues_for_violations(&result.violations, context).await?;
+                }
+
+                // Return error if violations were found
+                if !result.violations.is_empty() {
+                    return Err(CliError::new(
+                        format!("Found {} ERROR violation(s)", result.violations.len()),
+                        1,
+                    ));
                 }
 
                 Ok(())
@@ -379,6 +394,7 @@ mod tests {
             severity: None,
             category: None,
             create_issues: false,
+            no_fail_fast: false,
         };
 
         let request = CheckCommandRequest::with_config(cmd, setup_test_agent_config());
@@ -397,6 +413,7 @@ mod tests {
             severity: None,
             category: None,
             create_issues: false,
+            no_fail_fast: false,
         };
 
         let request = CheckCommandRequest::with_config(cmd, setup_test_agent_config());
@@ -415,6 +432,7 @@ mod tests {
             severity: Some("error".to_string()),
             category: None,
             create_issues: false,
+            no_fail_fast: false,
         };
 
         let request = CheckCommandRequest::with_config(cmd, setup_test_agent_config());
@@ -433,6 +451,7 @@ mod tests {
             severity: None,
             category: Some("security".to_string()),
             create_issues: false,
+            no_fail_fast: false,
         };
 
         let request = CheckCommandRequest::with_config(cmd, setup_test_agent_config());
@@ -451,6 +470,7 @@ mod tests {
             severity: None,
             category: None,
             create_issues: false,
+            no_fail_fast: false,
         };
 
         let request = CheckCommandRequest::with_config(cmd, setup_test_agent_config());
@@ -469,6 +489,7 @@ mod tests {
             severity: Some("error".to_string()),
             category: Some("security".to_string()),
             create_issues: false,
+            no_fail_fast: false,
         };
 
         let request = CheckCommandRequest::with_config(cmd, setup_test_agent_config());
@@ -487,6 +508,7 @@ mod tests {
             severity: None,
             category: None,
             create_issues: false,
+            no_fail_fast: false,
         };
 
         // Request ClaudeCode - it should work now without fallback
@@ -747,11 +769,50 @@ mod tests {
             severity: None,
             category: None,
             create_issues: true,
+            no_fail_fast: false,
         };
 
         let request = CheckCommandRequest::with_config(cmd, setup_test_agent_config());
         let result = execute_check_command_impl(request, &context).await;
         // Should succeed when no rules match (no violations to create issues for)
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_execute_check_command_with_no_fail_fast_flag() {
+        let context = setup_test_context().await;
+
+        let cmd = super::super::cli::CheckCommand {
+            patterns: vec!["test.rs".to_string()],
+            rule: Some(vec!["nonexistent-rule".to_string()]),
+            severity: None,
+            category: None,
+            create_issues: false,
+            no_fail_fast: true,
+        };
+
+        let request = CheckCommandRequest::with_config(cmd, setup_test_agent_config());
+        let result = execute_check_command_impl(request, &context).await;
+        // Should succeed when no rules match
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_execute_check_command_with_both_flags() {
+        let context = setup_test_context().await;
+
+        let cmd = super::super::cli::CheckCommand {
+            patterns: vec!["test.rs".to_string()],
+            rule: Some(vec!["nonexistent-rule".to_string()]),
+            severity: None,
+            category: None,
+            create_issues: true,
+            no_fail_fast: true,
+        };
+
+        let request = CheckCommandRequest::with_config(cmd, setup_test_agent_config());
+        let result = execute_check_command_impl(request, &context).await;
+        // Should succeed when no rules match
         assert!(result.is_ok());
     }
 }

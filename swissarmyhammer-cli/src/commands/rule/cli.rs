@@ -36,6 +36,7 @@ pub struct CheckCommand {
     pub severity: Option<String>,
     pub category: Option<String>,
     pub create_issues: bool,
+    pub no_fail_fast: bool,
 }
 
 /// Cache command for managing the rule evaluation cache.
@@ -108,6 +109,7 @@ pub fn parse_rule_command(matches: &ArgMatches) -> RuleCommand {
                 severity: sub_matches.get_one::<String>("severity").cloned(),
                 category: sub_matches.get_one::<String>("category").cloned(),
                 create_issues: sub_matches.get_flag("create-issues"),
+                no_fail_fast: sub_matches.get_flag("no-fail-fast"),
             };
             RuleCommand::Check(check_cmd)
         }
@@ -208,6 +210,11 @@ mod tests {
                         Arg::new("create-issues")
                             .long("create-issues")
                             .action(ArgAction::SetTrue),
+                    )
+                    .arg(
+                        Arg::new("no-fail-fast")
+                            .long("no-fail-fast")
+                            .action(ArgAction::SetTrue),
                     ),
             )
             .try_get_matches_from(["rule", "check", "file1.rs", "file2.rs"])
@@ -221,6 +228,7 @@ mod tests {
                 assert_eq!(check_cmd.severity, None);
                 assert_eq!(check_cmd.category, None);
                 assert!(!check_cmd.create_issues);
+                assert!(!check_cmd.no_fail_fast);
             }
             _ => panic!("Expected Check command"),
         }
@@ -244,6 +252,11 @@ mod tests {
                         Arg::new("create-issues")
                             .long("create-issues")
                             .action(ArgAction::SetTrue),
+                    )
+                    .arg(
+                        Arg::new("no-fail-fast")
+                            .long("no-fail-fast")
+                            .action(ArgAction::SetTrue),
                     ),
             )
             .try_get_matches_from([
@@ -264,6 +277,7 @@ mod tests {
                 assert_eq!(check_cmd.severity, Some("error".to_string()));
                 assert_eq!(check_cmd.category, Some("security".to_string()));
                 assert!(!check_cmd.create_issues);
+                assert!(!check_cmd.no_fail_fast);
             }
             _ => panic!("Expected Check command"),
         }
@@ -310,6 +324,7 @@ mod tests {
             severity: Some("error".to_string()),
             category: Some("security".to_string()),
             create_issues: false,
+            no_fail_fast: false,
         };
 
         match RuleCommand::Check(check_cmd) {
@@ -319,6 +334,7 @@ mod tests {
                 assert_eq!(cmd.severity, Some("error".to_string()));
                 assert_eq!(cmd.category, Some("security".to_string()));
                 assert!(!cmd.create_issues);
+                assert!(!cmd.no_fail_fast);
             }
             _ => panic!("CheckCommand should match RuleCommand::Check"),
         }
@@ -361,6 +377,11 @@ mod tests {
                         Arg::new("create-issues")
                             .long("create-issues")
                             .action(ArgAction::SetTrue),
+                    )
+                    .arg(
+                        Arg::new("no-fail-fast")
+                            .long("no-fail-fast")
+                            .action(ArgAction::SetTrue),
                     ),
             )
             .try_get_matches_from(["rule", "check", "--create-issues", "file.rs"])
@@ -371,6 +392,91 @@ mod tests {
             RuleCommand::Check(check_cmd) => {
                 assert_eq!(check_cmd.patterns, vec!["file.rs"]);
                 assert!(check_cmd.create_issues);
+                assert!(!check_cmd.no_fail_fast);
+            }
+            _ => panic!("Expected Check command"),
+        }
+    }
+
+    #[test]
+    fn test_parse_check_command_with_no_fail_fast() {
+        let matches = Command::new("rule")
+            .subcommand(
+                Command::new("check")
+                    .arg(
+                        Arg::new("rule")
+                            .short('r')
+                            .long("rule")
+                            .action(ArgAction::Append),
+                    )
+                    .arg(Arg::new("patterns").action(ArgAction::Append))
+                    .arg(Arg::new("severity").short('s').long("severity"))
+                    .arg(Arg::new("category").short('c').long("category"))
+                    .arg(
+                        Arg::new("create-issues")
+                            .long("create-issues")
+                            .action(ArgAction::SetTrue),
+                    )
+                    .arg(
+                        Arg::new("no-fail-fast")
+                            .long("no-fail-fast")
+                            .action(ArgAction::SetTrue),
+                    ),
+            )
+            .try_get_matches_from(["rule", "check", "--no-fail-fast", "file.rs"])
+            .unwrap();
+
+        let parsed = parse_rule_command(&matches);
+        match parsed {
+            RuleCommand::Check(check_cmd) => {
+                assert_eq!(check_cmd.patterns, vec!["file.rs"]);
+                assert!(!check_cmd.create_issues);
+                assert!(check_cmd.no_fail_fast);
+            }
+            _ => panic!("Expected Check command"),
+        }
+    }
+
+    #[test]
+    fn test_parse_check_command_with_both_flags() {
+        let matches = Command::new("rule")
+            .subcommand(
+                Command::new("check")
+                    .arg(
+                        Arg::new("rule")
+                            .short('r')
+                            .long("rule")
+                            .action(ArgAction::Append),
+                    )
+                    .arg(Arg::new("patterns").action(ArgAction::Append))
+                    .arg(Arg::new("severity").short('s').long("severity"))
+                    .arg(Arg::new("category").short('c').long("category"))
+                    .arg(
+                        Arg::new("create-issues")
+                            .long("create-issues")
+                            .action(ArgAction::SetTrue),
+                    )
+                    .arg(
+                        Arg::new("no-fail-fast")
+                            .long("no-fail-fast")
+                            .action(ArgAction::SetTrue),
+                    ),
+            )
+            .try_get_matches_from([
+                "rule",
+                "check",
+                "--create-issues",
+                "--no-fail-fast",
+                "file.rs",
+            ])
+            .unwrap();
+
+        let parsed = parse_rule_command(&matches);
+        match parsed {
+            RuleCommand::Check(check_cmd) => {
+                assert_eq!(check_cmd.patterns, vec!["file.rs"]);
+                assert!(check_cmd.create_issues);
+                assert!(check_cmd.no_fail_fast);
             }
             _ => panic!("Expected Check command"),
         }
