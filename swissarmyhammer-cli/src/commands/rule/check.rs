@@ -188,14 +188,14 @@ async fn execute_check_command_impl(
         check_mode,
     };
 
-    // Choose behavior based on no_fail_fast or create_issues flags
-    if request.cmd.create_issues {
-        // Use streaming mode for incremental issue creation
-        let mut stream = checker
-            .check_with_filters_stream(rule_request)
-            .await
-            .map_err(|e| CliError::new(format!("Failed to start rule check: {}", e), 1))?;
+    // All modes now use the unified streaming check API
+    let mut stream = checker
+        .check(rule_request)
+        .await
+        .map_err(|e| CliError::new(format!("Failed to start rule check: {}", e), 1))?;
 
+    // Handle violations based on create_issues flag
+    if request.cmd.create_issues {
         let storage = FileSystemIssueStorage::new_default()
             .map_err(|e| CliError::new(format!("Failed to initialize issue storage: {}", e), 1))?;
 
@@ -241,63 +241,40 @@ async fn execute_check_command_impl(
         }
 
         Ok(())
-    } else if request.cmd.no_fail_fast {
-        // Use collection mode to gather all ERROR violations for reporting
-        match checker.check_with_filters_collect(rule_request).await {
-            Ok(result) => {
-                // Print results if not quiet
-                if !context.quiet {
-                    if result.rules_checked == 0 {
-                        println!("No rules matched the filters");
-                    } else if result.violations.is_empty() {
-                        println!("All checks passed - no ERROR violations found");
-                    } else {
-                        println!(
-                            "Found {} ERROR violation(s)",
-                            result.violations.len()
-                        );
-                    }
-                }
-
-                // Return error if violations were found
-                if !result.violations.is_empty() {
-                    return Err(CliError::new(
-                        format!("Found {} ERROR violation(s)", result.violations.len()),
-                        1,
-                    ));
-                }
-
-                Ok(())
-            }
-            Err(e) => {
-                // Other errors need to be logged
-                Err(CliError::new(format!("Check failed: {}", e), 1))
-            }
-        }
     } else {
-        // Use fail-fast mode (original behavior)
-        match checker.check_with_filters(rule_request).await {
-            Ok(result) => {
-                // Print results if not quiet
-                if !context.quiet && result.rules_checked == 0 {
-                    println!("No rules matched the filters");
+        // Just report violations
+        let mut violation_count = 0;
+
+        while let Some(result) = stream.next().await {
+            match result {
+                Ok(_violation) => {
+                    violation_count += 1;
                 }
-                Ok(())
+                Err(e) => {
+                    // Non-violation error
+                    return Err(CliError::new(format!("Check failed: {}", e), 1));
+                }
             }
-            Err(e) => match e {
-                swissarmyhammer_common::SwissArmyHammerError::RuleViolation(violation_msg) => {
-                    // Violation was already logged by checker, pass through the message
-                    Err(CliError::new(
-                        format!("Rule violation: {}", violation_msg),
-                        1,
-                    ))
-                }
-                _ => {
-                    // Other errors need to be logged
-                    Err(CliError::new(format!("Check failed: {}", e), 1))
-                }
-            },
         }
+
+        // Print results if not quiet
+        if !context.quiet {
+            if violation_count == 0 {
+                println!("All checks passed - no ERROR violations found");
+            } else {
+                println!("Found {} ERROR violation(s)", violation_count);
+            }
+        }
+
+        // Return error if violations were found
+        if violation_count > 0 {
+            return Err(CliError::new(
+                format!("Found {} ERROR violation(s)", violation_count),
+                1,
+            ));
+        }
+
+        Ok(())
     }
 }
 

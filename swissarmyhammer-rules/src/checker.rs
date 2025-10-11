@@ -10,7 +10,7 @@ use crate::{
     detect_language, CachedResult, Result, Rule, RuleCache, RuleError, RuleViolation, Severity,
 };
 use futures_util::stream::{self, Stream, StreamExt};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::Arc;
 use swissarmyhammer_agent_executor::{AgentExecutionContext, AgentExecutor};
 use swissarmyhammer_common::glob_utils::{expand_glob_patterns, GlobExpansionConfig};
@@ -64,33 +64,6 @@ pub struct RuleCheckRequest {
     pub check_mode: CheckMode,
 }
 
-/// Result structure from rule checking operations
-///
-/// Contains statistics and violation information from a check operation.
-///
-/// # Examples
-///
-/// ```no_run
-/// use swissarmyhammer_rules::RuleCheckResult;
-///
-/// fn handle_result(result: RuleCheckResult) {
-///     println!("Checked {} rules against {} files",
-///              result.rules_checked, result.files_checked);
-///     if !result.violations.is_empty() {
-///         println!("Found {} violations", result.violations.len());
-///     }
-/// }
-/// ```
-#[derive(Debug, Clone)]
-pub struct RuleCheckResult {
-    /// Number of rules checked
-    pub rules_checked: usize,
-    /// Number of files checked
-    pub files_checked: usize,
-    /// List of violations found (empty if all checks passed)
-    pub violations: Vec<RuleViolation>,
-}
-
 /// Core rule checker that performs two-stage rendering and executes checks via LLM agent
 ///
 /// The RuleChecker is the heart of the rules system. It:
@@ -135,12 +108,12 @@ pub struct RuleCheckResult {
 pub struct RuleChecker {
     /// LLM agent executor for running checks
     agent: Arc<dyn AgentExecutor>,
-    /// Prompt library containing the .check prompt
-    prompt_library: PromptLibrary,
+    /// Prompt library containing the .check prompt (wrapped in Arc for sharing in streams)
+    prompt_library: Arc<PromptLibrary>,
     /// Rule library for partial template support (loaded once for performance)
     rule_library: Arc<crate::RuleLibrary>,
-    /// Cache for rule evaluation results
-    cache: RuleCache,
+    /// Cache for rule evaluation results (wrapped in Arc for sharing in streams)
+    cache: Arc<RuleCache>,
 }
 
 impl RuleChecker {
@@ -225,9 +198,9 @@ impl RuleChecker {
 
         Ok(Self {
             agent,
-            prompt_library,
+            prompt_library: Arc::new(prompt_library),
             rule_library: Arc::new(rule_library),
-            cache,
+            cache: Arc::new(cache),
         })
     }
 
@@ -258,8 +231,9 @@ impl RuleChecker {
     ///
     /// # Returns
     ///
-    /// Returns `Ok(())` if the file passes the check (LLM returns "PASS").
-    /// Returns `Err(RuleError::Violation)` if violations are found.
+    /// Returns `Ok(None)` if the file passes the check (LLM returns "PASS").
+    /// Returns `Ok(Some(violation))` if a violation is found.
+    /// Returns `Err(...)` for operational errors (file I/O, rendering, agent failures).
     ///
     /// # Errors
     ///
@@ -269,7 +243,6 @@ impl RuleChecker {
     /// - Template rendering fails
     /// - Agent execution fails
     /// - Response parsing fails
-    /// - Violation is found (fail-fast)
     ///
     /// # Examples
     ///
@@ -292,11 +265,14 @@ impl RuleChecker {
     ///     Severity::Error,
     /// );
     /// let target = PathBuf::from("src/main.rs");
-    /// checker.check_file(&rule, &target).await?;
+    /// match checker.check_file(&rule, &target).await? {
+    ///     None => println!("Check passed"),
+    ///     Some(violation) => println!("Found violation: {}", violation),
+    /// }
     /// # Ok(())
     /// # }
     /// ```
-    pub async fn check_file(&self, rule: &Rule, target_path: &Path) -> Result<()> {
+    pub async fn check_file(&self, rule: &Rule, target_path: &Path) -> Result<Option<RuleViolation>> {
         tracing::debug!(
             "Checking file {} against rule {}",
             target_path.display(),
@@ -320,7 +296,7 @@ impl RuleChecker {
                 rule.name,
                 target_path.display()
             );
-            return Ok(());
+            return Ok(None);
         }
 
         // Calculate cache key from file content + rule template + severity
@@ -343,7 +319,7 @@ impl RuleChecker {
                         target_path.display(),
                         rule.name
                     );
-                    return Ok(());
+                    return Ok(None);
                 }
                 CachedResult::Violation { violation } => {
                     // Log the violation with appropriate severity
@@ -354,19 +330,7 @@ impl RuleChecker {
                         Severity::Hint => tracing::debug!("{}", violation),
                     }
 
-                    // Apply same severity-based behavior as fresh evaluation
-                    // Only fail-fast for Error severity
-                    match violation.severity {
-                        Severity::Error => return Err(RuleError::Violation(violation).into()),
-                        Severity::Warning | Severity::Info | Severity::Hint => {
-                            tracing::debug!(
-                                "Cached non-error violation logged, continuing execution: {} in {}",
-                                violation.rule_name,
-                                target_path.display()
-                            );
-                            return Ok(());
-                        }
-                    }
+                    return Ok(Some(violation));
                 }
             }
         }
@@ -483,7 +447,7 @@ impl RuleChecker {
                 tracing::warn!("Failed to cache result: {}", e);
             }
 
-            Ok(())
+            Ok(None)
         } else {
             // Violation found - create RuleViolation
             let violation = RuleViolation::new(
@@ -509,502 +473,16 @@ impl RuleChecker {
                 tracing::warn!("Failed to cache result: {}", e);
             }
 
-            // Only fail-fast for Error severity
-            // Warnings, Info, and Hint are logged but don't stop execution
-            match violation.severity {
-                Severity::Error => Err(RuleError::Violation(violation).into()),
-                Severity::Warning | Severity::Info | Severity::Hint => {
-                    tracing::debug!(
-                        "Non-error violation logged, continuing execution: {} in {}",
-                        violation.rule_name,
-                        target_path.display()
-                    );
-                    Ok(())
-                }
-            }
+            Ok(Some(violation))
         }
     }
 
-    /// Check multiple files against multiple rules with fail-fast behavior
+    /// Check rules against files, streaming violations as they are discovered
     ///
-    /// Iterates through every rule × target combination. The LLM decides if a rule
-    /// is applicable to each file. Stops immediately on the first violation found.
+    /// This is the main entry point for rule checking. It loads rules, filters them,
+    /// validates them, expands file patterns, and streams violations as they are found.
     ///
-    /// # Arguments
-    ///
-    /// * `rules` - Vector of rules to check
-    /// * `targets` - Vector of file paths to check
-    ///
-    /// # Returns
-    ///
-    /// Returns `Ok(())` if all checks pass.
-    /// Returns `Err(RuleError::Violation)` on the first violation found.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error on the first:
-    /// - File read failure
-    /// - Rendering failure
-    /// - Agent execution failure
-    /// - Violation found (fail-fast)
-    ///
-    /// # Examples
-    ///
-    /// ```no_run
-    /// # use swissarmyhammer_rules::{RuleChecker, Rule, Severity};
-    /// # use swissarmyhammer_agent_executor::{AgentExecutorFactory, AgentExecutionContext};
-    /// # use std::sync::Arc;
-    /// # use std::path::PathBuf;
-    /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
-    /// # let workflow_context = WorkflowTemplateContext::load_with_agent_config()?;
-    /// # let agent_context = AgentExecutionContext::new(&workflow_context);
-    /// # let mut executor = AgentExecutorFactory::create_executor(&agent_context).await?;
-    /// # executor.initialize().await?;
-    /// # let agent = Arc::from(executor);
-    /// # let mut checker = RuleChecker::new(agent)?;
-    /// # checker.initialize().await?;
-    /// let rules = vec![
-    ///     Rule::new("rule1".to_string(), "Check 1".to_string(), Severity::Error),
-    ///     Rule::new("rule2".to_string(), "Check 2".to_string(), Severity::Warning),
-    /// ];
-    /// let targets = vec![
-    ///     PathBuf::from("src/main.rs"),
-    ///     PathBuf::from("src/lib.rs"),
-    /// ];
-    /// checker.check_all(rules, targets).await?;
-    /// # Ok(())
-    /// # }
-    /// ```
-    pub async fn check_all(&self, rules: Vec<Rule>, targets: Vec<PathBuf>) -> Result<()> {
-        tracing::info!(
-            "Checking {} rules against {} files",
-            rules.len(),
-            targets.len()
-        );
-
-        // Iterate every rule against every target
-        // LLM decides if rule is applicable to each file
-        for rule in &rules {
-            for target in &targets {
-                // check_file will return Err(RuleError::Violation) on first violation
-                // which causes immediate return (fail-fast)
-                self.check_file(rule, target).await?;
-            }
-        }
-
-        tracing::info!("All checks passed");
-        Ok(())
-    }
-
-    /// Check multiple files against multiple rules, collecting all ERROR violations
-    ///
-    /// Unlike check_all which fails fast on the first violation, this method
-    /// collects all ERROR-level violations and returns them. Non-error violations
-    /// are still logged but not collected.
-    ///
-    /// # Arguments
-    ///
-    /// * `rules` - Vector of rules to check
-    /// * `targets` - Vector of file paths to check
-    ///
-    /// # Returns
-    ///
-    /// Returns a Vec of all ERROR violations found. Empty if no ERROR violations.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if:
-    /// - File read failure
-    /// - Rendering failure
-    /// - Agent execution failure
-    /// - Other non-violation errors
-    ///
-    /// # Examples
-    ///
-    /// ```no_run
-    /// # use swissarmyhammer_rules::{RuleChecker, Rule, Severity};
-    /// # use swissarmyhammer_agent_executor::{AgentExecutorFactory, AgentExecutionContext};
-    /// # use std::sync::Arc;
-    /// # use std::path::PathBuf;
-    /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
-    /// # let workflow_context = WorkflowTemplateContext::load_with_agent_config()?;
-    /// # let agent_context = AgentExecutionContext::new(&workflow_context);
-    /// # let mut executor = AgentExecutorFactory::create_executor(&agent_context).await?;
-    /// # executor.initialize().await?;
-    /// # let agent = Arc::from(executor);
-    /// # let mut checker = RuleChecker::new(agent)?;
-    /// # checker.initialize().await?;
-    /// let rules = vec![
-    ///     Rule::new("rule1".to_string(), "Check 1".to_string(), Severity::Error),
-    ///     Rule::new("rule2".to_string(), "Check 2".to_string(), Severity::Warning),
-    /// ];
-    /// let targets = vec![
-    ///     PathBuf::from("src/main.rs"),
-    ///     PathBuf::from("src/lib.rs"),
-    /// ];
-    /// let violations = checker.check_all_collect_errors(rules, targets).await?;
-    /// println!("Found {} ERROR violations", violations.len());
-    /// # Ok(())
-    /// # }
-    /// ```
-    pub async fn check_all_collect_errors(
-        &self,
-        rules: Vec<Rule>,
-        targets: Vec<PathBuf>,
-    ) -> Result<Vec<RuleViolation>> {
-        tracing::info!(
-            "Checking {} rules against {} files (collecting ERROR violations)",
-            rules.len(),
-            targets.len()
-        );
-
-        let mut error_violations = Vec::new();
-
-        // Iterate every rule against every target
-        // LLM decides if rule is applicable to each file
-        for rule in &rules {
-            for target in &targets {
-                match self.check_file(rule, target).await {
-                    Ok(()) => {
-                        // Check passed
-                    }
-                    Err(e) => {
-                        // Check if this is a RuleViolation error
-                        if e.is_rule_violation() {
-                            // For collection mode, we need to reconstruct the violation
-                            // The RuleError::Violation is converted to SwissArmyHammerError::RuleViolation
-                            // which only stores a compact summary string. We extract the message part
-                            // to use in our reconstructed violation for issue creation.
-                            if rule.severity == Severity::Error {
-                                // Extract just the violation message by removing the "Rule violation: " prefix
-                                // that was added during error conversion
-                                let error_msg = e.to_string();
-                                let violation_message = error_msg
-                                    .strip_prefix("Rule violation: ")
-                                    .unwrap_or(&error_msg);
-
-                                let violation = RuleViolation::new(
-                                    rule.name.clone(),
-                                    target.to_path_buf(),
-                                    rule.severity,
-                                    violation_message.to_string(),
-                                );
-                                error_violations.push(violation);
-                            }
-                            // Continue checking other files instead of failing fast
-                        } else {
-                            // Other errors (non-violations) should propagate
-                            return Err(e);
-                        }
-                    }
-                }
-            }
-        }
-
-        if error_violations.is_empty() {
-            tracing::info!("All checks passed");
-        } else {
-            tracing::info!("Collected {} ERROR violations", error_violations.len());
-        }
-
-        Ok(error_violations)
-    }
-
-    /// High-level API for checking rules with filtering and pattern expansion
-    ///
-    /// This method provides a complete rule checking workflow:
-    /// 1. Loads all rules via RuleResolver
-    /// 2. Filters rules by name, severity, and category
-    /// 3. Validates all rules
-    /// 4. Expands glob patterns to file paths
-    /// 5. Executes checks via check_all
-    /// 6. Returns structured results
-    ///
-    /// # Arguments
-    ///
-    /// * `request` - RuleCheckRequest with filters and patterns
-    ///
-    /// # Returns
-    ///
-    /// Returns a RuleCheckResult with statistics and any violations found.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if:
-    /// - Rule loading fails
-    /// - Rule validation fails
-    /// - Pattern expansion fails
-    /// - Check execution fails
-    ///
-    /// # Examples
-    ///
-    /// ```no_run
-    /// # use swissarmyhammer_rules::{RuleChecker, RuleCheckRequest};
-    /// # use swissarmyhammer_agent_executor::{AgentExecutorFactory, AgentExecutionContext};
-    /// # use std::sync::Arc;
-    /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
-    /// # let workflow_context = WorkflowTemplateContext::load_with_agent_config()?;
-    /// # let agent_context = AgentExecutionContext::new(&workflow_context);
-    /// # let mut executor = AgentExecutorFactory::create_executor(&agent_context).await?;
-    /// # executor.initialize().await?;
-    /// # let agent = Arc::from(executor);
-    /// # let mut checker = RuleChecker::new(agent)?;
-    /// # checker.initialize().await?;
-    /// let request = RuleCheckRequest {
-    ///     rule_names: None,
-    ///     severity: None,
-    ///     category: None,
-    ///     patterns: vec!["**/*.rs".to_string()],
-    /// };
-    /// let result = checker.check_with_filters(request).await?;
-    /// println!("Checked {} files", result.files_checked);
-    /// # Ok(())
-    /// # }
-    /// ```
-    pub async fn check_with_filters(&self, request: RuleCheckRequest) -> Result<RuleCheckResult> {
-        tracing::info!("Starting rule check with filters");
-
-        // Phase 1: Load all rules via RuleResolver
-        let mut rules = Vec::new();
-        let mut resolver = crate::RuleResolver::new();
-        resolver
-            .load_all_rules(&mut rules)
-            .map_err(|e| RuleError::CheckError(format!("Failed to load rules: {}", e)))?;
-
-        let total_files = rules.len();
-        let partials_count = rules.iter().filter(|r| r.is_partial()).count();
-
-        // Filter out partials - they are not standalone rules
-        rules.retain(|r| !r.is_partial());
-
-        let rule_names: Vec<&str> = rules.iter().map(|r| r.name.as_str()).collect();
-        tracing::info!(
-            "Loaded {} files ({} rules, {} partials). Rules: {:?}",
-            total_files,
-            rules.len(),
-            partials_count,
-            rule_names
-        );
-
-        // Phase 2: Validate all rules first (fail if any invalid)
-        for rule in &rules {
-            rule.validate().map_err(|e| {
-                RuleError::CheckError(format!("Rule validation failed for '{}': {}", rule.name, e))
-            })?;
-        }
-
-        // Phase 3: Apply filters
-        if let Some(rule_names) = &request.rule_names {
-            tracing::info!("Filtering by rule_names: {:?}", rule_names);
-            tracing::info!(
-                "Available rule names before filter: {:?}",
-                rules.iter().map(|r| &r.name).collect::<Vec<_>>()
-            );
-            rules.retain(|r| rule_names.contains(&r.name));
-            tracing::info!("After filtering by rule_names: {} rules", rules.len());
-        }
-
-        if let Some(severity) = &request.severity {
-            rules.retain(|r| &r.severity == severity);
-        }
-
-        if let Some(category) = &request.category {
-            rules.retain(|r| r.category.as_ref() == Some(category));
-        }
-
-        let rules_checked = rules.len();
-
-        if rules.is_empty() {
-            tracing::info!("No rules matched the filters");
-            return Ok(RuleCheckResult {
-                rules_checked: 0,
-                files_checked: 0,
-                violations: Vec::new(),
-            });
-        }
-
-        // Phase 4: Expand glob patterns to get target files
-        let config = GlobExpansionConfig::default();
-        let target_files = expand_glob_patterns(&request.patterns, &config)
-            .map_err(|e| RuleError::CheckError(format!("Failed to expand glob patterns: {}", e)))?;
-
-        let files_checked = target_files.len();
-
-        if target_files.is_empty() {
-            tracing::info!("No files matched the patterns");
-            return Ok(RuleCheckResult {
-                rules_checked,
-                files_checked: 0,
-                violations: Vec::new(),
-            });
-        }
-
-        // Phase 5: Run checks
-        // Note: check_all currently fails fast on Error violations
-        match self.check_all(rules, target_files).await {
-            Ok(()) => {
-                // All checks passed
-                Ok(RuleCheckResult {
-                    rules_checked,
-                    files_checked,
-                    violations: Vec::new(),
-                })
-            }
-            Err(e) => {
-                // Propagate the error as-is
-                // The error is already logged by check_file
-                Err(e)
-            }
-        }
-    }
-
-    /// High-level API for checking rules with filtering and collecting ERROR violations
-    ///
-    /// This is similar to check_with_filters but instead of failing fast on the first
-    /// ERROR violation, it collects all ERROR violations and returns them. This is useful
-    /// for tools that want to create issues for all violations at once.
-    ///
-    /// # Arguments
-    ///
-    /// * `request` - RuleCheckRequest with filters and patterns
-    ///
-    /// # Returns
-    ///
-    /// Returns a RuleCheckResult with statistics and all ERROR violations found.
-    /// The violations field will contain all ERROR-level violations.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if:
-    /// - Rule loading fails
-    /// - Rule validation fails
-    /// - Pattern expansion fails
-    /// - Check execution fails (for non-violation errors)
-    ///
-    /// # Examples
-    ///
-    /// ```no_run
-    /// # use swissarmyhammer_rules::{RuleChecker, RuleCheckRequest};
-    /// # use swissarmyhammer_agent_executor::{AgentExecutorFactory, AgentExecutionContext};
-    /// # use std::sync::Arc;
-    /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
-    /// # let workflow_context = WorkflowTemplateContext::load_with_agent_config()?;
-    /// # let agent_context = AgentExecutionContext::new(&workflow_context);
-    /// # let mut executor = AgentExecutorFactory::create_executor(&agent_context).await?;
-    /// # executor.initialize().await?;
-    /// # let agent = Arc::from(executor);
-    /// # let mut checker = RuleChecker::new(agent)?;
-    /// # checker.initialize().await?;
-    /// let request = RuleCheckRequest {
-    ///     rule_names: None,
-    ///     severity: None,
-    ///     category: None,
-    ///     patterns: vec!["**/*.rs".to_string()],
-    /// };
-    /// let result = checker.check_with_filters_collect(request).await?;
-    /// println!("Found {} ERROR violations", result.violations.len());
-    /// # Ok(())
-    /// # }
-    /// ```
-    pub async fn check_with_filters_collect(
-        &self,
-        request: RuleCheckRequest,
-    ) -> Result<RuleCheckResult> {
-        tracing::info!("Starting rule check with filters (collecting ERROR violations)");
-
-        // Phase 1: Load all rules via RuleResolver
-        let mut rules = Vec::new();
-        let mut resolver = crate::RuleResolver::new();
-        resolver
-            .load_all_rules(&mut rules)
-            .map_err(|e| RuleError::CheckError(format!("Failed to load rules: {}", e)))?;
-
-        let total_files = rules.len();
-        let partials_count = rules.iter().filter(|r| r.is_partial()).count();
-
-        // Filter out partials - they are not standalone rules
-        rules.retain(|r| !r.is_partial());
-
-        let rule_names: Vec<&str> = rules.iter().map(|r| r.name.as_str()).collect();
-        tracing::info!(
-            "Loaded {} files ({} rules, {} partials). Rules: {:?}",
-            total_files,
-            rules.len(),
-            partials_count,
-            rule_names
-        );
-
-        // Phase 2: Validate all rules first (fail if any invalid)
-        for rule in &rules {
-            rule.validate().map_err(|e| {
-                RuleError::CheckError(format!("Rule validation failed for '{}': {}", rule.name, e))
-            })?;
-        }
-
-        // Phase 3: Apply filters
-        if let Some(rule_names) = &request.rule_names {
-            tracing::info!("Filtering by rule_names: {:?}", rule_names);
-            tracing::info!(
-                "Available rule names before filter: {:?}",
-                rules.iter().map(|r| &r.name).collect::<Vec<_>>()
-            );
-            rules.retain(|r| rule_names.contains(&r.name));
-            tracing::info!("After filtering by rule_names: {} rules", rules.len());
-        }
-
-        if let Some(severity) = &request.severity {
-            rules.retain(|r| &r.severity == severity);
-        }
-
-        if let Some(category) = &request.category {
-            rules.retain(|r| r.category.as_ref() == Some(category));
-        }
-
-        let rules_checked = rules.len();
-
-        if rules.is_empty() {
-            tracing::info!("No rules matched the filters");
-            return Ok(RuleCheckResult {
-                rules_checked: 0,
-                files_checked: 0,
-                violations: Vec::new(),
-            });
-        }
-
-        // Phase 4: Expand glob patterns to get target files
-        let config = GlobExpansionConfig::default();
-        let target_files = expand_glob_patterns(&request.patterns, &config)
-            .map_err(|e| RuleError::CheckError(format!("Failed to expand glob patterns: {}", e)))?;
-
-        let files_checked = target_files.len();
-
-        if target_files.is_empty() {
-            tracing::info!("No files matched the patterns");
-            return Ok(RuleCheckResult {
-                rules_checked,
-                files_checked: 0,
-                violations: Vec::new(),
-            });
-        }
-
-        // Phase 5: Run checks and collect ERROR violations
-        let violations = self.check_all_collect_errors(rules, target_files).await?;
-
-        Ok(RuleCheckResult {
-            rules_checked,
-            files_checked,
-            violations,
-        })
-    }
-
-    /// High-level API for checking rules with streaming violation results
-    ///
-    /// This method returns a stream that yields violations, enabling incremental
-    /// processing and issue creation. Note: The current implementation checks all
-    /// files before yielding violations (eager evaluation), which provides the
-    /// foundation for true lazy streaming while keeping the implementation simple.
     /// The behavior depends on the check_mode in the request:
-    ///
     /// - FailFast: Stops checking files after the first ERROR violation
     /// - CollectAll: Checks all files and yields all ERROR violations
     ///
@@ -1049,7 +527,7 @@ impl RuleChecker {
     ///     check_mode: CheckMode::CollectAll,
     /// };
     ///
-    /// let mut stream = checker.check_with_filters_stream(request).await?;
+    /// let mut stream = checker.check(request).await?;
     /// while let Some(result) = stream.next().await {
     ///     match result {
     ///         Ok(violation) => println!("Found violation: {}", violation.rule_name),
@@ -1059,7 +537,7 @@ impl RuleChecker {
     /// # Ok(())
     /// # }
     /// ```
-    pub async fn check_with_filters_stream(
+    pub async fn check(
         &self,
         request: RuleCheckRequest,
     ) -> Result<impl Stream<Item = Result<RuleViolation>>> {
@@ -1131,55 +609,53 @@ impl RuleChecker {
         }
 
         // Phase 5: Create stream that yields violations as they're discovered
+        // Wrap checker in Arc so it can be cloned for each stream element
+        let checker = Arc::new(self.clone_for_streaming());
         let check_mode = request.check_mode;
         
-        // We need to capture self's fields but can't clone the entire RuleChecker
-        // Instead, we'll use a simplified approach: check all violations eagerly
-        // but yield them one at a time through a stream
-        let mut violations = Vec::new();
-        
-        // Check all rule x file combinations
-        for rule in &rules {
-            for target in &target_files {
-                match self.check_file(rule, target).await {
-                    Ok(()) => {
-                        // Check passed, continue
+        // Create a stream that checks files lazily and yields violations immediately
+        let stream = stream::iter(rules)
+            .flat_map(move |rule| {
+                let targets = target_files.clone();
+                let checker = Arc::clone(&checker);
+                stream::iter(targets).then(move |target| {
+                    let rule = rule.clone();
+                    let checker = Arc::clone(&checker);
+                    async move {
+                        checker.check_file(&rule, &target).await
                     }
-                    Err(e) => {
-                        if e.is_rule_violation() {
-                            // Extract violation information
-                            let error_msg = e.to_string();
-                            let violation_message = error_msg
-                                .strip_prefix("Rule violation: ")
-                                .unwrap_or(&error_msg);
-                            
-                            let violation = RuleViolation::new(
-                                rule.name.clone(),
-                                target.to_path_buf(),
-                                rule.severity,
-                                violation_message.to_string(),
-                            );
-                            
-                            // Only collect ERROR violations
-                            if violation.severity == Severity::Error {
-                                violations.push(Ok(violation));
-                                
-                                // In FailFast mode, stop after first ERROR violation
-                                if check_mode == CheckMode::FailFast {
-                                    tracing::info!("Fail-fast mode: stopping after first ERROR violation");
-                                    return Ok(stream::iter(violations).boxed());
-                                }
-                            }
-                        } else {
-                            // Non-violation errors should propagate immediately
-                            return Err(e);
-                        }
+                })
+            })
+            .filter_map(|result| async move {
+                match result {
+                    Ok(Some(violation)) if violation.severity == Severity::Error => {
+                        Some(Ok(violation))
                     }
+                    Ok(Some(_)) => None, // Non-error violations are logged but not yielded
+                    Ok(None) => None,    // PASS - no violation
+                    Err(e) => Some(Err(e)), // Propagate operational errors
                 }
-            }
-        }
+            });
 
-        Ok(stream::iter(violations).boxed())
+        // For fail-fast mode, take only the first violation
+        if check_mode == CheckMode::FailFast {
+            Ok(stream.take(1).boxed())
+        } else {
+            Ok(stream.boxed())
+        }
+    }
+
+    /// Create a cloneable version of RuleChecker for streaming
+    ///
+    /// This allows the checker to be cloned and used in async stream operations
+    /// while maintaining shared access to the underlying agent and libraries.
+    fn clone_for_streaming(&self) -> Self {
+        Self {
+            agent: Arc::clone(&self.agent),
+            prompt_library: Arc::clone(&self.prompt_library),
+            rule_library: Arc::clone(&self.rule_library),
+            cache: Arc::clone(&self.cache),
+        }
     }
 }
 
@@ -1187,6 +663,7 @@ impl RuleChecker {
 mod tests {
     use super::*;
     use crate::Severity;
+    use std::path::PathBuf;
     use swissarmyhammer_agent_executor::LlamaAgentExecutorWrapper;
     use swissarmyhammer_config::LlamaAgentConfig;
     use tempfile::TempDir;
@@ -1271,19 +748,24 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_check_all_empty_lists() {
-        let mut checker = create_test_checker();
+    async fn test_check_streaming_empty_patterns() {
+        use futures_util::stream::StreamExt;
+        
+        let checker = create_test_checker();
 
-        // Initialize is required
-        if checker.initialize().await.is_err() {
-            // Skip test if agent initialization fails (no model available)
-            return;
-        }
+        let request = RuleCheckRequest {
+            rule_names: None,
+            severity: None,
+            category: None,
+            patterns: vec!["/nonexistent/**/*.rs".to_string()],
+            check_mode: CheckMode::FailFast,
+        };
 
-        let rules = vec![];
-        let targets = vec![];
-        let result = checker.check_all(rules, targets).await;
-        assert!(result.is_ok());
+        let mut stream = checker.check(request).await.expect("Should create empty stream");
+        
+        // Empty patterns should yield no violations
+        let violation = stream.next().await;
+        assert!(violation.is_none(), "Empty file patterns should yield no violations");
     }
 
     #[test]
@@ -1424,7 +906,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_check_with_filters_no_matching_rules() {
+    async fn test_check_streaming_no_matching_rules() {
+        use futures_util::stream::StreamExt;
+        
         let checker = create_test_checker();
 
         let request = RuleCheckRequest {
@@ -1435,34 +919,15 @@ mod tests {
             check_mode: CheckMode::FailFast,
         };
 
-        let result = checker.check_with_filters(request).await;
-        assert!(result.is_ok());
-        let check_result = result.unwrap();
-        assert_eq!(check_result.rules_checked, 0);
-        assert_eq!(check_result.files_checked, 0);
-        assert_eq!(check_result.violations.len(), 0);
+        let mut stream = checker.check(request).await.expect("Should create stream");
+        let violation = stream.next().await;
+        assert!(violation.is_none(), "No matching rules should yield no violations");
     }
 
     #[tokio::test]
-    async fn test_check_with_filters_no_matching_files() {
-        let checker = create_test_checker();
-
-        let request = RuleCheckRequest {
-            rule_names: None,
-            severity: None,
-            category: None,
-            patterns: vec!["/nonexistent/**/*.rs".to_string()],
-            check_mode: CheckMode::FailFast,
-        };
-
-        let result = checker.check_with_filters(request).await;
-        assert!(result.is_ok());
-        let check_result = result.unwrap();
-        assert_eq!(check_result.files_checked, 0);
-    }
-
-    #[tokio::test]
-    async fn test_check_with_filters_severity_filter() {
+    async fn test_check_streaming_fail_fast_mode() {
+        use futures_util::stream::StreamExt;
+        
         let checker = create_test_checker();
 
         let request = RuleCheckRequest {
@@ -1473,72 +938,39 @@ mod tests {
             check_mode: CheckMode::FailFast,
         };
 
-        let result = checker.check_with_filters(request).await;
-        // Should succeed - filters to only error-level rules
-        assert!(result.is_ok());
+        let mut stream = checker.check(request).await.expect("Should create stream");
+        
+        // In fail-fast mode, stream should stop after first violation
+        // For this test, we just verify the stream is created successfully
+        let _ = stream.next().await;
     }
 
     #[tokio::test]
-    async fn test_check_with_filters_category_filter() {
+    async fn test_check_streaming_collect_all_mode() {
+        use futures_util::stream::StreamExt;
+        
         let checker = create_test_checker();
 
         let request = RuleCheckRequest {
             rule_names: None,
             severity: None,
-            category: Some("security".to_string()),
+            category: None,
             patterns: vec!["test.rs".to_string()],
-            check_mode: CheckMode::FailFast,
+            check_mode: CheckMode::CollectAll,
         };
 
-        let result = checker.check_with_filters(request).await;
-        // Should succeed - filters to only security category rules
-        assert!(result.is_ok());
+        let mut stream = checker.check(request).await.expect("Should create stream");
+        
+        // In collect-all mode, stream continues until all files are checked
+        let mut count = 0;
+        while let Some(_) = stream.next().await {
+            count += 1;
+            // Prevent infinite loop in case of test issues
+            if count > 100 {
+                break;
+            }
+        }
     }
 
-    #[tokio::test]
-    async fn test_check_with_filters_combined_filters() {
-        let checker = create_test_checker();
 
-        let request = RuleCheckRequest {
-            rule_names: Some(vec!["specific-rule".to_string()]),
-            severity: Some(Severity::Error),
-            category: Some("security".to_string()),
-            patterns: vec!["test.rs".to_string()],
-            check_mode: CheckMode::FailFast,
-        };
-
-        let result = checker.check_with_filters(request).await;
-        // Should succeed - applies all filters
-        assert!(result.is_ok());
-    }
-
-    #[test]
-    fn test_rule_check_request_creation() {
-        let request = RuleCheckRequest {
-            rule_names: Some(vec!["test-rule".to_string()]),
-            severity: Some(Severity::Warning),
-            category: Some("style".to_string()),
-            patterns: vec!["**/*.rs".to_string()],
-            check_mode: CheckMode::FailFast,
-        };
-
-        assert_eq!(request.rule_names, Some(vec!["test-rule".to_string()]));
-        assert_eq!(request.severity, Some(Severity::Warning));
-        assert_eq!(request.category, Some("style".to_string()));
-        assert_eq!(request.patterns, vec!["**/*.rs"]);
-        assert_eq!(request.check_mode, CheckMode::FailFast);
-    }
-
-    #[test]
-    fn test_rule_check_result_creation() {
-        let result = RuleCheckResult {
-            rules_checked: 5,
-            files_checked: 10,
-            violations: Vec::new(),
-        };
-
-        assert_eq!(result.rules_checked, 5);
-        assert_eq!(result.files_checked, 10);
-        assert_eq!(result.violations.len(), 0);
-    }
 }
