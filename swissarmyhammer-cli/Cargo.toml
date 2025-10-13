@@ -31,7 +31,9 @@ swissarmyhammer-git = { path = "../swissarmyhammer-git" }
 swissarmyhammer-memoranda = { path = "../swissarmyhammer-memoranda" }
 swissarmyhammer-issues = { path = "../swissarmyhammer-issues" }
 swissarmyhammer-prompts = { path = "../swissarmyhammer-prompts" }
+swissarmyhammer-rules = { path = "../swissarmyhammer-rules" }
 swissarmyhammer-templating = { path = "../swissarmyhammer-templating" }
+swissarmyhammer-agent-executor = { path = "../swissarmyhammer-agent-executor" }
 swissarmyhammer-workflow = { path = "../swissarmyhammer-workflow" }
 
 # CLI dependencies
@@ -47,6 +49,7 @@ tabled = { workspace = true }
 
 # Async runtime
 tokio = { workspace = true }
+futures-util = { workspace = true }
 
 # Serialization
 serde = { workspace = true }
@@ -67,6 +70,8 @@ rmcp = { workspace = true }
 # File operations
 walkdir = { workspace = true }
 tempfile = { workspace = true }
+glob = { workspace = true }
+ignore = { workspace = true }
 
 # Utils
 regex = { workspace = true }
@@ -74,6 +79,7 @@ once_cell = { workspace = true }
 libc = { workspace = true }
 derive_builder = "0.20"
 scopeguard = "1.2"
+sha2 = { workspace = true }
 
 # Git integration
 git2 = { workspace = true }
@@ -83,6 +89,7 @@ assert_cmd = "2.0"
 predicates = { workspace = true }
 tempfile = { workspace = true }
 serial_test = "3.1"
+reqwest = { workspace = true }
 
 nix = { version = "0.27", features = ["signal"] }
 criterion = { version = "0.5", features = ["html_reports"] }

@@ -8,6 +8,8 @@ use swissarmyhammer_config::TemplateContext;
 use swissarmyhammer_prompts::{PromptLibrary, PromptResolver};
 
 /// Test cases for all builtin issue prompts that should render successfully
+/// Note: .check is tested separately in test_check_prompt_renders_with_parameters
+/// because it requires specific parameters
 #[rstest]
 #[case("issue/code")]
 #[case("issue/code_review")]
@@ -81,6 +83,7 @@ fn test_all_builtin_prompts_load_without_errors() {
         "issue/merge",
         "issue/complete",
         ".system",
+        ".check",
     ];
 
     for expected in expected_prompts {
@@ -144,4 +147,58 @@ fn test_partials_are_loaded_and_accessible() {
             }
         }
     }
+}
+
+#[test]
+fn test_check_prompt_renders_with_parameters() {
+    // Test the .check prompt with all required parameters
+    let mut library = PromptLibrary::new();
+    let mut resolver = PromptResolver::new();
+
+    resolver
+        .load_all_prompts(&mut library)
+        .expect("Failed to load builtin prompts");
+
+    // Create template context with required parameters for .check prompt
+    let mut template_context = TemplateContext::new();
+    template_context.set(
+        "rule_content".to_string(),
+        serde_json::json!("Functions must have documentation comments"),
+    );
+    template_context.set(
+        "target_content".to_string(),
+        serde_json::json!("fn foo() {}\nfn bar() {}"),
+    );
+    template_context.set(
+        "target_path".to_string(),
+        serde_json::json!("src/example.rs"),
+    );
+    template_context.set("language".to_string(), serde_json::json!("rust"));
+    template_context.set("rule_name".to_string(), serde_json::json!("test-rule-name"));
+
+    // Render the .check prompt
+    let rendered = library
+        .render(".check", &template_context)
+        .expect("Failed to render .check prompt");
+
+    // Verify the rendered output contains expected elements
+    assert!(
+        rendered.contains("Functions must have documentation comments"),
+        "Should contain the rule content"
+    );
+    assert!(
+        rendered.contains("src/example.rs"),
+        "Should contain the target path"
+    );
+    assert!(
+        rendered.contains("fn foo()"),
+        "Should contain the target content"
+    );
+    assert!(rendered.contains("rust"), "Should reference the language");
+    assert!(
+        rendered.contains("PASS") || rendered.contains("VIOLATION"),
+        "Should contain instructions about PASS/VIOLATION format"
+    );
+
+    println!("✓ .check prompt rendered successfully with all parameters");
 }

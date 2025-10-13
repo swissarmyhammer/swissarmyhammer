@@ -6600,6 +6600,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "swissarmyhammer-agent-executor"
+version = "0.1.1"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "llama-agent",
+ "reqwest 0.12.23",
+ "serde",
+ "serde_json",
+ "serial_test",
+ "swissarmyhammer-config",
+ "swissarmyhammer-prompts",
+ "swissarmyhammer-tools",
+ "tempfile",
+ "test-log",
+ "thiserror 1.0.69",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "which 7.0.3",
+]
+
+[[package]]
 name = "swissarmyhammer-cli"
 version = "0.1.1"
 dependencies = [
@@ -6614,26 +6637,33 @@ dependencies = [
  "derive_builder",
  "dialoguer",
  "dirs 5.0.1",
+ "futures-util",
  "git2",
+ "glob",
+ "ignore",
  "is-terminal",
  "libc",
  "nix 0.27.1",
  "once_cell",
  "predicates",
  "regex",
+ "reqwest 0.12.23",
  "rmcp",
  "scopeguard",
  "serde",
  "serde_json",
  "serde_yaml",
  "serial_test",
+ "sha2",
  "swissarmyhammer",
+ "swissarmyhammer-agent-executor",
  "swissarmyhammer-common",
  "swissarmyhammer-config",
  "swissarmyhammer-git",
  "swissarmyhammer-issues",
  "swissarmyhammer-memoranda",
  "swissarmyhammer-prompts",
+ "swissarmyhammer-rules",
  "swissarmyhammer-templating",
  "swissarmyhammer-tools",
  "swissarmyhammer-workflow",
@@ -6654,7 +6684,9 @@ dependencies = [
  "dashmap",
  "dialoguer",
  "dirs 5.0.1",
+ "glob",
  "governor",
+ "ignore",
  "nonzero_ext",
  "regex",
  "serde",
@@ -6805,6 +6837,39 @@ dependencies = [
 ]
 
 [[package]]
+name = "swissarmyhammer-rules"
+version = "0.1.1"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "dirs 5.0.1",
+ "futures-util",
+ "glob",
+ "ignore",
+ "include_dir",
+ "liquid",
+ "regex",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "serial_test",
+ "sha2",
+ "swissarmyhammer-agent-executor",
+ "swissarmyhammer-common",
+ "swissarmyhammer-config",
+ "swissarmyhammer-prompts",
+ "swissarmyhammer-templating",
+ "tempfile",
+ "thiserror 1.0.69",
+ "tokio",
+ "tokio-test",
+ "tracing",
+ "tree-sitter",
+ "ulid",
+ "walkdir",
+]
+
+[[package]]
 name = "swissarmyhammer-search"
 version = "0.1.1"
 dependencies = [
@@ -6928,6 +6993,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serial_test",
+ "swissarmyhammer-agent-executor",
  "swissarmyhammer-common",
  "swissarmyhammer-config",
  "swissarmyhammer-git",
@@ -6935,6 +7001,7 @@ dependencies = [
  "swissarmyhammer-memoranda",
  "swissarmyhammer-outline",
  "swissarmyhammer-prompts",
+ "swissarmyhammer-rules",
  "swissarmyhammer-search",
  "swissarmyhammer-shell",
  "swissarmyhammer-todo",
@@ -6992,6 +7059,7 @@ dependencies = [
  "serde_json",
  "serde_yaml",
  "serial_test",
+ "swissarmyhammer-agent-executor",
  "swissarmyhammer-common",
  "swissarmyhammer-config",
  "swissarmyhammer-git",
@@ -8306,6 +8374,18 @@ dependencies = [
  "either",
  "home",
  "rustix 0.38.44",
+ "winsafe",
+]
+
+[[package]]
+name = "which"
+version = "7.0.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "24d643ce3fd3e5b54854602a080f34fb10ab75e0b813ee32d00ca2b44fa74762"
+dependencies = [
+ "either",
+ "env_home",
+ "rustix 1.1.2",
  "winsafe",
 ]
 

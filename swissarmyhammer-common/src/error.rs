@@ -134,6 +134,14 @@ pub enum SwissArmyHammerError {
         source: Box<dyn std::error::Error + Send + Sync>,
     },
 
+    /// Rule violation detected during checking
+    ///
+    /// This variant is used when a rule violation is found during checking.
+    /// The violation has already been logged by the rule checker at the appropriate
+    /// level, so CLI/command layer should not log it again to avoid duplicate output.
+    #[error("Rule violation: {0}")]
+    RuleViolation(String),
+
     /// Other error with custom message
     #[error("{message}")]
     Other {
@@ -205,6 +213,16 @@ impl SwissArmyHammerError {
     pub fn other(message: String) -> Self {
         Self::Other { message }
     }
+
+    /// Create a new rule violation error
+    pub fn rule_violation(message: String) -> Self {
+        Self::RuleViolation(message)
+    }
+
+    /// Check if this error is a rule violation
+    pub fn is_rule_violation(&self) -> bool {
+        matches!(self, SwissArmyHammerError::RuleViolation(_))
+    }
 }
 
 /// Extension trait for adding context to errors
@@ -271,5 +289,31 @@ pub trait ErrorChainExt {
 impl<E: std::error::Error> ErrorChainExt for E {
     fn error_chain(&self) -> ErrorChain<'_> {
         ErrorChain(self)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_rule_violation_error() {
+        let error = SwissArmyHammerError::rule_violation("test violation".to_string());
+        match error {
+            SwissArmyHammerError::RuleViolation(ref msg) => {
+                assert_eq!(msg, "test violation");
+            }
+            _ => panic!("Expected RuleViolation variant"),
+        }
+        assert!(error.to_string().contains("test violation"));
+    }
+
+    #[test]
+    fn test_is_rule_violation() {
+        let violation = SwissArmyHammerError::rule_violation("test".to_string());
+        assert!(violation.is_rule_violation());
+
+        let other = SwissArmyHammerError::other("test".to_string());
+        assert!(!other.is_rule_violation());
     }
 }

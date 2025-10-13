@@ -62,22 +62,6 @@ pub fn validate_template_security(template_content: &str, is_trusted: bool) -> R
         )));
     }
 
-    // Check for dangerous patterns that could indicate code injection attempts
-    let dangerous_patterns = [
-        "include",  // File inclusion
-        "capture",  // Variable capture (potential data exfiltration)
-        "tablerow", // Complex loops that could cause DoS
-        "cycle",    // Another potential DoS vector
-    ];
-
-    for pattern in &dangerous_patterns {
-        if template_content.contains(&format!("{{% {pattern}")) {
-            return Err(TemplatingError::Security(format!(
-                "Template contains potentially dangerous pattern: {pattern}"
-            )));
-        }
-    }
-
     // Check for excessive nesting that could cause stack overflow
     let max_nesting = check_template_nesting_depth(template_content);
     if max_nesting > MAX_TEMPLATE_RECURSION_DEPTH {
@@ -166,21 +150,6 @@ mod tests {
         let result = validate_template_security(&large_template, false);
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("too large"));
-    }
-
-    #[test]
-    fn test_validate_template_security_dangerous_patterns() {
-        let dangerous_templates = [
-            "{% include 'dangerous.liquid' %}",
-            "{% capture secret %}{{ sensitive_data }}{% endcapture %}",
-            "{% tablerow item in items %}{{ item }}{% endtablerow %}",
-            "{% cycle 'red', 'blue' %}",
-        ];
-
-        for template in &dangerous_templates {
-            let result = validate_template_security(template, false);
-            assert!(result.is_err(), "Template should be rejected: {template}");
-        }
     }
 
     #[test]

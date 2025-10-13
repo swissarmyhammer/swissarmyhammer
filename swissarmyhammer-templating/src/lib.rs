@@ -202,8 +202,8 @@ mod integration_tests {
         // Safe template should pass
         assert!(validate_template_security("Hello {{ name }}!", false).is_ok());
 
-        // Dangerous template should fail
-        assert!(validate_template_security("{% include 'dangerous' %}", false).is_err());
+        // Templates with include should now pass (no longer blocked)
+        assert!(validate_template_security("{% include 'header' %}", false).is_ok());
 
         // Large template should fail for untrusted
         let large_template = "a".repeat(MAX_TEMPLATE_SIZE + 1);

@@ -740,6 +740,9 @@ Examples:
         // Add agent command with subcommands
         cli = cli.subcommand(Self::build_agent_command());
 
+        // Add rule command with subcommands
+        cli = cli.subcommand(Self::build_rule_command());
+
         cli
     }
 
@@ -1131,8 +1134,194 @@ When variables are not provided via --var, the command prompts interactively:
             )
     }
 
+    /// Build the rule command with all its subcommands
+    pub fn build_rule_command() -> Command {
+        Command::new("rule")
+            .about("Manage and test code quality rules")
+            .long_about(crate::commands::rule::DESCRIPTION)
+            .subcommand(
+                Command::new("list")
+                    .about("Display all available rules from all sources")
+                    .long_about(
+                        "
+Display all available rules from all sources (built-in, user, local).
+
+## Global Options
+
+Control output using global arguments:
+
+  sah --verbose rule list           # Show detailed information including descriptions
+  sah --format=json rule list       # Output as JSON for scripting
+  sah --format=yaml rule list       # Output as YAML for scripting
+
+## Output
+
+### Standard Output (default)
+Shows rule names, titles, and severity in a clean table format.
+
+### Verbose Output (--verbose)
+Shows additional information including:
+- Full descriptions
+- Source information (builtin, user, local)
+- Categories and tags
+- Severity levels
+
+### Structured Output (--format=json|yaml)
+Machine-readable output suitable for scripting and automation.
+
+## Examples
+
+  # Basic list
+  sah rule list
+
+  # Detailed information
+  sah --verbose rule list
+
+  # JSON output for scripts
+  sah --format=json rule list | jq '.[] | .name'
+
+  # Save YAML output
+  sah --format=yaml rule list > rules.yaml
+
+## Notes
+
+- All available rule sources are included automatically
+- Use global --quiet to suppress output except errors
+",
+                    ),
+            )
+            .subcommand(
+                Command::new("validate")
+                    .about("Validate rule files for syntax and structure")
+                    .long_about(
+                        "
+Validate rule files to ensure they have correct syntax, valid frontmatter,
+and proper template structure.
+
+## Usage
+  sah rule validate [OPTIONS]
+
+## Options
+
+- --rule <NAME> - Validate specific rule by name
+- --file <FILE> - Validate specific rule file
+
+## Examples
+
+  # Validate all rules
+  sah rule validate
+
+  # Validate specific rule
+  sah rule validate --rule no-hardcoded-secrets
+
+  # Validate specific file
+  sah rule validate --file .swissarmyhammer/rules/custom-rule.md
+
+## Exit Codes
+
+  0 - All rules are valid
+  1 - Validation errors found
+",
+                    )
+                    .arg(
+                        Arg::new("rule")
+                            .long("rule")
+                            .help("Validate specific rule by name")
+                            .value_name("NAME"),
+                    )
+                    .arg(
+                        Arg::new("file")
+                            .long("file")
+                            .help("Validate specific rule file")
+                            .value_name("FILE"),
+                    ),
+            )
+            .subcommand(
+                Command::new("check")
+                    .about("Run rules against code files")
+                    .long_about(
+                        "
+Run rules against code files and report violations.
+
+## Usage
+  sah rule check <PATTERNS>... [OPTIONS]
+
+## Arguments
+
+- <PATTERNS> - Glob patterns for files to check (e.g., \"src/**/*.rs\")
+
+## Options
+
+- --rule <NAME> - Only run specific rule(s) (can be used multiple times)
+- --severity <LEVEL> - Filter by severity level (error, warning, info, hint)
+- --category <CAT> - Filter by category
+
+## Examples
+
+  # Check all Rust files
+  sah rule check \"src/**/*.rs\"
+
+  # Check multiple patterns
+  sah rule check \"src/**/*.rs\" \"tests/**/*.rs\"
+
+  # Check with specific rule
+  sah rule check --rule no-hardcoded-secrets \"**/*.rs\"
+
+  # Check only errors
+  sah rule check --severity error \"**/*.rs\"
+
+  # Check specific category
+  sah rule check --category security \"**/*\"
+
+## Exit Codes
+
+  0 - All checks passed (no violations)
+  1 - Violations found or errors during checking
+",
+                    )
+                    .arg(
+                        Arg::new("patterns")
+                            .help("Glob patterns for files to check")
+                            .value_name("PATTERNS")
+                            .action(ArgAction::Append),
+                    )
+                    .arg(
+                        Arg::new("rule")
+                            .long("rule")
+                            .help("Only run specific rule(s)")
+                            .value_name("NAME")
+                            .action(ArgAction::Append),
+                    )
+                    .arg(
+                        Arg::new("severity")
+                            .long("severity")
+                            .help("Filter by severity level")
+                            .value_name("LEVEL")
+                            .value_parser(["error", "warning", "info", "hint"]),
+                    )
+                    .arg(
+                        Arg::new("category")
+                            .long("category")
+                            .help("Filter by category")
+                            .value_name("CATEGORY"),
+                    )
+                    .arg(
+                        Arg::new("create-issues")
+                            .long("create-issues")
+                            .help("Automatically create issues for ERROR level violations")
+                            .action(ArgAction::SetTrue),
+                    )
+                    .arg(
+                        Arg::new("no-fail-fast")
+                            .long("no-fail-fast")
+                            .help("Continue checking all rules and files even when violations are found")
+                            .action(ArgAction::SetTrue),
+                    ),
+            )
+    }
+
     /// Build the agent command with all its subcommands
-    fn build_agent_command() -> Command {
+    pub fn build_agent_command() -> Command {
         Command::new("agent")
             .about("Manage and interact with agents")
             .long_about(

@@ -164,7 +164,9 @@ impl EmbeddingEngine {
         Ok(Self {
             config,
             model_info,
-            backend: Arc::new(Mutex::new(EmbeddingBackend::Neural(Box::new(model)))),
+            backend: Arc::new(tokio::sync::Mutex::new(EmbeddingBackend::Neural(Box::new(
+                model,
+            )))),
         })
     }
 
@@ -381,6 +383,15 @@ impl EmbeddingEngine {
 
     /// Create embedding engine for testing with custom config using real small model
     pub async fn new_for_testing_with_config(config: EmbeddingConfig) -> SearchResult<Self> {
+        // Use a global lock to prevent concurrent model initialization during tests
+        // This prevents race conditions when multiple tests try to download/initialize the model
+        use std::sync::Mutex;
+        use std::sync::OnceLock;
+
+        static TEST_INIT_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        let lock = TEST_INIT_LOCK.get_or_init(|| Mutex::new(()));
+        let _guard = lock.lock().unwrap();
+
         info!("Creating embedding engine for testing with real small model");
 
         info!("Creating embedding engine with model: {}", config.model_id);
@@ -415,7 +426,9 @@ impl EmbeddingEngine {
         Ok(Self {
             config,
             model_info,
-            backend: Arc::new(Mutex::new(EmbeddingBackend::Neural(Box::new(model)))),
+            backend: Arc::new(tokio::sync::Mutex::new(EmbeddingBackend::Neural(Box::new(
+                model,
+            )))),
         })
     }
 }

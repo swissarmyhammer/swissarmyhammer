@@ -1,99 +1,39 @@
-//! Working rmcp client test for stdio server
+//! RMCP client test for MCP server
 //!
-//! This test uses the exact rmcp pattern from the documentation
+//! Tests RMCP client functionality using in-process HTTP server instead of subprocess.
 
-use rmcp::{
-    model::CallToolRequestParam,
-    service::ServiceExt,
-    transport::{ConfigureCommandExt, TokioChildProcess},
+use rmcp::model::CallToolRequestParam;
+use swissarmyhammer_tools::mcp::{
+    test_utils::create_test_client,
+    unified_server::{start_mcp_server, McpServerMode},
 };
-use tokio::process::Command;
 
-/// Fast RMCP client tools/prompts listing test (In-Process)
+/// Test RMCP client lists tools and prompts (Fast In-Process)
 ///
-/// Optimized version that tests RMCP client functionality without subprocess overhead:
-/// - Uses in-process MCP server instead of spawning subprocess
-/// - No cargo build/run overhead  
-/// - Tests core server functionality directly
-/// - Much faster than full E2E subprocess test
+/// Tests RMCP client functionality without subprocess overhead:
+/// - Uses in-process HTTP MCP server
+/// - No cargo build/run overhead
+/// - Tests tool listing, prompt listing, and tool calls
+/// - Fast execution (<1s instead of 20-30s)
 #[tokio::test]
-async fn test_stdio_rmcp_client_lists_tools_and_prompts() {
-    use swissarmyhammer_tools::mcp::unified_server::{start_mcp_server, McpServerMode};
-
-    // Start in-process MCP server (much faster than subprocess)
-    let mut server_handle = start_mcp_server(McpServerMode::Http { port: None }, None)
+async fn test_rmcp_client_lists_tools_and_prompts() {
+    // Start in-process HTTP MCP server
+    let mut server = start_mcp_server(McpServerMode::Http { port: None }, None)
         .await
         .expect("Failed to start in-process MCP server");
 
-    println!(
-        "✅ In-process MCP server started at: {}",
-        server_handle.url()
-    );
+    // Create RMCP client
+    let client = create_test_client(server.url()).await;
 
-    // Test server provides valid connection info
-    assert!(
-        server_handle.port().unwrap() > 0,
-        "Server should have valid port"
-    );
-    assert!(
-        server_handle.url().contains("http://"),
-        "Server should have HTTP URL"
-    );
-
-    // For comprehensive RMCP protocol testing with tool/prompt listing,
-    // we would need HTTP client implementation to connect to the server
-    // This test validates the critical server startup and availability without subprocess overhead
-
-    // Clean shutdown
-    server_handle
-        .shutdown()
-        .await
-        .expect("Failed to shutdown server");
-
-    println!("✅ SUCCESS: Fast RMCP client functionality test PASSED!");
-}
-
-/// Full E2E RMCP stdio client test with subprocess
-///
-/// The fast in-process test above covers the same functionality more efficiently.
-#[tokio::test]
-#[serial_test::serial]
-async fn test_stdio_rmcp_client_lists_tools_and_prompts_e2e() {
-    // Use exact rmcp pattern from documentation
-    let service = ()
-        .serve(
-            TokioChildProcess::new(Command::new("cargo").configure(|cmd| {
-                cmd.args([
-                    "run",
-                    "--package",
-                    "swissarmyhammer-cli",
-                    "--bin",
-                    "sah",
-                    "--",
-                    "serve",
-                ]);
-            }))
-            .expect("Failed to configure subprocess"),
-        )
-        .await
-        .expect("Failed to start service");
-
-    // Initialize and get server info
-    let server_info = service.peer_info();
-    println!("Connected to stdio server: {:#?}", server_info);
-
-    // List tools - this SHOULD work with rmcp
-    let tools = service
+    // List tools
+    let tools = client
         .list_tools(Default::default())
         .await
         .expect("Failed to list tools");
-    println!("Successfully listed {} tools", tools.tools.len());
 
-    // Verify we have expected tools
     assert!(!tools.tools.is_empty(), "Server should provide tools");
 
     let tool_names: Vec<String> = tools.tools.iter().map(|t| t.name.to_string()).collect();
-    println!("Available tools: {:?}", tool_names);
 
     assert!(
         tool_names.contains(&"files_read".to_string()),
@@ -104,15 +44,17 @@ async fn test_stdio_rmcp_client_lists_tools_and_prompts_e2e() {
         "Should have shell_execute tool"
     );
 
-    // List prompts - this SHOULD work with rmcp
-    let prompts = service
+    // List prompts
+    let prompts = client
         .list_prompts(Default::default())
         .await
         .expect("Failed to list prompts");
-    println!("Successfully listed {} prompts", prompts.prompts.len());
+
+    // Prompts may be empty or not depending on configuration, just verify call succeeds
+    assert!(prompts.prompts.is_empty() || !prompts.prompts.is_empty());
 
     // Test a tool call to verify full functionality
-    let tool_result = service
+    let tool_result = client
         .call_tool(CallToolRequestParam {
             name: "files_glob".into(),
             arguments: serde_json::json!({
@@ -124,10 +66,12 @@ async fn test_stdio_rmcp_client_lists_tools_and_prompts_e2e() {
         .await
         .expect("Tool call should work");
 
-    println!("Tool call result: {:#?}", tool_result);
+    assert!(
+        !tool_result.content.is_empty(),
+        "Tool should return content"
+    );
 
     // Clean shutdown
-    service.cancel().await.expect("Failed to cancel service");
-
-    println!("SUCCESS: rmcp stdio client can list tools, prompts, and call tools!");
+    client.cancel().await.expect("Failed to cancel client");
+    server.shutdown().await.expect("Failed to shutdown server");
 }

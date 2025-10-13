@@ -18,6 +18,8 @@ members = [
     "swissarmyhammer-outline",
     "swissarmyhammer-templating",
     "swissarmyhammer-prompts",
+    "swissarmyhammer-agent-executor",
+    "swissarmyhammer-rules",
     "swissarmyhammer-workflow",
 ]
 resolver = "2"
@@ -88,6 +90,7 @@ clap = { version = "4.5.41", features = ["derive"] }
 clap_complete = "4"
 colored = "2"
 is-terminal = "0.4"
+which = "7.0"
 
 rmcp = { version = "0.6.4", features = [
     "server",

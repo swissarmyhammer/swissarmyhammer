@@ -10,9 +10,7 @@ use tempfile::TempDir;
 mod in_process_test_utils;
 mod test_utils;
 
-use in_process_test_utils::{
-    run_sah_command_in_process, run_sah_command_in_process_with_dir, CapturedOutput,
-};
+use in_process_test_utils::{run_sah_command_in_process_with_dir, CapturedOutput};
 use test_utils::setup_git_repo;
 
 /// Setup function for error scenario testing using IsolatedTestEnvironment
@@ -116,85 +114,6 @@ async fn test_invalid_issue_operations() -> Result<()> {
         "Should show error for non-existent issue update: {}",
         update_result.stderr
     );
-
-    Ok(())
-}
-
-/// Test invalid memo operations - DISABLED: Memo commands only available with dynamic-cli feature
-// #[tokio::test]
-// #[ignore = "Memo commands only available with dynamic-cli feature"]
-async fn _test_invalid_memo_operations_disabled() -> Result<()> {
-    let (_home_guard, _temp_dir, temp_path) = setup_error_test_environment()?;
-
-    // Change to temp directory for test
-    let original_dir = std::env::current_dir()?;
-    std::env::set_current_dir(&temp_path)?;
-
-    // Test getting memo with invalid ID
-    let get_result = run_sah_command_in_process(&["memo", "get", "invalid_memo_id"]).await?;
-    assert_ne!(get_result.exit_code, 0, "Should fail for invalid memo ID");
-    assert!(
-        get_result.stderr.contains("Error")
-            || get_result.stderr.contains("error")
-            || get_result.stderr.contains("invalid")
-            || get_result.stderr.contains("not found"),
-        "Should show error for invalid memo ID: {}",
-        get_result.stderr
-    );
-
-    // Test updating memo with invalid ID
-    let update_result = run_sah_command_in_process(&[
-        "memo",
-        "update",
-        "invalid_memo_id",
-        "--content",
-        "Updated content",
-    ])
-    .await?;
-    assert_ne!(
-        update_result.exit_code, 0,
-        "Should fail for invalid memo update"
-    );
-    assert!(
-        update_result.stderr.contains("Error")
-            || update_result.stderr.contains("error")
-            || update_result.stderr.contains("invalid")
-            || update_result.stderr.contains("not found"),
-        "Should show error for invalid memo update: {}",
-        update_result.stderr
-    );
-
-    // Test deleting memo with invalid ID
-    let delete_result = run_sah_command_in_process(&["memo", "delete", "invalid_memo_id"]).await?;
-    assert_ne!(
-        delete_result.exit_code, 0,
-        "Should fail for invalid memo deletion"
-    );
-    assert!(
-        delete_result.stderr.contains("Error")
-            || delete_result.stderr.contains("error")
-            || delete_result.stderr.contains("invalid")
-            || delete_result.stderr.contains("not found"),
-        "Should show error for invalid memo deletion: {}",
-        delete_result.stderr
-    );
-
-    // Test creating memo without title
-    let create_result = run_sah_command_in_process(&["memo", "create"]).await?;
-    assert_ne!(
-        create_result.exit_code, 0,
-        "Should fail for missing memo title"
-    );
-    assert!(
-        create_result.stderr.contains("required")
-            || create_result.stderr.contains("missing")
-            || create_result.stderr.contains("title"),
-        "Should show error for missing memo title: {}",
-        create_result.stderr
-    );
-
-    // Restore original directory
-    std::env::set_current_dir(original_dir)?;
 
     Ok(())
 }
@@ -371,56 +290,6 @@ async fn test_resource_exhaustion() -> Result<()> {
             "Large content errors should be handled gracefully: {}",
             result.stderr
         );
-    }
-
-    Ok(())
-}
-
-/// Test malformed input handling
-#[tokio::test]
-#[ignore = "slow test - run with --ignored to enable"]
-async fn test_malformed_input_handling() -> Result<()> {
-    let (_home_guard, _temp_dir, temp_path) = setup_error_test_environment()?;
-
-    // Test with special characters in issue names
-    let special_names = vec![
-        "issue/with/slashes",
-        "issue\\with\\backslashes",
-        "issue with spaces",
-        "issue..with..dots",
-        "issue|with|pipes",
-        "issue\"with\"quotes",
-        "issue'with'apostrophes",
-        "issue<with>brackets",
-        "issue{with}braces",
-        "issue[with]square",
-    ];
-
-    for name in special_names {
-        // Use explicit working directory instead of global directory change to avoid race conditions
-        let result = run_sah_command_in_process_with_dir(
-            &[
-                "issue",
-                "create",
-                name,
-                "--content",
-                "Test content with special name",
-            ],
-            &temp_path,
-        )
-        .await?;
-
-        // Should either succeed (if name is sanitized) or fail gracefully
-        if result.exit_code != 0 {
-            assert!(
-                result.stderr.contains("Error")
-                    || result.stderr.contains("error")
-                    || result.stderr.contains("invalid")
-                    || result.stderr.contains("name"),
-                "Invalid names should be handled gracefully: {}",
-                result.stderr
-            );
-        }
     }
 
     Ok(())

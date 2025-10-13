@@ -27,6 +27,7 @@ pub mod error_context;
 pub mod file_loader;
 pub mod frontmatter;
 pub mod fs_utils;
+pub mod glob_utils;
 pub mod interactive_prompts;
 pub mod parameter_conditions;
 pub mod parameters;
@@ -74,6 +75,12 @@ pub use rate_limiter::{
 pub use abort_utils::{
     abort_file_exists, create_abort_file, create_abort_file_current_dir, read_abort_file,
     remove_abort_file,
+};
+
+// Re-export glob utilities for convenience
+pub use glob_utils::{
+    expand_glob_patterns, matches_glob_pattern, parse_glob_pattern, validate_glob_pattern,
+    GlobExpansionConfig, MAX_FILES,
 };
 
 // Re-export test utilities for convenience (when testing)

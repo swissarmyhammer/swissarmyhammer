@@ -480,7 +480,14 @@ mod tests {
             MarkdownMemoStorage::new(temp_dir.path().join("memos")),
         )));
         let tool_handlers = Arc::new(ToolHandlers::new(memo_storage.clone()));
-        let context = ToolContext::new(tool_handlers, issue_storage, git_ops, memo_storage);
+        let agent_config = Arc::new(swissarmyhammer_config::agent::AgentConfig::default());
+        let context = ToolContext::new(
+            tool_handlers,
+            issue_storage,
+            git_ops,
+            memo_storage,
+            agent_config,
+        );
 
         let tool = OutlineGenerateTool::new();
         let mut args = serde_json::Map::new();
@@ -518,7 +525,14 @@ mod tests {
             MarkdownMemoStorage::new(temp_dir2.path().join("memos")),
         )));
         let tool_handlers = Arc::new(ToolHandlers::new(memo_storage.clone()));
-        let context = ToolContext::new(tool_handlers, issue_storage, git_ops, memo_storage);
+        let agent_config = Arc::new(swissarmyhammer_config::agent::AgentConfig::default());
+        let context = ToolContext::new(
+            tool_handlers,
+            issue_storage,
+            git_ops,
+            memo_storage,
+            agent_config,
+        );
 
         let tool = OutlineGenerateTool::new();
         let mut args = serde_json::Map::new();

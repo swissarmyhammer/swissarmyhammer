@@ -10,8 +10,9 @@ use std::sync::Arc;
 
 use swissarmyhammer_git::GitOperations;
 use swissarmyhammer_tools::{
-    register_file_tools, register_issue_tools, register_memo_tools, register_search_tools,
-    register_shell_tools, register_web_fetch_tools, register_web_search_tools,
+    register_file_tools, register_issue_tools, register_memo_tools, register_rules_tools,
+    register_search_tools, register_shell_tools, register_web_fetch_tools,
+    register_web_search_tools,
 };
 use swissarmyhammer_tools::{ToolContext, ToolRegistry};
 use tokio::sync::{Mutex, RwLock};
@@ -40,8 +41,16 @@ impl CliToolContext {
         let git_ops = Self::create_git_operations(working_dir);
         let memo_storage = Self::create_memo_storage(working_dir);
         let tool_handlers = Self::create_tool_handlers(memo_storage.clone());
+        let agent_config =
+            std::sync::Arc::new(swissarmyhammer_config::agent::AgentConfig::default());
 
-        let tool_context = ToolContext::new(tool_handlers, issue_storage, git_ops, memo_storage);
+        let tool_context = ToolContext::new(
+            tool_handlers,
+            issue_storage,
+            git_ops,
+            memo_storage,
+            agent_config,
+        );
 
         let tool_registry = Arc::new(Self::create_tool_registry());
 
@@ -107,6 +116,7 @@ impl CliToolContext {
         register_file_tools(&mut tool_registry);
         register_issue_tools(&mut tool_registry);
         register_memo_tools(&mut tool_registry);
+        register_rules_tools(&mut tool_registry);
         register_search_tools(&mut tool_registry);
         register_shell_tools(&mut tool_registry);
         register_web_fetch_tools(&mut tool_registry);
@@ -298,7 +308,14 @@ mod tests {
         let tool_handlers = Arc::new(
             swissarmyhammer_tools::mcp::tool_handlers::ToolHandlers::new(memo_storage.clone()),
         );
+        let agent_config = Arc::new(swissarmyhammer_config::agent::AgentConfig::default());
 
-        ToolContext::new(tool_handlers, issue_storage, git_ops, memo_storage)
+        ToolContext::new(
+            tool_handlers,
+            issue_storage,
+            git_ops,
+            memo_storage,
+            agent_config,
+        )
     }
 }

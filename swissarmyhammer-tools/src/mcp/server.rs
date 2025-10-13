@@ -23,12 +23,14 @@ use swissarmyhammer_prompts::{PromptLibrary, PromptResolver};
 
 use tokio::sync::{Mutex, RwLock};
 
+use swissarmyhammer_config::agent::AgentConfig;
+
 use super::tool_handlers::ToolHandlers;
 use super::tool_registry::{
     register_abort_tools, register_file_tools, register_git_tools, register_issue_tools,
-    register_memo_tools, register_notify_tools, register_outline_tools, register_search_tools,
-    register_shell_tools, register_todo_tools, register_web_fetch_tools, register_web_search_tools,
-    ToolContext, ToolRegistry,
+    register_memo_tools, register_notify_tools, register_outline_tools, register_rules_tools,
+    register_search_tools, register_shell_tools, register_todo_tools, register_web_fetch_tools,
+    register_web_search_tools, ToolContext, ToolRegistry,
 };
 
 /// MCP server for all SwissArmyHammer functionality.
@@ -159,6 +161,9 @@ impl McpServer {
         // Initialize tool handlers with memo storage
         let tool_handlers = ToolHandlers::new(memo_storage_arc.clone());
 
+        // Load agent configuration from environment or use default
+        let agent_config = Arc::new(AgentConfig::default());
+
         // Initialize tool registry and context
         let mut tool_registry = ToolRegistry::new();
         let tool_context = Arc::new(ToolContext::new(
@@ -166,6 +171,7 @@ impl McpServer {
             issue_storage.clone(),
             git_ops_arc.clone(),
             memo_storage_arc.clone(),
+            agent_config,
         ));
 
         // Register all available tools
@@ -176,6 +182,7 @@ impl McpServer {
         register_memo_tools(&mut tool_registry);
         register_notify_tools(&mut tool_registry);
         register_outline_tools(&mut tool_registry);
+        register_rules_tools(&mut tool_registry);
         register_search_tools(&mut tool_registry);
         register_shell_tools(&mut tool_registry);
         register_todo_tools(&mut tool_registry);

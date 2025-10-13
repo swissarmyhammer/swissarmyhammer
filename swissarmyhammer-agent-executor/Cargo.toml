@@ -1,0 +1,45 @@
+[package]
+name = "swissarmyhammer-agent-executor"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Agent executor implementations for AI-powered workflows"
+documentation = "https://docs.rs/swissarmyhammer-agent-executor"
+readme = "../README.md"
+keywords = ["ai", "agent", "executor", "llama", "workflow"]
+categories = ["development-tools"]
+
+[lints]
+workspace = true
+
+[dependencies]
+# Core dependencies
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+thiserror = { workspace = true }
+async-trait = { workspace = true }
+tempfile = { workspace = true }
+which = { workspace = true }
+
+# SwissArmyHammer dependencies
+swissarmyhammer-config = { path = "../swissarmyhammer-config" }
+swissarmyhammer-prompts = { path = "../swissarmyhammer-prompts" }
+
+# LlamaAgent integration for local AI execution
+llama-agent = { workspace = true }
+
+[dev-dependencies]
+serial_test = "3.1"
+test-log = { workspace = true }
+tracing-subscriber = { workspace = true }
+reqwest = { workspace = true }
+swissarmyhammer-tools = { path = "../swissarmyhammer-tools" }
+
+# NEVER add features or feature flags to this Cargo.toml!
+# SwissArmyHammer provides ALL functionality ALL the time.
+# This is a SwissArmyHammer - every tool, every time!

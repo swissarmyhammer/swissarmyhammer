@@ -373,7 +373,7 @@ pub const DEFAULT_TEST_LLM_MODEL_REPO: &str = "unsloth/Qwen3-4B-Instruct-2507-GG
 /// defined by [`DEFAULT_TEST_LLM_MODEL_REPO`].
 ///
 /// This file will be automatically downloaded by llama.cpp when first accessed.
-pub const DEFAULT_TEST_LLM_MODEL_FILENAME: &str = "Qwen3-4B-Instruct-2507-UD-Q4_K_XL.gguf";
+pub const DEFAULT_TEST_LLM_MODEL_FILENAME: &str = "Qwen3-4B-Instruct-2507-Q4_K_M.gguf";
 
 /// Default embedding model for testing
 ///

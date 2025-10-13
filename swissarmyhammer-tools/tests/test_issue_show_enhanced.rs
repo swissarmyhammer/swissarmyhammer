@@ -7,6 +7,7 @@ use rmcp::model::CallToolResult;
 use serde_json::json;
 use std::sync::Arc;
 
+use swissarmyhammer_config::agent::AgentConfig;
 use swissarmyhammer_git::GitOperations;
 use swissarmyhammer_issues::Config;
 use swissarmyhammer_issues::{FileSystemIssueStorage, IssueStorage};
@@ -75,6 +76,7 @@ impl IssueShowTestEnvironment {
             issue_storage.clone(),
             git_ops.clone(),
             memo_storage,
+            Arc::new(AgentConfig::default()),
         );
 
         let tool = ShowIssueTool::new();
@@ -733,6 +735,7 @@ async fn test_issue_show_concurrent_access() {
             env.issue_storage.clone(),
             env.git_ops.clone(),
             memo_storage,
+            Arc::new(AgentConfig::default()),
         );
 
         let handle = tokio::spawn(async move {

@@ -79,7 +79,9 @@ impl McpTool for WorkIssueTool {
 
         // Enhanced validation for working on issues from other issue branches
         // First check if we're already on the correct issue branch - if so, no need to abort
-        let target_branch = format!("issue/{}", request.name.0);
+        // Sanitize the issue name for use as a branch name (removes ~ and other invalid chars)
+        let sanitized_name = swissarmyhammer_git::BranchName::sanitize(&request.name.0);
+        let target_branch = format!("issue/{}", sanitized_name);
         if current_branch.starts_with("issue/") && current_branch != target_branch {
             let abort_reason = format!(
                 "Cannot work on issue '{}' from issue branch '{}'. Issue branches cannot be used as source branches to prevent circular dependencies. Switch to a non-issue branch (such as a feature, develop, or base branch) first.",
@@ -109,11 +111,12 @@ impl McpTool for WorkIssueTool {
                 }
             };
 
-            let branch_name = issue.name.clone();
+            // Sanitize the issue name for use as a branch name
+            let sanitized_branch_name = swissarmyhammer_git::BranchName::sanitize(&issue.name);
 
             match git_ops.as_mut() {
                 Some(ops) => {
-                    let full_branch_name = format!("issue/{}", branch_name);
+                    let full_branch_name = format!("issue/{}", sanitized_branch_name);
                     let branch_name_obj = swissarmyhammer_git::BranchName::new(&full_branch_name)
                         .map_err(|e| {
                         McpError::internal_error(format!("Invalid branch name: {}", e), None)

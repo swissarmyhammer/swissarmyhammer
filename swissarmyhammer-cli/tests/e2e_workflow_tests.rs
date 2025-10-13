@@ -665,7 +665,7 @@ async fn test_error_recovery_workflow_lightweight() -> Result<()> {
     let test_env = E2ETestEnvironment::new()?;
 
     // Test basic error recovery scenarios without ML operations
-    let timeout_duration = std::time::Duration::from_secs(5); // Much shorter timeout for lightweight test
+    let timeout_duration = std::time::Duration::from_secs(15); // Allow time for subprocess commands
 
     let result = tokio::time::timeout(timeout_duration, async {
         // Test basic operations that don't require ML

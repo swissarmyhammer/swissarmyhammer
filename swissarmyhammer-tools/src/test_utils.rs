@@ -5,6 +5,7 @@ use crate::mcp::tool_registry::ToolContext;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use swissarmyhammer_config::agent::AgentConfig;
 use swissarmyhammer_git::GitOperations;
 use swissarmyhammer_issues::{FileSystemIssueStorage, IssueStorage};
 use swissarmyhammer_memoranda::{MarkdownMemoStorage, MemoStorage};
@@ -45,8 +46,15 @@ pub async fn create_test_context() -> ToolContext {
     )));
 
     let tool_handlers = Arc::new(ToolHandlers::new(memo_storage.clone()));
+    let agent_config = Arc::new(AgentConfig::default());
 
-    ToolContext::new(tool_handlers, issue_storage, git_ops, memo_storage)
+    ToolContext::new(
+        tool_handlers,
+        issue_storage,
+        git_ops,
+        memo_storage,
+        agent_config,
+    )
 }
 
 /// Test environment specifically designed for issue-related testing

@@ -26,6 +26,7 @@ Thumbs.db
 semantic.db
 semantic.db.wal
 semantic.db-wal
+search.db
 
 # Logs
 *.log
@@ -39,6 +40,7 @@ CODE_REVIEW.md
 TEST_FAILURES.md
 TEST_RESULTS.md
 TEST_RESULTS_SUMMARY.md
+scratch/
 
 # Test issue files
 swissarmyhammer/issues/
@@ -58,6 +60,7 @@ proptest-regressions/
 .fastembed_cache/
 
 swissarmyhammer/.swissarmyhammer
+swissarmyhammer-agent-executor/.swissarmyhammer
 swissarmyhammer-cli/.swissarmyhammer
 swissarmyhammer-workflow/.swissarmyhammer
 

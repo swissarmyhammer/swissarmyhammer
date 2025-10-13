@@ -4,7 +4,6 @@
 //! the in-process HTTP MCP server to read the Cargo.toml file. It proves the
 //! complete integration: local model → HTTP MCP server → MCP tool → file system.
 
-use serial_test::serial;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::Duration;
@@ -105,17 +104,12 @@ async fn test_llama_mcp_integration_fast() {
 
 /// Full end-to-end integration test validating LlamaAgent can use its own MCP tools to read Cargo.toml
 ///
-/// NOTE: This test is slow (>25s) because it downloads and runs a 4B parameter LLM model.
-/// It's marked with #[ignore] by default. Run with `cargo test -- --ignored` for full E2E validation.
-///
 /// This test proves the complete integration workflow:
 /// 1. Configures LlamaAgent to start its own HTTP MCP server with SwissArmyHammer tools
 /// 2. Executes prompt asking model to read Cargo.toml using file_read tool
 /// 3. Validates model makes correct MCP tool call to its own server and receives file contents
 /// 4. Verifies response contains actual Cargo.toml content
 #[test_log::test(tokio::test)]
-// needs to be serial -- model download
-#[serial]
 async fn test_llama_mcp_cargo_toml_integration() {
     let _guard = IsolatedTestEnvironment::new().expect("Failed to create test environment");
 

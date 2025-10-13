@@ -60,6 +60,63 @@ impl BranchName {
         self.0
     }
 
+    /// Sanitize an issue name or other string for use as a Git branch name
+    ///
+    /// Replaces or removes characters that are invalid in Git branch names
+    /// to create a valid branch name from potentially unsafe input.
+    ///
+    /// # Arguments
+    /// * `name` - The string to sanitize
+    ///
+    /// # Returns
+    /// A string that is safe to use as a Git branch name
+    ///
+    /// # Examples
+    /// ```
+    /// use swissarmyhammer_git::BranchName;
+    ///
+    /// let sanitized = BranchName::sanitize("~BASE_WEAPON_TEMPLATES_22b9a174");
+    /// assert_eq!(sanitized, "BASE_WEAPON_TEMPLATES_22b9a174");
+    ///
+    /// let sanitized = BranchName::sanitize("feature with spaces");
+    /// assert_eq!(sanitized, "feature_with_spaces");
+    /// ```
+    pub fn sanitize(name: &str) -> String {
+        let mut result = name.to_string();
+
+        // Remove leading ~ (common in rule violation issue names)
+        result = result.trim_start_matches('~').to_string();
+
+        // Remove leading dashes
+        result = result.trim_start_matches('-').to_string();
+
+        // Replace spaces and tabs with underscores
+        result = result.replace(' ', "_");
+        result = result.replace('\t', "_");
+
+        // Remove newlines
+        result = result.replace('\n', "");
+        result = result.replace('\r', "");
+
+        // Replace double dots with single dot
+        while result.contains("..") {
+            result = result.replace("..", ".");
+        }
+
+        // Replace other invalid characters with underscores
+        let invalid_chars = ['~', '^', ':', '?', '*', '[', '\\'];
+        for &ch in &invalid_chars {
+            result = result.replace(ch, "_");
+        }
+
+        // Ensure result is not empty
+        if result.is_empty() {
+            result = "branch".to_string();
+        }
+
+        result
+    }
+
     /// Validate a branch name according to Git rules
     fn validate_branch_name(name: &str) -> GitResult<()> {
         if name.is_empty() {
@@ -277,6 +334,49 @@ mod tests {
         assert!(BranchName::new("branch~name").is_err());
         assert!(BranchName::new("branch^name").is_err());
         assert!(BranchName::new("branch:name").is_err());
+    }
+
+    #[test]
+    fn test_branch_name_sanitize() {
+        // Remove leading tilde (rule violation issues)
+        assert_eq!(
+            BranchName::sanitize("~BASE_WEAPON_TEMPLATES_22b9a174"),
+            "BASE_WEAPON_TEMPLATES_22b9a174"
+        );
+
+        // Replace spaces with underscores
+        assert_eq!(
+            BranchName::sanitize("feature with spaces"),
+            "feature_with_spaces"
+        );
+
+        // Remove leading dashes
+        assert_eq!(BranchName::sanitize("-branch-name"), "branch-name");
+
+        // Replace double dots with single dot
+        assert_eq!(BranchName::sanitize("branch..name"), "branch.name");
+
+        // Replace invalid characters with underscores
+        assert_eq!(BranchName::sanitize("branch~name"), "branch_name");
+        assert_eq!(BranchName::sanitize("branch^name"), "branch_name");
+        assert_eq!(BranchName::sanitize("branch:name"), "branch_name");
+        assert_eq!(BranchName::sanitize("branch?name"), "branch_name");
+        assert_eq!(BranchName::sanitize("branch*name"), "branch_name");
+        assert_eq!(BranchName::sanitize("branch[name]"), "branch_name]"); // Only [ is invalid, ] stays
+
+        // Remove newlines
+        assert_eq!(BranchName::sanitize("branch\nname"), "branchname");
+
+        // Empty input becomes "branch"
+        assert_eq!(BranchName::sanitize(""), "branch");
+        assert_eq!(BranchName::sanitize("~"), "branch");
+        assert_eq!(BranchName::sanitize("---"), "branch");
+
+        // Complex combination
+        assert_eq!(
+            BranchName::sanitize("~feature: add~new^feature*with?spaces"),
+            "feature__add_new_feature_with_spaces"
+        );
     }
 
     #[test]

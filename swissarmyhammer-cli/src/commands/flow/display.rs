@@ -2,20 +2,6 @@ use serde::Serialize;
 use swissarmyhammer::Workflow;
 use tabled::Tabled;
 
-/// Convert FileSource to emoji representation for consistent display across all listing commands.
-/// This ensures all three table displays (prompt, flow, agent) use the same emoji mapping:
-/// - 📦 Built-in: System-provided built-in items
-/// - 📁 Project: Project-specific items from .swissarmyhammer directory  
-/// - 👤 User: User-specific items from user's home directory
-fn file_source_to_emoji(source: Option<&swissarmyhammer::FileSource>) -> &'static str {
-    match source {
-        Some(swissarmyhammer::FileSource::Builtin) => "📦 Built-in",
-        Some(swissarmyhammer::FileSource::Local) => "📁 Project",
-        Some(swissarmyhammer::FileSource::User) => "👤 User",
-        Some(swissarmyhammer::FileSource::Dynamic) | None => "📦 Built-in", // Default fallback
-    }
-}
-
 /// Returns a default description when the provided description is empty
 fn get_description_or_default(description: &str) -> String {
     if description.is_empty() {
@@ -74,7 +60,10 @@ impl WorkflowInfo {
         Self {
             name: workflow.name.as_str().to_string(),
             description: get_description_or_default(&workflow.description),
-            source: file_source_to_emoji(file_source).to_string(),
+            source: file_source
+                .map(|s| s.display_emoji())
+                .unwrap_or("📦 Built-in")
+                .to_string(),
         }
     }
 }
@@ -149,7 +138,10 @@ impl VerboseWorkflowInfo {
             name: workflow.name.as_str().to_string(),
             title,
             description: get_description_or_default(&workflow.description),
-            source: file_source_to_emoji(file_source).to_string(),
+            source: file_source
+                .map(|s| s.display_emoji())
+                .unwrap_or("📦 Built-in")
+                .to_string(),
             action_count: workflow.states.len().to_string(),
         }
     }

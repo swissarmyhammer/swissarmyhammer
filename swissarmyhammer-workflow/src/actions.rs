@@ -28,6 +28,13 @@ use async_trait::async_trait;
 use swissarmyhammer_config::agent::{AgentConfig, AgentExecutorConfig, AgentExecutorType};
 use swissarmyhammer_prompts::{PromptLibrary, PromptResolver};
 
+// Re-export types from agent-executor crate
+pub use swissarmyhammer_agent_executor::{
+    ActionError as AgentExecutorError, ActionResult as AgentExecutorResult,
+    AgentExecutor as AgentExecutorTrait, AgentResponse as AgentExecutorResponse,
+    AgentResponseType as AgentExecutorResponseType,
+};
+
 thread_local! {
     /// Thread-local test storage registry for tests
     static TEST_STORAGE_REGISTRY: std::cell::RefCell<Option<Arc<WorkflowStorage>>> = const { std::cell::RefCell::new(None) };
@@ -238,7 +245,7 @@ impl AgentExecutorFactory {
         match context.executor_type() {
             AgentExecutorType::ClaudeCode => {
                 tracing::info!("Using ClaudeCode");
-                let mut executor = ClaudeCodeExecutor::new();
+                let mut executor = crate::agents::ClaudeCodeExecutor::new();
                 executor.initialize().await?;
                 Ok(Box::new(executor))
             }
@@ -253,215 +260,66 @@ impl AgentExecutorFactory {
                         ))
                     }
                 };
-                let mut executor = crate::agents::LlamaAgentExecutorWrapper::new(llama_config);
+
+                // Start MCP server in workflow layer (breaking circular dependency)
+                use swissarmyhammer_prompts::PromptLibrary;
+                use swissarmyhammer_tools::mcp::unified_server::{start_mcp_server, McpServerMode};
+
+                tracing::info!("Starting MCP server for LlamaAgent in workflow layer");
+                let tools_mcp_handle = start_mcp_server(
+                    McpServerMode::Http {
+                        port: if llama_config.mcp_server.port == 0 {
+                            None
+                        } else {
+                            Some(llama_config.mcp_server.port)
+                        },
+                    },
+                    Some(PromptLibrary::default()),
+                )
+                .await
+                .map_err(|e| {
+                    ActionError::ExecutionError(format!("Failed to start MCP server: {}", e))
+                })?;
+
+                tracing::info!(
+                    "MCP server started on port {:?}",
+                    tools_mcp_handle.info.port
+                );
+
+                // Keep the MCP server handle alive by storing it in the executor
+                // The workflow layer owns the MCP server lifecycle
+                let port = tools_mcp_handle.info.port.unwrap_or(0);
+
+                // Create a cloneable shutdown handle that keeps the server alive
+                // We'll use a channel that we DON'T drop to keep the server running
+                let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel::<()>();
+
+                // Store the shutdown receiver to prevent it from being dropped
+                // This prevents premature server shutdown
+                let _server_keepalive = shutdown_rx;
+
+                let agent_mcp_handle = crate::agents::llama_agent_executor::McpServerHandle::new(
+                    port,
+                    "127.0.0.1".to_string(),
+                    shutdown_tx,
+                );
+
+                // Create executor with pre-started MCP server
+                let mut executor = crate::agents::LlamaAgentExecutorWrapper::new_with_mcp(
+                    llama_config,
+                    Some(agent_mcp_handle),
+                );
                 executor.initialize().await?;
+
+                // TODO: We need to properly manage the MCP server lifecycle
+                // Currently we leak the shutdown_rx to keep the server alive
+                // A better solution would be to store tools_mcp_handle in the executor
+                std::mem::forget(_server_keepalive);
+                std::mem::forget(tools_mcp_handle);
+
                 Ok(Box::new(executor))
             }
         }
-    }
-}
-
-/// Executor that shells out to Claude Code CLI
-#[derive(Debug)]
-pub struct ClaudeCodeExecutor {
-    claude_path: Option<std::path::PathBuf>,
-    initialized: bool,
-}
-
-impl Default for ClaudeCodeExecutor {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl ClaudeCodeExecutor {
-    /// Create a new ClaudeCodeExecutor instance
-    ///
-    /// The executor starts uninitialized and must be initialized before use.
-    pub fn new() -> Self {
-        Self {
-            claude_path: None,
-            initialized: false,
-        }
-    }
-
-    /// Get the path to the claude executable
-    fn get_claude_path(&self) -> ActionResult<&std::path::PathBuf> {
-        self.claude_path.as_ref().ok_or_else(|| {
-            ActionError::ExecutionError("Claude executor not initialized".to_string())
-        })
-    }
-
-    /// Create a temporary file with the given content (for testing)
-    #[cfg(test)]
-    fn create_temp_file(&self, content: &str) -> ActionResult<tempfile::NamedTempFile> {
-        use std::io::Write;
-
-        let mut temp_file = tempfile::NamedTempFile::new().map_err(ActionError::IoError)?;
-        temp_file
-            .write_all(content.as_bytes())
-            .map_err(ActionError::IoError)?;
-        temp_file.flush().map_err(ActionError::IoError)?;
-
-        Ok(temp_file)
-    }
-
-    /// Execute Claude command using stdin approach (maintaining backward compatibility)
-    async fn execute_claude_command(
-        &self,
-        claude_path: &std::path::PathBuf,
-        prompt: String,
-        system_prompt: Option<String>,
-    ) -> ActionResult<AgentResponse> {
-        use tokio::io::AsyncWriteExt;
-        use tokio::process::Command;
-
-        tracing::debug!(
-            "Executing Claude command: {} with prompt length: {}",
-            claude_path.display(),
-            prompt.len()
-        );
-
-        // Build command with system prompt if provided
-        let mut cmd = Command::new(claude_path);
-        cmd.args([
-            "--dangerously-skip-permissions",
-            "--print",
-            "-", // Read from stdin
-        ]);
-
-        // Add system prompt parameter if provided
-        if let Some(ref sys_prompt) = system_prompt {
-            tracing::debug!(
-                "Executing Claude command: {} with system prompt length: {}",
-                claude_path.display(),
-                sys_prompt.len()
-            );
-            cmd.args(["--append-system-prompt", sys_prompt]);
-        }
-
-        // Execute Claude Code with stdin input
-        let mut child = cmd
-            .stdin(std::process::Stdio::piped())
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped())
-            .spawn()
-            .map_err(|e| ActionError::ClaudeError(format!("Failed to execute Claude: {e}")))?;
-
-        // Write prompt to stdin
-        if let Some(stdin) = child.stdin.as_mut() {
-            stdin.write_all(prompt.as_bytes()).await.map_err(|e| {
-                ActionError::ClaudeError(format!("Failed to write to Claude stdin: {e}"))
-            })?;
-
-            // Close stdin to signal end of input
-            stdin.shutdown().await.map_err(|e| {
-                ActionError::ClaudeError(format!("Failed to close Claude stdin: {e}"))
-            })?;
-        }
-
-        // Wait for command completion
-        let output = child
-            .wait_with_output()
-            .await
-            .map_err(|e| ActionError::ClaudeError(format!("Failed to wait for Claude: {e}")))?;
-
-        // Check if Claude execution was successful
-        if !output.status.success() {
-            let exit_code = output.status.code().unwrap_or(-1);
-            let stderr = String::from_utf8_lossy(&output.stderr);
-
-            // Check for rate limiting
-            if stderr.contains("rate limit") || stderr.contains("Rate limit") {
-                let wait_time = std::time::Duration::from_secs(60); // Default wait time
-                return Err(ActionError::RateLimit {
-                    message: stderr.to_string(),
-                    wait_time,
-                });
-            }
-
-            return Err(ActionError::ClaudeError(format!(
-                "Claude execution failed with exit code {}: {}",
-                exit_code, stderr
-            )));
-        }
-
-        // Extract response from stdout
-        let response_text = String::from_utf8_lossy(&output.stdout).to_string();
-
-        // Process the response
-        let response_text = if response_text.trim().is_empty() {
-            tracing::warn!("Empty response from Claude Code");
-            "No response from Claude".to_string()
-        } else {
-            response_text.trim().to_string()
-        };
-
-        Ok(AgentResponse::success(response_text))
-    }
-}
-
-#[async_trait]
-impl AgentExecutor for ClaudeCodeExecutor {
-    async fn execute_prompt(
-        &self,
-        system_prompt: String,
-        rendered_prompt: String,
-        context: &AgentExecutionContext<'_>,
-    ) -> ActionResult<AgentResponse> {
-        let claude_path = self.get_claude_path()?;
-
-        // Get Claude CLI path from context or environment (maintaining compatibility)
-        let claude_path_str = context
-            .workflow_context
-            .get("claude_path")
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string())
-            .or_else(|| std::env::var("SAH_CLAUDE_PATH").ok())
-            .unwrap_or_else(|| claude_path.to_string_lossy().to_string());
-
-        let claude_path_buf = std::path::PathBuf::from(claude_path_str);
-
-        // Convert system prompt to Option for backward compatibility
-        let system_prompt_opt = if system_prompt.is_empty() {
-            None
-        } else {
-            Some(system_prompt)
-        };
-
-        // Execute Claude command using the same approach as the original implementation
-        self.execute_claude_command(&claude_path_buf, rendered_prompt, system_prompt_opt)
-            .await
-    }
-
-    fn executor_type(&self) -> AgentExecutorType {
-        AgentExecutorType::ClaudeCode
-    }
-
-    async fn initialize(&mut self) -> ActionResult<()> {
-        if self.initialized {
-            return Ok(());
-        }
-
-        // Find claude executable in PATH
-        self.claude_path = Some(which::which("claude").map_err(|_| {
-            ActionError::ExecutionError(
-                "Claude CLI not found in PATH. Please install Claude Code CLI.".to_string(),
-            )
-        })?);
-
-        self.initialized = true;
-        tracing::debug!(
-            "ClaudeCodeExecutor initialized with claude at: {:?}",
-            self.claude_path
-        );
-        Ok(())
-    }
-
-    async fn shutdown(&mut self) -> ActionResult<()> {
-        // No resources to cleanup for CLI approach
-        self.initialized = false;
-        Ok(())
     }
 }
 
@@ -2118,6 +1976,7 @@ pub fn parse_action_from_description(description: &str) -> ActionResult<Option<B
 mod tests {
     use super::*;
     use crate::action_parser::ActionParser;
+    use crate::agents::ClaudeCodeExecutor;
 
     use swissarmyhammer_common::test_utils::IsolatedTestEnvironment;
 
@@ -2276,6 +2135,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_executor_factory_llama_agent() {
         let mut context = WorkflowTemplateContext::with_vars_for_test(HashMap::new());
 
@@ -3319,34 +3179,9 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_claude_executor_temp_file_creation() {
-        let executor = ClaudeCodeExecutor::new();
-        let content =
-            "Test content for temporary file\nWith multiple lines\nAnd special chars: !@#$%";
-
-        match executor.create_temp_file(content) {
-            Ok(temp_file) => {
-                // Verify file exists and contains correct content
-                let file_content = std::fs::read_to_string(temp_file.path()).unwrap();
-                assert_eq!(file_content, content);
-            }
-            Err(e) => panic!("Failed to create temp file: {}", e),
-        }
-    }
-
-    #[test]
-    fn test_claude_executor_get_path_before_init() {
-        let executor = ClaudeCodeExecutor::new();
-        let result = executor.get_claude_path();
-        assert!(result.is_err());
-        match result {
-            Err(ActionError::ExecutionError(msg)) => {
-                assert!(msg.contains("not initialized"));
-            }
-            _ => panic!("Expected ExecutionError for uninitialized executor"),
-        }
-    }
+    // NOTE: These tests were removed because they test internal implementation details
+    // of ClaudeCodeExecutor that are now in the agent-executor crate. The workflow
+    // crate only exposes the public AgentExecutor trait interface.
 
     #[tokio::test]
     async fn test_prompt_action_with_claude_executor() {
@@ -3410,6 +3245,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_agent_executor_factory_llama_agent() {
         // Skip test if LlamaAgent testing is disabled
 

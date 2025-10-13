@@ -7,22 +7,26 @@
 
 use serial_test::serial;
 use std::sync::Arc;
+use swissarmyhammer_common::IsolatedTestEnvironment;
 use swissarmyhammer_memoranda::{MarkdownMemoStorage, MemoContent, MemoStorage, MemoTitle};
 use tokio::sync::Mutex;
 
 /// Helper to create a test memo storage
-async fn create_test_storage() -> Arc<Mutex<MarkdownMemoStorage>> {
-    let temp_dir = tempfile::tempdir().unwrap();
-    let memos_dir = temp_dir.path().join("memos");
+async fn create_test_storage() -> (Arc<Mutex<MarkdownMemoStorage>>, IsolatedTestEnvironment) {
+    let guard = IsolatedTestEnvironment::new().expect("Failed to create test environment");
+    let memos_dir = guard.temp_dir().join("memos");
     std::fs::create_dir_all(&memos_dir).unwrap();
-    Arc::new(Mutex::new(MarkdownMemoStorage::new(memos_dir)))
+    (
+        Arc::new(Mutex::new(MarkdownMemoStorage::new(memos_dir))),
+        guard,
+    )
 }
 
 /// Test creating a memo
 #[tokio::test]
 #[serial]
 async fn test_memo_create() {
-    let storage = create_test_storage().await;
+    let (storage, _guard) = create_test_storage().await;
 
     let title = MemoTitle::new("Test Memo".to_string()).unwrap();
     let content = MemoContent::from("Test content for memo".to_string());
@@ -41,7 +45,7 @@ async fn test_memo_create() {
 #[tokio::test]
 #[serial]
 async fn test_memo_get() {
-    let storage = create_test_storage().await;
+    let (storage, _guard) = create_test_storage().await;
 
     let title = MemoTitle::new("Get Test Memo".to_string()).unwrap();
     let content = MemoContent::from("Content for get test".to_string());
@@ -66,7 +70,7 @@ async fn test_memo_get() {
 #[tokio::test]
 #[serial]
 async fn test_memo_list() {
-    let storage = create_test_storage().await;
+    let (storage, _guard) = create_test_storage().await;
 
     // Create multiple memos
     let titles = vec!["Memo 1", "Memo 2", "Memo 3"];
@@ -89,7 +93,7 @@ async fn test_memo_list() {
 #[tokio::test]
 #[serial]
 async fn test_memo_update() {
-    let storage = create_test_storage().await;
+    let (storage, _guard) = create_test_storage().await;
 
     let title = MemoTitle::new("Update Test Memo".to_string()).unwrap();
     let original_content = MemoContent::from("Original content".to_string());
@@ -121,7 +125,7 @@ async fn test_memo_update() {
 #[tokio::test]
 #[serial]
 async fn test_memo_delete() {
-    let storage = create_test_storage().await;
+    let (storage, _guard) = create_test_storage().await;
 
     let title = MemoTitle::new("Delete Test Memo".to_string()).unwrap();
     let content = MemoContent::from("Content to be deleted".to_string());
@@ -164,7 +168,7 @@ async fn test_memo_invalid_title() {
 #[tokio::test]
 #[serial]
 async fn test_memo_get_nonexistent() {
-    let storage = create_test_storage().await;
+    let (storage, _guard) = create_test_storage().await;
 
     let title = MemoTitle::new("Nonexistent Memo".to_string()).unwrap();
     let result = storage.lock().await.get(&title).await.unwrap();
@@ -175,7 +179,7 @@ async fn test_memo_get_nonexistent() {
 #[tokio::test]
 #[serial]
 async fn test_memo_delete_nonexistent() {
-    let storage = create_test_storage().await;
+    let (storage, _guard) = create_test_storage().await;
 
     let title = MemoTitle::new("Nonexistent Memo".to_string()).unwrap();
     let deleted = storage.lock().await.delete(&title).await.unwrap();

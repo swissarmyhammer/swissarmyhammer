@@ -208,12 +208,12 @@ async fn test_repetition_detection_configuration() {
     let test_config = LlamaAgentConfig::for_testing();
     assert!(test_config.repetition_detection.enabled);
     assert_eq!(test_config.repetition_detection.repetition_penalty, 1.05); // Lower penalty
-    assert_eq!(test_config.repetition_detection.repetition_threshold, 100); // Higher threshold
-    assert_eq!(test_config.repetition_detection.repetition_window, 32); // Smaller window
+    assert_eq!(test_config.repetition_detection.repetition_threshold, 150); // Higher threshold
+    assert_eq!(test_config.repetition_detection.repetition_window, 128); // Smaller window
     println!("✓ Test repetition detection configuration validated");
 
     // Test small model configuration (should be most permissive)
-    let small_model_config = LlamaAgentConfig::for_small_model();
+    let small_model_config = LlamaAgentConfig::for_testing();
     assert!(small_model_config.repetition_detection.enabled);
     assert_eq!(
         small_model_config.repetition_detection.repetition_penalty,
@@ -233,7 +233,6 @@ async fn test_repetition_detection_configuration() {
     for (name, config) in [
         ("default", LlamaAgentConfig::default()),
         ("testing", LlamaAgentConfig::for_testing()),
-        ("small_model", LlamaAgentConfig::for_small_model()),
     ] {
         let json_result = serde_json::to_string(&config);
         assert!(json_result.is_ok(), "Failed to serialize {} config", name);
@@ -264,7 +263,7 @@ async fn test_repetition_configuration_integration() {
     // through to the llama-agent properly. Due to the mock implementation in tests,
     // this mainly verifies the configuration conversion doesn't panic.
 
-    let small_model_config = LlamaAgentConfig::for_small_model();
+    let small_model_config = LlamaAgentConfig::for_testing();
     let agent_config = AgentConfig::llama_agent(small_model_config);
 
     let context =

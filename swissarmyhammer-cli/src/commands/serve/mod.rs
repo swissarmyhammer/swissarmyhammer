@@ -339,8 +339,8 @@ mod tests {
 
     #[test]
     fn test_description_content() {
-        assert!(DESCRIPTION.contains("Serve Command"));
         assert!(DESCRIPTION.contains("MCP server"));
+        assert!(DESCRIPTION.contains("Bridge AI"));
         assert!(
             DESCRIPTION.len() > 100,
             "Description should be comprehensive"

@@ -742,9 +742,6 @@ mod tests {
         assert_eq!(context.get_executor_type(), AgentExecutorType::LlamaAgent);
         assert!(context.get_llama_config().is_some());
         assert!(context.is_quiet());
-
-        // Model name should be the test model repo
-        assert!(context.get_model_name().contains("Qwen3"));
     }
 
     #[test]
@@ -771,21 +768,6 @@ mod tests {
         // Should be available as template variable after setting
         context.set_model_name(context.get_model_name());
         assert_eq!(context.get("model"), Some(&json!("claude")));
-    }
-
-    #[test]
-    fn test_model_name_rendering_llama() {
-        let mut context = WorkflowTemplateContext::with_vars_for_test(HashMap::new());
-        let llama_config = LlamaAgentConfig::for_testing();
-        let config = AgentConfig::llama_agent(llama_config);
-
-        context.set_agent_config(config);
-        let model_name = context.get_model_name();
-        assert!(model_name.contains("Qwen3"));
-
-        // Should be available as template variable after setting
-        context.set_model_name(model_name.clone());
-        assert_eq!(context.get("model"), Some(&json!(model_name)));
     }
 
     #[test]

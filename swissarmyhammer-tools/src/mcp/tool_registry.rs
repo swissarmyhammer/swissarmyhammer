@@ -224,6 +224,7 @@ use rmcp::ErrorData as McpError;
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use swissarmyhammer_config::agent::AgentConfig;
 use swissarmyhammer_git::GitOperations;
 use swissarmyhammer_issues::IssueStorage;
 use swissarmyhammer_memoranda::MemoStorage;
@@ -285,6 +286,13 @@ pub struct ToolContext {
     /// Provides thread-safe access to memoranda storage operations. Use `read()` for
     /// read operations and `write()` for write operations.
     pub memo_storage: Arc<RwLock<Box<dyn MemoStorage>>>,
+
+    /// Agent configuration for tool operations that require agent execution
+    ///
+    /// Provides access to the configured agent executor (ClaudeCode or LlamaAgent)
+    /// and associated settings. Tools that need to execute agent operations should
+    /// use this configuration to create appropriate executor instances.
+    pub agent_config: Arc<AgentConfig>,
 }
 
 impl ToolContext {
@@ -294,12 +302,14 @@ impl ToolContext {
         issue_storage: Arc<RwLock<Box<dyn IssueStorage>>>,
         git_ops: Arc<Mutex<Option<GitOperations>>>,
         memo_storage: Arc<RwLock<Box<dyn MemoStorage>>>,
+        agent_config: Arc<AgentConfig>,
     ) -> Self {
         Self {
             tool_handlers,
             issue_storage,
             git_ops,
             memo_storage,
+            agent_config,
         }
     }
 }
@@ -1272,6 +1282,12 @@ pub fn register_outline_tools(registry: &mut ToolRegistry) {
     outline::register_outline_tools(registry);
 }
 
+/// Register all rules-related tools with the registry
+pub fn register_rules_tools(registry: &mut ToolRegistry) {
+    use super::tools::rules;
+    rules::register_rules_tools(registry);
+}
+
 /// Register all shell-related tools with the registry
 pub fn register_shell_tools(registry: &mut ToolRegistry) {
     use super::tools::shell;
@@ -1430,7 +1446,14 @@ mod tests {
             Arc::new(RwLock::new(Box::new(MarkdownMemoStorage::new(memo_dir))));
 
         let tool_handlers = Arc::new(ToolHandlers::new(memo_storage.clone()));
-        let context = ToolContext::new(tool_handlers, issue_storage, git_ops, memo_storage);
+        let agent_config = Arc::new(AgentConfig::default());
+        let context = ToolContext::new(
+            tool_handlers,
+            issue_storage,
+            git_ops,
+            memo_storage,
+            agent_config,
+        );
 
         let tool = MockTool {
             name: "exec_test",

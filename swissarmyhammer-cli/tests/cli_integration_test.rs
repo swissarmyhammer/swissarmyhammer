@@ -688,10 +688,7 @@ async fn test_root_validate_help() -> Result<()> {
         result.stdout.contains("--format"),
         "validate help should mention --format flag"
     );
-    assert!(
-        result.stdout.contains("--workflow-dir"),
-        "validate help should mention --workflow-dir option"
-    );
+    // Note: --workflow-dir is deprecated and hidden, so it should not appear in help
 
     Ok(())
 }
