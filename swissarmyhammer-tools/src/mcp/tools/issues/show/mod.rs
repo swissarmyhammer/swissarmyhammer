@@ -67,8 +67,7 @@ impl ShowIssueTool {
                 Ok(Some(branch)) => {
                     let branch_str = branch.to_string();
                     let config = Config::global();
-                    if let Some(issue_name) = branch_str.strip_prefix(&config.issue_branch_prefix)
-                    {
+                    if let Some(issue_name) = branch_str.strip_prefix(&config.issue_branch_prefix) {
                         Ok(issue_name.to_string())
                     } else {
                         Err(Ok(BaseToolImpl::create_success_response(format!(
@@ -158,7 +157,10 @@ impl McpTool for ShowIssueTool {
                 }
                 Err(e) => {
                     // Marker read failed (I/O error, permission, etc.) - fall back gracefully to git branch
-                    tracing::warn!("Failed to read current issue marker, using git branch fallback: {}", e);
+                    tracing::warn!(
+                        "Failed to read current issue marker, using git branch fallback: {}",
+                        e
+                    );
                     match Self::get_issue_name_from_branch(&context.git_ops).await {
                         Ok(name) => name,
                         Err(Ok(result)) => return Ok(result),
@@ -238,20 +240,20 @@ impl McpTool for ShowIssueTool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::mcp::tool_handlers::ToolHandlers;
     use std::sync::Arc;
+    use swissarmyhammer_config::agent::AgentConfig;
+    use swissarmyhammer_git::GitOperations;
+    use swissarmyhammer_issues::{FileSystemIssueStorage, IssueStorage};
+    use swissarmyhammer_memoranda::MarkdownMemoStorage;
     use tempfile::TempDir;
     use tokio::sync::RwLock;
-    use swissarmyhammer_issues::{FileSystemIssueStorage, IssueStorage};
-    use swissarmyhammer_git::GitOperations;
-    use swissarmyhammer_memoranda::MarkdownMemoStorage;
-    use crate::mcp::tool_handlers::ToolHandlers;
-    use swissarmyhammer_config::agent::AgentConfig;
-    
+
     /// Guard that restores the current directory when dropped
     struct DirGuard {
         original: std::path::PathBuf,
     }
-    
+
     impl DirGuard {
         fn new(new_dir: &std::path::Path) -> std::io::Result<Self> {
             let original = std::env::current_dir()?;
@@ -259,7 +261,7 @@ mod tests {
             Ok(Self { original })
         }
     }
-    
+
     impl Drop for DirGuard {
         fn drop(&mut self) {
             let _ = std::env::set_current_dir(&self.original);
@@ -270,22 +272,21 @@ mod tests {
     async fn create_test_context(temp_dir: &TempDir) -> ToolContext {
         let issues_dir = temp_dir.path().join(".swissarmyhammer").join("issues");
         std::fs::create_dir_all(&issues_dir).unwrap();
-        
+
         let issue_storage: Arc<RwLock<Box<dyn IssueStorage>>> = Arc::new(RwLock::new(Box::new(
             FileSystemIssueStorage::new(issues_dir).unwrap(),
         )));
-        
+
         let git_ops = GitOperations::new().ok();
-        
+
         let memo_dir = temp_dir.path().join(".swissarmyhammer").join("memos");
         std::fs::create_dir_all(&memo_dir).unwrap();
-        let memo_storage = Arc::new(RwLock::new(Box::new(
-            MarkdownMemoStorage::new(memo_dir),
-        ) as Box<dyn swissarmyhammer_memoranda::MemoStorage>));
-        
+        let memo_storage = Arc::new(RwLock::new(Box::new(MarkdownMemoStorage::new(memo_dir))
+            as Box<dyn swissarmyhammer_memoranda::MemoStorage>));
+
         let tool_handlers = Arc::new(ToolHandlers::new(memo_storage.clone()));
         let agent_config = Arc::new(AgentConfig::default());
-        
+
         ToolContext {
             issue_storage,
             git_ops: Arc::new(tokio::sync::Mutex::new(git_ops)),
@@ -297,7 +298,10 @@ mod tests {
 
     /// Helper to create a test issue
     async fn create_test_issue(storage: &dyn IssueStorage, name: &str, content: &str) {
-        storage.create_issue(name.to_string(), content.to_string()).await.unwrap();
+        storage
+            .create_issue(name.to_string(), content.to_string())
+            .await
+            .unwrap();
     }
 
     /// Helper to setup a git repository for testing
@@ -334,13 +338,18 @@ mod tests {
     async fn test_show_issue_from_marker() {
         let temp_dir = TempDir::new().unwrap();
         let _guard = DirGuard::new(temp_dir.path()).unwrap();
-        
+
         let context = create_test_context(&temp_dir).await;
-        
+
         // Create a test issue
         {
             let issue_storage = context.issue_storage.read().await;
-            create_test_issue(&**issue_storage, "test_issue_marker", "# Test Issue\n\nContent from marker").await;
+            create_test_issue(
+                &**issue_storage,
+                "test_issue_marker",
+                "# Test Issue\n\nContent from marker",
+            )
+            .await;
         }
 
         // Set the marker to this issue (uses current directory)
@@ -349,19 +358,25 @@ mod tests {
         // Execute the tool with "current"
         let tool = ShowIssueTool::new();
         let mut args = serde_json::Map::new();
-        args.insert("name".to_string(), serde_json::Value::String("current".to_string()));
+        args.insert(
+            "name".to_string(),
+            serde_json::Value::String("current".to_string()),
+        );
 
         let result = tool.execute(args, &context).await;
-        
+
         if let Err(e) = &result {
             panic!("Tool execution failed: {:?}", e);
         }
         let response = result.unwrap();
-        
+
         // Verify the response contains the issue name
         if let Some(content) = response.content.first() {
             if let rmcp::model::RawContent::Text(text_content) = &content.raw {
-                assert!(text_content.text.contains("test_issue_marker"), "Response should contain issue name from marker");
+                assert!(
+                    text_content.text.contains("test_issue_marker"),
+                    "Response should contain issue name from marker"
+                );
             }
         }
     }
@@ -382,11 +397,16 @@ mod tests {
             .unwrap();
 
         let context = create_test_context(&temp_dir).await;
-        
+
         // Create a test issue
         {
             let issue_storage = context.issue_storage.read().await;
-            create_test_issue(&**issue_storage, "test_branch_issue", "# Test Issue\n\nContent from branch").await;
+            create_test_issue(
+                &**issue_storage,
+                "test_branch_issue",
+                "# Test Issue\n\nContent from branch",
+            )
+            .await;
         }
 
         // Do NOT set marker - should fall back to branch
@@ -394,17 +414,23 @@ mod tests {
         // Execute the tool with "current"
         let tool = ShowIssueTool::new();
         let mut args = serde_json::Map::new();
-        args.insert("name".to_string(), serde_json::Value::String("current".to_string()));
+        args.insert(
+            "name".to_string(),
+            serde_json::Value::String("current".to_string()),
+        );
 
         let result = tool.execute(args, &context).await;
-        
+
         assert!(result.is_ok());
         let response = result.unwrap();
-        
+
         // Verify the response contains the issue name from branch
         if let Some(content) = response.content.first() {
             if let rmcp::model::RawContent::Text(text_content) = &content.raw {
-                assert!(text_content.text.contains("test_branch_issue"), "Response should contain issue name from branch");
+                assert!(
+                    text_content.text.contains("test_branch_issue"),
+                    "Response should contain issue name from branch"
+                );
             }
         }
     }
@@ -425,12 +451,22 @@ mod tests {
             .unwrap();
 
         let context = create_test_context(&temp_dir).await;
-        
+
         // Create TWO test issues - one for branch, one for marker
         {
             let issue_storage = context.issue_storage.read().await;
-            create_test_issue(&**issue_storage, "branch_issue", "# Branch Issue\n\nFrom branch").await;
-            create_test_issue(&**issue_storage, "marker_issue", "# Marker Issue\n\nFrom marker").await;
+            create_test_issue(
+                &**issue_storage,
+                "branch_issue",
+                "# Branch Issue\n\nFrom branch",
+            )
+            .await;
+            create_test_issue(
+                &**issue_storage,
+                "marker_issue",
+                "# Marker Issue\n\nFrom marker",
+            )
+            .await;
         }
 
         // Set marker to a DIFFERENT issue than the branch
@@ -439,18 +475,27 @@ mod tests {
         // Execute the tool with "current"
         let tool = ShowIssueTool::new();
         let mut args = serde_json::Map::new();
-        args.insert("name".to_string(), serde_json::Value::String("current".to_string()));
+        args.insert(
+            "name".to_string(),
+            serde_json::Value::String("current".to_string()),
+        );
 
         let result = tool.execute(args, &context).await;
-        
+
         assert!(result.is_ok());
         let response = result.unwrap();
-        
+
         // Verify the response contains the marker issue, NOT the branch issue
         if let Some(content) = response.content.first() {
             if let rmcp::model::RawContent::Text(text_content) = &content.raw {
-                assert!(text_content.text.contains("marker_issue"), "Response should contain issue name from marker (marker takes precedence)");
-                assert!(!text_content.text.contains("branch_issue"), "Response should NOT contain issue name from branch when marker exists");
+                assert!(
+                    text_content.text.contains("marker_issue"),
+                    "Response should contain issue name from marker (marker takes precedence)"
+                );
+                assert!(
+                    !text_content.text.contains("branch_issue"),
+                    "Response should NOT contain issue name from branch when marker exists"
+                );
             }
         }
     }
@@ -470,18 +515,25 @@ mod tests {
         // Execute the tool with "current"
         let tool = ShowIssueTool::new();
         let mut args = serde_json::Map::new();
-        args.insert("name".to_string(), serde_json::Value::String("current".to_string()));
+        args.insert(
+            "name".to_string(),
+            serde_json::Value::String("current".to_string()),
+        );
 
         let result = tool.execute(args, &context).await;
-        
+
         assert!(result.is_ok());
         let response = result.unwrap();
-        
+
         // Verify the response indicates no current issue
         if let Some(content) = response.content.first() {
             if let rmcp::model::RawContent::Text(text_content) = &content.raw {
-                assert!(text_content.text.contains("Not on an issue branch and no current issue marker set"), 
-                    "Response should indicate neither marker nor branch available");
+                assert!(
+                    text_content
+                        .text
+                        .contains("Not on an issue branch and no current issue marker set"),
+                    "Response should indicate neither marker nor branch available"
+                );
             }
         }
     }
@@ -491,28 +543,42 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let _guard = DirGuard::new(temp_dir.path()).unwrap();
         let context = create_test_context(&temp_dir).await;
-        
+
         // Create a test issue
         {
             let issue_storage = context.issue_storage.read().await;
-            create_test_issue(&**issue_storage, "specific_issue", "# Specific Issue\n\nDirect lookup").await;
+            create_test_issue(
+                &**issue_storage,
+                "specific_issue",
+                "# Specific Issue\n\nDirect lookup",
+            )
+            .await;
         }
 
         // Execute the tool with specific issue name
         let tool = ShowIssueTool::new();
         let mut args = serde_json::Map::new();
-        args.insert("name".to_string(), serde_json::Value::String("specific_issue".to_string()));
+        args.insert(
+            "name".to_string(),
+            serde_json::Value::String("specific_issue".to_string()),
+        );
 
         let result = tool.execute(args, &context).await;
-        
+
         assert!(result.is_ok());
         let response = result.unwrap();
-        
+
         // Verify the response contains the specific issue
         if let Some(content) = response.content.first() {
             if let rmcp::model::RawContent::Text(text_content) = &content.raw {
-                assert!(text_content.text.contains("specific_issue"), "Response should contain the specific issue name");
-                assert!(text_content.text.contains("Direct lookup"), "Response should contain the issue content");
+                assert!(
+                    text_content.text.contains("specific_issue"),
+                    "Response should contain the specific issue name"
+                );
+                assert!(
+                    text_content.text.contains("Direct lookup"),
+                    "Response should contain the issue content"
+                );
             }
         }
     }

@@ -80,7 +80,6 @@ fn get_http_static_tools() -> Vec<String> {
         "issue_create",
         "issue_list",
         "issue_show",
-        "issue_work",
         "issue_merge",
         "issue_mark_complete",
         "issue_update",
@@ -139,8 +138,8 @@ async fn test_mcp_tool_definitions_return_sufficient_tools() -> Result<()> {
     // Test HTTP static definition
     let http_tools = get_http_static_tools();
     assert!(
-        http_tools.len() >= 28,
-        "HTTP static definition should have at least 28 tools, got {}. Tools: {:?}",
+        http_tools.len() >= 27,
+        "HTTP static definition should have at least 27 tools, got {}. Tools: {:?}",
         http_tools.len(),
         http_tools
     );
@@ -148,8 +147,8 @@ async fn test_mcp_tool_definitions_return_sufficient_tools() -> Result<()> {
     // Test STDIN registry
     let stdin_tools = get_stdin_registry_tools();
     assert!(
-        stdin_tools.len() >= 28,
-        "STDIN registry should have at least 28 tools, got {}. Tools: {:?}",
+        stdin_tools.len() >= 27,
+        "STDIN registry should have at least 27 tools, got {}. Tools: {:?}",
         stdin_tools.len(),
         stdin_tools
     );

@@ -3,7 +3,7 @@
 use super::server::McpServer;
 use super::types::{
     AllCompleteRequest, CreateIssueRequest, MarkCompleteRequest, MergeIssueRequest,
-    UpdateIssueRequest, WorkIssueRequest,
+    UpdateIssueRequest,
 };
 use super::utils::validate_issue_name;
 use crate::test_utils::TestIssueEnvironment;
@@ -342,12 +342,6 @@ async fn test_mcp_server_tool_schemas_are_valid() {
     assert!(
         update_schema.is_ok(),
         "UpdateIssueRequest schema should be valid"
-    );
-
-    let work_schema = serde_json::to_value(schemars::schema_for!(WorkIssueRequest));
-    assert!(
-        work_schema.is_ok(),
-        "WorkIssueRequest schema should be valid"
     );
 
     let merge_schema = serde_json::to_value(schemars::schema_for!(MergeIssueRequest));

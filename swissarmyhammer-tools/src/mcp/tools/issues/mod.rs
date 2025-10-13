@@ -9,10 +9,9 @@
 //! lifecycle from creation to completion:
 //!
 //! 1. **Creation**: `create` tool generates numbered issues (e.g., `000123_feature_name.md`)
-//! 2. **Work Management**: `work` tool creates branches for active development
-//! 3. **Updates**: `update` tool modifies issue content and tracking information
-//! 4. **Completion**: `mark_complete` tool moves issues to `./issues/complete/`
-//! 5. **Integration**: `merge` tool integrates completed work back to source branch
+//! 2. **Updates**: `update` tool modifies issue content and tracking information
+//! 3. **Completion**: `mark_complete` tool moves issues to `./issues/complete/`
+//! 4. **Integration**: `merge` tool integrates completed work back to source branch
 //!
 //! ## Tool Implementation Pattern
 //!
@@ -62,7 +61,6 @@
 //! - **mark_complete**: Mark issues as completed and archive them
 //! - **all_complete**: Check if all pending issues are completed
 //! - **update**: Modify existing issue content and metadata
-//! - **work**: Switch to or create a work branch for an issue
 //! - **merge**: Merge completed issue work back to source branch
 
 pub mod all_complete;
@@ -72,7 +70,6 @@ pub mod mark_complete;
 pub mod merge;
 pub mod show;
 pub mod update;
-pub mod work;
 
 use crate::mcp::tool_registry::ToolRegistry;
 
@@ -84,6 +81,5 @@ pub fn register_issue_tools(registry: &mut ToolRegistry) {
     registry.register(all_complete::AllCompleteIssueTool::new());
     registry.register(show::ShowIssueTool::new());
     registry.register(update::UpdateIssueTool::new());
-    registry.register(work::WorkIssueTool::new());
     registry.register(merge::MergeIssueTool::new());
 }

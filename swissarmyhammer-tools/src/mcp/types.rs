@@ -75,13 +75,6 @@ pub struct UpdateIssueRequest {
     pub append: bool,
 }
 
-/// Request to work on an issue
-#[derive(Debug, Deserialize, schemars::JsonSchema)]
-pub struct WorkIssueRequest {
-    /// Issue name to work on
-    pub name: swissarmyhammer_issues::IssueName,
-}
-
 /// Request to merge an issue
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct MergeIssueRequest {

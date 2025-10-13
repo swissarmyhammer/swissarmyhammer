@@ -41,6 +41,6 @@ pub use unified_server::{
 
 pub use types::{
     AllCompleteRequest, CreateIssueRequest, IssueName, MarkCompleteRequest, MergeIssueRequest,
-    UpdateIssueRequest, WorkIssueRequest,
+    UpdateIssueRequest,
 };
 pub use utils::validate_issue_name;
