@@ -15,10 +15,10 @@ Core file system operations for reading, writing, and manipulating files:
 ### Issue Management
 Git-integrated project management using markdown files:
 - `issue_create` - Create new issues as markdown files
-- `issue_work` - Switch to issue branch for development
-- `issue_complete` - Mark issues as complete and archive
+- `issue_mark_complete` - Mark issues as complete and archive
 - `issue_list` - List all issues with filtering
 - `issue_show` - Display issue details
+- `issue_update` - Update issue content
 
 ### Memo System
 Personal knowledge management with full-text search:

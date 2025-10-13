@@ -38,11 +38,8 @@ sah file grep --pattern "TODO" --output-mode content
 # Create issue
 sah issue create --content "# Bug Fix\n\nDetails..."
 
-# Start work
-sah issue work --name "FEATURE_000123_user-auth"
-
-# Complete issue
-sah issue complete --name "FEATURE_000123_user-auth"
+# Mark issue complete
+sah issue mark-complete --name "FEATURE_000123_user-auth"
 
 # List issues
 sah issue list
@@ -102,8 +99,7 @@ The CLI provides a direct mapping from MCP tools:
 | `files_glob` | `sah file glob` |
 | `files_grep` | `sah file grep` |
 | `issue_create` | `sah issue create` |
-| `issue_work` | `sah issue work` |
-| `issue_complete` | `sah issue complete` |
+| `issue_mark_complete` | `sah issue mark-complete` |
 | `memo_create` | `sah memo create` |
 | `memo_search` | `sah memo search` |
 | `search_index` | `sah search index` |

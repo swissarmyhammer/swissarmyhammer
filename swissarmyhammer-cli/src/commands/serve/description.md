@@ -122,7 +122,7 @@ Search and Navigation:
 
 Development Workflow:
 • issue_create, issue_show, issue_list - Issue tracking
-• issue_work, issue_merge - Git branch management
+• issue_mark_complete, issue_update - Issue management
 • todo_create, todo_show - Task tracking
 • memo_create, memo_get - Knowledge management
 

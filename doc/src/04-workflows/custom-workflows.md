@@ -137,9 +137,9 @@ transitions:
     append: true
 ```
 
-**Work on Issue**:
+**Show Issue**:
 ```yaml
-- type: issue_work
+- type: issue_show
   params:
     name: "{{ issue_name }}"
 ```
@@ -525,13 +525,12 @@ states:
   setup:
     actions:
       - type: create_issue
-      - type: issue_work
   implement:
     actions:
       - type: placeholder  # To be overridden
   finalize:
     actions:
-      - type: issue_complete
+      - type: issue_mark_complete
 
 # rust-development.md
 ---
@@ -668,10 +667,6 @@ states:
   implementation:
     description: "Core implementation phase"
     actions:
-      - type: issue_work
-        params:
-          name: "{{ feature_issue.name }}"
-      
       - type: shell_command
         params:
           command: "cargo check"
@@ -740,22 +735,17 @@ states:
             - ✅ Ready for review
           append: true
       
-      - type: issue_complete
+      - type: issue_mark_complete
         params:
           name: "{{ feature_issue.name }}"
     
     transitions:
-      approved: "merge"
+      complete: "finalize"
       needs_changes: "implementation"
 
-  merge:
-    description: "Merge completed feature"
+  finalize:
+    description: "Finalize completed feature"
     actions:
-      - type: issue_merge
-        params:
-          name: "{{ feature_issue.name }}"
-          delete_branch: true
-      
       - type: create_memo
         params:
           title: "Feature Complete: {{ feature_name }}"
@@ -838,10 +828,6 @@ states:
             
             ## Potential Fixes
             {{ fix_options }}
-      
-      - type: issue_work
-        params:
-          name: "{{ bug_issue.name }}"
     
     transitions:
       root_cause_found: "fix"
@@ -891,21 +877,16 @@ states:
             - ✅ Manual testing complete
           append: true
       
-      - type: issue_complete
+      - type: issue_mark_complete
         params:
           name: "{{ bug_issue.name }}"
     
     transitions:
-      validated: "deploy"
+      validated: "finalize"
 
-  deploy:
-    description: "Deploy fix"
+  finalize:
+    description: "Finalize bug fix"
     actions:
-      - type: issue_merge
-        params:
-          name: "{{ bug_issue.name }}"
-          delete_branch: true
-      
       - type: create_memo
         params:
           title: "Bug Fixed: {{ bug_description }}"

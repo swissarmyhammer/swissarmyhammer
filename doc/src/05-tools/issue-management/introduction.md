@@ -18,16 +18,23 @@ Issues are stored as markdown files in the `./issues` directory and can be:
 - Contain full context and requirements in markdown format
 
 ### Git Integration
-- Issues can be linked to work branches using `issue/<issue_name>` pattern
-- Automatic branch creation and switching
-- Merge capabilities to integrate completed work
+- Issues can be worked on from any branch
+- Use your preferred git workflow for branching and merging
+- The system tracks which issue you're currently working on
+
+## Working with Issues
+
+Issues can be worked on from any branch. The system tracks the "current issue" using a marker file (`.swissarmyhammer/.current_issue`) which allows you to:
+- Work on issues from any git branch
+- Switch between issues without branch management
+- Use your preferred git workflow
+
+Use `issue_show current` to see which issue you're currently working on.
 
 ## Available Tools
 
 - `issue_create` - Create new issues
-- `issue_work` - Switch to work branch for an issue
 - `issue_mark_complete` - Mark issues as complete
-- `issue_merge` - Merge issue branches
 - `issue_update` - Update issue content
 - `issue_all_complete` - Check completion status
 - `issue_list` - List all issues
