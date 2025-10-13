@@ -232,3 +232,100 @@ After this step, the entire refactoring is complete:
 - ✅ Prompts updated
 
 The system now operates without automatic git branching for issues.
+
+
+## Proposed Solution
+
+After analyzing the prompt files, I've identified exactly what needs to be changed:
+
+### Files Found with References
+1. `/Users/wballard/github/swissarmyhammer/builtin/prompts/issue/merge.md` - Line 15: references `issue_merge` tool
+2. `/Users/wballard/github/swissarmyhammer/builtin/prompts/issue/code.md` - Line 25: references `issue_work` tool
+
+No other prompt files reference the removed tools or branch-switching workflow.
+
+### Changes to Implement
+
+#### 1. Delete merge.md prompt (entire file)
+The merge prompt's sole purpose was to guide users through the `issue_merge` tool. Since that tool is removed, this prompt is obsolete and should be deleted.
+
+**File**: `builtin/prompts/issue/merge.md`
+**Action**: Delete
+
+#### 2. Update code.md prompt to remove issue_work reference
+The code prompt currently instructs users to use `issue_work` tool when no current issue exists. This needs to be updated to reflect the marker-based workflow.
+
+**File**: `builtin/prompts/issue/code.md`
+**Lines affected**: ~25 (the issue_work reference in the Process section)
+
+**Current logic**:
+```markdown
+- if there is no current issue
+  - use the issue_show next tool to determine which issue to work
+  - use the issue_work tool to establish the correct working branch
+```
+
+**New logic**:
+```markdown
+- if there is no current issue
+  - use the issue_show next tool to determine which issue to work
+  - proceed with coding on your current branch (the issue_show next tool will set the current marker)
+```
+
+**Rationale**: The `issue_show next` tool should handle setting the current marker automatically, so we don't need a separate branching step. Users can work on any branch they choose.
+
+### Testing Strategy
+1. After changes, run `cargo build` to ensure no compilation issues
+2. Run `cargo nextest run` to verify all tests pass
+3. Look for any prompt rendering tests and verify they still pass
+4. Final verification: search entire codebase for any remaining references to removed tools
+
+### Implementation Steps
+1. Delete `builtin/prompts/issue/merge.md`
+2. Edit `builtin/prompts/issue/code.md` to remove `issue_work` reference and update workflow
+3. Build and test
+4. Verify no remaining references exist
+
+### Expected Impact
+- Users will no longer see prompts referencing removed tools
+- Workflow guidance will be clearer and simpler
+- The refactoring will be complete from the user perspective
+
+
+
+## Implementation Notes
+
+### Changes Made
+
+1. **Deleted** `builtin/prompts/issue/merge.md`
+   - This prompt was entirely focused on using the now-removed `issue_merge` tool
+   - No longer needed in the marker-based workflow
+
+2. **Updated** `builtin/prompts/issue/code.md`
+   - Removed the line: `use the issue_work tool to establish the correct working branch`
+   - Replaced with: `proceed with coding on your current branch (the issue_show next tool will set the current marker)`
+   - This change reflects that users no longer need to switch branches; they can work on any branch
+
+3. **Updated** `swissarmyhammer/tests/test_builtin_prompt_rendering.rs`
+   - Removed `#[case("issue/merge")]` from the test cases for `test_builtin_prompt_renders_successfully`
+   - Removed `"issue/merge"` from the `expected_prompts` vector in `test_all_builtin_prompts_load_without_errors`
+   - These changes were necessary because the merge prompt no longer exists
+
+### Verification
+
+- **Compilation**: `cargo build` completed successfully
+- **Tests**: All 3325 tests pass after running `cargo nextest run`
+- **No remaining references**: Confirmed no other prompt files reference `issue_work` or `issue_merge`
+
+### Root Cause Analysis
+
+The test failures occurred because:
+1. The test explicitly checked for the presence of `issue/merge` prompt
+2. The test attempted to render the `issue/merge` prompt
+3. After deleting the merge.md file, these tests correctly failed
+
+The fix was straightforward: remove the expectations for a prompt that no longer exists.
+
+### Impact
+
+This completes Step 8 of the issue_work_cleanup refactoring. All prompts now guide users through the marker-based workflow without references to the removed `issue_work` and `issue_merge` tools. The workflow is simpler and more flexible, allowing users to work on any branch while still tracking which issue they're working on via the marker file.

@@ -14,7 +14,6 @@ use swissarmyhammer_prompts::{PromptLibrary, PromptResolver};
 #[case("issue/code")]
 #[case("issue/code_review")]
 #[case("issue/review")]
-#[case("issue/merge")]
 #[case("issue/complete")]
 #[case(".system")]
 fn test_builtin_prompt_renders_successfully(#[case] prompt_name: &str) {
@@ -80,7 +79,6 @@ fn test_all_builtin_prompts_load_without_errors() {
         "issue/code",
         "issue/code_review",
         "issue/review",
-        "issue/merge",
         "issue/complete",
         ".system",
         ".check",
