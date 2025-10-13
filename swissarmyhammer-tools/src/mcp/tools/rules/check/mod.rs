@@ -9,18 +9,16 @@ use rmcp::model::CallToolResult;
 use rmcp::ErrorData as McpError;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
-use swissarmyhammer_agent_executor::{
-    AgentExecutor, ClaudeCodeExecutor, LlamaAgentExecutorWrapper,
-};
+use swissarmyhammer_agent_executor::{AgentExecutor, ClaudeCodeExecutor, LlamaAgentExecutorWrapper};
 use swissarmyhammer_config::{AgentConfig, AgentExecutorConfig};
 use swissarmyhammer_rules::{RuleCheckRequest as DomainRuleCheckRequest, RuleChecker, Severity};
 use tokio::sync::OnceCell;
 
 /// Create an agent executor from agent configuration
 ///
-/// This factory function instantiates the appropriate agent executor type based on
-/// the provided configuration. It handles both ClaudeCode and LlamaAgent executors,
-/// initializing them appropriately for rule checking operations.
+/// Note: This is a simplified implementation for the MCP tool. The canonical implementation
+/// with full MCP server lifecycle management is in swissarmyhammer_workflow::actions::AgentExecutorFactory.
+/// This cannot use the workflow factory due to circular dependency (workflow depends on tools).
 ///
 /// # Arguments
 ///

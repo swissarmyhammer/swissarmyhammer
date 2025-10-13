@@ -81,7 +81,7 @@ pub struct RuleCheckRequest {
 /// use std::path::PathBuf;
 ///
 /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
-/// // Load agent configuration (respects SAH_AGENT_EXECUTOR env, defaults to ClaudeCode)
+/// // Load agent configuration from sah.yaml
 /// let workflow_context = WorkflowTemplateContext::load_with_agent_config()?;
 /// let agent_context = AgentExecutionContext::new(&workflow_context);
 ///
@@ -145,7 +145,7 @@ impl RuleChecker {
     /// use std::sync::Arc;
     ///
     /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
-    /// // Load agent configuration (respects SAH_AGENT_EXECUTOR env, defaults to ClaudeCode)
+    /// // Load agent configuration from sah.yaml
     /// let workflow_context = WorkflowTemplateContext::load_with_agent_config()?;
     /// let agent_context = AgentExecutionContext::new(&workflow_context);
     ///
@@ -396,10 +396,10 @@ impl RuleChecker {
 
         tracing::debug!("Stage 2 complete: .check prompt rendered");
 
-        // Execute via agent (LLM)
-        // Create a simple agent config for rule checking
+        // Execute via agent (LLM) with optimization for rule checking
+        // Skip tool discovery since rule checking doesn't need MCP tools
         let agent_config = swissarmyhammer_config::agent::AgentConfig::default();
-        let agent_context = AgentExecutionContext::new(&agent_config);
+        let agent_context = AgentExecutionContext::for_rule_checking(&agent_config);
 
         let response = self
             .agent

@@ -609,7 +609,7 @@ impl AgentExecutor for LlamaAgentExecutor {
         &self,
         system_prompt: String,
         rendered_prompt: String,
-        _context: &AgentExecutionContext<'_>,
+        context: &AgentExecutionContext<'_>,
     ) -> ActionResult<AgentResponse> {
         if !self.initialized {
             return Err(ActionError::ExecutionError(
@@ -624,8 +624,9 @@ impl AgentExecutor for LlamaAgentExecutor {
         };
 
         tracing::info!(
-            "Executing LlamaAgent with MCP server at {}",
-            mcp_server_info
+            "Executing LlamaAgent with MCP server at {} (skip_tools: {})",
+            mcp_server_info,
+            context.skip_tools()
         );
         tracing::debug!("System prompt length: {}", system_prompt.len());
         tracing::debug!("Rendered prompt length: {}", rendered_prompt.len());
@@ -645,6 +646,7 @@ impl AgentExecutor for LlamaAgentExecutor {
                     system_prompt,
                     rendered_prompt,
                     execution_start,
+                    context.skip_tools(),
                 )
                 .await;
         } else {
@@ -664,6 +666,7 @@ impl LlamaAgentExecutor {
         system_prompt: String,
         rendered_prompt: String,
         execution_start: std::time::Instant,
+        skip_tools: bool,
     ) -> ActionResult<AgentResponse> {
         // Create a new session
         let mut session = agent_server
@@ -671,11 +674,15 @@ impl LlamaAgentExecutor {
             .await
             .map_err(|e| ActionError::ExecutionError(format!("Failed to create session: {}", e)))?;
 
-        // Discover available tools
-        agent_server
-            .discover_tools(&mut session)
-            .await
-            .map_err(|e| ActionError::ExecutionError(format!("Failed to discover tools: {}", e)))?;
+        // Discover available tools only if needed (skipped for rule checking optimization)
+        if !skip_tools {
+            agent_server
+                .discover_tools(&mut session)
+                .await
+                .map_err(|e| ActionError::ExecutionError(format!("Failed to discover tools: {}", e)))?;
+        } else {
+            tracing::debug!("Skipping tool discovery for rule checking (optimization)");
+        }
 
         // Add system message if provided
         if !system_prompt.is_empty() {

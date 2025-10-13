@@ -161,8 +161,14 @@ impl McpServer {
         // Initialize tool handlers with memo storage
         let tool_handlers = ToolHandlers::new(memo_storage_arc.clone());
 
-        // Load agent configuration from environment or use default
-        let agent_config = Arc::new(AgentConfig::default());
+        // Load agent configuration from sah.yaml
+        let template_context = TemplateContext::load_for_cli().map_err(|e| {
+            tracing::warn!("Failed to load configuration, using default: {}", e);
+            SwissArmyHammerError::Other {
+                message: format!("Failed to load configuration: {}", e),
+            }
+        })?;
+        let agent_config = Arc::new(template_context.get_agent_config(None));
 
         // Initialize tool registry and context
         let mut tool_registry = ToolRegistry::new();

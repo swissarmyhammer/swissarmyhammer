@@ -14,12 +14,25 @@ use swissarmyhammer_config::agent::{AgentConfig, AgentExecutorType};
 pub struct AgentExecutionContext<'a> {
     /// Agent configuration
     agent_config: &'a AgentConfig,
+    /// Skip tool discovery for this execution (optimization for rule checking)
+    skip_tools: bool,
 }
 
 impl<'a> AgentExecutionContext<'a> {
     /// Create a new agent execution context with the given configuration
     pub fn new(agent_config: &'a AgentConfig) -> Self {
-        Self { agent_config }
+        Self {
+            agent_config,
+            skip_tools: false,
+        }
+    }
+
+    /// Create a new agent execution context optimized for rule checking (no tools)
+    pub fn for_rule_checking(agent_config: &'a AgentConfig) -> Self {
+        Self {
+            agent_config,
+            skip_tools: true,
+        }
     }
 
     /// Get agent configuration
@@ -35,5 +48,10 @@ impl<'a> AgentExecutionContext<'a> {
     /// Check if quiet mode is enabled
     pub fn quiet(&self) -> bool {
         self.agent_config.quiet
+    }
+
+    /// Check if tools should be skipped for this execution
+    pub fn skip_tools(&self) -> bool {
+        self.skip_tools
     }
 }

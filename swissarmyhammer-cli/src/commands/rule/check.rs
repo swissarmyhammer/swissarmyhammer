@@ -8,9 +8,11 @@ use crate::error::{CliError, CliResult};
 use sha2::{Digest, Sha256};
 use std::path::Path;
 use std::sync::Arc;
-use swissarmyhammer_agent_executor::AgentExecutor;
+use swissarmyhammer_agent_executor::{AgentExecutor, ClaudeCodeExecutor, LlamaAgentExecutorWrapper};
 use swissarmyhammer_config::agent::{AgentConfig, AgentExecutorConfig};
 use swissarmyhammer_issues::{FileSystemIssueStorage, IssueStorage};
+use swissarmyhammer_prompts::PromptLibrary;
+use swissarmyhammer_tools::mcp::unified_server::{start_mcp_server, McpServerMode};
 use futures_util::stream::StreamExt;
 use swissarmyhammer_rules::{CheckMode, RuleCheckRequest, RuleChecker, RuleViolation};
 
@@ -91,19 +93,23 @@ async fn execute_check_command_impl(
     request: CheckCommandRequest,
     context: &CliContext,
 ) -> CliResult<()> {
-    // Load agent configuration (respects SAH_AGENT_EXECUTOR env var, defaults to ClaudeCode)
-    // For tests, use provided config (LlamaAgent), otherwise use default
-    let agent_config = request.agent_config.unwrap_or_default();
+    // Load agent configuration from sah.yaml or use provided config for tests
+    let agent_config = if let Some(config) = request.agent_config {
+        config
+    } else {
+        // Load from configuration files (sah.yaml)
+        let template_context = swissarmyhammer_config::TemplateContext::load_for_cli()
+            .map_err(|e| CliError::new(format!("Failed to load configuration: {}", e), 1))?;
+        template_context.get_agent_config(None)
+    };
 
     // Create and initialize executor based on type
+    // Note: This duplicates logic from workflow::AgentExecutorFactory, but we can't use that
+    // due to duplicate AgentExecutor trait definitions between agent-executor and workflow crates.
     let executor: Box<dyn AgentExecutor> = match &agent_config.executor {
         AgentExecutorConfig::LlamaAgent(llama_config) => {
             // Start MCP server for LlamaAgent
-            use swissarmyhammer_agent_executor::llama::{
-                LlamaAgentExecutorWrapper, McpServerHandle,
-            };
-            use swissarmyhammer_prompts::PromptLibrary;
-            use swissarmyhammer_tools::mcp::unified_server::{start_mcp_server, McpServerMode};
+            use swissarmyhammer_agent_executor::llama::McpServerHandle;
 
             tracing::info!("Starting MCP server for LlamaAgent");
             let tools_mcp_handle = start_mcp_server(
@@ -125,12 +131,13 @@ async fn execute_check_command_impl(
             );
 
             // Convert tools McpServerHandle to agent-executor McpServerHandle
-            // The two types are structurally identical but from different crates.
-            // We create a dummy shutdown channel because the tools MCP handle manages
-            // the server lifecycle, and we only need the port/host info for the agent.
             let port = tools_mcp_handle.info.port.unwrap_or(0);
-            let (dummy_tx, _dummy_rx) = tokio::sync::oneshot::channel();
-            let agent_mcp_handle = McpServerHandle::new(port, "127.0.0.1".to_string(), dummy_tx);
+            let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
+
+            // Store the shutdown receiver to prevent premature server shutdown
+            let _server_keepalive = shutdown_rx;
+
+            let agent_mcp_handle = McpServerHandle::new(port, "127.0.0.1".to_string(), shutdown_tx);
 
             let mut exec = LlamaAgentExecutorWrapper::new_with_mcp(
                 llama_config.clone(),
@@ -142,11 +149,15 @@ async fn execute_check_command_impl(
                     1,
                 )
             })?;
+
+            // Keep MCP server alive by leaking the handles
+            // This prevents the server from shutting down while the agent is in use
+            std::mem::forget(_server_keepalive);
+            std::mem::forget(tools_mcp_handle);
+
             Box::new(exec)
         }
         AgentExecutorConfig::ClaudeCode(_claude_config) => {
-            use swissarmyhammer_agent_executor::ClaudeCodeExecutor;
-
             tracing::info!("Using ClaudeCode executor for rule checking");
             let mut exec = ClaudeCodeExecutor::new();
             exec.initialize().await.map_err(|e| {

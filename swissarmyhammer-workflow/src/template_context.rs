@@ -77,71 +77,19 @@ impl WorkflowTemplateContext {
         Self::with_vars_for_test(vars)
     }
 
-    /// Load workflow template context with agent configuration from environment/config
+    /// Load workflow template context with agent configuration from sah.yaml
     pub fn load_with_agent_config() -> ConfigurationResult<Self> {
-        let mut context = Self::load_for_cli()?;
+        let context = Self::load_for_cli()?;
 
-        // Check for agent configuration in environment or config files
-        if let Ok(executor_type) = std::env::var("SAH_AGENT_EXECUTOR") {
-            match executor_type.as_str() {
-                "claude-code" => {
-                    context.set_agent_config(AgentConfig::claude_code());
-                }
-                "llama-agent" => {
-                    let llama_config = Self::load_llama_config_from_env()?;
-                    let mut config = AgentConfig::llama_agent(llama_config);
-                    config.quiet = std::env::var("SAH_QUIET")
-                        .map(|v| v == "true")
-                        .unwrap_or(false);
-                    context.set_agent_config(config);
-                }
-                _ => {
-                    // Default to Claude Code for unknown types
-                    context.set_agent_config(AgentConfig::default());
-                }
-            }
-        } else {
-            // Default configuration
-            context.set_agent_config(AgentConfig::default());
-        }
+        // Agent configuration is already loaded from sah.yaml via TemplateContext::load_for_cli()
+        // No need to set it again - get_agent_config() will read from the loaded template context
 
         // Set model name for prompt rendering
         let model_name = context.get_model_name();
+        let mut context = context;
         context.set_model_name(model_name);
 
         Ok(context)
-    }
-
-    /// Load LlamaAgent configuration from environment variables
-    fn load_llama_config_from_env() -> ConfigurationResult<LlamaAgentConfig> {
-        let model_repo = std::env::var("SAH_LLAMA_MODEL_REPO")
-            .unwrap_or_else(|_| "unsloth/Qwen3-Coder-30B-A3B-Instruct-GGUF".to_string());
-        let model_filename = std::env::var("SAH_LLAMA_MODEL_FILENAME").ok();
-        let mcp_port = std::env::var("SAH_LLAMA_MCP_PORT")
-            .ok()
-            .and_then(|p| p.parse().ok())
-            .unwrap_or(0);
-        let mcp_timeout = std::env::var("SAH_LLAMA_MCP_TIMEOUT")
-            .ok()
-            .and_then(|t| t.parse().ok())
-            .unwrap_or(30);
-
-        Ok(LlamaAgentConfig {
-            model: ModelConfig {
-                source: ModelSource::HuggingFace {
-                    repo: model_repo,
-                    filename: model_filename,
-                    folder: None,
-                },
-                ..Default::default()
-            },
-            mcp_server: McpServerConfig {
-                port: mcp_port,
-                timeout_seconds: mcp_timeout,
-            },
-
-            repetition_detection: Default::default(),
-        })
     }
 
     /// Initialize a workflow context HashMap with template variables
@@ -785,19 +733,4 @@ mod tests {
         assert_eq!(model_name, "/path/to/model.gguf");
     }
 
-    #[test]
-    fn test_load_llama_config_from_env() {
-        // Test with default values (no env vars set)
-        let config = WorkflowTemplateContext::load_llama_config_from_env().unwrap();
-
-        match config.model.source {
-            ModelSource::HuggingFace { repo, filename, .. } => {
-                assert_eq!(repo, "unsloth/Qwen3-Coder-30B-A3B-Instruct-GGUF");
-                assert!(filename.is_none());
-            }
-            ModelSource::Local { .. } => panic!("Default should be HuggingFace"),
-        }
-        assert_eq!(config.mcp_server.port, 0);
-        assert_eq!(config.mcp_server.timeout_seconds, 30);
-    }
 }

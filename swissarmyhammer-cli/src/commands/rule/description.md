@@ -115,13 +115,18 @@ Use global arguments to control output:
 
 AGENT CONFIGURATION
 
-Rule checking uses AI agents configured via SAH_AGENT_EXECUTOR environment
-variable or .swissarmyhammer/sah.yaml. The default is ClaudeCode integration.
+Rule checking uses AI agents configured in .swissarmyhammer/sah.yaml.
+The default is Claude Code if no configuration is present.
 
-To use a different agent:
-  export SAH_AGENT_EXECUTOR=llama
-  sah rule check "**/*.rs"
-
-Or configure in your project:
+To configure an agent for your project:
   sah agent use qwen-coder
   sah rule check "**/*.rs"
+
+Or edit .swissarmyhammer/sah.yaml directly:
+  agent:
+    executor:
+      type: llama-agent
+      config:
+        model:
+          source: !HuggingFace
+            repo: unsloth/Qwen3-Coder-30B-A3B-Instruct-GGUF
