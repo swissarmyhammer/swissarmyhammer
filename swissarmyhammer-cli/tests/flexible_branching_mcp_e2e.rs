@@ -1,6 +1,6 @@
 //! End-to-end MCP tool tests for flexible base branch support
 //!
-//! This module tests the MCP tools (issue_work, issue_merge, etc.) with flexible branching.
+//! This module tests the MCP tools with flexible branching.
 
 use git2::Repository;
 use swissarmyhammer_git::git2_utils;
