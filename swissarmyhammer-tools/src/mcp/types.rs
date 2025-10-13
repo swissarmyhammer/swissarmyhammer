@@ -75,16 +75,6 @@ pub struct UpdateIssueRequest {
     pub append: bool,
 }
 
-/// Request to merge an issue
-#[derive(Debug, Deserialize, schemars::JsonSchema)]
-pub struct MergeIssueRequest {
-    /// Issue name to merge
-    pub name: swissarmyhammer_issues::IssueName,
-    /// Whether to delete the branch after merging (default: false)
-    #[serde(default)]
-    pub delete_branch: bool,
-}
-
 // Re-export IssueName for convenience
 pub use swissarmyhammer_issues::IssueName;
 

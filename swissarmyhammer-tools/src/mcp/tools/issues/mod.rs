@@ -11,7 +11,6 @@
 //! 1. **Creation**: `create` tool generates numbered issues (e.g., `000123_feature_name.md`)
 //! 2. **Updates**: `update` tool modifies issue content and tracking information
 //! 3. **Completion**: `mark_complete` tool moves issues to `./issues/complete/`
-//! 4. **Integration**: `merge` tool integrates completed work back to source branch
 //!
 //! ## Tool Implementation Pattern
 //!
@@ -61,13 +60,11 @@
 //! - **mark_complete**: Mark issues as completed and archive them
 //! - **all_complete**: Check if all pending issues are completed
 //! - **update**: Modify existing issue content and metadata
-//! - **merge**: Merge completed issue work back to source branch
 
 pub mod all_complete;
 pub mod create;
 pub mod list;
 pub mod mark_complete;
-pub mod merge;
 pub mod show;
 pub mod update;
 
@@ -81,5 +78,4 @@ pub fn register_issue_tools(registry: &mut ToolRegistry) {
     registry.register(all_complete::AllCompleteIssueTool::new());
     registry.register(show::ShowIssueTool::new());
     registry.register(update::UpdateIssueTool::new());
-    registry.register(merge::MergeIssueTool::new());
 }
