@@ -69,6 +69,7 @@
 //! ```
 
 pub mod config;
+pub mod current_marker;
 pub mod error;
 pub mod metrics;
 pub mod storage;

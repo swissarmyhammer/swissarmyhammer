@@ -370,7 +370,7 @@ async fn start_stdio_server(library: Option<PromptLibrary>) -> Result<McpServerH
 
     // Create shutdown channel for cleanup coordination
     let (shutdown_tx, mut shutdown_rx) = oneshot::channel();
-    
+
     // Create completion channel to signal when server exits naturally
     let (completion_tx, completion_rx) = oneshot::channel();
 
@@ -513,7 +513,7 @@ async fn start_http_server(
                 tracing::info!("HTTP server received shutdown signal");
             })
             .await;
-        
+
         match result {
             Ok(_) => {
                 tracing::info!("HTTP server stopped successfully");
@@ -543,12 +543,6 @@ async fn start_http_server(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[tokio::test]
-    #[test_log::test]
-    async fn trace_this() {
-        tracing::info!("test_http_server_creation_and_info");
-    }
 
     #[tokio::test]
     #[test_log::test]
@@ -704,7 +698,10 @@ mod tests {
         let mut server = start_mcp_server(mode, None).await.unwrap();
 
         // Server should have a task handle for stdio mode
-        assert!(server.has_server_task(), "Stdio server should have task handle");
+        assert!(
+            server.has_server_task(),
+            "Stdio server should have task handle"
+        );
 
         // Shutdown and wait for completion should succeed within timeout
         server.shutdown().await.unwrap();
@@ -712,11 +709,18 @@ mod tests {
         // Use timeout to prevent hanging if server doesn't shut down
         let completion_result = tokio::time::timeout(
             tokio::time::Duration::from_secs(2),
-            server.wait_for_completion()
-        ).await;
+            server.wait_for_completion(),
+        )
+        .await;
 
-        assert!(completion_result.is_ok(), "Server task should complete within timeout");
-        assert!(completion_result.unwrap().is_ok(), "Server task should complete cleanly");
+        assert!(
+            completion_result.is_ok(),
+            "Server task should complete within timeout"
+        );
+        assert!(
+            completion_result.unwrap().is_ok(),
+            "Server task should complete cleanly"
+        );
     }
 
     // NOTE: Multiple concurrent server test removed to avoid port conflicts and timeouts

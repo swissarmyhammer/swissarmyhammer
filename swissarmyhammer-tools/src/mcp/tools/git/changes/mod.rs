@@ -123,7 +123,7 @@ impl McpTool for GitChangesTool {
             let branch_name = BranchName::new(&request.branch).map_err(|e| {
                 rmcp::ErrorData::invalid_params(format!("Invalid branch name: {}", e), None)
             })?;
-            
+
             // Try to find merge target, but if it returns the branch itself or fails, treat as no parent
             match git_ops.find_merge_target_for_issue(&branch_name) {
                 Ok(target) if target != request.branch => Some(target),
