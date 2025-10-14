@@ -34,7 +34,7 @@
 - [Overview](05-tools/overview.md)
 - [File Operations](05-tools/file-tools/introduction.md)
   - [files_read](05-tools/file-tools/read.md)
-  - [files_write](05-tools/file-tools/write.md)  
+  - [files_write](05-tools/file-tools/write.md)
   - [files_edit](05-tools/file-tools/edit.md)
   - [files_glob](05-tools/file-tools/glob.md)
   - [files_grep](05-tools/file-tools/grep.md)
@@ -86,7 +86,6 @@
 
 - [Performance Guide](performance.md)
 - [Plugin System](plugins.md)
-- [Built-in Resources](builtin-resources.md)
 - [Issues System](issues.md)
 - [Search System](search.md)
 - [Memoranda System](memoranda.md)
