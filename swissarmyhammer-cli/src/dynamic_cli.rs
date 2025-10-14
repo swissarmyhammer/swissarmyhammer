@@ -1316,6 +1316,12 @@ Run rules against code files and report violations.
                             .long("no-fail-fast")
                             .help("Continue checking all rules and files even when violations are found")
                             .action(ArgAction::SetTrue),
+                    )
+                    .arg(
+                        Arg::new("force")
+                            .long("force")
+                            .help("Force re-evaluation, bypassing cache")
+                            .action(ArgAction::SetTrue),
                     ),
             )
     }

@@ -197,6 +197,7 @@ async fn execute_check_command_impl(
         category: request.cmd.category,
         patterns: request.cmd.patterns,
         check_mode,
+        force: request.cmd.force,
     };
 
     // All modes now use the unified streaming check API
@@ -417,6 +418,7 @@ mod tests {
             category: None,
             create_issues: false,
             no_fail_fast: false,
+            force: false,
         };
 
         let request = CheckCommandRequest::with_config(cmd, setup_test_agent_config());
@@ -436,6 +438,7 @@ mod tests {
             category: None,
             create_issues: false,
             no_fail_fast: false,
+            force: false,
         };
 
         let request = CheckCommandRequest::with_config(cmd, setup_test_agent_config());
@@ -455,6 +458,7 @@ mod tests {
             category: None,
             create_issues: false,
             no_fail_fast: false,
+            force: false,
         };
 
         let request = CheckCommandRequest::with_config(cmd, setup_test_agent_config());
@@ -474,6 +478,7 @@ mod tests {
             category: Some("security".to_string()),
             create_issues: false,
             no_fail_fast: false,
+            force: false,
         };
 
         let request = CheckCommandRequest::with_config(cmd, setup_test_agent_config());
@@ -493,6 +498,7 @@ mod tests {
             category: None,
             create_issues: false,
             no_fail_fast: false,
+            force: false,
         };
 
         let request = CheckCommandRequest::with_config(cmd, setup_test_agent_config());
@@ -512,6 +518,7 @@ mod tests {
             category: Some("security".to_string()),
             create_issues: false,
             no_fail_fast: false,
+            force: false,
         };
 
         let request = CheckCommandRequest::with_config(cmd, setup_test_agent_config());
@@ -531,6 +538,7 @@ mod tests {
             category: None,
             create_issues: false,
             no_fail_fast: false,
+            force: false,
         };
 
         // Request ClaudeCode - it should work now without fallback
@@ -792,6 +800,7 @@ mod tests {
             category: None,
             create_issues: true,
             no_fail_fast: false,
+            force: false,
         };
 
         let request = CheckCommandRequest::with_config(cmd, setup_test_agent_config());
@@ -811,6 +820,7 @@ mod tests {
             category: None,
             create_issues: false,
             no_fail_fast: true,
+            force: false,
         };
 
         let request = CheckCommandRequest::with_config(cmd, setup_test_agent_config());
@@ -830,6 +840,7 @@ mod tests {
             category: None,
             create_issues: true,
             no_fail_fast: true,
+            force: false,
         };
 
         let request = CheckCommandRequest::with_config(cmd, setup_test_agent_config());

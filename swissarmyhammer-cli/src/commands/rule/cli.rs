@@ -37,6 +37,7 @@ pub struct CheckCommand {
     pub category: Option<String>,
     pub create_issues: bool,
     pub no_fail_fast: bool,
+    pub force: bool,
 }
 
 /// Cache command for managing the rule evaluation cache.
@@ -110,6 +111,7 @@ pub fn parse_rule_command(matches: &ArgMatches) -> RuleCommand {
                 category: sub_matches.get_one::<String>("category").cloned(),
                 create_issues: sub_matches.get_flag("create-issues"),
                 no_fail_fast: sub_matches.get_flag("no-fail-fast"),
+                force: sub_matches.get_flag("force"),
             };
             RuleCommand::Check(check_cmd)
         }
@@ -215,6 +217,11 @@ mod tests {
                         Arg::new("no-fail-fast")
                             .long("no-fail-fast")
                             .action(ArgAction::SetTrue),
+                    )
+                    .arg(
+                        Arg::new("force")
+                            .long("force")
+                            .action(ArgAction::SetTrue),
                     ),
             )
             .try_get_matches_from(["rule", "check", "file1.rs", "file2.rs"])
@@ -229,6 +236,7 @@ mod tests {
                 assert_eq!(check_cmd.category, None);
                 assert!(!check_cmd.create_issues);
                 assert!(!check_cmd.no_fail_fast);
+                assert!(!check_cmd.force);
             }
             _ => panic!("Expected Check command"),
         }
@@ -257,6 +265,11 @@ mod tests {
                         Arg::new("no-fail-fast")
                             .long("no-fail-fast")
                             .action(ArgAction::SetTrue),
+                    )
+                    .arg(
+                        Arg::new("force")
+                            .long("force")
+                            .action(ArgAction::SetTrue),
                     ),
             )
             .try_get_matches_from([
@@ -278,6 +291,7 @@ mod tests {
                 assert_eq!(check_cmd.category, Some("security".to_string()));
                 assert!(!check_cmd.create_issues);
                 assert!(!check_cmd.no_fail_fast);
+                assert!(!check_cmd.force);
             }
             _ => panic!("Expected Check command"),
         }
@@ -325,6 +339,7 @@ mod tests {
             category: Some("security".to_string()),
             create_issues: false,
             no_fail_fast: false,
+            force: false,
         };
 
         match RuleCommand::Check(check_cmd) {
@@ -335,6 +350,7 @@ mod tests {
                 assert_eq!(cmd.category, Some("security".to_string()));
                 assert!(!cmd.create_issues);
                 assert!(!cmd.no_fail_fast);
+                assert!(!cmd.force);
             }
             _ => panic!("CheckCommand should match RuleCommand::Check"),
         }
@@ -382,6 +398,11 @@ mod tests {
                         Arg::new("no-fail-fast")
                             .long("no-fail-fast")
                             .action(ArgAction::SetTrue),
+                    )
+                    .arg(
+                        Arg::new("force")
+                            .long("force")
+                            .action(ArgAction::SetTrue),
                     ),
             )
             .try_get_matches_from(["rule", "check", "--create-issues", "file.rs"])
@@ -393,6 +414,7 @@ mod tests {
                 assert_eq!(check_cmd.patterns, vec!["file.rs"]);
                 assert!(check_cmd.create_issues);
                 assert!(!check_cmd.no_fail_fast);
+                assert!(!check_cmd.force);
             }
             _ => panic!("Expected Check command"),
         }
@@ -421,6 +443,11 @@ mod tests {
                         Arg::new("no-fail-fast")
                             .long("no-fail-fast")
                             .action(ArgAction::SetTrue),
+                    )
+                    .arg(
+                        Arg::new("force")
+                            .long("force")
+                            .action(ArgAction::SetTrue),
                     ),
             )
             .try_get_matches_from(["rule", "check", "--no-fail-fast", "file.rs"])
@@ -432,6 +459,7 @@ mod tests {
                 assert_eq!(check_cmd.patterns, vec!["file.rs"]);
                 assert!(!check_cmd.create_issues);
                 assert!(check_cmd.no_fail_fast);
+                assert!(!check_cmd.force);
             }
             _ => panic!("Expected Check command"),
         }
@@ -460,6 +488,11 @@ mod tests {
                         Arg::new("no-fail-fast")
                             .long("no-fail-fast")
                             .action(ArgAction::SetTrue),
+                    )
+                    .arg(
+                        Arg::new("force")
+                            .long("force")
+                            .action(ArgAction::SetTrue),
                     ),
             )
             .try_get_matches_from([
@@ -477,6 +510,7 @@ mod tests {
                 assert_eq!(check_cmd.patterns, vec!["file.rs"]);
                 assert!(check_cmd.create_issues);
                 assert!(check_cmd.no_fail_fast);
+                assert!(!check_cmd.force);
             }
             _ => panic!("Expected Check command"),
         }

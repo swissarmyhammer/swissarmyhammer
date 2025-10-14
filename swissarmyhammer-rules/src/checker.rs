@@ -62,6 +62,8 @@ pub struct RuleCheckRequest {
     pub patterns: Vec<String>,
     /// Check mode controlling fail-fast behavior
     pub check_mode: CheckMode,
+    /// Force re-evaluation, bypassing cache
+    pub force: bool,
 }
 
 /// Core rule checker that performs two-stage rendering and executes checks via LLM agent
@@ -759,6 +761,7 @@ mod tests {
             category: None,
             patterns: vec!["/nonexistent/**/*.rs".to_string()],
             check_mode: CheckMode::FailFast,
+            force: false,
         };
 
         let mut stream = checker.check(request).await.expect("Should create empty stream");
@@ -917,6 +920,7 @@ mod tests {
             category: None,
             patterns: vec!["test.rs".to_string()],
             check_mode: CheckMode::FailFast,
+            force: false,
         };
 
         let mut stream = checker.check(request).await.expect("Should create stream");
@@ -936,6 +940,7 @@ mod tests {
             category: None,
             patterns: vec!["test.rs".to_string()],
             check_mode: CheckMode::FailFast,
+            force: false,
         };
 
         let mut stream = checker.check(request).await.expect("Should create stream");
@@ -957,6 +962,7 @@ mod tests {
             category: None,
             patterns: vec!["test.rs".to_string()],
             check_mode: CheckMode::CollectAll,
+            force: false,
         };
 
         let mut stream = checker.check(request).await.expect("Should create stream");

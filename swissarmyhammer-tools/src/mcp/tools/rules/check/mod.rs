@@ -207,6 +207,7 @@ impl McpTool for RuleCheckTool {
                 .clone()
                 .unwrap_or_else(|| vec!["**/*.*".to_string()]),
             check_mode: swissarmyhammer_rules::CheckMode::FailFast,
+            force: false, // MCP tool doesn't expose force flag yet
         };
 
         tracing::info!("Domain request patterns: {:?}", domain_request.patterns);
