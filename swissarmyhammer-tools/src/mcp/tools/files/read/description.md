@@ -8,12 +8,14 @@ Read file contents from the local filesystem with partial reading support.
 
 ## Examples
 
+Read entire file:
 ```json
 {
   "path": "/workspace/src/main.rs"
 }
 ```
 
+Read partial file with offset and limit:
 ```json
 {
   "path": "logs/application.log",

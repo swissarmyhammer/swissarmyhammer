@@ -7,12 +7,14 @@ Display details of a specific issue by name.
 
 ## Examples
 
+Show a specific issue by name:
 ```json
 {
   "name": "FEATURE_000123_user-auth"
 }
 ```
 
+Show the current issue for the active git branch:
 ```json
 {
   "name": "current"

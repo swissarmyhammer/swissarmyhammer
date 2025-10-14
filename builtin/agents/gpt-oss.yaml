@@ -1,0 +1,8 @@
+quiet: false
+executor:
+  type: llama-agent
+  config:
+    model:
+      source: !HuggingFace
+        repo: "unsloth/gpt-oss-120b-GGUF"
+        folder: "Q4_K_M"
