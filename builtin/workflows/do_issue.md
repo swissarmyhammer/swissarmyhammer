@@ -16,8 +16,7 @@ stateDiagram-v2
     code_review --> test
     test --> complete
     complete --> commit
-    commit --> merge
-    merge --> [*]
+    commit --> [*]
 ```
 
 ## Actions
@@ -29,7 +28,6 @@ stateDiagram-v2
 - test: run workflow "tdd"
 - complete: execute prompt "issue/complete"
 - commit: execute prompt "commit"
-- merge: execute prompt "issue/merge"
 
 ## Description
 

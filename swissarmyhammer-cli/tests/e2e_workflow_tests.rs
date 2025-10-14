@@ -265,26 +265,8 @@ async fn show_and_update_issue(working_dir: &std::path::Path) -> Result<()> {
     Ok(())
 }
 
-/// Helper function to work on issue and verify branch switching (optimized)
-async fn work_on_issue(working_dir: &std::path::Path) -> Result<()> {
-    // Work on the issue (creates git branch)
-    let work_result = run_sah_command_in_process_with_dir(
-        &["issue", "work", "--name", "e2e_lifecycle_test"],
-        working_dir,
-    )
-    .await?;
-    assert_eq!(work_result.exit_code, 0, "Issue work should succeed");
-
-    // Skip current issue verification to reduce subprocess calls
-    // The work success implies branch switching worked correctly
-    // Original verification: run_sah_command_in_process_with_dir(&["issue", "show", "--name", "current"], working_dir)
-    // This saves another ~0.5-1 second subprocess call
-
-    Ok(())
-}
-
-/// Helper function to complete, merge, and validate final issue state (optimized)
-async fn complete_and_merge_issue(working_dir: &std::path::Path) -> Result<()> {
+/// Helper function to complete issue and validate final state (optimized)
+async fn complete_issue(working_dir: &std::path::Path) -> Result<()> {
     // Complete the issue
     let complete_result = run_sah_command_in_process_with_dir(
         &["issue", "complete", "--name", "e2e_lifecycle_test"],
@@ -296,19 +278,14 @@ async fn complete_and_merge_issue(working_dir: &std::path::Path) -> Result<()> {
         "Issue complete should succeed"
     );
 
-    // Merge the issue
-    let merge_result = run_sah_command_in_process_with_dir(
-        &["issue", "merge", "--name", "e2e_lifecycle_test"],
-        working_dir,
-    )
-    .await?;
-    assert_eq!(merge_result.exit_code, 0, "Issue merge should succeed");
+    // Note: issue_merge requires being on an issue branch, which the removed issue_work tool would have created.
+    // Since we're testing the lifecycle without automatic branch management, we skip the merge step.
+    // Users who want branch-based workflows can manually create and manage branches.
 
     // Skip final verification list to reduce subprocess calls
-    // The complete and merge success implies the workflow completed correctly
+    // The complete success implies the workflow completed correctly
     // Original verification: run_sah_command_in_process_with_dir(&["issue", "list", "--show_completed"], working_dir)
     // This saves the final ~0.5-1 second subprocess call
-    // Total saved: ~2-4 seconds from removing 4 verification subprocess calls
 
     Ok(())
 }
@@ -374,8 +351,8 @@ async fn test_complete_issue_lifecycle() -> Result<()> {
     // Execute lifecycle steps using helper functions with explicit working directory
     create_and_validate_issue(test_env.path()).await?;
     show_and_update_issue(test_env.path()).await?;
-    work_on_issue(test_env.path()).await?;
-    complete_and_merge_issue(test_env.path()).await?;
+    // Note: issue_work tool has been removed - users now manually manage branches if needed
+    complete_issue(test_env.path()).await?;
 
     Ok(())
 }

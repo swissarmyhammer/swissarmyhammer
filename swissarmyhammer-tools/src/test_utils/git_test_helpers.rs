@@ -70,22 +70,34 @@ impl TestGitRepo {
         let tree_id = index.write_tree().expect("Failed to write tree");
         let tree = self.repo.find_tree(tree_id).expect("Failed to find tree");
 
-        let signature =
-            git2::Signature::now("Test User", "test@example.com").expect("Failed to create signature");
+        let signature = git2::Signature::now("Test User", "test@example.com")
+            .expect("Failed to create signature");
 
         // Get parent commit if this isn't the first commit
         let parent_commit = match self.repo.head() {
             Ok(head) => {
                 let parent_oid = head.target().expect("Failed to get head target");
-                Some(self.repo.find_commit(parent_oid).expect("Failed to find parent commit"))
+                Some(
+                    self.repo
+                        .find_commit(parent_oid)
+                        .expect("Failed to find parent commit"),
+                )
             }
             Err(_) => None, // First commit
         };
 
-        let parents: Vec<&git2::Commit> = parent_commit.as_ref().map(|c| vec![c]).unwrap_or_default();
+        let parents: Vec<&git2::Commit> =
+            parent_commit.as_ref().map(|c| vec![c]).unwrap_or_default();
 
         self.repo
-            .commit(Some("HEAD"), &signature, &signature, message, &tree, &parents)
+            .commit(
+                Some("HEAD"),
+                &signature,
+                &signature,
+                message,
+                &tree,
+                &parents,
+            )
             .expect("Failed to create commit")
     }
 

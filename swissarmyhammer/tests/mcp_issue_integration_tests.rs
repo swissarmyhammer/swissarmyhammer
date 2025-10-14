@@ -116,6 +116,32 @@ async fn test_complete_issue_workflow() {
     assert_eq!(active_issues.len(), 1);
     assert!(!active_issues[0].completed);
 
+    // Step 2.5: Verify no current issue marker initially
+    let current_issue =
+        swissarmyhammer_issues::current_marker::get_current_issue_in(env.temp_dir.path());
+    assert!(
+        current_issue.is_ok(),
+        "Should be able to check current issue"
+    );
+    assert_eq!(
+        current_issue.unwrap(),
+        None,
+        "Should have no current issue initially"
+    );
+
+    // Step 2.6: Set the current issue marker to simulate starting work
+    swissarmyhammer_issues::current_marker::set_current_issue_in(issue_name, env.temp_dir.path())
+        .expect("Failed to set current issue marker");
+
+    // Verify marker was set
+    let current_issue =
+        swissarmyhammer_issues::current_marker::get_current_issue_in(env.temp_dir.path());
+    assert_eq!(
+        current_issue.unwrap(),
+        Some(issue_name.clone()),
+        "Current issue marker should be set"
+    );
+
     // Step 3: Start working on the issue (test git operations)
     let git_ops = env.git_ops.lock().await;
     if let Some(git) = git_ops.as_ref() {
@@ -126,6 +152,15 @@ async fn test_complete_issue_workflow() {
         assert_eq!(current_branch, branch_name);
     }
     drop(git_ops);
+
+    // Verify marker persists after branch creation
+    let current_issue =
+        swissarmyhammer_issues::current_marker::get_current_issue_in(env.temp_dir.path());
+    assert_eq!(
+        current_issue.unwrap(),
+        Some(issue_name.clone()),
+        "Marker should persist after branch creation"
+    );
 
     // Step 4: Update the issue with progress
     let updated_issue = env.issue_storage.write().await
@@ -139,6 +174,15 @@ async fn test_complete_issue_workflow() {
     assert!(updated_issue
         .content
         .contains("JWT authentication implementation completed"));
+
+    // Verify marker persists after issue update
+    let current_issue =
+        swissarmyhammer_issues::current_marker::get_current_issue_in(env.temp_dir.path());
+    assert_eq!(
+        current_issue.unwrap(),
+        Some(issue_name.clone()),
+        "Marker should persist after issue update"
+    );
 
     // Step 5: Mark issue as complete
     let _completed_issue = env
@@ -181,6 +225,20 @@ async fn test_complete_issue_workflow() {
         let main_branch = git.main_branch().unwrap();
         assert_eq!(current_branch, main_branch);
     }
+    drop(git_ops);
+
+    // Step 8: Clear the marker after workflow completion
+    swissarmyhammer_issues::current_marker::clear_current_issue_in(env.temp_dir.path())
+        .expect("Failed to clear current issue marker");
+
+    // Verify marker was cleared
+    let current_issue =
+        swissarmyhammer_issues::current_marker::get_current_issue_in(env.temp_dir.path());
+    assert_eq!(
+        current_issue.unwrap(),
+        None,
+        "Marker should be cleared after workflow completion"
+    );
 }
 
 #[tokio::test]

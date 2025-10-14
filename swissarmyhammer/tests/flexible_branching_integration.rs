@@ -395,6 +395,36 @@ async fn test_release_branch_issue_workflow() {
             .expect("Failed to create hotfix issue");
     }
 
+    // Verify no current issue marker initially
+    let current_issue =
+        swissarmyhammer_issues::current_marker::get_current_issue_in(env.temp_dir.path());
+    assert!(
+        current_issue.is_ok(),
+        "Should be able to check current issue"
+    );
+    assert_eq!(
+        current_issue.unwrap(),
+        None,
+        "Should have no current issue initially"
+    );
+
+    // Set the current issue marker to simulate starting work
+    swissarmyhammer_issues::current_marker::set_current_issue_in(&issue_name, env.temp_dir.path())
+        .expect("Failed to set current issue marker");
+
+    // Verify marker was set
+    let current_issue =
+        swissarmyhammer_issues::current_marker::get_current_issue_in(env.temp_dir.path());
+    assert!(
+        current_issue.is_ok(),
+        "Should be able to read current issue"
+    );
+    assert_eq!(
+        current_issue.unwrap(),
+        Some(issue_name.clone()),
+        "Current issue marker should be set"
+    );
+
     // Create issue branch from release branch (should use current branch)
     {
         let git_ops = env.git_ops.lock().await;
@@ -403,6 +433,15 @@ async fn test_release_branch_issue_workflow() {
 
         assert_eq!(branch_name, "issue/critical-bugfix");
     }
+
+    // Verify marker persists after branch creation
+    let current_issue =
+        swissarmyhammer_issues::current_marker::get_current_issue_in(env.temp_dir.path());
+    assert_eq!(
+        current_issue.unwrap(),
+        Some(issue_name.clone()),
+        "Marker should persist after branch creation"
+    );
 
     // Make hotfix changes
     std::fs::write(
@@ -445,6 +484,19 @@ async fn test_release_branch_issue_workflow() {
         let git = git_ops.as_ref().unwrap();
         git.merge_issue_branch(&issue_name, "release/v1.0").unwrap();
     }
+
+    // Clear the marker after merge (simulating workflow completion)
+    swissarmyhammer_issues::current_marker::clear_current_issue_in(env.temp_dir.path())
+        .expect("Failed to clear current issue marker");
+
+    // Verify marker was cleared
+    let current_issue =
+        swissarmyhammer_issues::current_marker::get_current_issue_in(env.temp_dir.path());
+    assert_eq!(
+        current_issue.unwrap(),
+        None,
+        "Marker should be cleared after workflow completion"
+    );
 
     // Verify final state on release branch
     {

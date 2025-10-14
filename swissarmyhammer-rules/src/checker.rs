@@ -274,7 +274,11 @@ impl RuleChecker {
     /// # Ok(())
     /// # }
     /// ```
-    pub async fn check_file(&self, rule: &Rule, target_path: &Path) -> Result<Option<RuleViolation>> {
+    pub async fn check_file(
+        &self,
+        rule: &Rule,
+        target_path: &Path,
+    ) -> Result<Option<RuleViolation>> {
         tracing::debug!(
             "Checking file {} against rule {}",
             target_path.display(),
@@ -614,7 +618,7 @@ impl RuleChecker {
         // Wrap checker in Arc so it can be cloned for each stream element
         let checker = Arc::new(self.clone_for_streaming());
         let check_mode = request.check_mode;
-        
+
         // Create a stream that checks files lazily and yields violations immediately
         let stream = stream::iter(rules)
             .flat_map(move |rule| {
@@ -623,9 +627,7 @@ impl RuleChecker {
                 stream::iter(targets).then(move |target| {
                     let rule = rule.clone();
                     let checker = Arc::clone(&checker);
-                    async move {
-                        checker.check_file(&rule, &target).await
-                    }
+                    async move { checker.check_file(&rule, &target).await }
                 })
             })
             .filter_map(|result| async move {
@@ -752,7 +754,7 @@ mod tests {
     #[tokio::test]
     async fn test_check_streaming_empty_patterns() {
         use futures_util::stream::StreamExt;
-        
+
         let checker = create_test_checker();
 
         let request = RuleCheckRequest {
@@ -764,11 +766,17 @@ mod tests {
             force: false,
         };
 
-        let mut stream = checker.check(request).await.expect("Should create empty stream");
-        
+        let mut stream = checker
+            .check(request)
+            .await
+            .expect("Should create empty stream");
+
         // Empty patterns should yield no violations
         let violation = stream.next().await;
-        assert!(violation.is_none(), "Empty file patterns should yield no violations");
+        assert!(
+            violation.is_none(),
+            "Empty file patterns should yield no violations"
+        );
     }
 
     #[test]
@@ -911,7 +919,7 @@ mod tests {
     #[tokio::test]
     async fn test_check_streaming_no_matching_rules() {
         use futures_util::stream::StreamExt;
-        
+
         let checker = create_test_checker();
 
         let request = RuleCheckRequest {
@@ -925,13 +933,16 @@ mod tests {
 
         let mut stream = checker.check(request).await.expect("Should create stream");
         let violation = stream.next().await;
-        assert!(violation.is_none(), "No matching rules should yield no violations");
+        assert!(
+            violation.is_none(),
+            "No matching rules should yield no violations"
+        );
     }
 
     #[tokio::test]
     async fn test_check_streaming_fail_fast_mode() {
         use futures_util::stream::StreamExt;
-        
+
         let checker = create_test_checker();
 
         let request = RuleCheckRequest {
@@ -944,7 +955,7 @@ mod tests {
         };
 
         let mut stream = checker.check(request).await.expect("Should create stream");
-        
+
         // In fail-fast mode, stream should stop after first violation
         // For this test, we just verify the stream is created successfully
         let _ = stream.next().await;
@@ -953,7 +964,7 @@ mod tests {
     #[tokio::test]
     async fn test_check_streaming_collect_all_mode() {
         use futures_util::stream::StreamExt;
-        
+
         let checker = create_test_checker();
 
         let request = RuleCheckRequest {
@@ -966,10 +977,10 @@ mod tests {
         };
 
         let mut stream = checker.check(request).await.expect("Should create stream");
-        
+
         // In collect-all mode, stream continues until all files are checked
         let mut count = 0;
-        while let Some(_) = stream.next().await {
+        while (stream.next().await).is_some() {
             count += 1;
             // Prevent infinite loop in case of test issues
             if count > 100 {
@@ -977,6 +988,4 @@ mod tests {
             }
         }
     }
-
-
 }

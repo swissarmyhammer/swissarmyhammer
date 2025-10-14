@@ -31,9 +31,8 @@ SwissArmyHammer exposes several categories of MCP tools:
 - `issue_list` - List and filter issues  
 - `issue_show` - Display issue details
 - `issue_update` - Modify issue content
-- `issue_complete` - Mark issues complete
-- `issue_work` - Start work on issues
-- `issue_merge` - Merge completed work
+- `issue_mark_complete` - Mark issues complete
+- `issue_all_complete` - Check completion status
 
 **Memoranda Tools**:
 - `memo_create` - Create new memos
@@ -128,12 +127,14 @@ sah --mcp status
 }
 ```
 
-**Work on Issue**:
+**Update Issue**:
 ```json
 {
-  "tool": "issue_work",
+  "tool": "issue_update",
   "parameters": {
-    "name": "FEATURE_001_user-auth"
+    "name": "FEATURE_001_user-auth",
+    "content": "## Progress\n\nImplementation details...",
+    "append": true
   }
 }
 ```
@@ -217,14 +218,14 @@ AI can execute complex workflows using MCP tools:
 
 2. Planning Phase:
    - issue_create("implement OAuth integration")
-   - issue_work("FEATURE_001_oauth")
+   - issue_show("current")
 
 3. Development Phase:  
    - search_index(["**/*.rs"]) 
    - outline_generate(["src/auth/**/*.rs"])
 
 4. Completion Phase:
-   - issue_complete("FEATURE_001_oauth")
+   - issue_mark_complete("FEATURE_001_oauth")
    - memo_create("Implementation Notes", lessons_learned)
 ```
 
@@ -290,10 +291,9 @@ AI: "I'll help implement user authentication. Let me start by researching existi
 1. search_query("authentication patterns JWT session")
 2. memo_create("Auth Research", findings)
 3. issue_create("implement_user_auth", requirements)
-4. issue_work("FEATURE_001_user_auth")
-5. outline_generate(["src/auth/**/*.rs"])
-6. [Development work with other tools]
-7. issue_complete("FEATURE_001_user_auth")
+4. outline_generate(["src/auth/**/*.rs"])
+5. [Development work with other tools]
+6. issue_mark_complete("FEATURE_001_user_auth")
 ```
 
 **Code Review Assistance**:
@@ -330,7 +330,7 @@ AI can execute custom workflows defined in SwissArmyHammer:
 
 ## Implementation Phase  
 - Create focused issues for development tasks
-- Switch to appropriate Git branches
+- Track current work with issue markers
 - Generate code outlines for understanding structure
 
 ## Review Phase

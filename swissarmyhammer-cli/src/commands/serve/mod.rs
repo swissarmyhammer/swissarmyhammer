@@ -254,7 +254,7 @@ async fn handle_stdio_serve(cli_context: &CliContext) -> i32 {
     // This ensures the process exits cleanly in both scenarios without requiring
     // both events to occur (avoiding the hang when EOF occurs but no signal arrives).
     let mut completion_rx = server_handle.take_completion_rx();
-    
+
     tokio::select! {
         _ = wait_for_shutdown() => {
             tracing::info!("Received shutdown signal (SIGTERM/CTRL+C)");

@@ -737,10 +737,7 @@ impl GitOperations {
     /// Find the best merge target for an issue branch using git merge-base
     /// This determines which branch the issue branch should merge back to
     pub fn find_merge_target_for_issue(&self, issue_branch: &BranchName) -> GitResult<String> {
-        debug!(
-            "Finding merge target for branch: {}",
-            issue_branch
-        );
+        debug!("Finding merge target for branch: {}", issue_branch);
 
         // Get the commit for the issue branch
         let issue_commit = match self
@@ -770,7 +767,8 @@ impl GitOperations {
         // with the same prefix. This prevents merging feature/ branches back to other feature/ branches,
         // or issue/ branches back to other issue/ branches, ensuring we find the actual parent branch
         // from a different hierarchy level (e.g., feature/foo should merge to main, not feature/bar).
-        let branch_prefix = issue_branch.as_str()
+        let branch_prefix = issue_branch
+            .as_str()
             .split('/')
             .next()
             .filter(|_prefix| issue_branch.as_str().contains('/'))
@@ -800,7 +798,7 @@ impl GitOperations {
             }
         }
         debug!("Total candidate branches: {}", branches.len());
-        
+
         let had_candidates = !branches.is_empty();
 
         let mut best_target = None;
@@ -898,7 +896,7 @@ impl GitOperations {
                 // If we had NO candidates at all, fall back to main branch
                 debug!("No candidate branches found, falling back to main branch");
                 let main = self.main_branch()?;
-                
+
                 // If this branch IS the main branch, return error
                 if issue_branch.as_str() == main {
                     return Err(GitError::generic(format!(
@@ -906,7 +904,7 @@ impl GitOperations {
                         issue_branch
                     )));
                 }
-                
+
                 Ok(main)
             }
         }
@@ -1281,14 +1279,11 @@ mod tests {
 
         // Test 1: Issue branch should merge back to my-feature (perfect match)
         let merge_target = git_ops.find_merge_target_for_issue(&issue_branch).unwrap();
-
-        // For now, just verify that the function completes and returns something reasonable
-        // We'll debug why it's returning main instead of my-feature
-        eprintln!("ACTUAL result: {} (expected: my-feature)", merge_target);
-
-        // Temporarily comment out the assertion to see more debug info
-        // assert_eq!(merge_target, "my-feature",
-        //     "Issue branch should merge back to my-feature, but got: {}", merge_target);
+        assert_eq!(
+            merge_target, "my-feature",
+            "Issue branch should merge back to my-feature, but got: {}",
+            merge_target
+        );
 
         // Test 2: Move my-feature forward and test again
         git_ops.checkout_branch(&feature_branch).unwrap();

@@ -5,15 +5,18 @@
 
 use crate::context::CliContext;
 use crate::error::{CliError, CliResult};
+use futures_util::stream::StreamExt;
 use sha2::{Digest, Sha256};
 use std::path::Path;
 use std::sync::Arc;
-use swissarmyhammer_agent_executor::{AgentExecutor, ClaudeCodeExecutor, LlamaAgentExecutorWrapper};
+use swissarmyhammer_agent_executor::{
+    AgentExecutor, ClaudeCodeExecutor, LlamaAgentExecutorWrapper,
+};
 use swissarmyhammer_config::agent::{AgentConfig, AgentExecutorConfig};
 use swissarmyhammer_issues::{FileSystemIssueStorage, IssueStorage};
 use swissarmyhammer_prompts::PromptLibrary;
 use swissarmyhammer_tools::mcp::unified_server::{start_mcp_server, McpServerMode};
-use futures_util::stream::StreamExt;
+
 use swissarmyhammer_rules::{CheckMode, RuleCheckRequest, RuleChecker, RuleViolation};
 
 use super::cli::CheckCommand;

@@ -61,7 +61,6 @@ const EXPECTED_SAMPLE_TOOLS: &[&str] = &[
     "issue_create",
     "issue_list",
     "issue_show",
-    "issue_work",
     "issue_mark_complete",
     "memo_create",
     "memo_list",

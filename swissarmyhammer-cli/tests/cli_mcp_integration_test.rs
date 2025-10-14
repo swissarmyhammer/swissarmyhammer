@@ -209,7 +209,7 @@ async fn test_issue_workflow_integration() {
         .await
         .expect("Failed to create CliToolContext");
 
-    // Test a complete workflow: create issue, then list issues
+    // Test a complete workflow: create issue, work with marker, verify workflow
 
     // 1. Create an issue
     let create_args = context.create_arguments(vec![
@@ -229,7 +229,37 @@ async fn test_issue_workflow_integration() {
 
     let _create_call_result = create_result.unwrap();
 
-    // 2. Try to get the next issue using enhanced issue_show (should include our created issue)
+    // 2. Verify no current issue marker initially
+    let current_issue =
+        swissarmyhammer_issues::current_marker::get_current_issue_in(temp_dir.path());
+    assert!(
+        current_issue.is_ok(),
+        "Should be able to check current issue"
+    );
+    assert_eq!(
+        current_issue.unwrap(),
+        None,
+        "Should have no current issue initially"
+    );
+
+    // 3. Set the current issue marker
+    swissarmyhammer_issues::current_marker::set_current_issue_in("workflow_test", temp_dir.path())
+        .expect("Failed to set current issue marker");
+
+    // 4. Verify marker was set
+    let current_issue =
+        swissarmyhammer_issues::current_marker::get_current_issue_in(temp_dir.path());
+    assert!(
+        current_issue.is_ok(),
+        "Should be able to read current issue"
+    );
+    assert_eq!(
+        current_issue.unwrap(),
+        Some("workflow_test".to_string()),
+        "Current issue marker should be set"
+    );
+
+    // 5. Try to get the next issue using enhanced issue_show (should include our created issue)
     let next_args = context.create_arguments(vec![("name", json!("next"))]);
     let next_result = context.execute_tool("issue_show", next_args).await;
 
@@ -249,26 +279,24 @@ async fn test_issue_workflow_integration() {
         }
     }
 
-    // 3. Test issue_show current (enhanced functionality)
+    // 6. Test issue_show current (should read from marker)
     let current_args = context.create_arguments(vec![("name", json!("current"))]);
     let current_result = context.execute_tool("issue_show", current_args).await;
 
-    // This should succeed but might indicate we're not on an issue branch
-    match current_result {
-        Ok(result) => {
-            assert_eq!(
-                result.is_error,
-                Some(false),
-                "issue_show current should not report error when successful"
-            );
-        }
-        Err(e) => {
-            // This could happen if git operations fail
-            println!("issue_show current returned error (might be acceptable): {e}");
-        }
-    }
+    // Should succeed since we set the marker
+    assert!(
+        current_result.is_ok(),
+        "issue_show current should succeed with marker set: {:?}",
+        current_result.err()
+    );
+    let current_call_result = current_result.unwrap();
+    assert_eq!(
+        current_call_result.is_error,
+        Some(false),
+        "issue_show current should not report error when marker is set"
+    );
 
-    // 4. Test issue_show with regular issue name
+    // 7. Test issue_show with regular issue name
     let show_args = context.create_arguments(vec![("name", json!("workflow_test"))]);
     let show_result = context.execute_tool("issue_show", show_args).await;
 
@@ -283,6 +311,23 @@ async fn test_issue_workflow_integration() {
         show_call_result.is_error,
         Some(false),
         "issue_show should not report error when showing existing issue"
+    );
+
+    // 8. Clear the marker
+    swissarmyhammer_issues::current_marker::clear_current_issue_in(temp_dir.path())
+        .expect("Failed to clear current issue marker");
+
+    // 9. Verify marker was cleared
+    let current_issue =
+        swissarmyhammer_issues::current_marker::get_current_issue_in(temp_dir.path());
+    assert!(
+        current_issue.is_ok(),
+        "Should be able to check current issue"
+    );
+    assert_eq!(
+        current_issue.unwrap(),
+        None,
+        "Current issue marker should be cleared"
     );
 }
 
