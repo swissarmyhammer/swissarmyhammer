@@ -23,7 +23,6 @@ use swissarmyhammer_prompts::{PromptLibrary, PromptResolver};
 
 use tokio::sync::{Mutex, RwLock};
 
-use swissarmyhammer_config::agent::AgentConfig;
 
 use super::tool_handlers::ToolHandlers;
 use super::tool_registry::{

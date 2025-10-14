@@ -8,7 +8,7 @@ use serde_json::{json, Value};
 use std::collections::HashMap;
 use swissarmyhammer_config::{
     agent::{
-        AgentConfig, AgentExecutorType, LlamaAgentConfig, McpServerConfig, ModelConfig, ModelSource,
+        AgentConfig, AgentExecutorType, LlamaAgentConfig, ModelSource,
     },
     ConfigurationResult, TemplateContext,
 };

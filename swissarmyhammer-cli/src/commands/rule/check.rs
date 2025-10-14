@@ -848,4 +848,24 @@ mod tests {
         // Should succeed when no rules match
         assert!(result.is_ok());
     }
+
+    #[tokio::test]
+    async fn test_execute_check_command_with_force_flag() {
+        let context = setup_test_context().await;
+
+        let cmd = super::super::cli::CheckCommand {
+            patterns: vec!["test.rs".to_string()],
+            rule: Some(vec!["nonexistent-rule".to_string()]),
+            severity: None,
+            category: None,
+            create_issues: false,
+            no_fail_fast: false,
+            force: true,
+        };
+
+        let request = CheckCommandRequest::with_config(cmd, setup_test_agent_config());
+        let result = execute_check_command_impl(request, &context).await;
+        // Should succeed with force flag - bypasses cache
+        assert!(result.is_ok());
+    }
 }
