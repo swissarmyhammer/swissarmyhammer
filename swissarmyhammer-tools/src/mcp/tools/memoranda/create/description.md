@@ -1,4 +1,4 @@
-Create a new memo with the given title and content. Returns the created memo with its unique ID.
+Create a new memo with the given title and content.
 
 ## Parameters
 
@@ -7,11 +7,10 @@ Create a new memo with the given title and content. Returns the created memo wit
 
 ## Examples
 
-Create a memo with title and content:
 ```json
 {
   "title": "Meeting Notes",
-  "content": "# Team Meeting\n\nDiscussed project roadmap..."
+  "content": "# Team Meeting\\n\\nDiscussed project roadmap..."
 }
 ```
 

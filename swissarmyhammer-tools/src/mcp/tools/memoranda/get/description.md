@@ -1,15 +1,14 @@
-Retrieve a memo by its unique ID. Returns the memo content with metadata.
+Retrieve a memo by its title.
 
 ## Parameters
 
-- `id` (required): ULID identifier of the memo to retrieve
+- `title` (required): Title of the memo to retrieve
 
 ## Examples
 
-Get a memo by its ULID:
 ```json
 {
-  "id": "01ARZ3NDEKTSV4RRFFQ69G5FAV"
+  "title": "Meeting Notes"
 }
 ```
 

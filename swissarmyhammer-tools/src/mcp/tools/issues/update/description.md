@@ -1,4 +1,4 @@
-Update the content of an existing issue with additional context or modifications.
+Update the content of an existing issue.
 
 ## Parameters
 
@@ -8,23 +8,14 @@ Update the content of an existing issue with additional context or modifications
 
 ## Examples
 
-Replace issue content:
 ```json
 {
   "name": "REFACTOR_000123_cleanup-code",
-  "content": "# Updated issue content\n\nNew requirements and details..."
-}
-```
-
-Append to existing content:
-```json
-{
-  "name": "REFACTOR_000123_cleanup-code",
-  "content": "\n\n## Additional Context\n\nMore information...",
-  "append": true
+  "content": "# Updated issue content\\n\\nNew requirements...",
+  "append": false
 }
 ```
 
 ## Returns
 
-Returns confirmation that the issue has been updated with the new content.
+Returns confirmation that the issue has been updated.

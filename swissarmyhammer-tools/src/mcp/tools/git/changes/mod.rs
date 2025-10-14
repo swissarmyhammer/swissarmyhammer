@@ -292,7 +292,7 @@ mod tests {
         let tool = GitChangesTool::new();
         let description = tool.description();
         assert!(!description.is_empty());
-        assert!(description.contains("Git Changes"));
+        assert!(description.contains("List files that have changed"));
     }
 
     #[test]

@@ -6,7 +6,6 @@ Mark an issue as complete by moving it to ./issues/complete directory.
 
 ## Examples
 
-Mark an issue as complete:
 ```json
 {
   "name": "REFACTOR_000123_cleanup-code"
@@ -15,4 +14,4 @@ Mark an issue as complete:
 
 ## Returns
 
-Returns confirmation that the issue has been marked as complete and moved to the completed directory.
+Returns confirmation that the issue has been marked as complete and moved.
