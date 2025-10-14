@@ -80,3 +80,56 @@ tools (uses factory)
 - MCP server: `swissarmyhammer-tools/src/mcp/unified_server.rs`
 - CLI usage: `swissarmyhammer-cli/src/commands/rule/check.rs:106-166`
 - MCP tool usage: `swissarmyhammer-tools/src/mcp/tools/rules/check/mod.rs:34-61`
+
+
+
+## Current Status (2025-10-14)
+
+### Partial Progress Made
+
+The `AgentExecutorFactory` implementation was moved to `agent-executor` crate (commit a09fe0f5), but **the circular dependency is NOT resolved** due to duplicate trait definitions.
+
+### Root Cause: Duplicate Traits
+
+There are TWO identical `AgentExecutor` trait definitions:
+
+1. `swissarmyhammer-agent-executor/src/executor.rs:9` - Base trait
+2. `swissarmyhammer-workflow/src/actions.rs:213` - Duplicate trait
+
+These are incompatible types in Rust's type system despite having identical signatures:
+```rust
+// agent-executor crate
+Box<dyn agent_executor::AgentExecutor>  
+
+// workflow crate  
+Box<dyn workflow::AgentExecutor>
+
+// ❌ These are NOT interchangeable!
+```
+
+### What Was Done
+
+✅ Factory implementation exists in `agent-executor/src/executor.rs:36-74`
+✅ CLI uses the centralized factory successfully  
+❌ Workflow still has duplicate factory (can't use centralized one due to trait mismatch)
+
+### What Remains
+
+To fully fix this:
+
+1. **Remove duplicate trait** - Delete `workflow::AgentExecutor` trait definition
+2. **Re-export canonical trait** - Have workflow use `pub use agent_executor::AgentExecutor`
+3. **Update all workflow code** - Change references from local trait to re-exported one
+4. **Remove duplicate factory** - Delete `workflow::AgentExecutorFactory`, use only the centralized one
+5. **Update imports** - Fix all code that imports `workflow::AgentExecutor`
+
+### Blockers
+
+This is a breaking change across multiple crates. Need to:
+- Update all trait implementations (ClaudeCodeExecutor, LlamaAgentExecutorWrapper)  
+- Fix all call sites in workflow actions
+- Ensure tests still pass after trait unification
+
+### Estimated Effort
+
+~2-3 hours of careful refactoring to eliminate duplicate trait while maintaining compatibility.
