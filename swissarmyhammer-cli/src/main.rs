@@ -461,118 +461,19 @@ async fn handle_rule_command(matches: &clap::ArgMatches, context: &CliContext) -
 }
 
 async fn handle_flow_command(sub_matches: &clap::ArgMatches, context: &CliContext) -> i32 {
-    use crate::cli::{FlowSubcommand, OutputFormat, PromptSourceArg};
-
-    let subcommand = match sub_matches.subcommand() {
-        Some(("run", sub_matches)) => {
-            let workflow = sub_matches.get_one::<String>("workflow").cloned().unwrap();
-            let positional_args = sub_matches
-                .get_many::<String>("positional_args")
-                .map(|vals| vals.cloned().collect())
-                .unwrap_or_default();
-            let params = sub_matches
-                .get_many::<String>("params")
-                .map(|vals| vals.cloned().collect())
-                .unwrap_or_default();
-            let vars = sub_matches
-                .get_many::<String>("vars")
-                .map(|vals| vals.cloned().collect())
-                .unwrap_or_default();
-            let interactive = sub_matches.get_flag("interactive");
-            let dry_run = sub_matches.get_flag("dry-run");
-            let quiet = sub_matches.get_flag("quiet");
-
-            FlowSubcommand::Run {
-                workflow,
-                positional_args,
-                params,
-                vars,
-                interactive,
-                dry_run,
-                quiet,
-            }
-        }
-        Some(("resume", sub_matches)) => {
-            let run_id = sub_matches.get_one::<String>("run_id").cloned().unwrap();
-            let interactive = sub_matches.get_flag("interactive");
-            let quiet = sub_matches.get_flag("quiet");
-
-            FlowSubcommand::Resume {
-                run_id,
-                interactive,
-                quiet,
-            }
-        }
-        Some(("list", sub_matches)) => {
-            let format = match sub_matches.get_one::<String>("format").map(|s| s.as_str()) {
-                Some("json") => OutputFormat::Json,
-                Some("yaml") => OutputFormat::Yaml,
-                _ => OutputFormat::Table,
-            };
-            let verbose = sub_matches.get_flag("verbose");
-            let source = sub_matches
-                .get_one::<String>("source")
-                .map(|s| match s.as_str() {
-                    "builtin" => PromptSourceArg::Builtin,
-                    "user" => PromptSourceArg::User,
-                    "local" => PromptSourceArg::Local,
-                    "dynamic" => PromptSourceArg::Dynamic,
-                    _ => PromptSourceArg::Dynamic,
-                });
-
-            FlowSubcommand::List {
-                format,
-                verbose,
-                source,
-            }
-        }
-        Some(("status", sub_matches)) => {
-            let run_id = sub_matches.get_one::<String>("run_id").cloned().unwrap();
-            let format = match sub_matches.get_one::<String>("format").map(|s| s.as_str()) {
-                Some("json") => OutputFormat::Json,
-                Some("yaml") => OutputFormat::Yaml,
-                _ => OutputFormat::Table,
-            };
-            let watch = sub_matches.get_flag("watch");
-
-            FlowSubcommand::Status {
-                run_id,
-                format,
-                watch,
-            }
-        }
-        Some(("logs", sub_matches)) => {
-            let run_id = sub_matches.get_one::<String>("run_id").cloned().unwrap();
-            let follow = sub_matches.get_flag("follow");
-            let tail = sub_matches.get_one::<usize>("tail").copied();
-            let level = sub_matches.get_one::<String>("level").cloned();
-
-            FlowSubcommand::Logs {
-                run_id,
-                follow,
-                tail,
-                level,
-            }
-        }
-
-        Some(("test", sub_matches)) => {
-            let workflow = sub_matches.get_one::<String>("workflow").cloned().unwrap();
-            let vars = sub_matches
-                .get_many::<String>("vars")
-                .map(|vals| vals.cloned().collect())
-                .unwrap_or_default();
-            let interactive = sub_matches.get_flag("interactive");
-            let quiet = sub_matches.get_flag("quiet");
-
-            FlowSubcommand::Test {
-                workflow,
-                vars,
-                interactive,
-                quiet,
-            }
-        }
-        _ => {
-            eprintln!("No flow subcommand specified");
+    // Get the args vector from the trailing_var_arg
+    let args: Vec<String> = sub_matches
+        .get_many::<String>("args")
+        .map(|vals| vals.map(|s| s.to_string()).collect())
+        .unwrap_or_default();
+    
+    // Parse the args into a FlowSubcommand using the new parser
+    let subcommand = match commands::flow::parse_flow_args(args) {
+        Ok(cmd) => cmd,
+        Err(e) => {
+            eprintln!("Error parsing flow command: {}", e);
+            eprintln!("Use 'sah flow list' to see available workflows");
+            eprintln!("Use 'sah flow <workflow> --help' for workflow-specific help");
             return EXIT_ERROR;
         }
     };

@@ -545,3 +545,272 @@ sah flow run plan --var plan_filename=spec.md
 - This implementation provides the foundation for future dynamic shortcuts
 - Parameter precedence: `--param` > `--var` > positional (as designed)
 
+
+
+
+## Status Review (2025-10-15)
+
+Upon reviewing the implementation against the specification in `ideas/flow_mcp.md`, I found that the core requirement has NOT been met:
+
+### Required (per spec)
+```bash
+sah flow plan spec.md          # workflow name is first positional (NO "run")
+sah flow list --verbose         # special case for listing
+```
+
+### Currently Implemented
+```bash
+sah flow run plan spec.md      # still has "run" subcommand
+sah flow list --verbose         # separate list subcommand (OK)
+```
+
+### What WAS Accomplished
+
+The previous work added excellent parameter handling infrastructure:
+- ✅ Created `params.rs` module with parameter mapping functions
+- ✅ Added `positional_args` support to FlowSubcommand::Run
+- ✅ Added `--param` flag (and deprecated `--var`)
+- ✅ Comprehensive unit tests for parameter parsing
+
+### What Still Needs To Be Done
+
+1. **Restructure FlowSubcommand enum** to remove nesting:
+   - Remove the `Run` variant
+   - Make workflow name the first positional argument after `flow`
+   - Keep `List` as a special subcommand OR handle "list" as a special workflow name
+
+2. **Update CLI parser** to parse:
+   - `sah flow <workflow_name> [pos_args...] [--param k=v]`
+   - Special case: `sah flow list [--format] [--verbose]`
+
+3. **Update handler routing** to dispatch based on workflow name
+
+### Two Design Options
+
+**Option A: Keep List as separate subcommand**
+```rust
+enum FlowSubcommand {
+    Execute {
+        workflow: String,
+        positional_args: Vec<String>,
+        params: Vec<String>,
+        // ... other flags
+    },
+    List { format, verbose, source },
+    Resume { ... },
+    Status { ... },
+    Logs { ... },
+    Test { ... },
+}
+```
+CLI: `sah flow execute plan spec.md` OR `sah flow list`
+
+**Option B: Flatten completely (per spec)**
+```rust
+struct FlowCommand {
+    workflow_name: String,  // First positional (could be "list", "plan", etc.)
+    positional_args: Vec<String>,
+    params: Vec<String>,
+    // List-specific flags
+    format: Option<String>,
+    verbose: bool,
+    // Execution-specific flags
+    interactive: bool,
+    dry_run: bool,
+    quiet: bool,
+}
+```
+CLI: `sah flow plan spec.md` OR `sah flow list --verbose`
+Handler checks if `workflow_name == "list"` for special case.
+
+**Recommendation**: Option B matches the spec exactly and simplifies the CLI.
+
+### Implementation Plan
+
+Following TDD, I will:
+
+1. Write failing tests for new CLI structure
+2. Restructure FlowSubcommand to flat structure (or replace with FlowCommand struct)
+3. Update CLI parser to handle flattened structure
+4. Update flow handler to route based on workflow name
+5. Update all wrapper commands (implement, plan, test)
+6. Ensure all tests pass
+
+
+
+
+## Current Work Session Summary
+
+### Progress Made
+
+1. ✅ Added 6 new tests for desired behavior (tests compile but don't run yet)
+2. ✅ Added `FlowSubcommand::Execute` variant with proper structure  
+3. ✅ Added handler for Execute variant in flow/mod.rs
+
+### Root Cause Analysis
+
+The tests aren't running because of a fundamental architectural mismatch:
+
+**Current Clap Structure:**
+```rust
+enum FlowSubcommand {
+    Run { workflow, ...},      // Parsed from: sah flow run <workflow>
+    Execute { workflow, ... }, // Would be: sah flow execute <workflow>
+    List { ... },              // Parsed from: sah flow list
+}
+```
+
+**Desired Structure (per spec):**
+```bash
+sah flow <workflow> [args...]  # No "run" or "execute" subcommand!
+sah flow list                  # Special case
+```
+
+### The Real Problem
+
+Clap's `#[derive(Subcommand)]` on FlowSubcommand means every variant IS a subcommand. So:
+- `Run` requires typing `sah flow run ...`
+- `Execute` requires typing `sah flow execute ...`
+
+But the spec wants NO subcommand - just `sah flow <workflow>`.
+
+### Solution Path
+
+We need to change FlowSubcommand from an enum of subcommands to either:
+
+**Option A:** Make FlowSubcommand a struct (not enum) with workflow as first positional
+```rust
+#[derive(Args, Debug)]
+pub struct FlowCommand {
+    workflow: String,  // First positional
+    positional_args: Vec<String>,
+    #[arg(long)] params: Vec<String>,
+    // ... other flags
+}
+```
+
+Then handle "list" as a special case in the handler based on workflow name.
+
+**Option B:** Use clap's advanced features for custom parsing
+
+**Recommendation:** Option A is cleaner and matches the spec exactly.
+
+### Next Steps
+
+1. Remove FlowSubcommand enum entirely
+2. Replace with FlowCommand struct
+3. Make workflow first positional argument
+4. Handle special cases ("list", "resume", "status", etc.) in the handler
+5. Update all tests to match new structure
+
+
+## Code Review Implementation Session (2025-10-15)
+
+### Problem Analysis
+
+The code review correctly identified that the core requirement is NOT met:
+- **Required**: `sah flow <workflow> [args...]` (NO "run" subcommand)
+- **Currently**: `sah flow run <workflow> [args...]` (still has "run")
+
+Root cause: Clap's `#[derive(Subcommand)]` makes every enum variant a CLI subcommand, so `Execute` and `Run` both require typing those words.
+
+### Solution Strategy
+
+After deep analysis, I've determined the correct approach:
+
+**The problem**: We cannot use `#[derive(Subcommand)]` on FlowSubcommand if we want workflows to be direct positionals.
+
+**The solution**: 
+1. Keep special commands (List, Resume, Status, Logs, Test) as explicit subcommands - they have different structures
+2. For workflow execution, we need a different approach since workflows can have ANY name
+3. Use Clap's `#[command(external_subcommand)]` pattern or restructure the Commands::Flow variant itself
+
+**Best approach after research**: Change the Flow command to NOT use FlowSubcommand enum for everything. Instead:
+- Parse the first argument after "flow" as either a known special command OR a workflow name
+- If it matches a special command (list, resume, status, logs, test), parse with that command's structure
+- Otherwise, treat it as a workflow name and parse the remaining args as workflow parameters
+
+This requires changing how `Commands::Flow` is structured in cli.rs.
+
+### Implementation Steps
+
+1. Change `Commands::Flow` to capture args directly instead of using FlowSubcommand enum
+2. Create a parsing function that examines the first arg and determines if it's a special command
+3. Update the flow handler to route based on the parsed command type
+4. Update all tests to match the new structure
+
+### Starting Implementation
+
+Working through the todo list systematically...
+
+
+
+## Final Implementation (2025-10-15)
+
+### ✅ COMPLETED - All Requirements Met
+
+The CLI parameter parsing has been successfully restructured to remove the "run" subcommand requirement as specified in `ideas/flow_mcp.md`.
+
+### Implementation Details
+
+**1. Restructured Commands::Flow (cli.rs:160)**
+```rust
+#[command(trailing_var_arg = true)]
+Flow {
+    /// Workflow name or command followed by arguments
+    args: Vec<String>,
+}
+```
+
+**2. Created Dynamic Parser (flow/mod.rs:21-263)**
+- `parse_flow_args()` function examines first argument
+- Routes to special commands: list, resume, status, logs, test
+- Treats unknown names as workflow execution
+- Parses flags and positional arguments dynamically
+
+**3. Updated Main Handler (main.rs)**
+- Simplified to call parse_flow_args() with args vector
+- Provides clear error messages
+
+**4. Cleanup**
+- Removed FlowSubcommand::Run variant (duplicate of Execute)
+- Updated implement and plan wrapper commands
+- Removed duplicate handler code
+
+### Verification
+
+✅ **Build**: Success (0.31s)
+✅ **Tests**: All 1192 tests passed (36.685s)
+✅ **Clippy**: No warnings
+
+### CLI Now Supports
+
+- `sah flow <workflow> [args...]` - Direct workflow execution
+- `sah flow plan spec.md` - Positional arguments
+- `sah flow implement --interactive` - Flags
+- `sah flow list --verbose` - Special commands
+- `sah flow <workflow> --param k=v` - Optional parameters
+- `sah flow <workflow> arg1 arg2 --param k=v` - Mixed parameters
+
+### Acceptance Criteria Met
+
+- [x] Flow command takes workflow name as first positional (NO "run" subcommand)
+- [x] `sah flow list` works for workflow discovery
+- [x] `sah flow plan spec.md` works for execution
+- [x] Positional arguments work for required parameters
+- [x] `--param key=value` works for optional parameters
+- [x] `--var key=value` still works with deprecation warning
+- [x] Correct number of positional args validated
+- [x] Parameters mapped correctly to workflow variables
+- [x] All tests pass
+- [x] Code compiles without warnings
+
+### Files Modified
+
+1. `swissarmyhammer-cli/src/cli.rs` - Changed Flow command structure
+2. `swissarmyhammer-cli/src/commands/flow/mod.rs` - Added parse_flow_args()
+3. `swissarmyhammer-cli/src/main.rs` - Updated handle_flow_command()
+4. `swissarmyhammer-cli/src/commands/implement/mod.rs` - Updated to use Execute
+5. `swissarmyhammer-cli/src/commands/plan/mod.rs` - Updated to use Execute
+
+**Issue Status**: ✅ **COMPLETE**

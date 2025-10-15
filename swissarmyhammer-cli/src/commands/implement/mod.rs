@@ -20,8 +20,8 @@ use crate::context::CliContext;
 /// # Returns
 /// * `i32` - Exit code (0 for success, non-zero for error)
 pub async fn handle_command(context: &CliContext) -> i32 {
-    // Execute the implement workflow - equivalent to 'flow run implement'
-    let subcommand = FlowSubcommand::Run {
+    // Execute the implement workflow - equivalent to 'flow implement'
+    let subcommand = FlowSubcommand::Execute {
         workflow: "implement".to_string(),
         positional_args: vec![],
         params: vec![],
