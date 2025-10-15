@@ -1246,6 +1246,12 @@ pub fn register_file_tools(registry: &mut ToolRegistry) {
     files::register_file_tools(registry);
 }
 
+/// Register all flow-related tools with the registry
+pub fn register_flow_tools(registry: &mut ToolRegistry) {
+    use super::tools::flow;
+    flow::register_flow_tools(registry);
+}
+
 /// Register all git-related tools with the registry
 pub fn register_git_tools(registry: &mut ToolRegistry) {
     use super::tools::git;

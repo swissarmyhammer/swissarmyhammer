@@ -56,21 +56,30 @@
 //!
 //! ## Implementation Status
 //!
-//! This module currently provides:
+//! This module provides:
 //! - Type definitions for requests and responses
 //! - Schema generation utilities
-//! - Comprehensive test coverage
-//!
-//! Future additions will include:
 //! - Flow tool implementation with McpTool trait
-//! - Integration with workflow storage and execution
-//! - MCP notification support for long-running workflows
-//! - CLI command generation
+//! - Tool registration function
+//! - Workflow discovery (list functionality)
+//! - Comprehensive test coverage
 
+pub mod tool;
 pub mod types;
 
 // Re-export commonly used types
+pub use tool::FlowTool;
 pub use types::{
     generate_flow_tool_schema, FlowToolRequest, WorkflowListResponse, WorkflowMetadata,
     WorkflowParameter,
 };
+
+use crate::mcp::tool_registry::ToolRegistry;
+
+/// Register flow tools with the tool registry
+///
+/// This function registers the FlowTool for handling workflow execution
+/// and discovery operations through the MCP protocol.
+pub fn register_flow_tools(registry: &mut ToolRegistry) {
+    registry.register(FlowTool::new());
+}
