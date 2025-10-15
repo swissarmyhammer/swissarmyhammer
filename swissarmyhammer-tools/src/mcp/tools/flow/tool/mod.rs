@@ -10,6 +10,31 @@ use rmcp::model::CallToolResult;
 use rmcp::ErrorData as McpError;
 use swissarmyhammer_workflow::{MemoryWorkflowStorage, WorkflowResolver, WorkflowStorageBackend};
 
+/// Validate that all required parameters are provided
+///
+/// # Arguments
+///
+/// * `workflow` - The workflow definition with parameter requirements
+/// * `provided_params` - The parameters provided in the request
+///
+/// # Returns
+///
+/// Ok if all required parameters are present, Err with description if any are missing
+fn validate_required_parameters(
+    workflow: &swissarmyhammer_workflow::Workflow,
+    provided_params: &serde_json::Map<String, serde_json::Value>,
+) -> Result<(), String> {
+    for param in &workflow.parameters {
+        if param.required && !provided_params.contains_key(&param.name) {
+            return Err(format!(
+                "Missing required parameter: '{}'. Description: {}",
+                param.name, param.description
+            ));
+        }
+    }
+    Ok(())
+}
+
 /// Tool for executing workflows or listing available workflows
 ///
 /// The FlowTool provides a unified interface for workflow operations:
@@ -98,6 +123,12 @@ impl FlowTool {
     }
 
     /// Execute a workflow
+    ///
+    /// # Limitations
+    ///
+    /// The `interactive`, `dry_run`, and `quiet` flags in the request are not currently
+    /// passed to the WorkflowExecutor due to API limitations. These will be implemented
+    /// in a future enhancement when the WorkflowExecutor API supports them.
     async fn execute_workflow(
         &self,
         request: &FlowToolRequest,
@@ -108,14 +139,17 @@ impl FlowTool {
             .map_err(|e| McpError::internal_error(e, None))?;
 
         // Get the workflow
-        let workflow_name =
-            swissarmyhammer_workflow::WorkflowName::new(request.flow_name.clone());
+        let workflow_name = swissarmyhammer_workflow::WorkflowName::new(request.flow_name.clone());
         let workflow = storage.get_workflow(&workflow_name).map_err(|e| {
             McpError::internal_error(
                 format!("Failed to load workflow '{}': {}", request.flow_name, e),
                 None,
             )
         })?;
+
+        // Validate required parameters
+        validate_required_parameters(&workflow, &request.parameters)
+            .map_err(|e| McpError::invalid_params(e, None))?;
 
         // Create workflow executor
         let mut executor = swissarmyhammer_workflow::WorkflowExecutor::new();
@@ -136,20 +170,26 @@ impl FlowTool {
         // Handle execution result
         match result {
             Ok(()) => {
-                let status = run.status;
-                let output = format!(
-                    "Workflow '{}' completed with status: {:?}",
-                    request.flow_name, status
-                );
-                Ok(BaseToolImpl::create_success_response(output))
+                let output = serde_json::json!({
+                    "status": "completed",
+                    "workflow": request.flow_name,
+                    "final_status": format!("{:?}", run.status),
+                });
+                let formatted_output = serde_json::to_string_pretty(&output).map_err(|e| {
+                    McpError::internal_error(format!("Failed to serialize result: {}", e), None)
+                })?;
+                Ok(BaseToolImpl::create_success_response(formatted_output))
             }
             Err(e) => Err(McpError::internal_error(
-                format!("Workflow execution failed: {}", e),
+                format!("Workflow '{}' execution failed: {}", request.flow_name, e),
                 None,
             )),
         }
     }
 }
+
+/// Maximum length for description in table format before truncation
+const MAX_DESCRIPTION_LENGTH: usize = 47;
 
 /// Format workflow list as a table
 fn format_table(response: &WorkflowListResponse) -> String {
@@ -166,8 +206,8 @@ fn format_table(response: &WorkflowListResponse) -> String {
         output.push_str(&format!(
             "{:<20} {:<50} {:<10}\n",
             workflow.name,
-            if workflow.description.len() > 47 {
-                format!("{}...", &workflow.description[..47])
+            if workflow.description.len() > MAX_DESCRIPTION_LENGTH {
+                format!("{}...", &workflow.description[..MAX_DESCRIPTION_LENGTH])
             } else {
                 workflow.description.clone()
             },
@@ -380,5 +420,297 @@ mod tests {
         // Should truncate to 47 chars + "..."
         assert!(table.contains("..."));
         assert!(!table.contains(&long_desc));
+    }
+
+    // ============================================================================
+    // Parameter Validation Tests
+    // ============================================================================
+
+    #[test]
+    fn test_validate_required_parameters_success() {
+        use swissarmyhammer_common::{Parameter, ParameterType};
+        use swissarmyhammer_workflow::{StateId, Workflow, WorkflowName};
+
+        let workflow = Workflow {
+            name: WorkflowName::new("test".to_string()),
+            description: "Test workflow".to_string(),
+            initial_state: StateId::new("start"),
+            parameters: vec![
+                Parameter::new(
+                    "required_param",
+                    "A required parameter",
+                    ParameterType::String,
+                )
+                .required(true),
+                Parameter::new(
+                    "optional_param",
+                    "An optional parameter",
+                    ParameterType::String,
+                )
+                .required(false),
+            ],
+            states: Default::default(),
+            transitions: vec![],
+            metadata: Default::default(),
+        };
+
+        let mut provided_params = serde_json::Map::new();
+        provided_params.insert("required_param".to_string(), serde_json::json!("value"));
+
+        let result = validate_required_parameters(&workflow, &provided_params);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_validate_required_parameters_missing() {
+        use swissarmyhammer_common::{Parameter, ParameterType};
+        use swissarmyhammer_workflow::{StateId, Workflow, WorkflowName};
+
+        let workflow = Workflow {
+            name: WorkflowName::new("test".to_string()),
+            description: "Test workflow".to_string(),
+            initial_state: StateId::new("start"),
+            parameters: vec![Parameter::new(
+                "required_param",
+                "A required parameter",
+                ParameterType::String,
+            )
+            .required(true)],
+            states: Default::default(),
+            transitions: vec![],
+            metadata: Default::default(),
+        };
+
+        let provided_params = serde_json::Map::new();
+
+        let result = validate_required_parameters(&workflow, &provided_params);
+        assert!(result.is_err());
+        let err_msg = result.unwrap_err();
+        assert!(err_msg.contains("required_param"));
+        assert!(err_msg.contains("Missing required parameter"));
+    }
+
+    #[test]
+    fn test_validate_required_parameters_no_required() {
+        use swissarmyhammer_workflow::{StateId, Workflow, WorkflowName};
+
+        let workflow = Workflow {
+            name: WorkflowName::new("test".to_string()),
+            description: "Test workflow".to_string(),
+            initial_state: StateId::new("start"),
+            parameters: vec![],
+            states: Default::default(),
+            transitions: vec![],
+            metadata: Default::default(),
+        };
+
+        let provided_params = serde_json::Map::new();
+
+        let result = validate_required_parameters(&workflow, &provided_params);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_validate_required_parameters_extra_params_allowed() {
+        use swissarmyhammer_common::{Parameter, ParameterType};
+        use swissarmyhammer_workflow::{StateId, Workflow, WorkflowName};
+
+        let workflow = Workflow {
+            name: WorkflowName::new("test".to_string()),
+            description: "Test workflow".to_string(),
+            initial_state: StateId::new("start"),
+            parameters: vec![Parameter::new(
+                "required_param",
+                "A required parameter",
+                ParameterType::String,
+            )
+            .required(true)],
+            states: Default::default(),
+            transitions: vec![],
+            metadata: Default::default(),
+        };
+
+        let mut provided_params = serde_json::Map::new();
+        provided_params.insert("required_param".to_string(), serde_json::json!("value"));
+        provided_params.insert("extra_param".to_string(), serde_json::json!("extra"));
+
+        let result = validate_required_parameters(&workflow, &provided_params);
+        assert!(result.is_ok());
+    }
+
+    // ============================================================================
+    // Workflow Execution Tests
+    // ============================================================================
+
+    #[tokio::test]
+    async fn test_execute_workflow_nonexistent() {
+        use std::sync::Arc;
+        use swissarmyhammer_config::agent::AgentConfig;
+        use swissarmyhammer_issues::IssueStorage;
+        use swissarmyhammer_memoranda::{MarkdownMemoStorage, MemoStorage};
+        use tokio::sync::{Mutex, RwLock};
+
+        let tool = FlowTool::new();
+        let request = FlowToolRequest::new("nonexistent_workflow_xyz");
+
+        let _temp_dir = tempfile::tempdir().unwrap();
+        let test_issues_dir = _temp_dir.path().join("test_issues");
+        let issue_storage: Arc<RwLock<Box<dyn IssueStorage>>> = Arc::new(RwLock::new(Box::new(
+            swissarmyhammer_issues::FileSystemIssueStorage::new(test_issues_dir).unwrap(),
+        )));
+        let git_ops = Arc::new(Mutex::new(None));
+        let memo_dir = _temp_dir.path().join("memos");
+        let memo_storage: Arc<RwLock<Box<dyn MemoStorage>>> =
+            Arc::new(RwLock::new(Box::new(MarkdownMemoStorage::new(memo_dir))));
+        let tool_handlers = Arc::new(crate::mcp::tool_handlers::ToolHandlers::new(
+            memo_storage.clone(),
+        ));
+        let agent_config = Arc::new(AgentConfig::default());
+
+        let context = ToolContext::new(
+            tool_handlers,
+            issue_storage,
+            git_ops,
+            memo_storage,
+            agent_config,
+        );
+
+        let result = tool.execute_workflow(&request, &context).await;
+
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_execute_workflow_missing_required_params() {
+        use rmcp::model::ErrorCode;
+        use std::sync::Arc;
+        use swissarmyhammer_config::agent::AgentConfig;
+        use swissarmyhammer_issues::IssueStorage;
+        use swissarmyhammer_memoranda::{MarkdownMemoStorage, MemoStorage};
+        use tokio::sync::{Mutex, RwLock};
+
+        let tool = FlowTool::new();
+
+        // Load actual workflows to find one with required parameters
+        let (storage, _resolver) = tool.load_workflows().expect("Failed to load workflows");
+        let workflows = storage.list_workflows().expect("Failed to list workflows");
+
+        // Find a workflow with at least one required parameter
+        let workflow_with_required = workflows
+            .iter()
+            .find(|w| w.parameters.iter().any(|p| p.required));
+
+        if let Some(workflow) = workflow_with_required {
+            // Create request without providing the required parameter
+            let request = FlowToolRequest::new(workflow.name.to_string());
+
+            let _temp_dir = tempfile::tempdir().unwrap();
+            let test_issues_dir = _temp_dir.path().join("test_issues");
+            let issue_storage: Arc<RwLock<Box<dyn IssueStorage>>> =
+                Arc::new(RwLock::new(Box::new(
+                    swissarmyhammer_issues::FileSystemIssueStorage::new(test_issues_dir).unwrap(),
+                )));
+            let git_ops = Arc::new(Mutex::new(None));
+            let memo_dir = _temp_dir.path().join("memos");
+            let memo_storage: Arc<RwLock<Box<dyn MemoStorage>>> =
+                Arc::new(RwLock::new(Box::new(MarkdownMemoStorage::new(memo_dir))));
+            let tool_handlers = Arc::new(crate::mcp::tool_handlers::ToolHandlers::new(
+                memo_storage.clone(),
+            ));
+            let agent_config = Arc::new(AgentConfig::default());
+
+            let context = ToolContext::new(
+                tool_handlers,
+                issue_storage,
+                git_ops,
+                memo_storage,
+                agent_config,
+            );
+
+            let result = tool.execute_workflow(&request, &context).await;
+
+            // Should fail with invalid_params error
+            assert!(result.is_err());
+            if let Err(e) = result {
+                assert_eq!(e.code, ErrorCode::INVALID_PARAMS);
+                assert!(e.message.contains("Missing required parameter"));
+            }
+        }
+        // If no workflows with required parameters exist, test passes (nothing to validate)
+    }
+
+    #[tokio::test]
+    async fn test_execute_workflow_json_output() {
+        use std::sync::Arc;
+        use swissarmyhammer_config::agent::AgentConfig;
+        use swissarmyhammer_issues::IssueStorage;
+        use swissarmyhammer_memoranda::{MarkdownMemoStorage, MemoStorage};
+        use tokio::sync::{Mutex, RwLock};
+
+        let tool = FlowTool::new();
+
+        let (storage, _resolver) = tool.load_workflows().expect("Failed to load workflows");
+        let workflows = storage.list_workflows().expect("Failed to list workflows");
+
+        if workflows.is_empty() {
+            return;
+        }
+
+        // Find a simple workflow without interactive prompts for testing
+        // We need to check the workflow content to avoid workflows with prompt actions
+        let simple_workflow = workflows.iter().find(|w| {
+            // Look for workflows that don't have complex prompt actions
+            // Simple criteria: avoid workflows with "prompt" in their states
+            let has_prompt = w.states.values().any(|state| {
+                state.description.to_lowercase().contains("prompt")
+                    || state.description.to_lowercase().contains("ask")
+            });
+            !has_prompt && w.parameters.iter().all(|p| !p.required)
+        });
+
+        if simple_workflow.is_none() {
+            // If no simple workflow found, skip the test rather than hanging
+            return;
+        }
+
+        let workflow = simple_workflow.unwrap();
+        let request = FlowToolRequest::new(workflow.name.to_string());
+
+        let _temp_dir = tempfile::tempdir().unwrap();
+        let test_issues_dir = _temp_dir.path().join("test_issues");
+        let issue_storage: Arc<RwLock<Box<dyn IssueStorage>>> = Arc::new(RwLock::new(Box::new(
+            swissarmyhammer_issues::FileSystemIssueStorage::new(test_issues_dir).unwrap(),
+        )));
+        let git_ops = Arc::new(Mutex::new(None));
+        let memo_dir = _temp_dir.path().join("memos");
+        let memo_storage: Arc<RwLock<Box<dyn MemoStorage>>> =
+            Arc::new(RwLock::new(Box::new(MarkdownMemoStorage::new(memo_dir))));
+        let tool_handlers = Arc::new(crate::mcp::tool_handlers::ToolHandlers::new(
+            memo_storage.clone(),
+        ));
+        let agent_config = Arc::new(AgentConfig::default());
+
+        let context = ToolContext::new(
+            tool_handlers,
+            issue_storage,
+            git_ops,
+            memo_storage,
+            agent_config,
+        );
+
+        let result = tool.execute_workflow(&request, &context).await;
+
+        if let Ok(call_result) = result {
+            let content = call_result.content.first().expect("should have content");
+            if let rmcp::model::RawContent::Text(text_content) = &content.raw {
+                let parsed: serde_json::Value =
+                    serde_json::from_str(&text_content.text).expect("Should be valid JSON");
+                assert!(parsed.get("status").is_some());
+                assert!(parsed.get("workflow").is_some());
+                assert!(parsed.get("final_status").is_some());
+            } else {
+                panic!("Expected text content");
+            }
+        }
     }
 }
