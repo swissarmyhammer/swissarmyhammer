@@ -73,7 +73,7 @@ Each notification includes:
 - `token`: Unique workflow run ID
 - `progress`: Percentage complete (0-100)
 - `message`: Human-readable status message
-- `metadata`: Structured data about the event
+- `metadata`: Structured data about the event (flow_name, state info, parameters)
 
 ## Parameters
 
@@ -127,11 +127,10 @@ Create `docs/CLI_FLOW_USAGE.md`:
 
 ## Overview
 
-The flow system provides three ways to execute workflows:
+The flow system provides two ways to execute workflows:
 
-1. **Full form**: `sah flow run <workflow> [args...]`
+1. **Full form**: `sah flow <workflow> [args...]`
 2. **Shortcut form**: `sah <workflow> [args...]` (recommended)
-3. **MCP tool**: Via the `flow` MCP tool
 
 ## Command Syntax
 
@@ -141,11 +140,11 @@ Required workflow parameters are positional arguments:
 
 ```bash
 # Plan workflow requires 'plan_filename'
-sah flow run plan ideas/feature.md
+sah flow plan ideas/feature.md
 sah plan ideas/feature.md  # Shortcut
 
 # Custom workflow with multiple required params
-sah flow run code-review main feature-x
+sah flow code-review main feature-x
 sah code-review main feature-x  # Shortcut
 ```
 
@@ -154,7 +153,7 @@ sah code-review main feature-x  # Shortcut
 Optional workflow parameters use `--param key=value`:
 
 ```bash
-sah flow run custom-workflow --param author=alice --param priority=high
+sah flow custom-workflow --param author=alice --param priority=high
 sah custom-workflow --param author=alice --param priority=high
 ```
 
@@ -198,11 +197,11 @@ If a workflow name conflicts with a reserved command, it gets an underscore pref
 # Workflow named "list" becomes "_list"
 sah _list [args...]
 
-# Workflow named "run" becomes "_run"
-sah _run [args...]
+# Workflow named "flow" becomes "_flow"
+sah _flow [args...]
 ```
 
-Reserved names: `list`, `run`, plus all top-level commands (`flow`, `agent`, `prompt`, etc.)
+Reserved names: `list`, plus all top-level commands (`flow`, `agent`, `prompt`, `serve`, `doctor`, `rule`, `validate`)
 
 ## Migration from Old Syntax
 
@@ -212,29 +211,29 @@ The `--var` flag is deprecated. Use `--param` instead:
 
 ```bash
 # Old (deprecated)
-sah flow run workflow --var key=value
+sah flow workflow --var key=value
 
 # New (recommended)
-sah flow run workflow --param key=value
+sah flow workflow --param key=value
 sah workflow --param key=value  # Shortcut
 ```
 
 ### Deprecated Wrapper Commands
 
-The hardcoded `implement` and `plan` commands are deprecated:
+The hardcoded `implement` and `plan` wrapper commands are deprecated:
 
 ```bash
-# Old (deprecated)
+# Old (deprecated wrappers)
 sah implement
 sah plan ideas/feature.md
 
-# New (recommended)
-sah flow run implement
-sah flow run plan ideas/feature.md
+# New (dynamic shortcuts - same syntax, different implementation)
+sah implement --quiet
+sah plan ideas/feature.md --interactive
 
-# Or use shortcuts
-sah implement
-sah plan ideas/feature.md
+# Or use full form
+sah flow implement --quiet
+sah flow plan ideas/feature.md --interactive
 ```
 
 Note: Shortcuts work the same as old commands, but use the new dynamic system.
@@ -245,7 +244,7 @@ Note: Shortcuts work the same as old commands, but use the new dynamic system.
 
 ```bash
 # Full form
-sah flow run implement --quiet
+sah flow implement --quiet
 
 # Shortcut (recommended)
 sah implement --quiet
@@ -255,7 +254,7 @@ sah implement --quiet
 
 ```bash
 # Full form
-sah flow run plan ideas/feature.md --interactive
+sah flow plan ideas/feature.md --interactive
 
 # Shortcut (recommended)
 sah plan ideas/feature.md --interactive
@@ -265,7 +264,7 @@ sah plan ideas/feature.md --interactive
 
 ```bash
 # With required and optional parameters
-sah flow run my-workflow required-arg --param optional=value
+sah flow my-workflow required-arg --param optional=value
 
 # Shortcut
 sah my-workflow required-arg --param optional=value
@@ -279,7 +278,36 @@ sah plan ideas/feature.md --dry-run
 ```
 ```
 
-### 3. Create Migration Guide
+### 3. Update Main README
+
+Update repository README with flow system overview (section to add):
+
+```markdown
+## Workflow Execution
+
+SwissArmyHammer provides dynamic workflow execution through the flow system.
+
+### Quick Start
+
+```bash
+# List available workflows
+sah flow list
+
+# Execute a workflow (full form)
+sah flow plan ideas/feature.md
+
+# Execute a workflow (shortcut)
+sah plan ideas/feature.md
+```
+
+### Documentation
+
+- [Flow Usage Guide](docs/CLI_FLOW_USAGE.md)
+- [Migration Guide](docs/FLOW_MIGRATION.md)
+- [MCP Tool Documentation](swissarmyhammer-tools/src/mcp/tools/flow/description.md)
+```
+
+### 4. Create Migration Guide
 
 Create `docs/FLOW_MIGRATION.md`:
 
@@ -292,17 +320,17 @@ The flow system has been redesigned for dynamic workflow execution via MCP.
 
 ### Key Changes
 
-1. **Unified MCP Tool**: Single `flow` tool handles both discovery and execution
+1. **No "run" Subcommand**: `sah flow [workflow]` not `sah flow run [workflow]`
 2. **Parameter Convention**: Required params are positional, optional use `--param`
 3. **Dynamic Shortcuts**: Workflows automatically get top-level commands
 4. **MCP Notifications**: Long-running workflows send progress updates
-5. **Removed Commands**: `flow resume`, `flow status`, `flow logs` removed
+5. **Removed Commands**: Deprecated subcommands removed
 
 ### Breaking Changes
 
+- NO "run" subcommand: Use `sah flow [workflow]` directly
 - `--var` flag deprecated, use `--param` instead
-- `flow resume`, `flow status`, `flow logs` subcommands removed
-- Required parameters must be positional (not `--param`)
+- Required parameters must be positional
 
 ### Non-Breaking Changes
 
@@ -314,20 +342,24 @@ The flow system has been redesigned for dynamic workflow execution via MCP.
 
 ### For End Users
 
-1. **Update command invocations**:
-   - Replace `--var` with `--param`
-   - Use positional args for required parameters
+1. **Remove "run" from commands**:
+   - OLD: `sah flow run plan spec.md`
+   - NEW: `sah flow plan spec.md`
 
-2. **Use shortcuts** (optional but recommended):
-   - `sah plan file.md` instead of `sah flow run plan file.md`
+2. **Use positional args for required parameters**:
+   - Already works: `sah plan spec.md`
 
-3. **Update scripts**:
-   - Add `--no-deprecation-warning` to suppress warnings if needed
-   - Plan to migrate away from deprecated commands
+3. **Replace --var with --param for optional parameters**:
+   - OLD: `--var key=value`
+   - NEW: `--param key=value`
 
-### For Workflow Definitions
+4. **Use shortcuts** (optional but recommended):
+   - `sah plan file.md` instead of `sah flow plan file.md`
 
-No changes needed - workflow definitions are compatible.
+### For Scripts
+
+- Add `--no-deprecation-warning` to suppress warnings if needed
+- Plan to migrate away from deprecated syntax
 
 ### For MCP Clients
 
@@ -354,9 +386,9 @@ No changes needed - workflow definitions are compatible.
 
 ## Timeline
 
-- **Now**: New system available, old commands deprecated
+- **Now**: New system available, old syntax deprecated
 - **Next release**: Deprecation warnings added
-- **Future release**: Deprecated commands removed
+- **Future release**: Deprecated patterns removed
 
 ## Getting Help
 
@@ -365,45 +397,7 @@ No changes needed - workflow definitions are compatible.
 - Check workflow-specific help: `sah <workflow> --help`
 ```
 
-### 4. Update Main README
-
-Update repository README with flow system overview:
-
-```markdown
-## Workflow Execution
-
-SwissArmyHammer provides dynamic workflow execution through the flow system.
-
-### Quick Start
-
-```bash
-# List available workflows
-sah flow list
-
-# Execute a workflow (full form)
-sah flow run plan ideas/feature.md
-
-# Execute a workflow (shortcut)
-sah plan ideas/feature.md
-```
-
-### Documentation
-
-- [Flow Usage Guide](docs/CLI_FLOW_USAGE.md)
-- [Migration Guide](docs/FLOW_MIGRATION.md)
-- [MCP Tool Documentation](swissarmyhammer-tools/src/mcp/tools/flow/description.md)
-```
-
-### 5. Add Code Comments
-
-Add comprehensive code documentation:
-
-- Document `FlowTool` struct and methods
-- Document notification system
-- Document shortcut generation
-- Document parameter mapping
-
-### 6. Update Changelog
+### 5. Update Changelog
 
 Create `CHANGELOG.md` entry:
 
@@ -418,21 +412,34 @@ Create `CHANGELOG.md` entry:
 - `--param` flag for optional workflow parameters
 
 ### Changed
+- Flow command now takes workflow name directly: `sah flow [workflow]` not `sah flow run [workflow]`
 - Flow parameter convention: required params are positional
 - `--var` flag deprecated in favor of `--param`
 
 ### Removed
-- `flow resume` subcommand (not part of new design)
-- `flow status` subcommand (not part of new design)
-- `flow logs` subcommand (not part of new design)
+- `flow run` subcommand (use `flow [workflow]` directly)
+- `flow resume` subcommand
+- `flow status` subcommand
+- `flow logs` subcommand
+- `flow test` subcommand
 
 ### Deprecated
-- Hardcoded `implement` and `plan` commands (use shortcuts instead)
+- Hardcoded `implement` and `plan` wrapper commands (use shortcuts instead)
 - `--var` flag (use `--param` instead)
 
 ### Migration
 See [Flow Migration Guide](docs/FLOW_MIGRATION.md) for details.
 ```
+
+### 6. Add Code Comments
+
+Add comprehensive code documentation:
+
+- Document `FlowTool` struct and methods
+- Document notification system
+- Document shortcut generation
+- Document parameter mapping
+- Document special case handling for "list"
 
 ## Files to Create/Update
 
@@ -447,11 +454,11 @@ See [Flow Migration Guide](docs/FLOW_MIGRATION.md) for details.
 
 - [ ] Flow tool description is comprehensive
 - [ ] CLI usage guide covers all use cases
-- [ ] Migration guide is clear and actionable
+- [ ] Migration guide clearly explains NO "run" subcommand
 - [ ] README updated with flow overview
 - [ ] Changelog documents all changes
 - [ ] Code comments explain implementation
-- [ ] All examples are tested and working
+- [ ] All examples use correct syntax (no "flow run")
 - [ ] Documentation is consistent across all files
 
 ## Estimated Changes

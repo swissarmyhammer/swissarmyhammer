@@ -8,7 +8,7 @@ Add deprecation warnings to the hardcoded `implement` and `plan` wrapper command
 
 ## Context
 
-The `implement` and `plan` commands are hardcoded wrappers around `flow run`. While they'll continue to work during the transition period, we should warn users that they're deprecated and suggest using the new shortcut pattern.
+The `implement` and `plan` commands are hardcoded wrappers. While they'll continue to work during the transition period, we should warn users that they're deprecated and suggest using the new shortcut pattern.
 
 ## Tasks
 
@@ -20,24 +20,27 @@ Update `swissarmyhammer-cli/src/commands/implement/mod.rs`:
 pub async fn handle_command(context: &CliContext) -> i32 {
     // Print deprecation warning
     if !context.quiet {
-        eprintln!("Warning: 'sah implement' is deprecated.");
-        eprintln!("  Use 'sah flow run implement' or 'sah implement' (via dynamic shortcut) instead.");
-        eprintln!("  This command will be removed in a future version.");
+        eprintln!("Warning: 'sah implement' wrapper command is deprecated.");
+        eprintln!("  Use 'sah flow implement' or 'sah implement' (via dynamic shortcut) instead.");
+        eprintln!("  This wrapper will be removed in a future version.");
         eprintln!();
     }
     
-    // Execute the implement workflow
-    let subcommand = FlowSubcommand::Run {
-        workflow: "implement".to_string(),
+    // Execute the implement workflow via flow command
+    let cmd = FlowCommand {
+        workflow_name: "implement".to_string(),
         positional_args: vec![],
         params: vec![],
         vars: vec![],
+        format: None,
+        verbose: false,
+        source: None,
         interactive: false,
         dry_run: false,
         quiet: context.quiet,
     };
 
-    crate::commands::flow::handle_command(subcommand, context).await
+    crate::commands::flow::handle_command(cmd, context).await
 }
 ```
 
@@ -49,24 +52,27 @@ Update `swissarmyhammer-cli/src/commands/plan/mod.rs`:
 pub async fn handle_command(plan_filename: String, context: &CliContext) -> i32 {
     // Print deprecation warning
     if !context.quiet {
-        eprintln!("Warning: 'sah plan <file>' is deprecated.");
-        eprintln!("  Use 'sah flow run plan <file>' or 'sah plan <file>' (via dynamic shortcut) instead.");
-        eprintln!("  This command will be removed in a future version.");
+        eprintln!("Warning: 'sah plan <file>' wrapper command is deprecated.");
+        eprintln!("  Use 'sah flow plan <file>' or 'sah plan <file>' (via dynamic shortcut) instead.");
+        eprintln!("  This wrapper will be removed in a future version.");
         eprintln!();
     }
     
-    // Execute the plan workflow
-    let subcommand = FlowSubcommand::Run {
-        workflow: "plan".to_string(),
+    // Execute the plan workflow via flow command
+    let cmd = FlowCommand {
+        workflow_name: "plan".to_string(),
         positional_args: vec![plan_filename],
         params: vec![],
         vars: vec![],
+        format: None,
+        verbose: false,
+        source: None,
         interactive: false,
         dry_run: false,
         quiet: context.quiet,
     };
 
-    crate::commands::flow::handle_command(subcommand, context).await
+    crate::commands::flow::handle_command(cmd, context).await
 }
 ```
 
@@ -77,10 +83,10 @@ Update `swissarmyhammer-cli/src/commands/implement/description.md`:
 ```markdown
 # Implement Command (DEPRECATED)
 
-**This command is deprecated and will be removed in a future version.**
+**This wrapper command is deprecated and will be removed in a future version.**
 
 Use one of these alternatives instead:
-- `sah flow run implement` (full form)
+- `sah flow implement` (full form)
 - `sah implement` (dynamic shortcut, preferred)
 
 ## Description
@@ -93,10 +99,10 @@ Update `swissarmyhammer-cli/src/commands/plan/description.md`:
 ```markdown
 # Plan Command (DEPRECATED)
 
-**This command is deprecated and will be removed in a future version.**
+**This wrapper command is deprecated and will be removed in a future version.**
 
 Use one of these alternatives instead:
-- `sah flow run plan <file>` (full form)
+- `sah flow plan <file>` (full form)
 - `sah plan <file>` (dynamic shortcut, preferred)
 
 ## Description
@@ -109,12 +115,13 @@ Executes planning workflow for specific specification files.
 Add optional flag to suppress warnings (useful for scripts):
 
 ```rust
-// In CLI definition
+// In global CLI definition
 .arg(
     Arg::new("no_deprecation_warning")
         .long("no-deprecation-warning")
         .env("SAH_NO_DEPRECATION_WARNING")
         .action(ArgAction::SetTrue)
+        .global(true)
         .help("Suppress deprecation warnings")
         .hide(true)  // Hidden flag for compatibility
 )
@@ -170,7 +177,7 @@ async fn test_no_deprecation_warning_flag() {
 
 - [ ] Implement command shows deprecation warning
 - [ ] Plan command shows deprecation warning
-- [ ] Warnings suggest correct alternatives
+- [ ] Warnings suggest correct alternatives (no "flow run")
 - [ ] Quiet mode suppresses warnings
 - [ ] --no-deprecation-warning flag works
 - [ ] Command descriptions updated

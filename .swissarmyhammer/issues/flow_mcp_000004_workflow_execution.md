@@ -10,7 +10,17 @@ Implement workflow execution in the flow MCP tool, handling parameter mapping an
 
 With discovery working, we now need to implement actual workflow execution. The tool should map MCP parameters to workflow variables and handle execution options like interactive, dry_run, and quiet.
 
-## Tasks
+## BLOCKED: Circular Dependency Issue
+
+**Cannot proceed**: This step requires `swissarmyhammer-tools` to depend on `swissarmyhammer-workflow` to access `WorkflowExecutor`, but:
+- `swissarmyhammer-workflow` already depends on `swissarmyhammer-tools`
+- Adding the reverse dependency creates a circular dependency
+
+**Blocked by**: Same circular dependency as issue 000003
+
+**Architectural Solutions Required**: See issue 000003
+
+## Tasks (ON HOLD until circular dependency resolved)
 
 ### 1. Implement execute_workflow Method
 
@@ -148,13 +158,14 @@ async fn test_execute_workflow_dry_run() {
 }
 ```
 
-## Files to Modify
+## Files to Modify (ON HOLD)
 
 - `swissarmyhammer-tools/src/mcp/tools/flow/tool.rs`
 - `swissarmyhammer-tools/src/mcp/tools/flow/tests.rs`
 
-## Acceptance Criteria
+## Acceptance Criteria (ON HOLD)
 
+- [ ] Circular dependency resolved (prerequisite)
 - [ ] Workflow execution works with valid parameters
 - [ ] Required parameter validation works
 - [ ] Interactive, dry_run, and quiet flags are passed through
@@ -166,4 +177,9 @@ async fn test_execute_workflow_dry_run() {
 
 ## Estimated Changes
 
-~200 lines of code
+~200 lines of code (once circular dependency resolved)
+
+## Next Steps
+
+1. Resolve circular dependency (architectural decision needed)
+2. Then implement workflow execution
