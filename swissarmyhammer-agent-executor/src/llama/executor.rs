@@ -301,53 +301,32 @@ impl LlamaAgentExecutor {
 
     /// Get current resource usage statistics
     pub async fn get_resource_stats(&self) -> Result<LlamaResourceStats, ActionError> {
-        #[cfg(test)]
-        {
-            // Return mock stats for tests
-            if self.initialized {
-                Ok(LlamaResourceStats {
-                    memory_usage_mb: 128,
-                    model_size_mb: 256,
-                    active_sessions: 1,
-                    total_tokens_processed: 42,
-                    average_tokens_per_second: 10.0,
-                })
-            } else {
-                Err(ActionError::ExecutionError(
-                    "Agent not initialized".to_string(),
-                ))
-            }
-        }
+        if let Some(agent_server) = &self.agent_server {
+            // Get real statistics from the agent server
+            let health = agent_server.health().await.map_err(|e| {
+                ActionError::ExecutionError(format!("Failed to get health status: {}", e))
+            })?;
 
-        #[cfg(not(test))]
-        {
-            if let Some(agent_server) = &self.agent_server {
-                // Get real statistics from the agent server
-                let health = agent_server.health().await.map_err(|e| {
-                    ActionError::ExecutionError(format!("Failed to get health status: {}", e))
-                })?;
-
-                Ok(LlamaResourceStats {
-                    memory_usage_mb: 1024, // This would come from actual memory monitoring
-                    model_size_mb: 2048,   // This would come from model info
-                    active_sessions: health.active_sessions,
-                    total_tokens_processed: 0, // This would need to be tracked
-                    average_tokens_per_second: 0.0, // This would be calculated from metrics
-                })
-            } else if self.initialized {
-                // Fallback for when agent server is not available but we're initialized
-                Ok(LlamaResourceStats {
-                    memory_usage_mb: 512,
-                    model_size_mb: 1024,
-                    active_sessions: 0,
-                    total_tokens_processed: 0,
-                    average_tokens_per_second: 0.0,
-                })
-            } else {
-                Err(ActionError::ExecutionError(
-                    "Agent not initialized".to_string(),
-                ))
-            }
+            Ok(LlamaResourceStats {
+                memory_usage_mb: 1024, // This would come from actual memory monitoring
+                model_size_mb: 2048,   // This would come from model info
+                active_sessions: health.active_sessions,
+                total_tokens_processed: 0, // This would need to be tracked
+                average_tokens_per_second: 0.0, // This would be calculated from metrics
+            })
+        } else if self.initialized {
+            // Fallback for when agent server is not available but we're initialized
+            Ok(LlamaResourceStats {
+                memory_usage_mb: 512,
+                model_size_mb: 1024,
+                active_sessions: 0,
+                total_tokens_processed: 0,
+                average_tokens_per_second: 0.0,
+            })
+        } else {
+            Err(ActionError::ExecutionError(
+                "Agent not initialized".to_string(),
+            ))
         }
     }
 
@@ -659,7 +638,6 @@ impl AgentExecutor for LlamaAgentExecutor {
 
 impl LlamaAgentExecutor {
     /// Execute with real LlamaAgent when the feature is enabled
-    #[allow(dead_code)]
     async fn execute_with_real_agent(
         &self,
         agent_server: &Arc<AgentServer>,
@@ -1115,7 +1093,17 @@ mod tests {
         assert!(result.unwrap_err().to_string().contains("not initialized"));
     }
 
+    /// Integration test requiring a real LlamaAgent model to be available.
+    /// 
+    /// This test is ignored by default because it requires:
+    /// - A valid LlamaAgent model file accessible via the test configuration
+    /// - Sufficient system resources to load and run the model
+    /// - Network access for model operations
+    ///
+    /// To run this test, ensure the model is available and use:
+    /// `cargo nextest run --ignored test_llama_agent_executor_execute_with_init`
     #[test_log::test(tokio::test)]
+    #[ignore = "Requires LlamaAgent model files and system resources"]
     async fn test_llama_agent_executor_execute_with_init() {
         // Start MCP server first
         use swissarmyhammer_prompts::PromptLibrary;
@@ -1136,16 +1124,8 @@ mod tests {
         let config = LlamaAgentConfig::for_testing();
         let mut executor = LlamaAgentExecutor::new(config, Some(mcp_handle));
 
-        // Try to initialize executor - may fail in test environment without model files
-        let init_result = executor.initialize().await;
-        if init_result.is_err() {
-            // Skip test if we can't initialize (no model files available)
-            tracing::warn!(
-                "Skipping test - executor initialization failed: {:?}",
-                init_result.err()
-            );
-            return;
-        }
+        // Initialize executor - this test requires model files to be available
+        executor.initialize().await.expect("Executor initialization must succeed - ensure LlamaAgent model is available");
         //
 
         // Create a test execution context
