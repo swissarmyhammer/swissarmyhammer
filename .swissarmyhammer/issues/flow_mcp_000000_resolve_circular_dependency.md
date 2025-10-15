@@ -812,3 +812,68 @@ After this change:
 - [ ] Existing tests pass (LlamaAgent tests may need adjustment)
 - [ ] Workflow crate compiles independently
 
+
+
+
+## Implementation Complete
+
+The circular dependency has been successfully resolved. The work was already completed in a previous commit.
+
+### What Was Done
+
+1. **Removed MCP Server Startup from Workflow**: The MCP server startup code that was in `swissarmyhammer-workflow/src/actions.rs` has been removed and replaced with clear documentation comments (lines 705-719).
+
+2. **Removed Tools Dependency**: The `swissarmyhammer-tools` dependency has been removed from `swissarmyhammer-workflow/Cargo.toml`.
+
+3. **Updated Executor Creation**: The `get_executor` method in `PromptAction` now expects the MCP server to be pre-started by the caller. The executor initialization will fail with a helpful error message if the MCP server is not available.
+
+4. **Preserved PromptLibrary Import**: The import of `swissarmyhammer-prompts` remains, as it's a separate crate and not part of the circular dependency issue.
+
+### Verification Results
+
+All acceptance criteria have been met:
+
+- ✅ **No Tools Import**: `swissarmyhammer-tools` is not imported anywhere in the workflow crate
+- ✅ **No Tools Dependency**: `swissarmyhammer-workflow/Cargo.toml` does not list tools as a dependency
+- ✅ **Build Succeeds**: `cargo build --all` completes successfully in 0.30s
+- ✅ **Clippy Clean**: `cargo clippy --all` shows no warnings
+- ✅ **All Tests Pass**: 3325 tests pass, 1 skipped (expected)
+- ✅ **Workflow Compiles Independently**: No circular dependency errors
+
+### Architecture After Resolution
+
+```
+swissarmyhammer-workflow (no dependency on tools)
+  ├── Uses swissarmyhammer-common
+  ├── Uses swissarmyhammer-prompts
+  └── Expects pre-started MCP server
+
+swissarmyhammer-tools (can now depend on workflow if needed)
+  ├── Uses swissarmyhammer-common
+  └── Can add swissarmyhammer-workflow dependency for Flow MCP tool
+```
+
+### Code Changes Summary
+
+**swissarmyhammer-workflow/Cargo.toml**:
+- Removed: `swissarmyhammer-tools = { path = "../swissarmyhammer-tools" }`
+
+**swissarmyhammer-workflow/src/actions.rs**:
+- Removed: MCP server startup code (previously lines 672-716)
+- Added: Documentation comments explaining that MCP server must be pre-started
+- Updated: Error messages to guide users on starting MCP server at CLI layer
+
+### Next Steps
+
+With the circular dependency resolved, the following is now possible:
+
+1. **Flow MCP Tool Implementation**: Tools crate can add a dependency on workflow crate
+2. **Workflow Discovery**: Flow tool can access `WorkflowStorage` to list workflows
+3. **Workflow Execution**: Flow tool can use `WorkflowExecutor` to run workflows
+4. **Continue with Flow MCP Spec**: Proceed with steps 1-12 from `ideas/flow_mcp.md`
+
+### Technical Details
+
+The key architectural insight was recognizing that infrastructure setup (starting MCP servers) should happen at the initialization layer (CLI), not in the workflow execution layer (actions). This separation of concerns naturally resolves the circular dependency while creating cleaner, more maintainable code.
+
+The `LlamaAgentExecutorWrapper` already had the correct design with both `new()` and `new_with_mcp()` constructors, making this refactoring straightforward. The executor initialization gracefully handles missing MCP servers with clear error messages guiding users to start the server at the CLI layer.
