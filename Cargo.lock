@@ -7085,7 +7085,6 @@ dependencies = [
  "swissarmyhammer-search",
  "swissarmyhammer-shell",
  "swissarmyhammer-templating",
- "swissarmyhammer-tools",
  "syntect",
  "sysinfo",
  "tempfile",
