@@ -7,7 +7,6 @@ mod error;
 mod exit_codes;
 mod logging;
 mod mcp_integration;
-mod parameter_cli;
 mod schema_conversion;
 mod schema_validation;
 mod signal_handler;
@@ -467,6 +466,14 @@ async fn handle_flow_command(sub_matches: &clap::ArgMatches, context: &CliContex
     let subcommand = match sub_matches.subcommand() {
         Some(("run", sub_matches)) => {
             let workflow = sub_matches.get_one::<String>("workflow").cloned().unwrap();
+            let positional_args = sub_matches
+                .get_many::<String>("positional_args")
+                .map(|vals| vals.cloned().collect())
+                .unwrap_or_default();
+            let params = sub_matches
+                .get_many::<String>("params")
+                .map(|vals| vals.cloned().collect())
+                .unwrap_or_default();
             let vars = sub_matches
                 .get_many::<String>("vars")
                 .map(|vals| vals.cloned().collect())
@@ -477,6 +484,8 @@ async fn handle_flow_command(sub_matches: &clap::ArgMatches, context: &CliContex
 
             FlowSubcommand::Run {
                 workflow,
+                positional_args,
+                params,
                 vars,
                 interactive,
                 dry_run,

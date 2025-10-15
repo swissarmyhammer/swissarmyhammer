@@ -20,10 +20,13 @@ pub const DESCRIPTION: &str = include_str!("description.md");
 /// # Returns
 /// * `i32` - Exit code (0 for success, non-zero for error)
 pub async fn handle_command(plan_filename: String, context: &CliContext) -> i32 {
-    // Execute the plan workflow - equivalent to 'flow run plan'
+    // Execute the plan workflow - equivalent to 'flow run plan spec.md'
+    // The plan_filename is now a positional argument
     let subcommand = FlowSubcommand::Run {
         workflow: "plan".to_string(),
-        vars: vec![format!("plan_filename={}", plan_filename)],
+        positional_args: vec![plan_filename],
+        params: vec![],
+        vars: vec![],
         interactive: false,
         dry_run: false,
         quiet: context.quiet,

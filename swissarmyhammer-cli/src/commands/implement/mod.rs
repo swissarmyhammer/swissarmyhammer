@@ -23,6 +23,8 @@ pub async fn handle_command(context: &CliContext) -> i32 {
     // Execute the implement workflow - equivalent to 'flow run implement'
     let subcommand = FlowSubcommand::Run {
         workflow: "implement".to_string(),
+        positional_args: vec![],
+        params: vec![],
         vars: vec![],
         interactive: false,
         dry_run: false,

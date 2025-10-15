@@ -5,7 +5,8 @@ use std::path::PathBuf;
 
 use swissarmyhammer::test_utils::IsolatedTestEnvironment;
 use swissarmyhammer_cli::{
-    cli::FlowSubcommand, commands::flow::run::execute_run_command, context::CliContext,
+    commands::flow::run::{execute_run_command, RunCommandConfig},
+    context::CliContext,
 };
 
 mod in_process_test_utils;
@@ -50,25 +51,20 @@ async fn run_builtin_workflow_in_process(
     // Change to repo root directory where builtin workflows are located
     std::env::set_current_dir(&repo_root)?;
 
-    let subcommand = FlowSubcommand::Run {
-        workflow: workflow_name.to_string(),
-        vars,
-        interactive: false,
-        dry_run,
-        quiet: true,
-    };
-
     let cli_context = create_test_cli_context().await?;
-    let result = match subcommand {
-        FlowSubcommand::Run {
-            workflow,
+    let result = execute_run_command(
+        RunCommandConfig {
+            workflow: workflow_name.to_string(),
+            positional_args: vec![],
+            params: vec![],
             vars,
-            interactive,
+            interactive: false,
             dry_run,
-            quiet,
-        } => execute_run_command(workflow, vars, interactive, dry_run, quiet, &cli_context).await,
-        _ => panic!("Unexpected subcommand type"),
-    };
+            quiet: true,
+        },
+        &cli_context,
+    )
+    .await;
 
     Ok(result.is_ok())
 }

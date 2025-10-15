@@ -263,7 +263,14 @@ pub enum FlowSubcommand {
         /// Workflow name to run
         workflow: String,
 
-        /// Initial variables as key=value pairs
+        /// Required workflow parameters as positional arguments (after workflow name)
+        positional_args: Vec<String>,
+
+        /// Optional workflow parameters as key=value pairs
+        #[arg(long = "param", short = 'p', value_name = "KEY=VALUE")]
+        params: Vec<String>,
+
+        /// \[DEPRECATED\] Use --param instead
         #[arg(long = "var", value_name = "KEY=VALUE")]
         vars: Vec<String>,
 
@@ -1102,5 +1109,281 @@ mod tests {
     fn test_global_format_flag_invalid() {
         let result = Cli::try_parse_from_args(["swissarmyhammer", "--format", "invalid", "doctor"]);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_flow_run_basic_workflow() {
+        let result = Cli::try_parse_from_args(["swissarmyhammer", "flow", "run", "implement"]);
+        assert!(result.is_ok());
+
+        let cli = result.unwrap();
+        if let Some(Commands::Flow { subcommand }) = cli.command {
+            if let FlowSubcommand::Run {
+                workflow,
+                positional_args,
+                params,
+                vars,
+                interactive,
+                dry_run,
+                quiet,
+            } = subcommand
+            {
+                assert_eq!(workflow, "implement");
+                assert!(positional_args.is_empty());
+                assert!(params.is_empty());
+                assert!(vars.is_empty());
+                assert!(!interactive);
+                assert!(!dry_run);
+                assert!(!quiet);
+            } else {
+                unreachable!("Expected Run subcommand");
+            }
+        } else {
+            unreachable!("Expected Flow command");
+        }
+    }
+
+    #[test]
+    fn test_flow_run_with_positional_args() {
+        let result =
+            Cli::try_parse_from_args(["swissarmyhammer", "flow", "run", "plan", "spec.md"]);
+        assert!(result.is_ok());
+
+        let cli = result.unwrap();
+        if let Some(Commands::Flow { subcommand }) = cli.command {
+            if let FlowSubcommand::Run {
+                workflow,
+                positional_args,
+                params,
+                vars,
+                ..
+            } = subcommand
+            {
+                assert_eq!(workflow, "plan");
+                assert_eq!(positional_args, vec!["spec.md"]);
+                assert!(params.is_empty());
+                assert!(vars.is_empty());
+            } else {
+                unreachable!("Expected Run subcommand");
+            }
+        } else {
+            unreachable!("Expected Flow command");
+        }
+    }
+
+    #[test]
+    fn test_flow_run_with_multiple_positional_args() {
+        let result = Cli::try_parse_from_args([
+            "swissarmyhammer",
+            "flow",
+            "run",
+            "code-review",
+            "main",
+            "feature-x",
+        ]);
+        assert!(result.is_ok());
+
+        let cli = result.unwrap();
+        if let Some(Commands::Flow { subcommand }) = cli.command {
+            if let FlowSubcommand::Run {
+                workflow,
+                positional_args,
+                ..
+            } = subcommand
+            {
+                assert_eq!(workflow, "code-review");
+                assert_eq!(positional_args, vec!["main", "feature-x"]);
+            } else {
+                unreachable!("Expected Run subcommand");
+            }
+        } else {
+            unreachable!("Expected Flow command");
+        }
+    }
+
+    #[test]
+    fn test_flow_run_with_param_flag() {
+        let result = Cli::try_parse_from_args([
+            "swissarmyhammer",
+            "flow",
+            "run",
+            "plan",
+            "spec.md",
+            "--param",
+            "author=alice",
+        ]);
+        assert!(result.is_ok());
+
+        let cli = result.unwrap();
+        if let Some(Commands::Flow { subcommand }) = cli.command {
+            if let FlowSubcommand::Run {
+                workflow,
+                positional_args,
+                params,
+                vars,
+                ..
+            } = subcommand
+            {
+                assert_eq!(workflow, "plan");
+                assert_eq!(positional_args, vec!["spec.md"]);
+                assert_eq!(params, vec!["author=alice"]);
+                assert!(vars.is_empty());
+            } else {
+                unreachable!("Expected Run subcommand");
+            }
+        } else {
+            unreachable!("Expected Flow command");
+        }
+    }
+
+    #[test]
+    fn test_flow_run_with_multiple_params() {
+        let result = Cli::try_parse_from_args([
+            "swissarmyhammer",
+            "flow",
+            "run",
+            "custom",
+            "--param",
+            "key1=value1",
+            "--param",
+            "key2=value2",
+        ]);
+        assert!(result.is_ok());
+
+        let cli = result.unwrap();
+        if let Some(Commands::Flow { subcommand }) = cli.command {
+            if let FlowSubcommand::Run { params, .. } = subcommand {
+                assert_eq!(params, vec!["key1=value1", "key2=value2"]);
+            } else {
+                unreachable!("Expected Run subcommand");
+            }
+        } else {
+            unreachable!("Expected Flow command");
+        }
+    }
+
+    #[test]
+    fn test_flow_run_with_deprecated_var_flag() {
+        let result = Cli::try_parse_from_args([
+            "swissarmyhammer",
+            "flow",
+            "run",
+            "plan",
+            "--var",
+            "input=test",
+        ]);
+        assert!(result.is_ok());
+
+        let cli = result.unwrap();
+        if let Some(Commands::Flow { subcommand }) = cli.command {
+            if let FlowSubcommand::Run {
+                workflow,
+                params,
+                vars,
+                ..
+            } = subcommand
+            {
+                assert_eq!(workflow, "plan");
+                assert!(params.is_empty());
+                assert_eq!(vars, vec!["input=test"]);
+            } else {
+                unreachable!("Expected Run subcommand");
+            }
+        } else {
+            unreachable!("Expected Flow command");
+        }
+    }
+
+    #[test]
+    fn test_flow_run_with_both_param_and_var() {
+        let result = Cli::try_parse_from_args([
+            "swissarmyhammer",
+            "flow",
+            "run",
+            "workflow",
+            "--param",
+            "key1=param_value",
+            "--var",
+            "key2=var_value",
+        ]);
+        assert!(result.is_ok());
+
+        let cli = result.unwrap();
+        if let Some(Commands::Flow { subcommand }) = cli.command {
+            if let FlowSubcommand::Run { params, vars, .. } = subcommand {
+                assert_eq!(params, vec!["key1=param_value"]);
+                assert_eq!(vars, vec!["key2=var_value"]);
+            } else {
+                unreachable!("Expected Run subcommand");
+            }
+        } else {
+            unreachable!("Expected Flow command");
+        }
+    }
+
+    #[test]
+    fn test_flow_run_with_all_flags() {
+        let result = Cli::try_parse_from_args([
+            "swissarmyhammer",
+            "flow",
+            "run",
+            "plan",
+            "spec.md",
+            "--param",
+            "author=alice",
+            "--interactive",
+            "--dry-run",
+            "--quiet",
+        ]);
+        assert!(result.is_ok());
+
+        let cli = result.unwrap();
+        if let Some(Commands::Flow { subcommand }) = cli.command {
+            if let FlowSubcommand::Run {
+                workflow,
+                positional_args,
+                params,
+                interactive,
+                dry_run,
+                quiet,
+                ..
+            } = subcommand
+            {
+                assert_eq!(workflow, "plan");
+                assert_eq!(positional_args, vec!["spec.md"]);
+                assert_eq!(params, vec!["author=alice"]);
+                assert!(interactive);
+                assert!(dry_run);
+                assert!(quiet);
+            } else {
+                unreachable!("Expected Run subcommand");
+            }
+        } else {
+            unreachable!("Expected Flow command");
+        }
+    }
+
+    #[test]
+    fn test_flow_run_short_param_flag() {
+        let result = Cli::try_parse_from_args([
+            "swissarmyhammer",
+            "flow",
+            "run",
+            "workflow",
+            "-p",
+            "key=value",
+        ]);
+        assert!(result.is_ok());
+
+        let cli = result.unwrap();
+        if let Some(Commands::Flow { subcommand }) = cli.command {
+            if let FlowSubcommand::Run { params, .. } = subcommand {
+                assert_eq!(params, vec!["key=value"]);
+            } else {
+                unreachable!("Expected Run subcommand");
+            }
+        } else {
+            unreachable!("Expected Flow command");
+        }
     }
 }

@@ -5,7 +5,7 @@
 pub mod display;
 pub mod list;
 pub mod logs;
-
+pub mod params;
 pub mod resume;
 pub mod run;
 pub mod shared;
@@ -24,11 +24,32 @@ pub async fn handle_command(subcommand: FlowSubcommand, context: &CliContext) ->
     let result = match subcommand {
         FlowSubcommand::Run {
             workflow,
+            positional_args,
+            params,
             vars,
             interactive,
             dry_run,
             quiet,
-        } => run::execute_run_command(workflow, vars, interactive, dry_run, quiet, context).await,
+        } => {
+            // Show deprecation warning if --var is used
+            if !vars.is_empty() {
+                eprintln!("Warning: --var is deprecated, use --param instead");
+            }
+
+            run::execute_run_command(
+                run::RunCommandConfig {
+                    workflow,
+                    positional_args,
+                    params,
+                    vars,
+                    interactive,
+                    dry_run,
+                    quiet,
+                },
+                context,
+            )
+            .await
+        }
         FlowSubcommand::Resume {
             run_id,
             interactive,

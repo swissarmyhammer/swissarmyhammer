@@ -1,6 +1,6 @@
 //! Test a workflow without executing actions command implementation
 
-use super::run::execute_run_command;
+use super::run::{execute_run_command, RunCommandConfig};
 use crate::context::CliContext;
 use swissarmyhammer::Result;
 
@@ -14,11 +14,15 @@ pub async fn execute_test_command(
 ) -> Result<()> {
     // Test workflow is the same as run workflow but with dry_run enabled
     execute_run_command(
-        workflow,
-        vars,
-        interactive,
-        true, // dry_run = true for test mode
-        quiet,
+        RunCommandConfig {
+            workflow,
+            positional_args: vec![], // No positional args for test
+            params: vec![],          // No --param args for test
+            vars,
+            interactive,
+            dry_run: true, // dry_run = true for test mode
+            quiet,
+        },
         context,
     )
     .await
