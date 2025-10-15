@@ -9,7 +9,9 @@ use rmcp::model::CallToolResult;
 use rmcp::ErrorData as McpError;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
-use swissarmyhammer_agent_executor::{AgentExecutor, ClaudeCodeExecutor, LlamaAgentExecutorWrapper};
+use swissarmyhammer_agent_executor::{
+    AgentExecutor, ClaudeCodeExecutor, LlamaAgentExecutorWrapper,
+};
 use swissarmyhammer_config::{AgentConfig, AgentExecutorConfig};
 use swissarmyhammer_rules::{RuleCheckRequest as DomainRuleCheckRequest, RuleChecker, Severity};
 use tokio::sync::OnceCell;

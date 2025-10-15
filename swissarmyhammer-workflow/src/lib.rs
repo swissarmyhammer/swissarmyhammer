@@ -38,9 +38,8 @@ pub use actions::{
     is_valid_env_var_name, parse_action_from_description,
     parse_action_from_description_with_context, validate_command,
     validate_environment_variables_security, validate_working_directory_security, Action,
-    ActionError, ActionResult, AgentExecutionContext, AgentExecutor, AgentExecutorFactory,
-    LogAction, LogLevel, PromptAction, SetVariableAction, ShellAction, SubWorkflowAction,
-    WaitAction,
+    ActionError, ActionResult, AgentExecutionContext, AgentExecutor, LogAction, LogLevel,
+    PromptAction, SetVariableAction, ShellAction, SubWorkflowAction, WaitAction,
 };
 pub use agents::{LlamaAgentExecutor, LlamaAgentExecutorWrapper};
 

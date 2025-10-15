@@ -679,7 +679,9 @@ impl LlamaAgentExecutor {
             agent_server
                 .discover_tools(&mut session)
                 .await
-                .map_err(|e| ActionError::ExecutionError(format!("Failed to discover tools: {}", e)))?;
+                .map_err(|e| {
+                    ActionError::ExecutionError(format!("Failed to discover tools: {}", e))
+                })?;
         } else {
             tracing::debug!("Skipping tool discovery for rule checking (optimization)");
         }

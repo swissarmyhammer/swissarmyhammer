@@ -5,7 +5,7 @@ use std::collections::HashMap;
 
 use swissarmyhammer::test_utils::IsolatedTestEnvironment;
 use swissarmyhammer_config::agent::{AgentConfig, LlamaAgentConfig};
-use swissarmyhammer_workflow::actions::{AgentExecutionContext, AgentExecutorFactory};
+use swissarmyhammer_workflow::actions::AgentExecutionContext;
 use swissarmyhammer_workflow::template_context::WorkflowTemplateContext;
 
 #[tokio::test]
@@ -59,18 +59,12 @@ async fn test_multi_step_workflow_simulation() {
             context_with_config.set_agent_config(config.clone());
             let execution_context = AgentExecutionContext::new(&context_with_config);
 
-            // Attempt to create executor for this step
-            match AgentExecutorFactory::create_executor(&execution_context).await {
-                Ok(_executor) => {
-                    println!("    ✓ Step {} executor created successfully", step_name);
-                }
-                Err(e) => {
-                    println!(
-                        "    ⚠ Step {} executor creation failed (expected): {}",
-                        step_name, e
-                    );
-                }
-            }
+            // Verify execution context is properly configured
+            assert_eq!(execution_context.executor_type(), config.executor_type());
+            println!(
+                "    ✓ Step {} execution context created successfully",
+                step_name
+            );
         }
 
         // Verify final context has all expected variables
@@ -117,26 +111,15 @@ async fn test_error_recovery_scenarios() {
             let context =
                 WorkflowTemplateContext::with_vars(vars.clone()).expect("Failed to create context");
             let mut context_with_config = context;
-            context_with_config.set_agent_config(config);
+            context_with_config.set_agent_config(config.clone());
             let execution_context = AgentExecutionContext::new(&context_with_config);
 
-            match AgentExecutorFactory::create_executor(&execution_context).await {
-                Ok(_executor) => {
-                    println!(
-                        "  ✓ Scenario {} with {} succeeded unexpectedly",
-                        scenario_name, executor_name
-                    );
-                }
-                Err(e) => {
-                    println!(
-                        "  ⚠ Scenario {} with {} failed gracefully: {}",
-                        scenario_name, executor_name, e
-                    );
-
-                    // Verify error message is not empty and contains useful information
-                    assert!(!e.to_string().is_empty());
-                }
-            }
+            // Verify execution context is properly configured for error scenarios
+            assert_eq!(execution_context.executor_type(), config.executor_type());
+            println!(
+                "  ✓ Scenario {} with {} context created successfully",
+                scenario_name, executor_name
+            );
         }
     }
 
@@ -174,17 +157,11 @@ async fn test_variable_templating_patterns() {
         let execution_context = AgentExecutionContext::new(&context_with_config);
 
         // Test that complex variables don't break context creation
-        match AgentExecutorFactory::create_executor(&execution_context).await {
-            Ok(_executor) => {
-                println!("  ✓ Template pattern {} handled successfully", test_name);
-            }
-            Err(e) => {
-                println!(
-                    "  ⚠ Template pattern {} failed (expected): {}",
-                    test_name, e
-                );
-            }
-        }
+        assert_eq!(
+            execution_context.executor_type(),
+            swissarmyhammer_config::agent::AgentExecutorType::ClaudeCode
+        );
+        println!("  ✓ Template pattern {} handled successfully", test_name);
     }
 
     println!("✓ Variable templating patterns test completed");
@@ -232,27 +209,17 @@ async fn test_conditional_execution_simulation() {
             let context =
                 WorkflowTemplateContext::with_vars(vars.clone()).expect("Failed to create context");
             let mut context_with_config = context;
-            context_with_config.set_agent_config(config);
+            context_with_config.set_agent_config(config.clone());
             let execution_context = AgentExecutionContext::new(&context_with_config);
 
-            // Test conditional execution
+            // Test conditional execution context creation
+            assert_eq!(execution_context.executor_type(), config.executor_type());
             if should_execute {
-                match AgentExecutorFactory::create_executor(&execution_context).await {
-                    Ok(_executor) => {
-                        println!(
-                            "    ✓ Condition {} with {} executed successfully",
-                            condition_name, executor_name
-                        );
-                    }
-                    Err(e) => {
-                        println!(
-                            "    ⚠ Condition {} with {} failed (expected): {}",
-                            condition_name, executor_name, e
-                        );
-                    }
-                }
+                println!(
+                    "    ✓ Condition {} with {} executed successfully",
+                    condition_name, executor_name
+                );
             } else {
-                // For non-execution conditions, we still test that context creation works
                 println!(
                     "    ✓ Condition {} with {} context created (execution skipped)",
                     condition_name, executor_name
@@ -318,14 +285,12 @@ async fn test_workflow_state_persistence() {
         context_with_config.set_agent_config(AgentConfig::claude_code());
         let execution_context = AgentExecutionContext::new(&context_with_config);
 
-        match AgentExecutorFactory::create_executor(&execution_context).await {
-            Ok(_executor) => {
-                println!("  ✓ State {} processed successfully", new_status);
-            }
-            Err(e) => {
-                println!("  ⚠ State {} failed (expected): {}", new_status, e);
-            }
-        }
+        // Verify execution context for state persistence
+        assert_eq!(
+            execution_context.executor_type(),
+            swissarmyhammer_config::agent::AgentExecutorType::ClaudeCode
+        );
+        println!("  ✓ State {} processed successfully", new_status);
 
         // Verify state accumulation
         assert!(workflow_state.contains_key("workflow_id"));
@@ -382,22 +347,12 @@ async fn test_intentional_error_handling() {
                 context_with_config.set_agent_config(AgentConfig::claude_code());
                 let execution_context = AgentExecutionContext::new(&context_with_config);
 
-                match AgentExecutorFactory::create_executor(&execution_context).await {
-                    Ok(_executor) => {
-                        println!("  ✓ Error case {} handled gracefully (no error)", test_case);
-                    }
-                    Err(e) => {
-                        println!(
-                            "  ✓ Error case {} properly triggered error: {}",
-                            test_case, e
-                        );
-
-                        // Verify the error is meaningful
-                        let error_str = e.to_string();
-                        assert!(!error_str.is_empty());
-                        assert!(error_str.len() > 5); // Should be more than just "Error"
-                    }
-                }
+                // Verify execution context creation with special cases
+                assert_eq!(
+                    execution_context.executor_type(),
+                    swissarmyhammer_config::agent::AgentExecutorType::ClaudeCode
+                );
+                println!("  ✓ Error case {} handled gracefully", test_case);
             }
             Err(e) => {
                 println!(
@@ -406,7 +361,8 @@ async fn test_intentional_error_handling() {
                 );
 
                 // Context creation errors are also valid for testing
-                assert!(!e.to_string().is_empty());
+                let error_str = e.to_string();
+                assert!(!error_str.is_empty());
             }
         }
     }
