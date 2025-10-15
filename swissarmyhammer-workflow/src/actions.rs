@@ -708,7 +708,8 @@ impl PromptAction {
                 // via the configuration specified in llama_config.mcp_server.
                 tracing::info!("Creating LlamaAgent executor (expects pre-started MCP server)");
 
-                let mut executor = crate::agents::LlamaAgentExecutorWrapper::new(llama_config.clone());
+                let mut executor =
+                    crate::agents::LlamaAgentExecutorWrapper::new(llama_config.clone());
                 executor.initialize().await.map_err(|e| {
                     ActionError::ExecutionError(format!(
                         "Failed to initialize LlamaAgent. The MCP server must be started before running workflows that use LlamaAgent. \

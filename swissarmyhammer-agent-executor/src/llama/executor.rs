@@ -12,6 +12,38 @@ use swissarmyhammer_config::agent::AgentExecutorType;
 use swissarmyhammer_config::{LlamaAgentConfig, ModelSource};
 use tokio::sync::OnceCell;
 
+/// Re-exports from the llama_agent crate for external use and type compatibility
+///
+/// These types are re-exported to provide a unified interface for LlamaAgent configuration
+/// and execution. External code should use these re-exports rather than importing directly
+/// from llama_agent to maintain API stability and reduce coupling.
+///
+/// # Type Overview
+///
+/// ## Core Agent Types
+/// - `AgentServer`: The main server for handling agent execution and lifecycle
+/// - `AgentConfig`: Configuration for the agent including model, queue, and MCP settings
+/// - `AgentAPI`: Interface for interacting with the agent server
+///
+/// ## Session and Message Types
+/// - `Message`: Individual conversation message with role and content
+/// - `MessageRole`: Enum for message roles (User, Assistant, System, Tool)
+/// - `SessionConfig`: Configuration for conversation session management
+///
+/// ## Model Configuration Types
+/// - `ModelConfig`: Configuration for the LLM model
+/// - `ModelSource`: Enum for model sources (HuggingFace, Local)
+/// - `StoppingConfig`: Configuration for generation stopping criteria
+///
+/// ## Execution Configuration Types
+/// - `GenerationRequest`: Request for text generation
+/// - `ParallelConfig`: Configuration for parallel execution of tool calls
+/// - `QueueConfig`: Configuration for request queue management
+/// - `RetryConfig`: Configuration for retry logic on failures
+///
+/// ## MCP (Model Context Protocol) Types
+/// - `MCPServerConfig`: Configuration for MCP server connections
+/// - `HttpServerConfig`: Configuration for HTTP-based MCP servers
 pub use llama_agent::{
     types::{
         AgentAPI, AgentConfig, GenerationRequest, HttpServerConfig, MCPServerConfig, Message,
@@ -200,9 +232,13 @@ impl LlamaAgentExecutor {
                 max_delay_ms: 1000,
             },
             debug: false, // Hardcode to false to suppress llama.cpp verbose logging
-            n_seq_max: 1, // Match cache test
-            n_threads: 4, // Match cache test
-            n_threads_batch: 4, // Match cache test
+            // Thread and sequence configuration for llama.cpp
+            // n_seq_max: Maximum number of parallel sequences/contexts (1 = single conversation)
+            // n_threads: Number of threads for prompt processing (4 = balanced for multi-core CPUs)
+            // n_threads_batch: Number of threads for batch processing (4 = parallel token generation)
+            n_seq_max: 1,
+            n_threads: 4,
+            n_threads_batch: 4,
         };
 
         // Create MCP server configs for HTTP transport
@@ -1094,7 +1130,7 @@ mod tests {
     }
 
     /// Integration test requiring a real LlamaAgent model to be available.
-    /// 
+    ///
     /// This test is ignored by default because it requires:
     /// - A valid LlamaAgent model file accessible via the test configuration
     /// - Sufficient system resources to load and run the model
@@ -1125,8 +1161,10 @@ mod tests {
         let mut executor = LlamaAgentExecutor::new(config, Some(mcp_handle));
 
         // Initialize executor - this test requires model files to be available
-        executor.initialize().await.expect("Executor initialization must succeed - ensure LlamaAgent model is available");
-        //
+        executor
+            .initialize()
+            .await
+            .expect("Executor initialization must succeed - ensure LlamaAgent model is available");
 
         // Create a test execution context
         let agent_config = create_test_agent_config();
@@ -1143,7 +1181,6 @@ mod tests {
 
         // Execution must succeed - this is a real integration test
         let response = result.expect("Prompt execution must succeed");
-        // Response was obtained above with expect()
 
         // Verify response structure for real execution
         tracing::debug!("Response content length: {}", response.content.len());
