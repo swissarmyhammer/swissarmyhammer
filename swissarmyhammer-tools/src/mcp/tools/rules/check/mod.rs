@@ -9,18 +9,15 @@ use rmcp::model::CallToolResult;
 use rmcp::ErrorData as McpError;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
-use swissarmyhammer_agent_executor::{
-    AgentExecutor, ClaudeCodeExecutor, LlamaAgentExecutorWrapper,
-};
-use swissarmyhammer_config::{AgentConfig, AgentExecutorConfig};
+use swissarmyhammer_agent_executor::AgentExecutor;
+use swissarmyhammer_config::AgentConfig;
 use swissarmyhammer_rules::{RuleCheckRequest as DomainRuleCheckRequest, RuleChecker, Severity};
 use tokio::sync::OnceCell;
 
-/// Create an agent executor from agent configuration
+/// Create an agent executor from agent configuration using the centralized factory
 ///
-/// Note: This is a simplified implementation for the MCP tool. The canonical implementation
-/// with full MCP server lifecycle management is in swissarmyhammer_workflow::actions::AgentExecutorFactory.
-/// This cannot use the workflow factory due to circular dependency (workflow depends on tools).
+/// This now uses the centralized AgentExecutorFactory from swissarmyhammer_agent_executor,
+/// eliminating code duplication between CLI and MCP tool implementations.
 ///
 /// # Arguments
 ///
@@ -36,30 +33,19 @@ use tokio::sync::OnceCell;
 async fn create_agent_from_config(
     config: &AgentConfig,
 ) -> Result<Arc<dyn AgentExecutor>, McpError> {
-    match &config.executor {
-        AgentExecutorConfig::ClaudeCode(_claude_config) => {
-            tracing::debug!("Creating ClaudeCode executor for rule checking");
-            let mut executor = ClaudeCodeExecutor::new();
-            executor.initialize().await.map_err(|e| {
-                McpError::internal_error(
-                    format!("Failed to initialize ClaudeCode executor: {}", e),
-                    None,
-                )
-            })?;
-            Ok(Arc::new(executor) as Arc<dyn AgentExecutor>)
-        }
-        AgentExecutorConfig::LlamaAgent(llama_config) => {
-            tracing::debug!("Creating LlamaAgent executor for rule checking");
-            let mut executor = LlamaAgentExecutorWrapper::new(llama_config.clone());
-            executor.initialize().await.map_err(|e| {
-                McpError::internal_error(
-                    format!("Failed to initialize LlamaAgent executor: {}", e),
-                    None,
-                )
-            })?;
-            Ok(Arc::new(executor) as Arc<dyn AgentExecutor>)
-        }
-    }
+    tracing::debug!(
+        "Creating executor via centralized factory for {:?}",
+        config.executor_type()
+    );
+
+    // Use the centralized factory from agent-executor crate
+    // MCP server is not needed for rule checking as it runs without tools
+    swissarmyhammer_agent_executor::AgentExecutorFactory::create_executor(config, None)
+        .await
+        .map(Arc::from)
+        .map_err(|e| {
+            McpError::internal_error(format!("Failed to create agent executor: {}", e), None)
+        })
 }
 
 /// Request structure for rule checking operations via MCP
