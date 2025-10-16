@@ -78,6 +78,27 @@ pub async fn execute_check_command(cmd: CheckCommand, context: &CliContext) -> C
     execute_check_command_impl(request, context).await
 }
 
+/// MCP server keepalive guard to ensure proper cleanup
+///
+/// This struct holds the MCP server handles and ensures they are properly
+/// cleaned up when dropped, preventing memory leaks and orphaned processes.
+struct McpServerGuard {
+    _tools_handle: swissarmyhammer_tools::mcp::unified_server::McpServerHandle,
+    _shutdown_rx: tokio::sync::oneshot::Receiver<()>,
+}
+
+impl McpServerGuard {
+    fn new(
+        tools_handle: swissarmyhammer_tools::mcp::unified_server::McpServerHandle,
+        shutdown_rx: tokio::sync::oneshot::Receiver<()>,
+    ) -> Self {
+        Self {
+            _tools_handle: tools_handle,
+            _shutdown_rx: shutdown_rx,
+        }
+    }
+}
+
 /// Internal implementation of check command with injectable agent configuration
 ///
 /// This function is identical to `execute_check_command` but accepts a request
@@ -105,6 +126,9 @@ async fn execute_check_command_impl(
             .map_err(|e| CliError::new(format!("Failed to load configuration: {}", e), 1))?;
         template_context.get_agent_config(None)
     };
+
+    // MCP server guard to ensure proper cleanup (only used for LlamaAgent)
+    let _mcp_guard: Option<McpServerGuard>;
 
     // Create and initialize executor based on type
     // Note: This duplicates logic from workflow::AgentExecutorFactory, but we can't use that
@@ -137,8 +161,8 @@ async fn execute_check_command_impl(
             let port = tools_mcp_handle.info.port.unwrap_or(0);
             let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
 
-            // Store the shutdown receiver to prevent premature server shutdown
-            let _server_keepalive = shutdown_rx;
+            // Store handles in guard to ensure proper cleanup when function exits
+            _mcp_guard = Some(McpServerGuard::new(tools_mcp_handle, shutdown_rx));
 
             let agent_mcp_handle = McpServerHandle::new(port, "127.0.0.1".to_string(), shutdown_tx);
 
@@ -153,14 +177,10 @@ async fn execute_check_command_impl(
                 )
             })?;
 
-            // Keep MCP server alive by leaking the handles
-            // This prevents the server from shutting down while the agent is in use
-            std::mem::forget(_server_keepalive);
-            std::mem::forget(tools_mcp_handle);
-
             Box::new(exec)
         }
         AgentExecutorConfig::ClaudeCode(_claude_config) => {
+            _mcp_guard = None;
             tracing::info!("Using ClaudeCode executor for rule checking");
             let mut exec = ClaudeCodeExecutor::new();
             exec.initialize().await.map_err(|e| {

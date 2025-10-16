@@ -184,7 +184,13 @@ impl FlowTool {
 
         // Execute the workflow with progress tracking
         let result = self
-            .execute_with_notifications(&mut executor, &mut run, &run_id, &request.flow_name, context)
+            .execute_with_notifications(
+                &mut executor,
+                &mut run,
+                &run_id,
+                &request.flow_name,
+                context,
+            )
             .await;
 
         // Handle execution result
