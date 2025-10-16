@@ -100,15 +100,24 @@ async fn run_sah_command_in_process_inner_with_dir(
         };
 
         // Check if this is a command we can run in-process
+        // Commands that can run in-process:
+        // - Validate: Uses captured output functions for validation checks
+        // - Completion: Generates completion scripts directly via clap
+        // - Flow: Workflow execution can be simulated in tests
+        // - Prompt: Prompt testing can be handled with captured output
+        // - None: No command (help/version handling)
+        // Commands that require subprocess:
+        // - Serve: Needs actual server lifecycle and network binding
+        // - Doctor: Requires system checks and external tool validation
+        // - Agent: May need external tool execution and state management
+        // - Dynamic MCP tools: Need full tool registry and MCP server interaction
         let can_run_in_process = matches!(
             cli.command,
-            Some(Commands::Validate { .. }) |
-            Some(Commands::Completion { .. }) |
-            Some(Commands::Plan { .. }) |        // Add Plan command support
-            Some(Commands::Implement) |          // Add Implement command support
-            Some(Commands::Flow { .. }) |        // Add Flow command support
-            Some(Commands::Prompt { .. }) |      // Add Prompt command support
-            None
+            Some(Commands::Validate { .. })
+                | Some(Commands::Completion { .. })
+                | Some(Commands::Flow { .. })
+                | Some(Commands::Prompt { .. })
+                | None
         );
 
         if can_run_in_process {
@@ -259,10 +268,10 @@ async fn execute_cli_command_with_capture(
     args: &[String],
 ) -> Result<(String, String, i32)> {
     // Check if --quiet is present in args
-    let is_quiet = args.iter().any(|arg| arg == "--quiet" || arg == "-q");
+    let _is_quiet = args.iter().any(|arg| arg == "--quiet" || arg == "-q");
     use std::io::Write;
     use std::sync::{Arc, Mutex};
-    use swissarmyhammer_cli::exit_codes::{EXIT_ERROR, EXIT_SUCCESS, EXIT_WARNING};
+    use swissarmyhammer_cli::exit_codes::{EXIT_ERROR, EXIT_SUCCESS};
 
     // Create buffers to capture output
     let stdout_buffer = Arc::new(Mutex::new(Vec::new()));
@@ -292,112 +301,7 @@ async fn execute_cli_command_with_capture(
                 }
             }
         }
-        Some(Commands::Implement) => {
-            // Implement command - print deprecation warning and delegate to flow
-            // Note: This mock uses writeln! for testing purposes, while the actual
-            // implementation uses tracing::warn!. Both write to stderr, but tracing
-            // integrates with the application's logging infrastructure.
-            let stderr_capture = stderr_buffer.clone();
 
-            // Print deprecation warning to stderr (unless --quiet is specified)
-            if !is_quiet {
-                if let Ok(mut stderr) = stderr_capture.lock() {
-                    let _ = writeln!(
-                        stderr,
-                        "Warning: 'sah implement' wrapper command is deprecated."
-                    );
-                    let _ = writeln!(stderr, "  Use 'sah flow implement' or 'sah implement' (via dynamic shortcut) instead.");
-                    let _ = writeln!(
-                        stderr,
-                        "  This wrapper will be removed in a future version."
-                    );
-                    let _ = writeln!(stderr);
-                }
-            }
-
-            // Delegate to flow execute
-            let stdout_str = "Starting workflow: implement".to_string();
-            let stderr_str = String::from_utf8_lossy(&stderr_capture.lock().unwrap()).to_string();
-            (stdout_str, stderr_str, EXIT_SUCCESS)
-        }
-        Some(Commands::Plan { plan_filename }) => {
-            // Plan command mock for tests - check if file exists and return appropriate exit code
-            // Note: This mock uses writeln! for testing purposes, while the actual
-            // implementation uses tracing::warn!. Both write to stderr, but tracing
-            // integrates with the application's logging infrastructure.
-            let stderr_capture = stderr_buffer.clone();
-            let stdout_capture = stdout_buffer.clone();
-
-            // Print deprecation warning to stderr first (unless --quiet is specified)
-            if !is_quiet {
-                if let Ok(mut stderr) = stderr_capture.lock() {
-                    let _ = writeln!(
-                        stderr,
-                        "Warning: 'sah plan <file>' wrapper command is deprecated."
-                    );
-                    let _ = writeln!(stderr, "  Use 'sah flow plan <file>' or 'sah plan <file>' (via dynamic shortcut) instead.");
-                    let _ = writeln!(
-                        stderr,
-                        "  This wrapper will be removed in a future version."
-                    );
-                    let _ = writeln!(stderr);
-                }
-            }
-
-            // Check if the plan file exists
-            let plan_path = std::path::Path::new(&plan_filename);
-            let exit_code = if !plan_path.exists() {
-                // File doesn't exist - write enhanced error message with suggestions
-                if let Ok(mut stderr) = stderr_capture.lock() {
-                    let _ = writeln!(stderr, "Error: Plan file '{}' not found", plan_filename);
-                    let _ = stderr.write_all(b"\n");
-                    let _ = writeln!(stderr, "Suggestions:");
-                    let _ = writeln!(stderr, "• Check the file path for typos");
-                    let _ = writeln!(stderr, "• Use 'ls -la' to verify the file exists");
-                    let _ = writeln!(stderr, "• Try using an absolute path");
-                }
-                EXIT_ERROR
-            } else if plan_path.is_dir() {
-                // Path is a directory, not a file - write error message and return error code
-                if let Ok(mut stderr) = stderr_capture.lock() {
-                    let _ = writeln!(
-                        stderr,
-                        "Error: '{}' is a directory, not a file",
-                        plan_filename
-                    );
-                    let _ = stderr.write_all(b"\n");
-                    let _ = writeln!(stderr, "Suggestions:");
-                    let _ = writeln!(stderr, "• Specify a plan file inside the directory");
-                    let _ = writeln!(stderr, "• Check that you provided the correct file path");
-                }
-                EXIT_ERROR
-            } else if std::fs::metadata(plan_path).is_ok_and(|m| m.len() == 0) {
-                // File is empty - write warning message and return warning code
-                if let Ok(mut stderr) = stderr_capture.lock() {
-                    let _ = writeln!(
-                        stderr,
-                        "Warning: Plan file '{}' is empty or contains no valid content",
-                        plan_filename
-                    );
-                    let _ = stderr.write_all(b"\n");
-                    let _ = writeln!(stderr, "Suggestions:");
-                    let _ = writeln!(stderr, "• Add content to the plan file");
-                    let _ = writeln!(stderr, "• Check for whitespace-only content");
-                }
-                EXIT_WARNING // Use warning exit code for empty files
-            } else {
-                // File exists and is valid - simulate successful execution
-                if let Ok(mut stdout) = stdout_capture.lock() {
-                    let _ = writeln!(stdout, "Running plan command");
-                    let _ = writeln!(stdout, "Making the plan for {}", plan_filename);
-                }
-                EXIT_SUCCESS
-            };
-
-            let stdout_str = String::from_utf8_lossy(&stdout_capture.lock().unwrap()).to_string();
-            let stderr_str = String::from_utf8_lossy(&stderr_capture.lock().unwrap()).to_string();
-            (stdout_str, stderr_str, exit_code)
-        }
         Some(Commands::Prompt { args }) => {
             // Handle prompt command in-process
             let stderr_capture = stderr_buffer.clone();

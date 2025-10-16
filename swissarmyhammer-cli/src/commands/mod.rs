@@ -8,8 +8,6 @@
 pub mod agent;
 pub mod doctor;
 pub mod flow;
-pub mod implement;
-pub mod plan;
 pub mod prompt;
 pub mod rule;
 pub mod serve;
