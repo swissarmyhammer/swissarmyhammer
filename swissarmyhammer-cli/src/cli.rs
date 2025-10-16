@@ -619,7 +619,8 @@ mod tests {
 
         let cli = result.unwrap();
         if let Some(Commands::Flow { args }) = cli.command {
-            let subcommand = commands::flow::parse_flow_args(args).expect("Failed to parse flow args");
+            let subcommand =
+                commands::flow::parse_flow_args(args).expect("Failed to parse flow args");
             if let FlowSubcommand::Test {
                 workflow,
                 vars,
@@ -659,7 +660,8 @@ mod tests {
 
         let cli = result.unwrap();
         if let Some(Commands::Flow { args }) = cli.command {
-            let subcommand = commands::flow::parse_flow_args(args).expect("Failed to parse flow args");
+            let subcommand =
+                commands::flow::parse_flow_args(args).expect("Failed to parse flow args");
             if let FlowSubcommand::Test {
                 workflow,
                 vars,
@@ -1121,7 +1123,8 @@ mod tests {
 
         let cli = result.unwrap();
         if let Some(Commands::Flow { args }) = cli.command {
-            let subcommand = commands::flow::parse_flow_args(args).expect("Failed to parse flow args");
+            let subcommand =
+                commands::flow::parse_flow_args(args).expect("Failed to parse flow args");
             if let FlowSubcommand::Execute {
                 workflow,
                 positional_args,
@@ -1149,13 +1152,13 @@ mod tests {
 
     #[test]
     fn test_flow_run_with_positional_args() {
-        let result =
-            Cli::try_parse_from_args(["swissarmyhammer", "flow", "plan", "spec.md"]);
+        let result = Cli::try_parse_from_args(["swissarmyhammer", "flow", "plan", "spec.md"]);
         assert!(result.is_ok());
 
         let cli = result.unwrap();
         if let Some(Commands::Flow { args }) = cli.command {
-            let subcommand = commands::flow::parse_flow_args(args).expect("Failed to parse flow args");
+            let subcommand =
+                commands::flow::parse_flow_args(args).expect("Failed to parse flow args");
             if let FlowSubcommand::Execute {
                 workflow,
                 positional_args,
@@ -1189,7 +1192,8 @@ mod tests {
 
         let cli = result.unwrap();
         if let Some(Commands::Flow { args }) = cli.command {
-            let subcommand = commands::flow::parse_flow_args(args).expect("Failed to parse flow args");
+            let subcommand =
+                commands::flow::parse_flow_args(args).expect("Failed to parse flow args");
             if let FlowSubcommand::Execute {
                 workflow,
                 positional_args,
@@ -1220,7 +1224,8 @@ mod tests {
 
         let cli = result.unwrap();
         if let Some(Commands::Flow { args }) = cli.command {
-            let subcommand = commands::flow::parse_flow_args(args).expect("Failed to parse flow args");
+            let subcommand =
+                commands::flow::parse_flow_args(args).expect("Failed to parse flow args");
             if let FlowSubcommand::Execute {
                 workflow,
                 positional_args,
@@ -1256,7 +1261,8 @@ mod tests {
 
         let cli = result.unwrap();
         if let Some(Commands::Flow { args }) = cli.command {
-            let subcommand = commands::flow::parse_flow_args(args).expect("Failed to parse flow args");
+            let subcommand =
+                commands::flow::parse_flow_args(args).expect("Failed to parse flow args");
             if let FlowSubcommand::Execute { params, .. } = subcommand {
                 assert_eq!(params, vec!["key1=value1", "key2=value2"]);
             } else {
@@ -1269,18 +1275,14 @@ mod tests {
 
     #[test]
     fn test_flow_run_with_deprecated_var_flag() {
-        let result = Cli::try_parse_from_args([
-            "swissarmyhammer",
-            "flow",
-            "plan",
-            "--var",
-            "input=test",
-        ]);
+        let result =
+            Cli::try_parse_from_args(["swissarmyhammer", "flow", "plan", "--var", "input=test"]);
         assert!(result.is_ok());
 
         let cli = result.unwrap();
         if let Some(Commands::Flow { args }) = cli.command {
-            let subcommand = commands::flow::parse_flow_args(args).expect("Failed to parse flow args");
+            let subcommand =
+                commands::flow::parse_flow_args(args).expect("Failed to parse flow args");
             if let FlowSubcommand::Execute {
                 workflow,
                 params,
@@ -1314,7 +1316,8 @@ mod tests {
 
         let cli = result.unwrap();
         if let Some(Commands::Flow { args }) = cli.command {
-            let subcommand = commands::flow::parse_flow_args(args).expect("Failed to parse flow args");
+            let subcommand =
+                commands::flow::parse_flow_args(args).expect("Failed to parse flow args");
             if let FlowSubcommand::Execute { params, vars, .. } = subcommand {
                 assert_eq!(params, vec!["key1=param_value"]);
                 assert_eq!(vars, vec!["key2=var_value"]);
@@ -1343,7 +1346,8 @@ mod tests {
 
         let cli = result.unwrap();
         if let Some(Commands::Flow { args }) = cli.command {
-            let subcommand = commands::flow::parse_flow_args(args).expect("Failed to parse flow args");
+            let subcommand =
+                commands::flow::parse_flow_args(args).expect("Failed to parse flow args");
             if let FlowSubcommand::Execute {
                 workflow,
                 positional_args,
@@ -1370,18 +1374,14 @@ mod tests {
 
     #[test]
     fn test_flow_run_short_param_flag() {
-        let result = Cli::try_parse_from_args([
-            "swissarmyhammer",
-            "flow",
-            "workflow",
-            "-p",
-            "key=value",
-        ]);
+        let result =
+            Cli::try_parse_from_args(["swissarmyhammer", "flow", "workflow", "-p", "key=value"]);
         assert!(result.is_ok());
 
         let cli = result.unwrap();
         if let Some(Commands::Flow { args }) = cli.command {
-            let subcommand = commands::flow::parse_flow_args(args).expect("Failed to parse flow args");
+            let subcommand =
+                commands::flow::parse_flow_args(args).expect("Failed to parse flow args");
             if let FlowSubcommand::Execute { params, .. } = subcommand {
                 assert_eq!(params, vec!["key=value"]);
             } else {
@@ -1403,7 +1403,8 @@ mod tests {
 
         let cli = result.unwrap();
         if let Some(Commands::Flow { args }) = cli.command {
-            let subcommand = commands::flow::parse_flow_args(args).expect("Failed to parse flow args");
+            let subcommand =
+                commands::flow::parse_flow_args(args).expect("Failed to parse flow args");
             match subcommand {
                 FlowSubcommand::Execute {
                     workflow,
@@ -1425,13 +1426,13 @@ mod tests {
     #[test]
     fn test_flow_direct_workflow_with_positional() {
         // Test: sah flow plan spec.md (no "run")
-        let result =
-            Cli::try_parse_from_args(["swissarmyhammer", "flow", "plan", "spec.md"]);
+        let result = Cli::try_parse_from_args(["swissarmyhammer", "flow", "plan", "spec.md"]);
         assert!(result.is_ok());
 
         let cli = result.unwrap();
         if let Some(Commands::Flow { args }) = cli.command {
-            let subcommand = commands::flow::parse_flow_args(args).expect("Failed to parse flow args");
+            let subcommand =
+                commands::flow::parse_flow_args(args).expect("Failed to parse flow args");
             match subcommand {
                 FlowSubcommand::Execute {
                     workflow,
@@ -1462,7 +1463,8 @@ mod tests {
 
         let cli = result.unwrap();
         if let Some(Commands::Flow { args }) = cli.command {
-            let subcommand = commands::flow::parse_flow_args(args).expect("Failed to parse flow args");
+            let subcommand =
+                commands::flow::parse_flow_args(args).expect("Failed to parse flow args");
             match subcommand {
                 FlowSubcommand::Execute {
                     workflow,
@@ -1494,7 +1496,8 @@ mod tests {
 
         let cli = result.unwrap();
         if let Some(Commands::Flow { args }) = cli.command {
-            let subcommand = commands::flow::parse_flow_args(args).expect("Failed to parse flow args");
+            let subcommand =
+                commands::flow::parse_flow_args(args).expect("Failed to parse flow args");
             match subcommand {
                 FlowSubcommand::Execute {
                     workflow,
@@ -1527,7 +1530,8 @@ mod tests {
 
         let cli = result.unwrap();
         if let Some(Commands::Flow { args }) = cli.command {
-            let subcommand = commands::flow::parse_flow_args(args).expect("Failed to parse flow args");
+            let subcommand =
+                commands::flow::parse_flow_args(args).expect("Failed to parse flow args");
             match subcommand {
                 FlowSubcommand::Execute {
                     workflow,
@@ -1550,13 +1554,13 @@ mod tests {
     fn test_flow_list_special_case() {
         // Test: sah flow list --verbose
         // "list" is a special workflow name for discovery
-        let result =
-            Cli::try_parse_from_args(["swissarmyhammer", "flow", "list", "--verbose"]);
+        let result = Cli::try_parse_from_args(["swissarmyhammer", "flow", "list", "--verbose"]);
         assert!(result.is_ok());
 
         let cli = result.unwrap();
         if let Some(Commands::Flow { args }) = cli.command {
-            let subcommand = commands::flow::parse_flow_args(args).expect("Failed to parse flow args");
+            let subcommand =
+                commands::flow::parse_flow_args(args).expect("Failed to parse flow args");
             match subcommand {
                 FlowSubcommand::List { verbose, .. } => {
                     assert!(verbose);

@@ -10,6 +10,7 @@ use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::Arc;
 use swissarmyhammer_tools::mcp::tool_registry::{McpTool, ToolRegistry};
+use swissarmyhammer_workflow::WorkflowStorage;
 
 /// Pre-computed command data with owned strings for clap's 'static requirements
 #[derive(Debug, Clone)]
@@ -236,7 +237,12 @@ impl CliBuilder {
     }
 
     /// Build the complete CLI with dynamic commands generated from MCP tools
-    pub fn build_cli(&self) -> Command {
+    ///
+    /// # Parameters
+    ///
+    /// * `workflow_storage` - Optional workflow storage for generating shortcut commands.
+    ///   If None, shortcuts will not be generated.
+    pub fn build_cli(&self, workflow_storage: Option<&WorkflowStorage>) -> Command {
         let mut cli = Command::new("swissarmyhammer")
             .version(env!("CARGO_PKG_VERSION"))
             .about("An MCP server for managing prompts as markdown files")
@@ -344,6 +350,14 @@ Example:
         // Add static commands before MCP tool commands
         cli = Self::add_static_commands(cli);
 
+        // Add workflow shortcuts if storage is provided
+        if let Some(storage) = workflow_storage {
+            let shortcuts = Self::build_workflow_shortcuts(storage);
+            for shortcut in shortcuts {
+                cli = cli.subcommand(shortcut);
+            }
+        }
+
         // Add dynamic MCP tool commands using pre-computed data
         for (category_name, category_data) in &self.category_commands {
             cli =
@@ -358,10 +372,14 @@ Example:
     /// This method builds the CLI but logs warnings for any validation issues,
     /// skipping problematic tools rather than failing completely.
     ///
+    /// # Parameters
+    ///
+    /// * `workflow_storage` - Optional workflow storage for generating shortcut commands
+    ///
     /// # Returns
     ///
     /// Always returns a `Command`, but may skip invalid tools with warnings
-    pub fn build_cli_with_warnings(&self) -> Command {
+    pub fn build_cli_with_warnings(&self, workflow_storage: Option<&WorkflowStorage>) -> Command {
         let warnings = self.get_validation_warnings();
 
         if !warnings.is_empty() {
@@ -376,7 +394,7 @@ Example:
 
         // The build_cli method already includes graceful degradation
         // by skipping tools that fail validation
-        self.build_cli()
+        self.build_cli(workflow_storage)
     }
 
     /// Validate all tools that should appear in CLI
@@ -1348,7 +1366,7 @@ Use global arguments to control output:
 
 Examples:
   sah agent list                           # List all agents
-  sah --verbose agent list                 # Show detailed information  
+  sah --verbose agent list                 # Show detailed information
   sah --format=json agent list             # Output as JSON
   sah agent use code-reviewer              # Apply code-reviewer agent
   sah --debug agent use planner            # Use agent with debug output
@@ -1371,5 +1389,151 @@ Examples:
                         .required(true),
                 ),
             )
+    }
+
+    /// Generate workflow shortcut commands dynamically
+    ///
+    /// Creates top-level CLI commands for each workflow, enabling direct access like
+    /// `sah plan spec.md` instead of `sah flow plan spec.md`.
+    ///
+    /// # Conflict Resolution
+    ///
+    /// Workflows that conflict with reserved command names get an underscore prefix:
+    /// - Reserved: serve, doctor, prompt, rule, flow, agent, validate, plan, implement, list
+    /// - Example: A workflow named "list" becomes "_list"
+    ///
+    /// # Parameters
+    ///
+    /// * `workflow_storage` - Storage instance to load available workflows
+    ///
+    /// # Returns
+    ///
+    /// Vector of clap Commands, one for each workflow with proper argument handling
+    pub fn build_workflow_shortcuts(workflow_storage: &WorkflowStorage) -> Vec<Command> {
+        use std::collections::HashSet;
+
+        // Reserved command names that would conflict with top-level commands
+        const RESERVED_NAMES: &[&str] = &[
+            "serve",
+            "doctor",
+            "prompt",
+            "rule",
+            "flow",
+            "agent",
+            "validate",
+            "plan",
+            "implement",
+            "list", // Special: flow subcommand that should not conflict
+        ];
+
+        let mut shortcuts = Vec::new();
+        let reserved: HashSet<&str> = RESERVED_NAMES.iter().copied().collect();
+
+        // Load workflows from storage
+        let workflows = match workflow_storage.list_workflows() {
+            Ok(workflows) => workflows,
+            Err(e) => {
+                tracing::warn!("Failed to load workflows for shortcuts: {}", e);
+                return shortcuts;
+            }
+        };
+
+        for workflow in workflows {
+            let workflow_name = workflow.name.to_string();
+
+            // Apply conflict resolution - prefix with underscore if reserved
+            let command_name = if reserved.contains(workflow_name.as_str()) {
+                format!("_{}", workflow_name)
+            } else {
+                workflow_name.clone()
+            };
+
+            // Build the shortcut command
+            let cmd = Self::build_shortcut_command(command_name, &workflow_name, &workflow);
+            shortcuts.push(cmd);
+        }
+
+        shortcuts
+    }
+
+    /// Build a single workflow shortcut command
+    ///
+    /// Creates a clap Command for a workflow shortcut with:
+    /// - Positional arguments for required parameters
+    /// - --param flag for optional parameters
+    /// - Standard flow execution flags (--interactive, --dry-run, --quiet)
+    ///
+    /// # Parameters
+    ///
+    /// * `command_name` - CLI command name (may have underscore prefix for conflicts)
+    /// * `workflow_name` - Original workflow name
+    /// * `workflow` - Workflow definition with parameters
+    fn build_shortcut_command(
+        command_name: String,
+        workflow_name: &str,
+        workflow: &swissarmyhammer_workflow::Workflow,
+    ) -> Command {
+        let mut cmd =
+            Command::new(Box::leak(command_name.clone().into_boxed_str()) as &'static str);
+
+        // Set description indicating this is a shortcut
+        let about_text = format!(
+            "{} (shortcut for 'flow {}')",
+            workflow.description, workflow_name
+        );
+        cmd = cmd.about(Box::leak(about_text.into_boxed_str()) as &'static str);
+
+        // Collect required parameters
+        let required_params: Vec<_> = workflow.parameters.iter().filter(|p| p.required).collect();
+
+        // Add positional arguments for required parameters
+        if !required_params.is_empty() {
+            let value_names: Vec<&'static str> = required_params
+                .iter()
+                .map(|p| Box::leak(p.name.clone().into_boxed_str()) as &'static str)
+                .collect();
+
+            cmd = cmd.arg(
+                Arg::new("positional")
+                    .num_args(required_params.len())
+                    .value_names(value_names)
+                    .help("Required workflow parameters"),
+            );
+        }
+
+        // Add --param flag for optional parameters
+        cmd = cmd.arg(
+            Arg::new("param")
+                .long("param")
+                .short('p')
+                .action(ArgAction::Append)
+                .value_name("KEY=VALUE")
+                .help("Optional workflow parameter"),
+        );
+
+        // Add standard workflow execution flags
+        cmd = cmd
+            .arg(
+                Arg::new("interactive")
+                    .long("interactive")
+                    .short('i')
+                    .action(ArgAction::SetTrue)
+                    .help("Interactive mode - prompt at each state"),
+            )
+            .arg(
+                Arg::new("dry_run")
+                    .long("dry-run")
+                    .action(ArgAction::SetTrue)
+                    .help("Dry run - show execution plan without running"),
+            )
+            .arg(
+                Arg::new("quiet")
+                    .long("quiet")
+                    .short('q')
+                    .action(ArgAction::SetTrue)
+                    .help("Quiet mode - only show errors"),
+            );
+
+        cmd
     }
 }

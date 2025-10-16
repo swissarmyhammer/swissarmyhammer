@@ -471,19 +471,20 @@ async fn execute_cli_command_with_capture(cli: Cli) -> Result<(String, String, i
         Some(Commands::Flow { args }) => {
             // Handle flow commands - for test purposes, simulate workflow behavior
             use swissarmyhammer_cli::cli::FlowSubcommand;
-            
-            let subcommand = match swissarmyhammer_cli::commands::flow::parse_flow_args(args.clone()) {
-                Ok(cmd) => cmd,
-                Err(e) => {
-                    // Check if this is the special help message
-                    if e.to_string().contains("__HELP_DISPLAYED__") {
-                        // Help was displayed, return success
-                        // Note: the help text was already printed to stdout by parse_flow_args
-                        return Ok((String::new(), String::new(), EXIT_SUCCESS));
+
+            let subcommand =
+                match swissarmyhammer_cli::commands::flow::parse_flow_args(args.clone()) {
+                    Ok(cmd) => cmd,
+                    Err(e) => {
+                        // Check if this is the special help message
+                        if e.to_string().contains("__HELP_DISPLAYED__") {
+                            // Help was displayed, return success
+                            // Note: the help text was already printed to stdout by parse_flow_args
+                            return Ok((String::new(), String::new(), EXIT_SUCCESS));
+                        }
+                        return Err(anyhow::anyhow!("Failed to parse flow args: {}", e));
                     }
-                    return Err(anyhow::anyhow!("Failed to parse flow args: {}", e));
-                }
-            };
+                };
 
             match subcommand {
                 FlowSubcommand::Test { workflow, vars, .. } => {

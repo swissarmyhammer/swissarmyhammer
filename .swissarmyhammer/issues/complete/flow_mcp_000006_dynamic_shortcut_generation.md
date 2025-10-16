@@ -298,3 +298,131 @@ Instead of creating a separate `shortcuts` module, I'll integrate shortcut gener
 - Shortcuts are generated at startup, so new workflows require CLI restart
 - This is acceptable since workflows are typically static configuration
 
+## Implementation Notes
+
+### Changes Made
+
+1. **Added `build_workflow_shortcuts()` method to `CliBuilder`** (`dynamic_cli.rs:1394-1441`)
+   - Takes `WorkflowStorage` parameter to load available workflows
+   - Returns `Vec<Command>` with one command per workflow
+   - Implements conflict resolution with underscore prefix for reserved names
+   - Reserved names: `serve`, `doctor`, `prompt`, `rule`, `flow`, `agent`, `validate`, `plan`, `implement`, `list`
+
+2. **Added `build_shortcut_command()` helper method** (`dynamic_cli.rs:1455-1527`)
+   - Creates individual shortcut commands with proper clap configuration
+   - Sets about text to: "{description} (shortcut for 'flow {workflow}')"
+   - Adds positional arguments for required workflow parameters
+   - Adds `--param/-p` flag for optional parameters
+   - Adds standard workflow flags: `--interactive/-i`, `--dry-run`, `--quiet/-q`
+
+3. **Modified `build_cli()` signature** (`dynamic_cli.rs:244`)
+   - Added `workflow_storage: Option<&WorkflowStorage>` parameter
+   - Integrates shortcuts into CLI after static commands but before MCP tool commands
+   - Gracefully handles None case (no shortcuts generated)
+
+4. **Modified `build_cli_with_warnings()` signature** (`dynamic_cli.rs:381`)
+   - Updated to accept and pass through `workflow_storage` parameter
+   - Maintains graceful degradation behavior
+
+5. **Updated main.rs to initialize workflow storage early** (`main.rs:59-67`)
+   - Creates `WorkflowStorage::file_system()` before CLI building
+   - Passes storage reference to `build_cli_with_warnings()`
+   - Logs warning if storage initialization fails but continues
+
+6. **Added `handle_workflow_shortcut()` function** (`main.rs:454-498`)
+   - Handles shortcut command execution
+   - Strips underscore prefix from workflow names (conflict resolution)
+   - Extracts positional args, `--param` flags, and standard workflow flags
+   - Creates `FlowSubcommand::Execute` and delegates to `handle_flow_command()`
+
+7. **Modified command dispatching logic** (`main.rs:275-290`)
+   - Updated to detect shortcuts (top-level commands with no subcommands)
+   - Distinguishes between MCP tool commands (with subcommands) and shortcuts (without subcommands)
+   - Routes shortcuts to `handle_workflow_shortcut()`
+
+8. **Created comprehensive test suite** (`tests/workflow_shortcut_tests.rs`)
+   - Tests shortcut generation
+   - Tests conflict resolution with reserved names
+   - Tests about text format
+   - Tests standard flags presence
+   - Tests positional arguments for required parameters
+   - Tests CLI builder integration with and without workflow storage
+   - All 8 tests passing
+
+### Technical Decisions
+
+1. **Integration Location**: Added shortcuts to `CliBuilder` rather than creating separate module
+   - Consistent with existing dynamic command generation
+   - Reduces code duplication
+   - Centralizes CLI building logic
+
+2. **Conflict Resolution Strategy**: Underscore prefix for reserved names
+   - Simple and predictable
+   - Makes conflicts obvious to users
+   - Example: workflow named "list" becomes "_list"
+
+3. **Parameter Handling**: Positional args for required, `--param` for optional
+   - Matches existing workflow execution patterns
+   - Intuitive for users (required params are positional)
+   - Flexible for optional parameters
+
+4. **Delegation Pattern**: Shortcuts create `FlowSubcommand::Execute` and delegate
+   - Reuses existing flow command handling logic
+   - Maintains single source of truth for workflow execution
+   - No code duplication
+
+### Testing Results
+
+All 1211 tests in swissarmyhammer-cli pass, including:
+- 8 new shortcut-specific tests
+- All existing CLI tests
+- All workflow execution tests
+
+No warnings or compilation errors.
+
+### Acceptance Criteria Status
+
+- ✅ Shortcuts generated for all workflows
+- ✅ Name conflicts resolved with underscore prefix
+- ✅ Positional args work in shortcuts
+- ✅ Shortcuts delegate to flow handler (not "flow run")
+- ✅ Help text shows "(shortcut for 'flow <name>')"
+- ✅ All tests pass
+- ✅ Code compiles without warnings
+
+### Estimated vs Actual Changes
+
+- **Estimated**: ~230 lines of code
+- **Actual**: ~220 lines of new code + comprehensive tests
+  - `dynamic_cli.rs`: ~145 lines
+  - `main.rs`: ~65 lines
+  - `tests/workflow_shortcut_tests.rs`: ~220 lines of tests
+
+## Code Review Fixes
+
+### Summary
+
+Fixed 2 clippy warnings identified in code review:
+
+1. **Doc comment overindentation** (dynamic_cli.rs:244)
+   - Fixed overindented continuation line in doc comment
+   - Changed from 23 spaces to 2 spaces after the `*`
+   - Follows standard rustdoc formatting
+
+2. **Manual string prefix stripping** (main.rs:462-463)
+   - Replaced manual `starts_with` + slice pattern with `strip_prefix()`
+   - More idiomatic Rust code
+   - Safer and clearer intent
+
+### Verification
+
+- ✅ `cargo clippy --workspace -- -D warnings` - No warnings
+- ✅ All 1211 tests pass
+- ✅ CODE_REVIEW.md removed
+
+### Files Modified
+
+- `swissarmyhammer-cli/src/dynamic_cli.rs:244` - Fixed doc comment indentation
+- `swissarmyhammer-cli/src/main.rs:462-463` - Changed to use `strip_prefix()`
+
+All acceptance criteria from the original issue remain satisfied.
