@@ -29,7 +29,7 @@
 //!
 //! These tests use a hybrid approach to balance comprehensive testing with execution speed:
 //!
-//! 1. **Test Mode Execution**: Most tests use `sah flow test plan` instead of `sah plan`
+//! 1. **Dry-Run Execution**: Most tests use `sah flow plan --dry-run` instead of `sah plan`
 //!    to avoid calling external AI services, making tests fast and deterministic.
 //!
 //! 2. **Isolated Environments**: Each test uses `TestHomeGuard` to ensure complete isolation
@@ -77,7 +77,7 @@
 //! 1. Run with `--nocapture` to see stdout/stderr
 //! 2. Check that the `sah` binary builds successfully
 //! 3. Verify that built-in workflows are available: `sah flow list`
-//! 4. Test plan workflow manually: `sah flow test plan --var plan_filename=/path/to/test.md`
+//! 4. Test plan workflow manually: `sah flow plan --var plan_filename=/path/to/test.md --dry-run`
 
 use anyhow::Result;
 use std::fs;
@@ -332,14 +332,14 @@ async fn test_plan_workflow_test_mode() -> Result<()> {
     // Create a test plan file
     let plan_file = create_test_plan_file(&temp_path, "test-plan.md", "Test Plan")?;
 
-    // Execute plan workflow in test mode using flow test
+    // Execute plan workflow in dry-run mode
     let result = run_sah_command_in_process_with_dir(
         &[
             "flow",
-            "test",
             "plan",
             "--var",
             &format!("plan_filename={}", plan_file.display()),
+            "--dry-run",
         ],
         &temp_path,
     )
@@ -353,22 +353,10 @@ async fn test_plan_workflow_test_mode() -> Result<()> {
 
     let stdout = &result.stdout;
 
-    // Verify test mode execution indicators
+    // Verify dry-run mode execution indicators
     assert!(
-        stdout.contains("Test mode") || stdout.contains("🧪"),
-        "Should indicate test mode execution: {stdout}"
-    );
-
-    // Verify coverage report
-    assert!(
-        stdout.contains("Coverage Report") && stdout.contains("States visited"),
-        "Should show coverage report: {stdout}"
-    );
-
-    // Verify the plan workflow achieves good coverage
-    assert!(
-        stdout.contains("100.0%") || stdout.contains("Full"),
-        "Should achieve high coverage: {stdout}"
+        stdout.contains("Dry run") || stdout.contains("🔍"),
+        "Should indicate dry-run mode execution: {stdout}"
     );
 
     Ok(())
@@ -387,14 +375,14 @@ async fn test_plan_command_relative_path() -> Result<()> {
     fs::create_dir_all(&plans_dir)?;
     let _plan_file = create_test_plan_file(&plans_dir, "relative-test.md", "Relative Path Test")?;
 
-    // Test using flow test mode with relative path
+    // Test using flow workflow with relative path
     let result = run_sah_command_in_process_with_dir(
         &[
             "flow",
-            "test",
             "plan",
             "--var",
             "plan_filename=./specification/relative-test.md",
+            "--dry-run",
         ],
         &temp_path,
     )
@@ -408,8 +396,8 @@ async fn test_plan_command_relative_path() -> Result<()> {
 
     let stdout = &result.stdout;
     assert!(
-        stdout.contains("Test mode") && stdout.contains("Coverage Report"),
-        "Should execute workflow in test mode: {stdout}"
+        stdout.contains("Dry run mode") || stdout.contains("🔍"),
+        "Should execute workflow in dry run mode: {stdout}"
     );
 
     Ok(())
@@ -426,14 +414,14 @@ async fn test_plan_command_absolute_path() -> Result<()> {
     // Create plan file
     let plan_file = create_test_plan_file(&temp_path, "absolute-test.md", "Absolute Path Test")?;
 
-    // Test using flow test mode with absolute path
+    // Test using flow workflow with absolute path
     let result = run_sah_command_in_process_with_dir(
         &[
             "flow",
-            "test",
             "plan",
             "--var",
             &format!("plan_filename={}", plan_file.display()),
+            "--dry-run",
         ],
         &temp_path,
     )
@@ -447,7 +435,7 @@ async fn test_plan_command_absolute_path() -> Result<()> {
 
     let stdout = &result.stdout;
     assert!(
-        stdout.contains("Test mode") && stdout.contains("100.0%"),
+        stdout.contains("Dry run mode") || stdout.contains("🔍"),
         "Should execute workflow successfully: {stdout}"
     );
 
@@ -465,14 +453,14 @@ async fn test_plan_workflow_complex_specification() -> Result<()> {
     // Create complex plan file
     let plan_file = create_complex_plan_file(&temp_path, "advanced-feature.md")?;
 
-    // Test complex plan using flow test mode
+    // Test complex plan using dry-run mode
     let result = run_sah_command_in_process_with_dir(
         &[
             "flow",
-            "test",
             "plan",
             "--var",
             &format!("plan_filename={}", plan_file.display()),
+            "--dry-run",
         ],
         &temp_path,
     )
@@ -486,13 +474,8 @@ async fn test_plan_workflow_complex_specification() -> Result<()> {
 
     let stdout = &result.stdout;
     assert!(
-        stdout.contains("Test mode"),
-        "Should run in test mode: {stdout}"
-    );
-
-    assert!(
-        stdout.contains("Coverage Report"),
-        "Should show coverage report: {stdout}"
+        stdout.contains("Dry run") || stdout.contains("🔍"),
+        "Should run in dry-run mode: {stdout}"
     );
 
     Ok(())
@@ -600,16 +583,16 @@ async fn test_plan_workflow_with_existing_issues() -> Result<()> {
         "# Another Feature\n\nAnother existing issue.",
     )?;
 
-    // Create and test plan workflow in test mode
+    // Create and test plan workflow in dry-run mode
     let plan_file = create_test_plan_file(&temp_path, "new-feature.md", "New Feature Plan")?;
 
     let result = run_sah_command_in_process_with_dir(
         &[
             "flow",
-            "test",
             "plan",
             "--var",
             &format!("plan_filename={}", plan_file.display()),
+            "--dry-run",
         ],
         &temp_path,
     )
@@ -623,11 +606,11 @@ async fn test_plan_workflow_with_existing_issues() -> Result<()> {
 
     let stdout = &result.stdout;
     assert!(
-        stdout.contains("Test mode") && stdout.contains("Coverage Report"),
-        "Should execute workflow in test mode: {stdout}"
+        stdout.contains("Dry run") || stdout.contains("🔍"),
+        "Should execute workflow in dry-run mode: {stdout}"
     );
 
-    // Verify existing issues are preserved (unchanged during test mode)
+    // Verify existing issues are preserved (unchanged during dry-run mode)
     let existing_files = fs::read_dir(&issues_dir)?
         .filter_map(|entry| entry.ok())
         .map(|entry| entry.file_name().to_string_lossy().to_string())
@@ -659,10 +642,10 @@ async fn test_plan_workflow_special_characters() -> Result<()> {
     let result = run_sah_command_in_process_with_dir(
         &[
             "flow",
-            "test",
             "plan",
             "--var",
             &format!("plan_filename={}", plan_file.display()),
+            "--dry-run",
         ],
         &temp_path,
     )
@@ -676,7 +659,7 @@ async fn test_plan_workflow_special_characters() -> Result<()> {
 
     let stdout = &result.stdout;
     assert!(
-        stdout.contains("Test mode") && stdout.contains("Coverage Report"),
+        stdout.contains("Dry run") || stdout.contains("🔍"),
         "Should execute workflow successfully: {stdout}"
     );
 
@@ -702,10 +685,10 @@ async fn test_sequential_plan_workflow_executions() -> Result<()> {
         let result = run_sah_command_in_process_with_dir(
             &[
                 "flow",
-                "test",
                 "plan",
                 "--var",
                 &format!("plan_filename={}", plan_file.display()),
+                "--dry-run",
             ],
             &temp_path,
         )

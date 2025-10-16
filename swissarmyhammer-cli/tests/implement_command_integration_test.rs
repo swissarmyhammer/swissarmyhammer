@@ -42,10 +42,11 @@ async fn test_implement_workflow_delegation_via_flow_test() {
     let _guard = IsolatedTestEnvironment::new();
     let (_temp_dir, temp_path) = setup_implement_test_environment().unwrap();
 
-    // Test implement workflow via flow test command (tests CliContext delegation)
-    let result = run_sah_command_in_process_with_dir(&["flow", "test", "implement"], &temp_path)
-        .await
-        .expect("Failed to run implement workflow test");
+    // Test implement workflow via flow command with dry-run (tests CliContext delegation)
+    let result =
+        run_sah_command_in_process_with_dir(&["flow", "implement", "--dry-run"], &temp_path)
+            .await
+            .expect("Failed to run implement workflow test");
 
     assert!(
         result.exit_code == 0,
@@ -55,7 +56,7 @@ async fn test_implement_workflow_delegation_via_flow_test() {
 
     let stdout = &result.stdout;
     assert!(
-        stdout.contains("Testing workflow: implement"),
+        stdout.contains("Running workflow: implement") || stdout.contains("Testing workflow: implement"),
         "Should execute implement workflow via CliContext delegation: {stdout}"
     );
 }
@@ -66,12 +67,12 @@ async fn test_implement_workflow_with_custom_variables() {
     let _guard = IsolatedTestEnvironment::new();
     let (_temp_dir, temp_path) = setup_implement_test_environment().unwrap();
 
-    // Test implement workflow with custom variables via flow test (tests CliContext parameter passing)
+    // Test implement workflow with custom variables via flow with dry-run (tests CliContext parameter passing)
     let result = run_sah_command_in_process_with_dir(
         &[
             "flow",
-            "test",
             "implement",
+            "--dry-run",
             "--var",
             "test_key=test_value",
             "--var",
@@ -90,7 +91,7 @@ async fn test_implement_workflow_with_custom_variables() {
 
     let stdout = &result.stdout;
     assert!(
-        stdout.contains("Testing workflow: implement"),
+        stdout.contains("Running workflow: implement") || stdout.contains("Testing workflow: implement"),
         "Should execute workflow with custom variables via CliContext: {stdout}"
     );
 }
@@ -109,11 +110,11 @@ async fn test_implement_command_delegates_to_flow() {
         .await
         .expect("Failed to run implement command");
 
-    // Test equivalent flow run command (but use flow test to avoid actual AI calls)
+    // Test equivalent flow run command (but use dry-run to avoid actual AI calls)
     let flow_result =
-        run_sah_command_in_process_with_dir(&["flow", "test", "implement"], &temp_path)
+        run_sah_command_in_process_with_dir(&["flow", "implement", "--dry-run"], &temp_path)
             .await
-            .expect("Failed to run flow test implement");
+            .expect("Failed to run flow implement with dry-run");
 
     // Implement command should start workflow (CliContext delegation working)
     assert!(
@@ -139,8 +140,8 @@ async fn test_implement_command_delegates_to_flow() {
     );
 
     assert!(
-        flow_result.stdout.contains("Testing workflow: implement"),
-        "Flow test should confirm it's testing the same implement workflow that CliContext delegates to"
+        flow_result.stdout.contains("Running workflow: implement") || flow_result.stdout.contains("Testing workflow: implement"),
+        "Flow should confirm it's running the same implement workflow that CliContext delegates to"
     );
 }
 

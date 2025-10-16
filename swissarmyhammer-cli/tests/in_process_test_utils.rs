@@ -487,49 +487,6 @@ async fn execute_cli_command_with_capture(cli: Cli) -> Result<(String, String, i
                 };
 
             match subcommand {
-                FlowSubcommand::Test { workflow, vars, .. } => {
-                    // First validate variable format (like the real flow.rs does)
-                    for var in vars {
-                        if !var.contains('=') {
-                            return Ok((String::new(), format!("Invalid variable format: '{}'. Expected 'key=value' format. Example: --var input=test", var), EXIT_ERROR));
-                        }
-                    }
-
-                    // For flow test, check for builtin and test workflows
-                    let builtin_workflows = [
-                        "example-actions",
-                        "greeting",
-                        "hello-world",
-                        "plan",
-                        "document",
-                        "tdd",
-                        "implement",
-                    ];
-                    let test_workflows = ["test-workflow"]; // Allow test-workflow for in-process utilities tests
-                    let workflow_exists = builtin_workflows.contains(&workflow.as_str())
-                        || test_workflows.contains(&workflow.as_str());
-
-                    if workflow_exists {
-                        if workflow == "plan" {
-                            // Plan workflow specific test mode output
-                            (format!("Test mode 🧪 Testing workflow: {}\n\nCoverage Report:\nStates visited: 3/3 (100.0%)\nFull coverage achieved", workflow), String::new(), EXIT_SUCCESS)
-                        } else {
-                            // Other workflows
-                            (
-                                format!("Testing workflow: {}", workflow),
-                                String::new(),
-                                EXIT_SUCCESS,
-                            )
-                        }
-                    } else {
-                        // Workflow doesn't exist - return error
-                        (
-                            String::new(),
-                            format!("Error: Workflow '{}' not found", workflow),
-                            EXIT_ERROR,
-                        )
-                    }
-                }
                 FlowSubcommand::Execute {
                     workflow,
                     vars,
@@ -646,13 +603,13 @@ pub async fn run_flow_test_in_process(
     _timeout: Option<String>,
     quiet: bool,
 ) -> Result<CapturedOutput> {
-    // Build command args for "flow test"
-    let mut args = vec!["flow", "test", workflow_name];
+    // Build command args for "flow <workflow> --dry-run" (replaces deprecated "flow test")
+    let mut args = vec!["flow", workflow_name, "--dry-run"];
 
     // Add vars
     for var in &vars {
         args.push("--var");
-        args.push(var);
+        args.push(var.as_str());
     }
 
     // Timeout removed - no longer supported in CLI

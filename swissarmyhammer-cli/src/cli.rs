@@ -155,7 +155,7 @@ Examples:
     #[command(long_about = commands::flow::DESCRIPTION)]
     #[command(trailing_var_arg = true)]
     Flow {
-        /// Workflow name or command (list, resume, status, logs, test) followed by arguments
+        /// Workflow name or 'list' command followed by arguments
         args: Vec<String>,
     },
     /// Generate shell completion scripts
@@ -287,19 +287,6 @@ pub enum FlowSubcommand {
         #[arg(short, long)]
         quiet: bool,
     },
-    /// Resume a paused workflow run
-    Resume {
-        /// Run ID to resume
-        run_id: String,
-
-        /// Interactive mode - prompt at each state
-        #[arg(short, long)]
-        interactive: bool,
-
-        /// Quiet mode - only show errors
-        #[arg(short, long)]
-        quiet: bool,
-    },
     /// List available workflows
     List {
         /// Output format
@@ -313,79 +300,6 @@ pub enum FlowSubcommand {
         /// Filter by source
         #[arg(long, value_enum)]
         source: Option<PromptSourceArg>,
-    },
-    /// Check status of a workflow run
-    Status {
-        /// Run ID to check
-        run_id: String,
-
-        /// Output format
-        #[arg(long, value_enum, default_value = "table")]
-        format: OutputFormat,
-
-        /// Watch for status changes
-        #[arg(short, long)]
-        watch: bool,
-    },
-    /// View logs for a workflow run
-    Logs {
-        /// Run ID to view logs for
-        run_id: String,
-
-        /// Follow log output (like tail -f)
-        #[arg(short, long)]
-        follow: bool,
-
-        /// Number of log lines to show (from end)
-        #[arg(short = 'n', long)]
-        tail: Option<usize>,
-
-        /// Filter logs by level (info, warn, error)
-        #[arg(long)]
-        level: Option<String>,
-    },
-
-    /// Test a workflow without executing actions (simulates dry run)
-    #[command(long_about = "
-Test workflows in simulation mode without actually executing actions.
-This command provides a safe way to validate workflow logic and see what
-actions would be executed without actually running them.
-
-Features:
-- Simulates all actions instead of executing them
-- Claude prompts are echoed instead of sent to the API
-- Generates coverage reports showing visited states and transitions
-- Useful for testing workflow logic and debugging
-
-Usage:
-  swissarmyhammer flow test my-workflow
-  swissarmyhammer flow test my-workflow --var key=value
-  swissarmyhammer flow test my-workflow --var template_var=value
-
-Examples:
-  swissarmyhammer flow test hello-world                               # Test basic workflow
-  swissarmyhammer flow test greeting --var name=John --var language=Spanish  # With template variables
-  swissarmyhammer flow test code-review --var file=main.rs                   # With vars
-  swissarmyhammer flow test deploy --interactive                      # Step-by-step execution
-
-This is equivalent to 'flow run --test' but provided as a separate command
-for better discoverability and clearer intent.
-")]
-    Test {
-        /// Workflow name to test
-        workflow: String,
-
-        /// Initial variables as key=value pairs
-        #[arg(long = "var", value_name = "KEY=VALUE")]
-        vars: Vec<String>,
-
-        /// Interactive mode - prompt at each state
-        #[arg(short, long)]
-        interactive: bool,
-
-        /// Quiet mode - only show errors
-        #[arg(short, long)]
-        quiet: bool,
     },
 }
 
@@ -609,75 +523,6 @@ mod tests {
             assert_eq!(workflow_dirs, vec!["./workflows"]);
         } else {
             unreachable!("Expected Validate command");
-        }
-    }
-
-    #[test]
-    fn test_cli_flow_test_subcommand() {
-        let result = Cli::try_parse_from_args(["swissarmyhammer", "flow", "test", "my-workflow"]);
-        assert!(result.is_ok());
-
-        let cli = result.unwrap();
-        if let Some(Commands::Flow { args }) = cli.command {
-            let subcommand =
-                commands::flow::parse_flow_args(args).expect("Failed to parse flow args");
-            if let FlowSubcommand::Test {
-                workflow,
-                vars,
-                interactive,
-                quiet,
-            } = subcommand
-            {
-                assert_eq!(workflow, "my-workflow");
-                assert!(vars.is_empty());
-                assert!(!interactive);
-                assert!(!quiet);
-            } else {
-                unreachable!("Expected Test subcommand");
-            }
-        } else {
-            unreachable!("Expected Flow command");
-        }
-    }
-
-    #[test]
-    fn test_cli_flow_test_subcommand_with_options() {
-        let result = Cli::try_parse_from_args([
-            "swissarmyhammer",
-            "flow",
-            "test",
-            "my-workflow",
-            "--var",
-            "input=test",
-            "--var",
-            "author=Jane",
-            "--var",
-            "version=2.0",
-            "--interactive",
-            "--quiet",
-        ]);
-        assert!(result.is_ok());
-
-        let cli = result.unwrap();
-        if let Some(Commands::Flow { args }) = cli.command {
-            let subcommand =
-                commands::flow::parse_flow_args(args).expect("Failed to parse flow args");
-            if let FlowSubcommand::Test {
-                workflow,
-                vars,
-                interactive,
-                quiet,
-            } = subcommand
-            {
-                assert_eq!(workflow, "my-workflow");
-                assert_eq!(vars, vec!["input=test", "author=Jane", "version=2.0"]);
-                assert!(interactive);
-                assert!(quiet);
-            } else {
-                unreachable!("Expected Test subcommand");
-            }
-        } else {
-            unreachable!("Expected Flow command");
         }
     }
 
