@@ -6,11 +6,32 @@
 
 use crate::schema_validation::{SchemaValidator, ValidationError};
 use clap::{Arg, ArgAction, Command};
+use once_cell::sync::Lazy;
 use serde_json::Value;
-use std::collections::HashMap;
-use std::sync::Arc;
+use std::collections::{HashMap, HashSet};
+use std::sync::{Arc, Mutex};
 use swissarmyhammer_tools::mcp::tool_registry::{McpTool, ToolRegistry};
 use swissarmyhammer_workflow::WorkflowStorage;
+
+/// Global string cache to prevent memory leaks from Box::leak
+/// Strings are interned once and reused, satisfying clap's 'static lifetime requirement
+static STRING_CACHE: Lazy<Mutex<HashSet<&'static str>>> = Lazy::new(|| Mutex::new(HashSet::new()));
+
+/// Intern a string into the global cache, returning a 'static reference
+/// This ensures each unique string is only leaked once, preventing unbounded memory growth
+fn intern_string(s: String) -> &'static str {
+    let mut cache = STRING_CACHE.lock().unwrap();
+
+    // Check if we already have this string cached
+    if let Some(&cached) = cache.get(s.as_str()) {
+        return cached;
+    }
+
+    // Leak the string and cache the reference
+    let leaked: &'static str = Box::leak(s.into_boxed_str());
+    cache.insert(leaked);
+    leaked
+}
 
 /// Pre-computed command data with owned strings for clap's 'static requirements
 #[derive(Debug, Clone)]
@@ -90,7 +111,6 @@ impl CliValidationStats {
 
 /// Dynamic CLI builder that generates commands from MCP tool registry
 pub struct CliBuilder {
-    #[allow(dead_code)] // Used during initialization, kept for future functionality
     tool_registry: Arc<ToolRegistry>,
     // Pre-computed command data with owned strings
     category_commands: HashMap<String, CommandData>,
@@ -510,15 +530,14 @@ Example:
         category_name: &str,
         category_data: &CommandData,
     ) -> Command {
-        let mut cmd =
-            Command::new(Box::leak(category_data.name.clone().into_boxed_str()) as &'static str);
+        let mut cmd = Command::new(intern_string(category_data.name.clone()));
 
         if let Some(about) = &category_data.about {
-            cmd = cmd.about(Box::leak(about.clone().into_boxed_str()) as &'static str);
+            cmd = cmd.about(intern_string(about.clone()));
         }
 
         if let Some(long_about) = &category_data.long_about {
-            cmd = cmd.long_about(Box::leak(long_about.clone().into_boxed_str()) as &'static str);
+            cmd = cmd.long_about(intern_string(long_about.clone()));
         }
 
         // Add tool subcommands for this category
@@ -533,15 +552,14 @@ Example:
 
     /// Build a command for a specific MCP tool from pre-computed data
     fn build_tool_command_from_data(&self, tool_data: &CommandData) -> Command {
-        let mut cmd =
-            Command::new(Box::leak(tool_data.name.clone().into_boxed_str()) as &'static str);
+        let mut cmd = Command::new(intern_string(tool_data.name.clone()));
 
         if let Some(about) = &tool_data.about {
-            cmd = cmd.about(Box::leak(about.clone().into_boxed_str()) as &'static str);
+            cmd = cmd.about(intern_string(about.clone()));
         }
 
         if let Some(long_about) = &tool_data.long_about {
-            cmd = cmd.long_about(Box::leak(long_about.clone().into_boxed_str()) as &'static str);
+            cmd = cmd.long_about(intern_string(long_about.clone()));
         }
 
         // Add arguments from pre-computed data
@@ -554,12 +572,12 @@ Example:
 
     /// Build a clap argument from pre-computed data
     fn build_arg_from_data(&self, arg_data: &ArgData) -> Arg {
-        let name_static = Box::leak(arg_data.name.clone().into_boxed_str()) as &'static str;
+        let name_static = intern_string(arg_data.name.clone());
         let mut arg = Arg::new(name_static).long(name_static);
 
         // Set help text
         if let Some(help) = &arg_data.help {
-            arg = arg.help(Box::leak(help.clone().into_boxed_str()) as &'static str);
+            arg = arg.help(intern_string(help.clone()));
         }
 
         // Set as required if specified
@@ -601,15 +619,14 @@ Example:
         if let Some(possible_values) = &arg_data.possible_values {
             let str_values: Vec<&'static str> = possible_values
                 .iter()
-                .map(|s| Box::leak(s.clone().into_boxed_str()) as &'static str)
+                .map(|s| intern_string(s.clone()))
                 .collect();
             arg = arg.value_parser(clap::builder::PossibleValuesParser::new(str_values));
         }
 
         // Handle default values
         if let Some(default_value) = &arg_data.default_value {
-            arg = arg
-                .default_value(Box::leak(default_value.clone().into_boxed_str()) as &'static str);
+            arg = arg.default_value(intern_string(default_value.clone()));
         }
 
         arg
@@ -1473,15 +1490,14 @@ Examples:
         workflow_name: &str,
         workflow: &swissarmyhammer_workflow::Workflow,
     ) -> Command {
-        let mut cmd =
-            Command::new(Box::leak(command_name.clone().into_boxed_str()) as &'static str);
+        let mut cmd = Command::new(intern_string(command_name.clone()));
 
         // Set description indicating this is a shortcut
         let about_text = format!(
             "{} (shortcut for 'flow {}')",
             workflow.description, workflow_name
         );
-        cmd = cmd.about(Box::leak(about_text.into_boxed_str()) as &'static str);
+        cmd = cmd.about(intern_string(about_text));
 
         // Collect required parameters
         let required_params: Vec<_> = workflow.parameters.iter().filter(|p| p.required).collect();
@@ -1490,7 +1506,7 @@ Examples:
         if !required_params.is_empty() {
             let value_names: Vec<&'static str> = required_params
                 .iter()
-                .map(|p| Box::leak(p.name.clone().into_boxed_str()) as &'static str)
+                .map(|p| intern_string(p.name.clone()))
                 .collect();
 
             cmd = cmd.arg(
@@ -1537,3 +1553,7 @@ Examples:
         cmd
     }
 }
+
+#[cfg(test)]
+#[path = "dynamic_cli_tests.rs"]
+mod tests;
