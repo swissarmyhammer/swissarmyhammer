@@ -294,6 +294,9 @@ async fn execute_cli_command_with_capture(
         }
         Some(Commands::Implement) => {
             // Implement command - print deprecation warning and delegate to flow
+            // Note: This mock uses writeln! for testing purposes, while the actual
+            // implementation uses tracing::warn!. Both write to stderr, but tracing
+            // integrates with the application's logging infrastructure.
             let stderr_capture = stderr_buffer.clone();
 
             // Print deprecation warning to stderr (unless --quiet is specified)
@@ -319,6 +322,9 @@ async fn execute_cli_command_with_capture(
         }
         Some(Commands::Plan { plan_filename }) => {
             // Plan command mock for tests - check if file exists and return appropriate exit code
+            // Note: This mock uses writeln! for testing purposes, while the actual
+            // implementation uses tracing::warn!. Both write to stderr, but tracing
+            // integrates with the application's logging infrastructure.
             let stderr_capture = stderr_buffer.clone();
             let stdout_capture = stdout_buffer.clone();
 

@@ -24,12 +24,18 @@ use crate::context::CliContext;
 /// * `i32` - Exit code (0 for success, non-zero for error)
 pub async fn handle_command(context: &CliContext) -> i32 {
     // Print deprecation warning
+    // Note: Using tracing::warn! instead of eprintln! because:
+    // - Integrates with application logging infrastructure
+    // - Automatically writes to stderr
+    // - Can be controlled via log levels and filters
+    // - Consistent with other user-facing messages in the codebase
     if !context.quiet {
         tracing::warn!("'sah implement' wrapper command is deprecated.");
         tracing::warn!(
             "  Use 'sah flow implement' or 'sah implement' (via dynamic shortcut) instead."
         );
         tracing::warn!("  This wrapper will be removed in a future version.");
+        tracing::warn!("");
     }
 
     // Execute the implement workflow - equivalent to 'flow implement'
