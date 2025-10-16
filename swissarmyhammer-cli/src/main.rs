@@ -463,9 +463,11 @@ async fn handle_workflow_shortcut(
         workflow_name
     };
 
-    // Extract positional arguments
+    // Extract positional arguments (may not exist if workflow has no required params)
     let positional_args: Vec<String> = matches
-        .get_many::<String>("positional")
+        .try_get_many::<String>("positional")
+        .ok()
+        .flatten()
         .map(|vals| vals.cloned().collect())
         .unwrap_or_default();
 

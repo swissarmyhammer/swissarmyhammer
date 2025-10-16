@@ -1466,7 +1466,7 @@ Examples:
         // Collect required parameters
         let required_params: Vec<_> = workflow.parameters.iter().filter(|p| p.required).collect();
 
-        // Add positional arguments for required parameters
+        // Add positional arguments for required parameters ONLY if there are any
         if !required_params.is_empty() {
             let value_names: Vec<&'static str> = required_params
                 .iter()
@@ -1477,6 +1477,7 @@ Examples:
                 Arg::new("positional")
                     .num_args(required_params.len())
                     .value_names(value_names)
+                    .required(true)
                     .help("Required workflow parameters"),
             );
         }
