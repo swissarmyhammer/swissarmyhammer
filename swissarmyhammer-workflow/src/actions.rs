@@ -702,20 +702,38 @@ impl PromptAction {
                     }
                 };
 
-                // Note: MCP server must be started by caller before workflow execution.
-                // LlamaAgent will fail to initialize if required MCP server is not available.
-                // The executor initialization expects the MCP server to be running and accessible
-                // via the configuration specified in llama_config.mcp_server.
-                tracing::info!("Creating LlamaAgent executor (expects pre-started MCP server)");
+                // Get MCP server port from workflow context (started by CLI layer)
+                let mcp_port = context
+                    .workflow_context
+                    .get("_mcp_server_port")
+                    .and_then(|v| v.as_u64())
+                    .map(|p| p as u16);
+
+                if mcp_port.is_none() {
+                    return Err(ActionError::ExecutionError(
+                        "MCP server not started. The CLI layer should start the MCP server for LlamaAgent workflows.".to_string()
+                    ));
+                }
+
+                let port = mcp_port.unwrap();
+                tracing::info!("Creating LlamaAgent executor with MCP server on port {}", port);
+
+                // Create MCP server handle for the executor
+                // Note: We create a dummy shutdown channel since the actual server lifecycle
+                // is managed by the CLI layer. The executor just needs the port to connect.
+                let (dummy_tx, _dummy_rx) = tokio::sync::oneshot::channel();
+                let mcp_handle = crate::agents::llama_agent_executor::McpServerHandle::new(
+                    port,
+                    "127.0.0.1".to_string(),
+                    dummy_tx,
+                );
 
                 let mut executor =
-                    crate::agents::LlamaAgentExecutorWrapper::new(llama_config.clone());
+                    crate::agents::LlamaAgentExecutorWrapper::new_with_mcp(llama_config.clone(), Some(mcp_handle));
                 executor.initialize().await.map_err(|e| {
                     ActionError::ExecutionError(format!(
-                        "Failed to initialize LlamaAgent. The MCP server must be started before running workflows that use LlamaAgent. \
-                        Ensure the MCP server is running on port {} (or the configured port). \
-                        Start the MCP server at the CLI layer before executing workflows. Error: {}",
-                        llama_config.mcp_server.port,
+                        "Failed to initialize LlamaAgent with MCP server on port {}: {}",
+                        port,
                         e
                     ))
                 })?;

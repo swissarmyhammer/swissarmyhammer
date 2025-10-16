@@ -2,7 +2,7 @@ Display details of a specific issue by name.
 
 ## Parameters
 
-- `name` (required): Name of the issue to show. Use "current" for the current git branch issue, or "next" for the next pending issue
+- `name` (required): Name of the issue to show. Use "next" for the next pending issue.
 - `raw` (optional): Show raw content only without formatting (default: false)
 
 ## Examples
@@ -14,10 +14,10 @@ Show a specific issue by name:
 }
 ```
 
-Show the current issue for the active git branch:
+Show the next pending issue:
 ```json
 {
-  "name": "current"
+  "name": "next"
 }
 ```
 

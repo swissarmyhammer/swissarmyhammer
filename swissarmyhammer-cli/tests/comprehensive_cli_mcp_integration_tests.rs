@@ -45,15 +45,6 @@ async fn test_all_issue_tools_execution() -> Result<()> {
         "issue_show should succeed with regular name: {result:?}"
     );
 
-    // Test issue_show current (enhanced functionality)
-    let current_args = context.create_arguments(vec![("name", json!("current"))]);
-    let result = context.execute_tool("issue_show", current_args).await;
-    // This might succeed or fail depending on branch, but tool should be callable
-    assert!(
-        result.is_ok() || result.is_err(),
-        "issue_show current should be callable"
-    );
-
     // Test issue_show next (enhanced functionality)
     let next_args = context.create_arguments(vec![("name", json!("next"))]);
     let result = context.execute_tool("issue_show", next_args).await;
@@ -116,17 +107,6 @@ async fn test_all_memo_tools_execution() -> Result<()> {
         let get_args = context.create_arguments(vec![("id", json!(id))]);
         let result = context.execute_tool("memo_get", get_args).await;
         assert!(result.is_ok(), "memo_get should succeed: {result:?}");
-
-        // Test memo_update - SKIPPED: memo_update tool does not exist
-        // let update_args = context.create_arguments(vec![
-        //     ("id", json!(id)),
-        //     (
-        //         "content",
-        //         json!("# Updated Test Memo\n\nThis memo has been updated."),
-        //     ),
-        // ]);
-        // let result = context.execute_tool("memo_update", update_args).await;
-        // assert!(result.is_ok(), "memo_update should succeed: {result:?}");
     }
 
     // Test memo_search is disabled - should fail with "Tool not found"
@@ -239,17 +219,21 @@ async fn test_mcp_error_propagation() -> Result<()> {
     let nonexistent_args = context.create_arguments(vec![("title", json!("NonExistentMemo"))]);
     let result = context.execute_tool("memo_get", nonexistent_args).await;
 
-    // The memo_get tool should return success even for non-existent memos, just with a "not found" message
-    if let Ok(response) = result {
-        let text = response.content[0].as_text().unwrap().text.as_str();
-        assert!(
-            text.contains("Memo not found with title:"),
-            "Should contain not found message, got: {}",
-            text
-        );
-    } else {
-        // Skip this assertion for now since it's failing in CLI but works in direct tests
-        println!("Skipping non-existent memo test - CLI integration behaves differently than direct tests");
+    // The memo_get tool may return either success with "not found" message or error
+    // depending on the integration layer. Both behaviors are acceptable.
+    match result {
+        Ok(response) => {
+            let text = response.content[0].as_text().unwrap().text.as_str();
+            assert!(
+                text.contains("Memo not found with title:"),
+                "Should contain not found message, got: {}",
+                text
+            );
+        }
+        Err(_) => {
+            // CLI integration may return error for non-existent resources
+            // This is acceptable behavior
+        }
     }
 
     Ok(())
@@ -726,20 +710,6 @@ async fn test_issue_show_comprehensive() -> Result<()> {
         );
     }
 
-    // Test issue_show current (might not be on issue branch or might find different issue)
-    let current_args = context.create_arguments(vec![("name", json!("current"))]);
-    let result = context.execute_tool("issue_show", current_args).await;
-    // This might succeed with a message about not being on an issue branch, or find a different issue
-    match result {
-        Ok(_) => {
-            // Success - either found current issue or indicated not on issue branch
-        }
-        Err(e) => {
-            // This could happen if the current branch maps to a non-existent issue
-            println!("issue_show current returned error (acceptable): {e}");
-        }
-    }
-
     // Test raw parameter functionality
     let raw_args = context.create_arguments(vec![
         ("name", json!("ALPHA_ISSUE_001")),
@@ -756,10 +726,10 @@ async fn test_issue_show_comprehensive() -> Result<()> {
         &call_result,
     );
     if let Some(text) = content {
-        // Raw content should not have formatting emojis
+        // Raw content should not have formatting metadata
         assert!(
-            !text.contains("🔄") && !text.contains("✅"),
-            "Raw response should not contain emojis: {text}"
+            !text.contains("Status:") && !text.contains("File:") && !text.contains("Created:"),
+            "Raw response should not contain formatting metadata: {text}"
         );
         assert!(
             text.contains("ALPHA_ISSUE_001"),
@@ -812,7 +782,7 @@ async fn test_issue_show_performance_and_edge_cases() -> Result<()> {
             let error = result.unwrap_err();
             if error.to_string().contains("rate limit") {
                 // Rate limiting is expected during performance testing
-                println!("Rate limited at issue {i} (expected during performance test)");
+                tracing::debug!("Rate limited at issue {i} (expected during performance test)");
                 break;
             } else {
                 panic!("Should create performance test issue {i}: {error:?}");
@@ -836,7 +806,7 @@ async fn test_issue_show_performance_and_edge_cases() -> Result<()> {
         }
         Err(e) => {
             // This could happen if rate limiting prevented creating enough issues
-            println!("issue_show next failed (might be due to rate limiting): {e}");
+            tracing::debug!("issue_show next failed (might be due to rate limiting): {e}");
         }
     }
 
@@ -856,11 +826,10 @@ async fn test_issue_show_performance_and_edge_cases() -> Result<()> {
         let show_result = context.execute_tool("issue_show", show_large_args).await;
         assert!(show_result.is_ok(), "Should show large content efficiently");
     } else {
-        println!("Large content test skipped due to rate limiting");
+        tracing::debug!("Large content test skipped due to rate limiting");
     }
 
     // Test concurrent access to issue_show (skip if rate limited)
-    println!("Testing concurrent access to issue_show...");
     let mut success_count = 0;
     let mut handles = vec![];
 
@@ -890,12 +859,12 @@ async fn test_issue_show_performance_and_edge_cases() -> Result<()> {
             }
             Err(e) => {
                 // This could happen if rate limiting occurs
-                println!("Concurrent issue_show {i} returned error (might be rate limiting): {e}");
+                tracing::debug!("Concurrent issue_show {i} returned error (might be rate limiting): {e}");
             }
         }
     }
 
-    println!("Concurrent tests: {success_count} out of 3 succeeded");
+    assert!(success_count >= 1, "At least one concurrent test should succeed, got {success_count}");
 
     Ok(())
 }

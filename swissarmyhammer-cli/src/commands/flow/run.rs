@@ -7,6 +7,8 @@ use swissarmyhammer::{
     Result, SwissArmyHammerError, WorkflowExecutor, WorkflowName, WorkflowRunStatus,
 };
 use swissarmyhammer_common::{read_abort_file, remove_abort_file};
+use swissarmyhammer_config::agent::AgentExecutorType;
+use swissarmyhammer_tools::mcp::unified_server::{start_mcp_server, McpServerMode};
 use tokio::signal;
 
 /// Configuration for running a workflow command
@@ -87,6 +89,22 @@ pub async fn run_workflow_command(config: RunCommandConfig, context: &CliContext
         ));
     }
 
+    // Start MCP server if using LlamaAgent (before creating executor)
+    let agent_config = context.template_context.get_agent_config(None);
+    let mcp_server = if agent_config.executor_type() == AgentExecutorType::LlamaAgent {
+        tracing::info!("Starting MCP server for LlamaAgent");
+        let mode = McpServerMode::Http { port: None }; // Use random port
+        let server = start_mcp_server(mode, None)
+            .await
+            .map_err(|e| SwissArmyHammerError::Other {
+                message: format!("Failed to start MCP server for LlamaAgent: {}", e),
+            })?;
+        tracing::info!("MCP server started on port {}", server.info.port.unwrap_or(0));
+        Some(server)
+    } else {
+        None
+    };
+
     // Create executor
     let mut executor = WorkflowExecutor::new();
 
@@ -104,6 +122,17 @@ pub async fn run_workflow_command(config: RunCommandConfig, context: &CliContext
     // Set agent configuration from template context
     let agent_config = context.template_context.get_agent_config(None);
     run.context.set_agent_config(agent_config);
+
+    // Store MCP server port if started (for LlamaAgent executors to access)
+    // The actual MCP server handle lifecycle is managed by the CLI layer
+    if let Some(server) = &mcp_server {
+        let port = server.info.port.unwrap_or(0);
+        run.context.insert(
+            "_mcp_server_port".to_string(),
+            serde_json::Value::Number(serde_json::Number::from(port)),
+        );
+        tracing::debug!("Stored MCP server port {} in workflow context", port);
+    }
 
     // Set quiet mode in context for actions to use
     if config.quiet {
@@ -152,8 +181,23 @@ pub async fn run_workflow_command(config: RunCommandConfig, context: &CliContext
         Err(e) => {
             tracing::error!("❌ Workflow execution failed: {}", e);
             run.fail();
+
+            // Shutdown MCP server if it was started
+            if let Some(mut server) = mcp_server {
+                tracing::debug!("Shutting down MCP server after workflow failure");
+                let _ = server.shutdown().await;
+            }
+
             return Err(e);
         }
+    }
+
+    // Shutdown MCP server if it was started
+    if let Some(mut server) = mcp_server {
+        tracing::info!("Shutting down MCP server");
+        server.shutdown().await.map_err(|e| SwissArmyHammerError::Other {
+            message: format!("Failed to shutdown MCP server: {}", e),
+        })?;
     }
 
     Ok(())

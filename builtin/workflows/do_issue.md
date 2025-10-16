@@ -1,6 +1,6 @@
 ---
 title: Do Issue
-description: Autonomously work through the current open issue.
+description: Autonomously work through the next open issue.
 tags:
   - auto
 ---
