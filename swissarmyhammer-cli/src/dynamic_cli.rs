@@ -960,182 +960,29 @@ When variables are not provided via --var, the command prompts interactively:
     /// Build the flow command with all its subcommands
     fn build_flow_command() -> Command {
         Command::new("flow")
-            .about("Execute and manage workflows")
-            .subcommand(
-                Command::new("run")
-                    .about("Run a workflow")
-                    .arg(
-                        Arg::new("workflow")
-                            .help("Workflow name to run")
-                            .value_name("WORKFLOW")
-                            .required(true),
-                    )
-                    .arg(
-                        Arg::new("vars")
-                            .long("var")
-                            .help("Initial variables as key=value pairs")
-                            .value_name("KEY=VALUE")
-                            .action(ArgAction::Append),
-                    )
-                    .arg(
-                        Arg::new("interactive")
-                            .short('i')
-                            .long("interactive")
-                            .help("Interactive mode - prompt at each state")
-                            .action(ArgAction::SetTrue),
-                    )
-                    .arg(
-                        Arg::new("dry-run")
-                            .long("dry-run")
-                            .help("Dry run - show execution plan without running")
-                            .action(ArgAction::SetTrue),
-                    )
-                    .arg(
-                        Arg::new("test")
-                            .long("test")
-                            .help("Test mode - execute with mocked actions")
-                            .action(ArgAction::SetTrue),
-                    )
-                    .arg(
-                        Arg::new("quiet")
-                            .short('q')
-                            .long("quiet")
-                            .help("Quiet mode - only show errors")
-                            .action(ArgAction::SetTrue),
-                    ),
+            .about("Execute or list workflows")
+            .long_about(
+                "Execute workflows or list available workflows.
+
+Usage:
+  sah flow list                List all workflows
+  sah flow <workflow> [args]   Execute a workflow
+
+Special case: 'list' shows all available workflows
+All other names execute the named workflow.
+
+Examples:
+  sah flow list --verbose
+  sah flow implement
+  sah flow plan spec.md
+",
             )
-            .subcommand(
-                Command::new("resume")
-                    .about("Resume a paused workflow run")
-                    .arg(
-                        Arg::new("run_id")
-                            .help("Run ID to resume")
-                            .value_name("RUN_ID")
-                            .required(true),
-                    )
-                    .arg(
-                        Arg::new("interactive")
-                            .short('i')
-                            .long("interactive")
-                            .help("Interactive mode - prompt at each state")
-                            .action(ArgAction::SetTrue),
-                    )
-                    .arg(
-                        Arg::new("quiet")
-                            .short('q')
-                            .long("quiet")
-                            .help("Quiet mode - only show errors")
-                            .action(ArgAction::SetTrue),
-                    ),
-            )
-            .subcommand(
-                Command::new("list")
-                    .about("List available workflows")
-                    .arg(
-                        Arg::new("format")
-                            .long("format")
-                            .help("Output format")
-                            .value_parser(["table", "json", "yaml"])
-                            .default_value("table"),
-                    )
-                    .arg(
-                        Arg::new("verbose")
-                            .short('v')
-                            .long("verbose")
-                            .help("Show verbose output including workflow details")
-                            .action(ArgAction::SetTrue),
-                    )
-                    .arg(
-                        Arg::new("source")
-                            .long("source")
-                            .help("Filter by source")
-                            .value_parser(["builtin", "user", "local", "dynamic"]),
-                    ),
-            )
-            .subcommand(
-                Command::new("status")
-                    .about("Check status of a workflow run")
-                    .arg(
-                        Arg::new("run_id")
-                            .help("Run ID to check")
-                            .value_name("RUN_ID")
-                            .required(true),
-                    )
-                    .arg(
-                        Arg::new("format")
-                            .long("format")
-                            .help("Output format")
-                            .value_parser(["table", "json", "yaml"])
-                            .default_value("table"),
-                    )
-                    .arg(
-                        Arg::new("watch")
-                            .short('w')
-                            .long("watch")
-                            .help("Watch for status changes")
-                            .action(ArgAction::SetTrue),
-                    ),
-            )
-            .subcommand(
-                Command::new("logs")
-                    .about("View logs for a workflow run")
-                    .arg(
-                        Arg::new("run_id")
-                            .help("Run ID to view logs for")
-                            .value_name("RUN_ID")
-                            .required(true),
-                    )
-                    .arg(
-                        Arg::new("follow")
-                            .short('f')
-                            .long("follow")
-                            .help("Follow log output")
-                            .action(ArgAction::SetTrue),
-                    )
-                    .arg(
-                        Arg::new("tail")
-                            .short('n')
-                            .long("tail")
-                            .help("Number of log lines to show")
-                            .value_parser(clap::value_parser!(usize)),
-                    )
-                    .arg(
-                        Arg::new("level")
-                            .long("level")
-                            .help("Filter logs by level")
-                            .value_name("LEVEL"),
-                    ),
-            )
-            .subcommand(
-                Command::new("test")
-                    .about("Test a workflow without executing actions")
-                    .arg(
-                        Arg::new("workflow")
-                            .help("Workflow name to test")
-                            .value_name("WORKFLOW")
-                            .required(true),
-                    )
-                    .arg(
-                        Arg::new("vars")
-                            .long("var")
-                            .help("Initial variables as key=value pairs")
-                            .value_name("KEY=VALUE")
-                            .action(ArgAction::Append),
-                    )
-                    .arg(
-                        Arg::new("interactive")
-                            .short('i')
-                            .long("interactive")
-                            .help("Interactive mode - prompt at each state")
-                            .action(ArgAction::SetTrue),
-                    )
-                    .arg(
-                        Arg::new("quiet")
-                            .short('q')
-                            .long("quiet")
-                            .help("Quiet mode - only show errors")
-                            .action(ArgAction::SetTrue),
-                    ),
+            .trailing_var_arg(true)
+            .allow_external_subcommands(true)
+            .arg(
+                Arg::new("args")
+                    .num_args(0..)
+                    .help("Workflow name (or 'list') followed by arguments"),
             )
     }
 
