@@ -12,6 +12,38 @@ use swissarmyhammer_config::agent::AgentExecutorType;
 use swissarmyhammer_config::{LlamaAgentConfig, ModelSource};
 use tokio::sync::OnceCell;
 
+/// Re-exports from the llama_agent crate for external use and type compatibility
+///
+/// These types are re-exported to provide a unified interface for LlamaAgent configuration
+/// and execution. External code should use these re-exports rather than importing directly
+/// from llama_agent to maintain API stability and reduce coupling.
+///
+/// # Type Overview
+///
+/// ## Core Agent Types
+/// - `AgentServer`: The main server for handling agent execution and lifecycle
+/// - `AgentConfig`: Configuration for the agent including model, queue, and MCP settings
+/// - `AgentAPI`: Interface for interacting with the agent server
+///
+/// ## Session and Message Types
+/// - `Message`: Individual conversation message with role and content
+/// - `MessageRole`: Enum for message roles (User, Assistant, System, Tool)
+/// - `SessionConfig`: Configuration for conversation session management
+///
+/// ## Model Configuration Types
+/// - `ModelConfig`: Configuration for the LLM model
+/// - `ModelSource`: Enum for model sources (HuggingFace, Local)
+/// - `StoppingConfig`: Configuration for generation stopping criteria
+///
+/// ## Execution Configuration Types
+/// - `GenerationRequest`: Request for text generation
+/// - `ParallelConfig`: Configuration for parallel execution of tool calls
+/// - `QueueConfig`: Configuration for request queue management
+/// - `RetryConfig`: Configuration for retry logic on failures
+///
+/// ## MCP (Model Context Protocol) Types
+/// - `MCPServerConfig`: Configuration for MCP server connections
+/// - `HttpServerConfig`: Configuration for HTTP-based MCP servers
 pub use llama_agent::{
     types::{
         AgentAPI, AgentConfig, GenerationRequest, HttpServerConfig, MCPServerConfig, Message,
@@ -200,9 +232,13 @@ impl LlamaAgentExecutor {
                 max_delay_ms: 1000,
             },
             debug: false, // Hardcode to false to suppress llama.cpp verbose logging
-            n_seq_max: 1, // Match cache test
-            n_threads: 4, // Match cache test
-            n_threads_batch: 4, // Match cache test
+            // Thread and sequence configuration for llama.cpp
+            // n_seq_max: Maximum number of parallel sequences/contexts (1 = single conversation)
+            // n_threads: Number of threads for prompt processing (4 = balanced for multi-core CPUs)
+            // n_threads_batch: Number of threads for batch processing (4 = parallel token generation)
+            n_seq_max: 1,
+            n_threads: 4,
+            n_threads_batch: 4,
         };
 
         // Create MCP server configs for HTTP transport
@@ -301,53 +337,32 @@ impl LlamaAgentExecutor {
 
     /// Get current resource usage statistics
     pub async fn get_resource_stats(&self) -> Result<LlamaResourceStats, ActionError> {
-        #[cfg(test)]
-        {
-            // Return mock stats for tests
-            if self.initialized {
-                Ok(LlamaResourceStats {
-                    memory_usage_mb: 128,
-                    model_size_mb: 256,
-                    active_sessions: 1,
-                    total_tokens_processed: 42,
-                    average_tokens_per_second: 10.0,
-                })
-            } else {
-                Err(ActionError::ExecutionError(
-                    "Agent not initialized".to_string(),
-                ))
-            }
-        }
+        if let Some(agent_server) = &self.agent_server {
+            // Get real statistics from the agent server
+            let health = agent_server.health().await.map_err(|e| {
+                ActionError::ExecutionError(format!("Failed to get health status: {}", e))
+            })?;
 
-        #[cfg(not(test))]
-        {
-            if let Some(agent_server) = &self.agent_server {
-                // Get real statistics from the agent server
-                let health = agent_server.health().await.map_err(|e| {
-                    ActionError::ExecutionError(format!("Failed to get health status: {}", e))
-                })?;
-
-                Ok(LlamaResourceStats {
-                    memory_usage_mb: 1024, // This would come from actual memory monitoring
-                    model_size_mb: 2048,   // This would come from model info
-                    active_sessions: health.active_sessions,
-                    total_tokens_processed: 0, // This would need to be tracked
-                    average_tokens_per_second: 0.0, // This would be calculated from metrics
-                })
-            } else if self.initialized {
-                // Fallback for when agent server is not available but we're initialized
-                Ok(LlamaResourceStats {
-                    memory_usage_mb: 512,
-                    model_size_mb: 1024,
-                    active_sessions: 0,
-                    total_tokens_processed: 0,
-                    average_tokens_per_second: 0.0,
-                })
-            } else {
-                Err(ActionError::ExecutionError(
-                    "Agent not initialized".to_string(),
-                ))
-            }
+            Ok(LlamaResourceStats {
+                memory_usage_mb: 1024, // This would come from actual memory monitoring
+                model_size_mb: 2048,   // This would come from model info
+                active_sessions: health.active_sessions,
+                total_tokens_processed: 0, // This would need to be tracked
+                average_tokens_per_second: 0.0, // This would be calculated from metrics
+            })
+        } else if self.initialized {
+            // Fallback for when agent server is not available but we're initialized
+            Ok(LlamaResourceStats {
+                memory_usage_mb: 512,
+                model_size_mb: 1024,
+                active_sessions: 0,
+                total_tokens_processed: 0,
+                average_tokens_per_second: 0.0,
+            })
+        } else {
+            Err(ActionError::ExecutionError(
+                "Agent not initialized".to_string(),
+            ))
         }
     }
 
@@ -659,7 +674,6 @@ impl AgentExecutor for LlamaAgentExecutor {
 
 impl LlamaAgentExecutor {
     /// Execute with real LlamaAgent when the feature is enabled
-    #[allow(dead_code)]
     async fn execute_with_real_agent(
         &self,
         agent_server: &Arc<AgentServer>,
@@ -679,7 +693,9 @@ impl LlamaAgentExecutor {
             agent_server
                 .discover_tools(&mut session)
                 .await
-                .map_err(|e| ActionError::ExecutionError(format!("Failed to discover tools: {}", e)))?;
+                .map_err(|e| {
+                    ActionError::ExecutionError(format!("Failed to discover tools: {}", e))
+                })?;
         } else {
             tracing::debug!("Skipping tool discovery for rule checking (optimization)");
         }
@@ -1113,7 +1129,17 @@ mod tests {
         assert!(result.unwrap_err().to_string().contains("not initialized"));
     }
 
+    /// Integration test requiring a real LlamaAgent model to be available.
+    ///
+    /// This test is ignored by default because it requires:
+    /// - A valid LlamaAgent model file accessible via the test configuration
+    /// - Sufficient system resources to load and run the model
+    /// - Network access for model operations
+    ///
+    /// To run this test, ensure the model is available and use:
+    /// `cargo nextest run --ignored test_llama_agent_executor_execute_with_init`
     #[test_log::test(tokio::test)]
+    #[ignore = "Requires LlamaAgent model files and system resources"]
     async fn test_llama_agent_executor_execute_with_init() {
         // Start MCP server first
         use swissarmyhammer_prompts::PromptLibrary;
@@ -1134,17 +1160,11 @@ mod tests {
         let config = LlamaAgentConfig::for_testing();
         let mut executor = LlamaAgentExecutor::new(config, Some(mcp_handle));
 
-        // Try to initialize executor - may fail in test environment without model files
-        let init_result = executor.initialize().await;
-        if init_result.is_err() {
-            // Skip test if we can't initialize (no model files available)
-            tracing::warn!(
-                "Skipping test - executor initialization failed: {:?}",
-                init_result.err()
-            );
-            return;
-        }
-        //
+        // Initialize executor - this test requires model files to be available
+        executor
+            .initialize()
+            .await
+            .expect("Executor initialization must succeed - ensure LlamaAgent model is available");
 
         // Create a test execution context
         let agent_config = create_test_agent_config();
@@ -1161,7 +1181,6 @@ mod tests {
 
         // Execution must succeed - this is a real integration test
         let response = result.expect("Prompt execution must succeed");
-        // Response was obtained above with expect()
 
         // Verify response structure for real execution
         tracing::debug!("Response content length: {}", response.content.len());

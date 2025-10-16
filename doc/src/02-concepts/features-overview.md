@@ -45,7 +45,7 @@ Focus on:
 Three-tier system with clear precedence:
 
 1. **Builtin** (`embedded`) - 20+ production-ready prompts and workflows
-2. **User** (`~/.swissarmyhammer/`) - Your personal collection 
+2. **User** (`~/.swissarmyhammer/`) - Your personal collection
 3. **Local** (`./.swissarmyhammer/`) - Project-specific customizations
 
 ### Live Reloading
@@ -73,7 +73,7 @@ Powerful template processing with variables, logic, and filters:
 {% case review_type %}
 {% when "security" %}
 Focus on security vulnerabilities and data handling.
-{% when "performance" %}  
+{% when "performance" %}
 Focus on performance bottlenecks and optimization opportunities.
 {% else %}
 Standard code review focusing on quality and maintainability.
@@ -98,15 +98,15 @@ sah prompt list                    # List available prompts
 sah prompt test my-prompt         # Test prompt rendering
 sah prompt validate my-prompt     # Validate prompt syntax
 
-# Workflow execution  
+# Workflow execution
 sah flow run deployment           # Execute workflow
 sah flow status                   # Check running workflows
 sah flow history                  # View execution history
 
 # Issue tracking
 sah issue create "Fix login bug"  # Create new issue
-sah issue work ISSUE-123          # Switch to issue branch
-sah issue merge ISSUE-123         # Merge completed issue
+sah issue show ISSUE-123          # View issue details
+sah issue complete ISSUE-123      # Mark issue as complete
 
 # System diagnostics
 sah doctor                        # Health check
@@ -226,7 +226,7 @@ Brief description of the issue.
 ## Expected Behavior
 What should happen.
 
-## Actual Behavior  
+## Actual Behavior
 What actually happens.
 
 ## Environment
@@ -296,7 +296,7 @@ claude mcp add --scope user sah sah serve
 
 **Available Tools**:
 - `issue_*` - Complete issue lifecycle management
-- `memo_*` - Note-taking and knowledge management  
+- `memo_*` - Note-taking and knowledge management
 - `search_*` - Semantic code search capabilities
 - `outline_*` - Code structure generation
 - `abort_*` - Workflow control and termination
@@ -318,7 +318,7 @@ claude mcp add --scope user sah sah serve
 - `review/security` - Security-focused code review
 - `test` - Test generation and strategies
 
-**Documentation**  
+**Documentation**
 - `docs/readme` - README file generation
 - `docs/comments` - Inline code documentation
 - `docs/project` - Project documentation
@@ -335,7 +335,7 @@ Built-in workflows demonstrating best practices:
 
 **Feature Development**
 - `hello-world` - Basic workflow example
-- `tdd` - Test-driven development process
+- `test` - Test-driven development process
 - `implement` - Feature implementation workflow
 
 **Process Automation**
@@ -352,7 +352,7 @@ sah prompt list --builtin
 # Test built-in prompt
 sah prompt test code --var language=rust
 
-# Run built-in workflow  
+# Run built-in workflow
 sah flow run hello-world
 ```
 
@@ -360,7 +360,7 @@ sah flow run hello-world
 
 ### Scalability
 - Handles codebases with 10,000+ files efficiently
-- Lazy loading and configurable caching for memory efficiency  
+- Lazy loading and configurable caching for memory efficiency
 - Parallel processing for better throughput
 - Incremental updates for changed files only
 

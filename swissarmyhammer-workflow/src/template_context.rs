@@ -7,9 +7,7 @@ use crate::action_parser::ActionParser;
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use swissarmyhammer_config::{
-    agent::{
-        AgentConfig, AgentExecutorType, LlamaAgentConfig, ModelSource,
-    },
+    agent::{AgentConfig, AgentExecutorType, LlamaAgentConfig, ModelSource},
     ConfigurationResult, TemplateContext,
 };
 
@@ -732,5 +730,4 @@ mod tests {
         let model_name = context.get_model_name();
         assert_eq!(model_name, "/path/to/model.gguf");
     }
-
 }

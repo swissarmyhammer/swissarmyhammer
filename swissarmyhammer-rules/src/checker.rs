@@ -78,21 +78,17 @@ pub struct RuleCheckRequest {
 ///
 /// ```no_run
 /// use swissarmyhammer_rules::{RuleChecker, Rule, Severity};
-/// use swissarmyhammer_agent_executor::{AgentExecutorFactory, AgentExecutionContext};
+/// use swissarmyhammer_agent_executor::{AgentExecutor, ClaudeCodeExecutor};
 /// use std::sync::Arc;
 /// use std::path::PathBuf;
 ///
 /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
-/// // Load agent configuration from sah.yaml
-/// let workflow_context = WorkflowTemplateContext::load_with_agent_config()?;
-/// let agent_context = AgentExecutionContext::new(&workflow_context);
-///
-/// // Create and initialize executor
-/// let mut executor = AgentExecutorFactory::create_executor(&agent_context).await?;
+/// // Create and initialize executor (using ClaudeCode as example)
+/// let mut executor = ClaudeCodeExecutor::new();
 /// executor.initialize().await?;
 ///
 /// // Create checker
-/// let agent = Arc::from(executor);
+/// let agent: Arc<dyn AgentExecutor> = Arc::new(executor);
 /// let mut checker = RuleChecker::new(agent)?;
 /// checker.initialize().await?;
 ///
@@ -143,19 +139,15 @@ impl RuleChecker {
     ///
     /// ```no_run
     /// use swissarmyhammer_rules::RuleChecker;
-    /// use swissarmyhammer_agent_executor::{AgentExecutorFactory, AgentExecutionContext};
+    /// use swissarmyhammer_agent_executor::{AgentExecutor, ClaudeCodeExecutor};
     /// use std::sync::Arc;
     ///
     /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
-    /// // Load agent configuration from sah.yaml
-    /// let workflow_context = WorkflowTemplateContext::load_with_agent_config()?;
-    /// let agent_context = AgentExecutionContext::new(&workflow_context);
-    ///
-    /// // Create and initialize executor
-    /// let mut executor = AgentExecutorFactory::create_executor(&agent_context).await?;
+    /// // Create and initialize executor (using ClaudeCode as example)
+    /// let mut executor = ClaudeCodeExecutor::new();
     /// executor.initialize().await?;
     ///
-    /// let agent = Arc::from(executor);
+    /// let agent: Arc<dyn AgentExecutor> = Arc::new(executor);
     /// let checker = RuleChecker::new(agent)?;
     /// # Ok(())
     /// # }
@@ -250,15 +242,13 @@ impl RuleChecker {
     ///
     /// ```no_run
     /// # use swissarmyhammer_rules::{RuleChecker, Rule, Severity};
-    /// # use swissarmyhammer_agent_executor::{AgentExecutorFactory, AgentExecutionContext};
+    /// # use swissarmyhammer_agent_executor::{AgentExecutor, ClaudeCodeExecutor};
     /// # use std::sync::Arc;
     /// # use std::path::PathBuf;
     /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
-    /// # let workflow_context = WorkflowTemplateContext::load_with_agent_config()?;
-    /// # let agent_context = AgentExecutionContext::new(&workflow_context);
-    /// # let mut executor = AgentExecutorFactory::create_executor(&agent_context).await?;
+    /// # let mut executor = ClaudeCodeExecutor::new();
     /// # executor.initialize().await?;
-    /// # let agent = Arc::from(executor);
+    /// # let agent: Arc<dyn AgentExecutor> = Arc::new(executor);
     /// # let mut checker = RuleChecker::new(agent)?;
     /// # checker.initialize().await?;
     /// let rule = Rule::new(
@@ -515,14 +505,12 @@ impl RuleChecker {
     /// ```no_run
     /// # use swissarmyhammer_rules::{RuleChecker, RuleCheckRequest, CheckMode};
     /// # use futures_util::stream::StreamExt;
-    /// # use swissarmyhammer_agent_executor::{AgentExecutorFactory, AgentExecutionContext};
+    /// # use swissarmyhammer_agent_executor::{AgentExecutor, ClaudeCodeExecutor};
     /// # use std::sync::Arc;
     /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
-    /// # let workflow_context = WorkflowTemplateContext::load_with_agent_config()?;
-    /// # let agent_context = AgentExecutionContext::new(&workflow_context);
-    /// # let mut executor = AgentExecutorFactory::create_executor(&agent_context).await?;
+    /// # let mut executor = ClaudeCodeExecutor::new();
     /// # executor.initialize().await?;
-    /// # let agent = Arc::from(executor);
+    /// # let agent: Arc<dyn AgentExecutor> = Arc::new(executor);
     /// # let mut checker = RuleChecker::new(agent)?;
     /// # checker.initialize().await?;
     /// let request = RuleCheckRequest {
@@ -531,6 +519,7 @@ impl RuleChecker {
     ///     category: None,
     ///     patterns: vec!["**/*.rs".to_string()],
     ///     check_mode: CheckMode::CollectAll,
+    ///     force: false,
     /// };
     ///
     /// let mut stream = checker.check(request).await?;

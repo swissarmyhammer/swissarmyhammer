@@ -34,23 +34,72 @@ pub trait AgentExecutor: Send + Sync {
 pub struct AgentExecutorFactory;
 
 impl AgentExecutorFactory {
-    /// Create an executor based on the execution context
+    /// Create an executor based on agent configuration
+    ///
+    /// For LlamaAgent executors, an optional MCP server handle can be provided.
+    /// If not provided, the executor will be created but may require MCP server
+    /// to be started separately before initialization.
+    ///
+    /// # Arguments
+    ///
+    /// * `agent_config` - The agent configuration specifying which executor to use
+    /// * `mcp_server` - Optional MCP server handle (required for LlamaAgent)
+    ///
+    /// # Returns
+    ///
+    /// Returns an initialized executor wrapped in a Box<dyn AgentExecutor>
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use swissarmyhammer_agent_executor::{AgentExecutorFactory, AgentExecutionContext};
+    /// use swissarmyhammer_config::agent::AgentConfig;
+    ///
+    /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+    /// let agent_config = AgentConfig::default();
+    /// let mut executor = AgentExecutorFactory::create_executor(&agent_config, None).await?;
+    ///
+    /// // Execute a prompt
+    /// let context = AgentExecutionContext::default();
+    /// let response = executor.execute_prompt(
+    ///     "You are a helpful assistant.".to_string(),
+    ///     "What is 2+2?".to_string(),
+    ///     &context
+    /// ).await?;
+    /// # Ok(())
+    /// # }
+    /// ```
     pub async fn create_executor(
-        context: &AgentExecutionContext<'_>,
+        agent_config: &swissarmyhammer_config::agent::AgentConfig,
+        mcp_server: Option<crate::llama::McpServerHandle>,
     ) -> ActionResult<Box<dyn AgentExecutor>> {
-        match context.executor_type() {
+        match agent_config.executor_type() {
             AgentExecutorType::ClaudeCode => {
-                Err(crate::ActionError::ExecutionError(
-                    "ClaudeCode executor not available in agent-executor crate. Use swissarmyhammer-workflow.".to_string(),
-                ))
+                tracing::info!("Creating ClaudeCode executor");
+                let mut executor = crate::claude::ClaudeCodeExecutor::new();
+                executor.initialize().await?;
+                Ok(Box::new(executor))
             }
             AgentExecutorType::LlamaAgent => {
-                // LlamaAgent requires MCP server to be started first
-                // This factory is low-level and doesn't start MCP server
-                // Use swissarmyhammer_workflow::AgentExecutorFactory instead, which handles MCP server lifecycle
-                Err(crate::ActionError::ExecutionError(
-                    "LlamaAgent executor requires MCP server. Use swissarmyhammer_workflow::AgentExecutorFactory instead of agent-executor's factory.".to_string(),
-                ))
+                tracing::info!("Creating LlamaAgent executor");
+
+                // Extract LlamaAgent configuration from agent config
+                let llama_config = match &agent_config.executor {
+                    swissarmyhammer_config::agent::AgentExecutorConfig::LlamaAgent(config) => {
+                        config.clone()
+                    }
+                    _ => {
+                        return Err(crate::ActionError::ExecutionError(format!(
+                            "Expected LlamaAgent configuration, but got {:?}",
+                            agent_config.executor_type()
+                        )))
+                    }
+                };
+
+                // Create executor with optional MCP server handle
+                let mut executor = crate::llama::LlamaAgentExecutor::new(llama_config, mcp_server);
+                executor.initialize().await?;
+                Ok(Box::new(executor))
             }
         }
     }

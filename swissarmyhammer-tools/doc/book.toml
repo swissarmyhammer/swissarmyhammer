@@ -1,0 +1,30 @@
+[book]
+title = "SwissArmyHammer Tools"
+description = "MCP server and tools for AI-assisted development"
+authors = ["SwissArmyHammer Contributors"]
+language = "en"
+multilingual = false
+src = "src"
+
+[build]
+build-dir = "book"
+create-missing = true
+
+[output.html]
+default-theme = "rust"
+preferred-dark-theme = "navy"
+git-repository-url = "https://github.com/swissarmyhammer/swissarmyhammer"
+git-repository-icon = "fa-github"
+edit-url-template = "https://github.com/swissarmyhammer/swissarmyhammer/edit/main/swissarmyhammer-tools/doc/{path}"
+
+[output.html.fold]
+enable = true
+level = 1
+
+[output.html.search]
+enable = true
+limit-results = 30
+use-boolean-and = true
+
+[output.html.print]
+enable = true

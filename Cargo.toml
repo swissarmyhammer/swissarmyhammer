@@ -86,7 +86,7 @@ tree-sitter-dart = "0.0.4"
 md5 = "0.7"
 
 # CLI specific dependencies
-clap = { version = "4.5.41", features = ["derive"] }
+clap = { version = "4", features = ["derive"] }
 clap_complete = "4"
 colored = "2"
 is-terminal = "0.4"

@@ -2,6 +2,41 @@
 //!
 //! This module provides the action execution infrastructure for workflows,
 //! including Claude integration, variable operations, and control flow actions.
+//!
+//! # MCP Server Lifecycle Responsibility
+//!
+//! **Important**: This workflow layer does NOT start infrastructure services like MCP servers.
+//! Infrastructure setup is the responsibility of the caller (typically the CLI layer).
+//!
+//! ## For LlamaAgent Executors
+//!
+//! When creating a workflow that uses LlamaAgent:
+//!
+//! 1. **Caller Responsibility**: Start the MCP server BEFORE executing the workflow
+//! 2. **Workflow Responsibility**: Create executors that connect to the running server
+//! 3. **Error Handling**: If MCP server is not available, executor initialization will fail
+//!
+//! This separation ensures:
+//! - Clean architectural boundaries (workflow logic vs infrastructure)
+//! - Testability (mock or real MCP servers can be provided)
+//! - Flexibility (different deployment models can manage infrastructure differently)
+//!
+//! ## Example
+//!
+//! ```rust,no_run
+//! # use swissarmyhammer_workflow::WorkflowExecutor;
+//! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+//! // 1. Start MCP server (in CLI layer, not shown here)
+//! // let mcp_server = start_mcp_server(...).await?;
+//!
+//! // 2. Create workflow with LlamaAgent configuration
+//! // let workflow = load_workflow(...)?;
+//!
+//! // 3. Execute workflow (will connect to running MCP server)
+//! // let result = workflow.execute(...).await?;
+//! # Ok(())
+//! # }
+//! ```
 
 use swissarmyhammer_shell::{
     get_validator, log_shell_completion, log_shell_execution, ShellSecurityError,
@@ -24,15 +59,13 @@ use syntect::parsing::SyntaxSet;
 use syntect::util::as_24_bit_terminal_escaped;
 use thiserror::Error;
 
-use async_trait::async_trait;
 use swissarmyhammer_config::agent::{AgentConfig, AgentExecutorConfig, AgentExecutorType};
 use swissarmyhammer_prompts::{PromptLibrary, PromptResolver};
 
 // Re-export types from agent-executor crate
 pub use swissarmyhammer_agent_executor::{
     ActionError as AgentExecutorError, ActionResult as AgentExecutorResult,
-    AgentExecutor as AgentExecutorTrait, AgentResponse as AgentExecutorResponse,
-    AgentResponseType as AgentExecutorResponseType,
+    AgentResponse as AgentExecutorResponse, AgentResponseType as AgentExecutorResponseType,
 };
 
 thread_local! {
@@ -208,118 +241,21 @@ impl AgentResponse {
     }
 }
 
-/// Agent executor trait for abstracting prompt execution across different AI backends
-#[async_trait]
-pub trait AgentExecutor: Send + Sync {
-    /// Execute a rendered prompt and return the response
-    async fn execute_prompt(
-        &self,
-        system_prompt: String,
-        rendered_prompt: String,
-        context: &AgentExecutionContext<'_>,
-    ) -> ActionResult<AgentResponse>;
+/// Re-export the canonical AgentExecutor trait from agent-executor crate
+/// This eliminates the duplicate trait definition that was causing type incompatibility
+pub use swissarmyhammer_agent_executor::AgentExecutor;
 
-    /// Get the executor type enum
-    fn executor_type(&self) -> AgentExecutorType;
-
-    /// Initialize the executor with configuration
-    async fn initialize(&mut self) -> ActionResult<()>;
-
-    /// Shutdown the executor and cleanup resources
-    async fn shutdown(&mut self) -> ActionResult<()>;
-
-    /// Check if the executor supports streaming responses
-    fn supports_streaming(&self) -> bool {
-        false // Default implementation returns false
-    }
-}
-
-/// Factory for creating agent executors
-pub struct AgentExecutorFactory;
-
-impl AgentExecutorFactory {
-    /// Create an executor based on the execution context
-    pub async fn create_executor(
-        context: &AgentExecutionContext<'_>,
-    ) -> ActionResult<Box<dyn AgentExecutor>> {
-        match context.executor_type() {
-            AgentExecutorType::ClaudeCode => {
-                tracing::info!("Using ClaudeCode");
-                let mut executor = crate::agents::ClaudeCodeExecutor::new();
-                executor.initialize().await?;
-                Ok(Box::new(executor))
-            }
-            AgentExecutorType::LlamaAgent => {
-                tracing::info!("Using LlamaAgent with singleton pattern");
-                let agent_config = context.agent_config();
-                let llama_config = match agent_config.executor {
-                    AgentExecutorConfig::LlamaAgent(config) => config,
-                    _ => {
-                        return Err(ActionError::ExecutionError(
-                            "Expected LlamaAgent configuration".to_string(),
-                        ))
-                    }
-                };
-
-                // Start MCP server in workflow layer (breaking circular dependency)
-                use swissarmyhammer_prompts::PromptLibrary;
-                use swissarmyhammer_tools::mcp::unified_server::{start_mcp_server, McpServerMode};
-
-                tracing::info!("Starting MCP server for LlamaAgent in workflow layer");
-                let tools_mcp_handle = start_mcp_server(
-                    McpServerMode::Http {
-                        port: if llama_config.mcp_server.port == 0 {
-                            None
-                        } else {
-                            Some(llama_config.mcp_server.port)
-                        },
-                    },
-                    Some(PromptLibrary::default()),
-                )
-                .await
-                .map_err(|e| {
-                    ActionError::ExecutionError(format!("Failed to start MCP server: {}", e))
-                })?;
-
-                tracing::info!(
-                    "MCP server started on port {:?}",
-                    tools_mcp_handle.info.port
-                );
-
-                // Keep the MCP server handle alive by storing it in the executor
-                // The workflow layer owns the MCP server lifecycle
-                let port = tools_mcp_handle.info.port.unwrap_or(0);
-
-                // Create a cloneable shutdown handle that keeps the server alive
-                // We'll use a channel that we DON'T drop to keep the server running
-                let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel::<()>();
-
-                // Store the shutdown receiver to prevent it from being dropped
-                // This prevents premature server shutdown
-                let _server_keepalive = shutdown_rx;
-
-                let agent_mcp_handle = crate::agents::llama_agent_executor::McpServerHandle::new(
-                    port,
-                    "127.0.0.1".to_string(),
-                    shutdown_tx,
-                );
-
-                // Create executor with pre-started MCP server
-                let mut executor = crate::agents::LlamaAgentExecutorWrapper::new_with_mcp(
-                    llama_config,
-                    Some(agent_mcp_handle),
-                );
-                executor.initialize().await?;
-
-                // TODO: We need to properly manage the MCP server lifecycle
-                // Currently we leak the shutdown_rx to keep the server alive
-                // A better solution would be to store tools_mcp_handle in the executor
-                std::mem::forget(_server_keepalive);
-                std::mem::forget(tools_mcp_handle);
-
-                Ok(Box::new(executor))
-            }
-        }
+/// Convert agent-executor error to workflow ActionError
+fn convert_agent_executor_error(err: swissarmyhammer_agent_executor::ActionError) -> ActionError {
+    use swissarmyhammer_agent_executor::ActionError as AEError;
+    match err {
+        AEError::ClaudeError(msg) => ActionError::ClaudeError(msg),
+        AEError::VariableError(msg) => ActionError::VariableError(msg),
+        AEError::ParseError(msg) => ActionError::ParseError(msg),
+        AEError::ExecutionError(msg) => ActionError::ExecutionError(msg),
+        AEError::IoError(err) => ActionError::IoError(err),
+        AEError::JsonError(err) => ActionError::JsonError(err),
+        AEError::RateLimit { message, wait_time } => ActionError::RateLimit { message, wait_time },
     }
 }
 
@@ -664,17 +600,22 @@ impl PromptAction {
         // Execute the rendered prompt using the AgentExecutor trait
 
         // Create execution context (LLM handles its own timeout)
-        let execution_context = AgentExecutionContext::new(context);
+        let workflow_execution_context = AgentExecutionContext::new(context);
 
         // Get executor based on configuration
-        let executor = self.get_executor(&execution_context).await?;
+        let executor = self.get_executor(&workflow_execution_context).await?;
+
+        // Convert workflow context to agent-executor context
+        let agent_config = workflow_execution_context.agent_config();
+        let agent_exec_context =
+            swissarmyhammer_agent_executor::AgentExecutionContext::new(&agent_config);
 
         // Execute prompt through trait
         let response = executor
             .execute_prompt(
                 system_prompt.unwrap_or_default(),
                 user_prompt,
-                &execution_context,
+                &agent_exec_context,
             )
             .await;
 
@@ -682,7 +623,7 @@ impl PromptAction {
             Ok(resp) => resp,
             Err(e) => {
                 tracing::error!("Prompt execution failed: {:?}", e);
-                return Err(e);
+                return Err(convert_agent_executor_error(e));
             }
         };
 
@@ -739,7 +680,49 @@ impl PromptAction {
     ) -> ActionResult<Box<dyn AgentExecutor>> {
         // Only create executor when actually needed for prompt execution
         tracing::debug!("Creating executor on-demand for prompt execution");
-        AgentExecutorFactory::create_executor(context).await
+
+        match context.executor_type() {
+            AgentExecutorType::ClaudeCode => {
+                tracing::info!("Using ClaudeCode");
+                let mut executor = crate::agents::ClaudeCodeExecutor::new();
+                executor.initialize().await.map_err(|e| {
+                    ActionError::ExecutionError(format!("Failed to initialize ClaudeCode: {}", e))
+                })?;
+                Ok(Box::new(executor))
+            }
+            AgentExecutorType::LlamaAgent => {
+                tracing::info!("Using LlamaAgent with singleton pattern");
+                let agent_config = context.agent_config();
+                let llama_config = match agent_config.executor {
+                    AgentExecutorConfig::LlamaAgent(config) => config,
+                    _ => {
+                        return Err(ActionError::ExecutionError(
+                            "Expected LlamaAgent configuration".to_string(),
+                        ))
+                    }
+                };
+
+                // Note: MCP server must be started by caller before workflow execution.
+                // LlamaAgent will fail to initialize if required MCP server is not available.
+                // The executor initialization expects the MCP server to be running and accessible
+                // via the configuration specified in llama_config.mcp_server.
+                tracing::info!("Creating LlamaAgent executor (expects pre-started MCP server)");
+
+                let mut executor =
+                    crate::agents::LlamaAgentExecutorWrapper::new(llama_config.clone());
+                executor.initialize().await.map_err(|e| {
+                    ActionError::ExecutionError(format!(
+                        "Failed to initialize LlamaAgent. The MCP server must be started before running workflows that use LlamaAgent. \
+                        Ensure the MCP server is running on port {} (or the configured port). \
+                        Start the MCP server at the CLI layer before executing workflows. Error: {}",
+                        llama_config.mcp_server.port,
+                        e
+                    ))
+                })?;
+
+                Ok(Box::new(executor))
+            }
+        }
     }
 }
 
@@ -2088,7 +2071,9 @@ mod tests {
                 // Claude CLI is available - test shutdown
                 assert!(executor.shutdown().await.is_ok());
             }
-            Err(ActionError::ExecutionError(msg)) if msg.contains("Claude CLI not found") => {
+            Err(swissarmyhammer_agent_executor::ActionError::ExecutionError(msg))
+                if msg.contains("Claude CLI not found") =>
+            {
                 // This is expected in environments without Claude CLI
             }
             Err(e) => panic!("Unexpected error during initialization: {}", e),
@@ -2116,14 +2101,15 @@ mod tests {
     */
 
     #[tokio::test]
-    async fn test_executor_factory_claude() {
+    async fn test_executor_creation_claude() {
         let mut context = WorkflowTemplateContext::with_vars_for_test(HashMap::new());
         context.set_agent_config(AgentConfig::default());
 
         let execution_context = AgentExecutionContext::new(&context);
+        let action = PromptAction::new("test".to_string());
 
         // This test may fail if claude CLI is not available - that's expected
-        match AgentExecutorFactory::create_executor(&execution_context).await {
+        match action.get_executor(&execution_context).await {
             Ok(executor) => {
                 assert_eq!(executor.executor_type(), AgentExecutorType::ClaudeCode);
             }
@@ -2136,7 +2122,7 @@ mod tests {
 
     #[tokio::test]
     #[serial_test::serial]
-    async fn test_executor_factory_llama_agent() {
+    async fn test_executor_creation_llama_agent() {
         let mut context = WorkflowTemplateContext::with_vars_for_test(HashMap::new());
 
         use swissarmyhammer_config::agent::LlamaAgentConfig;
@@ -2144,17 +2130,27 @@ mod tests {
         context.set_agent_config(AgentConfig::llama_agent(llama_config));
 
         let execution_context = AgentExecutionContext::new(&context);
+        let action = PromptAction::new("test".to_string());
 
-        // LlamaAgent should now create successfully
-        match AgentExecutorFactory::create_executor(&execution_context).await {
-            Ok(executor) => {
-                // Verify we got a LlamaAgent executor
+        // LlamaAgent now requires MCP server to be pre-started, so this should fail
+        // with a specific message indicating the MCP server is not running
+        match action.get_executor(&execution_context).await {
+            Ok(_) => {
+                panic!("Expected LlamaAgent executor creation to fail without MCP server");
+            }
+            Err(e) => {
+                let error_msg = e.to_string();
                 assert!(
-                    !executor.supports_streaming(),
-                    "LlamaAgent should not support streaming by default"
+                    error_msg.contains("Failed to initialize LlamaAgent"),
+                    "Error should start with 'Failed to initialize LlamaAgent', got: {}",
+                    error_msg
+                );
+                assert!(
+                    error_msg.contains("MCP server must be started before running workflows"),
+                    "Error should explain MCP server requirement, got: {}",
+                    error_msg
                 );
             }
-            Err(e) => panic!("LlamaAgent executor creation failed: {}", e),
         }
     }
 
@@ -3225,15 +3221,16 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_agent_executor_factory_claude_code() {
+    async fn test_agent_executor_creation_claude_code() {
         let _guard = IsolatedTestEnvironment::new();
 
         let mut context = WorkflowTemplateContext::with_vars_for_test(HashMap::new());
         context.set_agent_config(swissarmyhammer_config::agent::AgentConfig::claude_code());
 
         let execution_context = AgentExecutionContext::new(&context);
+        let action = PromptAction::new("test".to_string());
 
-        match AgentExecutorFactory::create_executor(&execution_context).await {
+        match action.get_executor(&execution_context).await {
             Ok(executor) => {
                 assert_eq!(executor.executor_type(), AgentExecutorType::ClaudeCode);
             }
@@ -3246,7 +3243,7 @@ mod tests {
 
     #[tokio::test]
     #[serial_test::serial]
-    async fn test_agent_executor_factory_llama_agent() {
+    async fn test_agent_executor_creation_llama_agent() {
         // Skip test if LlamaAgent testing is disabled
 
         let _guard = IsolatedTestEnvironment::new();
@@ -3267,7 +3264,8 @@ mod tests {
         );
 
         // LlamaAgent should now create successfully
-        match AgentExecutorFactory::create_executor(&execution_context).await {
+        let action = PromptAction::new("test".to_string());
+        match action.get_executor(&execution_context).await {
             Ok(executor) => {
                 println!("DEBUG: LlamaAgent executor created successfully");
                 // Verify we got a LlamaAgent executor

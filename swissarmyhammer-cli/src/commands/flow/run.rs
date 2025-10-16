@@ -1,11 +1,8 @@
 //! Run a workflow command implementation
 
-use super::shared::{
-    create_local_workflow_run_storage, execute_workflow_with_progress, workflow_run_id_to_string,
-};
+use super::params::{map_positional_to_params, merge_params, parse_param_pairs};
+use super::shared::{execute_workflow_with_progress, workflow_run_id_to_string};
 use crate::context::CliContext;
-use crate::parameter_cli;
-use std::collections::HashMap;
 use swissarmyhammer::{
     Result, SwissArmyHammerError, WorkflowExecutor, WorkflowName, WorkflowRunStatus,
 };
@@ -13,8 +10,10 @@ use swissarmyhammer_common::{read_abort_file, remove_abort_file};
 use tokio::signal;
 
 /// Configuration for running a workflow command
-pub struct WorkflowCommandConfig {
-    pub workflow_name: String,
+pub struct RunCommandConfig {
+    pub workflow: String,
+    pub positional_args: Vec<String>,
+    pub params: Vec<String>,
     pub vars: Vec<String>,
     pub interactive: bool,
     pub dry_run: bool,
@@ -22,60 +21,28 @@ pub struct WorkflowCommandConfig {
 }
 
 /// Execute the run workflow command
-pub async fn execute_run_command(
-    workflow: String,
-    vars: Vec<String>,
-    interactive: bool,
-    dry_run: bool,
-    quiet: bool,
-    context: &CliContext,
-) -> Result<()> {
-    let config = WorkflowCommandConfig {
-        workflow_name: workflow,
-        vars,
-        interactive,
-        dry_run,
-        quiet,
-    };
-
+pub async fn execute_run_command(config: RunCommandConfig, context: &CliContext) -> Result<()> {
     run_workflow_command(config, context).await
 }
 
 /// Execute a workflow with given configuration
-pub async fn run_workflow_command(
-    config: WorkflowCommandConfig,
-    context: &CliContext,
-) -> Result<()> {
-    let workflow_name_typed = WorkflowName::new(&config.workflow_name);
+pub async fn run_workflow_command(config: RunCommandConfig, context: &CliContext) -> Result<()> {
+    let workflow_name_typed = WorkflowName::new(&config.workflow);
     let workflow = context
         .workflow_storage
         .get_workflow(&workflow_name_typed)?;
 
-    // Resolve workflow parameters with enhanced parameter system
-    let workflow_variables = parameter_cli::resolve_workflow_parameters_interactive(
-        &workflow,
-        &config.vars,
-        config.interactive && !config.dry_run,
-    )
-    .unwrap_or_else(|e| {
-        eprintln!("Warning: Failed to resolve workflow parameters: {e}");
-        HashMap::new()
-    });
+    // Map positional arguments to required workflow parameters
+    let positional_params = map_positional_to_params(&workflow, config.positional_args)?;
 
-    // Parse additional variables not handled by workflow parameters (backward compatibility)
-    let mut variables = workflow_variables;
-    for var in config.vars {
-        let parts: Vec<&str> = var.splitn(2, '=').collect();
-        if parts.len() == 2 {
-            let key = parts[0].to_string();
-            // Add variable, allowing later values to override earlier ones
-            variables.insert(key, serde_json::Value::String(parts[1].to_string()));
-        } else {
-            return Err(SwissArmyHammerError::Other { message: format!(
-                "Invalid variable format: '{var}'. Expected 'key=value' format. Example: --var input=test"
-            ) });
-        }
-    }
+    // Parse --param key=value pairs
+    let param_pairs = parse_param_pairs(&config.params)?;
+
+    // Parse --var key=value pairs (deprecated but still supported)
+    let var_pairs = parse_param_pairs(&config.vars)?;
+
+    // Merge all parameter sources with proper precedence
+    let variables = merge_params(positional_params, param_pairs, var_pairs);
 
     if config.dry_run {
         println!("🔍 Dry run mode - showing execution plan:");
@@ -163,35 +130,19 @@ pub async fn run_workflow_command(
         }
     };
 
-    // Create local workflow run storage (only store failed runs for debugging)
-    let mut run_storage = create_local_workflow_run_storage()?;
-
     match execution_result {
         Ok(_) => match run.status {
             WorkflowRunStatus::Completed => {
                 tracing::info!("✅ Workflow completed successfully");
                 tracing::info!("🆔 Run ID: {}", workflow_run_id_to_string(&run.id));
-
-                // Don't store successful runs to avoid accumulating thousands of runs
-                // Only failed runs are stored for debugging purposes
             }
             WorkflowRunStatus::Failed => {
                 tracing::error!("❌ Workflow failed");
                 tracing::info!("🆔 Run ID: {}", workflow_run_id_to_string(&run.id));
-
-                // Store failed runs for debugging
-                if let Err(storage_err) = run_storage.store_run(&run) {
-                    tracing::warn!("Failed to store failed run: {}", storage_err);
-                }
             }
             WorkflowRunStatus::Cancelled => {
                 tracing::warn!("🚫 Workflow cancelled");
                 tracing::info!("🆔 Run ID: {}", workflow_run_id_to_string(&run.id));
-
-                // Store cancelled runs for debugging
-                if let Err(storage_err) = run_storage.store_run(&run) {
-                    tracing::warn!("Failed to store cancelled run: {}", storage_err);
-                }
             }
             _ => {
                 tracing::info!("⏸️  Workflow paused");
@@ -201,13 +152,6 @@ pub async fn run_workflow_command(
         Err(e) => {
             tracing::error!("❌ Workflow execution failed: {}", e);
             run.fail();
-
-            // Store failed runs for debugging
-            if let Err(storage_err) = run_storage.store_run(&run) {
-                tracing::warn!("Failed to store failed run: {}", storage_err);
-            }
-
-            // Return the error to allow proper exit code handling in main.rs
             return Err(e);
         }
     }

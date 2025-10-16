@@ -18,7 +18,7 @@ async fn run_workflow_with_vars_in_process(
     dry_run: bool,
 ) -> Result<bool> {
     // Build command arguments for "flow run"
-    let mut args = vec!["flow", "run", workflow_name];
+    let mut args = vec!["flow", workflow_name];
 
     // Add variables
     for var in &vars {
@@ -151,7 +151,6 @@ fn test_workflow_with_var_variables() {
     // Run workflow with --var variables using in-process execution
     run_sah_sync_assert(&[
         "flow",
-        "run",
         "test-template",
         "--var",
         "greeting=Bonjour",
@@ -197,7 +196,7 @@ stateDiagram-v2
     )
     .unwrap();
 
-    run_sah_sync_assert(&["flow", "run", "some-workflow", "--var", "invalid_format"])
+    run_sah_sync_assert(&["flow", "some-workflow", "--var", "invalid_format"])
         .failure()
         .stderr(predicate::str::contains("Invalid variable format"))
         .stderr(predicate::str::contains("key=value"));
@@ -287,7 +286,7 @@ stateDiagram-v2
     .unwrap();
 
     // Run workflow with equals sign in value
-    run_sah_sync_assert(&["flow", "run", "equals-test", "--var", "formula=x=y+z"])
+    run_sah_sync_assert(&["flow", "equals-test", "--var", "formula=x=y+z"])
         .success()
         .stdout(predicate::str::contains("equals-test")); // Just check that workflow runs successfully
 }

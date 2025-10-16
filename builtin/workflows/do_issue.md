@@ -25,7 +25,7 @@ stateDiagram-v2
 - code: execute prompt "issue/code"
 - review: execute prompt "issue/review"
 - code_review: execute prompt "issue/code_review"
-- test: run workflow "tdd"
+- test: run workflow "test"
 - complete: execute prompt "issue/complete"
 - commit: execute prompt "commit"
 

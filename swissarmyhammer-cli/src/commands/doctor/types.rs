@@ -53,36 +53,6 @@ impl std::fmt::Display for WorkflowDirectory {
     }
 }
 
-/// Type-safe wrapper for disk space measurements in megabytes
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub struct DiskSpace {
-    mb: u64,
-}
-
-impl DiskSpace {
-    /// Create a new DiskSpace value from megabytes
-    pub fn from_mb(mb: u64) -> Self {
-        Self { mb }
-    }
-
-    /// Get the value in megabytes
-    #[allow(dead_code)]
-    pub fn as_mb(&self) -> u64 {
-        self.mb
-    }
-
-    /// Check if disk space is below a certain threshold
-    pub fn is_low(&self, threshold_mb: u64) -> bool {
-        self.mb < threshold_mb
-    }
-}
-
-impl std::fmt::Display for DiskSpace {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{} MB", self.mb)
-    }
-}
-
 /// Information about a workflow directory including its path and category
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WorkflowDirectoryInfo {
@@ -169,69 +139,6 @@ pub struct Check {
     pub fix: Option<String>,
 }
 
-impl Check {
-    // Builder pattern methods are currently unused but kept for potential future use
-    #[allow(dead_code)]
-    /// Create a new Check builder
-    ///
-    /// # Example
-    ///
-    /// ```
-    /// use swissarmyhammer_cli::commands::doctor::types::{Check, CheckStatus};
-    ///
-    /// let check = Check::builder("Test Check", CheckStatus::Ok)
-    ///     .with_message("Everything is working")
-    ///     .with_fix("No fix needed")
-    ///     .build();
-    /// ```
-    pub fn builder(name: impl Into<String>, status: CheckStatus) -> CheckBuilder {
-        CheckBuilder::new(name, status)
-    }
-}
-
-#[allow(dead_code)]
-/// Builder for creating Check instances
-pub struct CheckBuilder {
-    name: String,
-    status: CheckStatus,
-    message: String,
-    fix: Option<String>,
-}
-
-#[allow(dead_code)]
-impl CheckBuilder {
-    /// Create a new CheckBuilder
-    pub fn new(name: impl Into<String>, status: CheckStatus) -> Self {
-        Self {
-            name: name.into(),
-            status,
-            message: String::new(),
-            fix: None,
-        }
-    }
-    /// Set the message for this check
-    pub fn with_message(mut self, message: impl Into<String>) -> Self {
-        self.message = message.into();
-        self
-    }
-
-    /// Set the fix suggestion for this check
-    pub fn with_fix(mut self, fix: impl Into<String>) -> Self {
-        self.fix = Some(fix.into());
-        self
-    }
-
-    /// Build the Check instance
-    pub fn build(self) -> Check {
-        Check {
-            name: self.name,
-            status: self.status,
-            message: self.message,
-            fix: self.fix,
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -267,37 +174,6 @@ mod tests {
         let dir3 = WorkflowDirectory::new(PathBuf::from("/other"));
         assert_eq!(dir1, dir2);
         assert_ne!(dir1, dir3);
-    }
-
-    #[test]
-    fn test_disk_space_from_mb() {
-        let space = DiskSpace::from_mb(100);
-        assert_eq!(space.as_mb(), 100);
-    }
-
-    #[test]
-    fn test_disk_space_is_low() {
-        let space = DiskSpace::from_mb(50);
-        assert!(space.is_low(100));
-        assert!(!space.is_low(50));
-        assert!(!space.is_low(40));
-    }
-
-    #[test]
-    fn test_disk_space_display() {
-        let space = DiskSpace::from_mb(1024);
-        assert_eq!(format!("{space}"), "1024 MB");
-    }
-
-    #[test]
-    fn test_disk_space_ordering() {
-        let space1 = DiskSpace::from_mb(100);
-        let space2 = DiskSpace::from_mb(200);
-        let space3 = DiskSpace::from_mb(100);
-
-        assert!(space1 < space2);
-        assert!(space2 > space1);
-        assert_eq!(space1, space3);
     }
 
     #[test]
@@ -338,48 +214,5 @@ mod tests {
     fn test_exit_code_equality() {
         assert_eq!(ExitCode::Success, ExitCode::Success);
         assert_ne!(ExitCode::Success, ExitCode::Warning);
-    }
-
-    #[test]
-    fn test_check_builder_minimal() {
-        let check = Check::builder("Test Check", CheckStatus::Ok).build();
-        assert_eq!(check.name, "Test Check");
-        assert_eq!(check.status, CheckStatus::Ok);
-        assert_eq!(check.message, "");
-        assert_eq!(check.fix, None);
-    }
-
-    #[test]
-    fn test_check_builder_with_message() {
-        let check = Check::builder("Test Check", CheckStatus::Warning)
-            .with_message("This is a warning")
-            .build();
-        assert_eq!(check.name, "Test Check");
-        assert_eq!(check.status, CheckStatus::Warning);
-        assert_eq!(check.message, "This is a warning");
-        assert_eq!(check.fix, None);
-    }
-
-    #[test]
-    fn test_check_builder_with_fix() {
-        let check = Check::builder("Test Check", CheckStatus::Error)
-            .with_message("Something is wrong")
-            .with_fix("Try this to fix it")
-            .build();
-        assert_eq!(check.name, "Test Check");
-        assert_eq!(check.status, CheckStatus::Error);
-        assert_eq!(check.message, "Something is wrong");
-        assert_eq!(check.fix, Some("Try this to fix it".to_string()));
-    }
-
-    #[test]
-    fn test_check_builder_string_conversion() {
-        let check = Check::builder(String::from("Test"), CheckStatus::Ok)
-            .with_message(String::from("Message"))
-            .with_fix(String::from("Fix"))
-            .build();
-        assert_eq!(check.name, "Test");
-        assert_eq!(check.message, "Message");
-        assert_eq!(check.fix, Some("Fix".to_string()));
     }
 }

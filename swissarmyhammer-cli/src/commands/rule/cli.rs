@@ -218,11 +218,7 @@ mod tests {
                             .long("no-fail-fast")
                             .action(ArgAction::SetTrue),
                     )
-                    .arg(
-                        Arg::new("force")
-                            .long("force")
-                            .action(ArgAction::SetTrue),
-                    ),
+                    .arg(Arg::new("force").long("force").action(ArgAction::SetTrue)),
             )
             .try_get_matches_from(["rule", "check", "file1.rs", "file2.rs"])
             .unwrap();
@@ -266,11 +262,7 @@ mod tests {
                             .long("no-fail-fast")
                             .action(ArgAction::SetTrue),
                     )
-                    .arg(
-                        Arg::new("force")
-                            .long("force")
-                            .action(ArgAction::SetTrue),
-                    ),
+                    .arg(Arg::new("force").long("force").action(ArgAction::SetTrue)),
             )
             .try_get_matches_from([
                 "rule",
@@ -399,11 +391,7 @@ mod tests {
                             .long("no-fail-fast")
                             .action(ArgAction::SetTrue),
                     )
-                    .arg(
-                        Arg::new("force")
-                            .long("force")
-                            .action(ArgAction::SetTrue),
-                    ),
+                    .arg(Arg::new("force").long("force").action(ArgAction::SetTrue)),
             )
             .try_get_matches_from(["rule", "check", "--create-issues", "file.rs"])
             .unwrap();
@@ -444,11 +432,7 @@ mod tests {
                             .long("no-fail-fast")
                             .action(ArgAction::SetTrue),
                     )
-                    .arg(
-                        Arg::new("force")
-                            .long("force")
-                            .action(ArgAction::SetTrue),
-                    ),
+                    .arg(Arg::new("force").long("force").action(ArgAction::SetTrue)),
             )
             .try_get_matches_from(["rule", "check", "--no-fail-fast", "file.rs"])
             .unwrap();
@@ -489,11 +473,7 @@ mod tests {
                             .long("no-fail-fast")
                             .action(ArgAction::SetTrue),
                     )
-                    .arg(
-                        Arg::new("force")
-                            .long("force")
-                            .action(ArgAction::SetTrue),
-                    ),
+                    .arg(Arg::new("force").long("force").action(ArgAction::SetTrue)),
             )
             .try_get_matches_from([
                 "rule",

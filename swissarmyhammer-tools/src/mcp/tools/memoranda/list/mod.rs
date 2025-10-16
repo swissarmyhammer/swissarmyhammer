@@ -149,6 +149,13 @@ mod tests {
 
         // Create some test memos
         let mut memo_storage = context.memo_storage.write().await;
+
+        // Clean up any existing memos first to ensure test isolation
+        let existing_memos = memo_storage.list().await.unwrap();
+        for memo in existing_memos {
+            let _ = memo_storage.delete(&memo.title).await;
+        }
+
         memo_storage
             .create(
                 swissarmyhammer_memoranda::MemoTitle::new("First Memo".to_string()).unwrap(),

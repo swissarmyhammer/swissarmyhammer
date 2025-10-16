@@ -5,19 +5,8 @@ use super::utils::*;
 use anyhow::Result;
 use std::env;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use walkdir::WalkDir;
-
-/// Minimum disk space in MB before warning
-///
-/// This threshold is set to 100MB which provides enough space for:
-/// - Several workflow run outputs (typically 1-10MB each)
-/// - Temporary files created during workflow execution
-/// - Log files and diagnostic information
-///
-/// This conservative threshold helps ensure smooth operation while avoiding
-/// false alarms on systems with limited but adequate disk space.
-pub const LOW_DISK_SPACE_MB: u64 = 100;
 
 /// Check names constants to avoid typos and improve maintainability
 pub mod check_names {
@@ -32,8 +21,6 @@ pub mod check_names {
     pub const YAML_PARSING: &str = "YAML parsing";
     pub const FILE_PERMISSIONS: &str = "File permissions";
     pub const WORKFLOW_PARSING: &str = "Workflow parsing";
-    pub const WORKFLOW_RUN_STORAGE_ACCESS: &str = "Workflow run storage accessibility";
-    pub const WORKFLOW_RUN_STORAGE_SPACE: &str = "Workflow run storage space";
     pub const WORKFLOW_NAME_CONFLICTS: &str = "Workflow name conflicts";
     pub const WORKFLOW_CIRCULAR_DEPS: &str = "Workflow circular dependencies";
 }
@@ -455,7 +442,6 @@ pub fn check_file_permissions(checks: &mut Vec<Check>) -> Result<()> {
 /// Verifies the existence of workflow directories:
 /// - User workflows (~/.swissarmyhammer/workflows)
 /// - Local workflows (./.swissarmyhammer/workflows)
-/// - Run storage directory (~/.swissarmyhammer/runs)
 pub fn check_workflow_directories(checks: &mut Vec<Check>) -> Result<()> {
     // Check workflow directories
     for dir_info in get_workflow_directories() {
@@ -664,96 +650,6 @@ pub fn check_workflow_parsing(checks: &mut Vec<Check>) -> Result<()> {
                 status: CheckStatus::Error,
                 message: error,
                 fix: Some(format!("Fix or remove the workflow file: {path:?}")),
-            });
-        }
-    }
-
-    Ok(())
-}
-
-/// Check workflow run storage
-///
-/// Verifies the workflow run storage directory:
-/// - Exists and is accessible
-/// - Has write permissions
-/// - Has adequate disk space
-pub fn check_workflow_run_storage(checks: &mut Vec<Check>) -> Result<()> {
-    if let Some(home) = dirs::home_dir() {
-        let run_storage = home.join(SWISSARMYHAMMER_DIR).join("runs");
-
-        if run_storage.exists() {
-            check_run_storage_write_access(checks, &run_storage)?;
-            check_run_storage_disk_space(checks, &run_storage)?;
-        } else {
-            checks.push(Check {
-                name: check_names::WORKFLOW_RUN_STORAGE_ACCESS.to_string(),
-                status: CheckStatus::Warning,
-                message: "Run storage directory does not exist".to_string(),
-                fix: Some(format!("Create directory: mkdir -p {run_storage:?}")),
-            });
-        }
-    }
-
-    Ok(())
-}
-
-/// Check if workflow run storage is writable
-fn check_run_storage_write_access(checks: &mut Vec<Check>, run_storage: &Path) -> Result<()> {
-    let test_file = run_storage.join(".doctor_test");
-    match fs::write(&test_file, "test") {
-        Ok(_) => {
-            // Clean up test file - ignore errors as the file may have already been removed
-            // or we may lack permissions (which was the point of the test)
-            let _ = fs::remove_file(&test_file);
-
-            checks.push(Check {
-                name: check_names::WORKFLOW_RUN_STORAGE_ACCESS.to_string(),
-                status: CheckStatus::Ok,
-                message: "Run storage is accessible and writable".to_string(),
-                fix: None,
-            });
-        }
-        Err(e) => {
-            checks.push(Check {
-                name: check_names::WORKFLOW_RUN_STORAGE_ACCESS.to_string(),
-                status: CheckStatus::Error,
-                message: format!("Run storage is not writable: {e}"),
-                fix: Some(format!("Check permissions on {run_storage:?}")),
-            });
-        }
-    }
-
-    Ok(())
-}
-
-/// Check available disk space for workflow run storage
-fn check_run_storage_disk_space(checks: &mut Vec<Check>, run_storage: &Path) -> Result<()> {
-    match check_disk_space(run_storage) {
-        Ok((available, _)) => {
-            if available.is_low(LOW_DISK_SPACE_MB) {
-                checks.push(Check {
-                    name: check_names::WORKFLOW_RUN_STORAGE_SPACE.to_string(),
-                    status: CheckStatus::Warning,
-                    message: format!("Low disk space: {available}"),
-                    fix: Some(
-                        "Consider cleaning up old workflow runs or freeing disk space".to_string(),
-                    ),
-                });
-            } else {
-                checks.push(Check {
-                    name: check_names::WORKFLOW_RUN_STORAGE_SPACE.to_string(),
-                    status: CheckStatus::Ok,
-                    message: format!("Adequate disk space: {available}"),
-                    fix: None,
-                });
-            }
-        }
-        Err(e) => {
-            checks.push(Check {
-                name: check_names::WORKFLOW_RUN_STORAGE_SPACE.to_string(),
-                status: CheckStatus::Warning,
-                message: format!("Failed to check disk space: {e}"),
-                fix: None,
             });
         }
     }

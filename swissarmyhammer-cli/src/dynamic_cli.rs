@@ -6,10 +6,32 @@
 
 use crate::schema_validation::{SchemaValidator, ValidationError};
 use clap::{Arg, ArgAction, Command};
+use once_cell::sync::Lazy;
 use serde_json::Value;
-use std::collections::HashMap;
-use std::sync::Arc;
+use std::collections::{HashMap, HashSet};
+use std::sync::{Arc, Mutex};
 use swissarmyhammer_tools::mcp::tool_registry::{McpTool, ToolRegistry};
+use swissarmyhammer_workflow::WorkflowStorage;
+
+/// Global string cache to prevent memory leaks from Box::leak
+/// Strings are interned once and reused, satisfying clap's 'static lifetime requirement
+static STRING_CACHE: Lazy<Mutex<HashSet<&'static str>>> = Lazy::new(|| Mutex::new(HashSet::new()));
+
+/// Intern a string into the global cache, returning a 'static reference
+/// This ensures each unique string is only leaked once, preventing unbounded memory growth
+fn intern_string(s: String) -> &'static str {
+    let mut cache = STRING_CACHE.lock().unwrap();
+
+    // Check if we already have this string cached
+    if let Some(&cached) = cache.get(s.as_str()) {
+        return cached;
+    }
+
+    // Leak the string and cache the reference
+    let leaked: &'static str = Box::leak(s.into_boxed_str());
+    cache.insert(leaked);
+    leaked
+}
 
 /// Pre-computed command data with owned strings for clap's 'static requirements
 #[derive(Debug, Clone)]
@@ -89,7 +111,6 @@ impl CliValidationStats {
 
 /// Dynamic CLI builder that generates commands from MCP tool registry
 pub struct CliBuilder {
-    #[allow(dead_code)] // Used during initialization, kept for future functionality
     tool_registry: Arc<ToolRegistry>,
     // Pre-computed command data with owned strings
     category_commands: HashMap<String, CommandData>,
@@ -236,18 +257,31 @@ impl CliBuilder {
     }
 
     /// Build the complete CLI with dynamic commands generated from MCP tools
-    pub fn build_cli(&self) -> Command {
+    ///
+    /// # Parameters
+    ///
+    /// * `workflow_storage` - Optional workflow storage for generating shortcut commands.
+    ///   If None, shortcuts will not be generated.
+    pub fn build_cli(&self, workflow_storage: Option<&WorkflowStorage>) -> Command {
         let mut cli = Command::new("swissarmyhammer")
             .version(env!("CARGO_PKG_VERSION"))
-            .about("An MCP server for managing prompts as markdown files")
+            .about("The only coding assistant you'll ever need")
             .long_about(
                 "
-swissarmyhammer is an MCP (Model Context Protocol) server that manages
-prompts as markdown files. It supports file watching, template substitution,
-and seamless integration with Claude Code.
+SwissArmyHammer - The only coding assistant you'll ever need
 
-This CLI dynamically generates all MCP tool commands, eliminating code duplication
-and ensuring perfect consistency between MCP and CLI interfaces.
+Commands are organized into three types:
+- Static commands (serve, doctor, validate, agent, prompt, rule, flow)
+- Workflow shortcuts (implement, plan, etc.) - use 'sah flow list' to see all
+- Tool commands (file, issue, memo, search, shell, web-search)
+
+Examples:
+  sah serve                    Run as MCP server
+  sah doctor                   Diagnose configuration  
+  sah flow list                List all workflows
+  sah implement                Execute implement workflow (shortcut)
+  sah plan spec.md             Execute plan workflow (shortcut)
+  sah file read path.txt       Read a file via MCP tool
 ",
             )
             // Add verbose/debug/quiet flags from parent CLI
@@ -285,6 +319,7 @@ and ensuring perfect consistency between MCP and CLI interfaces.
                     .value_parser(["table", "json", "yaml"]),
             );
 
+        // === STATIC COMMANDS (Default heading) ===
         // Add core serve command (non-MCP command)
         cli = cli.subcommand(
             Command::new("serve")
@@ -341,15 +376,32 @@ Example:
                 ),
         );
 
-        // Add static commands before MCP tool commands
+        // Add other static commands (doctor, prompt, flow, validate, plan, implement, agent, rule)
         cli = Self::add_static_commands(cli);
 
-        // Add dynamic MCP tool commands using pre-computed data
-        for (category_name, category_data) in &self.category_commands {
-            cli =
-                cli.subcommand(self.build_category_command_from_data(category_name, category_data));
+        // Add workflow shortcuts if storage is provided
+        if let Some(storage) = workflow_storage {
+            let mut shortcuts = Self::build_workflow_shortcuts(storage);
+            // Sort alphabetically for easier scanning
+            shortcuts.sort_by(|a, b| a.get_name().cmp(b.get_name()));
+
+            for shortcut in shortcuts {
+                cli = cli.subcommand(shortcut);
+            }
         }
 
+        // Add dynamic MCP tool commands using pre-computed data
+        // Get sorted category names for consistent ordering
+        let mut category_names: Vec<String> = self.category_commands.keys().cloned().collect();
+        category_names.sort();
+
+        for category_name in category_names.iter() {
+            if let Some(category_data) = self.category_commands.get(category_name) {
+                let cmd = self.build_category_command_from_data(category_name, category_data);
+                cli = cli.subcommand(cmd);
+            }
+        }
+        
         cli
     }
 
@@ -358,10 +410,14 @@ Example:
     /// This method builds the CLI but logs warnings for any validation issues,
     /// skipping problematic tools rather than failing completely.
     ///
+    /// # Parameters
+    ///
+    /// * `workflow_storage` - Optional workflow storage for generating shortcut commands
+    ///
     /// # Returns
     ///
     /// Always returns a `Command`, but may skip invalid tools with warnings
-    pub fn build_cli_with_warnings(&self) -> Command {
+    pub fn build_cli_with_warnings(&self, workflow_storage: Option<&WorkflowStorage>) -> Command {
         let warnings = self.get_validation_warnings();
 
         if !warnings.is_empty() {
@@ -376,7 +432,7 @@ Example:
 
         // The build_cli method already includes graceful degradation
         // by skipping tools that fail validation
-        self.build_cli()
+        self.build_cli(workflow_storage)
     }
 
     /// Validate all tools that should appear in CLI
@@ -492,16 +548,17 @@ Example:
         category_name: &str,
         category_data: &CommandData,
     ) -> Command {
-        let mut cmd =
-            Command::new(Box::leak(category_data.name.clone().into_boxed_str()) as &'static str);
+        let mut cmd = Command::new(intern_string(category_data.name.clone()));
 
         if let Some(about) = &category_data.about {
-            cmd = cmd.about(Box::leak(about.clone().into_boxed_str()) as &'static str);
+            cmd = cmd.about(intern_string(about.clone()));
         }
 
         if let Some(long_about) = &category_data.long_about {
-            cmd = cmd.long_about(Box::leak(long_about.clone().into_boxed_str()) as &'static str);
+            cmd = cmd.long_about(intern_string(long_about.clone()));
         }
+        
+        cmd = cmd.subcommand_help_heading("Tools");
 
         // Add tool subcommands for this category
         if let Some(tools_in_category) = self.tool_commands.get(category_name) {
@@ -515,15 +572,14 @@ Example:
 
     /// Build a command for a specific MCP tool from pre-computed data
     fn build_tool_command_from_data(&self, tool_data: &CommandData) -> Command {
-        let mut cmd =
-            Command::new(Box::leak(tool_data.name.clone().into_boxed_str()) as &'static str);
+        let mut cmd = Command::new(intern_string(tool_data.name.clone()));
 
         if let Some(about) = &tool_data.about {
-            cmd = cmd.about(Box::leak(about.clone().into_boxed_str()) as &'static str);
+            cmd = cmd.about(intern_string(about.clone()));
         }
 
         if let Some(long_about) = &tool_data.long_about {
-            cmd = cmd.long_about(Box::leak(long_about.clone().into_boxed_str()) as &'static str);
+            cmd = cmd.long_about(intern_string(long_about.clone()));
         }
 
         // Add arguments from pre-computed data
@@ -536,12 +592,12 @@ Example:
 
     /// Build a clap argument from pre-computed data
     fn build_arg_from_data(&self, arg_data: &ArgData) -> Arg {
-        let name_static = Box::leak(arg_data.name.clone().into_boxed_str()) as &'static str;
+        let name_static = intern_string(arg_data.name.clone());
         let mut arg = Arg::new(name_static).long(name_static);
 
         // Set help text
         if let Some(help) = &arg_data.help {
-            arg = arg.help(Box::leak(help.clone().into_boxed_str()) as &'static str);
+            arg = arg.help(intern_string(help.clone()));
         }
 
         // Set as required if specified
@@ -583,15 +639,14 @@ Example:
         if let Some(possible_values) = &arg_data.possible_values {
             let str_values: Vec<&'static str> = possible_values
                 .iter()
-                .map(|s| Box::leak(s.clone().into_boxed_str()) as &'static str)
+                .map(|s| intern_string(s.clone()))
                 .collect();
             arg = arg.value_parser(clap::builder::PossibleValuesParser::new(str_values));
         }
 
         // Handle default values
         if let Some(default_value) = &arg_data.default_value {
-            arg = arg
-                .default_value(Box::leak(default_value.clone().into_boxed_str()) as &'static str);
+            arg = arg.default_value(intern_string(default_value.clone()));
         }
 
         arg
@@ -684,56 +739,6 @@ Examples:
                         .long("validate-tools")
                         .help("Validate MCP tool schemas for CLI compatibility")
                         .action(ArgAction::SetTrue),
-                ),
-        );
-
-        // Add plan command
-        cli = cli.subcommand(
-            Command::new("plan")
-                .about("Plan a specific specification file")
-                .long_about(
-                    "
-Execute planning workflow for a specific specification file.
-Takes a path to a markdown specification file and generates step-by-step implementation issues.
-
-The planning workflow will:
-• Read and analyze the specified plan file
-• Review existing issues to avoid conflicts
-• Generate numbered issue files in the ./issues directory  
-• Create incremental, focused implementation steps
-• Use existing memos and codebase context for better planning
-
-Examples:
-  swissarmyhammer plan ./specification/user-authentication.md
-  swissarmyhammer plan /home/user/projects/plans/feature-development.md
-                ",
-                )
-                .arg(
-                    Arg::new("plan_filename")
-                        .help("Path to the markdown plan file (relative or absolute)")
-                        .value_name("PLAN_FILENAME")
-                        .required(true),
-                ),
-        );
-
-        // Add implement command
-        cli = cli.subcommand(
-            Command::new("implement")
-                .about("Execute the implement workflow for autonomous issue resolution")
-                .long_about(
-                    "
-Execute the implement workflow to autonomously work through and resolve all pending issues.
-This is a convenience command equivalent to 'sah flow run implement'.
-
-The implement workflow will:
-• Check for pending issues in the ./issues directory
-• Work through each issue systematically  
-• Continue until all issues are resolved
-• Provide status updates throughout the process
-
-Examples:
-  swissarmyhammer implement
-                ",
                 ),
         );
 
@@ -1348,7 +1353,7 @@ Use global arguments to control output:
 
 Examples:
   sah agent list                           # List all agents
-  sah --verbose agent list                 # Show detailed information  
+  sah --verbose agent list                 # Show detailed information
   sah --format=json agent list             # Output as JSON
   sah agent use code-reviewer              # Apply code-reviewer agent
   sah --debug agent use planner            # Use agent with debug output
@@ -1372,4 +1377,148 @@ Examples:
                 ),
             )
     }
+
+    /// Generate workflow shortcut commands dynamically
+    ///
+    /// Creates top-level CLI commands for each workflow, enabling direct access like
+    /// `sah plan spec.md` instead of `sah flow plan spec.md`.
+    ///
+    /// # Conflict Resolution
+    ///
+    /// Workflows that conflict with reserved command names get an underscore prefix:
+    /// - Reserved: serve, doctor, prompt, rule, flow, agent, validate, plan, implement, list
+    /// - Example: A workflow named "list" becomes "_list"
+    ///
+    /// # Parameters
+    ///
+    /// * `workflow_storage` - Storage instance to load available workflows
+    ///
+    /// # Returns
+    ///
+    /// Vector of clap Commands, one for each workflow with proper argument handling
+    pub fn build_workflow_shortcuts(workflow_storage: &WorkflowStorage) -> Vec<Command> {
+        use std::collections::HashSet;
+
+        // Reserved command names that would conflict with top-level commands
+        const RESERVED_NAMES: &[&str] = &[
+            "serve", "doctor", "prompt", "rule", "flow", "agent", "validate",
+            "list", // Special: flow subcommand that should not conflict
+        ];
+
+        let mut shortcuts = Vec::new();
+        let reserved: HashSet<&str> = RESERVED_NAMES.iter().copied().collect();
+
+        // Load workflows from storage
+        let workflows = match workflow_storage.list_workflows() {
+            Ok(workflows) => workflows,
+            Err(e) => {
+                tracing::warn!("Failed to load workflows for shortcuts: {}", e);
+                return shortcuts;
+            }
+        };
+
+        for workflow in workflows {
+            let workflow_name = workflow.name.to_string();
+
+            // Apply conflict resolution - prefix with underscore if reserved
+            let command_name = if reserved.contains(workflow_name.as_str()) {
+                format!("_{}", workflow_name)
+            } else {
+                workflow_name.clone()
+            };
+
+            // Build the shortcut command
+            let cmd = Self::build_shortcut_command(command_name, &workflow_name, &workflow);
+            shortcuts.push(cmd);
+        }
+
+        shortcuts
+    }
+
+    /// Build a single workflow shortcut command
+    ///
+    /// Creates a clap Command for a workflow shortcut with:
+    /// - Positional arguments for required parameters
+    /// - --param flag for optional parameters
+    /// - Standard flow execution flags (--interactive, --dry-run, --quiet)
+    ///
+    /// # Parameters
+    ///
+    /// * `command_name` - CLI command name (may have underscore prefix for conflicts)
+    /// * `workflow_name` - Original workflow name
+    /// * `workflow` - Workflow definition with parameters
+    fn build_shortcut_command(
+        command_name: String,
+        workflow_name: &str,
+        workflow: &swissarmyhammer_workflow::Workflow,
+    ) -> Command {
+        let mut cmd = Command::new(intern_string(command_name.clone()));
+
+        // Set description indicating this is a shortcut
+        let about_text = format!(
+            "{} (shortcut for 'flow {}')",
+            workflow.description, workflow_name
+        );
+        cmd = cmd
+            .about(intern_string(about_text))
+            .subcommand_help_heading("Workflows");
+
+        // Collect required parameters
+        let required_params: Vec<_> = workflow.parameters.iter().filter(|p| p.required).collect();
+
+        // Add positional arguments for required parameters ONLY if there are any
+        if !required_params.is_empty() {
+            let value_names: Vec<&'static str> = required_params
+                .iter()
+                .map(|p| intern_string(p.name.clone()))
+                .collect();
+
+            cmd = cmd.arg(
+                Arg::new("positional")
+                    .num_args(required_params.len())
+                    .value_names(value_names)
+                    .required(true)
+                    .help("Required workflow parameters"),
+            );
+        }
+
+        // Add --param flag for optional parameters
+        cmd = cmd.arg(
+            Arg::new("param")
+                .long("param")
+                .short('p')
+                .action(ArgAction::Append)
+                .value_name("KEY=VALUE")
+                .help("Optional workflow parameter"),
+        );
+
+        // Add standard workflow execution flags
+        cmd = cmd
+            .arg(
+                Arg::new("interactive")
+                    .long("interactive")
+                    .short('i')
+                    .action(ArgAction::SetTrue)
+                    .help("Interactive mode - prompt at each state"),
+            )
+            .arg(
+                Arg::new("dry_run")
+                    .long("dry-run")
+                    .action(ArgAction::SetTrue)
+                    .help("Dry run - show execution plan without running"),
+            )
+            .arg(
+                Arg::new("quiet")
+                    .long("quiet")
+                    .short('q')
+                    .action(ArgAction::SetTrue)
+                    .help("Quiet mode - only show errors"),
+            );
+
+        cmd
+    }
 }
+
+#[cfg(test)]
+#[path = "dynamic_cli_tests.rs"]
+mod tests;

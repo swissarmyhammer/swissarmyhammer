@@ -7,7 +7,6 @@ mod error;
 mod exit_codes;
 mod logging;
 mod mcp_integration;
-mod parameter_cli;
 mod schema_conversion;
 mod schema_validation;
 mod signal_handler;
@@ -57,6 +56,16 @@ async fn main() {
     let tool_registry = cli_tool_context.get_tool_registry_arc();
     let cli_builder = CliBuilder::new(tool_registry);
 
+    // Initialize workflow storage for generating shortcuts
+    // This is done early before CLI parsing to enable workflow shortcuts
+    let workflow_storage = match swissarmyhammer_workflow::WorkflowStorage::file_system() {
+        Ok(storage) => Some(storage),
+        Err(e) => {
+            tracing::warn!("Failed to initialize workflow storage: {}", e);
+            None
+        }
+    };
+
     // Get validation statistics for startup reporting (only for non-serve commands)
     let validation_stats = cli_builder.get_validation_stats();
 
@@ -82,7 +91,8 @@ async fn main() {
 
     // Build CLI with warnings for validation issues (graceful degradation)
     // This will skip problematic tools but continue building the CLI
-    let dynamic_cli = cli_builder.build_cli_with_warnings();
+    // Pass workflow storage to enable dynamic shortcut generation
+    let dynamic_cli = cli_builder.build_cli_with_warnings(workflow_storage.as_ref());
 
     // Parse arguments with dynamic CLI
     let matches = match dynamic_cli.try_get_matches() {
@@ -259,19 +269,24 @@ async fn handle_dynamic_matches(
         Some(("rule", sub_matches)) => handle_rule_command(sub_matches, &context).await,
         Some(("flow", sub_matches)) => handle_flow_command(sub_matches, &context).await,
         Some(("validate", sub_matches)) => handle_validate_command(sub_matches, &context).await,
-        Some(("plan", sub_matches)) => handle_plan_command(sub_matches, &context).await,
-        Some(("implement", _sub_matches)) => handle_implement_command(&context).await,
         Some(("agent", sub_matches)) => handle_agent_command(sub_matches, &context).await,
-        Some((category, sub_matches)) => match sub_matches.subcommand() {
-            Some((tool_name, tool_matches)) => {
-                handle_dynamic_tool_command(category, tool_name, tool_matches, cli_tool_context)
-                    .await
+        Some((category, sub_matches)) => {
+            // Check if this is a workflow shortcut or an MCP tool command
+            // Workflow shortcuts are top-level commands with no subcommands
+            // MCP tool commands have the pattern: category -> tool_name
+            match sub_matches.subcommand() {
+                Some((tool_name, tool_matches)) => {
+                    // This is an MCP tool command
+                    handle_dynamic_tool_command(category, tool_name, tool_matches, cli_tool_context)
+                        .await
+                }
+                None => {
+                    // This might be a workflow shortcut (no subcommand)
+                    // Try to handle as a workflow shortcut
+                    handle_workflow_shortcut(category, sub_matches, &context).await
+                }
             }
-            None => {
-                eprintln!("No command specified for category '{}'", category);
-                EXIT_ERROR
-            }
-        },
+        }
         None => {
             eprintln!("No command specified. Use --help for usage information.");
             EXIT_ERROR
@@ -421,6 +436,67 @@ async fn handle_doctor_command(cli_context: &CliContext) -> i32 {
     commands::doctor::handle_command(cli_context).await
 }
 
+/// Handle workflow shortcut commands
+///
+/// Workflow shortcuts are top-level commands that directly execute workflows
+/// without needing the `flow` prefix. For example, `sah plan spec.md` instead
+/// of `sah flow plan spec.md`.
+///
+/// # Arguments
+/// * `workflow_name` - Name of the workflow (may have underscore prefix for conflicts)
+/// * `matches` - Argument matches from clap
+/// * `context` - CLI context
+///
+/// # Returns
+/// Exit code (0 for success, non-zero for error)
+async fn handle_workflow_shortcut(
+    workflow_name: &str,
+    matches: &clap::ArgMatches,
+    context: &CliContext,
+) -> i32 {
+    use crate::cli::FlowSubcommand;
+
+    // Remove underscore prefix if present (from conflict resolution)
+    let actual_workflow_name = if let Some(stripped) = workflow_name.strip_prefix('_') {
+        stripped
+    } else {
+        workflow_name
+    };
+
+    // Extract positional arguments (may not exist if workflow has no required params)
+    let positional_args: Vec<String> = matches
+        .try_get_many::<String>("positional")
+        .ok()
+        .flatten()
+        .map(|vals| vals.cloned().collect())
+        .unwrap_or_default();
+
+    // Extract --param arguments
+    let params: Vec<String> = matches
+        .get_many::<String>("param")
+        .map(|vals| vals.cloned().collect())
+        .unwrap_or_default();
+
+    // Extract flags
+    let interactive = matches.get_flag("interactive");
+    let dry_run = matches.get_flag("dry_run");
+    let quiet = matches.get_flag("quiet");
+
+    // Create FlowSubcommand::Execute
+    let subcommand = FlowSubcommand::Execute {
+        workflow: actual_workflow_name.to_string(),
+        positional_args,
+        params,
+        vars: vec![], // Shortcuts don't support deprecated --var
+        interactive,
+        dry_run,
+        quiet,
+    };
+
+    // Delegate to flow command handler
+    commands::flow::handle_command(subcommand, context).await
+}
+
 /// Handle prompt command routing using the new CliContext-based architecture.
 ///
 /// This function parses prompt subcommands using the new typed CLI system and routes
@@ -462,108 +538,23 @@ async fn handle_rule_command(matches: &clap::ArgMatches, context: &CliContext) -
 }
 
 async fn handle_flow_command(sub_matches: &clap::ArgMatches, context: &CliContext) -> i32 {
-    use crate::cli::{FlowSubcommand, OutputFormat, PromptSourceArg};
+    // Get the args vector from the trailing_var_arg
+    let args: Vec<String> = sub_matches
+        .get_many::<String>("args")
+        .map(|vals| vals.map(|s| s.to_string()).collect())
+        .unwrap_or_default();
 
-    let subcommand = match sub_matches.subcommand() {
-        Some(("run", sub_matches)) => {
-            let workflow = sub_matches.get_one::<String>("workflow").cloned().unwrap();
-            let vars = sub_matches
-                .get_many::<String>("vars")
-                .map(|vals| vals.cloned().collect())
-                .unwrap_or_default();
-            let interactive = sub_matches.get_flag("interactive");
-            let dry_run = sub_matches.get_flag("dry-run");
-            let quiet = sub_matches.get_flag("quiet");
-
-            FlowSubcommand::Run {
-                workflow,
-                vars,
-                interactive,
-                dry_run,
-                quiet,
+    // Parse the args into a FlowSubcommand using the new parser
+    let subcommand = match commands::flow::parse_flow_args(args) {
+        Ok(cmd) => cmd,
+        Err(e) => {
+            // Check if this is the special help message
+            if e.to_string().contains("__HELP_DISPLAYED__") {
+                return EXIT_SUCCESS;
             }
-        }
-        Some(("resume", sub_matches)) => {
-            let run_id = sub_matches.get_one::<String>("run_id").cloned().unwrap();
-            let interactive = sub_matches.get_flag("interactive");
-            let quiet = sub_matches.get_flag("quiet");
-
-            FlowSubcommand::Resume {
-                run_id,
-                interactive,
-                quiet,
-            }
-        }
-        Some(("list", sub_matches)) => {
-            let format = match sub_matches.get_one::<String>("format").map(|s| s.as_str()) {
-                Some("json") => OutputFormat::Json,
-                Some("yaml") => OutputFormat::Yaml,
-                _ => OutputFormat::Table,
-            };
-            let verbose = sub_matches.get_flag("verbose");
-            let source = sub_matches
-                .get_one::<String>("source")
-                .map(|s| match s.as_str() {
-                    "builtin" => PromptSourceArg::Builtin,
-                    "user" => PromptSourceArg::User,
-                    "local" => PromptSourceArg::Local,
-                    "dynamic" => PromptSourceArg::Dynamic,
-                    _ => PromptSourceArg::Dynamic,
-                });
-
-            FlowSubcommand::List {
-                format,
-                verbose,
-                source,
-            }
-        }
-        Some(("status", sub_matches)) => {
-            let run_id = sub_matches.get_one::<String>("run_id").cloned().unwrap();
-            let format = match sub_matches.get_one::<String>("format").map(|s| s.as_str()) {
-                Some("json") => OutputFormat::Json,
-                Some("yaml") => OutputFormat::Yaml,
-                _ => OutputFormat::Table,
-            };
-            let watch = sub_matches.get_flag("watch");
-
-            FlowSubcommand::Status {
-                run_id,
-                format,
-                watch,
-            }
-        }
-        Some(("logs", sub_matches)) => {
-            let run_id = sub_matches.get_one::<String>("run_id").cloned().unwrap();
-            let follow = sub_matches.get_flag("follow");
-            let tail = sub_matches.get_one::<usize>("tail").copied();
-            let level = sub_matches.get_one::<String>("level").cloned();
-
-            FlowSubcommand::Logs {
-                run_id,
-                follow,
-                tail,
-                level,
-            }
-        }
-
-        Some(("test", sub_matches)) => {
-            let workflow = sub_matches.get_one::<String>("workflow").cloned().unwrap();
-            let vars = sub_matches
-                .get_many::<String>("vars")
-                .map(|vals| vals.cloned().collect())
-                .unwrap_or_default();
-            let interactive = sub_matches.get_flag("interactive");
-            let quiet = sub_matches.get_flag("quiet");
-
-            FlowSubcommand::Test {
-                workflow,
-                vars,
-                interactive,
-                quiet,
-            }
-        }
-        _ => {
-            eprintln!("No flow subcommand specified");
+            eprintln!("Error parsing flow command: {}", e);
+            eprintln!("Use 'sah flow list' to see available workflows");
+            eprintln!("Use 'sah flow <workflow> --help' for workflow-specific help");
             return EXIT_ERROR;
         }
     };
@@ -579,15 +570,6 @@ async fn handle_validate_command(matches: &clap::ArgMatches, cli_context: &CliCo
     let validate_tools = matches.get_flag("validate-tools");
 
     commands::validate::handle_command(workflow_dirs, validate_tools, cli_context).await
-}
-
-async fn handle_plan_command(matches: &clap::ArgMatches, context: &CliContext) -> i32 {
-    let plan_filename = matches.get_one::<String>("plan_filename").cloned().unwrap();
-    commands::plan::handle_command(plan_filename, context).await
-}
-
-async fn handle_implement_command(context: &CliContext) -> i32 {
-    commands::implement::handle_command(context).await
 }
 
 async fn handle_agent_command(matches: &clap::ArgMatches, context: &CliContext) -> i32 {

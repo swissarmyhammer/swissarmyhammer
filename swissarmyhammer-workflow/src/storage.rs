@@ -1,6 +1,6 @@
-//! Storage abstractions and implementations for workflows and workflow runs
+//! Storage abstractions and implementations for workflows
 
-use crate::{MermaidParser, Workflow, WorkflowName, WorkflowRun, WorkflowRunId};
+use crate::{MermaidParser, Workflow, WorkflowName};
 use base64::{engine::general_purpose, Engine as _};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -208,38 +208,6 @@ pub trait WorkflowStorageBackend: Send + Sync {
     fn clone_box(&self) -> Box<dyn WorkflowStorageBackend>;
 }
 
-/// Trait for workflow run storage backends
-pub trait WorkflowRunStorageBackend: Send + Sync {
-    /// Store a workflow run
-    fn store_run(&mut self, run: &WorkflowRun) -> Result<()>;
-
-    /// Get a workflow run by ID
-    fn get_run(&self, id: &WorkflowRunId) -> Result<WorkflowRun>;
-
-    /// List all workflow runs
-    fn list_runs(&self) -> Result<Vec<WorkflowRun>>;
-
-    /// Remove a workflow run
-    fn remove_run(&mut self, id: &WorkflowRunId) -> Result<()>;
-
-    /// List runs for a specific workflow
-    fn list_runs_for_workflow(&self, workflow_name: &WorkflowName) -> Result<Vec<WorkflowRun>>;
-
-    /// Clean up old runs (older than specified days)
-    fn cleanup_old_runs(&mut self, days: u32) -> Result<u32>;
-
-    /// Check if a run exists
-    fn run_exists(&self, id: &WorkflowRunId) -> Result<bool> {
-        self.get_run(id).map(|_| true).or_else(|e| match e {
-            SwissArmyHammerError::WorkflowRunNotFound(_) => Ok(false),
-            _ => Err(e),
-        })
-    }
-
-    /// Clone the storage backend in a box
-    fn clone_box(&self) -> Box<dyn WorkflowRunStorageBackend>;
-}
-
 /// In-memory workflow storage implementation
 pub struct MemoryWorkflowStorage {
     workflows: HashMap<WorkflowName, Workflow>,
@@ -287,83 +255,6 @@ impl WorkflowStorageBackend for MemoryWorkflowStorage {
     fn clone_box(&self) -> Box<dyn WorkflowStorageBackend> {
         Box::new(MemoryWorkflowStorage {
             workflows: self.workflows.clone(),
-        })
-    }
-}
-
-/// In-memory workflow run storage implementation
-pub struct MemoryWorkflowRunStorage {
-    runs: HashMap<WorkflowRunId, WorkflowRun>,
-}
-
-impl MemoryWorkflowRunStorage {
-    /// Create a new memory workflow run storage
-    pub fn new() -> Self {
-        Self {
-            runs: HashMap::new(),
-        }
-    }
-}
-
-impl Default for MemoryWorkflowRunStorage {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl WorkflowRunStorageBackend for MemoryWorkflowRunStorage {
-    fn store_run(&mut self, run: &WorkflowRun) -> Result<()> {
-        self.runs.insert(run.id, run.clone());
-        Ok(())
-    }
-
-    fn get_run(&self, id: &WorkflowRunId) -> Result<WorkflowRun> {
-        self.runs
-            .get(id)
-            .cloned()
-            .ok_or_else(|| SwissArmyHammerError::WorkflowRunNotFound(format!("{id:?}")))
-    }
-
-    fn list_runs(&self) -> Result<Vec<WorkflowRun>> {
-        Ok(self.runs.values().cloned().collect())
-    }
-
-    fn remove_run(&mut self, id: &WorkflowRunId) -> Result<()> {
-        self.runs
-            .remove(id)
-            .ok_or_else(|| SwissArmyHammerError::WorkflowRunNotFound(format!("{id:?}")))?;
-        Ok(())
-    }
-
-    fn list_runs_for_workflow(&self, workflow_name: &WorkflowName) -> Result<Vec<WorkflowRun>> {
-        Ok(self
-            .runs
-            .values()
-            .filter(|run| &run.workflow.name == workflow_name)
-            .cloned()
-            .collect())
-    }
-
-    fn cleanup_old_runs(&mut self, days: u32) -> Result<u32> {
-        let cutoff = chrono::Utc::now() - chrono::Duration::days(days as i64);
-        let old_runs: Vec<WorkflowRunId> = self
-            .runs
-            .values()
-            .filter(|run| run.started_at < cutoff)
-            .map(|run| run.id)
-            .collect();
-
-        let count = old_runs.len() as u32;
-        for id in old_runs {
-            self.runs.remove(&id);
-        }
-
-        Ok(count)
-    }
-
-    fn clone_box(&self) -> Box<dyn WorkflowRunStorageBackend> {
-        Box::new(MemoryWorkflowRunStorage {
-            runs: self.runs.clone(),
         })
     }
 }
@@ -487,154 +378,23 @@ impl WorkflowStorageBackend for FileSystemWorkflowStorage {
     }
 }
 
-/// File system workflow run storage implementation
-pub struct FileSystemWorkflowRunStorage {
-    base_path: PathBuf,
-}
-
-impl FileSystemWorkflowRunStorage {
-    /// Create a new file system workflow run storage
-    pub fn new(base_path: impl AsRef<Path>) -> Result<Self> {
-        let base_path = base_path.as_ref().to_path_buf();
-
-        if !base_path.exists() {
-            std::fs::create_dir_all(&base_path)?;
-        }
-
-        let storage = Self { base_path };
-
-        Ok(storage)
-    }
-
-    fn run_path(&self, id: &WorkflowRunId) -> PathBuf {
-        self.base_path
-            .join("runs")
-            .join(format!("{id:?}"))
-            .join("run.json")
-    }
-
-    fn run_dir(&self, id: &WorkflowRunId) -> PathBuf {
-        self.base_path.join("runs").join(format!("{id:?}"))
-    }
-}
-
-impl WorkflowRunStorageBackend for FileSystemWorkflowRunStorage {
-    fn store_run(&mut self, run: &WorkflowRun) -> Result<()> {
-        let run_dir = self.run_dir(&run.id);
-        if !run_dir.exists() {
-            std::fs::create_dir_all(&run_dir)?;
-        }
-
-        let path = self.run_path(&run.id);
-        let content = serde_json::to_string_pretty(run)?;
-        std::fs::write(&path, content)?;
-
-        Ok(())
-    }
-
-    fn get_run(&self, id: &WorkflowRunId) -> Result<WorkflowRun> {
-        let path = self.run_path(id);
-        if !path.exists() {
-            return Err(SwissArmyHammerError::WorkflowRunNotFound(format!("{id:?}")));
-        }
-
-        let content = std::fs::read_to_string(&path)?;
-        let run: WorkflowRun = serde_json::from_str(&content)?;
-
-        Ok(run)
-    }
-
-    fn list_runs(&self) -> Result<Vec<WorkflowRun>> {
-        let runs_dir = self.base_path.join("runs");
-        if !runs_dir.exists() {
-            return Ok(Vec::new());
-        }
-
-        let mut runs = Vec::new();
-        for entry in std::fs::read_dir(&runs_dir)? {
-            let entry = entry?;
-            if entry.file_type()?.is_dir() {
-                let run_file = entry.path().join("run.json");
-                if run_file.exists() {
-                    let content = std::fs::read_to_string(&run_file)?;
-                    if let Ok(run) = serde_json::from_str::<WorkflowRun>(&content) {
-                        runs.push(run);
-                    }
-                }
-            }
-        }
-        Ok(runs)
-    }
-
-    fn remove_run(&mut self, id: &WorkflowRunId) -> Result<()> {
-        let run_dir = self.run_dir(id);
-        if !run_dir.exists() {
-            return Err(SwissArmyHammerError::WorkflowRunNotFound(format!("{id:?}")));
-        }
-
-        std::fs::remove_dir_all(run_dir)?;
-        Ok(())
-    }
-
-    fn list_runs_for_workflow(&self, workflow_name: &WorkflowName) -> Result<Vec<WorkflowRun>> {
-        let all_runs = self.list_runs()?;
-        Ok(all_runs
-            .into_iter()
-            .filter(|run| &run.workflow.name == workflow_name)
-            .collect())
-    }
-
-    fn cleanup_old_runs(&mut self, days: u32) -> Result<u32> {
-        let cutoff = chrono::Utc::now() - chrono::Duration::days(days as i64);
-        let all_runs = self.list_runs()?;
-        let old_runs: Vec<WorkflowRunId> = all_runs
-            .iter()
-            .filter(|run| run.started_at < cutoff)
-            .map(|run| run.id)
-            .collect();
-
-        let count = old_runs.len() as u32;
-        for id in old_runs {
-            self.remove_run(&id)?;
-        }
-
-        Ok(count)
-    }
-
-    fn clone_box(&self) -> Box<dyn WorkflowRunStorageBackend> {
-        Box::new(FileSystemWorkflowRunStorage {
-            base_path: self.base_path.clone(),
-        })
-    }
-}
-
 /// Main workflow storage that can use different backends
 pub struct WorkflowStorage {
     workflow_backend: Arc<dyn WorkflowStorageBackend>,
-    run_backend: Arc<dyn WorkflowRunStorageBackend>,
 }
 
 impl WorkflowStorage {
-    /// Create a new workflow storage with the given backends
-    pub fn new(
-        workflow_backend: Arc<dyn WorkflowStorageBackend>,
-        run_backend: Arc<dyn WorkflowRunStorageBackend>,
-    ) -> Self {
-        Self {
-            workflow_backend,
-            run_backend,
-        }
+    /// Create a new workflow storage with the given backend
+    pub fn new(workflow_backend: Arc<dyn WorkflowStorageBackend>) -> Self {
+        Self { workflow_backend }
     }
 
-    /// Create with memory backends
+    /// Create with memory backend
     pub fn memory() -> Self {
-        Self::new(
-            Arc::new(MemoryWorkflowStorage::new()),
-            Arc::new(MemoryWorkflowRunStorage::new()),
-        )
+        Self::new(Arc::new(MemoryWorkflowStorage::new()))
     }
 
-    /// Create with file system backends using hierarchical loading
+    /// Create with file system backend using hierarchical loading
     pub fn file_system() -> Result<Self> {
         // Performance optimization for tests: use lightweight storage in test mode
         if std::env::var("SWISSARMYHAMMER_TEST_MODE").is_ok() {
@@ -642,20 +402,7 @@ impl WorkflowStorage {
             tracing::debug!("Using test mode for workflow storage - optimized for speed");
         }
 
-        // Use a user directory as base path for workflow runs
-        let base_path = dirs::home_dir()
-            .ok_or_else(|| {
-                SwissArmyHammerError::Storage(
-                    "Cannot find home directory. Please ensure HOME environment variable is set"
-                        .to_string(),
-                )
-            })?
-            .join(".swissarmyhammer");
-
-        Ok(Self::new(
-            Arc::new(FileSystemWorkflowStorage::new()?),
-            Arc::new(FileSystemWorkflowRunStorage::new(&base_path)?),
-        ))
+        Ok(Self::new(Arc::new(FileSystemWorkflowStorage::new()?)))
     }
 
     /// Store a workflow
@@ -688,54 +435,6 @@ impl WorkflowStorage {
                 )
             })?
             .remove_workflow(name)
-    }
-
-    /// Store a workflow run
-    pub fn store_run(&mut self, run: &WorkflowRun) -> Result<()> {
-        Arc::get_mut(&mut self.run_backend)
-            .ok_or_else(|| {
-                SwissArmyHammerError::Storage(
-                    "Cannot get mutable reference to run storage backend".to_string(),
-                )
-            })?
-            .store_run(run)
-    }
-
-    /// Get a workflow run by ID
-    pub fn get_run(&self, id: &WorkflowRunId) -> Result<WorkflowRun> {
-        self.run_backend.get_run(id)
-    }
-
-    /// List all workflow runs
-    pub fn list_runs(&self) -> Result<Vec<WorkflowRun>> {
-        self.run_backend.list_runs()
-    }
-
-    /// Remove a workflow run
-    pub fn remove_run(&mut self, id: &WorkflowRunId) -> Result<()> {
-        Arc::get_mut(&mut self.run_backend)
-            .ok_or_else(|| {
-                SwissArmyHammerError::Storage(
-                    "Cannot get mutable reference to run storage backend".to_string(),
-                )
-            })?
-            .remove_run(id)
-    }
-
-    /// List runs for a specific workflow
-    pub fn list_runs_for_workflow(&self, workflow_name: &WorkflowName) -> Result<Vec<WorkflowRun>> {
-        self.run_backend.list_runs_for_workflow(workflow_name)
-    }
-
-    /// Clean up old runs
-    pub fn cleanup_old_runs(&mut self, days: u32) -> Result<u32> {
-        Arc::get_mut(&mut self.run_backend)
-            .ok_or_else(|| {
-                SwissArmyHammerError::Storage(
-                    "Cannot get mutable reference to run storage backend".to_string(),
-                )
-            })?
-            .cleanup_old_runs(days)
     }
 }
 
@@ -855,37 +554,22 @@ impl WorkflowStorageBackend for CompressedWorkflowStorage {
 }
 
 impl WorkflowStorage {
-    /// Create with compressed file system backends
+    /// Create with compressed file system backend
     pub fn compressed_file_system() -> Result<Self> {
-        let base_path = dirs::home_dir()
-            .ok_or_else(|| {
-                SwissArmyHammerError::Storage(
-                    "Cannot find home directory. Please ensure HOME environment variable is set"
-                        .to_string(),
-                )
-            })?
-            .join(".swissarmyhammer");
-
         let workflow_backend = CompressedWorkflowStorage::with_default_compression(Box::new(
             FileSystemWorkflowStorage::new()?,
         ));
 
-        Ok(Self::new(
-            Arc::new(workflow_backend),
-            Arc::new(FileSystemWorkflowRunStorage::new(&base_path)?),
-        ))
+        Ok(Self::new(Arc::new(workflow_backend)))
     }
 
-    /// Create with compressed memory backends (for testing)
+    /// Create with compressed memory backend (for testing)
     pub fn compressed_memory() -> Self {
         let workflow_backend = CompressedWorkflowStorage::with_default_compression(Box::new(
             MemoryWorkflowStorage::new(),
         ));
 
-        Self::new(
-            Arc::new(workflow_backend),
-            Arc::new(MemoryWorkflowRunStorage::new()),
-        )
+        Self::new(Arc::new(workflow_backend))
     }
 }
 
@@ -941,68 +625,14 @@ mod tests {
     }
 
     #[test]
-    fn test_memory_workflow_run_storage() {
-        let mut storage = MemoryWorkflowRunStorage::new();
-        let workflow = create_test_workflow();
-        let run = WorkflowRun::new(workflow.clone());
-
-        storage.store_run(&run).unwrap();
-
-        let retrieved = storage.get_run(&run.id).unwrap();
-        assert_eq!(retrieved.id, run.id);
-
-        let list = storage.list_runs().unwrap();
-        assert_eq!(list.len(), 1);
-
-        let workflow_runs = storage.list_runs_for_workflow(&workflow.name).unwrap();
-        assert_eq!(workflow_runs.len(), 1);
-
-        storage.remove_run(&run.id).unwrap();
-        assert!(storage.get_run(&run.id).is_err());
-    }
-
-    #[test]
-    fn test_cleanup_old_runs() {
-        let mut storage = MemoryWorkflowRunStorage::new();
-        let workflow = create_test_workflow();
-
-        // Create an old run
-        let mut old_run = WorkflowRun::new(workflow.clone());
-        old_run.started_at = chrono::Utc::now() - chrono::Duration::days(10);
-
-        // Create a recent run
-        let recent_run = WorkflowRun::new(workflow);
-
-        storage.store_run(&old_run).unwrap();
-        storage.store_run(&recent_run).unwrap();
-
-        let cleaned = storage.cleanup_old_runs(7).unwrap();
-        assert_eq!(cleaned, 1);
-
-        let remaining = storage.list_runs().unwrap();
-        assert_eq!(remaining.len(), 1);
-        assert_eq!(remaining[0].id, recent_run.id);
-    }
-
-    #[test]
     fn test_combined_workflow_storage() {
         let mut storage = WorkflowStorage::memory();
         let workflow = create_test_workflow();
-        let run = WorkflowRun::new(workflow.clone());
 
         // Test workflow operations
         storage.store_workflow(workflow.clone()).unwrap();
         let retrieved_workflow = storage.get_workflow(&workflow.name).unwrap();
         assert_eq!(retrieved_workflow.name, workflow.name);
-
-        // Test run operations
-        storage.store_run(&run).unwrap();
-        let retrieved_run = storage.get_run(&run.id).unwrap();
-        assert_eq!(retrieved_run.id, run.id);
-
-        // Test listing runs for workflow
-        let workflow_runs = storage.list_runs_for_workflow(&workflow.name).unwrap();
-        assert_eq!(workflow_runs.len(), 1);
     }
 
     #[test]
@@ -1035,20 +665,11 @@ mod tests {
     fn test_compressed_storage_integration() {
         let mut storage = WorkflowStorage::compressed_memory();
         let workflow = create_test_workflow();
-        let run = WorkflowRun::new(workflow.clone());
 
         // Test workflow operations with compression
         storage.store_workflow(workflow.clone()).unwrap();
         let retrieved_workflow = storage.get_workflow(&workflow.name).unwrap();
         assert_eq!(retrieved_workflow.name, workflow.name);
-
-        // Test that compression doesn't affect run operations
-        storage.store_run(&run).unwrap();
-        let retrieved_run = storage.get_run(&run.id).unwrap();
-        assert_eq!(retrieved_run.id, run.id);
-
-        let workflow_runs = storage.list_runs_for_workflow(&workflow.name).unwrap();
-        assert_eq!(workflow_runs.len(), 1);
     }
 
     #[test]

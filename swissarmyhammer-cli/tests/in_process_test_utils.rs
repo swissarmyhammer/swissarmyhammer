@@ -10,9 +10,7 @@ use swissarmyhammer_cli::validate;
 
 /// Captures output from in-process CLI command execution
 pub struct CapturedOutput {
-    #[allow(dead_code)] // Used by test infrastructure
     pub stdout: String,
-    #[allow(dead_code)] // Used by test infrastructure
     pub stderr: String,
     pub exit_code: i32,
 }
@@ -20,7 +18,7 @@ pub struct CapturedOutput {
 /// Execute any CLI command with explicit working directory
 ///
 /// This version allows specifying the working directory explicitly to avoid global state issues
-#[allow(dead_code)] // Used by tests, false positive from compiler
+#[allow(dead_code)] // Used by integration test files, false positive since uses are in separate compilation units
 pub async fn run_sah_command_in_process_with_dir(
     args: &[&str],
     working_dir: &std::path::Path,
@@ -102,28 +100,39 @@ async fn run_sah_command_in_process_inner_with_dir(
         };
 
         // Check if this is a command we can run in-process
+        // Commands that can run in-process:
+        // - Validate: Uses captured output functions for validation checks
+        // - Completion: Generates completion scripts directly via clap
+        // - Flow: Workflow execution can be simulated in tests
+        // - Prompt: Prompt testing can be handled with captured output
+        // - None: No command (help/version handling)
+        // Commands that require subprocess:
+        // - Serve: Needs actual server lifecycle and network binding
+        // - Doctor: Requires system checks and external tool validation
+        // - Agent: May need external tool execution and state management
+        // - Dynamic MCP tools: Need full tool registry and MCP server interaction
         let can_run_in_process = matches!(
             cli.command,
-            Some(Commands::Validate { .. }) |
-            Some(Commands::Completion { .. }) |
-            Some(Commands::Plan { .. }) |        // Add Plan command support
-            Some(Commands::Flow { .. }) |        // Add Flow command support
-            Some(Commands::Prompt { .. }) |      // Add Prompt command support
-            None
+            Some(Commands::Validate { .. })
+                | Some(Commands::Completion { .. })
+                | Some(Commands::Flow { .. })
+                | Some(Commands::Prompt { .. })
+                | None
         );
 
         if can_run_in_process {
             // Execute in-process with stdout/stderr capture
-            let (stdout, stderr, exit_code) = match execute_cli_command_with_capture(cli).await {
-                Ok(result) => result,
-                Err(e) => {
-                    return Ok(CapturedOutput {
-                        stdout: String::new(),
-                        stderr: e.to_string(),
-                        exit_code: 1,
-                    });
-                }
-            };
+            let (stdout, stderr, exit_code) =
+                match execute_cli_command_with_capture(cli, &args_with_program).await {
+                    Ok(result) => result,
+                    Err(e) => {
+                        return Ok(CapturedOutput {
+                            stdout: String::new(),
+                            stderr: e.to_string(),
+                            exit_code: 1,
+                        });
+                    }
+                };
 
             return Ok(CapturedOutput {
                 stdout,
@@ -254,10 +263,15 @@ async fn run_sah_command_in_process_inner_with_dir(
 }
 
 /// Execute a parsed CLI command with stdout/stderr capture
-async fn execute_cli_command_with_capture(cli: Cli) -> Result<(String, String, i32)> {
+async fn execute_cli_command_with_capture(
+    cli: Cli,
+    args: &[String],
+) -> Result<(String, String, i32)> {
+    // Check if --quiet is present in args
+    let _is_quiet = args.iter().any(|arg| arg == "--quiet" || arg == "-q");
     use std::io::Write;
     use std::sync::{Arc, Mutex};
-    use swissarmyhammer_cli::exit_codes::{EXIT_ERROR, EXIT_SUCCESS, EXIT_WARNING};
+    use swissarmyhammer_cli::exit_codes::{EXIT_ERROR, EXIT_SUCCESS};
 
     // Create buffers to capture output
     let stdout_buffer = Arc::new(Mutex::new(Vec::new()));
@@ -287,65 +301,7 @@ async fn execute_cli_command_with_capture(cli: Cli) -> Result<(String, String, i
                 }
             }
         }
-        Some(Commands::Plan { plan_filename }) => {
-            // Plan command mock for tests - check if file exists and return appropriate exit code
-            let stderr_capture = stderr_buffer.clone();
-            let stdout_capture = stdout_buffer.clone();
 
-            // Check if the plan file exists
-            let plan_path = std::path::Path::new(&plan_filename);
-            let exit_code = if !plan_path.exists() {
-                // File doesn't exist - write enhanced error message with suggestions
-                if let Ok(mut stderr) = stderr_capture.lock() {
-                    let _ = writeln!(stderr, "Error: Plan file '{}' not found", plan_filename);
-                    let _ = stderr.write_all(b"\n");
-                    let _ = writeln!(stderr, "Suggestions:");
-                    let _ = writeln!(stderr, "• Check the file path for typos");
-                    let _ = writeln!(stderr, "• Use 'ls -la' to verify the file exists");
-                    let _ = writeln!(stderr, "• Try using an absolute path");
-                }
-                EXIT_ERROR
-            } else if plan_path.is_dir() {
-                // Path is a directory, not a file - write error message and return error code
-                if let Ok(mut stderr) = stderr_capture.lock() {
-                    let _ = writeln!(
-                        stderr,
-                        "Error: '{}' is a directory, not a file",
-                        plan_filename
-                    );
-                    let _ = stderr.write_all(b"\n");
-                    let _ = writeln!(stderr, "Suggestions:");
-                    let _ = writeln!(stderr, "• Specify a plan file inside the directory");
-                    let _ = writeln!(stderr, "• Check that you provided the correct file path");
-                }
-                EXIT_ERROR
-            } else if std::fs::metadata(plan_path).is_ok_and(|m| m.len() == 0) {
-                // File is empty - write warning message and return warning code
-                if let Ok(mut stderr) = stderr_capture.lock() {
-                    let _ = writeln!(
-                        stderr,
-                        "Warning: Plan file '{}' is empty or contains no valid content",
-                        plan_filename
-                    );
-                    let _ = stderr.write_all(b"\n");
-                    let _ = writeln!(stderr, "Suggestions:");
-                    let _ = writeln!(stderr, "• Add content to the plan file");
-                    let _ = writeln!(stderr, "• Check for whitespace-only content");
-                }
-                EXIT_WARNING // Use warning exit code for empty files
-            } else {
-                // File exists and is valid - simulate successful execution
-                if let Ok(mut stdout) = stdout_capture.lock() {
-                    let _ = writeln!(stdout, "Running plan command");
-                    let _ = writeln!(stdout, "Making the plan for {}", plan_filename);
-                }
-                EXIT_SUCCESS
-            };
-
-            let stdout_str = String::from_utf8_lossy(&stdout_capture.lock().unwrap()).to_string();
-            let stderr_str = String::from_utf8_lossy(&stderr_capture.lock().unwrap()).to_string();
-            (stdout_str, stderr_str, exit_code)
-        }
         Some(Commands::Prompt { args }) => {
             // Handle prompt command in-process
             let stderr_capture = stderr_buffer.clone();
@@ -468,55 +424,26 @@ async fn execute_cli_command_with_capture(cli: Cli) -> Result<(String, String, i
             (completion_output, String::new(), EXIT_SUCCESS)
         }
 
-        Some(Commands::Flow { subcommand }) => {
+        Some(Commands::Flow { args }) => {
             // Handle flow commands - for test purposes, simulate workflow behavior
             use swissarmyhammer_cli::cli::FlowSubcommand;
 
+            let subcommand =
+                match swissarmyhammer_cli::commands::flow::parse_flow_args(args.clone()) {
+                    Ok(cmd) => cmd,
+                    Err(e) => {
+                        // Check if this is the special help message
+                        if e.to_string().contains("__HELP_DISPLAYED__") {
+                            // Help was displayed, return success
+                            // Note: the help text was already printed to stdout by parse_flow_args
+                            return Ok((String::new(), String::new(), EXIT_SUCCESS));
+                        }
+                        return Err(anyhow::anyhow!("Failed to parse flow args: {}", e));
+                    }
+                };
+
             match subcommand {
-                FlowSubcommand::Test { workflow, vars, .. } => {
-                    // First validate variable format (like the real flow.rs does)
-                    for var in vars {
-                        if !var.contains('=') {
-                            return Ok((String::new(), format!("Invalid variable format: '{}'. Expected 'key=value' format. Example: --var input=test", var), EXIT_ERROR));
-                        }
-                    }
-
-                    // For flow test, check for builtin and test workflows
-                    let builtin_workflows = [
-                        "example-actions",
-                        "greeting",
-                        "hello-world",
-                        "plan",
-                        "document",
-                        "tdd",
-                        "implement",
-                    ];
-                    let test_workflows = ["test-workflow"]; // Allow test-workflow for in-process utilities tests
-                    let workflow_exists = builtin_workflows.contains(&workflow.as_str())
-                        || test_workflows.contains(&workflow.as_str());
-
-                    if workflow_exists {
-                        if workflow == "plan" {
-                            // Plan workflow specific test mode output
-                            (format!("Test mode 🧪 Testing workflow: {}\n\nCoverage Report:\nStates visited: 3/3 (100.0%)\nFull coverage achieved", workflow), String::new(), EXIT_SUCCESS)
-                        } else {
-                            // Other workflows
-                            (
-                                format!("Testing workflow: {}", workflow),
-                                String::new(),
-                                EXIT_SUCCESS,
-                            )
-                        }
-                    } else {
-                        // Workflow doesn't exist - return error
-                        (
-                            String::new(),
-                            format!("Error: Workflow '{}' not found", workflow),
-                            EXIT_ERROR,
-                        )
-                    }
-                }
-                FlowSubcommand::Run {
+                FlowSubcommand::Execute {
                     workflow,
                     vars,
                     dry_run,
@@ -574,7 +501,7 @@ async fn execute_cli_command_with_capture(cli: Cli) -> Result<(String, String, i
                         "hello-world",
                         "plan",
                         "document",
-                        "tdd",
+                        "test",
                         "implement",
                     ];
                     let workflow_exists = test_created_workflows.contains(&workflow.as_str())
@@ -632,13 +559,13 @@ pub async fn run_flow_test_in_process(
     _timeout: Option<String>,
     quiet: bool,
 ) -> Result<CapturedOutput> {
-    // Build command args for "flow test"
-    let mut args = vec!["flow", "test", workflow_name];
+    // Build command args for "flow <workflow> --dry-run" (replaces deprecated "flow test")
+    let mut args = vec!["flow", workflow_name, "--dry-run"];
 
     // Add vars
     for var in &vars {
         args.push("--var");
-        args.push(var);
+        args.push(var.as_str());
     }
 
     // Timeout removed - no longer supported in CLI

@@ -1,4 +1,32 @@
-//! Agent response types
+//! Agent response types for executor results
+//!
+//! This module defines the response structures returned by agent executors
+//! after processing prompts and generating AI responses.
+//!
+//! # Core Types
+//!
+//! - [`AgentResponse`]: The main response structure containing content, metadata, and status
+//! - [`AgentResponseType`]: Enum indicating whether the response is successful, partial, or an error
+//!
+//! # Response Types
+//!
+//! - **Success**: Complete successful response from the agent
+//! - **Partial**: Incomplete response due to streaming, timeout, or early termination
+//! - **Error**: Failed execution with error details in the content
+//!
+//! # Usage
+//!
+//! ```rust
+//! use swissarmyhammer_agent_executor::AgentResponse;
+//!
+//! // Create a successful response
+//! let response = AgentResponse::success("Hello, world!".to_string());
+//! assert!(response.is_success());
+//!
+//! // Create an error response
+//! let error = AgentResponse::error("Model unavailable".to_string());
+//! assert!(error.is_error());
+//! ```
 
 /// Response type from agent execution
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]

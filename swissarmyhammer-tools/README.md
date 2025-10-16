@@ -1,0 +1,147 @@
+# SwissArmyHammer Tools
+
+📚 **[Read the full documentation](https://swissarmyhammer.github.io/swissarmyhammer-tools/)**
+
+> The only coding assistant you'll ever need. Write specs, not code.
+
+SwissArmyHammer Tools provides a comprehensive MCP (Model Context Protocol) server that exposes powerful AI development capabilities through standardized tools and prompts. This enables AI assistants like Claude to work effectively with codebases, manage development workflows, and automate complex software engineering tasks.
+
+## What Problem Does This Solve?
+
+Modern AI assistants need structured, reliable ways to interact with development environments. SwissArmyHammer solves this by:
+
+- **Standardized Interface**: MCP protocol provides a consistent way for AI assistants to access development tools
+- **Comprehensive Tooling**: Complete suite of file operations, semantic search, issue tracking, and code analysis tools
+- **Workflow Management**: Built-in issue tracking, todo management, and workflow execution capabilities
+- **Code Understanding**: Semantic search and outline generation help AI understand large codebases
+- **Safe Operations**: All file operations include security validation and atomic operations
+
+## How It Works
+
+SwissArmyHammer Tools implements the Model Context Protocol (MCP) specification, exposing functionality through:
+
+1. **MCP Tools**: Individual capabilities (file operations, search, git, etc.) exposed as MCP tools
+2. **MCP Prompts**: Reusable prompt templates from the SwissArmyHammer prompt library
+3. **Unified Server**: Both stdio and HTTP server modes for flexible integration
+4. **Tool Registry**: Modular architecture where each tool is self-contained and independently registered
+
+The server acts as a bridge between AI assistants and your development environment, providing structured access to:
+
+- File system operations (read, write, edit, glob, grep)
+- Semantic code search with vector embeddings
+- Issue and workflow management
+- Git operations and change tracking
+- Code outline generation and analysis
+- Shell command execution
+- Web fetch and search capabilities
+
+## Key Features
+
+- **Complete MCP Server**: Full implementation of Model Context Protocol for AI assistant integration
+- **Semantic Search**: Vector-based code search using tree-sitter parsing and embeddings
+- **Issue Management**: Track work items as markdown files with complete lifecycle support
+- **File Tools**: Comprehensive file operations with security validation
+- **Code Analysis**: Generate structured outlines of codebases with symbol extraction
+- **Workflow Execution**: Define and execute development workflows using YAML specifications
+- **Git Integration**: Track file changes and integrate with git workflows
+- **Web Tools**: Fetch and search web content with markdown conversion
+
+## Quick Start
+
+### Installation
+
+```bash
+# Install SwissArmyHammer CLI (includes tools package)
+cargo install swissarmyhammer
+```
+
+### Running the MCP Server
+
+```bash
+# Start MCP server in stdio mode (for Claude Desktop, etc.)
+sah serve
+
+# Start HTTP server on custom port
+sah serve --http --port 8080
+```
+
+### Using as a Library
+
+```rust
+use swissarmyhammer_tools::McpServer;
+use swissarmyhammer_prompts::PromptLibrary;
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let library = PromptLibrary::new();
+    let server = McpServer::new(library).await?;
+    server.initialize().await?;
+
+    // List available tools
+    let tools = server.list_tools();
+    println!("Available tools: {}", tools.len());
+
+    Ok(())
+}
+```
+
+## Tool Categories
+
+SwissArmyHammer provides tools organized into logical categories:
+
+- **Files**: Read, write, edit, glob pattern matching, and grep search
+- **Search**: Semantic code search with indexing and vector similarity
+- **Issues**: Create, list, show, update, and complete work items
+- **Memos**: Note-taking and knowledge management
+- **Todo**: Ephemeral task tracking for development sessions
+- **Git**: Track file changes and branch-based workflows
+- **Shell**: Execute shell commands with proper output handling
+- **Outline**: Generate structured code overviews using tree-sitter
+- **Rules**: Code quality checks against defined standards
+- **Web**: Fetch web content and perform searches
+- **Flow**: Workflow execution with AI agent coordination
+- **Notify**: Send notifications from AI to user
+- **Abort**: Signal workflow termination
+
+## Architecture
+
+SwissArmyHammer Tools follows a clean, modular architecture:
+
+- **MCP Server**: Implements the Model Context Protocol specification
+- **Tool Registry**: Pluggable tool system where each tool is independently registered
+- **Tool Context**: Shared context providing access to storage backends and operations
+- **Domain Crates**: Each feature area (issues, search, git, etc.) is a separate crate
+- **Storage Backends**: Abstracted storage interfaces for issues, memos, workflows
+
+Each tool implements the `McpTool` trait providing:
+- `name()`: Unique identifier
+- `description()`: Human-readable documentation
+- `schema()`: JSON schema for parameters
+- `execute()`: Async implementation
+
+## Documentation
+
+- **[Architecture Overview](https://swissarmyhammer.github.io/swissarmyhammer-tools/architecture.html)**: System design and component relationships
+- **[Getting Started](https://swissarmyhammer.github.io/swissarmyhammer-tools/getting-started.html)**: Installation and configuration guide
+- **[Features](https://swissarmyhammer.github.io/swissarmyhammer-tools/features.html)**: Detailed feature descriptions and examples
+- **[Troubleshooting](https://swissarmyhammer.github.io/swissarmyhammer-tools/troubleshooting.html)**: Common issues and solutions
+
+## Requirements
+
+- Rust 1.70 or later
+- Modern operating system (macOS, Linux, Windows)
+- Optional: mdBook for building documentation
+
+## License
+
+See the main SwissArmyHammer repository for license information.
+
+## Contributing
+
+Contributions are welcome! Please see the main SwissArmyHammer repository for contribution guidelines.
+
+## Related Projects
+
+- **[swissarmyhammer](https://github.com/swissarmyhammer/swissarmyhammer)**: Main CLI and orchestration
+- **[swissarmyhammer-prompts](https://github.com/swissarmyhammer/swissarmyhammer-prompts)**: Prompt library and template system
+- **[Model Context Protocol](https://modelcontextprotocol.io)**: MCP specification and documentation

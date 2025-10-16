@@ -28,12 +28,14 @@ swissarmyhammer-shell = { path = "../swissarmyhammer-shell" }
 swissarmyhammer-outline = { path = "../swissarmyhammer-outline" }
 swissarmyhammer-rules = { path = "../swissarmyhammer-rules" }
 swissarmyhammer-agent-executor = { path = "../swissarmyhammer-agent-executor" }
+swissarmyhammer-workflow = { path = "../swissarmyhammer-workflow" }
 
 
 # Async and JSON processing
 tokio = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+serde_yaml = { workspace = true }
 anyhow = { workspace = true }
 
 # MCP protocol

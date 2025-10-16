@@ -166,7 +166,7 @@ dependencies = [
  "objc2-foundation",
  "parking_lot",
  "percent-encoding",
- "windows-sys 0.60.2",
+ "windows-sys 0.52.0",
  "x11rb",
 ]
 
@@ -5296,7 +5296,7 @@ dependencies = [
  "once_cell",
  "socket2 0.6.1",
  "tracing",
- "windows-sys 0.60.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -7008,6 +7008,7 @@ dependencies = [
  "scraper",
  "serde",
  "serde_json",
+ "serde_yaml",
  "serial_test",
  "swissarmyhammer-agent-executor",
  "swissarmyhammer-common",
@@ -7021,6 +7022,7 @@ dependencies = [
  "swissarmyhammer-search",
  "swissarmyhammer-shell",
  "swissarmyhammer-todo",
+ "swissarmyhammer-workflow",
  "tempfile",
  "test-log",
  "thiserror 1.0.69",
@@ -7085,7 +7087,6 @@ dependencies = [
  "swissarmyhammer-search",
  "swissarmyhammer-shell",
  "swissarmyhammer-templating",
- "swissarmyhammer-tools",
  "syntect",
  "sysinfo",
  "tempfile",

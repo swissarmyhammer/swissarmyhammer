@@ -11,4 +11,4 @@ If a test genuinely has issues:
 
 ## Bottom Line
 
-Every test should run be run when we run tests.
+Every test should be run when we run tests.
