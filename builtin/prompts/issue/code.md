@@ -5,7 +5,7 @@ description: Code up an issue
 
 ## Goal
 
-You job is to resolve an issue by coding a solution.
+Your job is to resolve an issue by coding a solution.
 
 ## Rules
 
@@ -18,12 +18,7 @@ You job is to resolve an issue by coding a solution.
 
 ## Process
 
-- Use the issue_show current tool. Do not use a cli command.
-  - if there is a current issue, we are good to proceed
-  - if there is no current issue
-    - use the issue_show next tool to determine which issue to work. Do not use a cli command.
-    - proceed with coding on your current branch (the issue_show next tool will set the current marker)
-- Use the issue_show current tool -- this issue is what you are coding. Do not use a cli command.
+- Use the issue_show tool with `name=next`. This will show you the next issue to work on.
 - Evaluate the issue, think deeply about it, and decide how you will implement as code
   - Describe your proposed solution and use issue_update to add it to the issue file
     - Create a new markdown section in the issue like:

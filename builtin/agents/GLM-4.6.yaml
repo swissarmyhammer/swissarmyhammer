@@ -4,5 +4,5 @@ executor:
     config:
         model:
             source: !HuggingFace
-                repo: "unsloth/DeepSeek-V3.1-Terminus-GGUF"
+                repo: "unsloth/GLM-4.6-GGUF"
                 folder: "UD-Q2_K_XL"

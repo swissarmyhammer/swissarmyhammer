@@ -279,24 +279,7 @@ async fn test_issue_workflow_integration() {
         }
     }
 
-    // 6. Test issue_show current (should read from marker)
-    let current_args = context.create_arguments(vec![("name", json!("current"))]);
-    let current_result = context.execute_tool("issue_show", current_args).await;
-
-    // Should succeed since we set the marker
-    assert!(
-        current_result.is_ok(),
-        "issue_show current should succeed with marker set: {:?}",
-        current_result.err()
-    );
-    let current_call_result = current_result.unwrap();
-    assert_eq!(
-        current_call_result.is_error,
-        Some(false),
-        "issue_show current should not report error when marker is set"
-    );
-
-    // 7. Test issue_show with regular issue name
+    // 6. Test issue_show with regular issue name
     let show_args = context.create_arguments(vec![("name", json!("workflow_test"))]);
     let show_result = context.execute_tool("issue_show", show_args).await;
 
@@ -313,11 +296,11 @@ async fn test_issue_workflow_integration() {
         "issue_show should not report error when showing existing issue"
     );
 
-    // 8. Clear the marker
+    // 7. Clear the marker
     swissarmyhammer_issues::current_marker::clear_current_issue_in(temp_dir.path())
         .expect("Failed to clear current issue marker");
 
-    // 9. Verify marker was cleared
+    // 8. Verify marker was cleared
     let current_issue =
         swissarmyhammer_issues::current_marker::get_current_issue_in(temp_dir.path());
     assert!(
@@ -420,6 +403,3 @@ async fn test_create_arguments_helper() {
     assert_eq!(args.get("array_param"), Some(&json!(["item1", "item2"])));
     assert_eq!(args.get("object_param"), Some(&json!({"key": "value"})));
 }
-
-// Test for tool listing removed since the list_tools method was removed as dead code
-// The context creation itself verifies that tools are properly registered

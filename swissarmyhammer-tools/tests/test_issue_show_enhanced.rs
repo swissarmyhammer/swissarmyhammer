@@ -1,7 +1,7 @@
-//! Comprehensive tests for enhanced issue_show tool with "current" and "next" parameters
+//! Comprehensive tests for enhanced issue_show tool with "next" parameter
 //!
 //! This module provides comprehensive test coverage for the enhanced issue_show tool
-//! that supports special parameters "current" and "next" in addition to regular issue names.
+//! that supports the special parameter "next" in addition to regular issue names.
 
 use rmcp::model::CallToolResult;
 use serde_json::json;
@@ -9,7 +9,6 @@ use std::sync::Arc;
 
 use swissarmyhammer_config::agent::AgentConfig;
 use swissarmyhammer_git::GitOperations;
-use swissarmyhammer_issues::Config;
 use swissarmyhammer_issues::{FileSystemIssueStorage, IssueStorage};
 use swissarmyhammer_memoranda::{MarkdownMemoStorage, MemoStorage};
 use swissarmyhammer_tools::mcp::tool_handlers::ToolHandlers;
@@ -176,204 +175,6 @@ impl IssueShowTestEnvironment {
         arguments: serde_json::Map<String, serde_json::Value>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
         self.tool.execute(arguments, &self.tool_context).await
-    }
-}
-
-// Tests for "current" parameter functionality
-
-#[tokio::test]
-async fn test_issue_show_current_on_issue_branch() {
-    let env = IssueShowTestEnvironment::new().await;
-
-    // Create test issue
-    let issue_name = env
-        .create_test_issue(
-            "TEST_CURRENT_001",
-            "# Test Current Issue\n\nThis tests current functionality.",
-        )
-        .await;
-
-    // Create and switch to issue branch
-    let _branch_name = env.create_issue_branch(&issue_name).await;
-
-    // Test issue_show current
-    let args = env.create_arguments("current", None);
-    let result = env.execute_tool(args).await;
-
-    assert!(
-        result.is_ok(),
-        "issue_show current should succeed when on issue branch"
-    );
-    let call_result = result.unwrap();
-    assert_eq!(call_result.is_error, Some(false));
-
-    // Verify response contains issue information
-    if let Some(text_str) = extract_text_content(&call_result) {
-        assert!(
-            text_str.contains(&issue_name),
-            "Response should contain issue name"
-        );
-        assert!(
-            text_str.contains("Test Current Issue"),
-            "Response should contain issue content"
-        );
-    }
-}
-
-#[tokio::test]
-async fn test_issue_show_current_not_on_issue_branch() {
-    let env = IssueShowTestEnvironment::new().await;
-
-    // Stay on main branch (don't create issue branch)
-    // Test issue_show current
-    let args = env.create_arguments("current", None);
-    let result = env.execute_tool(args).await;
-
-    assert!(
-        result.is_ok(),
-        "issue_show current should succeed even when not on issue branch"
-    );
-    let call_result = result.unwrap();
-    assert_eq!(call_result.is_error, Some(false));
-
-    // Verify response indicates not on issue branch
-    if let Some(text_str) = extract_text_content(&call_result) {
-        assert!(
-            text_str.contains("Not on an issue branch") || text_str.contains("Current branch"),
-            "Response should indicate not on issue branch: {text_str}"
-        );
-    }
-}
-
-#[tokio::test]
-async fn test_issue_show_current_git_unavailable() {
-    let env = IssueShowTestEnvironment::new().await;
-
-    // Make git operations unavailable
-    *env.git_ops.lock().await = None;
-
-    // Test issue_show current
-    let args = env.create_arguments("current", None);
-    let result = env.execute_tool(args).await;
-
-    assert!(
-        result.is_ok(),
-        "issue_show current should handle git unavailable gracefully"
-    );
-    let call_result = result.unwrap();
-    assert_eq!(call_result.is_error, Some(false));
-
-    // Verify response indicates git unavailable
-    if let Some(text_str) = extract_text_content(&call_result) {
-        assert!(
-            text_str.contains("Git operations not available"),
-            "Response should indicate git unavailable: {text_str}"
-        );
-    }
-}
-
-#[tokio::test]
-async fn test_issue_show_current_branch_parsing() {
-    let env = IssueShowTestEnvironment::new().await;
-
-    // Test different branch name patterns
-    let test_cases = vec![
-        ("TEST_PARSING_001", "issue/TEST_PARSING_001"),
-        ("feature_branch", "issue/feature_branch"),
-        ("bug-fix-123", "issue/bug-fix-123"),
-    ];
-
-    for (issue_name, expected_branch) in test_cases {
-        // Create test issue
-        let actual_issue_name = env
-            .create_test_issue(
-                issue_name,
-                &format!("# Test Issue {issue_name}\n\nBranch parsing test."),
-            )
-            .await;
-
-        // Create and switch to issue branch
-        let branch_name = env.create_issue_branch(&actual_issue_name).await;
-        assert_eq!(
-            branch_name, expected_branch,
-            "Branch name should match expected pattern"
-        );
-
-        // Test issue_show current
-        let args = env.create_arguments("current", None);
-        let result = env.execute_tool(args).await;
-
-        assert!(
-            result.is_ok(),
-            "issue_show current should work with branch pattern"
-        );
-        let call_result = result.unwrap();
-        assert_eq!(call_result.is_error, Some(false));
-
-        // Switch back to main for next test
-        let git_ops = env.git_ops.lock().await;
-        if let Some(git) = git_ops.as_ref() {
-            let main_branch_str = git.main_branch().unwrap();
-            let main_branch = swissarmyhammer_git::BranchName::new(main_branch_str).unwrap();
-            git.checkout_branch(&main_branch).unwrap();
-        }
-    }
-}
-
-#[tokio::test]
-async fn test_issue_show_current_with_config_integration() {
-    let env = IssueShowTestEnvironment::new().await;
-
-    // Test with default config
-    let config = Config::global();
-    let prefix = &config.issue_branch_prefix;
-
-    // Create test issue
-    let issue_name = env
-        .create_test_issue("CONFIG_TEST_001", "# Config Test Issue")
-        .await;
-
-    // Create issue branch manually to test config integration
-    let git_ops = env.git_ops.lock().await;
-    if let Some(_git) = git_ops.as_ref() {
-        let full_branch_name = format!("{prefix}{issue_name}");
-        // Create branch manually using libgit2
-        let repo = git2::Repository::open(env.temp_dir.path()).expect("Failed to open repository");
-
-        let head_commit = repo
-            .head()
-            .expect("Failed to get HEAD")
-            .peel_to_commit()
-            .expect("Failed to peel to commit");
-
-        repo.branch(&full_branch_name, &head_commit, false)
-            .expect("Failed to create branch");
-
-        repo.set_head(&format!("refs/heads/{}", full_branch_name))
-            .expect("Failed to set HEAD");
-
-        repo.checkout_head(None).expect("Failed to checkout head");
-        // Branch already checked out by previous command
-    }
-    drop(git_ops);
-
-    // Test issue_show current
-    let args = env.create_arguments("current", None);
-    let result = env.execute_tool(args).await;
-
-    assert!(
-        result.is_ok(),
-        "issue_show current should work with config prefix"
-    );
-    let call_result = result.unwrap();
-    assert_eq!(call_result.is_error, Some(false));
-
-    // Verify response contains correct issue
-    if let Some(text_str) = extract_text_content(&call_result) {
-        assert!(
-            text_str.contains(&issue_name),
-            "Response should contain issue name"
-        );
     }
 }
 
@@ -580,14 +381,10 @@ async fn test_issue_show_raw_parameter_compatibility() {
 
     // Verify raw response (should not have formatting)
     if let Some(text_str) = extract_text_content(&call_result) {
-        // Raw content should not have emoji status indicators
+        // Raw content should not have status formatting
         assert!(
-            !text_str.contains("🔄"),
-            "Raw response should not contain status emojis"
-        );
-        assert!(
-            !text_str.contains("✅"),
-            "Raw response should not contain status emojis"
+            !text_str.contains("Status:"),
+            "Raw response should not contain status formatting"
         );
         assert!(
             text_str.contains("Raw Test Issue"),
@@ -606,8 +403,8 @@ async fn test_issue_show_raw_parameter_compatibility() {
     if let Some(text_str) = extract_text_content(&call_result) {
         // Formatted content should have status indicators
         assert!(
-            text_str.contains("🔄") || text_str.contains("✅"),
-            "Formatted response should contain status emojis: {text_str}"
+            text_str.contains("Status:") && (text_str.contains("Active") || text_str.contains("Completed")),
+            "Formatted response should contain status text: {text_str}"
         );
     }
 }
@@ -641,9 +438,6 @@ async fn test_issue_show_special_parameter_case_sensitivity() {
 
     // Test case variations of special parameters
     let test_cases = vec![
-        ("current", true),  // Should work
-        ("CURRENT", false), // Should not work (case sensitive)
-        ("Current", false), // Should not work (case sensitive)
         ("next", true),     // Should work
         ("NEXT", false),    // Should not work (case sensitive)
         ("Next", false),    // Should not work (case sensitive)
@@ -789,16 +583,14 @@ async fn test_issue_show_switching_between_parameters() {
 
     // Test switching between different parameter types
     let test_sequence = vec![
-        ("current", true),
-        (&issue_name, true),
-        ("next", true),
-        ("current", true),
-        ("nonexistent", false),
-        ("next", true),
+        (issue_name.clone(), true),
+        ("next".to_string(), true),
+        ("nonexistent".to_string(), false),
+        ("next".to_string(), true),
     ];
 
     for (param, should_succeed) in test_sequence {
-        let args = env.create_arguments(param, None);
+        let args = env.create_arguments(&param, None);
         let result = env.execute_tool(args).await;
 
         if should_succeed {
@@ -856,24 +648,15 @@ async fn test_issue_show_corrupted_git_state() {
     }
 
     // Test should handle corrupted git gracefully
-    let args = env.create_arguments("current", None);
+    // Regular issue lookup should still work even without git
+    let args = env.create_arguments(&issue_name, None);
     let result = env.execute_tool(args).await;
 
-    // Should either succeed with error message or fail gracefully
-    match result {
-        Ok(call_result) => {
-            // Should indicate git is not available
-            if let Some(text_str) = extract_text_content(&call_result) {
-                assert!(
-                    text_str.contains("Git") || text_str.contains("not available"),
-                    "Should indicate git issues: {text_str}"
-                );
-            }
-        }
-        Err(_) => {
-            // Graceful failure is also acceptable
-        }
-    }
+    // Should succeed for regular issue lookup regardless of git state
+    assert!(
+        result.is_ok(),
+        "Regular issue lookup should work even with corrupted git"
+    );
 }
 
 #[tokio::test]
@@ -910,10 +693,6 @@ async fn test_issue_show_schema_validation() {
 
     // Verify description mentions special parameters
     let description = name_prop.get("description").unwrap().as_str().unwrap();
-    assert!(
-        description.contains("current"),
-        "Description should mention 'current' parameter"
-    );
     assert!(
         description.contains("next"),
         "Description should mention 'next' parameter"
