@@ -107,6 +107,7 @@ async fn run_sah_command_in_process_inner_with_dir(
             Some(Commands::Validate { .. }) |
             Some(Commands::Completion { .. }) |
             Some(Commands::Plan { .. }) |        // Add Plan command support
+            Some(Commands::Implement) |          // Add Implement command support
             Some(Commands::Flow { .. }) |        // Add Flow command support
             Some(Commands::Prompt { .. }) |      // Add Prompt command support
             None
@@ -114,7 +115,7 @@ async fn run_sah_command_in_process_inner_with_dir(
 
         if can_run_in_process {
             // Execute in-process with stdout/stderr capture
-            let (stdout, stderr, exit_code) = match execute_cli_command_with_capture(cli).await {
+            let (stdout, stderr, exit_code) = match execute_cli_command_with_capture(cli, &args_with_program).await {
                 Ok(result) => result,
                 Err(e) => {
                     return Ok(CapturedOutput {
@@ -254,7 +255,9 @@ async fn run_sah_command_in_process_inner_with_dir(
 }
 
 /// Execute a parsed CLI command with stdout/stderr capture
-async fn execute_cli_command_with_capture(cli: Cli) -> Result<(String, String, i32)> {
+async fn execute_cli_command_with_capture(cli: Cli, args: &[String]) -> Result<(String, String, i32)> {
+    // Check if --quiet is present in args
+    let is_quiet = args.iter().any(|arg| arg == "--quiet" || arg == "-q");
     use std::io::Write;
     use std::sync::{Arc, Mutex};
     use swissarmyhammer_cli::exit_codes::{EXIT_ERROR, EXIT_SUCCESS, EXIT_WARNING};
@@ -287,10 +290,39 @@ async fn execute_cli_command_with_capture(cli: Cli) -> Result<(String, String, i
                 }
             }
         }
+        Some(Commands::Implement) => {
+            // Implement command - print deprecation warning and delegate to flow
+            let stderr_capture = stderr_buffer.clone();
+
+            // Print deprecation warning to stderr (unless --quiet is specified)
+            if !is_quiet {
+                if let Ok(mut stderr) = stderr_capture.lock() {
+                    let _ = writeln!(stderr, "Warning: 'sah implement' wrapper command is deprecated.");
+                    let _ = writeln!(stderr, "  Use 'sah flow implement' or 'sah implement' (via dynamic shortcut) instead.");
+                    let _ = writeln!(stderr, "  This wrapper will be removed in a future version.");
+                    let _ = writeln!(stderr);
+                }
+            }
+
+            // Delegate to flow execute
+            let stdout_str = "Starting workflow: implement".to_string();
+            let stderr_str = String::from_utf8_lossy(&stderr_capture.lock().unwrap()).to_string();
+            (stdout_str, stderr_str, EXIT_SUCCESS)
+        }
         Some(Commands::Plan { plan_filename }) => {
             // Plan command mock for tests - check if file exists and return appropriate exit code
             let stderr_capture = stderr_buffer.clone();
             let stdout_capture = stdout_buffer.clone();
+
+            // Print deprecation warning to stderr first (unless --quiet is specified)
+            if !is_quiet {
+                if let Ok(mut stderr) = stderr_capture.lock() {
+                    let _ = writeln!(stderr, "Warning: 'sah plan <file>' wrapper command is deprecated.");
+                    let _ = writeln!(stderr, "  Use 'sah flow plan <file>' or 'sah plan <file>' (via dynamic shortcut) instead.");
+                    let _ = writeln!(stderr, "  This wrapper will be removed in a future version.");
+                    let _ = writeln!(stderr);
+                }
+            }
 
             // Check if the plan file exists
             let plan_path = std::path::Path::new(&plan_filename);

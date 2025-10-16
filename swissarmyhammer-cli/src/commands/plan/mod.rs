@@ -13,6 +13,9 @@ pub const DESCRIPTION: &str = include_str!("description.md");
 /// This command delegates to the flow runner to execute the 'plan' workflow,
 /// which processes a specification file and generates an implementation plan.
 ///
+/// **DEPRECATED**: This wrapper command is deprecated. Use `sah flow plan <file>` or
+/// the dynamic shortcut `sah plan <file>` instead.
+///
 /// # Arguments
 /// * `plan_filename` - Path to the specification file to process
 /// * `context` - CLI context containing global arguments and configuration
@@ -20,6 +23,14 @@ pub const DESCRIPTION: &str = include_str!("description.md");
 /// # Returns
 /// * `i32` - Exit code (0 for success, non-zero for error)
 pub async fn handle_command(plan_filename: String, context: &CliContext) -> i32 {
+    // Print deprecation warning
+    if !context.quiet {
+        eprintln!("Warning: 'sah plan <file>' wrapper command is deprecated.");
+        eprintln!("  Use 'sah flow plan <file>' or 'sah plan <file>' (via dynamic shortcut) instead.");
+        eprintln!("  This wrapper will be removed in a future version.");
+        eprintln!();
+    }
+
     // Execute the plan workflow - equivalent to 'flow plan spec.md'
     // The plan_filename is now a positional argument
     let subcommand = FlowSubcommand::Execute {

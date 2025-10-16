@@ -14,12 +14,23 @@ use crate::context::CliContext;
 /// This command delegates to the flow runner to execute the 'implement' workflow,
 /// which automatically resolves pending issues in the repository.
 ///
+/// **DEPRECATED**: This wrapper command is deprecated. Use `sah flow implement` or
+/// the dynamic shortcut `sah implement` instead.
+///
 /// # Arguments
 /// * `context` - CLI context containing global arguments and configuration
 ///
 /// # Returns
 /// * `i32` - Exit code (0 for success, non-zero for error)
 pub async fn handle_command(context: &CliContext) -> i32 {
+    // Print deprecation warning
+    if !context.quiet {
+        eprintln!("Warning: 'sah implement' wrapper command is deprecated.");
+        eprintln!("  Use 'sah flow implement' or 'sah implement' (via dynamic shortcut) instead.");
+        eprintln!("  This wrapper will be removed in a future version.");
+        eprintln!();
+    }
+
     // Execute the implement workflow - equivalent to 'flow implement'
     let subcommand = FlowSubcommand::Execute {
         workflow: "implement".to_string(),

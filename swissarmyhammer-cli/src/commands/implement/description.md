@@ -1,3 +1,11 @@
+**DEPRECATED**: This wrapper command is deprecated and will be removed in a future version.
+
+Use one of these alternatives instead:
+- `sah flow implement` (full form)
+- `sah implement` (dynamic shortcut, preferred)
+
+---
+
 Autonomous issue resolution that works through your entire backlog hands-free.
 
 Let AI systematically implement all pending issues while you focus on design,
@@ -52,18 +60,15 @@ Quiet mode for background execution:
 WORKFLOW INTEGRATION
 
 This command is a convenience shortcut for:
-  swissarmyhammer flow run implement
+  swissarmyhammer flow implement
 
 For more control over execution, use the full flow command:
 
 Interactive mode (approve each step):
-  swissarmyhammer flow run implement --interactive
+  swissarmyhammer flow implement --interactive
 
 Preview without execution:
-  swissarmyhammer flow run implement --dry-run
-
-Resume interrupted implementation:
-  swissarmyhammer flow resume <run_id>
+  swissarmyhammer flow implement --dry-run
 
 HOW IT WORKS
 

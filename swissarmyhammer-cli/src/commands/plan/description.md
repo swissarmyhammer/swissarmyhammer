@@ -1,3 +1,11 @@
+**DEPRECATED**: This wrapper command is deprecated and will be removed in a future version.
+
+Use one of these alternatives instead:
+- `sah flow plan <file>` (full form)
+- `sah plan <file>` (dynamic shortcut, preferred)
+
+---
+
 Transform high-level specifications into actionable implementation steps with AI-powered planning.
 
 The plan command analyzes your requirements and generates a comprehensive,

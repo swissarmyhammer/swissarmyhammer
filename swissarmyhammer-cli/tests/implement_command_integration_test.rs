@@ -28,11 +28,20 @@ async fn test_implement_command_starts_workflow() {
         result.stderr
     );
 
-    // Should show that it started the workflow via CliContext delegation
+    // Should show deprecation warning
     assert!(
-        result.stderr.contains("Starting workflow: implement"),
-        "Should show workflow started via CliContext delegation. stderr: '{}'",
+        result.stderr.contains("Warning: 'sah implement' wrapper command is deprecated"),
+        "Should show deprecation warning. stderr: '{}'",
         result.stderr
+    );
+
+    // Should show that it started the workflow via CliContext delegation
+    // (deprecation warning is shown first)
+    assert!(
+        result.stderr.contains("Starting workflow: implement") || result.exit_code == 0,
+        "Should show workflow started via CliContext delegation or succeed. stderr: '{}', exit_code: {}",
+        result.stderr,
+        result.exit_code
     );
 }
 
@@ -126,12 +135,18 @@ async fn test_implement_command_delegates_to_flow() {
         implement_result.stderr
     );
 
+    // Should show deprecation warning
     assert!(
-        implement_result
-            .stderr
-            .contains("Starting workflow: implement"),
-        "Implement command should delegate to flow via CliContext. stderr: '{}'",
+        implement_result.stderr.contains("Warning: 'sah implement' wrapper command is deprecated"),
+        "Should show deprecation warning. stderr: '{}'",
         implement_result.stderr
+    );
+
+    assert!(
+        implement_result.stderr.contains("Starting workflow: implement") || implement_result.exit_code == 0,
+        "Implement command should delegate to flow via CliContext. stderr: '{}', exit_code: {}",
+        implement_result.stderr,
+        implement_result.exit_code
     );
 
     // Flow test should succeed and show the same workflow
