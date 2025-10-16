@@ -618,7 +618,7 @@ steps:
 ```
 You: "Run the deploy workflow for staging"
 
-Claude uses: flow_mcp
+Claude uses: flow
 {
   "flow_name": "deploy",
   "parameters": {

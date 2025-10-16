@@ -711,7 +711,7 @@ impl PromptAction {
 
                 if mcp_port.is_none() {
                     return Err(ActionError::ExecutionError(
-                        "MCP server not started. The CLI layer should start the MCP server for LlamaAgent workflows.".to_string()
+                        "Failed to initialize LlamaAgent: MCP server must be started before running workflows".to_string()
                     ));
                 }
 

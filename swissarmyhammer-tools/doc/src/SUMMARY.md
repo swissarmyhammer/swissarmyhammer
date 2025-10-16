@@ -8,6 +8,7 @@
 - [Features Overview](./features.md)
 - [Use Cases and Best Practices](./use-cases.md)
 - [Examples and Tutorials](./examples.md)
+- [Frequently Asked Questions](./faq.md)
 - [Troubleshooting](./troubleshooting.md)
 
 # Architecture

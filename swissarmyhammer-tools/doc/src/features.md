@@ -24,8 +24,6 @@ File operations with security validation and atomic operations.
 
 **Tools**: `files_read`, `files_write`, `files_edit`, `files_glob`, `files_grep`
 
-[Learn more about File Tools →](./features/file-tools.md)
-
 ### Key Capabilities
 
 - Read files with partial reading support (offset and limit)
@@ -53,8 +51,6 @@ Vector-based code search using tree-sitter parsing and embeddings.
 
 **Tools**: `search_index`, `search_query`
 
-[Learn more about Semantic Search →](./features/search-tools.md)
-
 ### Key Capabilities
 
 - Index codebases with intelligent chunking
@@ -79,8 +75,6 @@ Search for functionality:
 Track work items as markdown files with complete lifecycle support.
 
 **Tools**: `issue_create`, `issue_list`, `issue_show`, `issue_update`, `issue_mark_complete`, `issue_all_complete`
-
-[Learn more about Issue Management →](./features/issue-management.md)
 
 ### Key Capabilities
 
@@ -110,8 +104,6 @@ Knowledge management and note-taking with ULID-based organization.
 
 **Tools**: `memo_create`, `memo_list`, `memo_get`, `memo_get_all_context`
 
-[Learn more about Memo System →](./features/memo-system.md)
-
 ### Key Capabilities
 
 - Create memos with title and markdown content
@@ -138,8 +130,6 @@ Get memo content:
 Ephemeral task tracking for development sessions.
 
 **Tools**: `todo_create`, `todo_show`, `todo_mark_complete`
-
-[Learn more about Todo Tracking →](./features/todo-tracking.md)
 
 ### Key Capabilities
 
@@ -168,8 +158,6 @@ Track file changes and integrate with git workflows.
 
 **Tools**: `git_changes`
 
-[Learn more about Git Integration →](./features/git-integration.md)
-
 ### Key Capabilities
 
 - List changed files on a branch
@@ -192,8 +180,6 @@ Track work:
 Execute shell commands with proper output handling.
 
 **Tools**: `shell_execute`
-
-[Learn more about Shell Execution →](./features/shell-execution.md)
 
 ### Key Capabilities
 
@@ -219,8 +205,6 @@ Generate structured code overviews using tree-sitter parsing.
 
 **Tools**: `outline_generate`
 
-[Learn more about Code Outline →](./features/code-outline.md)
-
 ### Key Capabilities
 
 - Extract symbols (classes, functions, methods, etc.)
@@ -244,8 +228,6 @@ Analyze structure:
 Check code against quality standards and best practices.
 
 **Tools**: `rules_check`
-
-[Learn more about Rules Engine →](./features/rules-engine.md)
 
 ### Key Capabilities
 
@@ -271,8 +253,6 @@ Fetch and search web content with markdown conversion.
 
 **Tools**: `web_fetch`, `web_search`
 
-[Learn more about Web Tools →](./features/web-tools.md)
-
 ### Key Capabilities
 
 - Fetch web pages and convert to markdown
@@ -295,9 +275,7 @@ Search for solutions:
 
 Execute complex development workflows with AI agent coordination.
 
-**Tools**: `flow_mcp`
-
-[Learn more about Workflow Execution →](./features/workflow-execution.md)
+**Tools**: `flow`
 
 ### Key Capabilities
 
@@ -350,16 +328,7 @@ All features are designed for seamless integration with Claude Code:
 
 ## Next Steps
 
-Explore each feature area in detail:
-
-- [File Tools](./features/file-tools.md)
-- [Semantic Search](./features/search-tools.md)
-- [Issue Management](./features/issue-management.md)
-- [Memo System](./features/memo-system.md)
-- [Todo Tracking](./features/todo-tracking.md)
-- [Git Integration](./features/git-integration.md)
-- [Shell Execution](./features/shell-execution.md)
-- [Code Outline](./features/code-outline.md)
-- [Rules Engine](./features/rules-engine.md)
-- [Web Tools](./features/web-tools.md)
-- [Workflow Execution](./features/workflow-execution.md)
+- [Tool Catalog](./reference/tools.md): Detailed reference for all tools
+- [Examples](./examples.md): Practical examples and tutorials
+- [Use Cases](./use-cases.md): Best practices and patterns
+- [Architecture](./architecture.md): System design and internals

@@ -515,7 +515,7 @@ Search the web using DuckDuckGo.
 
 ## Workflow Execution
 
-### flow_mcp
+### flow
 
 Execute or list workflows dynamically via MCP.
 
