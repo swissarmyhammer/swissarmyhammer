@@ -63,8 +63,7 @@ pub use state::{
     CompensationKey, ErrorContext, State, StateError, StateId, StateResult, StateType,
 };
 pub use storage::{
-    CompressedWorkflowStorage, FileSystemWorkflowRunStorage, FileSystemWorkflowStorage,
-    MemoryWorkflowRunStorage, MemoryWorkflowStorage, WorkflowResolver, WorkflowRunStorageBackend,
+    CompressedWorkflowStorage, FileSystemWorkflowStorage, MemoryWorkflowStorage, WorkflowResolver,
     WorkflowStorage, WorkflowStorageBackend,
 };
 pub use template_context::WorkflowTemplateContext;

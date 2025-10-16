@@ -65,8 +65,7 @@ pub use swissarmyhammer_templating::{Template, TemplateEngine};
 pub use swissarmyhammer_common::*;
 pub use swissarmyhammer_workflow::{
     FileSystemWorkflowStorage, Workflow, WorkflowError, WorkflowExecutor, WorkflowName,
-    WorkflowResolver, WorkflowRunId, WorkflowRunStatus, WorkflowRunStorageBackend, WorkflowStorage,
-    WorkflowStorageBackend,
+    WorkflowResolver, WorkflowRunId, WorkflowRunStatus, WorkflowStorage, WorkflowStorageBackend,
 };
 
 // sah.toml configuration types removed (migrated to swissarmyhammer-config)

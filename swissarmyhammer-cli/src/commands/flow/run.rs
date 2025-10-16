@@ -1,9 +1,7 @@
 //! Run a workflow command implementation
 
 use super::params::{map_positional_to_params, merge_params, parse_param_pairs};
-use super::shared::{
-    create_local_workflow_run_storage, execute_workflow_with_progress, workflow_run_id_to_string,
-};
+use super::shared::{execute_workflow_with_progress, workflow_run_id_to_string};
 use crate::context::CliContext;
 use swissarmyhammer::{
     Result, SwissArmyHammerError, WorkflowExecutor, WorkflowName, WorkflowRunStatus,
@@ -132,35 +130,19 @@ pub async fn run_workflow_command(config: RunCommandConfig, context: &CliContext
         }
     };
 
-    // Create local workflow run storage (only store failed runs for debugging)
-    let mut run_storage = create_local_workflow_run_storage()?;
-
     match execution_result {
         Ok(_) => match run.status {
             WorkflowRunStatus::Completed => {
                 tracing::info!("✅ Workflow completed successfully");
                 tracing::info!("🆔 Run ID: {}", workflow_run_id_to_string(&run.id));
-
-                // Don't store successful runs to avoid accumulating thousands of runs
-                // Only failed runs are stored for debugging purposes
             }
             WorkflowRunStatus::Failed => {
                 tracing::error!("❌ Workflow failed");
                 tracing::info!("🆔 Run ID: {}", workflow_run_id_to_string(&run.id));
-
-                // Store failed runs for debugging
-                if let Err(storage_err) = run_storage.store_run(&run) {
-                    tracing::warn!("Failed to store failed run: {}", storage_err);
-                }
             }
             WorkflowRunStatus::Cancelled => {
                 tracing::warn!("🚫 Workflow cancelled");
                 tracing::info!("🆔 Run ID: {}", workflow_run_id_to_string(&run.id));
-
-                // Store cancelled runs for debugging
-                if let Err(storage_err) = run_storage.store_run(&run) {
-                    tracing::warn!("Failed to store cancelled run: {}", storage_err);
-                }
             }
             _ => {
                 tracing::info!("⏸️  Workflow paused");
@@ -170,13 +152,6 @@ pub async fn run_workflow_command(config: RunCommandConfig, context: &CliContext
         Err(e) => {
             tracing::error!("❌ Workflow execution failed: {}", e);
             run.fail();
-
-            // Store failed runs for debugging
-            if let Err(storage_err) = run_storage.store_run(&run) {
-                tracing::warn!("Failed to store failed run: {}", storage_err);
-            }
-
-            // Return the error to allow proper exit code handling in main.rs
             return Err(e);
         }
     }

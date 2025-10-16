@@ -66,9 +66,6 @@ swissarmyhammer-workflow/.swissarmyhammer
 
 .work
 
-# SwissArmyHammer workflow runs (keep config files but ignore run history)
-.swissarmyhammer/workflow-runs/
-
 # SwissArmyHammer abort files (temporary test files)
 .swissarmyhammer/.abort
 

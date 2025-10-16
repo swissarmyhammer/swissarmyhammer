@@ -151,41 +151,7 @@ impl WorkflowExecutor {
         result.map(|_| run)
     }
 
-    /// Resume a workflow from saved state
-    pub async fn resume_workflow(&mut self, mut run: WorkflowRun) -> ExecutorResult<WorkflowRun> {
-        if run.status == WorkflowRunStatus::Completed || run.status == WorkflowRunStatus::Failed {
-            return Err(ExecutorError::WorkflowCompleted);
-        }
 
-        // Start metrics tracking for resumed run
-        self.metrics.start_run(run.id, run.workflow.name.clone());
-
-        self.log_event(
-            ExecutionEventType::Started,
-            format!(
-                "Resumed workflow: {} from state: {}",
-                run.workflow.name, run.current_state
-            ),
-        );
-
-        // Continue execution from current state with transition limit
-        let result = self
-            .execute_state_with_limit(&mut run, MAX_TRANSITIONS)
-            .await;
-
-        // Complete metrics tracking
-        match &result {
-            Ok(_) => {
-                self.metrics.complete_run(&run.id, run.status, None);
-            }
-            Err(e) => {
-                self.metrics
-                    .complete_run(&run.id, WorkflowRunStatus::Failed, Some(e.to_string()));
-            }
-        }
-
-        result.map(|_| run)
-    }
 
     /// Check if workflow execution should stop
     pub fn is_workflow_finished(&self, run: &WorkflowRun) -> bool {

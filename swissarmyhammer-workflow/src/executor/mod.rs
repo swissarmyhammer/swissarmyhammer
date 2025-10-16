@@ -30,9 +30,7 @@ pub enum ExecutorError {
     /// Generic workflow execution failure
     #[error("Execution failed: {0}")]
     ExecutionFailed(String),
-    /// Attempted to resume a completed workflow
-    #[error("Workflow already completed")]
-    WorkflowCompleted,
+
     /// Expression evaluation failed
     #[error("Expression evaluation failed: {0}")]
     ExpressionError(String),

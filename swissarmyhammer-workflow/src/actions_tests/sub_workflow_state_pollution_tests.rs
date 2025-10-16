@@ -4,7 +4,7 @@
 //! don't interfere with each other during execution.
 
 use crate::actions::{clear_test_storage, set_test_storage};
-use crate::storage::{MemoryWorkflowRunStorage, MemoryWorkflowStorage, WorkflowStorageBackend};
+use crate::storage::{MemoryWorkflowStorage, WorkflowStorageBackend};
 use crate::{MermaidParser, WorkflowExecutor, WorkflowStorage};
 use serde_json::Value;
 use swissarmyhammer_common::test_utils::IsolatedTestEnvironment;
@@ -14,7 +14,6 @@ use std::sync::Arc;
 /// Helper function to set up test storage with workflows
 fn setup_test_storage_with_workflows(workflows: &[(&str, &str)]) -> Arc<WorkflowStorage> {
     let mut workflow_storage = MemoryWorkflowStorage::new();
-    let run_storage = MemoryWorkflowRunStorage::new();
 
     // Parse and store workflows
     for (name, content) in workflows {
@@ -22,10 +21,7 @@ fn setup_test_storage_with_workflows(workflows: &[(&str, &str)]) -> Arc<Workflow
         workflow_storage.store_workflow(workflow).unwrap();
     }
 
-    Arc::new(WorkflowStorage::new(
-        Arc::new(workflow_storage),
-        Arc::new(run_storage),
-    ))
+    Arc::new(WorkflowStorage::new(Arc::new(workflow_storage)))
 }
 
 #[tokio::test]

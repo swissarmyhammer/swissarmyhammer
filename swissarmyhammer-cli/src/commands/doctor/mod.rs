@@ -108,7 +108,6 @@ impl Doctor {
         checks::check_workflow_directories(&mut self.checks)?;
         checks::check_workflow_permissions(&mut self.checks)?;
         checks::check_workflow_parsing(&mut self.checks)?;
-        checks::check_workflow_run_storage(&mut self.checks)?;
         checks::check_workflow_dependencies(&mut self.checks)?;
         Ok(())
     }
@@ -189,7 +188,7 @@ impl Doctor {
         }
 
         // Check subdirectories
-        let subdirs = ["memos", "todo", "runs", "workflows", "prompts"];
+        let subdirs = ["memos", "todo", "workflows", "prompts"];
         for subdir in &subdirs {
             let subdir_path = swissarmyhammer_dir.join(subdir);
             if subdir_path.exists() {

@@ -9,7 +9,7 @@ use swissarmyhammer_git::GitOperations;
 
 use crate::cli::OutputFormat;
 use swissarmyhammer_prompts::PromptLibrary;
-use swissarmyhammer_workflow::{FileSystemWorkflowRunStorage, WorkflowStorage};
+use swissarmyhammer_workflow::WorkflowStorage;
 
 /// Shared CLI context containing all storage objects, configuration, and parsed arguments
 #[derive(derive_builder::Builder)]
@@ -17,10 +17,6 @@ use swissarmyhammer_workflow::{FileSystemWorkflowRunStorage, WorkflowStorage};
 pub struct CliContext {
     /// Workflow storage for loading and managing workflows
     pub workflow_storage: Arc<WorkflowStorage>,
-
-    /// Workflow run storage for execution state
-    #[allow(dead_code)]
-    pub workflow_run_storage: Arc<FileSystemWorkflowRunStorage>,
 
     /// Prompt library for managing prompts
     #[allow(dead_code)]
@@ -200,18 +196,6 @@ impl CliContextBuilder {
                 })??,
         );
 
-        let workflow_run_storage = Arc::new(
-            tokio::task::spawn_blocking(|| {
-                let base_path = swissarmyhammer_common::utils::paths::get_swissarmyhammer_dir()
-                    .unwrap_or_else(|_| std::env::current_dir().unwrap_or_default());
-                FileSystemWorkflowRunStorage::new(base_path)
-            })
-            .await
-            .map_err(|e| swissarmyhammer_common::SwissArmyHammerError::Other {
-                message: format!("Failed to create workflow run storage: {e}"),
-            })??,
-        );
-
         let mut prompt_library = PromptLibrary::new();
 
         // Add default prompt sources
@@ -252,7 +236,6 @@ impl CliContextBuilder {
 
         Ok(CliContext {
             workflow_storage,
-            workflow_run_storage,
             prompt_library: Arc::new(prompt_library),
             memo_storage,
             issue_storage,

@@ -1,6 +1,6 @@
 //! Shared utilities for flow command subcommands
 
-use swissarmyhammer::{Result, SwissArmyHammerError, WorkflowRunId, WorkflowRunStorageBackend};
+use swissarmyhammer::{Result, SwissArmyHammerError, WorkflowRunId};
 use swissarmyhammer::{WorkflowExecutor, WorkflowRunStatus};
 use swissarmyhammer_workflow::{ExecutorError, WorkflowRun};
 
@@ -72,23 +72,7 @@ pub async fn execute_workflow_with_progress(
     Ok(())
 }
 
-/// Create local workflow run storage backend
-pub fn create_local_workflow_run_storage() -> Result<Box<dyn WorkflowRunStorageBackend>> {
-    use std::fs;
 
-    // Create local .swissarmyhammer/workflow-runs directory
-    let local_dir = std::path::PathBuf::from(".swissarmyhammer/workflow-runs");
-    fs::create_dir_all(&local_dir).map_err(|e| SwissArmyHammerError::Other {
-        message: format!("Failed to create .swissarmyhammer/workflow-runs directory: {e}"),
-    })?;
-
-    let run_storage = swissarmyhammer_workflow::FileSystemWorkflowRunStorage::new(&local_dir)
-        .map_err(|e| SwissArmyHammerError::Other {
-            message: format!("Failed to create local workflow run storage: {e}"),
-        })?;
-
-    Ok(Box::new(run_storage))
-}
 
 #[cfg(test)]
 mod tests {

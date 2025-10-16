@@ -53,36 +53,6 @@ impl std::fmt::Display for WorkflowDirectory {
     }
 }
 
-/// Type-safe wrapper for disk space measurements in megabytes
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub struct DiskSpace {
-    mb: u64,
-}
-
-impl DiskSpace {
-    /// Create a new DiskSpace value from megabytes
-    pub fn from_mb(mb: u64) -> Self {
-        Self { mb }
-    }
-
-    /// Get the value in megabytes
-    #[allow(dead_code)]
-    pub fn as_mb(&self) -> u64 {
-        self.mb
-    }
-
-    /// Check if disk space is below a certain threshold
-    pub fn is_low(&self, threshold_mb: u64) -> bool {
-        self.mb < threshold_mb
-    }
-}
-
-impl std::fmt::Display for DiskSpace {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{} MB", self.mb)
-    }
-}
-
 /// Information about a workflow directory including its path and category
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WorkflowDirectoryInfo {
