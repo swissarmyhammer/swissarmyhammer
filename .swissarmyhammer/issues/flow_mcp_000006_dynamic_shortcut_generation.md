@@ -231,3 +231,70 @@ fn test_shortcut_about_text() {
 ## Estimated Changes
 
 ~230 lines of code
+
+
+
+## Proposed Solution
+
+After analyzing the codebase, I've identified a cleaner approach that integrates better with the existing CLI architecture:
+
+### Analysis of Current State
+
+The codebase already has:
+1. **Dynamic CLI Builder** (`dynamic_cli.rs`) - generates MCP tool commands dynamically
+2. **Flow Command Parser** (`commands/flow/mod.rs`) - handles `flow` command with `parse_flow_args()` 
+3. **CliContext** - shared context with workflow storage access
+4. **Static Commands** - added via `add_static_commands()` in `CliBuilder`
+
+The `FlowSubcommand::Execute` enum variant was recently added (see tests) for the new flattened structure.
+
+### Implementation Approach
+
+Instead of creating a separate `shortcuts` module, I'll integrate shortcut generation directly into the existing `CliBuilder` in `dynamic_cli.rs`. This maintains consistency with how other dynamic commands are generated.
+
+**Key Design Decisions:**
+
+1. **Location**: Add shortcut generation to `CliBuilder::add_static_commands()` since shortcuts are workflow-specific top-level commands
+2. **Conflict Resolution**: Check against both reserved flow subcommands (`list`) AND top-level commands (`serve`, `doctor`, `prompt`, `rule`, `flow`, `agent`, `validate`, `plan`, `implement`)
+3. **Parameter Handling**: Shortcuts accept positional args and `--param` flags, delegating to `FlowSubcommand::Execute`
+4. **Help Text**: Show "(shortcut for 'flow <workflow>')" in about text
+
+### Implementation Steps
+
+1. **Add helper method to `CliBuilder`**:
+   - `build_workflow_shortcuts(&self, workflow_storage: &WorkflowStorage) -> Vec<Command>`
+   - Returns vector of workflow shortcut commands
+
+2. **Integrate into CLI building**:
+   - Call from `build_cli()` after static commands
+   - Add shortcuts as top-level subcommands
+
+3. **Add dispatcher in main.rs**:
+   - Match on shortcut command names
+   - Create `FlowSubcommand::Execute` with mapped parameters
+   - Delegate to existing `handle_flow_command()`
+
+4. **Conflict detection**:
+   - Reserved names: `list`, `serve`, `doctor`, `prompt`, `rule`, `flow`, `agent`, `validate`, `plan`, `implement`
+   - Prefix conflicts with underscore: `_{workflow_name}`
+
+### Files to Modify
+
+- `swissarmyhammer-cli/src/dynamic_cli.rs` - Add `build_workflow_shortcuts()` method
+- `swissarmyhammer-cli/src/main.rs` - Add shortcut dispatcher in `handle_dynamic_matches()`
+- `swissarmyhammer-cli/src/context.rs` - Expose workflow storage if needed
+- `swissarmyhammer-cli/tests/integration_tests.rs` or new test file - Add shortcut tests
+
+### Why This Approach is Better
+
+1. **Consistency**: Uses same pattern as dynamic MCP tool commands
+2. **Less Code**: Reuses existing infrastructure instead of creating parallel system
+3. **Maintainability**: All CLI generation logic in one place (`CliBuilder`)
+4. **Testability**: Can test through existing CLI parsing infrastructure
+
+### Trade-offs
+
+- Need access to `WorkflowStorage` during CLI building (requires passing through `CliContext`)
+- Shortcuts are generated at startup, so new workflows require CLI restart
+- This is acceptable since workflows are typically static configuration
+

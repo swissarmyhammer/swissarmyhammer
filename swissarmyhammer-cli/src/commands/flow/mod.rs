@@ -168,6 +168,22 @@ pub fn parse_flow_args(args: Vec<String>) -> Result<FlowSubcommand> {
         
         "test" => {
             // Parse test command: flow test <workflow> [--var KEY=VALUE]... [--interactive] [--quiet]
+            // Check for help flag first
+            if args.len() > 1 && (args[1] == "--help" || args[1] == "-h") {
+                // Print help for test command to stdout and return an error to signal help was shown
+                println!("Test workflow execution without actually running it\n");
+                println!("Usage: sah flow test <WORKFLOW> [OPTIONS]\n");
+                println!("Arguments:");
+                println!("  <WORKFLOW>  Workflow name to test\n");
+                println!("Options:");
+                println!("  --var <KEY=VALUE>     Set workflow variable (deprecated, for backward compatibility)");
+                println!("  -i, --interactive     Interactive mode - prompt at each state");
+                println!("  -q, --quiet          Quiet mode - only show errors");
+                println!("  -h, --help           Print help");
+                // Return a special error that the caller can handle as "help displayed, exit 0"
+                return Err(anyhow!("__HELP_DISPLAYED__"));
+            }
+            
             if args.len() < 2 {
                 return Err(anyhow!("Test command requires a workflow name"));
             }
@@ -188,6 +204,18 @@ pub fn parse_flow_args(args: Vec<String>) -> Result<FlowSubcommand> {
                     }
                     "--interactive" | "-i" => interactive = true,
                     "--quiet" | "-q" => quiet = true,
+                    "--help" | "-h" => {
+                        println!("Test workflow execution without actually running it\n");
+                        println!("Usage: sah flow test <WORKFLOW> [OPTIONS]\n");
+                        println!("Arguments:");
+                        println!("  <WORKFLOW>  Workflow name to test\n");
+                        println!("Options:");
+                        println!("  --var <KEY=VALUE>     Set workflow variable (deprecated, for backward compatibility)");
+                        println!("  -i, --interactive     Interactive mode - prompt at each state");
+                        println!("  -q, --quiet          Quiet mode - only show errors");
+                        println!("  -h, --help           Print help");
+                        return Err(anyhow!("__HELP_DISPLAYED__"));
+                    }
                     _ => return Err(anyhow!("Unknown flag for test command: {}", args[i])),
                 }
                 i += 1;

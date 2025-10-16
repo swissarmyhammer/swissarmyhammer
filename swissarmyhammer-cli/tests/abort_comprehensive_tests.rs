@@ -104,7 +104,7 @@ transitions:
     create_abort_file("CLI integration test abort")?;
 
     std::env::set_var("SWISSARMYHAMMER_SKIP_MCP_STARTUP", "1");
-    let result = run_sah_command_in_process(&["flow", "run", "test_abort_workflow.md"]).await?;
+    let result = run_sah_command_in_process(&["flow", "test_abort_workflow.md"]).await?;
     std::env::remove_var("SWISSARMYHAMMER_SKIP_MCP_STARTUP");
 
     // Clean up
@@ -269,7 +269,7 @@ transitions:
     create_abort_file(&large_reason)?;
 
     std::env::set_var("SWISSARMYHAMMER_SKIP_MCP_STARTUP", "1");
-    let result = run_sah_command_in_process(&["flow", "run", "large_reason_test.md"]).await?;
+    let result = run_sah_command_in_process(&["flow", "large_reason_test.md"]).await?;
     std::env::remove_var("SWISSARMYHAMMER_SKIP_MCP_STARTUP");
 
     cleanup_abort_file();
@@ -310,7 +310,7 @@ transitions:
     create_abort_file(reason_with_newlines)?;
 
     std::env::set_var("SWISSARMYHAMMER_SKIP_MCP_STARTUP", "1");
-    let result = run_sah_command_in_process(&["flow", "run", "newline_test.md"]).await?;
+    let result = run_sah_command_in_process(&["flow", "newline_test.md"]).await?;
     std::env::remove_var("SWISSARMYHAMMER_SKIP_MCP_STARTUP");
 
     cleanup_abort_file();
@@ -351,7 +351,7 @@ transitions:
     create_abort_file("")?;
 
     std::env::set_var("SWISSARMYHAMMER_SKIP_MCP_STARTUP", "1");
-    let result = run_sah_command_in_process(&["flow", "run", "empty_abort_test.md"]).await?;
+    let result = run_sah_command_in_process(&["flow", "empty_abort_test.md"]).await?;
     std::env::remove_var("SWISSARMYHAMMER_SKIP_MCP_STARTUP");
 
     cleanup_abort_file();
@@ -396,7 +396,7 @@ transitions:
     assert_abort_file_not_exists();
 
     std::env::set_var("SWISSARMYHAMMER_SKIP_MCP_STARTUP", "1");
-    let result = run_sah_command_in_process(&["flow", "run", "normal_test.md"]).await?;
+    let result = run_sah_command_in_process(&["flow", "normal_test.md"]).await?;
     std::env::remove_var("SWISSARMYHAMMER_SKIP_MCP_STARTUP");
 
     let _ = std::fs::remove_file("normal_test.md");
@@ -449,7 +449,7 @@ transitions:
     for i in 0..3 {
         tasks.spawn(async move {
             std::env::set_var("SWISSARMYHAMMER_SKIP_MCP_STARTUP", "1");
-            let result = run_sah_command_in_process(&["flow", "run", "concurrent_test.md"]).await;
+            let result = run_sah_command_in_process(&["flow", "concurrent_test.md"]).await;
             std::env::remove_var("SWISSARMYHAMMER_SKIP_MCP_STARTUP");
             (i, result)
         });

@@ -237,7 +237,6 @@ async fn test_cli_integration_greeting_workflow() -> Result<()> {
 
     let result = run_sah_command_in_process(&[
         "flow",
-        "run",
         "greeting",
         "--var",
         "person_name=Integration Test",
@@ -261,7 +260,6 @@ async fn test_cli_integration_plan_workflow() -> Result<()> {
 
     let result = run_sah_command_in_process(&[
         "flow",
-        "run",
         "plan",
         "--var",
         "plan_filename=./test.md",

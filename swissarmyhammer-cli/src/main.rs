@@ -471,6 +471,10 @@ async fn handle_flow_command(sub_matches: &clap::ArgMatches, context: &CliContex
     let subcommand = match commands::flow::parse_flow_args(args) {
         Ok(cmd) => cmd,
         Err(e) => {
+            // Check if this is the special help message
+            if e.to_string().contains("__HELP_DISPLAYED__") {
+                return EXIT_SUCCESS;
+            }
             eprintln!("Error parsing flow command: {}", e);
             eprintln!("Use 'sah flow list' to see available workflows");
             eprintln!("Use 'sah flow <workflow> --help' for workflow-specific help");

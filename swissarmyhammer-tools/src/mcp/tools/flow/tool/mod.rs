@@ -274,8 +274,9 @@ impl McpTool for FlowTool {
     }
 
     fn cli_name(&self) -> &'static str {
-        // This will be the command name within the flow category
-        "run"
+        // Workflows are executed directly as: sah flow <workflow>
+        // The workflow name is dynamic and provided as the first argument
+        ""
     }
 }
 
@@ -319,7 +320,7 @@ mod tests {
     fn test_flow_tool_cli_integration() {
         let tool = FlowTool::new();
         assert_eq!(tool.cli_category(), Some("flow"));
-        assert_eq!(tool.cli_name(), "run");
+        assert_eq!(tool.cli_name(), "");
     }
 
     #[tokio::test]
