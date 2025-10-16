@@ -8,8 +8,6 @@ use std::fs;
 use std::path::PathBuf;
 use walkdir::WalkDir;
 
-
-
 /// Check names constants to avoid typos and improve maintainability
 pub mod check_names {
     pub const INSTALLATION_METHOD: &str = "Installation Method";

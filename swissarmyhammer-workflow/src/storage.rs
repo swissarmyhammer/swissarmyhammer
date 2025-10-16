@@ -208,8 +208,6 @@ pub trait WorkflowStorageBackend: Send + Sync {
     fn clone_box(&self) -> Box<dyn WorkflowStorageBackend>;
 }
 
-
-
 /// In-memory workflow storage implementation
 pub struct MemoryWorkflowStorage {
     workflows: HashMap<WorkflowName, Workflow>,
@@ -260,8 +258,6 @@ impl WorkflowStorageBackend for MemoryWorkflowStorage {
         })
     }
 }
-
-
 
 /// File system workflow storage implementation that uses WorkflowResolver for hierarchical loading
 pub struct FileSystemWorkflowStorage {
@@ -381,8 +377,6 @@ impl WorkflowStorageBackend for FileSystemWorkflowStorage {
         Box::new(new_storage)
     }
 }
-
-
 
 /// Main workflow storage that can use different backends
 pub struct WorkflowStorage {
@@ -629,8 +623,6 @@ mod tests {
         storage.remove_workflow(&workflow.name).unwrap();
         assert!(storage.get_workflow(&workflow.name).is_err());
     }
-
-
 
     #[test]
     fn test_combined_workflow_storage() {

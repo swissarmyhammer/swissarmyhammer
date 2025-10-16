@@ -239,36 +239,6 @@ mod tests {
         assert_ne!(dir1, dir3);
     }
 
-    #[test]
-    fn test_disk_space_from_mb() {
-        let space = DiskSpace::from_mb(100);
-        assert_eq!(space.as_mb(), 100);
-    }
-
-    #[test]
-    fn test_disk_space_is_low() {
-        let space = DiskSpace::from_mb(50);
-        assert!(space.is_low(100));
-        assert!(!space.is_low(50));
-        assert!(!space.is_low(40));
-    }
-
-    #[test]
-    fn test_disk_space_display() {
-        let space = DiskSpace::from_mb(1024);
-        assert_eq!(format!("{space}"), "1024 MB");
-    }
-
-    #[test]
-    fn test_disk_space_ordering() {
-        let space1 = DiskSpace::from_mb(100);
-        let space2 = DiskSpace::from_mb(200);
-        let space3 = DiskSpace::from_mb(100);
-
-        assert!(space1 < space2);
-        assert!(space2 > space1);
-        assert_eq!(space1, space3);
-    }
 
     #[test]
     fn test_workflow_directory_info_new() {

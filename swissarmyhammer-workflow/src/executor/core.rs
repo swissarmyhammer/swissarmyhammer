@@ -151,8 +151,6 @@ impl WorkflowExecutor {
         result.map(|_| run)
     }
 
-
-
     /// Check if workflow execution should stop
     pub fn is_workflow_finished(&self, run: &WorkflowRun) -> bool {
         run.status == WorkflowRunStatus::Completed || run.status == WorkflowRunStatus::Failed

@@ -56,7 +56,8 @@ async fn test_implement_workflow_delegation_via_flow_test() {
 
     let stdout = &result.stdout;
     assert!(
-        stdout.contains("Running workflow: implement") || stdout.contains("Testing workflow: implement"),
+        stdout.contains("Running workflow: implement")
+            || stdout.contains("Testing workflow: implement"),
         "Should execute implement workflow via CliContext delegation: {stdout}"
     );
 }
@@ -91,7 +92,8 @@ async fn test_implement_workflow_with_custom_variables() {
 
     let stdout = &result.stdout;
     assert!(
-        stdout.contains("Running workflow: implement") || stdout.contains("Testing workflow: implement"),
+        stdout.contains("Running workflow: implement")
+            || stdout.contains("Testing workflow: implement"),
         "Should execute workflow with custom variables via CliContext: {stdout}"
     );
 }
@@ -140,7 +142,8 @@ async fn test_implement_command_delegates_to_flow() {
     );
 
     assert!(
-        flow_result.stdout.contains("Running workflow: implement") || flow_result.stdout.contains("Testing workflow: implement"),
+        flow_result.stdout.contains("Running workflow: implement")
+            || flow_result.stdout.contains("Testing workflow: implement"),
         "Flow should confirm it's running the same implement workflow that CliContext delegates to"
     );
 }
