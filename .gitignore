@@ -97,3 +97,4 @@ test_validation
 # Claude Code usage tracking files
 cc.json
 .swissarmyhammer/workflow-runs
+.swissarmyhammer/workflow-runs/
