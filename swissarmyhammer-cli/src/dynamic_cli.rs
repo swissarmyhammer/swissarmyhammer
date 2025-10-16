@@ -265,15 +265,23 @@ impl CliBuilder {
     pub fn build_cli(&self, workflow_storage: Option<&WorkflowStorage>) -> Command {
         let mut cli = Command::new("swissarmyhammer")
             .version(env!("CARGO_PKG_VERSION"))
-            .about("An MCP server for managing prompts as markdown files")
+            .about("The only coding assistant you'll ever need")
             .long_about(
                 "
-swissarmyhammer is an MCP (Model Context Protocol) server that manages
-prompts as markdown files. It supports file watching, template substitution,
-and seamless integration with Claude Code.
+SwissArmyHammer - The only coding assistant you'll ever need
 
-This CLI dynamically generates all MCP tool commands, eliminating code duplication
-and ensuring perfect consistency between MCP and CLI interfaces.
+Commands are organized into three types:
+- Static commands (serve, doctor, validate, agent, prompt, rule, flow)
+- Workflow shortcuts (implement, plan, etc.) - use 'sah flow list' to see all
+- Tool commands (file, issue, memo, search, shell, web-search)
+
+Examples:
+  sah serve                    Run as MCP server
+  sah doctor                   Diagnose configuration  
+  sah flow list                List all workflows
+  sah implement                Execute implement workflow (shortcut)
+  sah plan spec.md             Execute plan workflow (shortcut)
+  sah file read path.txt       Read a file via MCP tool
 ",
             )
             // Add verbose/debug/quiet flags from parent CLI
@@ -389,12 +397,11 @@ Example:
 
         for category_name in category_names.iter() {
             if let Some(category_data) = self.category_commands.get(category_name) {
-                cli = cli.subcommand(
-                    self.build_category_command_from_data(category_name, category_data),
-                );
+                let cmd = self.build_category_command_from_data(category_name, category_data);
+                cli = cli.subcommand(cmd);
             }
         }
-
+        
         cli
     }
 
@@ -550,6 +557,8 @@ Example:
         if let Some(long_about) = &category_data.long_about {
             cmd = cmd.long_about(intern_string(long_about.clone()));
         }
+        
+        cmd = cmd.subcommand_help_heading("Tools");
 
         // Add tool subcommands for this category
         if let Some(tools_in_category) = self.tool_commands.get(category_name) {
@@ -1450,7 +1459,9 @@ Examples:
             "{} (shortcut for 'flow {}')",
             workflow.description, workflow_name
         );
-        cmd = cmd.about(intern_string(about_text));
+        cmd = cmd
+            .about(intern_string(about_text))
+            .subcommand_help_heading("Workflows");
 
         // Collect required parameters
         let required_params: Vec<_> = workflow.parameters.iter().filter(|p| p.required).collect();
