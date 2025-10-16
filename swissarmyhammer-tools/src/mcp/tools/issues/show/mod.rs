@@ -293,6 +293,7 @@ mod tests {
             memo_storage,
             tool_handlers,
             agent_config,
+            notification_sender: None,
         }
     }
 

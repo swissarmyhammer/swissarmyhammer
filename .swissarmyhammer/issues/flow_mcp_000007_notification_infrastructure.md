@@ -218,3 +218,140 @@ async fn test_notification_channel() {
 ## Estimated Changes
 
 ~220 lines of code
+
+
+
+## Proposed Solution
+
+After reviewing the existing MCP infrastructure, I'll implement the notification system following these steps:
+
+### Architecture Design
+
+1. **Reuse existing NotifyRequest patterns**: The codebase already has `notify_types.rs` with `NotifyRequest` and `NotifyLevel`. We'll extend this pattern for flow notifications.
+
+2. **Create FlowNotification types**: Define specialized notification types for workflow execution that extend the existing notification infrastructure with workflow-specific metadata.
+
+3. **Channel-based sender**: Use `tokio::sync::mpsc` for asynchronous notification delivery without blocking workflow execution.
+
+4. **ToolContext integration**: Add optional `NotificationSender` to `ToolContext` (already has structure for this pattern).
+
+### Implementation Details
+
+**Phase 1: Define notification types** (notifications.rs)
+- Create `FlowNotification` struct with token, progress, message, and metadata
+- Create `FlowNotificationMetadata` enum for different notification types:
+  - FlowStart: workflow initiated with parameters
+  - StateStart: entering a workflow state
+  - StateComplete: exiting a workflow state
+  - FlowComplete: workflow finished successfully
+  - FlowError: workflow failed with error
+
+**Phase 2: Notification sender** (notifications.rs)
+- Create `NotificationSender` wrapping `mpsc::UnboundedSender<FlowNotification>`
+- Implement convenience methods for each notification type
+- Handle channel errors gracefully
+
+**Phase 3: Builder utilities** (notifications.rs)
+- Add builder methods to `FlowNotification` for each notification type
+- Ensure consistent message formatting
+- Calculate progress percentages based on workflow state position
+
+**Phase 4: ToolContext update** (tool_registry.rs)
+- Add `notification_sender: Option<NotificationSender>` field
+- Update constructor to accept optional sender
+- Maintain backward compatibility with existing code
+
+**Phase 5: Comprehensive testing** (notifications_tests.rs)
+- Test notification serialization/deserialization
+- Test channel-based notification delivery
+- Test builder methods produce correct structures
+- Test error handling for closed channels
+
+### Files to Modify
+- `swissarmyhammer-tools/src/mcp/notifications.rs` (create)
+- `swissarmyhammer-tools/src/mcp/tool_registry.rs` (update ToolContext)
+- `swissarmyhammer-tools/src/mcp/mod.rs` (export notifications module)
+
+### Testing Strategy
+- Unit tests for each notification type
+- Integration tests for notification channel
+- Serialization tests to ensure MCP compatibility
+- Error handling tests for edge cases
+
+
+
+## Implementation Notes
+
+### Completed Work
+
+Successfully implemented the MCP notification infrastructure for workflow progress tracking.
+
+### Files Created/Modified
+
+1. **swissarmyhammer-tools/src/mcp/notifications.rs** (created, 729 lines)
+   - Defined `FlowNotification` struct with token, progress, message, and metadata
+   - Created `FlowNotificationMetadata` enum with 5 notification types:
+     - FlowStart: workflow initiated with parameters
+     - StateStart: entering a workflow state  
+     - StateComplete: exiting a workflow state
+     - FlowComplete: workflow finished successfully
+     - FlowError: workflow failed with error
+   - Implemented `NotificationSender` wrapping `mpsc::UnboundedSender`
+   - Added convenience methods for each notification type
+   - Created `SendError` type for channel error handling
+   - Comprehensive test coverage (17 tests, all passing)
+
+2. **swissarmyhammer-tools/src/mcp/tool_registry.rs** (modified)
+   - Added `notification_sender: Option<NotificationSender>` field to `ToolContext`
+   - Updated `ToolContext::new()` to initialize with `None`
+   - Added `ToolContext::with_notifications()` constructor for notification-enabled contexts
+   - Imported `NotificationSender` from notifications module
+
+3. **swissarmyhammer-tools/src/mcp/mod.rs** (modified)
+   - Added `notifications` module declaration
+   - Re-exported key types: `FlowNotification`, `FlowNotificationMetadata`, `NotificationSender`, `SendError`
+
+4. **swissarmyhammer-tools/src/mcp/tools/issues/show/mod.rs** (modified)
+   - Fixed test to include `notification_sender: None` in ToolContext construction
+
+### Design Decisions
+
+1. **Channel-based async**: Used `tokio::sync::mpsc::UnboundedSender` for non-blocking notification delivery
+2. **Optional sender**: Made notification sender optional in ToolContext for backward compatibility
+3. **Builder pattern**: Added builder methods to `FlowNotification` for convenience
+4. **Serde integration**: Full serialization/deserialization support for MCP compatibility
+5. **Type safety**: Used enums for notification metadata to ensure type-safe handling
+
+### Testing Results
+
+- All 17 notification-specific tests passing
+- Full test suite: 598 tests passing, 0 failures
+- No clippy warnings
+- Clean compilation with no errors
+
+### API Examples
+
+```rust
+// Create notification channel
+let (tx, rx) = mpsc::unbounded_channel();
+let sender = NotificationSender::new(tx);
+
+// Send flow start notification
+sender.send_flow_start(
+    "run_123",
+    "implement",
+    json!({"issue": "bug-456"}),
+    "parse_issue"
+)?;
+
+// Send state notifications
+sender.send_state_start("run_123", "implement", "state1", "Description", 25)?;
+sender.send_state_complete("run_123", "implement", "state1", Some("state2"), 50)?;
+
+// Send completion
+sender.send_flow_complete("run_123", "implement", "completed", "done")?;
+```
+
+### Next Steps
+
+This infrastructure is ready for integration with workflow execution in subsequent issues. The notification sender can be passed to ToolContext when creating contexts for workflow tools, enabling progress tracking during long-running operations.

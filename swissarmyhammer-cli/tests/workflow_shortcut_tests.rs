@@ -38,7 +38,7 @@ fn test_name_conflict_resolution() {
     let shortcuts = CliBuilder::build_workflow_shortcuts(&storage);
 
     // Reserved names that should get underscore prefix
-    let reserved = vec![
+    let reserved = [
         "serve",
         "doctor",
         "prompt",

@@ -7,6 +7,7 @@
 pub mod error_handling;
 pub mod file_watcher;
 pub mod memo_types;
+pub mod notifications;
 pub mod notify_types;
 pub mod responses;
 pub mod search_types;
@@ -26,6 +27,9 @@ pub mod test_utils;
 mod tests;
 
 // Re-export commonly used items from submodules
+pub use notifications::{
+    FlowNotification, FlowNotificationMetadata, NotificationSender, SendError,
+};
 pub use server::McpServer;
 pub use tool_handlers::ToolHandlers;
 pub use tool_registry::{

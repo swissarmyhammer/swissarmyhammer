@@ -218,6 +218,7 @@
 //! }
 //! ```
 
+use super::notifications::NotificationSender;
 use super::tool_handlers::ToolHandlers;
 use rmcp::model::{Annotated, CallToolResult, RawContent, RawTextContent, Tool};
 use rmcp::ErrorData as McpError;
@@ -293,6 +294,21 @@ pub struct ToolContext {
     /// and associated settings. Tools that need to execute agent operations should
     /// use this configuration to create appropriate executor instances.
     pub agent_config: Arc<AgentConfig>,
+
+    /// Optional notification sender for long-running operations
+    ///
+    /// When present, tools can send progress notifications during execution.
+    /// This is particularly useful for workflow execution and other long-running
+    /// operations that benefit from progress tracking.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// if let Some(sender) = &context.notification_sender {
+    ///     sender.send_flow_start("run_123", "workflow", json!({}), "start")?;
+    /// }
+    /// ```
+    pub notification_sender: Option<NotificationSender>,
 }
 
 impl ToolContext {
@@ -310,6 +326,39 @@ impl ToolContext {
             git_ops,
             memo_storage,
             agent_config,
+            notification_sender: None,
+        }
+    }
+
+    /// Create a new tool context with notification support
+    ///
+    /// # Arguments
+    ///
+    /// * `tool_handlers` - The tool handlers instance
+    /// * `issue_storage` - Issue storage backend
+    /// * `git_ops` - Git operations
+    /// * `memo_storage` - Memo storage backend
+    /// * `agent_config` - Agent configuration
+    /// * `notification_sender` - Notification sender for progress updates
+    ///
+    /// # Returns
+    ///
+    /// A new `ToolContext` with notification support enabled
+    pub fn with_notifications(
+        tool_handlers: Arc<ToolHandlers>,
+        issue_storage: Arc<RwLock<Box<dyn IssueStorage>>>,
+        git_ops: Arc<Mutex<Option<GitOperations>>>,
+        memo_storage: Arc<RwLock<Box<dyn MemoStorage>>>,
+        agent_config: Arc<AgentConfig>,
+        notification_sender: NotificationSender,
+    ) -> Self {
+        Self {
+            tool_handlers,
+            issue_storage,
+            git_ops,
+            memo_storage,
+            agent_config,
+            notification_sender: Some(notification_sender),
         }
     }
 }
