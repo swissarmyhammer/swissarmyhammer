@@ -335,7 +335,7 @@ fn generate_file_hash(file_path: &Path) -> String {
 fn generate_issue_name(rule_name: &str, file_path: &Path) -> String {
     let file_hash = generate_file_hash(file_path);
     let safe_rule_name = rule_name.replace('/', "_");
-    format!("~{}_{}", safe_rule_name, file_hash)
+    format!("{}_{}", safe_rule_name, file_hash)
 }
 
 /// Format issue content from a rule violation
