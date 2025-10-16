@@ -1,6 +1,14 @@
 //! Plan command implementation
 //!
-//! Executes planning workflow for specific specification files
+//! Executes planning workflow for specific specification files.
+//!
+//! # Design Note: Deprecation Warning Output
+//!
+//! Deprecation warnings use `tracing::warn!` instead of `eprintln!` because:
+//! - Integrates with application logging infrastructure
+//! - Automatically writes to stderr
+//! - Can be controlled via log levels and filters
+//! - Consistent with other user-facing messages in the codebase
 
 use crate::cli::FlowSubcommand;
 use crate::context::CliContext;
@@ -24,11 +32,6 @@ pub const DESCRIPTION: &str = include_str!("description.md");
 /// * `i32` - Exit code (0 for success, non-zero for error)
 pub async fn handle_command(plan_filename: String, context: &CliContext) -> i32 {
     // Print deprecation warning
-    // Note: Using tracing::warn! instead of eprintln! because:
-    // - Integrates with application logging infrastructure
-    // - Automatically writes to stderr
-    // - Can be controlled via log levels and filters
-    // - Consistent with other user-facing messages in the codebase
     if !context.quiet {
         tracing::warn!("'sah plan <file>' wrapper command is deprecated.");
         tracing::warn!(

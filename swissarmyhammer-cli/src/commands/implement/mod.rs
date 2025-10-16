@@ -1,6 +1,14 @@
 //! Implement command implementation
 //!
-//! Executes the implement workflow for autonomous issue resolution
+//! Executes the implement workflow for autonomous issue resolution.
+//!
+//! # Design Note: Deprecation Warning Output
+//!
+//! Deprecation warnings use `tracing::warn!` instead of `eprintln!` because:
+//! - Integrates with application logging infrastructure
+//! - Automatically writes to stderr
+//! - Can be controlled via log levels and filters
+//! - Consistent with other user-facing messages in the codebase
 
 use crate::cli::FlowSubcommand;
 
@@ -24,11 +32,6 @@ use crate::context::CliContext;
 /// * `i32` - Exit code (0 for success, non-zero for error)
 pub async fn handle_command(context: &CliContext) -> i32 {
     // Print deprecation warning
-    // Note: Using tracing::warn! instead of eprintln! because:
-    // - Integrates with application logging infrastructure
-    // - Automatically writes to stderr
-    // - Can be controlled via log levels and filters
-    // - Consistent with other user-facing messages in the codebase
     if !context.quiet {
         tracing::warn!("'sah implement' wrapper command is deprecated.");
         tracing::warn!(
