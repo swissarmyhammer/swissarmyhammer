@@ -289,3 +289,92 @@ Approximately 450+ lines of code removed including:
 - Test cases (~300+ lines across multiple test files)
 
 The removal is clean and complete with no breaking changes since the dynamic flow shortcuts provide identical functionality.
+
+
+## Additional Issue Found
+
+After the static command removal, there's a follow-up issue: the `RESERVED_NAMES` list in `dynamic_cli.rs` still includes `"plan"` and `"implement"`, which causes the dynamic workflow system to create both underscore-prefixed versions (`_implement`, `_plan`) AND the normal versions when there's no actual conflict.
+
+### Current Behavior
+Running `sah --help` shows:
+- `plan` - Plan a specific specification file
+- `implement` - Execute the implement workflow for autonomous issue resolution  
+- `_implement` - Autonomously run until all issues are resolved (shortcut for 'flow implement')
+- `_plan` - Turn specifications into multiple step plans (shortcut for 'flow plan')
+
+### Root Cause
+In `swissarmyhammer-cli/src/dynamic_cli.rs` at line ~1443-1453:
+```rust
+const RESERVED_NAMES: &[&str] = &[
+    "serve",
+    "doctor",
+    "prompt",
+    "rule",
+    "flow",
+    "agent",
+    "validate",
+    "plan",        // ← Should be removed
+    "implement",   // ← Should be removed
+    "list",
+];
+```
+
+These were reserved when static commands existed, but now they're causing unnecessary prefixing.
+
+### Solution
+Remove `"plan"` and `"implement"` from the `RESERVED_NAMES` array in `dynamic_cli.rs` since the static commands have been deleted.
+
+### Expected Result After Fix
+Running `sah --help` should show only:
+- `implement` - Autonomously run until all issues are resolved (shortcut for 'flow implement')
+- `plan` - Turn specifications into multiple step plans (shortcut for 'flow plan')
+
+No underscore-prefixed duplicates.
+
+
+
+## Additional Fix Applied
+
+Successfully removed duplicate command entries that were causing both underscore-prefixed and normal versions to appear.
+
+### Changes Made
+1. **Removed from RESERVED_NAMES** in `swissarmyhammer-cli/src/dynamic_cli.rs:1443-1453`:
+   - Removed `"plan"` from the reserved names list
+   - Removed `"implement"` from the reserved names list
+   
+2. **Removed hardcoded Command definitions** in `swissarmyhammer-cli/src/dynamic_cli.rs:738-790`:
+   - Deleted entire `Command::new("plan")` subcommand definition (~30 lines)
+   - Deleted entire `Command::new("implement")` subcommand definition (~30 lines)
+
+3. **Updated test assertions** in `swissarmyhammer-cli/src/dynamic_cli_tests.rs:180`:
+   - Removed `assert!(subcommand_names.contains(&"plan"));`
+   - Removed `assert!(subcommand_names.contains(&"implement"));`
+   - Added comment explaining they're now dynamic shortcuts
+
+4. **Updated reserved names test** in `swissarmyhammer-cli/tests/workflow_shortcut_tests.rs:42-44`:
+   - Removed `"plan"` from reserved array
+   - Removed `"implement"` from reserved array
+   - Added comment explaining the change
+
+### Verification
+- ✅ All 3343 tests pass
+- ✅ Code compiles without errors or warnings
+- ✅ CLI help shows only one entry for each command (no duplicates)
+- ✅ Commands appear without underscore prefixes:
+  - `implement` - Autonomously run until all issues are resolved (shortcut for 'flow implement')
+  - `plan` - Turn specifications into multiple step plans (shortcut for 'flow plan')
+
+### Root Cause
+After removing the static command modules, there were TWO sources creating these commands:
+1. Hardcoded `Command::new()` definitions in `build_cli()` method
+2. Dynamic workflow shortcuts from `build_workflow_shortcuts()`
+
+The RESERVED_NAMES list was preventing conflicts by prefixing the dynamic shortcuts with underscores, resulting in both versions appearing in the help output.
+
+### Solution
+Removed ALL three sources of duplication:
+1. RESERVED_NAMES entries (stopped creating underscore versions)
+2. Hardcoded Command definitions (stopped creating static versions)  
+3. Updated tests to match new behavior
+
+Now only the dynamic workflow shortcuts exist, appearing cleanly without prefixes.

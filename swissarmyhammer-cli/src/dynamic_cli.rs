@@ -733,56 +733,6 @@ Examples:
                 ),
         );
 
-        // Add plan command
-        cli = cli.subcommand(
-            Command::new("plan")
-                .about("Plan a specific specification file")
-                .long_about(
-                    "
-Execute planning workflow for a specific specification file.
-Takes a path to a markdown specification file and generates step-by-step implementation issues.
-
-The planning workflow will:
-• Read and analyze the specified plan file
-• Review existing issues to avoid conflicts
-• Generate numbered issue files in the ./issues directory  
-• Create incremental, focused implementation steps
-• Use existing memos and codebase context for better planning
-
-Examples:
-  swissarmyhammer plan ./specification/user-authentication.md
-  swissarmyhammer plan /home/user/projects/plans/feature-development.md
-                ",
-                )
-                .arg(
-                    Arg::new("plan_filename")
-                        .help("Path to the markdown plan file (relative or absolute)")
-                        .value_name("PLAN_FILENAME")
-                        .required(true),
-                ),
-        );
-
-        // Add implement command
-        cli = cli.subcommand(
-            Command::new("implement")
-                .about("Execute the implement workflow for autonomous issue resolution")
-                .long_about(
-                    "
-Execute the implement workflow to autonomously work through and resolve all pending issues.
-This is a convenience command equivalent to 'sah flow run implement'.
-
-The implement workflow will:
-• Check for pending issues in the ./issues directory
-• Work through each issue systematically  
-• Continue until all issues are resolved
-• Provide status updates throughout the process
-
-Examples:
-  swissarmyhammer implement
-                ",
-                ),
-        );
-
         // Add agent command with subcommands
         cli = cli.subcommand(Self::build_agent_command());
 
@@ -1442,15 +1392,7 @@ Examples:
 
         // Reserved command names that would conflict with top-level commands
         const RESERVED_NAMES: &[&str] = &[
-            "serve",
-            "doctor",
-            "prompt",
-            "rule",
-            "flow",
-            "agent",
-            "validate",
-            "plan",
-            "implement",
+            "serve", "doctor", "prompt", "rule", "flow", "agent", "validate",
             "list", // Special: flow subcommand that should not conflict
         ];
 

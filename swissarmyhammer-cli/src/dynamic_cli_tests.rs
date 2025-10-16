@@ -177,8 +177,7 @@ fn test_build_cli_basic_structure() {
     assert!(subcommand_names.contains(&"prompt"));
     assert!(subcommand_names.contains(&"flow"));
     assert!(subcommand_names.contains(&"validate"));
-    assert!(subcommand_names.contains(&"plan"));
-    assert!(subcommand_names.contains(&"implement"));
+    // Note: plan and implement are now dynamic workflow shortcuts, not hardcoded commands
     assert!(subcommand_names.contains(&"agent"));
     assert!(subcommand_names.contains(&"rule"));
 }

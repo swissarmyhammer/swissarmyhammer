@@ -6,6 +6,8 @@
 
 - [Getting Started](./getting-started.md)
 - [Features Overview](./features.md)
+- [Use Cases and Best Practices](./use-cases.md)
+- [Examples and Tutorials](./examples.md)
 - [Troubleshooting](./troubleshooting.md)
 
 # Architecture

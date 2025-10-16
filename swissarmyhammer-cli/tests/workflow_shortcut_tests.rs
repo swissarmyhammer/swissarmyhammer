@@ -38,17 +38,9 @@ fn test_name_conflict_resolution() {
     let shortcuts = CliBuilder::build_workflow_shortcuts(&storage);
 
     // Reserved names that should get underscore prefix
+    // Note: plan and implement are no longer reserved since static commands were removed
     let reserved = [
-        "serve",
-        "doctor",
-        "prompt",
-        "rule",
-        "flow",
-        "agent",
-        "validate",
-        "plan",
-        "implement",
-        "list",
+        "serve", "doctor", "prompt", "rule", "flow", "agent", "validate", "list",
     ];
 
     // Check if any workflow has a reserved name
