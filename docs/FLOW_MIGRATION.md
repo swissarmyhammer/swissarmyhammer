@@ -275,7 +275,7 @@ Subscribe to MCP notifications to track workflow progress:
 }
 ```
 
-See the [Flow Tool Description](../swissarmyhammer-tools/src/mcp/tools/flow/tool/description.md) for complete notification details.
+See the [Flow Tool Description](https://swissarmyhammer.github.io/swissarmyhammer/mcp/flow) for complete notification details.
 
 ## Migration Examples
 
@@ -433,8 +433,8 @@ sah flow workflow args... --dry-run
 
 ### Read the Documentation
 
-- [CLI Flow Usage Guide](CLI_FLOW_USAGE.md)
-- [Flow Tool Description](../swissarmyhammer-tools/src/mcp/tools/flow/tool/description.md)
+- [CLI Flow Usage Guide](./CLI_FLOW_USAGE.md)
+- [Flow Tool Description](https://swissarmyhammer.github.io/swissarmyhammer/mcp/flow)
 - [SwissArmyHammer Documentation](https://swissarmyhammer.github.io/swissarmyhammer)
 
 ### Report Issues

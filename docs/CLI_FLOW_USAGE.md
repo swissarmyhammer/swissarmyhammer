@@ -329,6 +329,6 @@ sah workflow
 
 ## See Also
 
-- [Flow Migration Guide](FLOW_MIGRATION.md) - Migrating from old syntax
+- [Flow Migration Guide](./FLOW_MIGRATION.md) - Migrating from old syntax
 - [Workflow Documentation](https://swissarmyhammer.github.io/swissarmyhammer) - Complete workflow guide
-- [MCP Flow Tool](../swissarmyhammer-tools/src/mcp/tools/flow/tool/description.md) - MCP API reference
+- [MCP Flow Tool](https://swissarmyhammer.github.io/swissarmyhammer/mcp/flow) - MCP API reference

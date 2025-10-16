@@ -79,6 +79,7 @@ swissarmyhammer-workflow/.swissarmyhammer
 .swissarmyhammer/sah.yaml
 
 doc/book
+**/doc/book
 
 # Claude Code configuration
 .claude/

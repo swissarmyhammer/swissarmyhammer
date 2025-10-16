@@ -214,7 +214,7 @@ arguments:
 
 Create a beautiful daily crypto report for {{symbol}}:
 
-1. Use memo_search to find the research data for "{{symbol}} Research Data"
+1. Use memo_get to retrieve the research data for "{{symbol}} Research Data"
 
 2. Transform the research into a professional daily report with:
    - 📊 Executive summary
