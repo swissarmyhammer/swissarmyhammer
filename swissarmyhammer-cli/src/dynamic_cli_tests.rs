@@ -402,96 +402,26 @@ fn test_workflow_shortcuts_are_sorted_when_built() {
 }
 
 #[test]
-fn test_workflow_separator_on_first_command() {
+fn test_command_descriptions_are_clean() {
     use swissarmyhammer_workflow::WorkflowStorage;
 
-    // Try to load workflow storage
-    if let Ok(storage) = WorkflowStorage::file_system() {
-        let workflows = storage.list_workflows().unwrap_or_default();
-
-        // Only test if workflows are present
-        if !workflows.is_empty() {
-            // Create a tool registry and CLI builder
-            let registry = Arc::new(ToolRegistry::new());
-            let builder = CliBuilder::new(registry);
-
-            // Build CLI with workflows
-            let cli = builder.build_cli(Some(&storage));
-
-            // Get help text
-            let help = get_help_text(&cli);
-
-            // Verify workflow separator appears in help text
-            assert!(
-                help.contains("──────── WORKFLOWS ────────"),
-                "Help text should contain workflow separator"
-            );
-        }
-    }
-}
-
-#[test]
-fn test_tools_separator_on_first_command() {
     // Create a tool registry and CLI builder
     let registry = Arc::new(ToolRegistry::new());
     let builder = CliBuilder::new(registry.clone());
 
-    // Build CLI without workflows
-    let cli = builder.build_cli(None);
+    // Try to load workflow storage
+    let cli = if let Ok(storage) = WorkflowStorage::file_system() {
+        builder.build_cli(Some(&storage))
+    } else {
+        builder.build_cli(None)
+    };
 
     // Get help text
     let help = get_help_text(&cli);
 
-    // Only test if there are MCP tool categories
-    let categories = registry.get_cli_categories();
-    if !categories.is_empty() {
-        // Verify tools separator appears in help text
-        assert!(
-            help.contains("──────── TOOLS ────────"),
-            "Help text should contain tools separator"
-        );
-    }
-}
-
-#[test]
-fn test_separator_only_on_first_command() {
-    use swissarmyhammer_workflow::WorkflowStorage;
-
-    // Create a tool registry and CLI builder
-    let registry = Arc::new(ToolRegistry::new());
-    let builder = CliBuilder::new(registry.clone());
-
-    // Try to load workflow storage
-    if let Ok(storage) = WorkflowStorage::file_system() {
-        let workflows = storage.list_workflows().unwrap_or_default();
-
-        // Build CLI with workflows if available
-        let cli = builder.build_cli(Some(&storage));
-
-        // Get help text
-        let help = get_help_text(&cli);
-
-        // Count occurrences - should be exactly 2 (one for workflows, one for tools)
-        // Note: Only count if workflows and tools both exist
-        let workflow_count = help.matches("──────── WORKFLOWS ────────").count();
-        let tools_count = help.matches("──────── TOOLS ────────").count();
-
-        let categories = registry.get_cli_categories();
-
-        // If both workflows and tools exist, there should be exactly one separator for each
-        if !workflows.is_empty() {
-            assert_eq!(
-                workflow_count, 1,
-                "Should have exactly one workflow separator"
-            );
-        } else {
-            assert_eq!(workflow_count, 0, "Should have no workflow separator when no workflows exist");
-        }
-
-        if !categories.is_empty() {
-            assert_eq!(tools_count, 1, "Should have exactly one tools separator");
-        } else {
-            assert_eq!(tools_count, 0, "Should have no tools separator when no tools exist");
-        }
-    }
+    // Verify no separator markers appear in command descriptions
+    assert!(
+        !help.contains("────────"),
+        "Help text should not contain visual separators"
+    );
 }
