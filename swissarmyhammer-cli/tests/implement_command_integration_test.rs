@@ -30,7 +30,9 @@ async fn test_implement_command_starts_workflow() {
 
     // Should show deprecation warning
     assert!(
-        result.stderr.contains("Warning: 'sah implement' wrapper command is deprecated"),
+        result
+            .stderr
+            .contains("Warning: 'sah implement' wrapper command is deprecated"),
         "Should show deprecation warning. stderr: '{}'",
         result.stderr
     );
@@ -137,13 +139,18 @@ async fn test_implement_command_delegates_to_flow() {
 
     // Should show deprecation warning
     assert!(
-        implement_result.stderr.contains("Warning: 'sah implement' wrapper command is deprecated"),
+        implement_result
+            .stderr
+            .contains("Warning: 'sah implement' wrapper command is deprecated"),
         "Should show deprecation warning. stderr: '{}'",
         implement_result.stderr
     );
 
     assert!(
-        implement_result.stderr.contains("Starting workflow: implement") || implement_result.exit_code == 0,
+        implement_result
+            .stderr
+            .contains("Starting workflow: implement")
+            || implement_result.exit_code == 0,
         "Implement command should delegate to flow via CliContext. stderr: '{}', exit_code: {}",
         implement_result.stderr,
         implement_result.exit_code

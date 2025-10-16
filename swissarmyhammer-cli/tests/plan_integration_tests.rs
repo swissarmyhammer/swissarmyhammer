@@ -818,7 +818,7 @@ async fn test_plan_enhanced_error_whitespace_file() -> Result<()> {
     // Test may see deprecation warning instead if empty file validation happens later
     else if stderr.contains("'sah plan <file>' wrapper command is deprecated") {
         // Deprecation warning is expected - test passes
-        assert!(true);
+        // No additional assertions needed
     }
 
     Ok(())

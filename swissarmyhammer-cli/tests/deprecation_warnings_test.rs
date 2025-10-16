@@ -202,7 +202,8 @@ async fn test_implement_delegates_correctly() -> Result<()> {
 
     // Verify delegation to flow command works - should start workflow
     assert!(
-        stdout.contains("Starting workflow: implement") || stderr.contains("Starting workflow: implement"),
+        stdout.contains("Starting workflow: implement")
+            || stderr.contains("Starting workflow: implement"),
         "Should delegate to flow command and start workflow. stdout: {stdout}, stderr: {stderr}"
     );
 
@@ -237,7 +238,9 @@ async fn test_plan_delegates_correctly() -> Result<()> {
 
     // Verify delegation to flow command works - should execute plan workflow
     assert!(
-        stdout.contains("Running plan command") || stdout.contains("Making the plan for") || stderr.contains("Starting workflow: plan"),
+        stdout.contains("Running plan command")
+            || stdout.contains("Making the plan for")
+            || stderr.contains("Starting workflow: plan"),
         "Should delegate to flow command and start workflow. stdout: {stdout}, stderr: {stderr}"
     );
 

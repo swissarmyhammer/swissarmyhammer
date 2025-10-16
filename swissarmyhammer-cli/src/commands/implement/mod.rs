@@ -25,10 +25,11 @@ use crate::context::CliContext;
 pub async fn handle_command(context: &CliContext) -> i32 {
     // Print deprecation warning
     if !context.quiet {
-        eprintln!("Warning: 'sah implement' wrapper command is deprecated.");
-        eprintln!("  Use 'sah flow implement' or 'sah implement' (via dynamic shortcut) instead.");
-        eprintln!("  This wrapper will be removed in a future version.");
-        eprintln!();
+        tracing::warn!("'sah implement' wrapper command is deprecated.");
+        tracing::warn!(
+            "  Use 'sah flow implement' or 'sah implement' (via dynamic shortcut) instead."
+        );
+        tracing::warn!("  This wrapper will be removed in a future version.");
     }
 
     // Execute the implement workflow - equivalent to 'flow implement'

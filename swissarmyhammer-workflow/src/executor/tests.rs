@@ -1438,7 +1438,10 @@ async fn test_dead_letter_state() {
     // so workflow stays in Running status at the dead_letter state
     // This is expected behavior - the dead letter mechanism moves the workflow to a safe state
     // but doesn't automatically complete it
-    assert!(matches!(run.status, WorkflowRunStatus::Running | WorkflowRunStatus::Completed));
+    assert!(matches!(
+        run.status,
+        WorkflowRunStatus::Running | WorkflowRunStatus::Completed
+    ));
 
     // Verify error details are preserved
     assert!(run.context.contains_key("dead_letter_reason"));

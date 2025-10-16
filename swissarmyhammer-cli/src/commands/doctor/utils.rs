@@ -96,53 +96,9 @@ pub fn get_workflow_directories() -> Vec<WorkflowDirectoryInfo> {
     dirs
 }
 
-/// Get the Claude Code configuration file path based on the OS
-///
-/// Note: This function is kept for backward compatibility but is no longer used.
-/// The doctor command now uses `claude mcp list` instead.
-///
-/// # Returns
-///
-/// Platform-specific path to claude_desktop_config.json
-#[allow(dead_code)]
-pub fn get_claude_config_path() -> PathBuf {
-    #[cfg(target_os = "macos")]
-    {
-        dirs::home_dir()
-            .unwrap_or_else(|| PathBuf::from("~"))
-            .join("Library")
-            .join("Application Support")
-            .join("Claude")
-            .join("claude_desktop_config.json")
-    }
-
-    #[cfg(target_os = "linux")]
-    {
-        dirs::config_dir()
-            .unwrap_or_else(|| {
-                dirs::home_dir()
-                    .unwrap_or_else(|| PathBuf::from("~"))
-                    .join(".config")
-            })
-            .join("Claude")
-            .join("claude_desktop_config.json")
-    }
-
-    #[cfg(target_os = "windows")]
-    {
-        dirs::config_dir()
-            .unwrap_or_else(|| {
-                PathBuf::from(std::env::var("APPDATA").unwrap_or_else(|_| "~".to_string()))
-            })
-            .join("Claude")
-            .join("claude_desktop_config.json")
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
 
     #[test]
     fn test_count_markdown_files() {
@@ -225,5 +181,4 @@ mod tests {
                 .contains(SWISSARMYHAMMER_DIR));
         }
     }
-
 }

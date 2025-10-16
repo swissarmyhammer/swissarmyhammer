@@ -25,10 +25,11 @@ pub const DESCRIPTION: &str = include_str!("description.md");
 pub async fn handle_command(plan_filename: String, context: &CliContext) -> i32 {
     // Print deprecation warning
     if !context.quiet {
-        eprintln!("Warning: 'sah plan <file>' wrapper command is deprecated.");
-        eprintln!("  Use 'sah flow plan <file>' or 'sah plan <file>' (via dynamic shortcut) instead.");
-        eprintln!("  This wrapper will be removed in a future version.");
-        eprintln!();
+        tracing::warn!("'sah plan <file>' wrapper command is deprecated.");
+        tracing::warn!(
+            "  Use 'sah flow plan <file>' or 'sah plan <file>' (via dynamic shortcut) instead."
+        );
+        tracing::warn!("  This wrapper will be removed in a future version.");
     }
 
     // Execute the plan workflow - equivalent to 'flow plan spec.md'

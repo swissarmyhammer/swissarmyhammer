@@ -10,9 +10,7 @@ use swissarmyhammer_cli::validate;
 
 /// Captures output from in-process CLI command execution
 pub struct CapturedOutput {
-    #[allow(dead_code)] // Used by test infrastructure
     pub stdout: String,
-    #[allow(dead_code)] // Used by test infrastructure
     pub stderr: String,
     pub exit_code: i32,
 }
@@ -115,16 +113,17 @@ async fn run_sah_command_in_process_inner_with_dir(
 
         if can_run_in_process {
             // Execute in-process with stdout/stderr capture
-            let (stdout, stderr, exit_code) = match execute_cli_command_with_capture(cli, &args_with_program).await {
-                Ok(result) => result,
-                Err(e) => {
-                    return Ok(CapturedOutput {
-                        stdout: String::new(),
-                        stderr: e.to_string(),
-                        exit_code: 1,
-                    });
-                }
-            };
+            let (stdout, stderr, exit_code) =
+                match execute_cli_command_with_capture(cli, &args_with_program).await {
+                    Ok(result) => result,
+                    Err(e) => {
+                        return Ok(CapturedOutput {
+                            stdout: String::new(),
+                            stderr: e.to_string(),
+                            exit_code: 1,
+                        });
+                    }
+                };
 
             return Ok(CapturedOutput {
                 stdout,
@@ -255,7 +254,10 @@ async fn run_sah_command_in_process_inner_with_dir(
 }
 
 /// Execute a parsed CLI command with stdout/stderr capture
-async fn execute_cli_command_with_capture(cli: Cli, args: &[String]) -> Result<(String, String, i32)> {
+async fn execute_cli_command_with_capture(
+    cli: Cli,
+    args: &[String],
+) -> Result<(String, String, i32)> {
     // Check if --quiet is present in args
     let is_quiet = args.iter().any(|arg| arg == "--quiet" || arg == "-q");
     use std::io::Write;
@@ -297,9 +299,15 @@ async fn execute_cli_command_with_capture(cli: Cli, args: &[String]) -> Result<(
             // Print deprecation warning to stderr (unless --quiet is specified)
             if !is_quiet {
                 if let Ok(mut stderr) = stderr_capture.lock() {
-                    let _ = writeln!(stderr, "Warning: 'sah implement' wrapper command is deprecated.");
+                    let _ = writeln!(
+                        stderr,
+                        "Warning: 'sah implement' wrapper command is deprecated."
+                    );
                     let _ = writeln!(stderr, "  Use 'sah flow implement' or 'sah implement' (via dynamic shortcut) instead.");
-                    let _ = writeln!(stderr, "  This wrapper will be removed in a future version.");
+                    let _ = writeln!(
+                        stderr,
+                        "  This wrapper will be removed in a future version."
+                    );
                     let _ = writeln!(stderr);
                 }
             }
@@ -317,9 +325,15 @@ async fn execute_cli_command_with_capture(cli: Cli, args: &[String]) -> Result<(
             // Print deprecation warning to stderr first (unless --quiet is specified)
             if !is_quiet {
                 if let Ok(mut stderr) = stderr_capture.lock() {
-                    let _ = writeln!(stderr, "Warning: 'sah plan <file>' wrapper command is deprecated.");
+                    let _ = writeln!(
+                        stderr,
+                        "Warning: 'sah plan <file>' wrapper command is deprecated."
+                    );
                     let _ = writeln!(stderr, "  Use 'sah flow plan <file>' or 'sah plan <file>' (via dynamic shortcut) instead.");
-                    let _ = writeln!(stderr, "  This wrapper will be removed in a future version.");
+                    let _ = writeln!(
+                        stderr,
+                        "  This wrapper will be removed in a future version."
+                    );
                     let _ = writeln!(stderr);
                 }
             }
