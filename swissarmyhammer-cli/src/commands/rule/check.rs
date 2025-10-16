@@ -384,7 +384,7 @@ async fn create_issue_for_violation(
 mod tests {
     use super::*;
     use crate::context::CliContextBuilder;
-    use swissarmyhammer_config::{LlamaAgentConfig, TemplateContext};
+    use swissarmyhammer_config::TemplateContext;
 
     /// Helper function to create a test CLI context with standard settings
     async fn setup_test_context() -> CliContext {
@@ -406,8 +406,11 @@ mod tests {
     }
 
     /// Helper function to create a test agent configuration
+    ///
+    /// Uses ClaudeCode executor for tests to avoid expensive LlamaAgent initialization
+    /// which includes starting an MCP server and loading model configuration.
     fn setup_test_agent_config() -> AgentConfig {
-        AgentConfig::llama_agent(LlamaAgentConfig::for_testing())
+        AgentConfig::claude_code()
     }
 
     #[tokio::test]
