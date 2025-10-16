@@ -266,11 +266,14 @@ EOF
 ### 4. Run Your Workflow
 ```bash
 # Generate report for Bitcoin
-sah flow run crypto-report --crypto "BTC"
+sah crypto-report --param crypto=BTC
 
 # Or try different cryptos
-sah flow run crypto-report --crypto "ETH"
-sah flow run crypto-report --crypto "SOL"
+sah crypto-report --param crypto=ETH
+sah crypto-report --param crypto=SOL
+
+# Full form (also works)
+sah flow crypto-report --param crypto=BTC
 ```
 
 **This workflow demonstrates SwissArmyHammer's power:**
@@ -285,3 +288,52 @@ sah flow run crypto-report --crypto "SOL"
 ---
 
 **Ready to automate your world? Install SwissArmyHammer and start building workflows that work while you sleep.** 🚀
+
+## 🔄 Workflow Execution
+
+SwissArmyHammer provides a powerful dynamic workflow system for executing both built-in and custom workflows.
+
+### Quick Start
+
+```bash
+# List available workflows
+sah flow list
+
+# Execute a workflow (shortcut form - recommended)
+sah plan ideas/feature.md
+
+# Execute a workflow (full form)
+sah flow plan ideas/feature.md
+
+# Execute with options
+sah implement --quiet
+sah plan spec.md --interactive --dry-run
+```
+
+### Key Features
+
+- **Dynamic Discovery**: List all available workflows with `sah flow list --verbose`
+- **Shortcuts**: Each workflow gets a convenient top-level command
+- **Progress Tracking**: MCP notifications for long-running workflows
+- **Parameter Support**: Required parameters are positional, optional use `--param`
+- **Common Options**: `--interactive`, `--dry-run`, `--quiet` work with all workflows
+
+### Built-in Workflows
+
+**Implement**: Autonomous issue resolution
+```bash
+sah implement --quiet
+```
+
+**Plan**: Generate implementation plans from specs
+```bash
+sah plan ideas/feature.md --interactive
+```
+
+### Learn More
+
+- [CLI Flow Usage Guide](docs/CLI_FLOW_USAGE.md) - Complete command reference
+- [Flow Migration Guide](docs/FLOW_MIGRATION.md) - Migrating from old syntax
+- [MCP Flow Tool](swissarmyhammer-tools/src/mcp/tools/flow/tool/description.md) - MCP API reference
+
+---

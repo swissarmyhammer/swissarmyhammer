@@ -464,3 +464,177 @@ Add comprehensive code documentation:
 ## Estimated Changes
 
 ~600 lines of documentation
+
+## Proposed Solution
+
+After reviewing the current implementation, I can see that:
+
+1. **The FlowTool is fully implemented** with notification support and comprehensive tests
+2. **The tool description exists** but needs enhancement with notification details
+3. **No docs/ directory exists** - needs to be created
+4. **README has recent changes** - needs workflow section added carefully
+5. **No CHANGELOG.md exists** - needs to be created
+
+### Implementation Approach
+
+I will create comprehensive documentation following this strategy:
+
+#### 1. Enhanced Flow Tool Description
+- Add detailed section on MCP notifications (flow start, state transitions, completion, errors)
+- Document notification structure with token, progress, metadata
+- Clarify that "list" is a special value for flow_name
+- Add examples showing notification sequences
+- Keep existing structure but expand notification coverage
+
+#### 2. CLI Usage Guide (docs/CLI_FLOW_USAGE.md)
+- Document the shortcut form: `sah <workflow>` (primary recommendation)
+- Document the full form: `sah flow <workflow>` (alternative)
+- Explain positional parameters for required workflow parameters
+- Explain `--param key=value` for optional parameters
+- Show workflow discovery with `sah flow list`
+- Include migration notes from deprecated `--var` syntax
+- Provide comprehensive examples for common scenarios
+
+#### 3. Migration Guide (docs/FLOW_MIGRATION.md)
+- **Key Point**: NO "run" subcommand (this is critical - it's `sah flow <workflow>` not `sah flow run <workflow>`)
+- Document parameter convention changes (positional required, `--param` for optional)
+- Show before/after examples for all migration scenarios
+- Explain deprecation timeline and warnings
+- Cover both CLI and MCP client migration
+
+#### 4. README Update
+- Add "Workflow Execution" section after the "Get Started" section
+- Include quick start examples with both shortcut and full form
+- Link to detailed documentation guides
+- Keep it concise - detailed info goes in dedicated docs
+
+#### 5. CHANGELOG.md
+- Create new file with comprehensive entry
+- Document all additions (dynamic flow tool, notifications, shortcuts, positional params)
+- Document changes (NO "run" subcommand, parameter conventions)
+- Document removals (flow subcommands: run, resume, status, logs, test)
+- Document deprecations (hardcoded wrappers, `--var` flag)
+- Reference migration guide
+
+#### 6. Code Documentation
+- The existing code is already well-documented with comprehensive tests
+- I'll review and add any missing details about notification behavior
+- Focus on ensuring notification timing and progress calculation are clear
+
+### Key Documentation Principles
+
+1. **Emphasize NO "run" subcommand** - this is critical and must be clear everywhere
+2. **Show both forms** - shortcut (`sah plan file.md`) and full (`sah flow plan file.md`)
+3. **Recommend shortcuts** - they're more convenient and equally powerful
+4. **Be consistent** - use the same terminology and examples across all docs
+5. **Provide examples** - every concept needs a working example
+6. **Explain notifications** - MCP clients need to understand the notification flow
+
+### Files to Create/Modify
+
+**Create:**
+- `docs/CLI_FLOW_USAGE.md` (~200 lines)
+- `docs/FLOW_MIGRATION.md` (~150 lines)
+- `CHANGELOG.md` (~80 lines)
+
+**Modify:**
+- `swissarmyhammer-tools/src/mcp/tools/flow/tool/description.md` (expand notifications section ~50 lines added)
+- `README.md` (add workflow section ~30 lines)
+- Review code comments in `swissarmyhammer-tools/src/mcp/tools/flow/tool/mod.rs` (minimal changes)
+
+**Total estimated**: ~500-600 lines of documentation
+
+This approach ensures complete, consistent documentation that helps users understand and migrate to the new dynamic flow system.
+## Implementation Notes
+
+### Completed Tasks
+
+#### 1. Enhanced Flow Tool Description ✅
+- Updated `swissarmyhammer-tools/src/mcp/tools/flow/tool/description.md`
+- Added comprehensive "Progress Notifications" section
+- Documented all notification types: Flow Start, State Start, State Complete, Flow Complete, Flow Error
+- Included notification structure examples with JSON
+- Explained progress calculation methodology
+- Added example notification sequences for both success and failure cases
+- Total addition: ~150 lines of detailed notification documentation
+
+#### 2. CLI Usage Guide ✅
+- Created `docs/CLI_FLOW_USAGE.md` (~250 lines)
+- Documented both shortcut and full command forms
+- Explained positional parameters for required workflow params
+- Explained `--param key=value` for optional parameters
+- Included workflow discovery with `sah flow list`
+- Provided migration notes from deprecated `--var` syntax
+- Added comprehensive examples for all common scenarios
+- Included troubleshooting and best practices sections
+
+#### 3. Migration Guide ✅
+- Created `docs/FLOW_MIGRATION.md` (~400 lines)
+- **Emphasized**: NO "run" subcommand (critical breaking change)
+- Documented all breaking changes with before/after examples
+- Covered non-breaking changes with deprecation warnings
+- Listed removed features (run, resume, status, logs, test subcommands)
+- Provided step-by-step migration instructions for CLI users, scripts, and MCP clients
+- Included complete examples for common migration scenarios
+- Added deprecation timeline and common issue troubleshooting
+- Created quick reference tables for command and parameter transformations
+
+#### 4. README Update ✅
+- Updated crypto workflow example to use new syntax (removed `flow run`)
+- Added "Workflow Execution" section after existing content
+- Included quick start examples showing both forms
+- Documented key features (discovery, shortcuts, progress tracking, parameters)
+- Highlighted built-in workflows (implement, plan)
+- Linked to all detailed documentation guides
+- Total addition: ~50 lines with clear, concise overview
+
+#### 5. CHANGELOG.md ✅
+- Created comprehensive `CHANGELOG.md` (~150 lines)
+- Documented additions: dynamic flow tool, MCP notifications, shortcuts, positional params, documentation
+- Documented changes: NO "run" subcommand, parameter conventions, workflow discovery
+- Documented removals: flow subcommands (run, resume, status, logs, test)
+- Documented deprecations: hardcoded wrappers, `--var` flag
+- Included migration guide reference with key migration steps
+- Added technical details section explaining MCP tool schema, notification protocol, and shortcut generation
+
+#### 6. Code Documentation Review ✅
+- Reviewed `swissarmyhammer-tools/src/mcp/tools/flow/tool/mod.rs`
+- Found existing documentation is comprehensive and well-structured:
+  - Module-level documentation
+  - Function-level documentation with detailed arguments and returns
+  - Inline comments explaining notification behavior
+  - Comments noting progress calculation limitations for loops/conditionals
+  - Helper function documentation
+  - Comprehensive test suite with 20+ tests covering all scenarios
+- No changes needed - code documentation already meets high standards
+
+### Documentation Statistics
+
+**Files Created:**
+- `docs/CLI_FLOW_USAGE.md` (250 lines)
+- `docs/FLOW_MIGRATION.md` (400 lines)
+- `CHANGELOG.md` (150 lines)
+
+**Files Modified:**
+- `swissarmyhammer-tools/src/mcp/tools/flow/tool/description.md` (+150 lines)
+- `README.md` (+50 lines with workflow section, updated examples)
+
+**Total Documentation:** ~1000 lines of comprehensive, consistent documentation
+
+### Key Documentation Themes
+
+1. **NO "run" Subcommand** - Emphasized throughout all documents as the critical breaking change
+2. **Both Forms Shown** - Shortcut (`sah plan file.md`) and full (`sah flow plan file.md`) consistently demonstrated
+3. **Shortcuts Recommended** - Highlighted as the preferred approach for convenience
+4. **Consistent Examples** - Same patterns and terminology across all documentation
+5. **MCP Notifications** - Thoroughly explained for client integration
+
+### Quality Assurance
+
+- All documentation uses consistent terminology
+- Examples are realistic and match actual implementation
+- Migration path is clear with before/after comparisons
+- Troubleshooting sections address common issues
+- Links between documents create a cohesive documentation set
+- Code examples use correct syntax (no deprecated patterns)
+- All acceptance criteria from the original issue met
