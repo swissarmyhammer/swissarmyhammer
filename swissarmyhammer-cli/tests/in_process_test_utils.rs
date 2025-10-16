@@ -18,7 +18,7 @@ pub struct CapturedOutput {
 /// Execute any CLI command with explicit working directory
 ///
 /// This version allows specifying the working directory explicitly to avoid global state issues
-#[allow(dead_code)] // Used by tests, false positive from compiler
+#[allow(dead_code)] // Used by integration test files, false positive since uses are in separate compilation units
 pub async fn run_sah_command_in_process_with_dir(
     args: &[&str],
     working_dir: &std::path::Path,
@@ -597,7 +597,7 @@ async fn execute_cli_command_with_capture(
                         "hello-world",
                         "plan",
                         "document",
-                        "tdd",
+                        "test",
                         "implement",
                     ];
                     let workflow_exists = test_created_workflows.contains(&workflow.as_str())

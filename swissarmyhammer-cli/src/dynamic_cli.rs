@@ -311,6 +311,7 @@ and ensuring perfect consistency between MCP and CLI interfaces.
                     .value_parser(["table", "json", "yaml"]),
             );
 
+        // === STATIC COMMANDS (Default heading) ===
         // Add core serve command (non-MCP command)
         cli = cli.subcommand(
             Command::new("serve")
@@ -367,21 +368,35 @@ Example:
                 ),
         );
 
-        // Add static commands before MCP tool commands
+        // Add other static commands (doctor, prompt, flow, validate, plan, implement, agent, rule)
         cli = Self::add_static_commands(cli);
 
-        // Add workflow shortcuts if storage is provided
+        // === WORKFLOWS SECTION ===
+        // Add workflow shortcuts if storage is provided, grouped under "Workflows" heading
         if let Some(storage) = workflow_storage {
-            let shortcuts = Self::build_workflow_shortcuts(storage);
+            cli = cli.next_help_heading(Some("Workflows"));
+            let mut shortcuts = Self::build_workflow_shortcuts(storage);
+            // Sort alphabetically for easier scanning
+            shortcuts.sort_by(|a, b| a.get_name().cmp(b.get_name()));
             for shortcut in shortcuts {
                 cli = cli.subcommand(shortcut);
             }
         }
 
-        // Add dynamic MCP tool commands using pre-computed data
-        for (category_name, category_data) in &self.category_commands {
-            cli =
-                cli.subcommand(self.build_category_command_from_data(category_name, category_data));
+        // === TOOLS SECTION ===
+        // Add dynamic MCP tool commands using pre-computed data, grouped under "Tools" heading
+        cli = cli.next_help_heading(Some("Tools"));
+
+        // Get sorted category names for consistent ordering
+        let mut category_names: Vec<String> = self.category_commands.keys().cloned().collect();
+        category_names.sort();
+
+        for category_name in category_names {
+            if let Some(category_data) = self.category_commands.get(&category_name) {
+                cli = cli.subcommand(
+                    self.build_category_command_from_data(&category_name, category_data),
+                );
+            }
         }
 
         cli
