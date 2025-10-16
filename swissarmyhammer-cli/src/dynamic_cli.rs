@@ -372,29 +372,49 @@ Example:
         cli = Self::add_static_commands(cli);
 
         // === WORKFLOWS SECTION ===
-        // Add workflow shortcuts if storage is provided, grouped under "Workflows" heading
+        // Add workflow shortcuts if storage is provided
+        // NOTE: Clap v4.x does not support multiple subcommand headings via next_help_heading().
+        // This is a known limitation (see https://github.com/clap-rs/clap/issues/1553).
+        // We use visual separators in command descriptions instead to create pseudo-sections.
         if let Some(storage) = workflow_storage {
-            cli = cli.next_help_heading(Some("Workflows"));
             let mut shortcuts = Self::build_workflow_shortcuts(storage);
             // Sort alphabetically for easier scanning
             shortcuts.sort_by(|a, b| a.get_name().cmp(b.get_name()));
+
+            // Add visual separator to first workflow command
+            if let Some(first) = shortcuts.first_mut() {
+                if let Some(about) = first.get_about() {
+                    let separator_text = format!("──────── WORKFLOWS ──────── | {}", about);
+                    *first = first.clone().about(intern_string(separator_text));
+                }
+            }
+
             for shortcut in shortcuts {
                 cli = cli.subcommand(shortcut);
             }
         }
 
         // === TOOLS SECTION ===
-        // Add dynamic MCP tool commands using pre-computed data, grouped under "Tools" heading
-        cli = cli.next_help_heading(Some("Tools"));
+        // Add dynamic MCP tool commands using pre-computed data
+        // NOTE: Clap v4.x limitation - cannot use next_help_heading() for subcommands.
+        // Visual separator added to first tool command instead.
 
         // Get sorted category names for consistent ordering
         let mut category_names: Vec<String> = self.category_commands.keys().cloned().collect();
         category_names.sort();
 
-        for category_name in category_names {
-            if let Some(category_data) = self.category_commands.get(&category_name) {
+        for (index, category_name) in category_names.iter().enumerate() {
+            if let Some(category_data) = self.category_commands.get(category_name) {
+                // Add visual separator to first tool command
+                let mut modified_data = category_data.clone();
+                if index == 0 {
+                    if let Some(about) = &modified_data.about {
+                        modified_data.about = Some(format!("──────── TOOLS ──────── | {}", about));
+                    }
+                }
+
                 cli = cli.subcommand(
-                    self.build_category_command_from_data(&category_name, category_data),
+                    self.build_category_command_from_data(category_name, &modified_data),
                 );
             }
         }
