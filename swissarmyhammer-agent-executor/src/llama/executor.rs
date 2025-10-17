@@ -223,7 +223,7 @@ impl LlamaAgentExecutor {
 
         let model_config = ModelConfig {
             source: model_source,
-            batch_size: 64, // Match cache test
+            batch_size: self.config.model.batch_size,
             use_hf_params: self.config.model.use_hf_params,
             retry_config: RetryConfig {
                 max_retries: 2,

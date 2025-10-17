@@ -1523,6 +1523,20 @@ impl Action for SubWorkflowAction {
             );
         }
 
+        // Inherit MCP server port from parent context
+        // This uses the unified helper method to ensure consistency with the CLI code path
+        tracing::debug!("SubWorkflowAction::execute - setting up agent config for sub-workflow '{}'", self.workflow_name);
+
+        if let Some(mcp_port) = context.get("_mcp_server_port").and_then(|v| v.as_u64()).map(|p| p as u16) {
+            tracing::debug!("Parent context has _mcp_server_port: {}", mcp_port);
+            run.context.update_mcp_port(mcp_port);
+        } else {
+            tracing::warn!("No _mcp_server_port found in parent context for sub-workflow '{}'", self.workflow_name);
+            // Still copy agent config even if no MCP port
+            let agent_config = context.get_agent_config();
+            run.context.set_agent_config(agent_config);
+        }
+
         // Execute the workflow
         executor.execute_state(&mut run).await.map_err(|e| {
             ActionError::ExecutionError(format!(

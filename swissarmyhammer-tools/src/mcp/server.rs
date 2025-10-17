@@ -212,6 +212,20 @@ impl McpServer {
         &self.library
     }
 
+    /// Set the MCP server port in the tool context
+    ///
+    /// This should be called after the server is bound to a port, so that
+    /// workflows executed via MCP tools can access the server.
+    ///
+    /// # Arguments
+    ///
+    /// * `port` - The port the MCP server is listening on
+    pub async fn set_server_port(&self, port: u16) {
+        tracing::debug!("Setting MCP server port to {} in tool context", port);
+        let mut port_lock = self.tool_context.mcp_server_port.write().await;
+        *port_lock = Some(port);
+    }
+
     /// Initialize the server.
     ///
     /// This method loads all prompts using the PromptResolver.

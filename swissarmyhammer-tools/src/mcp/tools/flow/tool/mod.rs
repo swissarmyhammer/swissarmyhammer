@@ -177,6 +177,19 @@ impl FlowTool {
         run.context
             .set_workflow_var("__run_id__".to_string(), serde_json::json!(run_id));
 
+        // Set MCP server port in workflow context if available
+        // This allows LlamaAgent executors in workflows to connect to the MCP server
+        {
+            let port_lock = context.mcp_server_port.read().await;
+            if let Some(port) = *port_lock {
+                run.context.insert(
+                    "_mcp_server_port".to_string(),
+                    serde_json::Value::Number(serde_json::Number::from(port)),
+                );
+                tracing::debug!("Set _mcp_server_port={} in workflow context", port);
+            }
+        }
+
         // Set parameters from request into workflow context
         for (key, value) in &request.parameters {
             run.context.set_workflow_var(key.clone(), value.clone());
