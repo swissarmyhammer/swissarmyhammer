@@ -3736,7 +3736,7 @@ checksum = "f5e54036fe321fd421e10d732f155734c4e4afd610dd556d9a82833ab3ee0bed"
 [[package]]
 name = "llama-agent"
 version = "0.1.0"
-source = "git+https://github.com/swissarmyhammer/llama-agent#9115f2bad1e640460879195d2ffa3a122d76eb34"
+source = "git+https://github.com/swissarmyhammer/llama-agent#19957edfc388cdf34b9eccf155c213cc7a1879a0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3771,7 +3771,7 @@ dependencies = [
 [[package]]
 name = "llama-common"
 version = "0.1.0"
-source = "git+https://github.com/swissarmyhammer/llama-agent#9115f2bad1e640460879195d2ffa3a122d76eb34"
+source = "git+https://github.com/swissarmyhammer/llama-agent#19957edfc388cdf34b9eccf155c213cc7a1879a0"
 dependencies = [
  "async-trait",
  "serde",
@@ -3784,7 +3784,7 @@ dependencies = [
 [[package]]
 name = "llama-cpp-2"
 version = "0.1.123"
-source = "git+https://github.com/swissarmyhammer/llama-cpp-rs#a8fc0a9bfe77613ca0d004605761c39df248b12c"
+source = "git+https://github.com/swissarmyhammer/llama-cpp-rs#ce7aa46acfd7a4249bea43c4fd0e8b810f023e99"
 dependencies = [
  "enumflags2",
  "llama-cpp-sys-2",
@@ -3796,7 +3796,7 @@ dependencies = [
 [[package]]
 name = "llama-cpp-sys-2"
 version = "0.1.123"
-source = "git+https://github.com/swissarmyhammer/llama-cpp-rs#a8fc0a9bfe77613ca0d004605761c39df248b12c"
+source = "git+https://github.com/swissarmyhammer/llama-cpp-rs#ce7aa46acfd7a4249bea43c4fd0e8b810f023e99"
 dependencies = [
  "bindgen",
  "cc",
@@ -3809,7 +3809,7 @@ dependencies = [
 [[package]]
 name = "llama-loader"
 version = "0.1.0"
-source = "git+https://github.com/swissarmyhammer/llama-agent#9115f2bad1e640460879195d2ffa3a122d76eb34"
+source = "git+https://github.com/swissarmyhammer/llama-agent#19957edfc388cdf34b9eccf155c213cc7a1879a0"
 dependencies = [
  "dirs 6.0.0",
  "hf-hub",
@@ -4060,13 +4060,13 @@ dependencies = [
 
 [[package]]
 name = "mio"
-version = "1.0.4"
+version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "78bed444cc8a2160f01cbcf811ef18cac863ad68ae8ca62092e8db51d51c761c"
+checksum = "69d83b0086dc8ecf3ce9ae2874b2d1290252e2a30720bea58a5c6639b0092873"
 dependencies = [
  "libc",
  "wasi",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -5832,9 +5832,9 @@ dependencies = [
 
 [[package]]
 name = "rustls"
-version = "0.23.32"
+version = "0.23.33"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cd3c25631629d034ce7cd9940adc9d45762d46de2b0f57193c4443b92c6d4d40"
+checksum = "751e04a496ca00bb97a5e043158d23d66b5aabf2e1d5aa2a0aaebb1aafe6f82c"
 dependencies = [
  "log",
  "once_cell",
@@ -7492,7 +7492,7 @@ checksum = "ff360e02eab121e0bc37a2d3b4d4dc622e6eda3a8e5253d5435ecf5bd4c68408"
 dependencies = [
  "bytes",
  "libc",
- "mio 1.0.4",
+ "mio 1.1.0",
  "parking_lot",
  "pin-project-lite",
  "signal-hook-registry",

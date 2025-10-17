@@ -309,6 +309,14 @@ pub struct ToolContext {
     /// }
     /// ```
     pub notification_sender: Option<NotificationSender>,
+
+    /// MCP server port (for workflow executors that need to connect to the server)
+    ///
+    /// When workflows are executed via MCP tools and need to use LlamaAgent,
+    /// they require the MCP server port to connect. This field is populated
+    /// by the HTTP server on startup. Uses interior mutability to allow updates
+    /// after context creation.
+    pub mcp_server_port: Arc<RwLock<Option<u16>>>,
 }
 
 impl ToolContext {
@@ -327,6 +335,7 @@ impl ToolContext {
             memo_storage,
             agent_config,
             notification_sender: None,
+            mcp_server_port: Arc::new(RwLock::new(None)),
         }
     }
 
@@ -359,6 +368,7 @@ impl ToolContext {
             memo_storage,
             agent_config,
             notification_sender: Some(notification_sender),
+            mcp_server_port: Arc::new(RwLock::new(None)),
         }
     }
 }

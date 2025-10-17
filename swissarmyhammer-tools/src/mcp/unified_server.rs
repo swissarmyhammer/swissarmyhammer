@@ -479,6 +479,10 @@ async fn start_http_server(
     server.initialize().await?;
     tracing::debug!("MCP server initialized");
 
+    // Set the server port in the tool context so workflows can access it
+    server.set_server_port(actual_port).await;
+    tracing::debug!("Set MCP server port {} in tool context", actual_port);
+
     // Wrap server in Arc for sharing between service and handle
     let server_arc = Arc::new(server);
     let server_for_service = server_arc.clone();

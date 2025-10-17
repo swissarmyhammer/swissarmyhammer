@@ -418,6 +418,37 @@ impl WorkflowTemplateContext {
                 .unwrap_or_else(|| "unknown".to_string()),
         }
     }
+
+    /// Update the MCP server port in the agent configuration
+    ///
+    /// This is the unified method for setting the MCP server port in the agent config.
+    /// It should be used by both:
+    /// 1. CLI code when starting a workflow with an MCP server
+    /// 2. Sub-workflow execution when inheriting the MCP port from parent
+    ///
+    /// This ensures we have a single code path for this operation and avoids duplication.
+    pub fn update_mcp_port(&mut self, port: u16) {
+        tracing::debug!("Updating MCP server port to {} in workflow context", port);
+
+        // Store the port in context
+        self.insert("_mcp_server_port".to_string(), Value::Number(serde_json::Number::from(port)));
+
+        // Get the current agent config and update its MCP port
+        let mut agent_config = self.get_agent_config();
+
+        // Update the port if this is a LlamaAgent config
+        if let swissarmyhammer_config::agent::AgentConfig {
+            executor: swissarmyhammer_config::agent::AgentExecutorConfig::LlamaAgent(ref mut llama_config),
+            ..
+        } = agent_config {
+            llama_config.mcp_server.port = port;
+            tracing::debug!("Updated LlamaAgent MCP server port to {}", port);
+        }
+
+        // Store the updated agent config back
+        self.set_agent_config(agent_config);
+        tracing::debug!("Stored updated agent config with MCP port {}", port);
+    }
 }
 
 #[cfg(test)]

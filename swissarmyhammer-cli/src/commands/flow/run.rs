@@ -119,19 +119,11 @@ pub async fn run_workflow_command(config: RunCommandConfig, context: &CliContext
     // Set initial variables
     run.context.set_workflow_vars(variables.clone());
 
-    // Set agent configuration from template context
-    let agent_config = context.template_context.get_agent_config(None);
-    run.context.set_agent_config(agent_config);
-
-    // Store MCP server port if started (for LlamaAgent executors to access)
-    // The actual MCP server handle lifecycle is managed by the CLI layer
+    // Update MCP server port in agent config if MCP server was started
+    // This uses the unified helper method to ensure consistency with sub-workflows
     if let Some(server) = &mcp_server {
         let port = server.info.port.unwrap_or(0);
-        run.context.insert(
-            "_mcp_server_port".to_string(),
-            serde_json::Value::Number(serde_json::Number::from(port)),
-        );
-        tracing::debug!("Stored MCP server port {} in workflow context", port);
+        run.context.update_mcp_port(port);
     }
 
     // Set quiet mode in context for actions to use
