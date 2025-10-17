@@ -300,6 +300,14 @@ Examples:
                     .action(ArgAction::SetTrue),
             )
             .arg(
+                Arg::new("cwd")
+                    .long("cwd")
+                    .help("Set working directory before executing command")
+                    .value_name("PATH")
+                    .global(true)
+                    .value_parser(clap::value_parser!(std::path::PathBuf)),
+            )
+            .arg(
                 Arg::new("quiet")
                     .short('q')
                     .long("quiet")

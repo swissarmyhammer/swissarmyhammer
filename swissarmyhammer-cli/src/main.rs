@@ -41,6 +41,23 @@ fn load_cli_configuration() -> TemplateContext {
 
 #[tokio::main]
 async fn main() {
+    // Parse CLI early to check for --cwd flag BEFORE doing anything else
+    // We need to do a minimal parse just to extract --cwd
+    let args: Vec<String> = std::env::args().collect();
+    
+    // Check for --cwd flag and change directory FIRST
+    if let Some(cwd_index) = args.iter().position(|arg| arg == "--cwd") {
+        if let Some(cwd_path) = args.get(cwd_index + 1) {
+            if let Err(e) = std::env::set_current_dir(cwd_path) {
+                eprintln!("Failed to change directory to '{}': {}", cwd_path, e);
+                process::exit(EXIT_ERROR);
+            }
+        } else {
+            eprintln!("--cwd requires a path argument");
+            process::exit(EXIT_ERROR);
+        }
+    }
+    
     // Load configuration early for CLI operations
     let template_context = load_cli_configuration();
 
