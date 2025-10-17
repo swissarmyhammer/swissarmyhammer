@@ -161,7 +161,7 @@ To use SwissArmyHammer Tools with Claude Desktop:
 
 If you want to embed SwissArmyHammer Tools in your own Rust application:
 
-```rust
+```rust,ignore
 use swissarmyhammer_tools::McpServer;
 use swissarmyhammer_prompts::PromptLibrary;
 
