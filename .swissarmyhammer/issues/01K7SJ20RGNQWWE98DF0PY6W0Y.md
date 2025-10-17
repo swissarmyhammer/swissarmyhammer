@@ -1,7 +1,7 @@
 # Remove notify_create Tool Implementation
 
 ## Parent Issue
-Eliminate notify_create Tool and Replace with Native MCP Notifications (01K7SHXK4XKMDREMXG7BFJ8YJ7)
+Eliminate notify_create Tool and Replace with Native MCP Notifications (01K7SM38449JYA2KZP4KNKQ05X)
 
 ## Summary
 Delete the notify_create tool implementation from the codebase.

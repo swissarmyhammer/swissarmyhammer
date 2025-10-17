@@ -1,7 +1,7 @@
 # Remove notify_create from CLI Serve Integration Test
 
 ## Parent Issue
-Eliminate notify_create Tool and Replace with Native MCP Notifications (01K7SHXK4XKMDREMXG7BFJ8YJ7)
+Eliminate notify_create Tool and Replace with Native MCP Notifications (01K7SM38449JYA2KZP4KNKQ05X)
 
 ## Summary
 Remove notify_create tool references from sah serve integration tests.

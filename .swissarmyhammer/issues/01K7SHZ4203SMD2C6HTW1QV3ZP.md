@@ -322,7 +322,7 @@ Create or update:
 ## Related Issues
 
 This is a prerequisite for:
-- Issue: Eliminate notify_create tool (01K7SHXK4XKMDREMXG7BFJ8YJ7)
+- Issue: Eliminate notify_create tool (01K7SM38449JYA2KZP4KNKQ05X)
 - Phase 2: Add progress notifications to shell_execute
 - Phase 2: Add progress notifications to search_index
 - Phase 3: Add progress notifications to web_search, web_fetch, outline_generate
