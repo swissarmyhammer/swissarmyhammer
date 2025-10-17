@@ -219,6 +219,7 @@
 //! ```
 
 use super::notifications::NotificationSender;
+use super::progress_notifications::ProgressSender;
 use super::tool_handlers::ToolHandlers;
 use rmcp::model::{Annotated, CallToolResult, RawContent, RawTextContent, Tool};
 use rmcp::ErrorData as McpError;
@@ -295,11 +296,10 @@ pub struct ToolContext {
     /// use this configuration to create appropriate executor instances.
     pub agent_config: Arc<AgentConfig>,
 
-    /// Optional notification sender for long-running operations
+    /// Optional notification sender for long-running operations (workflow state transitions)
     ///
-    /// When present, tools can send progress notifications during execution.
-    /// This is particularly useful for workflow execution and other long-running
-    /// operations that benefit from progress tracking.
+    /// When present, workflows can send flow notifications during execution.
+    /// This is specifically for workflow state machine transitions.
     ///
     /// # Examples
     ///
@@ -309,6 +309,21 @@ pub struct ToolContext {
     /// }
     /// ```
     pub notification_sender: Option<NotificationSender>,
+
+    /// Optional progress sender for tool operations
+    ///
+    /// When present, tools can send progress notifications during execution.
+    /// This is for generic progress updates during long-running tool operations.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// if let Some(sender) = &context.progress_sender {
+    ///     let token = generate_progress_token();
+    ///     sender.send_progress(&token, Some(50), "Halfway done")?;
+    /// }
+    /// ```
+    pub progress_sender: Option<ProgressSender>,
 
     /// MCP server port (for workflow executors that need to connect to the server)
     ///
@@ -335,11 +350,12 @@ impl ToolContext {
             memo_storage,
             agent_config,
             notification_sender: None,
+            progress_sender: None,
             mcp_server_port: Arc::new(RwLock::new(None)),
         }
     }
 
-    /// Create a new tool context with notification support
+    /// Create a new tool context with workflow notification support
     ///
     /// # Arguments
     ///
@@ -348,11 +364,11 @@ impl ToolContext {
     /// * `git_ops` - Git operations
     /// * `memo_storage` - Memo storage backend
     /// * `agent_config` - Agent configuration
-    /// * `notification_sender` - Notification sender for progress updates
+    /// * `notification_sender` - Notification sender for workflow state transitions
     ///
     /// # Returns
     ///
-    /// A new `ToolContext` with notification support enabled
+    /// A new `ToolContext` with workflow notification support enabled
     pub fn with_notifications(
         tool_handlers: Arc<ToolHandlers>,
         issue_storage: Arc<RwLock<Box<dyn IssueStorage>>>,
@@ -368,8 +384,26 @@ impl ToolContext {
             memo_storage,
             agent_config,
             notification_sender: Some(notification_sender),
+            progress_sender: None,
             mcp_server_port: Arc::new(RwLock::new(None)),
         }
+    }
+
+    /// Set the progress sender for this context
+    ///
+    /// Creates a new context with the progress sender added. This allows
+    /// tools to send progress notifications during execution.
+    ///
+    /// # Arguments
+    ///
+    /// * `sender` - The progress sender to use
+    ///
+    /// # Returns
+    ///
+    /// A new `ToolContext` with the progress sender set
+    pub fn with_progress_sender(mut self, sender: ProgressSender) -> Self {
+        self.progress_sender = Some(sender);
+        self
     }
 }
 

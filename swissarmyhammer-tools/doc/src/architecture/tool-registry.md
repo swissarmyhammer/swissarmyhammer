@@ -84,9 +84,14 @@ fn schema(&self) -> serde_json::Value {
 }
 ```
 
-Supported types:
-- `string`, `integer`, `number`, `boolean`, `array`
-- **Not supported**: `object`, `null` (for CLI compatibility)
+Supported types for all MCP tools:
+- `string`, `integer`, `number`, `boolean`, `array`, `object`
+
+CLI compatibility notes:
+- CLI tools have limitations with `object` types due to command-line argument parsing constraints
+- Object parameters work correctly when tools are called via MCP protocol
+- Tools that require object parameters can set `hidden_from_cli()` to return `true` if CLI use is not appropriate
+- `null` type is not supported for any tools
 
 #### execute()
 Implements the tool's business logic:

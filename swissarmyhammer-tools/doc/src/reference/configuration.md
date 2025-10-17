@@ -424,6 +424,13 @@ sah [OPTIONS] <COMMAND>
 - **Type**: Flag
 - **Description**: Print help information
 
+#### --cwd
+
+- **Type**: Path
+- **Description**: Change working directory before any initialization
+- **Example**: `sah --cwd /path/to/project serve`
+- **Usage**: This flag is processed before loading configuration or initializing contexts, ensuring all relative paths and configurations are resolved from the specified directory. Useful for starting the server from a different location than your project root.
+
 ### Serve Command Arguments
 
 ```bash

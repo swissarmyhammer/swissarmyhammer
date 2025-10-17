@@ -9,6 +9,7 @@ pub mod file_watcher;
 pub mod memo_types;
 pub mod notifications;
 pub mod notify_types;
+pub mod progress_notifications;
 pub mod responses;
 pub mod search_types;
 pub mod server;
@@ -28,7 +29,11 @@ mod tests;
 
 // Re-export commonly used items from submodules
 pub use notifications::{
-    FlowNotification, FlowNotificationMetadata, NotificationSender, SendError,
+    FlowNotification, FlowNotificationMetadata, NotificationSender, SendError as FlowSendError,
+};
+pub use progress_notifications::{
+    complete_notification, generate_progress_token, ProgressNotification, ProgressSender,
+    SendError as ProgressSendError, start_notification,
 };
 pub use server::McpServer;
 pub use tool_handlers::ToolHandlers;

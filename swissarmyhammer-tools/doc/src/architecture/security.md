@@ -560,9 +560,11 @@ if force && branch_name.is_protected() {
 
 ### Reporting
 
-Security vulnerabilities should be reported to:
-- GitHub Security Advisories
-- Email: security@swissarmyhammer.org
+Security vulnerabilities should be reported through:
+- **GitHub Security Advisories** (preferred): https://github.com/swissarmyhammer/swissarmyhammer/security/advisories
+- GitHub Issues (for non-critical issues): https://github.com/swissarmyhammer/swissarmyhammer/issues
+
+Please use the GitHub Security Advisory feature for sensitive security issues to ensure responsible disclosure.
 
 ### Response Process
 

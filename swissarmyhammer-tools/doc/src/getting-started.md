@@ -80,6 +80,23 @@ sah serve --http --port 8080
 
 Access the server at `http://localhost:8080`.
 
+### Working Directory
+
+To set the working directory before starting the server:
+
+```bash
+# Change to a specific project directory
+sah --cwd /path/to/project serve
+
+# Use relative paths resolved from the specified directory
+sah --cwd ~/projects/myapp serve
+```
+
+The `--cwd` flag changes the working directory before any initialization occurs, ensuring all relative paths and configurations are resolved from the specified directory. This is useful when:
+- Starting the server from a different location than your project root
+- Integrating with tools that launch from specific directories
+- Running multiple instances in different project directories
+
 ## Integrating with Claude Desktop
 
 To use SwissArmyHammer Tools with Claude Desktop:

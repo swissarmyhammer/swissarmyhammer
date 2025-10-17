@@ -25,11 +25,11 @@ SwissArmyHammer Tools provides a comprehensive suite of MCP tools organized by c
 Read file contents with optional partial reading.
 
 **Parameters**:
-- `path` (string, required): Absolute path to the file
+- `path` (string, required): **Absolute path** to the file (relative paths are not supported)
 - `offset` (number, optional): Starting line number (1-based)
 - `limit` (number, optional): Maximum number of lines to read
 
-**Returns**: File content with metadata (encoding, line counts)
+**Returns**: Object containing file content (text or base64 for binary), content type, encoding, and line counts (total, returned, offset)
 
 **Example**:
 ```json
@@ -52,10 +52,10 @@ Read file contents with optional partial reading.
 Write content to a file, creating or overwriting.
 
 **Parameters**:
-- `file_path` (string, required): Absolute path for the file
+- `file_path` (string, required): **Absolute path** for the file (relative paths are not supported)
 - `content` (string, required): Complete file content
 
-**Returns**: Confirmation with file size
+**Returns**: Object containing file path and file size in bytes
 
 **Example**:
 ```json
@@ -70,12 +70,12 @@ Write content to a file, creating or overwriting.
 Perform precise string replacement in a file.
 
 **Parameters**:
-- `file_path` (string, required): Absolute path to the file
+- `file_path` (string, required): **Absolute path** to the file (relative paths are not supported)
 - `old_string` (string, required): Exact text to replace
 - `new_string` (string, required): Replacement text
 - `replace_all` (boolean, optional): Replace all occurrences (default: false)
 
-**Returns**: Number of replacements made
+**Returns**: Object containing file path, number of replacements made, bytes written, encoding, and line ending format
 
 **Example**:
 ```json
@@ -92,11 +92,11 @@ Find files matching glob patterns.
 
 **Parameters**:
 - `pattern` (string, required): Glob pattern (e.g., `**/*.rs`)
-- `path` (string, optional): Directory to search (default: current directory)
+- `path` (string, optional): **Absolute path** to directory to search (default: current directory; relative paths are not supported)
 - `case_sensitive` (boolean, optional): Case-sensitive matching (default: false)
 - `respect_git_ignore` (boolean, optional): Honor .gitignore (default: true)
 
-**Returns**: List of matching file paths
+**Returns**: Object containing file count and array of matching absolute file paths sorted by modification time
 
 **Example**:
 ```json
@@ -111,14 +111,14 @@ Search file contents using regex patterns.
 
 **Parameters**:
 - `pattern` (string, required): Regular expression pattern
-- `path` (string, optional): File or directory to search
+- `path` (string, optional): **Absolute path** to file or directory to search (relative paths are not supported)
 - `glob` (string, optional): Glob pattern to filter files
 - `type` (string, optional): File type filter (e.g., `js`, `py`, `rust`)
 - `case_insensitive` (boolean, optional): Case-insensitive search
 - `context_lines` (number, optional): Lines of context around matches
 - `output_mode` (string, optional): `content`, `files_with_matches`, or `count`
 
-**Returns**: Matches with file paths, line numbers, and content
+**Returns**: Varies by output_mode: `content` returns matches with file paths, line numbers, and matching lines; `files_with_matches` returns array of file paths; `count` returns match counts per file
 
 **Example**:
 ```json
@@ -139,7 +139,7 @@ Index files for semantic code search.
 - `patterns` (array of strings, required): Glob patterns to match files
 - `force` (boolean, optional): Force re-indexing (default: false)
 
-**Returns**: Indexed file count and statistics
+**Returns**: Object containing indexed file count, skipped files count, total chunks created, and execution time in seconds
 
 **Example**:
 ```json
@@ -156,7 +156,7 @@ Perform semantic search across indexed files.
 - `query` (string, required): Search query
 - `limit` (number, optional): Maximum results (default: 10)
 
-**Returns**: Ranked results with similarity scores
+**Returns**: Array of search results, each containing file path, chunk text, line numbers (start, end), similarity score, language, and excerpt context
 
 **Example**:
 ```json
@@ -176,7 +176,7 @@ Create a new issue as a markdown file.
 - `content` (string, required): Markdown content
 - `name` (string, optional): Issue name (auto-generated if omitted)
 
-**Returns**: Created issue name
+**Returns**: Object containing the created issue name and confirmation message
 
 **Example**:
 ```json
@@ -195,7 +195,7 @@ List all issues with optional filtering.
 - `show_active` (boolean, optional): Include active issues (default: true)
 - `format` (string, optional): Output format: `table`, `json`, or `markdown` (default: table)
 
-**Returns**: List of issues with metadata
+**Returns**: Formatted list of issues, each containing issue name, status, creation date, and file path
 
 **Example**:
 ```json
@@ -213,7 +213,7 @@ Display details of a specific issue.
 - `name` (string, required): Issue name, "current", or "next"
 - `raw` (boolean, optional): Show raw content only (default: false)
 
-**Returns**: Issue details and content
+**Returns**: Object containing issue name, status, creation date, file path, and markdown content (when raw=true, returns only markdown content)
 
 **Example**:
 ```json
@@ -249,7 +249,7 @@ Mark an issue as complete.
 **Parameters**:
 - `name` (string, required): Issue name or "current"
 
-**Returns**: Confirmation that issue was moved to complete directory
+**Returns**: Confirmation message that the issue has been marked complete and moved to the complete directory
 
 **Example**:
 ```json
@@ -281,7 +281,7 @@ Create a new memo with title and content.
 - `title` (string, required): Memo title
 - `content` (string, required): Markdown content
 
-**Returns**: Created memo with ULID
+**Returns**: Object containing the created memo with ULID identifier, title, content, and creation timestamp
 
 **Example**:
 ```json
@@ -411,10 +411,10 @@ Execute shell commands with proper output handling.
 
 **Parameters**:
 - `command` (string, required): Shell command to execute
-- `working_directory` (string, optional): Working directory
+- `working_directory` (string, optional): **Absolute path** for working directory (relative paths are not supported)
 - `environment` (string, optional): JSON string of environment variables
 
-**Returns**: Command output, exit code, and execution time
+**Returns**: Object containing command output (stdout/stderr combined), exit code, execution time in milliseconds, and working directory path
 
 **Example**:
 ```json
@@ -434,7 +434,7 @@ Generate structured code outlines using tree-sitter.
 - `patterns` (array of strings, required): Glob patterns for files
 - `output_format` (string, optional): `yaml` or `json` (default: yaml)
 
-**Returns**: Hierarchical outline with symbols
+**Returns**: Hierarchical outline containing file paths, symbols (classes, functions, methods, etc.) with line numbers, signatures, and documentation
 
 **Example**:
 ```json

@@ -283,6 +283,7 @@ mod tests {
             tool_handlers,
             agent_config,
             notification_sender: None,
+            progress_sender: None,
             mcp_server_port: Arc::new(RwLock::new(None)),
         }
     }

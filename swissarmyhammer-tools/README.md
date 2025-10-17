@@ -63,6 +63,9 @@ sah serve
 
 # Start HTTP server on custom port
 sah serve --http --port 8080
+
+# Change working directory before starting server
+sah --cwd /path/to/project serve
 ```
 
 ### Using as a Library
