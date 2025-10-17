@@ -96,7 +96,6 @@ fn get_http_static_tools() -> Vec<String> {
         "todo_show",
         "todo_mark_complete",
         "outline_generate",
-        "notify_create",
         "abort_create",
     ];
 
@@ -137,8 +136,8 @@ async fn test_mcp_tool_definitions_return_sufficient_tools() -> Result<()> {
     // Test HTTP static definition
     let http_tools = get_http_static_tools();
     assert!(
-        http_tools.len() >= 26,
-        "HTTP static definition should have at least 26 tools, got {}. Tools: {:?}",
+        http_tools.len() >= 25,
+        "HTTP static definition should have at least 25 tools, got {}. Tools: {:?}",
         http_tools.len(),
         http_tools
     );
@@ -146,8 +145,8 @@ async fn test_mcp_tool_definitions_return_sufficient_tools() -> Result<()> {
     // Test STDIN registry
     let stdin_tools = get_stdin_registry_tools();
     assert!(
-        stdin_tools.len() >= 26,
-        "STDIN registry should have at least 26 tools, got {}. Tools: {:?}",
+        stdin_tools.len() >= 25,
+        "STDIN registry should have at least 25 tools, got {}. Tools: {:?}",
         stdin_tools.len(),
         stdin_tools
     );

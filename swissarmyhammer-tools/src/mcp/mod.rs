@@ -32,8 +32,8 @@ pub use notifications::{
     FlowNotification, FlowNotificationMetadata, NotificationSender, SendError as FlowSendError,
 };
 pub use progress_notifications::{
-    complete_notification, generate_progress_token, ProgressNotification, ProgressSender,
-    SendError as ProgressSendError, start_notification,
+    complete_notification, generate_progress_token, start_notification, ProgressNotification,
+    ProgressSender, SendError as ProgressSendError,
 };
 pub use server::McpServer;
 pub use tool_handlers::ToolHandlers;

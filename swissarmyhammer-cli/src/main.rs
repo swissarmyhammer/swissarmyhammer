@@ -44,7 +44,7 @@ async fn main() {
     // Parse CLI early to check for --cwd flag BEFORE doing anything else
     // We need to do a minimal parse just to extract --cwd
     let args: Vec<String> = std::env::args().collect();
-    
+
     // Check for --cwd flag and change directory FIRST
     if let Some(cwd_index) = args.iter().position(|arg| arg == "--cwd") {
         if let Some(cwd_path) = args.get(cwd_index + 1) {
@@ -57,7 +57,7 @@ async fn main() {
             process::exit(EXIT_ERROR);
         }
     }
-    
+
     // Load configuration early for CLI operations
     let template_context = load_cli_configuration();
 

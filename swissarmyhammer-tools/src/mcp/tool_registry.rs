@@ -1662,7 +1662,6 @@ mod tests {
     struct ShellExecuteTool;
     struct TodoCreateTool;
     struct OutlineGenerateTool;
-    struct NotifyCreateTool;
     struct AbortCreateTool;
     struct UnknownCategoryTool;
     struct NoUnderscoreTool;
@@ -1829,26 +1828,6 @@ mod tests {
     }
 
     #[async_trait::async_trait]
-    impl McpTool for NotifyCreateTool {
-        fn name(&self) -> &'static str {
-            "notify_create"
-        }
-        fn description(&self) -> &'static str {
-            "Send notification messages from LLM to user"
-        }
-        fn schema(&self) -> serde_json::Value {
-            serde_json::json!({})
-        }
-        async fn execute(
-            &self,
-            _args: serde_json::Map<String, serde_json::Value>,
-            _ctx: &ToolContext,
-        ) -> std::result::Result<CallToolResult, McpError> {
-            Ok(BaseToolImpl::create_success_response("Test"))
-        }
-    }
-
-    #[async_trait::async_trait]
     impl McpTool for AbortCreateTool {
         fn name(&self) -> &'static str {
             "abort_create"
@@ -1939,7 +1918,6 @@ mod tests {
         assert_eq!(ShellExecuteTool.cli_category(), Some("shell"));
         assert_eq!(TodoCreateTool.cli_category(), Some("todo"));
         assert_eq!(OutlineGenerateTool.cli_category(), Some("outline"));
-        assert_eq!(NotifyCreateTool.cli_category(), Some("notify"));
         assert_eq!(AbortCreateTool.cli_category(), Some("abort"));
 
         // Test unknown category
@@ -1960,7 +1938,6 @@ mod tests {
         assert_eq!(ShellExecuteTool.cli_name(), "execute");
         assert_eq!(TodoCreateTool.cli_name(), "create");
         assert_eq!(OutlineGenerateTool.cli_name(), "generate");
-        assert_eq!(NotifyCreateTool.cli_name(), "create");
         assert_eq!(AbortCreateTool.cli_name(), "create");
 
         // Test unknown category still extracts action

@@ -65,7 +65,6 @@ const EXPECTED_SAMPLE_TOOLS: &[&str] = &[
     "memo_create",
     "memo_list",
     "memo_get",
-    "notify_create",
     "outline_generate",
     "search_index",
     "search_query",
@@ -244,17 +243,7 @@ async fn test_minimal_tool_executions(
     _tools: &[Value],
 ) -> Result<(), Box<dyn std::error::Error>> {
     // Test only one fast, safe tool to verify execution works
-    test_single_tool_execution(
-        stdin,
-        reader,
-        3,
-        "notify_create",
-        json!({
-            "message": "Integration test notification",
-            "level": "info"
-        }),
-    )
-    .await?;
+    test_single_tool_execution(stdin, reader, 3, "memo_get_all_context", json!({})).await?;
 
     println!("✅ Tool execution test completed successfully");
     Ok(())

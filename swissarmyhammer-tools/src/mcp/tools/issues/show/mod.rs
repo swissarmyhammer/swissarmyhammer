@@ -122,8 +122,6 @@ impl ShowIssueTool {
 
         result
     }
-
-
 }
 
 #[async_trait]

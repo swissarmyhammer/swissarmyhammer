@@ -103,7 +103,6 @@ SwissArmyHammer provides tools organized into logical categories:
 - **Rules**: Code quality checks against defined standards
 - **Web**: Fetch web content and perform searches
 - **Flow**: Workflow execution with AI agent coordination
-- **Notify**: Send notifications from AI to user
 - **Abort**: Signal workflow termination
 
 ## Architecture

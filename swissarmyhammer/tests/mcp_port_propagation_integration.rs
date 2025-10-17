@@ -61,7 +61,8 @@ stateDiagram-v2
     if let swissarmyhammer_config::agent::AgentConfig {
         executor: swissarmyhammer_config::agent::AgentExecutorConfig::LlamaAgent(llama_config),
         ..
-    } = stored_agent_config {
+    } = stored_agent_config
+    {
         assert_eq!(llama_config.mcp_server.port, test_port);
     } else {
         panic!("Expected LlamaAgent config");
@@ -352,7 +353,8 @@ async fn test_update_mcp_port_helper_method() -> Result<()> {
     if let swissarmyhammer_config::agent::AgentConfig {
         executor: swissarmyhammer_config::agent::AgentExecutorConfig::LlamaAgent(llama_config),
         ..
-    } = stored_agent_config {
+    } = stored_agent_config
+    {
         assert_eq!(llama_config.mcp_server.port, test_port);
     } else {
         panic!("Expected LlamaAgent config");
@@ -416,7 +418,8 @@ async fn test_update_mcp_port_idempotent() -> Result<()> {
     if let swissarmyhammer_config::agent::AgentConfig {
         executor: swissarmyhammer_config::agent::AgentExecutorConfig::LlamaAgent(llama_config),
         ..
-    } = stored_agent_config {
+    } = stored_agent_config
+    {
         assert_eq!(llama_config.mcp_server.port, 3333);
     } else {
         panic!("Expected LlamaAgent config");
@@ -440,7 +443,8 @@ async fn test_mcp_port_with_different_llama_configs() -> Result<()> {
     if let swissarmyhammer_config::agent::AgentConfig {
         executor: swissarmyhammer_config::agent::AgentExecutorConfig::LlamaAgent(llama_config),
         ..
-    } = agent_config1 {
+    } = agent_config1
+    {
         assert_eq!(llama_config.mcp_server.port, 4444);
     } else {
         panic!("Expected LlamaAgent config");
@@ -456,7 +460,8 @@ async fn test_mcp_port_with_different_llama_configs() -> Result<()> {
     if let swissarmyhammer_config::agent::AgentConfig {
         executor: swissarmyhammer_config::agent::AgentExecutorConfig::LlamaAgent(llama_config),
         ..
-    } = agent_config2 {
+    } = agent_config2
+    {
         assert_eq!(llama_config.mcp_server.port, 5555);
     } else {
         panic!("Expected LlamaAgent config");

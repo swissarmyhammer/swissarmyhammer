@@ -403,7 +403,8 @@ async fn test_issue_show_raw_parameter_compatibility() {
     if let Some(text_str) = extract_text_content(&call_result) {
         // Formatted content should have status indicators
         assert!(
-            text_str.contains("Status:") && (text_str.contains("Active") || text_str.contains("Completed")),
+            text_str.contains("Status:")
+                && (text_str.contains("Active") || text_str.contains("Completed")),
             "Formatted response should contain status text: {text_str}"
         );
     }
@@ -438,9 +439,9 @@ async fn test_issue_show_special_parameter_case_sensitivity() {
 
     // Test case variations of special parameters
     let test_cases = vec![
-        ("next", true),     // Should work
-        ("NEXT", false),    // Should not work (case sensitive)
-        ("Next", false),    // Should not work (case sensitive)
+        ("next", true),  // Should work
+        ("NEXT", false), // Should not work (case sensitive)
+        ("Next", false), // Should not work (case sensitive)
     ];
 
     for (param_name, should_work) in test_cases {

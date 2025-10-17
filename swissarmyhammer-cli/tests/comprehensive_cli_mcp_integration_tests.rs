@@ -859,12 +859,17 @@ async fn test_issue_show_performance_and_edge_cases() -> Result<()> {
             }
             Err(e) => {
                 // This could happen if rate limiting occurs
-                tracing::debug!("Concurrent issue_show {i} returned error (might be rate limiting): {e}");
+                tracing::debug!(
+                    "Concurrent issue_show {i} returned error (might be rate limiting): {e}"
+                );
             }
         }
     }
 
-    assert!(success_count >= 1, "At least one concurrent test should succeed, got {success_count}");
+    assert!(
+        success_count >= 1,
+        "At least one concurrent test should succeed, got {success_count}"
+    );
 
     Ok(())
 }

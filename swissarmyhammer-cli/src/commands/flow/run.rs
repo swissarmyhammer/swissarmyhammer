@@ -94,12 +94,16 @@ pub async fn run_workflow_command(config: RunCommandConfig, context: &CliContext
     let mcp_server = if agent_config.executor_type() == AgentExecutorType::LlamaAgent {
         tracing::info!("Starting MCP server for LlamaAgent");
         let mode = McpServerMode::Http { port: None }; // Use random port
-        let server = start_mcp_server(mode, None)
-            .await
-            .map_err(|e| SwissArmyHammerError::Other {
-                message: format!("Failed to start MCP server for LlamaAgent: {}", e),
-            })?;
-        tracing::info!("MCP server started on port {}", server.info.port.unwrap_or(0));
+        let server =
+            start_mcp_server(mode, None)
+                .await
+                .map_err(|e| SwissArmyHammerError::Other {
+                    message: format!("Failed to start MCP server for LlamaAgent: {}", e),
+                })?;
+        tracing::info!(
+            "MCP server started on port {}",
+            server.info.port.unwrap_or(0)
+        );
         Some(server)
     } else {
         None
@@ -187,9 +191,12 @@ pub async fn run_workflow_command(config: RunCommandConfig, context: &CliContext
     // Shutdown MCP server if it was started
     if let Some(mut server) = mcp_server {
         tracing::info!("Shutting down MCP server");
-        server.shutdown().await.map_err(|e| SwissArmyHammerError::Other {
-            message: format!("Failed to shutdown MCP server: {}", e),
-        })?;
+        server
+            .shutdown()
+            .await
+            .map_err(|e| SwissArmyHammerError::Other {
+                message: format!("Failed to shutdown MCP server: {}", e),
+            })?;
     }
 
     Ok(())

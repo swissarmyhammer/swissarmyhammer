@@ -409,7 +409,7 @@ Example:
                 cli = cli.subcommand(cmd);
             }
         }
-        
+
         cli
     }
 
@@ -565,7 +565,7 @@ Example:
         if let Some(long_about) = &category_data.long_about {
             cmd = cmd.long_about(intern_string(long_about.clone()));
         }
-        
+
         cmd = cmd.subcommand_help_heading("Tools");
 
         // Add tool subcommands for this category

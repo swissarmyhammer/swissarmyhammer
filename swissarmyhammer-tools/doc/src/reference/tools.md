@@ -15,7 +15,6 @@ SwissArmyHammer Tools provides a comprehensive suite of MCP tools organized by c
 - [Rules Checking](#rules-checking)
 - [Web Operations](#web-operations)
 - [Workflow Execution](#workflow-execution)
-- [Notifications](#notifications)
 - [Flow Control](#flow-control)
 
 ## File Operations
@@ -550,27 +549,6 @@ Execute or list workflows dynamically via MCP.
 ```
 
 **Progress Notifications**: Long-running workflows send MCP progress notifications to track execution state, including flow start, state transitions, and completion or error events.
-
-## Notifications
-
-### notify_create
-
-Send notification messages from LLM to user.
-
-**Parameters**:
-- `message` (string, required): Notification message
-- `level` (string, optional): Level (info, warn, error) (default: info)
-- `context` (object, optional): Structured JSON data
-
-**Returns**: Confirmation
-
-**Example**:
-```json
-{
-  "message": "Processing large codebase - this may take a few minutes",
-  "level": "info"
-}
-```
 
 ## Flow Control
 

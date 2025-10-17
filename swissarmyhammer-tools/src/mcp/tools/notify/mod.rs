@@ -43,15 +43,12 @@
 //! }
 //! ```
 //!
-//! ## Available Tools
-//!
-//! - **create**: Send notification messages to users through the logging system
-
-pub mod create;
-
 use crate::mcp::tool_registry::ToolRegistry;
 
 /// Register all notification-related tools with the registry
-pub fn register_notify_tools(registry: &mut ToolRegistry) {
-    registry.register(create::NotifyTool::new());
+///
+/// Note: Notification tools have been removed in favor of native MCP progress notifications.
+/// This function is kept for backward compatibility but does not register any tools.
+pub fn register_notify_tools(_registry: &mut ToolRegistry) {
+    // No tools to register - notification functionality replaced by MCP progress notifications
 }

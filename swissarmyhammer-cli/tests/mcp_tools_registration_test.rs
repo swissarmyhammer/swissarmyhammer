@@ -51,7 +51,6 @@ fn test_mcp_tools_are_registered() {
         "memo_create",
         "memo_list",
         "memo_get",
-        "notify_create",
         "outline_generate",
         "search_index",
         "search_query",

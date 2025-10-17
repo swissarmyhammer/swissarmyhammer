@@ -202,18 +202,18 @@ impl ProgressSender {
 /// ```
 pub fn generate_progress_token() -> String {
     use std::time::{SystemTime, UNIX_EPOCH};
-    
+
     let timestamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_millis();
-    
+
     let random_bytes: [u8; 8] = rand::random();
     let random_hex = random_bytes
         .iter()
         .map(|b| format!("{:02x}", b))
         .collect::<String>();
-    
+
     format!("progress_{:016x}_{}", timestamp, random_hex)
 }
 
@@ -362,7 +362,9 @@ mod tests {
         let (tx, mut rx) = mpsc::unbounded_channel();
         let sender = ProgressSender::new(tx);
 
-        sender.send_progress("token_123", Some(25), "Quarter done").unwrap();
+        sender
+            .send_progress("token_123", Some(25), "Quarter done")
+            .unwrap();
 
         let notification = rx.recv().await.unwrap();
         assert_eq!(notification.progress_token, "token_123");
@@ -411,7 +413,9 @@ mod tests {
         let sender = ProgressSender::new(tx);
 
         sender.send_progress("token_123", Some(0), "Start").unwrap();
-        sender.send_progress("token_123", Some(50), "Middle").unwrap();
+        sender
+            .send_progress("token_123", Some(50), "Middle")
+            .unwrap();
         sender.send_progress("token_123", Some(100), "End").unwrap();
 
         let notif1 = rx.recv().await.unwrap();
@@ -432,7 +436,9 @@ mod tests {
         let sender_clone = sender.clone();
 
         sender.send_progress("token_1", Some(25), "First").unwrap();
-        sender_clone.send_progress("token_2", Some(75), "Second").unwrap();
+        sender_clone
+            .send_progress("token_2", Some(75), "Second")
+            .unwrap();
     }
 
     #[test]
@@ -450,7 +456,7 @@ mod tests {
         // Tokens should start with "progress_"
         assert!(token1.starts_with("progress_"));
         assert!(token2.starts_with("progress_"));
-        
+
         // Tokens should have the expected format: progress_<timestamp>_<random>
         let parts: Vec<&str> = token1.split('_').collect();
         assert_eq!(parts.len(), 3);
@@ -490,7 +496,9 @@ mod tests {
         let (tx, mut rx) = mpsc::unbounded_channel();
         let sender = ProgressSender::new(tx);
 
-        sender.send_progress("token_123", None, "Working...").unwrap();
+        sender
+            .send_progress("token_123", None, "Working...")
+            .unwrap();
 
         let notification = rx.recv().await.unwrap();
         assert_eq!(notification.progress_token, "token_123");
@@ -508,7 +516,7 @@ mod tests {
         };
 
         let json = serde_json::to_value(&notification).unwrap();
-        
+
         // Should not include metadata field when None
         assert!(json.get("metadata").is_none());
         assert_eq!(json.get("progress_token").unwrap(), "token_123");
@@ -527,7 +535,7 @@ mod tests {
         };
 
         let json = serde_json::to_value(&notification).unwrap();
-        
+
         // Metadata should be flattened into the top level
         assert_eq!(json.get("key").unwrap(), "value");
     }
