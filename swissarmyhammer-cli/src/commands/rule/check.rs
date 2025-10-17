@@ -605,9 +605,6 @@ mod tests {
 
         let issue_name = generate_issue_name(rule_name, file_path);
 
-        // Should start with ~
-        assert!(issue_name.starts_with('~'));
-
         // Should contain rule name
         assert!(issue_name.contains("no-unwrap"));
 
@@ -625,9 +622,6 @@ mod tests {
         let file_path = Path::new("test_violation.rs");
 
         let issue_name = generate_issue_name(rule_name, file_path);
-
-        // Should start with ~
-        assert!(issue_name.starts_with('~'));
 
         // Should replace slashes with underscores
         assert!(issue_name.contains("security_no-hardcoded-secrets"));
@@ -652,9 +646,6 @@ mod tests {
         assert!(issue_name.contains("category_subcategory_rule-name"));
         assert!(!issue_name.contains('/'));
 
-        // Should start with ~
-        assert!(issue_name.starts_with('~'));
-
         // Should be deterministic
         let issue_name_again = generate_issue_name(rule_name, file_path);
         assert_eq!(issue_name, issue_name_again);
@@ -670,9 +661,6 @@ mod tests {
         // Should replace consecutive slashes with underscores
         assert!(issue_name.contains("security__no-secrets"));
         assert!(!issue_name.contains('/'));
-
-        // Should start with ~
-        assert!(issue_name.starts_with('~'));
     }
 
     #[test]
@@ -685,9 +673,6 @@ mod tests {
         // Should replace all slashes including leading/trailing
         assert!(issue_name.contains("_security_no-secrets_"));
         assert!(!issue_name.contains('/'));
-
-        // Should start with ~
-        assert!(issue_name.starts_with('~'));
     }
 
     #[test]

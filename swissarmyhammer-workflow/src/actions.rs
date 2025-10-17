@@ -572,7 +572,7 @@ impl PromptAction {
         &self,
         context: &mut WorkflowTemplateContext,
     ) -> ActionResult<Value> {
-        tracing::info!(
+        tracing::debug!(
             "Executing prompt '{}' with context: {:?}",
             self.prompt_name,
             context
@@ -716,7 +716,10 @@ impl PromptAction {
                 }
 
                 let port = mcp_port.unwrap();
-                tracing::info!("Creating LlamaAgent executor with MCP server on port {}", port);
+                tracing::info!(
+                    "Creating LlamaAgent executor with MCP server on port {}",
+                    port
+                );
 
                 // Create MCP server handle for the executor
                 // Note: We create a dummy shutdown channel since the actual server lifecycle
@@ -728,13 +731,14 @@ impl PromptAction {
                     dummy_tx,
                 );
 
-                let mut executor =
-                    crate::agents::LlamaAgentExecutorWrapper::new_with_mcp(llama_config.clone(), Some(mcp_handle));
+                let mut executor = crate::agents::LlamaAgentExecutorWrapper::new_with_mcp(
+                    llama_config.clone(),
+                    Some(mcp_handle),
+                );
                 executor.initialize().await.map_err(|e| {
                     ActionError::ExecutionError(format!(
                         "Failed to initialize LlamaAgent with MCP server on port {}: {}",
-                        port,
-                        e
+                        port, e
                     ))
                 })?;
 

@@ -755,18 +755,20 @@ impl ServerHandler for McpServer {
         request: CallToolRequestParam,
         _context: RequestContext<RoleServer>,
     ) -> std::result::Result<CallToolResult, McpError> {
-        tracing::info!("🔧 call_tool() invoked for tool: {}", request.name);
-        tracing::debug!("🔧 Tool arguments: {:?}", request.arguments);
-
+        tracing::debug!(
+            "🔧 call_tool() invoked for tool: {}, arguments: {:?}",
+            request.name,
+            request.arguments
+        );
         if let Some(tool) = self.tool_registry.get_tool(&request.name) {
             tracing::info!("🔧 Executing tool: {}", request.name);
             let result = tool
                 .execute(request.arguments.unwrap_or_default(), &self.tool_context)
                 .await;
-            tracing::info!(
+            tracing::debug!(
                 "🔧 Tool execution result for {}: {:?}",
                 request.name,
-                result.is_ok()
+                result
             );
             result
         } else {
