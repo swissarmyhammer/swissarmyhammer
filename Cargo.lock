@@ -3736,7 +3736,7 @@ checksum = "f5e54036fe321fd421e10d732f155734c4e4afd610dd556d9a82833ab3ee0bed"
 [[package]]
 name = "llama-agent"
 version = "0.1.0"
-source = "git+https://github.com/swissarmyhammer/llama-agent#19957edfc388cdf34b9eccf155c213cc7a1879a0"
+source = "git+https://github.com/swissarmyhammer/llama-agent#53aa9ea7a4d8b746d57af1731a3473ca0a072aa6"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3771,7 +3771,7 @@ dependencies = [
 [[package]]
 name = "llama-common"
 version = "0.1.0"
-source = "git+https://github.com/swissarmyhammer/llama-agent#19957edfc388cdf34b9eccf155c213cc7a1879a0"
+source = "git+https://github.com/swissarmyhammer/llama-agent#53aa9ea7a4d8b746d57af1731a3473ca0a072aa6"
 dependencies = [
  "async-trait",
  "serde",
@@ -3809,7 +3809,7 @@ dependencies = [
 [[package]]
 name = "llama-loader"
 version = "0.1.0"
-source = "git+https://github.com/swissarmyhammer/llama-agent#19957edfc388cdf34b9eccf155c213cc7a1879a0"
+source = "git+https://github.com/swissarmyhammer/llama-agent#53aa9ea7a4d8b746d57af1731a3473ca0a072aa6"
 dependencies = [
  "dirs 6.0.0",
  "hf-hub",
