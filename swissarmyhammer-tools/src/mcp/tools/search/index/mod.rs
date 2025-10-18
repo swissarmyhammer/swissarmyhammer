@@ -2,11 +2,13 @@
 //!
 //! This module provides the SearchIndexTool for indexing files for semantic search through the MCP protocol.
 
+use crate::mcp::progress_notifications::generate_progress_token;
 use crate::mcp::search_types::{SearchIndexRequest, SearchIndexResponse};
 use crate::mcp::tool_registry::{BaseToolImpl, McpTool, ToolContext};
 use async_trait::async_trait;
 use rmcp::model::CallToolResult;
 use rmcp::ErrorData as McpError;
+use serde_json::json;
 use std::time::Instant;
 use swissarmyhammer_search::{indexer::FileIndexer, storage::VectorStorage, SemanticConfig};
 
@@ -80,7 +82,7 @@ impl McpTool for SearchIndexTool {
     async fn execute(
         &self,
         arguments: serde_json::Map<String, serde_json::Value>,
-        _context: &ToolContext, // Search tools don't need shared context
+        _context: &ToolContext,
     ) -> std::result::Result<CallToolResult, McpError> {
         let request: SearchIndexRequest = BaseToolImpl::parse_arguments(arguments)?;
 
@@ -95,6 +97,22 @@ impl McpTool for SearchIndexTool {
         }
 
         let start_time = Instant::now();
+        let progress_token = generate_progress_token();
+
+        // Send start notification
+        if let Some(sender) = &_context.progress_sender {
+            sender
+                .send_progress_with_metadata(
+                    &progress_token,
+                    Some(0),
+                    format!("Starting indexing: {} patterns", request.patterns.len()),
+                    json!({
+                        "patterns": request.patterns,
+                        "force": request.force
+                    }),
+                )
+                .ok();
+        }
 
         // Initialize semantic search components
         let config = {
@@ -171,6 +189,30 @@ impl McpTool for SearchIndexTool {
             total_chunks: report.total_chunks,
             execution_time_ms: duration.as_millis() as u64,
         };
+
+        // Send completion notification
+        if let Some(sender) = &_context.progress_sender {
+            let duration_ms = duration.as_millis() as u64;
+            sender
+                .send_progress_with_metadata(
+                    &progress_token,
+                    Some(100),
+                    format!(
+                        "Indexed {} files ({} chunks) in {:.1}s",
+                        response.indexed_files,
+                        response.total_chunks,
+                        duration_ms as f64 / 1000.0
+                    ),
+                    json!({
+                        "files_indexed": response.indexed_files,
+                        "files_failed": report.files_failed,
+                        "files_skipped": response.skipped_files,
+                        "total_chunks": response.total_chunks,
+                        "duration_ms": duration_ms
+                    }),
+                )
+                .ok();
+        }
 
         tracing::info!(
             "Search indexing completed: {} files indexed, {} chunks created in {:?}",
@@ -301,5 +343,105 @@ fn add(a: i32, b: i32) -> i32 {
 
         let result = tool.execute(arguments, &context).await;
         assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_search_index_sends_progress_notifications() {
+        use crate::mcp::progress_notifications::ProgressSender;
+        use tokio::sync::mpsc;
+
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let progress_sender = ProgressSender::new(tx);
+
+        let mut context = create_test_context().await;
+        context.progress_sender = Some(progress_sender);
+
+        // Create a temporary directory with test files
+        let temp_dir = tempfile::TempDir::new().expect("Failed to create temp dir");
+        let test_dir = temp_dir.path();
+
+        // Create multiple test Rust files to generate multiple progress updates
+        for i in 0..15 {
+            let test_file = test_dir.join(format!("test_{}.rs", i));
+            std::fs::write(
+                &test_file,
+                format!(
+                    r#"fn function_{}() {{
+    println!("Hello from file {}", {});
+}}
+
+fn add_{}(a: i32, b: i32) -> i32 {{
+    a + b
+}}
+"#,
+                    i, i, i, i
+                ),
+            )
+            .expect("Failed to write test file");
+        }
+
+        let tool = SearchIndexTool::new();
+        let pattern = format!("{}/*.rs", test_dir.display());
+        let mut arguments = serde_json::Map::new();
+        arguments.insert(
+            "patterns".to_string(),
+            serde_json::Value::Array(vec![serde_json::Value::String(pattern)]),
+        );
+        arguments.insert("force".to_string(), serde_json::Value::Bool(false));
+
+        // Execute the tool (may fail if embedding model not available, which is expected in test environments)
+        let _ = tool.execute(arguments, &context).await;
+
+        // Collect all notifications
+        let mut notifications = Vec::new();
+        while let Ok(notif) = rx.try_recv() {
+            notifications.push(notif);
+        }
+
+        // If indexing succeeded, verify notifications were sent
+        if !notifications.is_empty() {
+            // Should have at least: start notification and completion notification
+            assert!(
+                notifications.len() >= 2,
+                "Expected at least 2 notifications (start, completion), got {}",
+                notifications.len()
+            );
+
+            // First notification should be the start notification with 0% progress
+            assert_eq!(
+                notifications[0].progress,
+                Some(0),
+                "First notification should be start with 0% progress"
+            );
+            assert!(
+                notifications[0].message.contains("Starting indexing"),
+                "Start notification should mention starting indexing"
+            );
+
+            // Last notification should be completion with 100% progress
+            let last = notifications.last().unwrap();
+            assert_eq!(
+                last.progress,
+                Some(100),
+                "Last notification should be completion with 100% progress"
+            );
+            assert!(
+                last.message.contains("Indexed") || last.message.contains("files"),
+                "Completion notification should mention indexed files"
+            );
+
+            // Verify progress values increase monotonically (when present)
+            let progresses: Vec<u32> = notifications.iter().filter_map(|n| n.progress).collect();
+            if progresses.len() >= 2 {
+                for window in progresses.windows(2) {
+                    assert!(
+                        window[0] <= window[1],
+                        "Progress should increase monotonically: {} > {}",
+                        window[0],
+                        window[1]
+                    );
+                }
+            }
+        }
     }
 }

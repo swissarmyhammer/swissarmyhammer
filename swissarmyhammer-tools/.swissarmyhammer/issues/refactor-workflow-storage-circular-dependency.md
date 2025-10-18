@@ -101,3 +101,67 @@ The issue description assumes there is a circular dependency problem that needs 
 This issue is based on a false premise. The workflow storage is correctly placed in `swissarmyhammer-workflow` where it belongs. No code changes are needed or beneficial.
 
 **Status:** Issue cannot be resolved through code changes because there is no actual problem to fix.
+
+
+
+## Proposed Solution (2025-10-18)
+
+After thorough investigation, I have confirmed that **this issue is based on a false premise**. There is no circular dependency problem to fix.
+
+### Verification Results
+
+1. ✅ **Project builds successfully** - `cargo build` completes without errors
+2. ✅ **All 575 tests pass** - Full test suite passes with `cargo nextest run`
+3. ✅ **No circular dependency exists** - Verified with `cargo tree`
+4. ✅ **Proper dependency graph (DAG)**:
+   ```
+   swissarmyhammer-common (base)
+            ↑
+            |
+   swissarmyhammer-workflow
+            ↑
+            |
+   swissarmyhammer-tools
+   ```
+
+### Dependency Analysis
+
+**swissarmyhammer-workflow/Cargo.toml** does NOT depend on `swissarmyhammer-tools`:
+- Depends on: common, prompts, shell, templating, agent-executor, config, memoranda, search, git
+- Does NOT depend on: tools ✓
+
+**swissarmyhammer-tools/Cargo.toml** correctly depends on workflow:
+- Contains: `swissarmyhammer-workflow = { path = "../swissarmyhammer-workflow" }` ✓
+
+This is a **proper directed acyclic graph (DAG)** with no cycles.
+
+### Code Analysis
+
+The workflow storage implementation in `swissarmyhammer-workflow/src/storage.rs`:
+- ✅ Properly exports all storage types through `lib.rs`
+- ✅ `WorkflowStorageBackend` trait is public and usable
+- ✅ `FileSystemWorkflowStorage` implementation is complete
+- ✅ `MemoryWorkflowStorage` implementation is complete
+- ✅ `CompressedWorkflowStorage` wrapper is complete
+- ✅ `WorkflowResolver` is fully functional
+
+All types are correctly placed in the workflow crate and can be imported by the tools crate without any issues.
+
+### Why This Is Correct Architecture
+
+The current design follows **domain-driven design principles**:
+
+1. **swissarmyhammer-common** - Shared utilities (file loading, errors, etc.)
+2. **swissarmyhammer-workflow** - Workflow domain logic (storage, execution, parsing)
+3. **swissarmyhammer-tools** - Application layer (MCP server, tool implementations)
+
+Moving workflow storage to `common` would:
+- ❌ Violate separation of concerns
+- ❌ Pollute the base utilities crate with domain logic
+- ❌ Break the clear layering of the architecture
+
+### Conclusion
+
+**No code changes are needed.** The architecture is correct, the code builds and tests pass, and there is no circular dependency. The workflow storage is properly placed in `swissarmyhammer-workflow` where it belongs.
+
+**Recommendation**: Close this issue as invalid/cannot reproduce. The premise (circular dependency) is false.

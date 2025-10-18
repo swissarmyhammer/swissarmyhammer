@@ -1134,8 +1134,13 @@ async fn execute_shell_command(
             })?;
 
         // Process output with limits using streaming
-        let (exit_status, output_buffer) =
-            process_child_output_with_limits(child, &output_limits, progress_sender, progress_token).await?;
+        let (exit_status, output_buffer) = process_child_output_with_limits(
+            child,
+            &output_limits,
+            progress_sender,
+            progress_token,
+        )
+        .await?;
 
         let (exit_status, output_buffer) = (exit_status, output_buffer);
         {
