@@ -51,8 +51,6 @@
   - [todo_mark_complete](05-tools/todo-tools/complete.md)
 - [Outline Operations](05-tools/outline-tools/introduction.md)
   - [outline_generate](05-tools/outline-tools/generate.md)
-- [Notification Operations](05-tools/notification-tools/introduction.md)
-  - [notify_create](05-tools/notification-tools/create.md)
 - [Abort Operations](05-tools/abort-tools/introduction.md)
   - [abort_create](05-tools/abort-tools/create.md)
 - [Search Operations](05-tools/search-tools/introduction.md)

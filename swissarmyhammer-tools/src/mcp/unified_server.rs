@@ -74,7 +74,7 @@ impl FileWriterGuard {
     /// Creates a new `FileWriterGuard` wrapping the given file.
     ///
     /// # Arguments
-    /// * `file` - Arc<Mutex<File>> for thread-safe access to the underlying file
+    /// * `file` - `Arc<Mutex<File>>` for thread-safe access to the underlying file
     ///
     /// # Returns
     /// A new `FileWriterGuard` instance that will ensure immediate flushing for all writes

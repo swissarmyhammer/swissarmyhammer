@@ -44,7 +44,6 @@ Safe command execution with security controls:
 ### Utility Tools
 Supporting functionality for workflows:
 - `todo_create` - Ephemeral task tracking
-- `notify_create` - Send notifications to users
 - `abort_create` - Signal workflow termination
 - `outline_generate` - Generate code structure overviews
 
