@@ -297,16 +297,6 @@ Check workflow status:
 
 ## Additional Features
 
-### Notification System
-
-Send notifications from AI to user through the logging system.
-
-**Tool**: `notify_create`
-
-- Send info, warning, or error notifications
-- Include structured context data
-- Integration with logging infrastructure
-
 ### Abort Mechanism
 
 Signal workflow termination gracefully.

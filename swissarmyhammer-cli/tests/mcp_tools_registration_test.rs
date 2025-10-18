@@ -5,8 +5,8 @@
 use swissarmyhammer_tools::mcp::tool_registry::ToolRegistry;
 use swissarmyhammer_tools::mcp::tool_registry::{
     register_abort_tools, register_file_tools, register_issue_tools, register_memo_tools,
-    register_notify_tools, register_outline_tools, register_search_tools, register_shell_tools,
-    register_todo_tools, register_web_fetch_tools, register_web_search_tools,
+    register_outline_tools, register_search_tools, register_shell_tools, register_todo_tools,
+    register_web_fetch_tools, register_web_search_tools,
 };
 
 /// Test that verifies all expected MCP tools are registered
@@ -19,7 +19,6 @@ fn test_mcp_tools_are_registered() {
     register_file_tools(&mut registry);
     register_issue_tools(&mut registry);
     register_memo_tools(&mut registry);
-    register_notify_tools(&mut registry);
     register_outline_tools(&mut registry);
     register_search_tools(&mut registry);
     register_shell_tools(&mut registry);
@@ -30,7 +29,9 @@ fn test_mcp_tools_are_registered() {
     let tool_count = registry.len();
     println!("📊 Registered {} MCP tools", tool_count);
 
-    // We should have a significant number of tools
+    // We should have a significant number of tools. The threshold of 20 is based on the
+    // minimum set of core tools across all categories (files, shell, issues, memos, search,
+    // todos, web, etc.). This acts as a smoke test to catch missing tool registrations.
     assert!(
         tool_count > 20,
         "Expected more than 20 tools, got {}. This suggests tools are not being registered properly.",
@@ -139,7 +140,6 @@ fn test_cli_categories_are_available() {
     register_file_tools(&mut registry);
     register_issue_tools(&mut registry);
     register_memo_tools(&mut registry);
-    register_notify_tools(&mut registry);
     register_outline_tools(&mut registry);
     register_search_tools(&mut registry);
     register_shell_tools(&mut registry);

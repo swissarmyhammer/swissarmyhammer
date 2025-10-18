@@ -32,13 +32,10 @@ The file operation tools work with any text-based file format.
 
 Install using cargo:
 ```bash
-cargo install swissarmyhammer-tools
+cargo install swissarmyhammer
 ```
 
-Then initialize a workspace:
-```bash
-sah init
-```
+The `sah` command-line tool will be available after installation, which includes the MCP server and all tools.
 
 ### Where is the configuration stored?
 

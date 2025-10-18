@@ -8,11 +8,6 @@ use serde_json::Value;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
-// TODO: Move workflow storage to swissarmyhammer-common to fix circular dependency
-// use swissarmyhammer_workflow::{
-//     FileSystemWorkflowRunStorage, FileSystemWorkflowStorage, WorkflowRunStorageBackend,
-//     WorkflowStorage, WorkflowStorageBackend,
-// };
 
 use swissarmyhammer_common::{Result, SwissArmyHammerError};
 use swissarmyhammer_config::TemplateContext;
