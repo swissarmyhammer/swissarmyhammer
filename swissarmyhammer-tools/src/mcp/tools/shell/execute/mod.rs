@@ -2,12 +2,14 @@
 //!
 //! This module provides the ShellExecuteTool for executing shell commands through the MCP protocol.
 
+use crate::mcp::progress_notifications::{generate_progress_token, ProgressSender};
 use crate::mcp::shared_utils::{McpErrorHandler, McpValidation};
 use crate::mcp::tool_registry::{BaseToolImpl, McpTool, ToolContext};
 use async_trait::async_trait;
 use rmcp::model::CallToolResult;
 use rmcp::ErrorData as McpError;
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 use std::fmt;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
@@ -127,8 +129,8 @@ fn parse_size_string(size_str: &str) -> Result<usize, SizeParseError> {
 ///
 /// # Design Rationale
 ///
-/// After removing the `sah_config` module, shell configuration moved to hardcoded
-/// defaults to simplify the system while maintaining essential safety limits:
+/// Shell configuration uses hardcoded defaults. The `sah_config` module is not used.
+/// This design simplifies the system while maintaining essential safety limits:
 ///
 /// - **Output Size Limit**: 10MB prevents memory exhaustion from commands that
 ///   produce massive output (e.g., `cat large_file.log`, `find /`)
@@ -806,6 +808,8 @@ impl Drop for AsyncProcessGuard {
 async fn process_child_output_with_limits(
     mut child: Child,
     output_limits: &OutputLimits,
+    progress_sender: Option<&ProgressSender>,
+    progress_token: &str,
 ) -> Result<(std::process::ExitStatus, OutputBuffer), ShellError> {
     // Take stdout and stderr from the child process
     let stdout = child.stdout.take().ok_or_else(|| ShellError::SystemError {
@@ -830,6 +834,13 @@ async fn process_child_output_with_limits(
             stdout_line = stdout_reader.next_line() => {
                 match stdout_line {
                     Ok(Some(line)) => {
+                        // Send progress notification for this line
+                        if let Some(sender) = progress_sender {
+                            sender
+                                .send_progress(progress_token, None, &line)
+                                .ok();
+                        }
+
                         let line_bytes = line.as_bytes();
                         let mut line_with_newline = Vec::with_capacity(line_bytes.len() + 1);
                         line_with_newline.extend_from_slice(line_bytes);
@@ -858,6 +869,13 @@ async fn process_child_output_with_limits(
             stderr_line = stderr_reader.next_line() => {
                 match stderr_line {
                     Ok(Some(line)) => {
+                        // Send progress notification for this line
+                        if let Some(sender) = progress_sender {
+                            sender
+                                .send_progress(progress_token, None, &line)
+                                .ok();
+                        }
+
                         let line_bytes = line.as_bytes();
                         let mut line_with_newline = Vec::with_capacity(line_bytes.len() + 1);
                         line_with_newline.extend_from_slice(line_bytes);
@@ -1041,6 +1059,8 @@ async fn execute_shell_command(
     command: String,
     working_directory: Option<PathBuf>,
     environment: Option<std::collections::HashMap<String, String>>,
+    progress_sender: Option<&ProgressSender>,
+    progress_token: &str,
 ) -> Result<ShellExecutionResult, ShellError> {
     let start_time = Instant::now();
 
@@ -1067,7 +1087,7 @@ async fn execute_shell_command(
     let mut cmd = Command::new(program);
     cmd.args(args).current_dir(&work_dir);
 
-    // Note: Process group configuration removed for compatibility
+    // Note: Process group configuration is not used for compatibility
     // The AsyncProcessGuard will handle process cleanup using kill/killpg
 
     // Add environment variables if provided
@@ -1115,7 +1135,7 @@ async fn execute_shell_command(
 
         // Process output with limits using streaming
         let (exit_status, output_buffer) =
-            process_child_output_with_limits(child, &output_limits).await?;
+            process_child_output_with_limits(child, &output_limits, progress_sender, progress_token).await?;
 
         let (exit_status, output_buffer) = (exit_status, output_buffer);
         {
@@ -1153,6 +1173,22 @@ async fn execute_shell_command(
                 truncation_info,
                 binary_info
             );
+
+            // Send completion notification
+            if let Some(sender) = progress_sender {
+                sender
+                    .send_progress_with_metadata(
+                        progress_token,
+                        Some(100),
+                        format!("Command completed with exit code {}", exit_code),
+                        json!({
+                            "exit_code": exit_code,
+                            "duration_ms": execution_time_ms,
+                            "output_truncated": output_buffer.is_truncated()
+                        }),
+                    )
+                    .ok();
+            }
 
             Ok(ShellExecutionResult {
                 command,
@@ -1223,7 +1259,7 @@ impl McpTool for ShellExecuteTool {
 
         tracing::debug!("Executing shell command: {:?}", request.command);
 
-        // Using default shell configuration (removed sah_config dependency)
+        // Using default shell configuration (does not use sah_config)
 
         // Validate command is not empty
         McpValidation::validate_not_empty(&request.command, "shell command")
@@ -1285,10 +1321,26 @@ impl McpTool for ShellExecuteTool {
         // Execute the shell command using our core execution function
         let working_directory = request.working_directory.map(PathBuf::from);
 
+        // Generate progress token for this execution
+        let progress_token = generate_progress_token();
+
+        // Send start notification
+        if let Some(sender) = &_context.progress_sender {
+            sender
+                .send_progress(
+                    &progress_token,
+                    Some(0),
+                    format!("Executing: {}", request.command),
+                )
+                .ok();
+        }
+
         match execute_shell_command(
             request.command.clone(),
             working_directory,
             parsed_environment,
+            _context.progress_sender.as_ref(),
+            &progress_token,
         )
         .await
         {
@@ -3401,5 +3453,173 @@ mod tests {
             SizeParseError::Overflow("999999999GB".to_string()).to_string(),
             "Size value too large in '999999999GB'"
         );
+    }
+
+    // Progress notification tests
+
+    #[tokio::test]
+    async fn test_shell_execute_sends_progress_notifications() {
+        use crate::mcp::progress_notifications::ProgressSender;
+        use tokio::sync::mpsc;
+
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let progress_sender = ProgressSender::new(tx);
+
+        let mut context = create_test_context();
+        context.progress_sender = Some(progress_sender);
+
+        let tool = ShellExecuteTool::new();
+        let mut args = serde_json::Map::new();
+        args.insert(
+            "command".to_string(),
+            serde_json::Value::String("echo 'line1'; echo 'line2'".to_string()),
+        );
+
+        let result = tool.execute(args, &context).await;
+        assert!(result.is_ok());
+
+        // Collect all notifications
+        let mut notifications = Vec::new();
+        while let Ok(notif) = rx.try_recv() {
+            notifications.push(notif);
+        }
+
+        // Should have at least: start notification, output lines, completion notification
+        assert!(
+            notifications.len() >= 3,
+            "Expected at least 3 notifications (start, output, completion), got {}",
+            notifications.len()
+        );
+
+        // First notification should be the start notification with 0% progress
+        assert_eq!(
+            notifications[0].progress,
+            Some(0),
+            "First notification should be start with 0% progress"
+        );
+        assert!(
+            notifications[0].message.contains("Executing"),
+            "Start notification should mention executing"
+        );
+
+        // Last notification should be completion with 100% progress
+        let last = notifications.last().unwrap();
+        assert_eq!(
+            last.progress,
+            Some(100),
+            "Last notification should be completion with 100% progress"
+        );
+        assert!(
+            last.message.contains("completed"),
+            "Completion notification should mention completed"
+        );
+
+        // Middle notifications should be output lines (indeterminate progress)
+        for notif in &notifications[1..notifications.len() - 1] {
+            assert_eq!(
+                notif.progress, None,
+                "Output notifications should have indeterminate progress"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn test_shell_execute_continues_when_notification_fails() {
+        use crate::mcp::progress_notifications::ProgressSender;
+        use tokio::sync::mpsc;
+
+        let (tx, rx) = mpsc::unbounded_channel();
+        drop(rx); // Close channel to cause send errors
+
+        let progress_sender = ProgressSender::new(tx);
+        let mut context = create_test_context();
+        context.progress_sender = Some(progress_sender);
+
+        let tool = ShellExecuteTool::new();
+        let mut args = serde_json::Map::new();
+        args.insert(
+            "command".to_string(),
+            serde_json::Value::String("echo 'test'".to_string()),
+        );
+
+        // Should still succeed even though notifications fail
+        let result = tool.execute(args, &context).await;
+        assert!(
+            result.is_ok(),
+            "Command should succeed even when notification channel is closed"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_shell_execute_without_progress_sender() {
+        let context = create_test_context();
+        assert!(
+            context.progress_sender.is_none(),
+            "Default test context should not have progress sender"
+        );
+
+        let tool = ShellExecuteTool::new();
+        let mut args = serde_json::Map::new();
+        args.insert(
+            "command".to_string(),
+            serde_json::Value::String("echo 'test'".to_string()),
+        );
+
+        // Should work fine without progress sender
+        let result = tool.execute(args, &context).await;
+        assert!(
+            result.is_ok(),
+            "Command should succeed without progress sender"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_shell_execute_completion_metadata() {
+        use crate::mcp::progress_notifications::ProgressSender;
+        use tokio::sync::mpsc;
+
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let progress_sender = ProgressSender::new(tx);
+
+        let mut context = create_test_context();
+        context.progress_sender = Some(progress_sender);
+
+        let tool = ShellExecuteTool::new();
+        let mut args = serde_json::Map::new();
+        args.insert(
+            "command".to_string(),
+            serde_json::Value::String("echo 'test'".to_string()),
+        );
+
+        let result = tool.execute(args, &context).await;
+        assert!(result.is_ok());
+
+        // Collect all notifications
+        let mut notifications = Vec::new();
+        while let Ok(notif) = rx.try_recv() {
+            notifications.push(notif);
+        }
+
+        // Find the completion notification
+        let completion = notifications.last().unwrap();
+        assert_eq!(completion.progress, Some(100));
+
+        // Check that metadata contains exit code and duration
+        if let Some(metadata) = &completion.metadata {
+            assert!(
+                metadata.get("exit_code").is_some(),
+                "Completion metadata should include exit_code"
+            );
+            assert!(
+                metadata.get("duration_ms").is_some(),
+                "Completion metadata should include duration_ms"
+            );
+            assert!(
+                metadata.get("output_truncated").is_some(),
+                "Completion metadata should include output_truncated"
+            );
+        } else {
+            panic!("Completion notification should have metadata");
+        }
     }
 }
