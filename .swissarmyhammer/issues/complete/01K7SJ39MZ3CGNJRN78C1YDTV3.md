@@ -53,3 +53,30 @@ Must be completed **after**:
 - [ ] notify_create instructions removed
 - [ ] Progress notification guidance added
 - [ ] Memo is up to date with current practices
+
+## Proposed Solution
+
+The fix is straightforward - this is a simple text replacement in the CODING_STANDARDS memo:
+
+1. Read the current memo content to confirm the exact text
+2. Remove the line: `- notify_create the user that an issue was created using the notify_create tool`
+3. Add a new section after the Refactoring section with guidance on Progress Notifications
+4. The new section should explain when and how to use ProgressSender from ToolContext
+
+This is a documentation-only change with no code implementation needed. The change aligns the standards with the removal of the notify_create tool and introduces guidance on using the new MCP progress notification infrastructure.
+## Implementation Notes
+
+Successfully completed the documentation update:
+
+1. **Removed notify_create reference**: Deleted the line `- notify_create the user that an issue was created using the notify_create tool` from line 50 of the CODING_STANDARDS.md memo
+
+2. **Added Progress Notifications section**: Added a new section after the Refactoring section with guidance on using ProgressSender from ToolContext for long-running operations
+
+3. **Verification**: Confirmed the memo_get tool returns the updated content with:
+   - The notify_create instruction removed
+   - New Progress Notifications section in place with clear guidelines on when and how to use MCP progress notifications
+
+The change aligns the coding standards with the removal of the notify_create tool and provides clear guidance for developers on implementing MCP progress notifications in long-running operations.
+
+**Files Modified**:
+- `.swissarmyhammer/memos/CODING_STANDARDS.md` - Updated refactoring section and added progress notifications guidance

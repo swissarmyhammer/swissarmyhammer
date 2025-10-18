@@ -47,9 +47,17 @@ When you are engaged in a large refactoring, you need to work file by file.
   - in each todo, clearly state what tests need to be created
 - Work the todo list
 - todo_mark_complete it off your todo list once the issue is created
-- notify_create the user that an issue was created using the notify_create tool
 
 Creating issues rather than just 'going for it' ensures working in small, testable chunks.
+
+### Progress Notifications
+
+When implementing long-running operations (>1 second):
+- Use the ProgressSender from ToolContext to send progress notifications
+- Send start notification (0% progress) when beginning operation
+- Send periodic progress updates (with percentage when deterministic)
+- Send completion notification (100% progress) when finished
+- Do not fail the operation if notification sending fails
 
 ### Data Structures
 
