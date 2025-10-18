@@ -17,6 +17,7 @@ SwissArmyHammer Tools exposes functionality through MCP tools organized into log
 - **[Rules Engine](#rules-engine)**: Check code against quality standards and best practices
 - **[Web Tools](#web-tools)**: Fetch web content and search with DuckDuckGo
 - **[Workflow Execution](#workflow-execution)**: Execute complex workflows with AI coordination
+- **[Progress Notifications](#progress-notifications)**: Real-time progress updates during long operations
 - **[Abort Mechanism](#abort-mechanism)**: Signal workflow termination gracefully
 
 ## File Tools
@@ -298,6 +299,63 @@ Execute a workflow:
 Check workflow status:
 "Show me the status of the current workflow"
 ```
+
+## Progress Notifications
+
+Tools send real-time progress updates during long-running operations via MCP notifications.
+
+**Features**:
+
+- Streaming progress updates for shell commands
+- File indexing progress with percentage complete
+- Web search and fetch progress tracking
+- Workflow execution state transitions
+- No LLM tool calls required - server-sent automatically
+
+### Key Capabilities
+
+- Channel-based async notification delivery
+- ULID-based progress tokens for tracking operations
+- Progress percentages (0-100) or indeterminate progress
+- Custom metadata support for tool-specific information
+- Non-blocking operation - tools continue while sending updates
+
+### How It Works
+
+Tools that support progress notifications send updates through [MCP's progress notification protocol](./architecture/mcp-server.md) whenever they perform long-running operations. These notifications are triggered automatically by the tool implementation when significant progress milestones are reached (such as completing processing of a batch of files, finishing a workflow state, or receiving streaming output from a command).
+
+Clients subscribing to MCP notifications receive these updates in real-time through the notification channel without needing to poll or make additional tool calls. The AI assistant can display this progress information to users, providing:
+
+- Live feedback during long operations
+- Better user experience with visibility into progress
+- Ability to track multiple concurrent operations
+- Detailed progress information with custom metadata
+
+### Example Progress Flow
+
+Generic progress flow showing percentage completion:
+```
+1. Tool starts: "Starting: file indexing" (0%)
+2. Tool progressing: "Indexed 500/1000 files" (50%)
+3. Tool completing: "Completed: file indexing" (100%)
+```
+
+Concrete example - Indexing 1000 Rust files:
+```
+1. "Starting file indexing" (0%)
+2. "Indexed 250 files" (25%)
+3. "Indexed 500 files" (50%)
+4. "Indexed 750 files" (75%)
+5. "Completed: 1000 files indexed" (100%)
+```
+
+Progress notifications are currently used by:
+- [Workflow execution](#workflow-execution) (flow tool) - tracks state transitions
+- Shell command execution - streams command output
+- File indexing operations - reports files processed
+- Web search and fetch operations - tracks network operations
+
+For detailed information about the notification system architecture, see the [MCP Server documentation](./architecture/mcp-server.md).
 
 ## Abort Mechanism
 
