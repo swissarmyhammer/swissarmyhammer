@@ -2,6 +2,23 @@
 
 SwissArmyHammer Tools provides a comprehensive suite of capabilities for AI-assisted software development. Each feature area is designed to work seamlessly with AI assistants like Claude to enhance development workflows.
 
+## Quick Reference
+
+| Feature | What It Does | Key Tools |
+|---------|--------------|-----------|
+| [File Tools](#file-tools) | Read, write, edit, search files | `files_read`, `files_write`, `files_edit`, `files_glob`, `files_grep` |
+| [Semantic Search](#semantic-search) | AI-powered code search | `search_index`, `search_query` |
+| [Issue Management](#issue-management) | Track work items | `issue_create`, `issue_list`, `issue_mark_complete` |
+| [Memo System](#memo-system) | Knowledge management | `memo_create`, `memo_get`, `memo_list` |
+| [Todo Tracking](#todo-tracking) | Ephemeral task lists | `todo_create`, `todo_show`, `todo_mark_complete` |
+| [Git Integration](#git-integration) | Track changes | `git_changes` |
+| [Shell Execution](#shell-execution) | Run commands | `shell_execute` |
+| [Code Outline](#code-outline) | Analyze structure | `outline_generate` |
+| [Rules Engine](#rules-engine) | Check quality | `rules_check` |
+| [Web Tools](#web-tools) | Fetch content, search | `web_fetch`, `web_search` |
+| [Workflow Execution](#workflow-execution) | Automate processes | `flow` |
+| [Progress Notifications](#progress-notifications) | Real-time updates | Automatic for long operations |
+
 ## Overview
 
 SwissArmyHammer Tools exposes functionality through MCP tools organized into logical categories:

@@ -101,9 +101,17 @@ The `--cwd` flag changes the working directory before any initialization occurs,
 
 To use SwissArmyHammer Tools with Claude Desktop:
 
-1. Open Claude Desktop settings
-2. Navigate to the "Developer" section
-3. Add a new MCP server:
+### Step 1: Locate Configuration File
+
+The Claude Desktop configuration file location varies by operating system:
+
+- **macOS**: `~/Library/Application Support/Claude/claude_desktop_config.json`
+- **Windows**: `%APPDATA%\Claude\claude_desktop_config.json`
+- **Linux**: `~/.config/Claude/claude_desktop_config.json`
+
+### Step 2: Add MCP Server Configuration
+
+Edit the configuration file and add SwissArmyHammer to the `mcpServers` section:
 
 ```json
 {
@@ -116,8 +124,51 @@ To use SwissArmyHammer Tools with Claude Desktop:
 }
 ```
 
-4. Restart Claude Desktop
-5. SwissArmyHammer tools will now be available in Claude
+If the file already has other MCP servers, add SwissArmyHammer alongside them:
+
+```json
+{
+  "mcpServers": {
+    "existing-server": {
+      "command": "existing",
+      "args": []
+    },
+    "swissarmyhammer": {
+      "command": "sah",
+      "args": ["serve"]
+    }
+  }
+}
+```
+
+### Step 3: Set Working Directory (Optional)
+
+If you want SwissArmyHammer to start in a specific project directory:
+
+```json
+{
+  "mcpServers": {
+    "swissarmyhammer": {
+      "command": "sah",
+      "args": ["--cwd", "/path/to/your/project", "serve"]
+    }
+  }
+}
+```
+
+### Step 4: Restart Claude Desktop
+
+Completely quit and restart Claude Desktop for the changes to take effect.
+
+### Step 5: Verify Integration
+
+After restart, you should see SwissArmyHammer tools available. Test by asking Claude:
+
+```
+"Index all Rust files for semantic search"
+```
+
+If successful, Claude will use the `search_index` tool to index your codebase.
 
 ## Basic Usage Examples
 
@@ -229,8 +280,15 @@ If `sah` is not found after installation:
 # Add Cargo bin directory to PATH
 export PATH="$HOME/.cargo/bin:$PATH"
 
+# Add to your shell profile for persistence
+echo 'export PATH="$HOME/.cargo/bin:$PATH"' >> ~/.bashrc  # or ~/.zshrc
+
 # Or reinstall with verbose output
 cargo install swissarmyhammer --verbose
+
+# Verify installation
+which sah
+sah --version
 ```
 
 ### Issue: Permission denied
@@ -239,6 +297,9 @@ On Unix systems, ensure the binary is executable:
 
 ```bash
 chmod +x ~/.cargo/bin/sah
+
+# Check file permissions
+ls -la ~/.cargo/bin/sah
 ```
 
 ### Issue: Port already in use
@@ -248,6 +309,72 @@ If the HTTP port is already in use:
 ```bash
 # Use a different port
 sah serve --http --port 8081
+
+# Find what is using the port
+lsof -i :8080  # macOS/Linux
+netstat -ano | findstr :8080  # Windows
+```
+
+### Issue: Configuration file not found
+
+If the server cannot find configuration:
+
+```bash
+# Check default locations
+ls -la ~/.config/swissarmyhammer/sah.yaml
+ls -la .swissarmyhammer/sah.yaml
+
+# Create directory if missing
+mkdir -p ~/.config/swissarmyhammer
+
+# Copy example configuration
+sah config init
+```
+
+### Issue: Semantic search index errors
+
+If indexing fails or searches return no results:
+
+```bash
+# Remove old index
+rm -rf .swissarmyhammer/search.db
+
+# Re-index with force flag
+sah search index '**/*.rs' --force
+
+# Check index size
+ls -lh .swissarmyhammer/search.db
+
+# Verify indexing worked
+sah search query "test query"
+```
+
+### Issue: MCP connection failures
+
+If Claude Desktop or other clients cannot connect:
+
+1. Check server logs for errors
+2. Verify sah binary is in PATH
+3. Restart the client application
+4. Test server manually: `sah serve --help`
+5. Check client configuration file syntax
+
+### Issue: Slow performance
+
+If operations are slow:
+
+```bash
+# Check system resources
+top  # or htop on Linux
+
+# Reduce search index size
+sah search index 'src/**/*.rs'  # Index only src directory
+
+# Check for large files in .swissarmyhammer
+du -sh .swissarmyhammer/*
+
+# Enable debug logging to identify bottlenecks
+RUST_LOG=debug sah serve
 ```
 
 ## Next Steps

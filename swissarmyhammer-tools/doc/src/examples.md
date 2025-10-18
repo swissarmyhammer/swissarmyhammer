@@ -2,11 +2,117 @@
 
 This section provides practical, step-by-step examples for common SwissArmyHammer Tools workflows.
 
+## Real-World Example: Adding a New API Endpoint
+
+Let's walk through a complete, realistic workflow: adding a new REST API endpoint to an existing web service.
+
+**Scenario**: You need to add a `/api/users/{id}/profile` endpoint that returns user profile information.
+
+### Step 1: Understand the Existing Code
+
+First, use semantic search to understand how other endpoints are implemented:
+
+```
+You: "How are API endpoints implemented in this codebase?"
+
+Claude uses search_query to find relevant code, then explains the pattern
+```
+
+### Step 2: Create an Issue for Tracking
+
+Create an issue to track this work:
+
+```
+You: "Create an issue for adding the user profile API endpoint"
+
+Claude uses issue_create:
+{
+  "name": "feature_user_profile_endpoint",
+  "content": "# Add User Profile API Endpoint\n\n## Goal\nImplement GET /api/users/{id}/profile\n\n## Requirements\n- Return user profile data\n- Handle missing users (404)\n- Include proper authentication\n\n## Test Plan\n- Unit tests for handler\n- Integration test for endpoint"
+}
+```
+
+### Step 3: Find Related Code
+
+Search for similar endpoint implementations:
+
+```
+You: "Find examples of API endpoints that fetch user data"
+
+Claude uses search_query and files_read to show similar patterns
+```
+
+### Step 4: Create the Endpoint Handler
+
+```
+You: "Create src/api/users/profile.rs with a handler for the profile endpoint following the existing patterns"
+
+Claude uses files_write to create the new file
+```
+
+### Step 5: Update the Router
+
+```
+You: "Add the profile route to the API router in src/api/mod.rs"
+
+Claude uses files_edit to add the route registration
+```
+
+### Step 6: Create Tests
+
+```
+You: "Create tests for the profile endpoint in tests/api/users_test.rs"
+
+Claude uses files_write to create comprehensive tests
+```
+
+### Step 7: Run Tests
+
+```
+You: "Run the tests to make sure everything works"
+
+Claude uses shell_execute:
+{
+  "command": "cargo nextest run users"
+}
+```
+
+### Step 8: Check Code Quality
+
+```
+You: "Check the new code for any quality issues"
+
+Claude uses rules_check:
+{
+  "file_paths": ["src/api/users/profile.rs"]
+}
+```
+
+### Step 9: Review Changes
+
+```
+You: "Show me all files I've changed on this branch"
+
+Claude uses git_changes to list modified files
+```
+
+### Step 10: Complete the Issue
+
+```
+You: "Mark the profile endpoint issue as complete"
+
+Claude uses issue_mark_complete
+```
+
+**Result**: You've successfully added a new API endpoint with tests, following existing patterns, with full tracking and quality checks—all through natural conversation with your AI assistant.
+
 ## Quick Start Examples
 
 ### Example 1: Your First Semantic Search
 
-Learn how to index and search your codebase.
+Learn how to index and search your codebase semantically rather than by exact keywords.
+
+**Why use semantic search?** Instead of searching for exact text matches, semantic search understands the meaning of your query and finds relevant code even if it uses different terminology.
 
 **Step 1: Index your codebase**
 

@@ -2,20 +2,53 @@
 
 SwissArmyHammer Tools provides a comprehensive suite of MCP tools organized by category. This reference documents all available tools, their parameters, and usage examples.
 
+## Overview
+
+This comprehensive reference documents all 40+ MCP tools provided by SwissArmyHammer Tools. Each tool entry includes parameter specifications, return value descriptions, usage examples, and important notes.
+
+## Quick Reference
+
+Common tasks and their corresponding tools:
+
+| Task | Tool | Quick Example |
+|------|------|---------------|
+| Read file contents | `files_read` | `{"path": "/absolute/path/to/file"}` |
+| Find files by pattern | `files_glob` | `{"pattern": "**/*.rs"}` |
+| Search file contents | `files_grep` | `{"pattern": "TODO", "output_mode": "content"}` |
+| Modify file precisely | `files_edit` | `{"file_path": "...", "old_string": "...", "new_string": "..."}` |
+| Create or overwrite file | `files_write` | `{"file_path": "...", "content": "..."}` |
+| Index code for search | `search_index` | `{"patterns": ["src/**/*.rs"]}` |
+| Search code semantically | `search_query` | `{"query": "authentication logic"}` |
+| Create work item | `issue_create` | `{"name": "feature_name", "content": "# Title\n..."}` |
+| List all issues | `issue_list` | `{"show_completed": false}` |
+| View specific issue | `issue_show` | `{"name": "current"}` |
+| Complete an issue | `issue_mark_complete` | `{"name": "issue_name"}` |
+| Create a memo | `memo_create` | `{"title": "...", "content": "..."}` |
+| Get all memos | `memo_get_all_context` | `{}` |
+| Add todo task | `todo_create` | `{"task": "...", "context": "..."}` |
+| Show next todo | `todo_show` | `{"item": "next"}` |
+| List changed files | `git_changes` | `{"branch": "current"}` |
+| Run shell command | `shell_execute` | `{"command": "cargo test"}` |
+| Generate code outline | `outline_generate` | `{"patterns": ["src/**/*.rs"]}` |
+| Check code quality | `rules_check` | `{"file_paths": ["src/**/*.rs"]}` |
+| Fetch web page | `web_fetch` | `{"url": "https://..."}` |
+| Search the web | `web_search` | `{"query": "rust async"}` |
+| Execute workflow | `flow` | `{"flow_name": "deploy"}` |
+
 ## Tool Categories
 
-- [File Operations](#file-operations)
-- [Semantic Search](#semantic-search)
-- [Issue Management](#issue-management)
-- [Memo System](#memo-system)
-- [Todo Tracking](#todo-tracking)
-- [Git Operations](#git-operations)
-- [Shell Execution](#shell-execution)
-- [Code Analysis](#code-analysis)
-- [Rules Checking](#rules-checking)
-- [Web Operations](#web-operations)
-- [Workflow Execution](#workflow-execution)
-- [Flow Control](#flow-control)
+- [File Operations](#file-operations) (5 tools)
+- [Semantic Search](#semantic-search) (2 tools)
+- [Issue Management](#issue-management) (6 tools)
+- [Memo System](#memo-system) (4 tools)
+- [Todo Tracking](#todo-tracking) (3 tools)
+- [Git Operations](#git-operations) (1 tool)
+- [Shell Execution](#shell-execution) (1 tool)
+- [Code Analysis](#code-analysis) (1 tool)
+- [Rules Checking](#rules-checking) (1 tool)
+- [Web Operations](#web-operations) (2 tools)
+- [Workflow Execution](#workflow-execution) (1 tool)
+- [Flow Control](#flow-control) (1 tool)
 
 ## File Operations
 

@@ -1,8 +1,10 @@
 # SwissArmyHammer Tools
 
-📚 **[Read the full documentation](https://swissarmyhammer.github.io/swissarmyhammer-tools/)**
+> **Write specs, not code.** The only coding assistant you'll ever need.
 
-> The only coding assistant you'll ever need. Write specs, not code.
+## 📚 [Complete Documentation →](https://swissarmyhammer.github.io/swissarmyhammer-tools/)
+
+**Read the full documentation at [swissarmyhammer.github.io/swissarmyhammer-tools](https://swissarmyhammer.github.io/swissarmyhammer-tools/)** for comprehensive guides, examples, and API reference.
 
 SwissArmyHammer Tools provides a comprehensive MCP (Model Context Protocol) server that exposes powerful AI development capabilities through standardized tools and prompts. This enables AI assistants like Claude to work effectively with codebases, manage development workflows, and automate complex software engineering tasks.
 

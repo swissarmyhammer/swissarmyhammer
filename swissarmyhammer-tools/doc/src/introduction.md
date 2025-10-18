@@ -1,10 +1,16 @@
 # Introduction
 
-Welcome to SwissArmyHammer Tools, a comprehensive MCP (Model Context Protocol) server that enables AI assistants to work effectively with development environments.
+Welcome to SwissArmyHammer Tools, the comprehensive MCP (Model Context Protocol) server that transforms how AI assistants interact with your development environment.
 
 ## What is SwissArmyHammer Tools?
 
-SwissArmyHammer Tools is the MCP server component of the SwissArmyHammer ecosystem. It exposes powerful development capabilities through a standardized protocol that AI assistants like Claude can use to:
+SwissArmyHammer Tools bridges AI assistants and your codebase through the standardized Model Context Protocol. Think of it as a universal adapter that gives AI assistants structured, safe access to development tools—from file operations to semantic code search to workflow automation.
+
+**In simple terms**: SwissArmyHammer Tools lets AI assistants like Claude understand your codebase, track work items, execute commands, and automate development tasks—all through a well-defined, secure interface.
+
+## What Can It Do?
+
+SwissArmyHammer Tools empowers AI assistants to:
 
 - Read, write, and edit files with atomic operations and security validation
 - Search code semantically using vector embeddings and tree-sitter parsing

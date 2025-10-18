@@ -3,11 +3,13 @@
 //! This module provides the OutlineGenerateTool for generating structured code overviews
 //! using Tree-sitter parsing through the MCP protocol.
 
+use crate::mcp::progress_notifications::generate_progress_token;
 use crate::mcp::tool_registry::{BaseToolImpl, McpTool, ToolContext};
 use async_trait::async_trait;
 use rmcp::model::CallToolResult;
 use rmcp::ErrorData as McpError;
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 
 /// Request structure for outline generation
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -151,6 +153,25 @@ impl McpTool for OutlineGenerateTool {
         tracing::debug!("Generating outline for patterns: {:?}", request.patterns);
 
         let start_time = std::time::Instant::now();
+        let progress_token = generate_progress_token();
+
+        // Send start notification
+        if let Some(sender) = &_context.progress_sender {
+            sender
+                .send_progress_with_metadata(
+                    &progress_token,
+                    Some(0),
+                    format!(
+                        "Starting outline generation: {} patterns",
+                        request.patterns.len()
+                    ),
+                    json!({
+                        "patterns": request.patterns,
+                        "output_format": request.output_format
+                    }),
+                )
+                .ok();
+        }
 
         // Use the new file discovery functionality
         let file_discovery =
@@ -180,6 +201,22 @@ impl McpTool for OutlineGenerateTool {
         let supported_files =
             swissarmyhammer_outline::FileDiscovery::filter_supported_files(discovered_files);
 
+        let total_files = supported_files.len();
+
+        // Send file discovery notification
+        if let Some(sender) = &_context.progress_sender {
+            sender
+                .send_progress_with_metadata(
+                    &progress_token,
+                    Some(10),
+                    format!("Found {} files to parse", total_files),
+                    json!({
+                        "total_files": total_files
+                    }),
+                )
+                .ok();
+        }
+
         // Process all supported files and generate outline
         let mut outline_parser = swissarmyhammer_outline::OutlineParser::new(
             swissarmyhammer_outline::OutlineParserConfig::default(),
@@ -192,7 +229,7 @@ impl McpTool for OutlineGenerateTool {
         let mut file_outlines = Vec::new();
         let mut total_symbols = 0;
 
-        for discovered_file in &supported_files {
+        for (i, discovered_file) in supported_files.iter().enumerate() {
             tracing::debug!("Processing file: {}", discovered_file.path.display());
 
             // Read file content
@@ -222,10 +259,47 @@ impl McpTool for OutlineGenerateTool {
                     // Continue processing other files
                 }
             }
+
+            // Send parsing progress notifications every 10 files or on last file
+            if i % 10 == 0 || i == total_files - 1 {
+                if let Some(sender) = &_context.progress_sender {
+                    let progress = 10 + ((i as f64 / total_files as f64) * 85.0) as u32;
+                    sender
+                        .send_progress_with_metadata(
+                            &progress_token,
+                            Some(progress),
+                            format!(
+                                "Parsing: {}/{} files ({} symbols)",
+                                i + 1,
+                                total_files,
+                                total_symbols
+                            ),
+                            json!({
+                                "files_parsed": i + 1,
+                                "total_files": total_files,
+                                "symbols_found": total_symbols,
+                                "current_file": discovered_file.path.display().to_string()
+                            }),
+                        )
+                        .ok();
+                }
+            }
         }
 
         // Create hierarchy from file outlines
+        let files_parsed = file_outlines.len();
         let hierarchy = swissarmyhammer_outline::OutlineHierarchy::new(file_outlines);
+
+        // Send formatting notification
+        if let Some(sender) = &_context.progress_sender {
+            sender
+                .send_progress(
+                    &progress_token,
+                    Some(95),
+                    format!("Formatting outline ({} symbols)", total_symbols),
+                )
+                .ok();
+        }
 
         // Format output based on requested format
         let output_format = request.output_format.as_deref().unwrap_or("yaml");
@@ -265,6 +339,31 @@ impl McpTool for OutlineGenerateTool {
                 ))
             }
         };
+
+        // Send completion notification
+        let duration = start_time.elapsed();
+        let duration_ms = duration.as_millis() as u64;
+        if let Some(sender) = &_context.progress_sender {
+            sender
+                .send_progress_with_metadata(
+                    &progress_token,
+                    Some(100),
+                    format!(
+                        "Generated outline: {} files, {} symbols in {:.1}s",
+                        total_files,
+                        total_symbols,
+                        duration_ms as f64 / 1000.0
+                    ),
+                    json!({
+                        "files_parsed": files_parsed,
+                        "total_files": total_files,
+                        "total_symbols": total_symbols,
+                        "duration_ms": duration_ms,
+                        "output_format": output_format
+                    }),
+                )
+                .ok();
+        }
 
         Ok(BaseToolImpl::create_success_response(formatted_output))
     }
@@ -549,5 +648,143 @@ mod tests {
         let call_result = result.unwrap();
         assert_eq!(call_result.is_error, Some(false));
         assert!(!call_result.content.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_outline_generate_sends_progress_notifications() {
+        use crate::mcp::progress_notifications::ProgressSender;
+        use crate::mcp::tool_handlers::ToolHandlers;
+        use std::sync::Arc;
+        use swissarmyhammer_git::GitOperations;
+        use swissarmyhammer_issues::IssueStorage;
+        use swissarmyhammer_memoranda::{MarkdownMemoStorage, MemoStorage};
+        use tokio::sync::{mpsc, Mutex, RwLock};
+
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let progress_sender = ProgressSender::new(tx);
+
+        // Create mock context with progress sender
+        let issue_storage: Arc<RwLock<Box<dyn IssueStorage>>> = Arc::new(RwLock::new(Box::new(
+            swissarmyhammer_issues::FileSystemIssueStorage::new(
+                tempfile::tempdir().unwrap().path().to_path_buf(),
+            )
+            .unwrap(),
+        )));
+        let git_ops: Arc<Mutex<Option<GitOperations>>> = Arc::new(Mutex::new(None));
+        let temp_dir = tempfile::tempdir().unwrap();
+        let memo_storage: Arc<RwLock<Box<dyn MemoStorage>>> = Arc::new(RwLock::new(Box::new(
+            MarkdownMemoStorage::new(temp_dir.path().join("memos")),
+        )));
+        let tool_handlers = Arc::new(ToolHandlers::new(memo_storage.clone()));
+        let agent_config = Arc::new(swissarmyhammer_config::agent::AgentConfig::default());
+        let mut context = ToolContext::new(
+            tool_handlers,
+            issue_storage,
+            git_ops,
+            memo_storage,
+            agent_config,
+        );
+        context.progress_sender = Some(progress_sender);
+
+        // Create temporary directory with multiple test files
+        let test_dir = tempfile::tempdir().unwrap();
+        for i in 0..15 {
+            let test_file = test_dir.path().join(format!("test_{}.rs", i));
+            std::fs::write(
+                &test_file,
+                format!(
+                    r#"fn function_{}() {{
+    println!("Hello from file {}", {});
+}}
+
+fn add_{}(a: i32, b: i32) -> i32 {{
+    a + b
+}}
+"#,
+                    i, i, i, i
+                ),
+            )
+            .expect("Failed to write test file");
+        }
+
+        let tool = OutlineGenerateTool::new();
+        let pattern = format!("{}/*.rs", test_dir.path().display());
+        let mut args = serde_json::Map::new();
+        args.insert("patterns".to_string(), json!(vec![pattern]));
+        args.insert("output_format".to_string(), json!("yaml"));
+
+        // Execute the tool
+        let result = tool.execute(args, &context).await;
+        assert!(result.is_ok(), "Tool execution should succeed");
+
+        // Collect all notifications
+        let mut notifications = Vec::new();
+        while let Ok(notif) = rx.try_recv() {
+            notifications.push(notif);
+        }
+
+        // Verify notifications were sent
+        assert!(
+            notifications.len() >= 5,
+            "Expected at least 5 notifications (start, discovery, progress, formatting, completion), got {}",
+            notifications.len()
+        );
+
+        // First notification should be the start notification with 0% progress
+        assert_eq!(
+            notifications[0].progress,
+            Some(0),
+            "First notification should be start with 0% progress"
+        );
+        assert!(
+            notifications[0]
+                .message
+                .contains("Starting outline generation"),
+            "Start notification should mention starting outline generation"
+        );
+
+        // Second notification should be file discovery with 10% progress
+        assert_eq!(
+            notifications[1].progress,
+            Some(10),
+            "Second notification should be file discovery with 10% progress"
+        );
+        assert!(
+            notifications[1].message.contains("Found")
+                && notifications[1].message.contains("files to parse"),
+            "Discovery notification should mention files found"
+        );
+
+        // Last notification should be completion with 100% progress
+        let last = notifications.last().unwrap();
+        assert_eq!(
+            last.progress,
+            Some(100),
+            "Last notification should be completion with 100% progress"
+        );
+        assert!(
+            last.message.contains("Generated outline") && last.message.contains("symbols"),
+            "Completion notification should mention generated outline and symbols"
+        );
+
+        // Verify progress values increase monotonically (when present)
+        let progresses: Vec<u32> = notifications.iter().filter_map(|n| n.progress).collect();
+        for window in progresses.windows(2) {
+            assert!(
+                window[0] <= window[1],
+                "Progress should increase monotonically: {} > {}",
+                window[0],
+                window[1]
+            );
+        }
+
+        // Verify formatting notification is present
+        let formatting_notif = notifications
+            .iter()
+            .find(|n| n.message.contains("Formatting outline") && n.progress == Some(95));
+        assert!(
+            formatting_notif.is_some(),
+            "Should have formatting notification at 95% progress"
+        );
     }
 }

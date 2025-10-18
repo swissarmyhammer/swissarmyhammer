@@ -156,6 +156,54 @@ async fn call_tool(
 - Returns structured result or error
 - Logs execution for debugging
 
+## Progress Notifications
+
+The MCP server supports real-time progress notifications for long-running operations. Tools can optionally send progress updates through a channel-based system to provide feedback without blocking execution.
+
+### Progress Notification System
+
+**Architecture**:
+- **Channel-based**: Uses tokio unbounded channels for async, non-blocking delivery
+- **Optional**: Tools can check for progress sender availability in ToolContext
+- **ULID Tokens**: Each operation receives a unique token for tracking
+- **Metadata Support**: Tools can include custom metadata in notifications
+
+**Implementation**:
+```rust
+// In ToolContext
+pub struct ToolContext {
+    pub progress_sender: Option<Arc<ProgressSender>>,
+    // ... other fields
+}
+
+// Tools send progress
+if let Some(sender) = &context.progress_sender {
+    let token = generate_progress_token();
+    sender.send_progress(&token, Some(50), "Halfway done")?;
+}
+```
+
+**Notification Format**:
+```json
+{
+  "method": "notifications/progress",
+  "params": {
+    "progressToken": "progress_0192a1b2c3d4_1234567890abcdef",
+    "progress": 50,
+    "total": 100
+  }
+}
+```
+
+### Tools with Progress Support
+
+The following tools send progress notifications:
+- **shell_execute**: Streams command output in real-time
+- **search_index**: Reports files indexed with percentage complete
+- **web_fetch**: Tracks HTTP request and content conversion progress
+- **web_search**: Reports search progress and content fetching
+- **flow**: Tracks workflow state transitions and step completion
+
 ## File Watching
 
 The server monitors prompt directories for changes and automatically reloads prompts when files are modified, created, or deleted.

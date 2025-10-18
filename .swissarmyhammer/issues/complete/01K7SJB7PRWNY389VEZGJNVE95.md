@@ -261,3 +261,57 @@ Generate structured code outlines with progress feedback.
 
 ## Related Issues
 - **01K7SHZ4203SMD2C6HTW1QV3ZP**: Phase 1: Implement MCP Progress Notification Infrastructure (prerequisite)
+
+
+
+## Proposed Solution
+
+After analyzing the existing codebase and similar implementations (particularly `search_index` tool), I will implement progress notifications following this approach:
+
+### Implementation Strategy
+
+1. **Import Required Dependencies** - Add `generate_progress_token` from progress_notifications module
+2. **Generate Unique Token** - Create token at start of execution for tracking all notifications
+3. **Send Notifications at Key Phases** - Follow the progress breakdown outlined in the issue
+4. **Handle Notification Failures Gracefully** - Use `.ok()` to ignore send failures (non-blocking)
+5. **Include Rich Metadata** - Provide detailed context at each phase for debugging and monitoring
+
+### Progress Notification Points
+
+The implementation will send notifications at these execution points in `execute()` method:
+
+1. **Line ~90** (after pattern validation): 0% - Starting with patterns metadata
+2. **Line ~150** (after file discovery): 10% - Total files found
+3. **Line ~180-200** (during parsing loop): 10-95% - Every 10 files or 10% progress change with symbol counts
+4. **Line ~210** (before formatting): 95% - Formatting with total symbols
+5. **Line ~230** (after completion): 100% - Full statistics including duration, files, symbols, symbol types
+
+### Notification Frequency Logic
+
+```rust
+// Send notifications every 10 files OR when significant progress change occurs
+if i % 10 == 0 || i == supported_files.len() - 1 {
+    let progress = 10 + ((i as f64 / total_files as f64) * 85.0) as u32;
+    sender.send_progress_with_metadata(...).ok();
+}
+```
+
+### Testing Strategy
+
+Will add comprehensive unit test `test_outline_generate_sends_progress_notifications()` that:
+- Creates temp directory with multiple test files (15+ to trigger progress updates)
+- Captures notifications via channel
+- Verifies start (0%), completion (100%), and monotonic progress increase
+- Handles cases where embedding models may not be available in test environment
+
+### Non-Functional Requirements
+
+- Progress notifications must not block or fail the main operation
+- Overhead must be negligible (<1% of total execution time)
+- All notifications use consistent token for operation tracking
+- Metadata provides actionable debugging information
+
+### Files to Modify
+
+- `swissarmyhammer-tools/src/mcp/tools/outline/generate/mod.rs` - Main implementation
+

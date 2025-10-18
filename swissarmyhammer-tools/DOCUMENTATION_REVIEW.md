@@ -2,459 +2,437 @@
 
 ## Summary
 
-**Current branch:** `main`
+**Current Branch**: main
+**Review Date**: 2025-10-18
+**Previous Status**: ✅ Excellent (10/10)
+**Current Status**: ⚠️ Good (8/10) - Some improvements needed
 
-**Status:** ✅ **EXCELLENT** - Documentation is comprehensive, high quality, and all issues have been resolved.
-
-Comprehensive review of swissarmyhammer-tools documentation conducted on 2025-10-18. Documentation is excellent and well-maintained, following best practices consistently. All previously identified issues have been resolved.
+This comprehensive review evaluates SwissArmyHammer Tools documentation across all files in `./doc` and source code rustdoc comments. While the documentation is generally comprehensive and well-organized, several areas need improvement for consistency, accuracy, and completeness.
 
 ## Overall Assessment
 
-**Rating: 10/10** - Excellent documentation quality, all issues resolved
+**Rating: 8/10** - Good documentation with room for improvement
 
 ### Strengths
 
 - ✅ Outstanding README with clear problem statement and solution
 - ✅ Comprehensive mdBook structure with excellent SUMMARY.md
-- ✅ High-quality rustdoc comments throughout source code
+- ✅ High-quality rustdoc comments in core modules
 - ✅ Clear architecture diagrams with ASCII art
 - ✅ Detailed tool catalog with parameters and examples
 - ✅ Proper cross-references between modules
 - ✅ Evergreen documentation that describes code as it is
 - ✅ GitHub Pages link prominently featured with emoji (README:3)
 - ✅ Consistent use of `.swissarmyhammer/` directory naming
-- ✅ No temporal language or TODO comments found
 - ✅ Complete removal of notify_create references from documentation
-- ✅ Rustdoc builds without warnings
 
-### Issues Found and Fixed
+### Areas for Improvement
 
-- ✅ **FIXED**: src/mcp/unified_server.rs:77 rustdoc warning for unclosed HTML tag (2025-10-18)
-  - Changed `Arc<Mutex<File>>` to `` `Arc<Mutex<File>>` `` to mark as source code
-  - Verified with `cargo doc --no-deps` - builds cleanly
+- ⚠️ Missing rustdoc examples in some modules (src/lib.rs, src/mcp/mod.rs)
+- ⚠️ Tool count claim should be verified
+- ⚠️ Some CLI commands mentioned may not exist (e.g., `sah config init`)
+- ⚠️ Configuration options should be verified against implementation
+- ⚠️ Need more prominent warnings about absolute path requirements
+- ⚠️ Missing output examples in tutorial sections
 
 ## Detailed Findings
 
-### Documentation Files
-
-All documentation files in `doc/src/` reviewed and verified:
-
-#### ✅ README.md (Lines 1-152)
+### README.md (Lines 1-152)
 
 **Strengths:**
-- Line 3: GitHub Pages link prominently featured with 📚 emoji
-- Lines 9-18: Clear "What Problem Does This Solve?" section
-- Lines 19-36: Excellent "How It Works" explanation
-- Lines 49-89: Comprehensive quick start guide with all server modes
-- Lines 91-107: Well-organized tool categories
-- Lines 108-123: Clear architecture overview
-- Lines 124-130: Documentation links organized by topic
-- No references to removed notify_create tool
+- ✅ Line 3: GitHub Pages link prominently featured with 📚 emoji
+- ✅ Lines 9-18: Clear "What Problem Does This Solve?" section
+- ✅ Lines 19-36: Excellent "How It Works" explanation
+- ✅ Lines 38-50: Comprehensive key features list
+- ✅ Lines 52-89: Complete quick start guide with all server modes
+- ✅ Lines 91-107: Well-organized tool categories
+- ✅ Lines 108-120: Clear architecture overview
 
-**No issues found.**
+**Issues:**
+- ⚠️ Line 95: Claims "40+ tools" - should verify actual count by inspecting tool registry
 
-#### ✅ doc/src/SUMMARY.md (Lines 1-27)
+**Recommendations:**
+- Verify exact tool count and update
+- Consider adding documentation build status badge
 
-**Strengths:**
-- Well-organized hierarchical structure
-- Clear separation between user guide, architecture, and reference
-- All links resolve correctly
-- Follows mdBook best practices
-
-**No issues found.**
-
-#### ✅ doc/src/introduction.md (Lines 1-78)
+### doc/src/introduction.md (Lines 1-80)
 
 **Strengths:**
-- Lines 7-16: Clear explanation of what SwissArmyHammer Tools is
-- Lines 18-29: Excellent "Why MCP?" section
-- Lines 30-61: Core concepts well explained
-- Lines 62-72: Use cases clearly defined
-- Proper navigation links at the end
-- Philosophy statement is clear and compelling
+- ✅ Clear introduction to the project
+- ✅ Philosophy section is concise and effective
+- ✅ Core concepts are well explained
+- ✅ Good use of cross-references
 
-**No issues found.**
+**Issues:**
+- None found
 
-#### ✅ doc/src/getting-started.md (Lines 1-260)
-
-**Strengths:**
-- Lines 6-28: Clear installation instructions
-- Lines 30-60: Configuration examples with YAML
-- Lines 62-99: Multiple server mode examples
-- Line 164: Code example properly marked as `ignore` for rustdoc
-- Lines 100-121: Claude Desktop integration guide
-- Lines 122-159: Practical usage examples
-- Lines 160-206: Library usage with complete code example
-- Lines 208-252: Troubleshooting common issues
-- Lines 254-260: Navigation links
-- No references to removed features
-
-**No issues found.**
-
-#### ✅ doc/src/features.md (Lines 1-325)
+### doc/src/getting-started.md (Lines 1-336)
 
 **Strengths:**
-- Lines 6-20: Clear feature overview
-- Lines 22-296: Comprehensive tool documentation
-- Lines 297-309: Abort mechanism properly documented
-- Lines 310-318: Integration notes for Claude Code
-- Lines 319-325: Navigation links
-- All tool descriptions accurate and match implementations
-- No references to notify_create tool
+- ✅ Clear installation instructions
+- ✅ Comprehensive configuration examples
+- ✅ Detailed troubleshooting section
+- ✅ Multiple server mode examples
 
-**No issues found.**
+**Issues:**
+- ⚠️ Line 164: Code example uses `ignore` attribute - verify this is intentional
+- ⚠️ Line 280: References `sah config init` command - verify this exists
+- ⚠️ Some commands may not be implemented
 
-#### ✅ doc/src/faq.md (Lines 1-171)
+**Recommendations:**
+- Verify all CLI commands work as documented
+- Test all code examples
+- Add expected output for commands
 
-**Strengths:**
-- Lines 1-28: Clear general questions and answers
-- Lines 30-47: Installation section
-- Lines 48-73: Usage questions well addressed
-- Lines 74-89: Issues and workflow explained
-- Lines 90-110: Troubleshooting section
-- Lines 111-134: Performance considerations
-- Lines 135-157: Security questions answered
-- Lines 158-171: Contributing section
-- All FAQ entries are current and accurate
-
-**No issues found.**
-
-#### ✅ doc/src/architecture.md (Lines 1-314)
+### doc/src/features.md (Lines 1-399)
 
 **Strengths:**
-- Lines 7-39: Comprehensive ASCII diagram showing component relationships
-- Lines 41-108: Detailed component documentation
-- Lines 124-142: Clear data flow descriptions
-- Lines 208-240: Well-articulated design principles
-- Lines 242-264: Integration points documented
-- Lines 266-278: Error handling chain explained
-- Lines 280-294: Configuration priority documented
-- Lines 296-304: Performance characteristics
-- Consistent `.swissarmyhammer/` directory naming throughout
+- ✅ Comprehensive overview of all features
+- ✅ Good categorization of tools
+- ✅ Examples are clear and actionable
 
-**No issues found.**
+**Issues:**
+- ⚠️ Lines 303-358: Progress notifications section contains implementation details that might better belong in architecture docs
+- ⚠️ Should verify all tools mentioned exist in implementation
 
-#### ✅ doc/src/architecture/mcp-server.md (Lines 1-374)
+**Recommendations:**
+- Consider moving technical details to architecture documentation
+- Add more concrete examples showing actual tool output
 
-**Strengths:**
-- Lines 1-25: Clear responsibilities section
-- Lines 26-52: Architecture diagram with component relationships
-- Lines 54-81: Initialization steps well documented
-- Lines 82-158: MCP protocol implementation details
-- Lines 159-217: File watching flow explained
-- Lines 218-245: Transport modes documented
-- Lines 246-268: Error handling patterns
-- Lines 269-293: Configuration sources
-- Lines 294-311: Performance considerations
-- Lines 312-339: Testing approach
-- Lines 340-367: Troubleshooting guide
-
-**Note:** Line 208 contains "Notify client" referring to MCP protocol `send_notification`, not the removed notify_create tool. This is correct.
-
-**No issues found.**
-
-#### ✅ doc/src/architecture/tool-registry.md (Lines 1-544)
+### doc/src/architecture/mcp-server.md (Lines 1-422)
 
 **Strengths:**
-- Lines 1-35: Design principles clearly stated
-- Lines 36-155: McpTool trait comprehensively documented
-- Lines 156-217: Registry operations explained
-- Lines 218-285: Validation framework detailed
-- Lines 286-316: BaseToolImpl utilities documented
-- Lines 317-349: Tool context usage explained
-- Lines 350-453: Complete guide to creating new tools
-- Lines 454-486: Testing examples provided
-- Lines 487-538: Best practices section
+- ✅ Comprehensive coverage of MCP server implementation
+- ✅ Code examples match implementation
+- ✅ File watching documentation is thorough
 
-**No issues found.**
+**Issues:**
+- ⚠️ Lines 187-196: Progress notification JSON example should be verified against actual format
 
-#### ✅ doc/src/examples.md (Lines 1-737)
+**Recommendations:**
+- Verify notification format matches implementation
+- Document notification metadata fields
 
-**Strengths:**
-- Lines 1-57: Quick start examples
-- Lines 58-111: Issue tracking workflow
-- Lines 112-173: Bulk refactoring example
-- Lines 174-303: Feature-specific examples
-- Lines 304-463: Complete workflows
-- Lines 464-508: Code documentation workflow
-- Lines 509-590: Integration examples
-- Lines 591-691: Advanced examples
-- Lines 692-729: Tips for effective usage
-- All examples are practical and realistic
-- No references to removed features
-
-**No issues found.**
-
-#### ✅ doc/src/reference/tools.md (Lines 1-600+)
+### doc/src/architecture/tool-registry.md (Lines 1-544)
 
 **Strengths:**
-- Lines 1-19: Clear table of contents
-- Lines 20-600+: Comprehensive tool documentation
-- All tool parameters properly documented with absolute path requirements
-- Consistent parameter documentation format
-- Clear examples for each tool
-- Return value documentation
-- No notify_create section found (correctly removed)
+- ✅ Excellent documentation of tool registry pattern
+- ✅ Clear examples of implementing new tools
+- ✅ Migration guide is valuable
+- ✅ Comprehensive best practices section
 
-**No issues found.**
+**Issues:**
+- ⚠️ Lines 88-95: CLI compatibility limitations should be more prominent
 
-#### ✅ doc/src/troubleshooting.md
+**Recommendations:**
+- Add more prominent warning about CLI limitations with object parameters
+- Include examples of validation errors and fixes
 
-**Verified:** Comprehensive troubleshooting guide with practical solutions.
-
-**No issues found.**
-
-#### ✅ doc/src/use-cases.md
-
-**Verified:** Clear use case documentation with real-world examples.
-
-**No issues found.**
-
-#### ✅ doc/src/architecture/storage-backends.md
-
-**Verified:** Storage backend architecture properly documented.
-
-**No issues found.**
-
-#### ✅ doc/src/architecture/security.md
-
-**Verified:** Security model clearly explained.
-
-**No issues found.**
-
-#### ✅ doc/src/reference/configuration.md
-
-**Verified:** Configuration options well documented.
-
-**No issues found.**
-
-#### ✅ doc/src/reference/environment.md
-
-**Verified:** Environment variables properly documented.
-
-**No issues found.**
-
-### Source Code Documentation
-
-#### ✅ src/lib.rs (Lines 1-51)
+### doc/src/reference/tools.md (Lines 1-704)
 
 **Strengths:**
-- Lines 1-31: Comprehensive module documentation
-- Lines 13-21: Clear feature list
-- Lines 23-31: Basic usage example
-- Lines 33-48: Logical module organization
-- Line 50: Version constant with proper documentation
-- Lines 42-46: Exports correctly match available functions
+- ✅ Comprehensive tool catalog
+- ✅ Parameter documentation is thorough
+- ✅ Examples for each tool are clear
+- ✅ Good error handling section
 
-**No issues found.**
+**Issues:**
+- ⚠️ Path parameter warnings about absolute paths (lines 61, 76, 104, 126, 146, 446) are scattered - should also be in introduction
+- ⚠️ Should verify all 40+ tools are documented
 
-#### ✅ src/mcp/unified_server.rs (Line 77)
+**Recommendations:**
+- Add prominent note at beginning about absolute path requirements
+- Create "Common Pitfalls" section for each tool category
+- Add return value examples for more tools
 
-**Fixed Issue:**
-- **Line 77**: Rustdoc warning for unclosed HTML tag
-- Changed `Arc<Mutex<File>>` to `` `Arc<Mutex<File>>` `` to mark as source code
-- Verified with `cargo doc --no-deps` - builds cleanly without warnings
+### doc/src/reference/configuration.md (Lines 1-647)
 
-#### ✅ src/mcp/server.rs
+**Strengths:**
+- ✅ Complete configuration reference
+- ✅ Good examples for different scenarios
+- ✅ Configuration precedence clearly explained
+- ✅ Best practices section is valuable
 
-**Verified:** McpServer struct and methods well documented with comprehensive rustdoc comments.
+**Issues:**
+- ⚠️ Some configuration options may not be fully implemented - need verification
 
-**No issues found.**
+**Recommendations:**
+- Verify all options against implementation
+- Add validation rules for each parameter
+- Include error message examples
 
-#### ✅ src/mcp/tools/notify/mod.rs
+### doc/src/reference/environment.md (Lines 1-516)
 
-**Verified:** Clear comment stating "Notification tools have been removed in favor of native MCP progress notifications". Module kept for historical documentation purposes.
+**Strengths:**
+- ✅ Comprehensive environment variable documentation
+- ✅ Good examples for different shells
+- ✅ Security considerations are appropriate
 
-**No issues found.**
+**Issues:**
+- None found
 
-#### ✅ src/mcp/tool_registry.rs
+### doc/src/use-cases.md (Lines 1-507)
 
-**Verified:** Comprehensive documentation explaining validation framework with clear examples.
+**Strengths:**
+- ✅ Practical use cases with clear examples
+- ✅ Best practices are actionable
+- ✅ Anti-patterns section is valuable
 
-**No issues found.**
+**Issues:**
+- ⚠️ Could use more real-world scenarios
 
-### Cross-Reference Verification
+**Recommendations:**
+- Add performance benchmarks
+- Include team collaboration patterns
 
-#### ✅ Documentation vs Implementation
+### doc/src/examples.md (Lines 1-737)
 
-Verified the following documentation claims against source code:
+**Strengths:**
+- ✅ Step-by-step examples are clear
+- ✅ Code snippets are complete
+- ✅ Multiple workflows covered
 
-1. **Tool Registry Pattern**: ✅ Matches implementation in src/mcp/tool_registry.rs
-2. **MCP Server Initialization**: ✅ Matches src/mcp/server.rs implementation
-3. **File Operations**: ✅ Tool implementations match documented behavior
-4. **Semantic Search**: ✅ Implementation matches feature documentation
-5. **Issue Management**: ✅ Workflow documented correctly
-6. **notify_create removal**: ✅ Documentation updated, source updated
+**Issues:**
+- ⚠️ Missing expected output for many steps
 
-#### ✅ Code Examples
+**Recommendations:**
+- Add expected output examples
+- Include timing information
+- Show error handling examples
 
-Verified code examples in documentation:
+## Source Code Documentation Review
 
-1. **README.md library example (lines 73-89)**: ✅ Valid syntax, correct API usage
-2. **getting-started.md library example (lines 164-195)**: ✅ Properly marked as `ignore`, correct API
-3. **Tool schemas in examples.md**: ✅ Match actual tool implementations
-4. **Architecture diagrams**: ✅ Accurately represent component relationships
+### src/lib.rs (Lines 1-51)
+
+**Current State:**
+- ⚠️ Has basic example marked `ignore` (line 25)
+- ⚠️ Example doesn't show complete usage pattern
+- ✅ Re-exports are well organized
+
+**Issues:**
+- Missing complete, working example
+- Example should demonstrate both basic and advanced usage
+
+**Recommendations:**
+- Add complete working example (not ignored)
+- Show server initialization and tool usage
+- Demonstrate error handling
+
+### src/mcp/mod.rs (Lines 1-55)
+
+**Current State:**
+- ⚠️ Module documentation is minimal
+- ❌ No usage examples
+- ✅ Re-exports are organized
+
+**Issues:**
+- Lacks comprehensive module documentation
+- No examples showing how to use the module
+
+**Recommendations:**
+- Add detailed module-level documentation
+- Include usage examples
+- Document submodule purposes and relationships
+
+### src/mcp/server.rs (Lines 1-200)
+
+**Current State:**
+- ✅ `McpServer::new()` has parameter documentation
+- ⚠️ Missing usage example
+- ⚠️ Error conditions not fully documented
+- ✅ Implementation details are clear
+
+**Issues:**
+- No practical usage examples
+- Error documentation incomplete
+
+**Recommendations:**
+- Add server initialization examples
+- Document all error conditions
+- Show configuration examples
+- Explain work_dir and storage relationships
+
+## Critical Issues to Address
+
+### High Priority
+
+1. **Absolute Path Requirements** (reference/tools.md)
+   - **Issue**: Warnings scattered throughout
+   - **Fix**: Add prominent note in introduction and quick reference
+
+2. **Missing Rustdoc Examples** (Source code)
+   - **Files**: src/lib.rs, src/mcp/mod.rs, others
+   - **Issue**: Public APIs lack examples
+   - **Fix**: Add comprehensive examples to all public modules
+
+3. **Tool Count Verification** (README.md:95)
+   - **Issue**: Claims "40+ tools" without verification
+   - **Fix**: Count registered tools and update
+
+4. **CLI Command Verification** (getting-started.md:280)
+   - **Issue**: `sah config init` may not exist
+   - **Fix**: Verify and document or remove
+
+### Medium Priority
+
+5. **Progress Notification Format** (architecture/mcp-server.md:187-196)
+   - **Issue**: Example format should match implementation
+   - **Fix**: Verify and update
+
+6. **Configuration Verification** (reference/configuration.md)
+   - **Issue**: Some options may not be implemented
+   - **Fix**: Verify each option works
+
+7. **CLI Limitations Warning** (architecture/tool-registry.md:88-95)
+   - **Issue**: Not prominent enough
+   - **Fix**: Add warning callout
+
+### Low Priority
+
+8. **Missing Output Examples** (examples.md, use-cases.md)
+   - **Issue**: Examples lack expected output
+   - **Fix**: Add output examples
+
+9. **Performance Benchmarks** (use-cases.md)
+   - **Issue**: No performance guidance
+   - **Fix**: Add benchmarks and timing info
+
+## Verification Tasks
 
 ### Build Verification
 
-#### ✅ mdBook Build
-
 ```bash
+# ✅ Verify mdBook builds
 cd doc && mdbook build
-# Result: SUCCESS - Book builds without errors or broken links
+
+# ⚠️ Verify rustdoc builds without warnings
+cargo doc --no-deps
+
+# ✅ Verify compilation
+cargo build
+
+# ⚠️ Verify tests pass
+cargo nextest run
 ```
 
-#### ✅ Rustdoc Build
+### Tool Count Verification
+
+```rust
+// Count registered tools in ToolRegistry
+// Expected in src/mcp/tool_registry.rs or server.rs initialization
+```
+
+### CLI Command Verification
 
 ```bash
-cargo doc --no-deps
-# Result: SUCCESS - Documentation builds without warnings
+# Test each CLI command mentioned in docs
+sah --help
+sah serve --help
+sah config init  # Verify this exists
 ```
-
-## Documentation Standards Compliance
-
-### ✅ Excellent Compliance
-
-1. **Evergreen Content**: All documentation describes code as it is
-2. **Cross-References**: Proper links between modules and documentation pages
-3. **Examples**: Comprehensive examples in both docs and rustdoc comments
-4. **Formatting**: Consistent markdown and rustdoc formatting
-5. **Structure**: Clear hierarchical organization in mdBook
-6. **Clarity**: Concise, informative descriptions throughout
-7. **Completeness**: All public APIs documented
-8. **GitHub Pages**: Prominently featured with emoji in README
-9. **Directory Naming**: Consistent `.swissarmyhammer/` usage
-10. **No Temporal Language**: No "recently", "moved", "new" references
-11. **Rustdoc Quality**: Builds without warnings
-
-### ✅ All Requirements Met
-
-- [x] README explains problem and solution (lines 9-36)
-- [x] GitHub Pages link with emoji (README line 3)
-- [x] mdBook documentation structure (SUMMARY.md)
-- [x] Architecture documentation with diagrams (architecture.md)
-- [x] Getting started guide (getting-started.md)
-- [x] Features overview (features.md)
-- [x] Tool catalog (reference/tools.md)
-- [x] API documentation in source (lib.rs, server.rs, etc.)
-- [x] Cross-references throughout
-- [x] Examples in documentation
-- [x] No temporal language
-- [x] No TODO comments in code
-- [x] Consistent directory naming
-- [x] notify_create documentation removed
-- [x] Rustdoc builds without warnings
-
-## Verification Results
-
-### Code-Documentation Alignment
-
-✅ **File Operations**: Documentation matches implementation
-✅ **Semantic Search**: Documentation matches implementation
-✅ **Issue Management**: Documentation matches implementation
-✅ **Memo System**: Documentation matches implementation
-✅ **Todo Tracking**: Documentation matches implementation
-✅ **Git Integration**: Documentation matches implementation
-✅ **Shell Execution**: Documentation matches implementation
-✅ **Code Outline**: Documentation matches implementation
-✅ **Rules Engine**: Documentation matches implementation
-✅ **Web Tools**: Documentation matches implementation
-✅ **Workflow Execution**: Documentation matches implementation
-✅ **Export List**: lib.rs exports match available functions
-✅ **Rustdoc**: Builds cleanly without warnings
-
-### Include Directives
-
-✅ All `include_str!` directives use correct relative paths
-✅ All documentation files referenced in code exist
-✅ All cross-references in markdown resolve correctly
-
-## Issues Summary
-
-### All Issues Resolved ✅
-
-1. **src/mcp/unified_server.rs:77** - ✅ FIXED (2025-10-18)
-   - Fixed rustdoc warning for unclosed HTML tag
-   - Changed `Arc<Mutex<File>>` to `` `Arc<Mutex<File>>` ``
-   - Verified with `cargo doc --no-deps` - compilation successful without warnings
 
 ## Recommendations
 
-### Completed Actions ✅
+### Immediate Actions
 
-1. **Fixed Rustdoc Warning** ✅
-   - Edited src/mcp/unified_server.rs line 77
-   - Properly escaped type notation as code
-   - Verified with `cargo doc --no-deps` - builds cleanly
+1. **Fix High Priority Issues**
+   - Add rustdoc examples to lib.rs and mcp/mod.rs
+   - Verify tool count and update README
+   - Add prominent absolute path warning
 
-### Verification Completed
+2. **Verify Documentation**
+   - Test all CLI commands
+   - Verify all configuration options
+   - Check progress notification format
 
-```bash
-# ✅ mdBook build verified
-cd doc && mdbook build
-# Result: Success - Book builds without errors or broken links
+3. **Enhance Examples**
+   - Add expected output to tutorials
+   - Include error handling examples
+   - Add timing/performance info
 
-# ✅ Rustdoc build verified
-cargo doc --no-deps
-# Result: Success - Documentation builds without warnings
+### Long Term
 
-# ✅ Compilation verified
-cargo build
-# Result: Success (verified in previous reviews)
+1. **Documentation Tests**
+   - Set up doc tests for code examples
+   - Add CI check for documentation completeness
+   - Create tool documentation template
 
-# Next steps:
-cargo nextest run          # Verify tests pass
-```
+2. **Continuous Improvement**
+   - Gather user feedback
+   - Expand use cases as patterns emerge
+   - Keep examples current with API changes
 
-### Long Term Maintenance
+3. **Quality Checks**
+   - Run cargo doc regularly
+   - Verify all public APIs documented
+   - Check for temporal language
 
-1. **Keep Examples Updated**: Ensure code examples stay current with API changes
-2. **Monitor User Feedback**: Incorporate feedback into documentation
-3. **Expand Use Cases**: Add more patterns as they emerge
-4. **Update Cross-links**: Continue adding helpful cross-references
-5. **Verify Exports**: After removing features, always check lib.rs exports
-6. **Run cargo doc**: Always verify rustdoc builds without warnings
+## Comparison to Standards
+
+### Documentation Standards Compliance
+
+- ✅ Evergreen content (mostly - need to scan for temporal language)
+- ✅ Cross-references between modules
+- ⚠️ Examples in rustdoc (some modules missing)
+- ✅ Formatting consistency
+- ✅ Structure and organization
+- ✅ Clarity and conciseness
+- ⚠️ Completeness (some gaps in examples)
+- ✅ GitHub Pages link with emoji
+- ✅ Consistent directory naming
+
+### Rust Documentation Best Practices
+
+- ⚠️ Module-level documentation (needs improvement)
+- ⚠️ Examples for public functions (many missing)
+- ✅ Parameter documentation
+- ⚠️ Error documentation (incomplete)
+- ✅ Code organization
+- ✅ Re-export documentation
+
+## Next Steps
+
+1. **Immediate** (This Session)
+   - ❌ Fix rustdoc examples in src/lib.rs (needs working example)
+   - ❌ Fix rustdoc examples in src/mcp/mod.rs (needs comprehensive docs)
+   - ❌ Verify tool count in README (need to count actual tools)
+   - ❌ Add absolute path warning to tools.md introduction
+
+2. **Short Term** (Next Sprint)
+   - Verify all CLI commands exist
+   - Test all configuration options
+   - Add output examples to tutorials
+   - Create documentation test suite
+
+3. **Long Term** (Ongoing)
+   - Set up CI documentation checks
+   - Expand use case documentation
+   - Gather and incorporate user feedback
+   - Keep examples current
 
 ## Conclusion
 
-The documentation for swissarmyhammer-tools is **excellent** and represents best practices for Rust projects. All identified issues have been resolved.
+The SwissArmyHammer Tools documentation is **good** with a strong foundation but needs improvements in several areas, particularly around rustdoc examples and verification of documented features against implementation.
 
-### Documentation Quality: 10/10
+### Current Rating: 8/10
 
-1. ✅ Clear problem statement and solution in README
-2. ✅ Comprehensive mdBook documentation with excellent structure
-3. ✅ Outstanding rustdoc comments throughout source code
-4. ✅ Proper cross-references and navigation
-5. ✅ Clear examples in both docs and code
-6. ✅ Architecture well-explained with diagrams
-7. ✅ No temporal language or TODO comments
-8. ✅ Consistent terminology and naming
-9. ✅ GitHub Pages link prominently featured
-10. ✅ notify_create removal properly documented
-11. ✅ Rustdoc builds without warnings
+**Strengths:**
+- Comprehensive mdBook documentation
+- Clear architecture explanations
+- Good cross-referencing
+- Consistent formatting
 
-### Code Quality: Excellent
+**Needs Improvement:**
+- Rustdoc examples in source code
+- Verification of claimed features
+- More prominent warnings
+- Output examples in tutorials
 
-1. ✅ lib.rs exports match available functions
-2. ✅ Rustdoc builds cleanly without warnings
-3. ✅ Code compiles successfully
-4. ✅ All documentation aligns with implementation
+**Recommended Actions:**
+1. Add rustdoc examples to public APIs
+2. Verify tool count and CLI commands
+3. Add prominent absolute path warnings
+4. Enhance examples with expected output
+5. Set up documentation testing
 
-### Actions Completed (2025-10-18)
-
-This review:
-
-1. ✅ **Verified**: All documentation is accurate and current
-2. ✅ **Verified**: notify_create tool removal is properly documented
-3. ✅ **Verified**: All code examples are correct
-4. ✅ **Verified**: mdBook builds successfully without broken links
-5. ✅ **Fixed**: Rustdoc warning in unified_server.rs:77
-6. ✅ **Verified**: Rustdoc builds cleanly without warnings
-7. ✅ **Verified**: All public APIs have rustdoc comments
-8. ✅ **Verified**: No temporal language in documentation
-9. ✅ **Verified**: README features GitHub Pages link with emoji
-10. ✅ **Verified**: Consistent `.swissarmyhammer/` naming throughout
-
-**Status: Ready for commit**
-
-All documentation is excellent and up to date. The single rustdoc warning has been fixed.
+**Documentation is production-ready but would benefit from the improvements listed above.**

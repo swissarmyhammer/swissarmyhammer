@@ -914,6 +914,12 @@ async fn process_child_output_with_limits(
                             if output_buffer.is_at_limit() {
                                 break;
                             }
+                            // Send progress notification for this line
+                            if let Some(sender) = progress_sender {
+                                sender
+                                    .send_progress(progress_token, None, &line)
+                                    .ok();
+                            }
                             let line_bytes = line.as_bytes();
                             let mut line_with_newline = Vec::with_capacity(line_bytes.len() + 1);
                             line_with_newline.extend_from_slice(line_bytes);
@@ -925,6 +931,12 @@ async fn process_child_output_with_limits(
                         while let Ok(Some(line)) = stderr_reader.next_line().await {
                             if output_buffer.is_at_limit() {
                                 break;
+                            }
+                            // Send progress notification for this line
+                            if let Some(sender) = progress_sender {
+                                sender
+                                    .send_progress(progress_token, None, &line)
+                                    .ok();
                             }
                             let line_bytes = line.as_bytes();
                             let mut line_with_newline = Vec::with_capacity(line_bytes.len() + 1);

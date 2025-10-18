@@ -2,6 +2,23 @@
 
 SwissArmyHammer Tools follows a modular, extensible architecture built on the Model Context Protocol (MCP) specification. This document provides a high-level overview of the system design, component relationships, and key architectural decisions.
 
+## Quick Overview
+
+**Three-Layer Architecture**:
+
+1. **MCP Server Layer**: Handles protocol communication with AI assistants (Claude Desktop, etc.)
+2. **Tool Layer**: Implements individual capabilities (file operations, search, issues, etc.)
+3. **Storage Layer**: Manages persistent data (issues, memos, workflows) as markdown/YAML files
+
+**Key Components**:
+
+- **Tool Registry**: Pluggable system for managing 40+ tools with O(1) lookup
+- **Tool Context**: Dependency injection providing tools access to storage and services
+- **Prompt Library**: Reusable templates with hot-reloading support
+- **Storage Backends**: File-based persistence using markdown for human-readable, git-friendly data
+
+**Communication Flow**: AI Client (via MCP) → MCP Server → Tool Registry → Specific Tool → Storage Backends
+
 ## System Overview
 
 ```
