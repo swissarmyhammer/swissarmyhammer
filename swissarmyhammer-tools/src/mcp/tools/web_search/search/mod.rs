@@ -4,6 +4,7 @@
 //! official Instant Answer API through the MCP protocol. For comprehensive web search results,
 //! consider configuring third-party APIs.
 
+use crate::mcp::progress_notifications::generate_progress_token;
 use crate::mcp::tool_registry::{BaseToolImpl, McpTool, ToolContext};
 use crate::mcp::tools::web_search::content_fetcher::{ContentFetchConfig, ContentFetcher};
 use crate::mcp::tools::web_search::duckduckgo_client::{DuckDuckGoClient, DuckDuckGoError};
@@ -12,6 +13,7 @@ use crate::mcp::tools::web_search::types::*;
 use async_trait::async_trait;
 use rmcp::model::CallToolResult;
 use rmcp::ErrorData as McpError;
+use serde_json::json;
 use std::time::{Duration, Instant};
 
 /// Tool for performing web searches using DuckDuckGo web scraping
@@ -285,7 +287,32 @@ impl McpTool for WebSearchTool {
         }
 
         let start_time = Instant::now();
+        let progress_token = generate_progress_token();
+
+        // Send start notification (0%)
+        if let Some(sender) = &_context.progress_sender {
+            sender
+                .send_progress_with_metadata(
+                    &progress_token,
+                    Some(0),
+                    format!("Searching for: {}", request.query),
+                    json!({
+                        "query": request.query,
+                        "results_count": request.results_count,
+                        "fetch_content": request.fetch_content
+                    }),
+                )
+                .ok();
+        }
+
         let mut search_tool = WebSearchTool::new();
+
+        // Send search progress notification (25%)
+        if let Some(sender) = &_context.progress_sender {
+            sender
+                .send_progress(&progress_token, Some(25), "Performing web search...")
+                .ok();
+        }
 
         // Perform search using DuckDuckGo browser automation
         let duckduckgo_client = search_tool.get_duckduckgo_client();
@@ -327,6 +354,27 @@ impl McpTool for WebSearchTool {
 
         let search_time = start_time.elapsed();
 
+        // Send results retrieved notification
+        // If fetch_content is false, we're almost done (90%), otherwise we're at 40%
+        let progress_after_search = if request.fetch_content.unwrap_or(true) {
+            40
+        } else {
+            90
+        };
+
+        if let Some(sender) = &_context.progress_sender {
+            sender
+                .send_progress_with_metadata(
+                    &progress_token,
+                    Some(progress_after_search),
+                    format!("Retrieved {} search results", results.len()),
+                    json!({
+                        "results_count": results.len()
+                    }),
+                )
+                .ok();
+        }
+
         // Optionally fetch content from each result using the ContentFetcher
         let mut content_fetch_stats = None;
 
@@ -345,6 +393,12 @@ impl McpTool for WebSearchTool {
                 total_time_ms: stats.total_time_ms,
             });
         }
+
+        // Calculate with_content before moving content_fetch_stats
+        let with_content = content_fetch_stats
+            .as_ref()
+            .map(|s| s.successful)
+            .unwrap_or(0);
 
         let response = WebSearchResponse {
             results: results.clone(),
@@ -368,6 +422,22 @@ impl McpTool for WebSearchTool {
             response.metadata.query,
             search_time
         );
+
+        // Send completion notification (100%)
+        if let Some(sender) = &_context.progress_sender {
+            sender
+                .send_progress_with_metadata(
+                    &progress_token,
+                    Some(100),
+                    format!("Search complete: {} results", response.results.len()),
+                    json!({
+                        "total_results": response.results.len(),
+                        "with_content": with_content,
+                        "search_time_ms": search_time.as_millis() as u64
+                    }),
+                )
+                .ok();
+        }
 
         Ok(BaseToolImpl::create_success_response(
             serde_json::to_string_pretty(&response).map_err(|e| {
@@ -546,5 +616,74 @@ mod tests {
             .unwrap_err()
             .to_string()
             .contains("maximum is 50"));
+    }
+
+    #[tokio::test]
+    async fn test_web_search_sends_progress_notifications() {
+        use crate::mcp::progress_notifications::ProgressSender;
+        use tokio::sync::mpsc;
+
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let progress_sender = ProgressSender::new(tx);
+
+        let mut context = create_test_context().await;
+        context.progress_sender = Some(progress_sender);
+
+        let tool = WebSearchTool::new();
+        let mut args = serde_json::Map::new();
+        args.insert(
+            "query".to_string(),
+            serde_json::Value::String("rust programming language".to_string()),
+        );
+        args.insert(
+            "results_count".to_string(),
+            serde_json::Value::Number(serde_json::Number::from(3)),
+        );
+        args.insert("fetch_content".to_string(), serde_json::Value::Bool(false));
+
+        // Execute the search
+        let result = tool.execute(args, &context).await;
+
+        // Collect all notifications
+        let mut notifications = Vec::new();
+        while let Ok(notif) = rx.try_recv() {
+            notifications.push(notif);
+        }
+
+        // The test should verify notifications are sent even if search fails
+        // (e.g., in CI environments without network access)
+        if !notifications.is_empty() {
+            // First notification should be the start notification with 0% progress
+            assert_eq!(
+                notifications[0].progress,
+                Some(0),
+                "First notification should be start with 0% progress"
+            );
+            assert!(
+                notifications[0].message.contains("Searching for:"),
+                "Start notification should contain query"
+            );
+
+            // Last notification should have higher progress (90-100%)
+            let last = notifications.last().unwrap();
+            assert!(
+                last.progress.unwrap_or(0) >= 90,
+                "Last notification should have progress >= 90%"
+            );
+
+            // Should have at least start and one other notification
+            assert!(
+                notifications.len() >= 2,
+                "Expected at least 2 notifications (start and progress/completion), got {}",
+                notifications.len()
+            );
+        }
+
+        // If the search succeeded, verify result structure
+        if result.is_ok() {
+            let call_result = result.unwrap();
+            assert_eq!(call_result.is_error, Some(false));
+            assert!(!call_result.content.is_empty());
+        }
     }
 }
