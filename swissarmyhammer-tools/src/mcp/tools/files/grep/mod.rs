@@ -3,11 +3,13 @@
 //! This module provides the GrepFileTool for fast text searching with ripgrep integration.
 //! Falls back to regex-based search when ripgrep is not available.
 
+use crate::mcp::progress_notifications::generate_progress_token;
 use crate::mcp::tool_registry::{BaseToolImpl, McpTool, ToolContext};
 use crate::mcp::tools::files::shared_utils::FilePathValidator;
 use async_trait::async_trait;
 use rmcp::model::CallToolResult;
 use rmcp::ErrorData as McpError;
+use serde_json::json;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -559,7 +561,7 @@ impl McpTool for GrepFileTool {
     async fn execute(
         &self,
         arguments: serde_json::Map<String, serde_json::Value>,
-        _context: &ToolContext,
+        context: &ToolContext,
     ) -> std::result::Result<CallToolResult, McpError> {
         // Parse arguments
         let request: GrepRequest = BaseToolImpl::parse_arguments(arguments)?;
@@ -585,6 +587,33 @@ impl McpTool for GrepFileTool {
             })?,
         };
 
+        // Generate progress token for this operation
+        let token = generate_progress_token();
+
+        // Send start notification
+        if let Some(sender) = &context.progress_sender {
+            sender
+                .send_progress_with_metadata(
+                    &token,
+                    Some(0),
+                    format!("Searching for pattern: {}", request.pattern),
+                    json!({
+                        "pattern": request.pattern,
+                        "path": search_dir.display().to_string(),
+                        "output_mode": request.output_mode.as_deref().unwrap_or("content"),
+                        "case_insensitive": request.case_insensitive.unwrap_or(false)
+                    }),
+                )
+                .ok();
+        }
+
+        // Send searching notification
+        if let Some(sender) = &context.progress_sender {
+            sender
+                .send_progress(&token, Some(25), "Searching files...")
+                .ok();
+        }
+
         // Execute search using ripgrep if available, otherwise fallback to regex
         let results = if self.ripgrep_available {
             self.execute_with_ripgrep(&request, &search_dir).await?
@@ -592,9 +621,44 @@ impl McpTool for GrepFileTool {
             self.execute_with_fallback(&request, &search_dir).await?
         };
 
+        // Send processing notification
+        if let Some(sender) = &context.progress_sender {
+            sender
+                .send_progress_with_metadata(
+                    &token,
+                    Some(75),
+                    format!("Processing {} matches", results.total_matches),
+                    json!({
+                        "matches_found": results.total_matches,
+                        "files_with_matches": results.files_searched
+                    }),
+                )
+                .ok();
+        }
+
         // Format response based on output mode and results
         let output_mode = request.output_mode.as_deref().unwrap_or("content");
         let response = self.format_response(&results, output_mode)?;
+
+        // Send completion notification
+        if let Some(sender) = &context.progress_sender {
+            sender
+                .send_progress_with_metadata(
+                    &token,
+                    Some(100),
+                    format!(
+                        "Search complete: {} matches in {} files",
+                        results.total_matches, results.files_searched
+                    ),
+                    json!({
+                        "total_matches": results.total_matches,
+                        "files_with_matches": results.files_searched,
+                        "duration_ms": results.search_time_ms,
+                        "engine": if results.used_ripgrep { "ripgrep" } else { "fallback" }
+                    }),
+                )
+                .ok();
+        }
 
         Ok(BaseToolImpl::create_success_response(response))
     }
@@ -678,5 +742,173 @@ impl GrepFileTool {
         };
 
         Ok(response)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::mcp::progress_notifications::ProgressSender;
+    use crate::test_utils::create_test_context;
+    use tokio::sync::mpsc;
+
+    #[test]
+    fn test_grep_file_tool_new() {
+        let tool = GrepFileTool::new();
+        assert_eq!(tool.name(), "files_grep");
+        assert!(!tool.description().is_empty());
+    }
+
+    #[test]
+    fn test_grep_file_tool_schema() {
+        let tool = GrepFileTool::new();
+        let schema = tool.schema();
+
+        assert_eq!(schema["type"], "object");
+        assert!(schema["properties"]["pattern"].is_object());
+        assert!(schema["properties"]["path"].is_object());
+        assert!(schema["properties"]["output_mode"].is_object());
+        assert_eq!(schema["required"], serde_json::json!(["pattern"]));
+    }
+
+    #[tokio::test]
+    async fn test_grep_file_tool_sends_progress_notifications() {
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let progress_sender = ProgressSender::new(tx);
+
+        let mut context = create_test_context().await;
+        context.progress_sender = Some(progress_sender);
+
+        // Create a temporary directory with test files
+        let temp_dir = tempfile::TempDir::new().expect("Failed to create temp dir");
+        let test_dir = temp_dir.path();
+
+        // Create test files with content to search
+        for i in 0..5 {
+            let test_file = test_dir.join(format!("test_{}.txt", i));
+            std::fs::write(
+                &test_file,
+                format!(
+                    "This is test file number {}\nSome test content here\nAnother line with test keyword\n",
+                    i
+                ),
+            )
+            .expect("Failed to write test file");
+        }
+
+        let tool = GrepFileTool::new();
+        let mut arguments = serde_json::Map::new();
+        arguments.insert(
+            "pattern".to_string(),
+            serde_json::Value::String("test".to_string()),
+        );
+        arguments.insert(
+            "path".to_string(),
+            serde_json::Value::String(test_dir.display().to_string()),
+        );
+
+        // Execute the tool
+        let result = tool.execute(arguments, &context).await;
+        assert!(result.is_ok());
+
+        // Collect all notifications
+        let mut notifications = Vec::new();
+        while let Ok(notification) = rx.try_recv() {
+            notifications.push(notification);
+        }
+
+        // Verify we received 4 notifications (start, searching, processing, complete)
+        assert!(
+            notifications.len() >= 4,
+            "Expected at least 4 notifications, got {}",
+            notifications.len()
+        );
+
+        // Verify start notification
+        let start = &notifications[0];
+        assert_eq!(start.progress, Some(0));
+        assert!(start.message.contains("Searching for pattern"));
+        assert!(start.metadata.is_some());
+        let start_meta = start.metadata.as_ref().unwrap();
+        assert_eq!(start_meta["pattern"], "test");
+
+        // Verify searching notification
+        let searching = &notifications[1];
+        assert_eq!(searching.progress, Some(25));
+        assert!(searching.message.contains("Searching files"));
+
+        // Verify processing notification
+        let processing = &notifications[2];
+        assert_eq!(processing.progress, Some(75));
+        assert!(processing.message.contains("Processing"));
+        assert!(processing.metadata.is_some());
+
+        // Verify completion notification
+        let complete = &notifications[3];
+        assert_eq!(complete.progress, Some(100));
+        assert!(complete.message.contains("Search complete"));
+        assert!(complete.metadata.is_some());
+        let complete_meta = complete.metadata.as_ref().unwrap();
+        assert!(complete_meta["total_matches"].is_number());
+        assert!(complete_meta["files_with_matches"].is_number());
+        assert!(complete_meta["duration_ms"].is_number());
+    }
+
+    #[tokio::test]
+    async fn test_grep_file_tool_works_without_progress_sender() {
+        let context = create_test_context().await;
+
+        // Create a temporary directory with test files
+        let temp_dir = tempfile::TempDir::new().expect("Failed to create temp dir");
+        let test_dir = temp_dir.path();
+
+        // Create test file
+        let test_file = test_dir.join("test.txt");
+        std::fs::write(&test_file, "test content\n").expect("Failed to write test file");
+
+        let tool = GrepFileTool::new();
+        let mut arguments = serde_json::Map::new();
+        arguments.insert(
+            "pattern".to_string(),
+            serde_json::Value::String("test".to_string()),
+        );
+        arguments.insert(
+            "path".to_string(),
+            serde_json::Value::String(test_dir.display().to_string()),
+        );
+
+        // Execute the tool - should succeed even without progress sender
+        let result = tool.execute(arguments, &context).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_grep_file_tool_invalid_pattern() {
+        let context = create_test_context().await;
+
+        let tool = GrepFileTool::new();
+        let arguments = serde_json::Map::new(); // Missing pattern field
+
+        let result = tool.execute(arguments, &context).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_grep_file_tool_nonexistent_path() {
+        let context = create_test_context().await;
+
+        let tool = GrepFileTool::new();
+        let mut arguments = serde_json::Map::new();
+        arguments.insert(
+            "pattern".to_string(),
+            serde_json::Value::String("test".to_string()),
+        );
+        arguments.insert(
+            "path".to_string(),
+            serde_json::Value::String("/nonexistent/path".to_string()),
+        );
+
+        let result = tool.execute(arguments, &context).await;
+        assert!(result.is_err());
     }
 }
