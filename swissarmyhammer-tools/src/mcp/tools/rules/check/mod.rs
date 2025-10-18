@@ -3,16 +3,26 @@
 //! This tool provides an MCP interface to the SwissArmyHammer rule checking functionality.
 //! It uses the swissarmyhammer-rules library directly for better performance and type safety.
 
+use crate::mcp::progress_notifications::generate_progress_token;
 use crate::mcp::tool_registry::{BaseToolImpl, McpTool, ToolContext};
 use async_trait::async_trait;
 use rmcp::model::CallToolResult;
 use rmcp::ErrorData as McpError;
 use serde::{Deserialize, Serialize};
+use serde_json::json;
+use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Instant;
 use swissarmyhammer_agent_executor::AgentExecutor;
 use swissarmyhammer_config::AgentConfig;
 use swissarmyhammer_rules::{RuleCheckRequest as DomainRuleCheckRequest, RuleChecker, Severity};
 use tokio::sync::OnceCell;
+
+// Progress notification milestones
+const PROGRESS_START: u32 = 0;
+const PROGRESS_INITIALIZED: u32 = 10;
+const PROGRESS_CHECKING: u32 = 20;
+const PROGRESS_COMPLETE: u32 = 100;
 
 /// Create an agent executor from agent configuration using the centralized factory
 ///
@@ -86,7 +96,22 @@ impl RuleCheckTool {
         }
     }
 
-    /// Get or initialize the rule checker using the provided context's agent configuration
+    /// Get or initialize the rule checker using the provided context's agent configuration.
+    ///
+    /// This method uses lazy initialization with `OnceCell` to ensure the RuleChecker
+    /// is created only once and reused across multiple rule check requests.
+    ///
+    /// # Arguments
+    ///
+    /// * `context` - The tool context containing agent configuration
+    ///
+    /// # Returns
+    ///
+    /// * `Result<&RuleChecker, McpError>` - Reference to the initialized checker
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if agent creation or checker initialization fails
     async fn get_checker(&self, context: &ToolContext) -> Result<&RuleChecker, McpError> {
         // Clone config for use in async closure
         let agent_config = context.agent_config.clone();
@@ -181,9 +206,41 @@ impl McpTool for RuleCheckTool {
         tracing::info!("Rule names filter: {:?}", request.rule_names);
         tracing::info!("File paths: {:?}", request.file_paths);
 
+        let start_time = Instant::now();
+        let progress_token = generate_progress_token();
+
+        // Send start notification
+        if let Some(sender) = &context.progress_sender {
+            if let Err(e) = sender.send_progress_with_metadata(
+                &progress_token,
+                Some(PROGRESS_START),
+                "Starting rules check",
+                json!({
+                    "rule_names": request.rule_names,
+                    "file_paths": request.file_paths,
+                    "category": request.category,
+                    "severity": request.severity
+                }),
+            ) {
+                tracing::debug!("Failed to send progress notification: {}", e);
+            }
+        }
+
         // Get or initialize the rule checker with context's agent configuration
         let checker = self.get_checker(context).await?;
         tracing::info!("RuleChecker initialized successfully");
+
+        // Send rules loaded notification
+        if let Some(sender) = &context.progress_sender {
+            if let Err(e) = sender.send_progress_with_metadata(
+                &progress_token,
+                Some(PROGRESS_INITIALIZED),
+                "Rule checker initialized",
+                json!({}),
+            ) {
+                tracing::debug!("Failed to send progress notification: {}", e);
+            }
+        }
 
         // Map MCP request to domain request
         let domain_request = DomainRuleCheckRequest {
@@ -208,11 +265,37 @@ impl McpTool for RuleCheckTool {
             .await
             .map_err(|e| McpError::internal_error(format!("Rule check failed: {}", e), None))?;
 
-        // Collect all violations from the stream
+        // Send checking progress notification
+        if let Some(sender) = &context.progress_sender {
+            if let Err(e) = sender.send_progress_with_metadata(
+                &progress_token,
+                Some(PROGRESS_CHECKING),
+                "Checking files against rules",
+                json!({}),
+            ) {
+                tracing::debug!("Failed to send progress notification: {}", e);
+            }
+        }
+
+        // Collect all violations from the stream and track statistics.
+        // This loop processes the violation stream, counting violations by severity
+        // and tracking which files contain violations for the completion notification.
         let mut violations = Vec::new();
+        let mut violation_count_by_severity: HashMap<String, usize> = HashMap::new();
+        let mut files_with_violations = std::collections::HashSet::new();
+
         while let Some(result) = stream.next().await {
             match result {
-                Ok(violation) => violations.push(violation),
+                Ok(violation) => {
+                    // Track severity counts
+                    let severity_str = format!("{:?}", violation.severity);
+                    *violation_count_by_severity.entry(severity_str).or_insert(0) += 1;
+
+                    // Track unique files with violations
+                    files_with_violations.insert(violation.file_path.clone());
+
+                    violations.push(violation);
+                }
                 Err(e) => {
                     return Err(McpError::internal_error(
                         format!("Rule check failed: {}", e),
@@ -223,6 +306,30 @@ impl McpTool for RuleCheckTool {
         }
 
         tracing::info!("Check completed: found {} violations", violations.len());
+
+        let duration = start_time.elapsed();
+
+        // Send completion notification
+        if let Some(sender) = &context.progress_sender {
+            let duration_ms = duration.as_millis() as u64;
+            if let Err(e) = sender.send_progress_with_metadata(
+                &progress_token,
+                Some(PROGRESS_COMPLETE),
+                format!(
+                    "Rules check complete: {} violations in {} files",
+                    violations.len(),
+                    files_with_violations.len()
+                ),
+                json!({
+                    "violations_found": violations.len(),
+                    "files_with_violations": files_with_violations.len(),
+                    "violation_count_by_severity": violation_count_by_severity,
+                    "duration_ms": duration_ms
+                }),
+            ) {
+                tracing::debug!("Failed to send progress notification: {}", e);
+            }
+        }
 
         // Format the response
         let result_text = if violations.is_empty() {
