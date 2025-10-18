@@ -39,9 +39,9 @@ pub use server::McpServer;
 pub use tool_handlers::ToolHandlers;
 pub use tool_registry::{
     register_abort_tools, register_file_tools, register_git_tools, register_issue_tools,
-    register_memo_tools, register_notify_tools, register_outline_tools, register_rules_tools,
-    register_search_tools, register_shell_tools, register_todo_tools, register_web_fetch_tools,
-    register_web_search_tools, ToolContext, ToolRegistry,
+    register_memo_tools, register_outline_tools, register_rules_tools, register_search_tools,
+    register_shell_tools, register_todo_tools, register_web_fetch_tools, register_web_search_tools,
+    ToolContext, ToolRegistry,
 };
 pub use types::{GetPromptRequest, ListPromptsRequest};
 pub use unified_server::{

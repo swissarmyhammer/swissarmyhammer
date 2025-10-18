@@ -41,7 +41,6 @@ pub mod flow;
 pub mod git;
 pub mod issues;
 pub mod memoranda;
-pub mod notify;
 pub mod outline;
 pub mod rules;
 pub mod search;

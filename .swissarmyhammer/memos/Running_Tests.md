@@ -1,1 +1,1 @@
-Running unit tests with: `cargo nextest run --fail-fast`
+Running cargo nextest run --fail-fast
