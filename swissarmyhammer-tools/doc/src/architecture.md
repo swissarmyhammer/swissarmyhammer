@@ -84,12 +84,13 @@ See [Tool Registry](./architecture/tool-registry.md) for implementation details.
 
 The `ToolContext` provides dependency injection for tools, giving them access to:
 
-- **Issue Storage**: File-based issue tracking system
-- **Memo Storage**: Markdown note-taking and knowledge management
-- **Git Operations**: Repository operations and change tracking
-- **Agent Configuration**: AI agent executor settings
+- **Issue Storage**: File-based issue tracking system with lifecycle management
+- **Memo Storage**: Markdown note-taking and knowledge management with ULID identifiers
+- **Git Operations**: Repository operations, change tracking, and branch detection
+- **Agent Configuration**: AI agent executor settings and workflow coordination
+- **Tool Handlers**: Shared utilities for common operations across tools
 
-This shared context ensures tools can access necessary services without tight coupling.
+This shared context ensures tools can access necessary services without tight coupling, enabling modular tool development and independent testing.
 
 ### Storage Backends
 
@@ -177,9 +178,11 @@ Prompts are discovered from:
 
 ### Modularity
 
-- Each domain (issues, memos, search, etc.) lives in its own crate
+- Each domain (issues, memos, search, git, shell, etc.) lives in its own crate
 - Tools are self-contained and independently testable
 - Clean separation between MCP protocol and business logic
+- Domain crates have no dependencies on the MCP server
+- Each tool category is independently registered at startup
 
 ### Extensibility
 

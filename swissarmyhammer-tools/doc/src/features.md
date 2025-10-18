@@ -6,17 +6,18 @@ SwissArmyHammer Tools provides a comprehensive suite of capabilities for AI-assi
 
 SwissArmyHammer Tools exposes functionality through MCP tools organized into logical categories:
 
-- **[File Tools](#file-tools)**: Read, write, edit, and search files
-- **[Semantic Search](#semantic-search)**: Vector-based code search and understanding
-- **[Issue Management](#issue-management)**: Track work items through their lifecycle
-- **[Memo System](#memo-system)**: Knowledge management and note-taking
+- **[File Tools](#file-tools)**: Read, write, edit, and search files with security validation
+- **[Semantic Search](#semantic-search)**: Vector-based code search using tree-sitter and embeddings
+- **[Issue Management](#issue-management)**: Track work items through their complete lifecycle
+- **[Memo System](#memo-system)**: Knowledge management and note-taking with ULID identifiers
 - **[Todo Tracking](#todo-tracking)**: Ephemeral task tracking for development sessions
-- **[Git Integration](#git-integration)**: Track changes and integrate with git workflows
-- **[Shell Execution](#shell-execution)**: Execute commands with proper output handling
-- **[Code Outline](#code-outline)**: Generate structured code overviews
-- **[Rules Engine](#rules-engine)**: Check code against quality standards
-- **[Web Tools](#web-tools)**: Fetch and search web content
-- **[Workflow Execution](#workflow-execution)**: Execute complex development workflows
+- **[Git Integration](#git-integration)**: Track changes with branch detection and parent tracking
+- **[Shell Execution](#shell-execution)**: Execute commands with environment and output control
+- **[Code Outline](#code-outline)**: Generate structured code overviews using tree-sitter
+- **[Rules Engine](#rules-engine)**: Check code against quality standards and best practices
+- **[Web Tools](#web-tools)**: Fetch web content and search with DuckDuckGo
+- **[Workflow Execution](#workflow-execution)**: Execute complex workflows with AI coordination
+- **[Abort Mechanism](#abort-mechanism)**: Signal workflow termination gracefully
 
 ## File Tools
 
@@ -26,11 +27,14 @@ File operations with security validation and atomic operations.
 
 ### Key Capabilities
 
-- Read files with partial reading support (offset and limit)
-- Write files atomically with automatic backup
-- Perform precise string replacements with validation
-- Pattern matching with glob support
-- Content search with regex using ripgrep
+- Read files with partial reading support (offset and limit for large files)
+- Write files atomically with permissions preservation
+- Perform precise string replacements with exact matching validation
+- Pattern matching with glob support and .gitignore awareness
+- Content search with regex using ripgrep for performance
+- Binary file detection with base64 encoding support
+- Line ending normalization across platforms
+- Character encoding detection and handling
 
 ### Example Usage
 
@@ -295,17 +299,29 @@ Check workflow status:
 "Show me the status of the current workflow"
 ```
 
-## Additional Features
+## Abort Mechanism
 
-### Abort Mechanism
-
-Signal workflow termination gracefully.
+Signal workflow termination gracefully during long-running operations.
 
 **Tool**: `abort_create`
 
-- Create abort file with reason
-- Terminate long-running workflows
-- Preserve state for debugging
+### Key Capabilities
+
+- Create abort signal file with detailed reason
+- Terminate long-running workflows cleanly
+- Preserve workflow state for debugging and analysis
+- Automatic cleanup after workflow termination
+- Integration with workflow execution system
+
+### Example Usage
+
+```
+Signal workflow abort:
+"Abort the current workflow because requirements changed"
+
+Terminate long operation:
+"Create an abort signal to stop the deployment workflow"
+```
 
 ## Integration with Claude Code
 

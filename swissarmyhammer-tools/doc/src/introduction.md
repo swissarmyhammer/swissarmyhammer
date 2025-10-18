@@ -6,13 +6,15 @@ Welcome to SwissArmyHammer Tools, a comprehensive MCP (Model Context Protocol) s
 
 SwissArmyHammer Tools is the MCP server component of the SwissArmyHammer ecosystem. It exposes powerful development capabilities through a standardized protocol that AI assistants like Claude can use to:
 
-- Read, write, and edit files with atomic operations
-- Search code semantically using vector embeddings
-- Manage issues and track work items
-- Execute shell commands safely
-- Analyze code structure and generate outlines
-- Track changes with git integration
-- Execute complex workflows with AI agent coordination
+- Read, write, and edit files with atomic operations and security validation
+- Search code semantically using vector embeddings and tree-sitter parsing
+- Manage issues and track work items through their complete lifecycle
+- Execute shell commands with proper output handling and environment control
+- Analyze code structure and generate outlines for multiple languages
+- Track changes with git integration and branch-based workflows
+- Execute complex workflows with AI agent coordination and state management
+- Fetch and search web content with markdown conversion
+- Check code quality against defined rules and standards
 
 ## The SwissArmyHammer Philosophy
 

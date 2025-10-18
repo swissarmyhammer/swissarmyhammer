@@ -36,8 +36,6 @@ The goal is to have:
 - refer to `.swissarmyhammer/tmp/TEST_FAILURES.md` to refresh your memory
 - if there is an existing `.swissarmyhammer/tmp/TEST_FAILURES.md`, read it, think, and append to it -- more work to do!
 - fix broken tests one at a time, focus and don't get distracted
-- when you start to work on a specific test, use the notify_create tool to let the user know
-- when you fix a specific test, use the notify_create tool to let the user know
 - DO NOT commit to git
 - DO NOT mark the issue complete with the issue_mark_complete tool
 {% render "todo", todo_file: ".swissarmyhammer/tmp/TEST_FAILURES.md" %}

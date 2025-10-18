@@ -38,13 +38,15 @@ The server acts as a bridge between AI assistants and your development environme
 ## Key Features
 
 - **Complete MCP Server**: Full implementation of Model Context Protocol for AI assistant integration
-- **Semantic Search**: Vector-based code search using tree-sitter parsing and embeddings
-- **Issue Management**: Track work items as markdown files with complete lifecycle support
-- **File Tools**: Comprehensive file operations with security validation
-- **Code Analysis**: Generate structured outlines of codebases with symbol extraction
-- **Workflow Execution**: Define and execute development workflows using YAML specifications
-- **Git Integration**: Track file changes and integrate with git workflows
-- **Web Tools**: Fetch and search web content with markdown conversion
+- **Semantic Search**: Vector-based code search using tree-sitter parsing and embeddings for intelligent code navigation
+- **Issue Management**: Track work items as markdown files with complete lifecycle support and git-friendly storage
+- **File Tools**: Comprehensive file operations with security validation, atomic writes, and encoding handling
+- **Code Analysis**: Generate structured outlines of codebases with symbol extraction for multiple languages
+- **Workflow Execution**: Define and execute development workflows using YAML specifications with AI coordination
+- **Git Integration**: Track file changes with branch detection, parent branch tracking, and uncommitted changes
+- **Web Tools**: Fetch and search web content with markdown conversion and DuckDuckGo integration
+- **Rules Engine**: Check code quality against defined standards with configurable severity levels
+- **Shell Execution**: Execute commands with environment control and proper output handling
 
 ## Quick Start
 
@@ -90,20 +92,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 ## Tool Categories
 
-SwissArmyHammer provides tools organized into logical categories:
+SwissArmyHammer provides 40+ tools organized into logical categories:
 
-- **Files**: Read, write, edit, glob pattern matching, and grep search
-- **Search**: Semantic code search with indexing and vector similarity
-- **Issues**: Create, list, show, update, and complete work items
-- **Memos**: Note-taking and knowledge management
-- **Todo**: Ephemeral task tracking for development sessions
-- **Git**: Track file changes and branch-based workflows
-- **Shell**: Execute shell commands with proper output handling
-- **Outline**: Generate structured code overviews using tree-sitter
-- **Rules**: Code quality checks against defined standards
-- **Web**: Fetch web content and perform searches
-- **Flow**: Workflow execution with AI agent coordination
-- **Abort**: Signal workflow termination
+- **Files** (`files_*`): Read, write, edit, glob pattern matching, and grep search with security validation
+- **Search** (`search_*`): Semantic code search with indexing and vector similarity using tree-sitter
+- **Issues** (`issue_*`): Create, list, show, update, and complete work items with lifecycle management
+- **Memos** (`memo_*`): Note-taking and knowledge management with ULID-based organization
+- **Todo** (`todo_*`): Ephemeral task tracking for development sessions with automatic cleanup
+- **Git** (`git_*`): Track file changes with branch detection and parent branch tracking
+- **Shell** (`shell_*`): Execute shell commands with environment variables and output handling
+- **Outline** (`outline_*`): Generate structured code overviews using tree-sitter for multiple languages
+- **Rules** (`rules_*`): Code quality checks against defined standards with severity filtering
+- **Web** (`web_*`): Fetch web content with markdown conversion and DuckDuckGo search integration
+- **Flow** (`flow`): Workflow execution with AI agent coordination and state management
+- **Abort** (`abort_*`): Signal workflow termination with reason preservation
 
 ## Architecture
 

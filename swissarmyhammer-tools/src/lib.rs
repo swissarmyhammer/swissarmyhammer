@@ -41,8 +41,8 @@ pub mod test_utils;
 pub use mcp::McpServer;
 pub use mcp::{
     register_file_tools, register_git_tools, register_issue_tools, register_memo_tools,
-    register_notify_tools, register_rules_tools, register_search_tools, register_shell_tools,
-    register_todo_tools, register_web_fetch_tools, register_web_search_tools,
+    register_rules_tools, register_search_tools, register_shell_tools, register_todo_tools,
+    register_web_fetch_tools, register_web_search_tools,
 };
 pub use mcp::{ToolContext, ToolRegistry};
 
