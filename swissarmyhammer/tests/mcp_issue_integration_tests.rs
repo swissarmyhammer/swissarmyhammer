@@ -142,16 +142,7 @@ async fn test_complete_issue_workflow() {
         "Current issue marker should be set"
     );
 
-    // Step 3: Start working on the issue (test git operations)
-    let git_ops = env.git_ops.lock().await;
-    if let Some(git) = git_ops.as_ref() {
-        let branch_name = git.create_work_branch_simple(issue.name.as_str()).unwrap();
-
-        // Verify we're on the correct branch
-        let current_branch = git.current_branch().unwrap();
-        assert_eq!(current_branch, branch_name);
-    }
-    drop(git_ops);
+    // Step 3: Work on the issue (no automatic branching anymore)
 
     // Verify marker persists after branch creation
     let current_issue =
@@ -214,18 +205,7 @@ async fn test_complete_issue_workflow() {
     let active_issues: Vec<_> = issues.iter().filter(|i| !i.completed).collect();
     assert_eq!(active_issues.len(), 0);
 
-    // Step 7: Merge the issue branch
-    let git_ops = env.git_ops.lock().await;
-    if let Some(git) = git_ops.as_ref() {
-        // Merge the issue branch
-        git.merge_issue_branch_auto(issue.name.as_str()).unwrap();
-
-        // Verify we're on main
-        let current_branch = git.current_branch().unwrap();
-        let main_branch = git.main_branch().unwrap();
-        assert_eq!(current_branch, main_branch);
-    }
-    drop(git_ops);
+    // Step 7: Workflow complete (no automatic merging anymore)
 
     // Step 8: Clear the marker after workflow completion
     swissarmyhammer_issues::current_marker::clear_current_issue_in(env.temp_dir.path())
@@ -326,7 +306,7 @@ async fn test_git_integration_edge_cases() {
     let env = TestEnvironment::new().await;
 
     // Create an issue
-    let issue = env
+    let _issue = env
         .issue_storage
         .write()
         .await
@@ -337,18 +317,13 @@ async fn test_git_integration_edge_cases() {
         .await
         .unwrap();
 
-    // Work on the issue
-    let git_ops = env.git_ops.lock().await;
-    if let Some(git) = git_ops.as_ref() {
-        let _branch_name = git.create_work_branch_simple(issue.name.as_str()).unwrap();
-    }
-    drop(git_ops);
+    // Work on the issue (no automatic branching)
 
     // Create some uncommitted changes
     std::fs::write(env.temp_dir.path().join("test.txt"), "uncommitted changes").unwrap();
 
     // Create another issue
-    let issue2 = env
+    let _issue2 = env
         .issue_storage
         .write()
         .await
@@ -359,18 +334,12 @@ async fn test_git_integration_edge_cases() {
         .await
         .unwrap();
 
-    // Try to work on another issue (create_work_branch may handle uncommitted changes)
+    // Try to work on another issue (no automatic branching)
     let git_ops = env.git_ops.lock().await;
     if let Some(git) = git_ops.as_ref() {
         // Check if there are uncommitted changes
         let has_changes = git.has_uncommitted_changes().unwrap_or(false);
         assert!(has_changes);
-
-        // The create_work_branch may succeed as it handles uncommitted changes
-        let result = git.create_work_branch_simple(issue2.name.as_str());
-
-        // We accept either success or failure here as it depends on git implementation
-        let _ = result;
     }
     drop(git_ops);
 
@@ -397,16 +366,14 @@ async fn test_git_integration_edge_cases() {
     )
     .unwrap();
 
-    // Switch back to main branch first (required per issue 000184)
+    // Switch back to main branch first
     let git_ops = env.git_ops.lock().await;
     if let Some(git) = git_ops.as_ref() {
         let main_branch = git.main_branch().unwrap();
         let main_branch_name = swissarmyhammer_git::BranchName::new(main_branch).unwrap();
         git.checkout_branch(&main_branch_name).unwrap();
 
-        // Now working on another issue should succeed
-        let result = git.create_work_branch_simple(issue2.name.as_str());
-        assert!(result.is_ok());
+        // Now working on another issue (no automatic branching)
     }
 }
 

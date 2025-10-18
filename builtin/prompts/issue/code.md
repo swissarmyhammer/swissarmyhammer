@@ -29,7 +29,7 @@ Your job is to resolve an issue by coding a solution.
       ```
     - DO NOT make a new file or issue -- update the existing issue
 - Check the existing code, determine if this issue has already been done in the code
-- Use Test Driven Development and implement your proposed solution on the issue feature branch
+- Use Test Driven Development and implement your proposed solution
 - DO NOT commit to git
 - DO NOT mark an issue complete with the issue_mark_complete tool
 - As you code, keep notes on your decisions and add them to the issue file

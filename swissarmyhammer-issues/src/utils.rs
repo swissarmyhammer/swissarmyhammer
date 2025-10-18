@@ -8,7 +8,6 @@ use crate::storage::IssueStorage;
 use crate::types::{Issue, IssueInfo};
 use std::io::{self, Read};
 use std::path::PathBuf;
-use swissarmyhammer_git::GitOperations;
 
 /// Content source for issue operations
 #[derive(Debug, Clone, PartialEq)]
@@ -66,81 +65,6 @@ impl ContentSource {
 pub fn get_content_from_args(content: Option<String>, file: Option<PathBuf>) -> Result<String> {
     let source = ContentSource::from_args(content, file)?;
     source.read_content()
-}
-
-/// Result of issue branch operations
-#[derive(Debug, Clone)]
-pub struct IssueBranchResult {
-    /// The issue that was operated on
-    pub issue: Issue,
-    /// The git branch name
-    pub branch_name: String,
-    /// Whether this was a new branch creation or existing branch checkout
-    pub created_new_branch: bool,
-}
-
-/// Result of issue merge operations
-#[derive(Debug, Clone)]
-pub struct IssueMergeResult {
-    /// The issue that was merged
-    pub issue: Issue,
-    /// The branch that was merged
-    pub branch_name: String,
-    /// Whether the branch was deleted after merge
-    pub branch_deleted: bool,
-}
-
-/// Create or switch to a work branch for an issue
-///
-/// This function encapsulates the business logic for issue branch management:
-/// - Validates the issue exists
-/// - Creates or switches to the appropriate issue branch
-/// - Handles the git operations consistently
-pub async fn work_on_issue<S: IssueStorage>(
-    issue_name: &str,
-    storage: &S,
-    git_ops: &GitOperations,
-) -> Result<IssueBranchResult> {
-    // Get the issue to ensure it exists
-    let issue = storage.get_issue(issue_name).await?;
-
-    // Create work branch with format: issue/{issue_name}
-    let branch_name = format!("issue/{}", issue.name);
-    let current_branch = git_ops
-        .get_current_branch()?
-        .map(|b| b.to_string())
-        .unwrap_or_default();
-    let created_new_branch = current_branch != branch_name;
-
-    // Create or switch to the work branch (branch from current HEAD)
-    let branch_name_obj = swissarmyhammer_git::BranchName::new(&branch_name)
-        .map_err(|e| Error::other(format!("Invalid branch name: {}", e)))?;
-    git_ops.create_and_checkout_branch(&branch_name_obj)?;
-    let actual_branch_name = branch_name.clone();
-
-    Ok(IssueBranchResult {
-        issue,
-        branch_name: actual_branch_name,
-        created_new_branch,
-    })
-}
-
-/// Get the current issue being worked on based on git branch
-///
-/// This function determines the current issue by parsing the git branch name
-/// to extract the issue name from branches following the "issue/{name}" pattern.
-pub fn get_current_issue_from_branch(git_ops: &GitOperations) -> Result<Option<String>> {
-    let current_branch = git_ops
-        .get_current_branch()?
-        .map(|b| b.to_string())
-        .unwrap_or_default();
-
-    // Parse issue name from branch name pattern: issue/{issue_name}
-    if let Some(stripped) = current_branch.strip_prefix("issue/") {
-        Ok(Some(stripped.to_string()))
-    } else {
-        Ok(None)
-    }
 }
 
 /// Project status and progress statistics
@@ -336,72 +260,6 @@ mod tests {
 
         let result = get_content_from_args(None, Some(file_path)).unwrap();
         assert_eq!(result, "file content");
-    }
-
-    #[test]
-    fn test_get_current_issue_from_branch() {
-        use swissarmyhammer_git::GitOperations;
-
-        use tempfile::TempDir;
-
-        // Create a temporary git repository for testing
-        let temp_dir = TempDir::new().unwrap();
-        let repo_path = temp_dir.path();
-
-        // Initialize git repo using git2
-        let repo = git2::Repository::init(repo_path).unwrap();
-
-        // Set git config for the test
-        let mut config = repo.config().unwrap();
-        config.set_str("user.name", "Test User").unwrap();
-        config.set_str("user.email", "test@example.com").unwrap();
-
-        // Create initial commit using git2
-        std::fs::write(repo_path.join("README.md"), "Test").unwrap();
-        let mut index = repo.index().unwrap();
-        index.add_path(std::path::Path::new("README.md")).unwrap();
-        index.write().unwrap();
-        let tree_id = index.write_tree().unwrap();
-        let tree = repo.find_tree(tree_id).unwrap();
-        let signature = git2::Signature::now("Test User", "test@example.com").unwrap();
-        repo.commit(
-            Some("HEAD"),
-            &signature,
-            &signature,
-            "Initial commit",
-            &tree,
-            &[],
-        )
-        .unwrap();
-
-        let git_ops = GitOperations::with_work_dir(repo_path.to_path_buf()).unwrap();
-
-        // Test main branch (should return None)
-        let result = get_current_issue_from_branch(&git_ops).unwrap();
-        assert_eq!(result, None);
-
-        // Create and switch to issue branch using git2
-        let head_commit = repo.head().unwrap().peel_to_commit().unwrap();
-        let branch = repo
-            .branch("issue/test_issue", &head_commit, false)
-            .unwrap();
-        repo.set_head(branch.get().name().unwrap()).unwrap();
-        repo.checkout_head(None).unwrap();
-
-        // Test issue branch (should return Some("test_issue"))
-        let result = get_current_issue_from_branch(&git_ops).unwrap();
-        assert_eq!(result, Some("test_issue".to_string()));
-
-        // Test complex issue name using git2
-        let head_commit = repo.head().unwrap().peel_to_commit().unwrap();
-        let branch = repo
-            .branch("issue/01K0S1158ADEHEQ28YMNBJHW97", &head_commit, false)
-            .unwrap();
-        repo.set_head(branch.get().name().unwrap()).unwrap();
-        repo.checkout_head(None).unwrap();
-
-        let result = get_current_issue_from_branch(&git_ops).unwrap();
-        assert_eq!(result, Some("01K0S1158ADEHEQ28YMNBJHW97".to_string()));
     }
 
     #[test]

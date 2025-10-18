@@ -233,27 +233,6 @@ impl GitOperations {
         }
     }
 
-    /// Create a new branch
-    pub fn create_branch(&self, branch_name: &BranchName) -> GitResult<()> {
-        debug!("Creating branch: {}", branch_name);
-
-        if self.branch_exists(branch_name)? {
-            return Err(GitError::branch_already_exists(branch_name.to_string()));
-        }
-
-        let repo = self.repo.inner();
-        let head_commit = repo
-            .head()
-            .and_then(|head| head.peel_to_commit())
-            .map_err(|e| convert_git2_error("get_head_commit", e))?;
-
-        repo.branch(branch_name.as_str(), &head_commit, false)
-            .map_err(|e| convert_git2_error("create_branch", e))?;
-
-        info!("Created branch: {}", branch_name);
-        Ok(())
-    }
-
     /// Checkout an existing branch
     pub fn checkout_branch(&self, branch_name: &BranchName) -> GitResult<()> {
         debug!("Checking out branch: {}", branch_name);
@@ -279,14 +258,6 @@ impl GitOperations {
             .map_err(|e| convert_git2_error("set_head", e))?;
 
         info!("Checked out branch: {}", branch_name);
-        Ok(())
-    }
-
-    /// Create and checkout a new branch in one operation
-    pub fn create_and_checkout_branch(&self, branch_name: &BranchName) -> GitResult<()> {
-        debug!("Creating and checking out branch: {}", branch_name);
-        self.create_branch(branch_name)?;
-        self.checkout_branch(branch_name)?;
         Ok(())
     }
 
@@ -639,32 +610,6 @@ impl GitOperations {
         Ok(())
     }
 
-    /// Create a simple work branch for an issue (convenience method for tests)
-    pub fn create_work_branch_simple(&self, issue_name: &str) -> GitResult<String> {
-        // Check if we're already on an issue branch - if so, fail
-        if let Some(current_branch) = self.get_current_branch()? {
-            let current_branch_str = current_branch.as_str();
-            debug!(
-                "create_work_branch_simple: current branch is {}",
-                current_branch_str
-            );
-            if current_branch_str.starts_with("issue/") {
-                debug!("create_work_branch_simple: rejecting creation of {} because already on issue branch {}", issue_name, current_branch_str);
-                return Err(GitError::from_string(format!(
-                    "Cannot create issue branch '{}' while on another issue branch '{}'",
-                    issue_name, current_branch_str
-                )));
-            }
-        } else {
-            debug!("create_work_branch_simple: no current branch found");
-        }
-
-        let branch_name = format!("issue/{}", issue_name);
-        let branch = BranchName::new(&branch_name)?;
-        self.create_and_checkout_branch(&branch)?;
-        Ok(branch_name)
-    }
-
     /// Get current branch name as a String (convenience method for tests)
     pub fn current_branch(&self) -> GitResult<String> {
         match self.get_current_branch()? {
@@ -673,47 +618,6 @@ impl GitOperations {
                 "No current branch (detached HEAD or empty repository)".to_string(),
             )),
         }
-    }
-
-    /// Create a work branch from a string (convenience method)
-    pub fn create_work_branch(&self, issue_name: &str) -> GitResult<String> {
-        let branch_name = format!("issue/{}", issue_name);
-        let branch = BranchName::new(&branch_name)?;
-        self.create_and_checkout_branch(&branch)?;
-        Ok(branch_name)
-    }
-
-    /// Merge an issue branch automatically (convenience method)
-    /// This attempts to merge back to the main branch (main or master)
-    pub fn merge_issue_branch_auto(&self, issue_name: &str) -> GitResult<()> {
-        // First, checkout the main branch
-        let main_branch_name = self.main_branch()?;
-        self.checkout_branch_str(&main_branch_name)?;
-
-        // Then merge the issue branch into it
-        let issue_branch_name = format!("issue/{}", issue_name);
-        let issue_branch = BranchName::new(&issue_branch_name)?;
-        self.merge_branch(&issue_branch)
-    }
-
-    /// Merge issue branch from issue name and target branch
-    pub fn merge_issue_branch(&self, issue_name: &str, target_branch: &str) -> GitResult<()> {
-        info!(
-            "merge_issue_branch called: {} -> {}",
-            issue_name, target_branch
-        );
-
-        // First checkout the target branch
-        let target = BranchName::new(target_branch)?;
-        self.checkout_branch(&target)?;
-
-        // Then merge the issue branch into it
-        let issue_branch_name = format!("issue/{}", issue_name);
-        let issue_branch = BranchName::new(&issue_branch_name)?;
-        let result = self.merge_branch(&issue_branch);
-
-        info!("merge_issue_branch result: {:?}", result);
-        result
     }
 
     /// Get the main branch name
@@ -734,12 +638,12 @@ impl GitOperations {
         }
     }
 
-    /// Find the best merge target for an issue branch using git merge-base
-    /// This determines which branch the issue branch should merge back to
+    /// Find the best merge target for a branch using git merge-base
+    /// This determines which branch the given branch should merge back to
     pub fn find_merge_target_for_issue(&self, issue_branch: &BranchName) -> GitResult<String> {
         debug!("Finding merge target for branch: {}", issue_branch);
 
-        // Get the commit for the issue branch
+        // Get the commit for the branch
         let issue_commit = match self
             .repo
             .inner()
@@ -821,7 +725,7 @@ impl GitOperations {
                 Err(_) => continue, // Skip branches that don't exist
             };
 
-            // Find merge base between issue branch and this potential target
+            // Find merge base between this branch and this potential target
             let merge_base = match self.repo.inner().merge_base(issue_commit, target_commit) {
                 Ok(base) => base,
                 Err(_) => continue, // Skip if no merge base (unrelated histories)
@@ -982,105 +886,6 @@ mod tests {
     use git2::Repository;
     use tempfile::TempDir;
 
-    /// Tests that attempting to create an issue branch from another issue branch fails.
-    /// This validates the business rule that issue branches should only be created from
-    /// feature or main branches, not from other issue branches.
-    #[test]
-    fn debug_branch_creation_issue() {
-        // Create a simple temporary repo without using setup_test_repo
-        let temp_dir = TempDir::new().expect("Failed to create temp directory");
-        let repo_path = temp_dir.path();
-
-        println!("Setting up test repo at: {:?}", repo_path);
-
-        // Initialize and configure repository
-        let repo = Repository::init(repo_path).expect("Failed to init repository");
-        let mut config = repo.config().expect("Failed to get config");
-        config
-            .set_str("user.name", "Test User")
-            .expect("Failed to set user.name");
-        config
-            .set_str("user.email", "test@example.com")
-            .expect("Failed to set user.email");
-
-        // Create initial commit directly
-        std::fs::write(repo_path.join("README.md"), "# Test Repository\n")
-            .expect("Failed to write README");
-
-        let mut index = repo.index().expect("Failed to get index");
-        index
-            .add_path(std::path::Path::new("README.md"))
-            .expect("Failed to add file");
-        index.write().expect("Failed to write index");
-
-        let signature = git2::Signature::now("Test User", "test@example.com")
-            .expect("Failed to create signature");
-        let tree_id = index.write_tree().expect("Failed to write tree");
-        let tree = repo.find_tree(tree_id).expect("Failed to find tree");
-        repo.commit(
-            Some("HEAD"),
-            &signature,
-            &signature,
-            "Initial commit",
-            &tree,
-            &[],
-        )
-        .expect("Failed to create initial commit");
-
-        println!("Repository setup complete");
-
-        // Now create GitOperations
-        let git_ops = GitOperations::with_work_dir(repo_path.to_path_buf())
-            .expect("Failed to create GitOperations");
-
-        // Check current branch
-        let current = git_ops
-            .get_current_branch()
-            .expect("Failed to get current branch");
-        println!("Current branch after setup: {:?}", current);
-
-        // Create first issue branch
-        println!("Creating first issue branch...");
-        let result1 = git_ops.create_work_branch_simple("good-issue");
-        println!(
-            "Result of create_work_branch_simple('good-issue'): {:?}",
-            result1
-        );
-        assert!(result1.is_ok(), "First branch creation should succeed");
-
-        let current_after_first = git_ops
-            .get_current_branch()
-            .expect("Failed to get current branch");
-        println!(
-            "Current branch after first create: {:?}",
-            current_after_first
-        );
-
-        // Try to create second issue branch (should fail)
-        println!("Creating second issue branch (should fail)...");
-        let result2 = git_ops.create_work_branch_simple("bad-issue");
-        println!(
-            "Result of create_work_branch_simple('bad-issue'): {:?}",
-            result2
-        );
-
-        let current_after_second = git_ops
-            .get_current_branch()
-            .expect("Failed to get current branch");
-        println!(
-            "Current branch after second attempt: {:?}",
-            current_after_second
-        );
-
-        // Verify the assertion that the test expects
-        assert!(
-            result2.is_err(),
-            "Expected second branch creation to fail, but got: {:?}",
-            result2
-        );
-        println!("✅ SUCCESS: Second branch creation failed as expected");
-    }
-
     fn setup_test_repo() -> (TempDir, GitOperations) {
         let temp_dir = TempDir::new().expect("Failed to create temp directory");
         let repo_path = temp_dir.path();
@@ -1138,58 +943,6 @@ mod tests {
     }
 
     #[test]
-    fn test_branch_operations() {
-        // Create a simple temporary repo without using setup_test_repo
-        let temp_dir = TempDir::new().expect("Failed to create temp directory");
-        let repo_path = temp_dir.path();
-
-        // Initialize and configure repository
-        let repo = Repository::init(repo_path).expect("Failed to init repository");
-        let mut config = repo.config().expect("Failed to get config");
-        config
-            .set_str("user.name", "Test User")
-            .expect("Failed to set user.name");
-        config
-            .set_str("user.email", "test@example.com")
-            .expect("Failed to set user.email");
-
-        // Create initial commit directly
-        let signature = git2::Signature::now("Test User", "test@example.com")
-            .expect("Failed to create signature");
-        let tree_id = repo
-            .index()
-            .unwrap()
-            .write_tree()
-            .expect("Failed to write tree");
-        let tree = repo.find_tree(tree_id).expect("Failed to find tree");
-        repo.commit(
-            Some("HEAD"),
-            &signature,
-            &signature,
-            "Initial commit",
-            &tree,
-            &[],
-        )
-        .expect("Failed to create initial commit");
-
-        // Now create GitOperations
-        let git_ops = GitOperations::with_work_dir(repo_path.to_path_buf())
-            .expect("Failed to create GitOperations");
-
-        let branch_name = BranchName::new("test-branch").expect("Invalid branch name");
-
-        // Test branch creation
-        assert!(!git_ops.branch_exists(&branch_name).unwrap());
-        git_ops.create_branch(&branch_name).unwrap();
-        assert!(git_ops.branch_exists(&branch_name).unwrap());
-
-        // Test branch checkout
-        git_ops.checkout_branch(&branch_name).unwrap();
-        let current_branch = git_ops.get_current_branch().unwrap();
-        assert_eq!(current_branch, Some(branch_name.clone()));
-    }
-
-    #[test]
     fn test_status_operations() {
         let (_temp_dir, git_ops) = setup_test_repo();
 
@@ -1197,115 +950,6 @@ mod tests {
         let status = git_ops.get_status().unwrap();
         assert!(status.is_clean());
         assert!(git_ops.is_working_directory_clean().unwrap());
-    }
-
-    #[test]
-    fn test_find_merge_target_nested_branching() {
-        // Create a test repository with nested branching structure:
-        // main -> my-feature -> issue/task1
-        let temp_dir = TempDir::new().expect("Failed to create temp directory");
-        let repo_path = temp_dir.path();
-
-        // Initialize repository
-        let repo = Repository::init(repo_path).expect("Failed to init repository");
-        let mut config = repo.config().expect("Failed to get config");
-        config
-            .set_str("user.name", "Test User")
-            .expect("Failed to set user.name");
-        config
-            .set_str("user.email", "test@example.com")
-            .expect("Failed to set user.email");
-
-        let signature = git2::Signature::now("Test User", "test@example.com")
-            .expect("Failed to create signature");
-
-        // Helper function to create a commit
-        let create_commit = |message: &str, content: &str| {
-            std::fs::write(repo_path.join("file.txt"), content).expect("Failed to write file");
-            let mut index = repo.index().expect("Failed to get index");
-            index
-                .add_path(std::path::Path::new("file.txt"))
-                .expect("Failed to add file to index");
-            index.write().expect("Failed to write index");
-            let tree_id = index.write_tree().expect("Failed to write tree");
-            let tree = repo.find_tree(tree_id).expect("Failed to find tree");
-
-            let parent_commit = match repo.head() {
-                Ok(head) => {
-                    let parent_oid = head.target().expect("Failed to get head target");
-                    Some(
-                        repo.find_commit(parent_oid)
-                            .expect("Failed to find parent commit"),
-                    )
-                }
-                Err(_) => None, // First commit
-            };
-
-            let parents: Vec<&git2::Commit> =
-                parent_commit.as_ref().map(|c| vec![c]).unwrap_or_default();
-            repo.commit(
-                Some("HEAD"),
-                &signature,
-                &signature,
-                message,
-                &tree,
-                &parents,
-            )
-            .expect("Failed to create commit")
-        };
-
-        // Create initial commit on main
-        let _initial_commit = create_commit("Initial commit", "initial content");
-
-        let git_ops = GitOperations::with_work_dir(repo_path.to_path_buf())
-            .expect("Failed to create GitOperations");
-
-        // Create and switch to my-feature branch
-        let feature_branch = BranchName::new("my-feature").expect("Invalid branch name");
-        git_ops.create_and_checkout_branch(&feature_branch).unwrap();
-        eprintln!("Created my-feature branch");
-
-        // Add commits to my-feature
-        let _feature_commit1 = create_commit("Feature commit 1", "feature content 1");
-        let _feature_commit2 = create_commit("Feature commit 2", "feature content 2");
-
-        // Create issue/task1 branch from my-feature tip
-        let issue_branch = BranchName::new("issue/task1").expect("Invalid branch name");
-        git_ops.create_and_checkout_branch(&issue_branch).unwrap();
-        eprintln!("Created issue/task1 branch");
-
-        // Add commit to issue branch
-        let _issue_commit = create_commit("Issue task1 work", "task1 content");
-
-        // Test 1: Issue branch should merge back to my-feature (perfect match)
-        let merge_target = git_ops.find_merge_target_for_issue(&issue_branch).unwrap();
-        assert_eq!(
-            merge_target, "my-feature",
-            "Issue branch should merge back to my-feature, but got: {}",
-            merge_target
-        );
-
-        // Test 2: Move my-feature forward and test again
-        git_ops.checkout_branch(&feature_branch).unwrap();
-        let _feature_commit3 = create_commit("Feature moved forward", "feature content 3");
-
-        // Issue should still merge back to my-feature (most recent merge base)
-        let merge_target = git_ops.find_merge_target_for_issue(&issue_branch).unwrap();
-        assert_eq!(merge_target, "my-feature",
-            "Issue branch should still merge back to my-feature after it moved forward, but got: {}", merge_target);
-
-        // Test 3: Create another issue branch from main and verify it merges to main
-        git_ops.checkout_branch_str("main").unwrap();
-        let issue2_branch = BranchName::new("issue/task2").expect("Invalid branch name");
-        git_ops.create_and_checkout_branch(&issue2_branch).unwrap();
-        let _issue2_commit = create_commit("Issue task2 work", "task2 content");
-
-        let merge_target = git_ops.find_merge_target_for_issue(&issue2_branch).unwrap();
-        assert_eq!(
-            merge_target, "main",
-            "Issue branch from main should merge back to main, but got: {}",
-            merge_target
-        );
     }
 
     #[test]

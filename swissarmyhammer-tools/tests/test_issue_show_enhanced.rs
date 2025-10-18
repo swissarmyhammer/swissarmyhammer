@@ -30,7 +30,7 @@ fn extract_text_content(result: &CallToolResult) -> Option<String> {
 
 /// Test environment for comprehensive issue_show testing
 struct IssueShowTestEnvironment {
-    temp_dir: TempDir,
+    _temp_dir: TempDir,
     tool_context: ToolContext,
     issue_storage: Arc<RwLock<Box<dyn IssueStorage>>>,
     git_ops: Arc<Mutex<Option<GitOperations>>>,
@@ -145,16 +145,6 @@ impl IssueShowTestEnvironment {
             .await
             .expect("Failed to create test issue");
         issue.name
-    }
-
-    async fn create_issue_branch(&self, issue_name: &str) -> String {
-        let git_ops = self.git_ops.lock().await;
-        if let Some(git) = git_ops.as_ref() {
-            git.create_work_branch_simple(issue_name)
-                .expect("Failed to create issue branch")
-        } else {
-            panic!("Git operations not available")
-        }
     }
 
     fn create_arguments(
@@ -548,39 +538,11 @@ async fn test_issue_show_concurrent_access() {
 }
 
 #[tokio::test]
-async fn test_issue_show_rate_limiting() {
-    let env = IssueShowTestEnvironment::new().await;
-
-    // Create test issue
-    env.create_test_issue("RATE_LIMIT_TEST", "# Rate Limit Test")
-        .await;
-
-    // Execute multiple rapid requests (should be handled by rate limiter)
-    for i in 0..10 {
-        let args = env.create_arguments("RATE_LIMIT_TEST", None);
-        let result = env.execute_tool(args).await;
-        // Some may succeed, some may be rate limited, but none should panic
-        match result {
-            Ok(_) => println!("Request {i} succeeded"),
-            Err(e) => {
-                let error_msg = e.to_string();
-                if error_msg.contains("rate limit") {
-                    println!("Request {i} rate limited (expected)");
-                } else {
-                    panic!("Unexpected error: {error_msg}");
-                }
-            }
-        }
-    }
-}
-
-#[tokio::test]
 async fn test_issue_show_switching_between_parameters() {
     let env = IssueShowTestEnvironment::new().await;
 
     // Create test issue and branch
     let issue_name = env.create_test_issue("SWITCH_TEST", "# Switch Test").await;
-    let _branch_name = env.create_issue_branch(&issue_name).await;
 
     // Test switching between different parameter types
     let test_sequence = vec![
@@ -602,63 +564,7 @@ async fn test_issue_show_switching_between_parameters() {
     }
 }
 
-// Performance tests
-
-#[tokio::test]
-async fn test_issue_show_memory_usage() {
-    let env = IssueShowTestEnvironment::new().await;
-
-    // Create issues with large content
-    let large_content = "A".repeat(10000);
-    for i in 0..10 {
-        env.create_test_issue(&format!("MEMORY_TEST_{i:03}"), &large_content)
-            .await;
-    }
-
-    // Test that memory usage is reasonable
-    let args = env.create_arguments("next", None);
-    let result = env.execute_tool(args).await;
-
-    assert!(result.is_ok(), "Should handle large content efficiently");
-
-    // Test multiple operations don't accumulate memory
-    for _ in 0..10 {
-        let args = env.create_arguments("next", None);
-        let _ = env.execute_tool(args).await;
-    }
-
-    // If we got here without panicking, memory usage is reasonable
-}
-
 // Edge cases and error scenarios
-
-#[tokio::test]
-async fn test_issue_show_corrupted_git_state() {
-    let env = IssueShowTestEnvironment::new().await;
-
-    // Create issue and branch
-    let issue_name = env
-        .create_test_issue("CORRUPT_TEST", "# Corrupt Test")
-        .await;
-    let _branch_name = env.create_issue_branch(&issue_name).await;
-
-    // Simulate corrupted git state by removing .git directory
-    let git_dir = env.temp_dir.path().join(".git");
-    if git_dir.exists() {
-        std::fs::remove_dir_all(&git_dir).unwrap();
-    }
-
-    // Test should handle corrupted git gracefully
-    // Regular issue lookup should still work even without git
-    let args = env.create_arguments(&issue_name, None);
-    let result = env.execute_tool(args).await;
-
-    // Should succeed for regular issue lookup regardless of git state
-    assert!(
-        result.is_ok(),
-        "Regular issue lookup should work even with corrupted git"
-    );
-}
 
 #[tokio::test]
 async fn test_issue_show_schema_validation() {

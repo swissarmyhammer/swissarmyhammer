@@ -42,28 +42,22 @@
 //! ## Issue Lifecycle
 //!
 //! ```rust
-//! use swissarmyhammer_issues::{FileSystemIssueStorage, IssueStorage, work_on_issue};
-//! use swissarmyhammer_git::GitOperations;
+//! use swissarmyhammer_issues::{FileSystemIssueStorage, IssueStorage};
 //!
 //! # async fn workflow_example() -> Result<(), Box<dyn std::error::Error>> {
 //! let storage = FileSystemIssueStorage::new_default()?;
-//! let git_ops = GitOperations::new()?;
 //!
 //! // 1. Create issue
 //! let issue = storage.create_issue("new_feature".to_string(), "# New Feature\n\nDescription".to_string()).await?;
 //!
-//! // 2. Create work branch (name-based)  
-//! let branch_result = work_on_issue(&issue.name, &storage, &git_ops).await?;
+//! // 2. Work on the issue...
 //!
-//! // 3. Work on the issue...
-//! // 4. Update issue with progress
+//! // 3. Update issue with progress
 //! let updated = storage.update_issue(&issue.name, "# New Feature\n\nDescription\n\n## Progress\n\nCompleted basic structure".to_string()).await?;
 //!
-//! // 5. Mark complete
+//! // 4. Mark complete
 //! let completed = storage.complete_issue(&issue.name).await?;
 //!
-//! // 6. Merge branch
-//! // git_ops.merge_issue_branch_auto(&issue.name)?;
 //! # Ok(())
 //! # }
 //! ```
@@ -83,6 +77,5 @@ pub use metrics::{MetricsSnapshot, Operation, PerformanceMetrics};
 pub use storage::{FileSystemIssueStorage, IssueStorage};
 pub use types::{Issue, IssueInfo, IssueName, IssueState};
 pub use utils::{
-    format_issue_status, get_content_from_args, get_current_issue_from_branch, get_project_status,
-    work_on_issue, ContentSource, IssueBranchResult, IssueMergeResult, ProjectStatus,
+    format_issue_status, get_content_from_args, get_project_status, ContentSource, ProjectStatus,
 };

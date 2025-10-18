@@ -10,7 +10,6 @@ use async_trait::async_trait;
 use rmcp::model::CallToolResult;
 use rmcp::ErrorData as McpError;
 use swissarmyhammer_common::SwissArmyHammerError;
-use swissarmyhammer_issues::Config;
 
 /// Tool for marking issues as complete
 #[derive(Default)]
@@ -69,18 +68,8 @@ impl McpTool for MarkCompleteIssueTool {
             match git_ops.as_ref() {
                 Some(ops) => match ops.get_current_branch() {
                     Ok(Some(branch)) => {
-                        let branch_str = branch.to_string();
-                        let config = Config::global();
-                        if let Some(issue_name) =
-                            branch_str.strip_prefix(&config.issue_branch_prefix)
-                        {
-                            issue_name.to_string()
-                        } else {
-                            return Err(McpError::invalid_params(
-                                format!("Not on an issue branch. Current branch: {branch_str}"),
-                                None,
-                            ));
-                        }
+                        // With no prefix requirement, the branch name is the issue name
+                        branch.to_string()
                     }
                     Ok(None) => {
                         return Err(McpError::invalid_params(

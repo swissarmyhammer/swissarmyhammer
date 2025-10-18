@@ -432,18 +432,18 @@ mod tests {
     #[test]
     fn test_git_changes_response_serialization() {
         let response = GitChangesResponse {
-            branch: "issue/test".to_string(),
+            branch: "test-branch".to_string(),
             parent_branch: Some("main".to_string()),
             files: vec!["src/main.rs".to_string(), "README.md".to_string()],
         };
 
         let json = serde_json::to_string(&response).unwrap();
-        assert!(json.contains("issue/test"));
+        assert!(json.contains("test-branch"));
         assert!(json.contains("main"));
         assert!(json.contains("src/main.rs"));
 
         let deserialized: GitChangesResponse = serde_json::from_str(&json).unwrap();
-        assert_eq!(deserialized.branch, "issue/test");
+        assert_eq!(deserialized.branch, "test-branch");
         assert_eq!(deserialized.parent_branch, Some("main".to_string()));
         assert_eq!(deserialized.files.len(), 2);
     }
@@ -453,8 +453,8 @@ mod tests {
         let repo = TestGitRepo::new();
         repo.commit_file("committed.txt", "committed content", "Initial commit");
 
-        // Create issue branch and add a committed file
-        repo.create_and_checkout_branch("issue/test-uncommitted");
+        // Create branch and add a committed file
+        repo.create_and_checkout_branch("test-uncommitted");
         repo.commit_file("committed_on_branch.txt", "committed", "Add committed file");
 
         // Create an uncommitted file
@@ -468,10 +468,7 @@ mod tests {
         // Execute tool
         let tool = GitChangesTool::new();
         let mut arguments = serde_json::Map::new();
-        arguments.insert(
-            "branch".to_string(),
-            serde_json::json!("issue/test-uncommitted"),
-        );
+        arguments.insert("branch".to_string(), serde_json::json!("test-uncommitted"));
 
         let result = tool.execute(arguments, &context).await;
         assert!(result.is_ok());
@@ -487,7 +484,7 @@ mod tests {
         let parsed: GitChangesResponse = serde_json::from_str(response_text).unwrap();
 
         // Verify both committed and uncommitted files are included
-        assert_eq!(parsed.branch, "issue/test-uncommitted");
+        assert_eq!(parsed.branch, "test-uncommitted");
         assert_eq!(parsed.parent_branch, Some("main".to_string()));
         assert_eq!(parsed.files.len(), 2);
         assert!(parsed
@@ -554,18 +551,17 @@ mod tests {
         let context = crate::test_utils::create_test_context().await;
         *context.git_ops.lock().await = Some(git_ops);
 
-        // Execute tool with non-existent issue branch
-        // Use issue/ prefix to trigger parent branch lookup which should fail
+        // Execute tool with non-existent branch
         let tool = GitChangesTool::new();
         let mut arguments = serde_json::Map::new();
         arguments.insert(
             "branch".to_string(),
-            serde_json::json!("issue/non-existent-branch"),
+            serde_json::json!("non-existent-branch"),
         );
 
         let result = tool.execute(arguments, &context).await;
 
-        // For non-existent issue branches, the tool falls back to get_all_tracked_files
+        // For non-existent branches, the tool falls back to get_all_tracked_files
         // which may succeed. This is acceptable behavior - the tool shows tracked files
         // rather than failing. Let's verify it returns a valid response.
         assert!(result.is_ok());
@@ -577,8 +573,8 @@ mod tests {
             _ => panic!("Expected text content"),
         };
         let parsed: GitChangesResponse = serde_json::from_str(response_text).unwrap();
-        assert_eq!(parsed.branch, "issue/non-existent-branch");
-        // Should have no parent since it doesn't exist as an issue branch
+        assert_eq!(parsed.branch, "non-existent-branch");
+        // Should have no parent since it doesn't exist
         assert_eq!(parsed.parent_branch, None);
     }
 
@@ -643,7 +639,7 @@ mod tests {
         let repo = TestGitRepo::new();
         repo.commit_file("base.txt", "base content", "Initial commit");
 
-        // Create feature branch (not issue/) and add files
+        // Create feature branch and add files
         repo.create_and_checkout_branch("feature/new-feature");
         repo.create_file("feature1.txt", "feature content");
         repo.create_file("feature2.txt", "more features");

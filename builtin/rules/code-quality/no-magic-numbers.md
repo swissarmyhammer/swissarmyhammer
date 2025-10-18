@@ -6,6 +6,10 @@ severity: error
 tags: ["code-quality", "maintainability"]
 ---
 
+This rule only applies to programming languages that use numeric literals.
+
+This rule does not apply to data files like yaml or json.
+
 Check {{ language }} code for magic numbers (unexplained numeric literals).
 
 Flag numeric literals that should be named constants, except:

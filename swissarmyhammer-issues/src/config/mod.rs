@@ -10,12 +10,10 @@
 //!
 //! // Get global configuration instance
 //! let config = Config::global();
-//! println!("Issue branch prefix: {}", config.issue_branch_prefix);
 //! println!("Max pending issues in summary: {}", config.max_pending_issues_in_summary);
 //!
 //! // Create new configuration instance (reads from environment)
 //! let config = Config::new();
-//! assert_eq!(config.issue_branch_prefix, "issue/");
 //! ```
 
 use swissarmyhammer_common::EnvLoader;
@@ -23,8 +21,6 @@ use swissarmyhammer_common::EnvLoader;
 /// Configuration settings for SwissArmyHammer issue management
 #[derive(Debug, Clone)]
 pub struct Config {
-    /// Prefix for issue branches (default: "issue/")
-    pub issue_branch_prefix: String,
     /// Maximum number of pending issues to display in summary (default: 5)
     pub max_pending_issues_in_summary: usize,
     /// Maximum content length for issue content (default: 50000)
@@ -51,7 +47,6 @@ pub struct Config {
 }
 
 impl Config {
-    const DEFAULT_ISSUE_BRANCH_PREFIX: &'static str = "issue/";
     const DEFAULT_MAX_PENDING_ISSUES_IN_SUMMARY: usize = 5;
     const DEFAULT_MAX_CONTENT_LENGTH: usize = 50000;
     const DEFAULT_MAX_LINE_LENGTH: usize = 10000;
@@ -68,7 +63,6 @@ impl Config {
 impl Default for Config {
     fn default() -> Self {
         Self {
-            issue_branch_prefix: Config::DEFAULT_ISSUE_BRANCH_PREFIX.to_string(),
             max_pending_issues_in_summary: Config::DEFAULT_MAX_PENDING_ISSUES_IN_SUMMARY,
             max_content_length: Config::DEFAULT_MAX_CONTENT_LENGTH,
             max_line_length: Config::DEFAULT_MAX_LINE_LENGTH,
@@ -92,8 +86,6 @@ impl Config {
         let loader = EnvLoader::new("SWISSARMYHAMMER");
 
         Self {
-            issue_branch_prefix: loader
-                .load_string("ISSUE_BRANCH_PREFIX", Self::DEFAULT_ISSUE_BRANCH_PREFIX),
             max_pending_issues_in_summary: loader.load_parsed(
                 "MAX_PENDING_ISSUES_IN_SUMMARY",
                 Self::DEFAULT_MAX_PENDING_ISSUES_IN_SUMMARY,
@@ -144,7 +136,6 @@ mod tests {
     #[test]
     fn test_default_config() {
         let config = Config::default();
-        assert_eq!(config.issue_branch_prefix, "issue/");
         assert_eq!(config.issue_number_width, 6);
         assert_eq!(config.max_pending_issues_in_summary, 5);
         assert_eq!(config.min_issue_number, 1);
@@ -169,7 +160,6 @@ mod tests {
             .unwrap_or_else(|poisoned| poisoned.into_inner());
 
         // Clean up any environment variables that could affect this test
-        std::env::remove_var("SWISSARMYHAMMER_ISSUE_BRANCH_PREFIX");
         std::env::remove_var("SWISSARMYHAMMER_ISSUE_NUMBER_WIDTH");
         std::env::remove_var("SWISSARMYHAMMER_MAX_PENDING_ISSUES_IN_SUMMARY");
         std::env::remove_var("SWISSARMYHAMMER_MAX_ISSUE_NUMBER");
@@ -183,7 +173,6 @@ mod tests {
 
         let config = Config::new();
         // Should use defaults when environment variables are not set
-        assert_eq!(config.issue_branch_prefix, "issue/");
         assert_eq!(config.issue_number_width, 6);
         assert_eq!(config.max_pending_issues_in_summary, 5);
         assert_eq!(config.min_issue_number, 1);
@@ -208,7 +197,6 @@ mod tests {
             .unwrap_or_else(|poisoned| poisoned.into_inner());
 
         // Clean up any environment variables first
-        std::env::remove_var("SWISSARMYHAMMER_ISSUE_BRANCH_PREFIX");
         std::env::remove_var("SWISSARMYHAMMER_ISSUE_NUMBER_WIDTH");
         std::env::remove_var("SWISSARMYHAMMER_MAX_PENDING_ISSUES_IN_SUMMARY");
         std::env::remove_var("SWISSARMYHAMMER_MAX_ISSUE_NUMBER");
@@ -218,7 +206,6 @@ mod tests {
         std::env::remove_var("SWISSARMYHAMMER_DEFAULT_ISSUE_CONTENT");
 
         // Set test values
-        std::env::set_var("SWISSARMYHAMMER_ISSUE_BRANCH_PREFIX", "feature/");
         std::env::set_var("SWISSARMYHAMMER_ISSUE_NUMBER_WIDTH", "8");
         std::env::set_var("SWISSARMYHAMMER_MAX_PENDING_ISSUES_IN_SUMMARY", "10");
         std::env::set_var("SWISSARMYHAMMER_MAX_ISSUE_NUMBER", "9999999");
@@ -231,7 +218,6 @@ mod tests {
         );
 
         let config = Config::new();
-        assert_eq!(config.issue_branch_prefix, "feature/");
         assert_eq!(config.issue_number_width, 8);
         assert_eq!(config.max_pending_issues_in_summary, 10);
         assert_eq!(config.min_issue_number, 1);
@@ -245,7 +231,6 @@ mod tests {
         );
 
         // Clean up the environment variables we set
-        std::env::remove_var("SWISSARMYHAMMER_ISSUE_BRANCH_PREFIX");
         std::env::remove_var("SWISSARMYHAMMER_ISSUE_NUMBER_WIDTH");
         std::env::remove_var("SWISSARMYHAMMER_MAX_PENDING_ISSUES_IN_SUMMARY");
         std::env::remove_var("SWISSARMYHAMMER_MAX_ISSUE_NUMBER");
