@@ -81,7 +81,7 @@ impl IssueShowTestEnvironment {
         let tool = ShowIssueTool::new();
 
         Self {
-            temp_dir,
+            _temp_dir: temp_dir,
             tool_context,
             issue_storage,
             git_ops,

@@ -8,8 +8,8 @@ use std::collections::HashSet;
 use swissarmyhammer_tools::mcp::tool_registry::ToolRegistry;
 use swissarmyhammer_tools::mcp::tool_registry::{
     register_abort_tools, register_file_tools, register_issue_tools, register_memo_tools,
-    register_notify_tools, register_outline_tools, register_search_tools, register_shell_tools,
-    register_todo_tools, register_web_fetch_tools, register_web_search_tools,
+    register_outline_tools, register_search_tools, register_shell_tools, register_todo_tools,
+    register_web_fetch_tools, register_web_search_tools,
 };
 use tracing::info;
 
@@ -111,7 +111,6 @@ fn get_stdin_registry_tools() -> Vec<String> {
     register_file_tools(&mut registry);
     register_issue_tools(&mut registry);
     register_memo_tools(&mut registry);
-    register_notify_tools(&mut registry);
     register_outline_tools(&mut registry);
     register_search_tools(&mut registry);
     register_shell_tools(&mut registry);
