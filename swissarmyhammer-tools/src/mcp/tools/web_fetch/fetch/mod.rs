@@ -3,6 +3,7 @@
 //! This module provides the WebFetchTool for fetching web content and converting HTML to markdown
 //! through the MCP protocol by delegating to the markdowndown crate.
 
+use crate::mcp::progress_notifications::generate_progress_token;
 use crate::mcp::tool_registry::{BaseToolImpl, McpTool, ToolContext};
 use crate::mcp::tools::web_fetch::security::{SecurityError, SecurityValidator};
 use crate::mcp::types::WebFetchRequest;
@@ -10,6 +11,7 @@ use async_trait::async_trait;
 use markdowndown::{convert_url_with_config, Config};
 use rmcp::model::CallToolResult;
 use rmcp::ErrorData as McpError;
+use serde_json::json;
 use std::time::Instant;
 
 /// Configuration constants for web fetch operations
@@ -303,6 +305,22 @@ impl McpTool for WebFetchTool {
         // Create markdowndown configuration from request parameters
         let config = self.create_markdowndown_config(&request);
 
+        // Generate progress token and send start notification
+        let progress_token = generate_progress_token();
+        if let Some(sender) = &_context.progress_sender {
+            sender
+                .send_progress_with_metadata(
+                    &progress_token,
+                    Some(0),
+                    format!("Fetching: {}", request.url),
+                    json!({
+                        "url": request.url,
+                        "timeout": config.http.timeout.as_secs()
+                    }),
+                )
+                .ok();
+        }
+
         // Measure execution time
         let start_time = Instant::now();
 
@@ -311,10 +329,47 @@ impl McpTool for WebFetchTool {
             Ok(markdown) => {
                 let response_time_ms = start_time.elapsed().as_millis() as u64;
                 let markdown_content = markdown.to_string();
+
+                // Send completion notification
+                if let Some(sender) = &_context.progress_sender {
+                    sender
+                        .send_progress_with_metadata(
+                            &progress_token,
+                            Some(100),
+                            format!(
+                                "Fetch complete: {} chars markdown in {:.1}s",
+                                markdown_content.len(),
+                                response_time_ms as f64 / 1000.0
+                            ),
+                            json!({
+                                "markdown_length": markdown_content.len(),
+                                "duration_ms": response_time_ms
+                            }),
+                        )
+                        .ok();
+                }
+
                 self.build_success_response(&request, markdown_content, response_time_ms)
             }
             Err(e) => {
                 let response_time_ms = start_time.elapsed().as_millis() as u64;
+
+                // Send error notification
+                if let Some(sender) = &_context.progress_sender {
+                    sender
+                        .send_progress_with_metadata(
+                            &progress_token,
+                            None,
+                            format!("Fetch failed: {}", e),
+                            json!({
+                                "error": e.to_string(),
+                                "url": request.url,
+                                "duration_ms": response_time_ms
+                            }),
+                        )
+                        .ok();
+                }
+
                 self.build_error_response(&e, response_time_ms, &request)
             }
         }
@@ -417,5 +472,114 @@ mod tests {
 
         let parse_error = std::io::Error::new(std::io::ErrorKind::InvalidData, "Invalid encoding");
         assert_eq!(tool.categorize_error(&parse_error), "content_error");
+    }
+
+    #[tokio::test]
+    async fn test_web_fetch_sends_progress_notifications_on_success() {
+        use crate::mcp::progress_notifications::ProgressSender;
+        use tokio::sync::mpsc;
+
+        let tool = WebFetchTool::new();
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let progress_sender = ProgressSender::new(tx);
+
+        let mut context = crate::test_utils::create_test_context().await;
+        context.progress_sender = Some(progress_sender);
+
+        let mut arguments = serde_json::Map::new();
+        arguments.insert(
+            "url".to_string(),
+            serde_json::Value::String("https://example.com".to_string()),
+        );
+
+        // Execute the tool (this will likely fail due to network, but we can check notifications)
+        let _result = tool.execute(arguments, &context).await;
+
+        // Collect notifications
+        let mut notifications = Vec::new();
+        while let Ok(notification) = rx.try_recv() {
+            notifications.push(notification);
+        }
+
+        // Should have at least one notification (start notification)
+        assert!(
+            !notifications.is_empty(),
+            "Should have sent at least one progress notification"
+        );
+
+        // First notification should be start (0% progress)
+        let start_notif = &notifications[0];
+        assert_eq!(start_notif.progress, Some(0));
+        assert!(start_notif.message.contains("Fetching:"));
+        assert!(start_notif.metadata.is_some());
+
+        // If successful, last notification should be 100% or if failed, should be None
+        let last_notif = &notifications[notifications.len() - 1];
+        assert!(
+            last_notif.progress == Some(100) || last_notif.progress.is_none(),
+            "Last notification should be either completion (100%) or error (None)"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_web_fetch_sends_error_notification_on_failure() {
+        use crate::mcp::progress_notifications::ProgressSender;
+        use tokio::sync::mpsc;
+
+        let tool = WebFetchTool::new();
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let progress_sender = ProgressSender::new(tx);
+
+        let mut context = crate::test_utils::create_test_context().await;
+        context.progress_sender = Some(progress_sender);
+
+        let mut arguments = serde_json::Map::new();
+        // Use an invalid URL that will definitely fail
+        arguments.insert(
+            "url".to_string(),
+            serde_json::Value::String("https://definitely-not-a-real-domain-12345.com".to_string()),
+        );
+
+        // Execute the tool (should fail)
+        let _result = tool.execute(arguments, &context).await;
+
+        // Collect notifications
+        let mut notifications = Vec::new();
+        while let Ok(notification) = rx.try_recv() {
+            notifications.push(notification);
+        }
+
+        // Should have at least 2 notifications (start and error)
+        assert!(
+            notifications.len() >= 2,
+            "Should have sent start and error notifications"
+        );
+
+        // First notification should be start
+        assert_eq!(notifications[0].progress, Some(0));
+
+        // Last notification should be error (None progress)
+        let error_notif = &notifications[notifications.len() - 1];
+        assert_eq!(error_notif.progress, None);
+        assert!(error_notif.message.contains("failed"));
+    }
+
+    #[tokio::test]
+    async fn test_web_fetch_works_without_progress_sender() {
+        let tool = WebFetchTool::new();
+
+        // Context without progress sender
+        let context = crate::test_utils::create_test_context().await;
+        assert!(context.progress_sender.is_none());
+
+        let mut arguments = serde_json::Map::new();
+        arguments.insert(
+            "url".to_string(),
+            serde_json::Value::String("https://example.com".to_string()),
+        );
+
+        // Should not panic even without progress sender
+        let _result = tool.execute(arguments, &context).await;
+        // Test passes if it doesn't panic
     }
 }

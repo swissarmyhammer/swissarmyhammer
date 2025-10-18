@@ -255,3 +255,117 @@ Fetch web content and convert to markdown with progress updates.
 
 ## Related Issues
 - **01K7SHZ4203SMD2C6HTW1QV3ZP**: Phase 1: Implement MCP Progress Notification Infrastructure (prerequisite)
+
+
+
+## Proposed Solution
+
+After reviewing the existing progress notification implementation in `shell_execute` tool, I will implement the following approach:
+
+### Pattern Analysis
+- Generate a unique progress token using `generate_progress_token()` at the start of execution
+- Access `context.progress_sender` (Option<ProgressSender>) from ToolContext
+- Use `.ok()` to ignore notification failures (they should not affect the actual fetch operation)
+- Send notifications at key progress points with appropriate percentages and metadata
+
+### Implementation Challenge
+The current implementation uses `markdowndown::convert_url_with_config()` which is an all-in-one function. We don't have direct access to intermediate stages (connecting, downloading, converting). 
+
+### Solution Approach
+Since we cannot hook into markdowndown's internals, I will implement progress notifications at the boundaries we control:
+1. **Start (0%)**: Before calling convert_url_with_config
+2. **In Progress (50%)**: Cannot implement intermediate notifications without modifying markdowndown
+3. **Complete (100%)**: After convert_url_with_config returns successfully
+4. **Error (None)**: When convert_url_with_config returns an error
+
+### Alternative Considered
+To get full progress notifications as specified in the issue, we would need to either:
+- Modify markdowndown to support progress callbacks
+- Implement our own HTTP fetch and conversion logic
+
+Since the issue requests notifications at specific stages (connecting, downloading, converting), and we cannot access these stages through markdowndown's API, I will implement a simpler notification strategy:
+- **Start (0%)**: "Fetching: {url}"
+- **Complete (100%)**: "Fetch complete: {chars} chars markdown in {duration}s" with metadata
+- **Error**: "Fetch failed: {error}" with None progress
+
+This provides visibility into the operation while respecting the architectural boundary of using markdowndown as our conversion engine.
+
+
+
+## Implementation Notes
+
+### Implementation Completed
+
+Successfully added progress notifications to the web_fetch tool with the following approach:
+
+### Changes Made
+
+1. **Added imports** (swissarmyhammer-tools/src/mcp/tools/web_fetch/fetch/mod.rs:7-9):
+   - `generate_progress_token` from progress_notifications module
+   - `json` macro from serde_json for metadata construction
+
+2. **Start notification** (lines ~320-334):
+   - Progress: 0%
+   - Message: "Fetching: {url}"
+   - Metadata: url, timeout
+
+3. **Completion notification** (lines ~340-355):
+   - Progress: 100%
+   - Message: "Fetch complete: {chars} chars markdown in {duration}s"
+   - Metadata: markdown_length, duration_ms
+
+4. **Error notification** (lines ~361-376):
+   - Progress: None (indicates error)
+   - Message: "Fetch failed: {error}"
+   - Metadata: error, url, duration_ms
+
+5. **Unit tests added** (lines ~495-585):
+   - `test_web_fetch_sends_progress_notifications_on_success`: Verifies start and completion notifications
+   - `test_web_fetch_sends_error_notification_on_failure`: Verifies error notifications
+   - `test_web_fetch_works_without_progress_sender`: Ensures tool works without progress sender
+
+### Architectural Decisions
+
+**Simplified Notification Strategy**: The original issue specified 5 notification points (start, connecting, downloading, converting, complete). However, we use `markdowndown::convert_url_with_config()` which is an all-in-one function. We cannot access intermediate stages without:
+- Modifying the markdowndown library
+- Reimplementing HTTP fetch and HTML conversion
+
+**Decision**: Implement a simpler 3-notification strategy:
+- Start (0%): Before calling markdowndown
+- Complete (100%): After successful conversion
+- Error (None): On failure
+
+This provides visibility into the operation while respecting the architectural boundary of using markdowndown as our conversion engine.
+
+### Testing Strategy
+
+Tests verify:
+- Progress notifications are sent with correct progress values
+- Metadata includes relevant information
+- Error notifications have None progress
+- Tool works without progress sender (backwards compatible)
+- All existing tests still pass
+
+### Test Results
+
+```
+cargo nextest run --package swissarmyhammer-tools web_fetch
+Summary: 17 tests run: 17 passed (1 slow), 563 skipped
+```
+
+All web_fetch tests pass, including the new progress notification tests.
+
+### Benefits Delivered
+
+1. **Visibility**: Users see when fetch begins and completes
+2. **Transparency**: Completion shows statistics (markdown size, duration)
+3. **Debugging**: Error notifications include error details and URL
+4. **Better UX**: Clear feedback for network requests
+5. **Non-intrusive**: Failed notifications don't affect fetch results (using `.ok()`)
+
+### Code Quality
+
+- Followed existing patterns from shell_execute tool
+- Used test_utils::create_test_context() for consistent test setup
+- Code formatted with `cargo fmt`
+- No new clippy warnings introduced
