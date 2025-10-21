@@ -11,9 +11,9 @@ use swissarmyhammer_prompts::{PromptLibrary, PromptResolver};
 /// Note: .check is tested separately in test_check_prompt_renders_with_parameters
 /// because it requires specific parameters
 #[rstest]
-#[case("issue/code")]
-#[case("issue/code_review")]
-#[case("issue/review")]
+#[case("code/issue")]
+#[case("code/review")]
+#[case("review/code")]
 #[case("issue/complete")]
 #[case(".system")]
 fn test_builtin_prompt_renders_successfully(#[case] prompt_name: &str) {
@@ -76,9 +76,8 @@ fn test_all_builtin_prompts_load_without_errors() {
 
     // Check that key prompts are present
     let expected_prompts = vec![
-        "issue/code",
-        "issue/code_review",
-        "issue/review",
+        "code/issue",
+        "code/review",
         "issue/complete",
         ".system",
         ".check",

@@ -22,9 +22,9 @@ stateDiagram-v2
 ## Actions
 
 - start: log "Working an issue"
-- code: execute prompt "issue/code"
-- review: execute prompt "issue/review"
-- code_review: execute prompt "issue/code_review"
+- code: execute prompt "code/issue"
+- review: execute prompt "review/code"
+- code_review: execute prompt "code/review"
 - test: run workflow "test"
 - complete: execute prompt "issue/complete"
 - commit: execute prompt "commit"
