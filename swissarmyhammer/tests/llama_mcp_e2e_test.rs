@@ -74,25 +74,6 @@ async fn test_llama_mcp_integration_fast() {
     info!("LlamaAgent MCP integration infrastructure validated successfully");
 }
 
-/// Full end-to-end integration test validating LlamaAgent can use its own MCP tools to read Cargo.toml
-///
-/// This test proves the complete integration workflow:
-/// 1. Configures LlamaAgent to start its own HTTP MCP server with SwissArmyHammer tools
-/// 2. Executes prompt asking model to read Cargo.toml using file_read tool
-/// 3. Validates model makes correct MCP tool call to its own server and receives file contents
-/// 4. Verifies response contains actual Cargo.toml content
-///
-/// NOTE: This test requires actual executor implementation. Test this functionality through PromptAction.
-#[test_log::test(tokio::test)]
-#[ignore = "Requires actual executor implementation - test via PromptAction instead"]
-async fn test_llama_mcp_cargo_toml_integration() {
-    let _guard = IsolatedTestEnvironment::new().expect("Failed to create test environment");
-
-    // This test is disabled until executor implementation is refactored
-    // to use PromptAction for execution rather than direct executor creation.
-    info!("Test disabled - requires PromptAction integration");
-}
-
 /// Tests LlamaAgent MCP server integration by validating configuration (Slow)
 ///
 /// NOTE: This test is slow (>5s) because it may trigger LLM model operations.

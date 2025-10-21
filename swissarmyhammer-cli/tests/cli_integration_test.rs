@@ -362,7 +362,6 @@ async fn test_flow_test_invalid_set_format() -> Result<()> {
 
 /// Test flow test help command
 #[tokio::test]
-#[ignore] // FIXME: Help handling needs to be fixed for in-process tests
 async fn test_flow_test_help() -> Result<()> {
     let result = run_sah_command_in_process(&["flow", "--help"]).await?;
 

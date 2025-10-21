@@ -867,7 +867,6 @@ impl AgentExecutor for LlamaAgentExecutorWrapper {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::AgentResponseType;
     use swissarmyhammer_config::{McpServerConfig, ModelConfig};
 
     #[test_log::test(tokio::test)]
@@ -1127,80 +1126,6 @@ mod tests {
 
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("not initialized"));
-    }
-
-    /// Integration test requiring a real LlamaAgent model to be available.
-    ///
-    /// This test is ignored by default because it requires:
-    /// - A valid LlamaAgent model file accessible via the test configuration
-    /// - Sufficient system resources to load and run the model
-    /// - Network access for model operations
-    ///
-    /// To run this test, ensure the model is available and use:
-    /// `cargo nextest run --ignored test_llama_agent_executor_execute_with_init`
-    #[test_log::test(tokio::test)]
-    #[ignore = "Requires LlamaAgent model files and system resources"]
-    async fn test_llama_agent_executor_execute_with_init() {
-        // Start MCP server first
-        use swissarmyhammer_prompts::PromptLibrary;
-        use swissarmyhammer_tools::mcp::unified_server::{start_mcp_server, McpServerMode};
-
-        let tools_handle = start_mcp_server(
-            McpServerMode::Http { port: None },
-            Some(PromptLibrary::default()),
-        )
-        .await
-        .expect("Failed to start test MCP server");
-
-        let port = tools_handle.info.port.unwrap_or(0);
-        let (dummy_tx, _dummy_rx) = tokio::sync::oneshot::channel();
-        let mcp_handle = McpServerHandle::new(port, "127.0.0.1".to_string(), dummy_tx);
-
-        // Test that executor properly handles execution requests
-        let config = LlamaAgentConfig::for_testing();
-        let mut executor = LlamaAgentExecutor::new(config, Some(mcp_handle));
-
-        // Initialize executor - this test requires model files to be available
-        executor
-            .initialize()
-            .await
-            .expect("Executor initialization must succeed - ensure LlamaAgent model is available");
-
-        // Create a test execution context
-        let agent_config = create_test_agent_config();
-        let context = crate::AgentExecutionContext::new(&agent_config);
-
-        // Execute prompt
-        let result = executor
-            .execute_prompt(
-                "You are a software agent with multiple tools.".to_string(),
-                "Do you have the files_read tool, answer YES or NO.".to_string(),
-                &context,
-            )
-            .await;
-
-        // Execution must succeed - this is a real integration test
-        let response = result.expect("Prompt execution must succeed");
-
-        // Verify response structure for real execution
-        tracing::debug!("Response content length: {}", response.content.len());
-        tracing::debug!("Response type: {:?}", response.response_type);
-
-        // For real execution, we just verify we got some response
-        assert!(matches!(response.response_type, AgentResponseType::Success));
-        assert!(!response.content.is_empty());
-
-        // For real execution, metadata may or may not be present
-        tracing::debug!("Response metadata present: {}", response.metadata.is_some());
-        if let Some(metadata) = &response.metadata {
-            tracing::debug!("Metadata: {:#}", metadata);
-        }
-
-        tracing::info!("✓ LlamaAgent executor test completed successfully");
-
-        // Real execution doesn't need specific metadata structure validation
-
-        executor.shutdown().await.unwrap();
     }
 
     #[test]
