@@ -76,6 +76,10 @@ pub struct RuleCheckRequest {
     /// Optional list of file paths or glob patterns to check
     #[serde(skip_serializing_if = "Option::is_none")]
     pub file_paths: Option<Vec<String>>,
+
+    /// Optional maximum number of ERROR violations to return
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_errors: Option<usize>,
 }
 
 /// Tool for checking code against rules via direct library integration
@@ -190,6 +194,11 @@ impl McpTool for RuleCheckTool {
                         "type": "string"
                     },
                     "description": "Optional array of file paths or glob patterns to check (defaults to **/*.*)"
+                },
+                "max_errors": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "description": "Optional maximum number of ERROR violations to return (default: unlimited)"
                 }
             }
         })
@@ -253,6 +262,7 @@ impl McpTool for RuleCheckTool {
                 .unwrap_or_else(|| vec!["**/*.*".to_string()]),
             check_mode: swissarmyhammer_rules::CheckMode::FailFast,
             force: false, // MCP tool doesn't expose force flag yet
+            max_errors: request.max_errors,
         };
 
         tracing::info!("Domain request patterns: {:?}", domain_request.patterns);

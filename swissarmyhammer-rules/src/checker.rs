@@ -48,6 +48,8 @@ pub enum CheckMode {
 ///     category: None,
 ///     patterns: vec!["**/*.rs".to_string()],
 ///     check_mode: CheckMode::FailFast,
+///     force: false,
+///     max_errors: None,
 /// };
 /// ```
 #[derive(Debug, Clone)]
@@ -64,6 +66,8 @@ pub struct RuleCheckRequest {
     pub check_mode: CheckMode,
     /// Force re-evaluation, bypassing cache
     pub force: bool,
+    /// Maximum number of ERROR violations to return (None = unlimited)
+    pub max_errors: Option<usize>,
 }
 
 /// Core rule checker that performs two-stage rendering and executes checks via LLM agent
@@ -607,6 +611,7 @@ impl RuleChecker {
         // Wrap checker in Arc so it can be cloned for each stream element
         let checker = Arc::new(self.clone_for_streaming());
         let check_mode = request.check_mode;
+        let max_errors = request.max_errors;
 
         // Create a stream that checks files lazily and yields violations immediately
         let stream = stream::iter(rules)
@@ -630,12 +635,17 @@ impl RuleChecker {
                 }
             });
 
-        // For fail-fast mode, take only the first violation
-        if check_mode == CheckMode::FailFast {
-            Ok(stream.take(1).boxed())
+        // Apply limits based on check_mode and max_errors
+        // Priority: max_errors takes precedence if specified, otherwise use check_mode
+        let limited_stream = if let Some(limit) = max_errors {
+            stream.take(limit).boxed()
+        } else if check_mode == CheckMode::FailFast {
+            stream.take(1).boxed()
         } else {
-            Ok(stream.boxed())
-        }
+            stream.boxed()
+        };
+
+        Ok(limited_stream)
     }
 
     /// Create a cloneable version of RuleChecker for streaming
@@ -753,6 +763,7 @@ mod tests {
             patterns: vec!["/nonexistent/**/*.rs".to_string()],
             check_mode: CheckMode::FailFast,
             force: false,
+            max_errors: None,
         };
 
         let mut stream = checker
@@ -918,6 +929,7 @@ mod tests {
             patterns: vec!["test.rs".to_string()],
             check_mode: CheckMode::FailFast,
             force: false,
+            max_errors: None,
         };
 
         let mut stream = checker.check(request).await.expect("Should create stream");
@@ -941,6 +953,7 @@ mod tests {
             patterns: vec!["test.rs".to_string()],
             check_mode: CheckMode::FailFast,
             force: false,
+            max_errors: None,
         };
 
         let mut stream = checker.check(request).await.expect("Should create stream");
@@ -963,6 +976,7 @@ mod tests {
             patterns: vec!["test.rs".to_string()],
             check_mode: CheckMode::CollectAll,
             force: false,
+            max_errors: None,
         };
 
         let mut stream = checker.check(request).await.expect("Should create stream");
@@ -976,5 +990,63 @@ mod tests {
                 break;
             }
         }
+    }
+
+    #[tokio::test]
+    async fn test_check_with_max_errors_limits_violations() {
+        use futures_util::stream::StreamExt;
+
+        let checker = create_test_checker();
+
+        // Create request with max_errors = 2
+        let request = RuleCheckRequest {
+            rule_names: None,
+            severity: None,
+            category: None,
+            patterns: vec!["test.rs".to_string()],
+            check_mode: CheckMode::CollectAll,
+            force: false,
+            max_errors: Some(2),
+        };
+
+        let mut stream = checker.check(request).await.expect("Should create stream");
+
+        // Collect all violations from the stream
+        let mut violations = Vec::new();
+        while let Some(result) = stream.next().await {
+            match result {
+                Ok(violation) => violations.push(violation),
+                Err(_) => break,
+            }
+        }
+
+        // Should have at most 2 violations due to max_errors limit
+        assert!(
+            violations.len() <= 2,
+            "Expected at most 2 violations with max_errors=2, got {}",
+            violations.len()
+        );
+    }
+
+    #[tokio::test]
+    async fn test_check_without_max_errors_unlimited() {
+        let checker = create_test_checker();
+
+        // Create request without max_errors (unlimited)
+        let request = RuleCheckRequest {
+            rule_names: None,
+            severity: None,
+            category: None,
+            patterns: vec!["test.rs".to_string()],
+            check_mode: CheckMode::CollectAll,
+            force: false,
+            max_errors: None,
+        };
+
+        let stream_result = checker.check(request).await;
+        assert!(
+            stream_result.is_ok(),
+            "Should create stream when max_errors is None"
+        );
     }
 }

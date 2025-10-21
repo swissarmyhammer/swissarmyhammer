@@ -38,6 +38,7 @@ pub struct CheckCommand {
     pub create_issues: bool,
     pub no_fail_fast: bool,
     pub force: bool,
+    pub max_errors: Option<usize>,
 }
 
 /// Cache command for managing the rule evaluation cache.
@@ -112,6 +113,7 @@ pub fn parse_rule_command(matches: &ArgMatches) -> RuleCommand {
                 create_issues: sub_matches.get_flag("create-issues"),
                 no_fail_fast: sub_matches.get_flag("no-fail-fast"),
                 force: sub_matches.get_flag("force"),
+                max_errors: sub_matches.get_one::<usize>("max-errors").copied(),
             };
             RuleCommand::Check(check_cmd)
         }
@@ -218,7 +220,12 @@ mod tests {
                             .long("no-fail-fast")
                             .action(ArgAction::SetTrue),
                     )
-                    .arg(Arg::new("force").long("force").action(ArgAction::SetTrue)),
+                    .arg(Arg::new("force").long("force").action(ArgAction::SetTrue))
+                    .arg(
+                        Arg::new("max-errors")
+                            .long("max-errors")
+                            .value_parser(clap::value_parser!(usize)),
+                    ),
             )
             .try_get_matches_from(["rule", "check", "file1.rs", "file2.rs"])
             .unwrap();
@@ -262,7 +269,12 @@ mod tests {
                             .long("no-fail-fast")
                             .action(ArgAction::SetTrue),
                     )
-                    .arg(Arg::new("force").long("force").action(ArgAction::SetTrue)),
+                    .arg(Arg::new("force").long("force").action(ArgAction::SetTrue))
+                    .arg(
+                        Arg::new("max-errors")
+                            .long("max-errors")
+                            .value_parser(clap::value_parser!(usize)),
+                    ),
             )
             .try_get_matches_from([
                 "rule",
@@ -332,6 +344,7 @@ mod tests {
             create_issues: false,
             no_fail_fast: false,
             force: false,
+            max_errors: None,
         };
 
         match RuleCommand::Check(check_cmd) {
@@ -343,6 +356,7 @@ mod tests {
                 assert!(!cmd.create_issues);
                 assert!(!cmd.no_fail_fast);
                 assert!(!cmd.force);
+                assert_eq!(cmd.max_errors, None);
             }
             _ => panic!("CheckCommand should match RuleCommand::Check"),
         }
@@ -391,7 +405,12 @@ mod tests {
                             .long("no-fail-fast")
                             .action(ArgAction::SetTrue),
                     )
-                    .arg(Arg::new("force").long("force").action(ArgAction::SetTrue)),
+                    .arg(Arg::new("force").long("force").action(ArgAction::SetTrue))
+                    .arg(
+                        Arg::new("max-errors")
+                            .long("max-errors")
+                            .value_parser(clap::value_parser!(usize)),
+                    ),
             )
             .try_get_matches_from(["rule", "check", "--create-issues", "file.rs"])
             .unwrap();
@@ -432,7 +451,12 @@ mod tests {
                             .long("no-fail-fast")
                             .action(ArgAction::SetTrue),
                     )
-                    .arg(Arg::new("force").long("force").action(ArgAction::SetTrue)),
+                    .arg(Arg::new("force").long("force").action(ArgAction::SetTrue))
+                    .arg(
+                        Arg::new("max-errors")
+                            .long("max-errors")
+                            .value_parser(clap::value_parser!(usize)),
+                    ),
             )
             .try_get_matches_from(["rule", "check", "--no-fail-fast", "file.rs"])
             .unwrap();
@@ -473,7 +497,12 @@ mod tests {
                             .long("no-fail-fast")
                             .action(ArgAction::SetTrue),
                     )
-                    .arg(Arg::new("force").long("force").action(ArgAction::SetTrue)),
+                    .arg(Arg::new("force").long("force").action(ArgAction::SetTrue))
+                    .arg(
+                        Arg::new("max-errors")
+                            .long("max-errors")
+                            .value_parser(clap::value_parser!(usize)),
+                    ),
             )
             .try_get_matches_from([
                 "rule",

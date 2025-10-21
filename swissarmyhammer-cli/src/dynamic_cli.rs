@@ -1182,6 +1182,13 @@ Run rules against code files and report violations.
                             .long("force")
                             .help("Force re-evaluation, bypassing cache")
                             .action(ArgAction::SetTrue),
+                    )
+                    .arg(
+                        Arg::new("max-errors")
+                            .long("max-errors")
+                            .help("Maximum number of ERROR violations to return (default: unlimited)")
+                            .value_name("N")
+                            .value_parser(clap::value_parser!(usize)),
                     ),
             )
     }
