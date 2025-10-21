@@ -38,6 +38,8 @@ pub struct CheckCommand {
     pub create_issues: bool,
     pub no_fail_fast: bool,
     pub force: bool,
+    /// Maximum number of ERROR violations to return. Defaults to 1 for fast feedback
+    /// and incremental error fixing. Use higher values to see more errors at once.
     pub max_errors: Option<usize>,
 }
 
@@ -520,6 +522,104 @@ mod tests {
                 assert!(check_cmd.create_issues);
                 assert!(check_cmd.no_fail_fast);
                 assert!(!check_cmd.force);
+            }
+            _ => panic!("Expected Check command"),
+        }
+    }
+
+    #[test]
+    fn test_parse_check_command_max_errors_defaults_to_one() {
+        let matches = Command::new("rule")
+            .subcommand(
+                Command::new("check")
+                    .arg(
+                        Arg::new("rule")
+                            .short('r')
+                            .long("rule")
+                            .action(ArgAction::Append),
+                    )
+                    .arg(Arg::new("patterns").action(ArgAction::Append))
+                    .arg(Arg::new("severity").short('s').long("severity"))
+                    .arg(Arg::new("category").short('c').long("category"))
+                    .arg(
+                        Arg::new("create-issues")
+                            .long("create-issues")
+                            .action(ArgAction::SetTrue),
+                    )
+                    .arg(
+                        Arg::new("no-fail-fast")
+                            .long("no-fail-fast")
+                            .action(ArgAction::SetTrue),
+                    )
+                    .arg(Arg::new("force").long("force").action(ArgAction::SetTrue))
+                    .arg(
+                        Arg::new("max-errors")
+                            .long("max-errors")
+                            .value_parser(clap::value_parser!(usize))
+                            .default_value("1"),
+                    ),
+            )
+            .try_get_matches_from(["rule", "check", "file.rs"])
+            .unwrap();
+
+        let parsed = parse_rule_command(&matches);
+        match parsed {
+            RuleCommand::Check(check_cmd) => {
+                assert_eq!(check_cmd.patterns, vec!["file.rs"]);
+                assert_eq!(
+                    check_cmd.max_errors,
+                    Some(1),
+                    "max_errors should default to 1 when not specified"
+                );
+            }
+            _ => panic!("Expected Check command"),
+        }
+    }
+
+    #[test]
+    fn test_parse_check_command_max_errors_explicit_value() {
+        let matches = Command::new("rule")
+            .subcommand(
+                Command::new("check")
+                    .arg(
+                        Arg::new("rule")
+                            .short('r')
+                            .long("rule")
+                            .action(ArgAction::Append),
+                    )
+                    .arg(Arg::new("patterns").action(ArgAction::Append))
+                    .arg(Arg::new("severity").short('s').long("severity"))
+                    .arg(Arg::new("category").short('c').long("category"))
+                    .arg(
+                        Arg::new("create-issues")
+                            .long("create-issues")
+                            .action(ArgAction::SetTrue),
+                    )
+                    .arg(
+                        Arg::new("no-fail-fast")
+                            .long("no-fail-fast")
+                            .action(ArgAction::SetTrue),
+                    )
+                    .arg(Arg::new("force").long("force").action(ArgAction::SetTrue))
+                    .arg(
+                        Arg::new("max-errors")
+                            .long("max-errors")
+                            .value_parser(clap::value_parser!(usize))
+                            .default_value("1"),
+                    ),
+            )
+            .try_get_matches_from(["rule", "check", "--max-errors", "10", "file.rs"])
+            .unwrap();
+
+        let parsed = parse_rule_command(&matches);
+        match parsed {
+            RuleCommand::Check(check_cmd) => {
+                assert_eq!(check_cmd.patterns, vec!["file.rs"]);
+                assert_eq!(
+                    check_cmd.max_errors,
+                    Some(10),
+                    "max_errors should use the explicitly provided value"
+                );
             }
             _ => panic!("Expected Check command"),
         }

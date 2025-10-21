@@ -1115,6 +1115,8 @@ Run rules against code files and report violations.
 - --rule <NAME> - Only run specific rule(s) (can be used multiple times)
 - --severity <LEVEL> - Filter by severity level (error, warning, info, hint)
 - --category <CAT> - Filter by category
+- --max-errors <N> - Maximum number of ERROR violations to return (default: 1)
+                      Use higher values to see more errors at once
 
 ## Examples
 
@@ -1186,9 +1188,11 @@ Run rules against code files and report violations.
                     .arg(
                         Arg::new("max-errors")
                             .long("max-errors")
-                            .help("Maximum number of ERROR violations to return (default: unlimited)")
+                            // Default to 1 for fast feedback and incremental error fixing
+                            .help("Maximum number of ERROR violations to return (default: 1)")
                             .value_name("N")
-                            .value_parser(clap::value_parser!(usize)),
+                            .value_parser(clap::value_parser!(usize))
+                            .default_value("1"),
                     ),
             )
     }
