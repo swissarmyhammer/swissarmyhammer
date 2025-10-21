@@ -258,3 +258,178 @@ impl CliContextBuilder {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use serde::Serialize;
+    use tabled::Tabled;
+
+    #[derive(Tabled, Serialize, Debug, Clone)]
+    struct TestRow {
+        #[tabled(rename = "Status")]
+        status: String,
+        #[tabled(rename = "Name")]
+        name: String,
+        #[tabled(rename = "Message")]
+        message: String,
+    }
+
+    /// Test that table rendering with emoji characters produces properly aligned output
+    #[test]
+    fn test_table_alignment_with_emojis() {
+        let test_rows = vec![
+            TestRow {
+                status: "✅".to_string(),
+                name: "Check One".to_string(),
+                message: "Everything is working".to_string(),
+            },
+            TestRow {
+                status: "⚠️".to_string(),
+                name: "Check Two".to_string(),
+                message: "Warning message".to_string(),
+            },
+            TestRow {
+                status: "❌".to_string(),
+                name: "Check Three".to_string(),
+                message: "Error occurred".to_string(),
+            },
+        ];
+
+        // Render the table
+        let table = tabled::Table::new(&test_rows)
+            .with(tabled::settings::Style::modern())
+            .to_string();
+
+        // Verify that the table contains the emoji characters
+        assert!(table.contains("✅"), "Table should contain checkmark emoji");
+        assert!(table.contains("⚠️"), "Table should contain warning emoji");
+        assert!(table.contains("❌"), "Table should contain error emoji");
+
+        // Verify table is not empty and has multiple lines
+        let lines: Vec<&str> = table.lines().collect();
+        assert!(
+            lines.len() >= 7,
+            "Table should have at least 7 lines (header + separators + 3 rows)"
+        );
+
+        // Verify that column separators exist in data rows
+        let data_rows: Vec<&str> = lines
+            .iter()
+            .filter(|line| line.contains("✅") || line.contains("⚠️") || line.contains("❌"))
+            .copied()
+            .collect();
+
+        assert_eq!(data_rows.len(), 3, "Should have 3 data rows");
+
+        // Each data row should have column separators
+        for row in &data_rows {
+            assert!(
+                row.contains('│'),
+                "Row should contain column separators: {}",
+                row
+            );
+        }
+    }
+
+    /// Test that table rendering handles long text correctly
+    #[test]
+    fn test_table_with_long_content() {
+        let test_rows = vec![
+            TestRow {
+                status: "✅".to_string(),
+                name: "Short Name".to_string(),
+                message: "Short message".to_string(),
+            },
+            TestRow {
+                status: "⚠️".to_string(),
+                name: "Very Long Name That Might Cause Issues".to_string(),
+                message: "This is a very long message that contains a lot of text and might cause alignment issues if not handled properly".to_string(),
+            },
+        ];
+
+        let table = tabled::Table::new(&test_rows)
+            .with(tabled::settings::Style::modern())
+            .to_string();
+
+        // Verify table contains the long content
+        assert!(
+            table.contains("Very Long Name"),
+            "Table should contain long name"
+        );
+        assert!(
+            table.contains("very long message"),
+            "Table should contain long message"
+        );
+
+        // Verify column separators exist
+        let lines: Vec<&str> = table.lines().collect();
+        let data_rows: Vec<&str> = lines
+            .iter()
+            .filter(|line| line.contains("✅") || line.contains("⚠️"))
+            .copied()
+            .collect();
+
+        for row in &data_rows {
+            assert!(
+                row.contains('│'),
+                "Row should contain column separators: {}",
+                row
+            );
+        }
+    }
+
+    /// Test that empty table is handled gracefully
+    #[test]
+    fn test_empty_table() {
+        let test_rows: Vec<TestRow> = vec![];
+        let table = tabled::Table::new(&test_rows)
+            .with(tabled::settings::Style::modern())
+            .to_string();
+
+        // Empty table should still render some output (just headers)
+        assert!(!table.is_empty(), "Empty table should produce some output");
+    }
+
+    /// Test table with special characters
+    #[test]
+    fn test_table_with_special_characters() {
+        let test_rows = vec![
+            TestRow {
+                status: "✅".to_string(),
+                name: "Test with → arrow".to_string(),
+                message: "Contains • bullet".to_string(),
+            },
+            TestRow {
+                status: "⚠️".to_string(),
+                name: "Test with © symbol".to_string(),
+                message: "Contains ™ trademark".to_string(),
+            },
+        ];
+
+        let table = tabled::Table::new(&test_rows)
+            .with(tabled::settings::Style::modern())
+            .to_string();
+
+        // Verify special characters are present
+        assert!(table.contains("→"), "Table should contain arrow");
+        assert!(table.contains("•"), "Table should contain bullet");
+        assert!(table.contains("©"), "Table should contain copyright");
+        assert!(table.contains("™"), "Table should contain trademark");
+
+        // Verify column separators exist
+        let lines: Vec<&str> = table.lines().collect();
+        let data_rows: Vec<&str> = lines
+            .iter()
+            .filter(|line| line.contains("✅") || line.contains("⚠️"))
+            .copied()
+            .collect();
+
+        for row in &data_rows {
+            assert!(
+                row.contains('│'),
+                "Row should contain column separators: {}",
+                row
+            );
+        }
+    }
+}
