@@ -1,5 +1,5 @@
 ---
-title: issue_complete
+title: Complete an Issue
 description: Mark an issue as complete
 ---
 

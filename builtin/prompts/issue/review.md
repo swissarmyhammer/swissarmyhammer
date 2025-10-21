@@ -1,6 +1,6 @@
 ---
-title: "review code"
-description: "Improved the current code changes"
+title: Review Code Changes
+description: Improve the current code changes with a code review
 ---
 
 ## Rules

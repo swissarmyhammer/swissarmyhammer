@@ -795,6 +795,167 @@ Claude:
 - Verifies error handling works
 ```
 
+## Progress Notification Examples
+
+Many SwissArmyHammer tools send real-time progress notifications during execution, providing live feedback for long-running operations.
+
+### Example 1: Semantic Search Indexing
+
+When indexing a large codebase, progress notifications show indexing status:
+
+```
+You: "Index all Rust files in the project"
+
+Claude uses: search_index
+{
+  "patterns": ["**/*.rs"],
+  "force": false
+}
+
+Progress notifications received:
+1. "Starting file indexing" (0%)
+2. "Indexed 125/500 files" (25%)
+3. "Indexed 250/500 files" (50%)
+4. "Indexed 375/500 files" (75%)
+5. "Completed: 500 files indexed" (100%)
+
+Result: "Indexed 500 files with 12,450 chunks in 45.3 seconds"
+```
+
+The notifications appear in real-time as files are processed, providing immediate feedback without blocking the operation.
+
+### Example 2: Shell Command Execution
+
+Shell commands stream output as lines are produced:
+
+```
+You: "Run cargo nextest run to execute all tests"
+
+Claude uses: shell_execute
+{
+  "command": "cargo nextest run"
+}
+
+Progress notifications (streaming output):
+- "   Compiling swissarmyhammer-common v0.1.0"
+- "   Compiling swissarmyhammer-tools v0.1.0"
+- "    Finished test [unoptimized + debuginfo] target(s) in 23.45s"
+- "     Running tests/integration_test.rs (target/debug/deps/integration_test-abc123)"
+- "test test_file_operations ... ok"
+- "test test_search_functionality ... ok"
+- "test result: ok. 42 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out"
+
+Result: Exit code 0, execution time 24.1s
+```
+
+Each line of output is streamed as a progress notification, allowing you to see test results as they execute.
+
+### Example 3: Workflow Execution
+
+Workflows send detailed notifications for each state transition:
+
+```
+You: "Run the implementation workflow"
+
+Claude uses: flow
+{
+  "flow_name": "implement"
+}
+
+Progress notifications:
+1. "Starting workflow: implement" (0%)
+   - flow_name: "implement"
+   - initial_state: "parse_spec"
+
+2. "Entering state: parse_spec" (20%)
+   - state_id: "parse_spec"
+   - state_description: "Parse specification file"
+
+3. "Completed state: parse_spec" (40%)
+   - state_id: "parse_spec"
+   - next_state: "generate_code"
+
+4. "Entering state: generate_code" (40%)
+   - state_id: "generate_code"
+   - state_description: "Generate implementation code"
+
+5. "Completed state: generate_code" (60%)
+   - state_id: "generate_code"
+   - next_state: "run_tests"
+
+6. "Entering state: run_tests" (60%)
+   - state_id: "run_tests"
+   - state_description: "Execute test suite"
+
+7. "Completed state: run_tests" (80%)
+   - state_id: "run_tests"
+   - next_state: "complete"
+
+8. "Completed workflow: implement" (100%)
+   - flow_name: "implement"
+   - status: "completed"
+   - final_state: "complete"
+
+Result: Workflow completed successfully
+```
+
+Each workflow state transition generates a notification, allowing you to track progress through complex multi-step processes.
+
+### Example 4: File Pattern Matching
+
+Large glob operations report progress:
+
+```
+You: "Find all TypeScript files in the monorepo"
+
+Claude uses: files_glob
+{
+  "pattern": "**/*.{ts,tsx}"
+}
+
+Progress notifications:
+1. "Starting glob pattern matching" (0%)
+2. "Scanned 1000 directories" (33%)
+3. "Scanned 2000 directories" (66%)
+4. "Completed: found 3,421 files" (100%)
+
+Result: 3,421 matching files found
+```
+
+### Example 5: Web Search with Content Fetching
+
+Web searches report progress during search execution and content fetching:
+
+```
+You: "Search for Rust async programming best practices"
+
+Claude uses: web_search
+{
+  "query": "rust async programming best practices",
+  "category": "it",
+  "results_count": 10,
+  "fetch_content": true
+}
+
+Progress notifications:
+1. "Starting web search" (0%)
+2. "Search completed: 10 results found" (20%)
+3. "Fetching content from result 1/10" (30%)
+4. "Fetching content from result 5/10" (60%)
+5. "Fetching content from result 10/10" (90%)
+6. "Content fetching complete" (100%)
+
+Result: 10 search results with converted markdown content
+```
+
+### Benefits of Progress Notifications
+
+- **Real-time Feedback**: See operation status as it happens
+- **No Blocking**: Notifications are sent asynchronously without blocking the operation
+- **Multiple Operations**: Track concurrent operations with unique ULID tokens
+- **Rich Metadata**: Notifications include operation-specific details (file counts, state IDs, etc.)
+- **Better UX**: Users stay informed during long operations instead of waiting with no feedback
+
 ## Tips for Effective Usage
 
 ### Start Simple

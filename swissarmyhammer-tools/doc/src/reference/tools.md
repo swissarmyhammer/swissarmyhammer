@@ -130,6 +130,8 @@ Find files matching glob patterns.
 
 **Returns**: Object containing file count and array of matching absolute file paths sorted by modification time
 
+**Progress Notifications**: Reports pattern matching progress across large directory trees with file counts and completion percentage
+
 **Example**:
 ```json
 {
@@ -152,6 +154,8 @@ Search file contents using regex patterns.
 
 **Returns**: Varies by output_mode: `content` returns matches with file paths, line numbers, and matching lines; `files_with_matches` returns array of file paths; `count` returns match counts per file
 
+**Progress Notifications**: Reports content search progress with file and match counts as files are searched
+
 **Example**:
 ```json
 {
@@ -172,6 +176,8 @@ Index files for semantic code search.
 - `force` (boolean, optional): Force re-indexing (default: false)
 
 **Returns**: Object containing indexed file count, skipped files count, total chunks created, and execution time in seconds
+
+**Progress Notifications**: Sends real-time updates during indexing with file counts and percentage complete. Progress is reported in batches as files are processed.
 
 **Example**:
 ```json
@@ -448,6 +454,8 @@ Execute shell commands with proper output handling.
 
 **Returns**: Object containing command output (stdout/stderr combined), exit code, execution time in milliseconds, and working directory path
 
+**Progress Notifications**: Streams command output in real-time as lines are produced by the executing command, enabling live feedback for long-running operations.
+
 **Example**:
 ```json
 {
@@ -467,6 +475,8 @@ Generate structured code outlines using tree-sitter.
 - `output_format` (string, optional): `yaml` or `json` (default: yaml)
 
 **Returns**: Hierarchical outline containing file paths, symbols (classes, functions, methods, etc.) with line numbers, signatures, and documentation
+
+**Progress Notifications**: Reports parsing progress across multiple source files with file counts and percentage complete
 
 **Example**:
 ```json
@@ -489,6 +499,8 @@ Check source code against quality rules.
 - `severity` (string, optional): Severity filter (error, warning, info, hint)
 
 **Returns**: List of violations
+
+**Progress Notifications**: Reports rule checking progress with file counts and completion status as files are analyzed
 
 **Example**:
 ```json
@@ -513,6 +525,8 @@ Fetch web content and convert to markdown.
 
 **Returns**: Converted markdown content
 
+**Progress Notifications**: Tracks HTTP request and HTML-to-markdown conversion progress
+
 **Example**:
 ```json
 {
@@ -535,6 +549,8 @@ Search the web using DuckDuckGo.
 - `time_range` (string, optional): Time filter (day, week, month, year)
 
 **Returns**: Search results with optional content
+
+**Progress Notifications**: Reports search execution progress and content fetching from result URLs
 
 **Example**:
 ```json
@@ -561,6 +577,14 @@ Execute or list workflows dynamically via MCP.
 - `quiet` (boolean, optional): Suppress progress output (workflow execution only)
 
 **Returns**: Workflow execution results or list of available workflows
+
+**Progress Notifications**: Reports comprehensive workflow progress including:
+- Flow start with initial state and parameters
+- State transitions with state ID and description
+- Step execution completion with next state information
+- Flow completion with final status and state
+- Error notifications with state and error details
+See the [Features documentation](../features.md#progress-notifications) for detailed notification structure
 
 **Example (List Workflows)**:
 ```json

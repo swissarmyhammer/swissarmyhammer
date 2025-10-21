@@ -158,51 +158,49 @@ async fn call_tool(
 
 ## Progress Notifications
 
-The MCP server supports real-time progress notifications for long-running operations. Tools can optionally send progress updates through a channel-based system to provide feedback without blocking execution.
+### Architecture
 
-### Progress Notification System
+Progress notifications use a channel-based architecture for non-blocking delivery:
 
-**Architecture**:
-- **Channel-based**: Uses tokio unbounded channels for async, non-blocking delivery
-- **Optional**: Tools can check for progress sender availability in ToolContext
-- **ULID Tokens**: Each operation receives a unique token for tracking
-- **Metadata Support**: Tools can include custom metadata in notifications
-
-**Implementation**:
 ```rust
-// In ToolContext
 pub struct ToolContext {
-    pub progress_sender: Option<Arc<ProgressSender>>,
+    progress_sender: Option<Arc<ProgressSender>>,
     // ... other fields
 }
 
-// Tools send progress
-if let Some(sender) = &context.progress_sender {
-    let token = generate_progress_token();
-    sender.send_progress(&token, Some(50), "Halfway done")?;
+pub struct ProgressSender {
+    sender: mpsc::Sender<ProgressNotification>,
 }
 ```
 
-**Notification Format**:
-```json
-{
-  "method": "notifications/progress",
-  "params": {
-    "progressToken": "progress_0192a1b2c3d4_1234567890abcdef",
-    "progress": 50,
-    "total": 100
-  }
-}
-```
+**Design Principles**:
+- **Non-blocking**: Tools send notifications without waiting for client acknowledgment
+- **Optional**: Progress sender is optional in ToolContext to avoid overhead when not needed
+- **ULID Tokens**: Each operation gets a unique ULID token for tracking concurrent operations
+- **Metadata Support**: Tools can include custom JSON metadata for rich progress information
 
-### Tools with Progress Support
+**Notification Flow**:
+1. Tool generates progress update (e.g., file processed, command output line)
+2. Tool sends notification via ToolContext.progress_sender channel
+3. MCP server receives notification on channel
+4. Server serializes and sends MCP progress notification to client
+5. Client displays progress to user (non-blocking)
 
-The following tools send progress notifications:
-- **shell_execute**: Streams command output in real-time
-- **search_index**: Reports files indexed with percentage complete
-- **web_fetch**: Tracks HTTP request and content conversion progress
-- **web_search**: Reports search progress and content fetching
-- **flow**: Tracks workflow state transitions and step completion
+### Tools with Progress Notification Support
+
+The following tools send progress notifications during execution:
+
+- **flow**: Tracks workflow state transitions and step completion with state metadata
+- **shell_execute**: Streams command output in real-time as lines are produced
+- **search_index**: Reports files indexed with counts and percentage complete
+- **files_glob**: Reports pattern matching progress across large directory trees
+- **files_grep**: Reports content search progress with file and match counts
+- **outline_generate**: Reports parsing progress across multiple source files
+- **rules_check**: Reports rule checking progress with file counts
+- **web_fetch**: Tracks HTTP request and HTML-to-markdown conversion progress
+- **web_search**: Reports search execution and content fetching from result URLs
+
+Each tool sends notifications at appropriate milestones to balance responsiveness with performance.
 
 ## File Watching
 

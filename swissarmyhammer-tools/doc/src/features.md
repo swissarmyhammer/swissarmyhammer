@@ -366,11 +366,21 @@ Concrete example - Indexing 1000 Rust files:
 5. "Completed: 1000 files indexed" (100%)
 ```
 
-Progress notifications are currently used by:
-- [Workflow execution](#workflow-execution) (flow tool) - tracks state transitions
-- Shell command execution - streams command output
-- File indexing operations - reports files processed
-- Web search and fetch operations - tracks network operations
+### Tools with Progress Notification Support
+
+The following tools send progress notifications during execution:
+
+- **`flow`** ([Workflow execution](#workflow-execution)) - Reports workflow state transitions, step execution, and completion status
+- **`shell_execute`** ([Shell execution](#shell-execution)) - Streams command output in real-time as the command executes
+- **`search_index`** ([Semantic search](#semantic-search)) - Reports file indexing progress with counts and percentages
+- **`files_glob`** ([File tools](#file-tools)) - Reports pattern matching progress across large directory trees
+- **`files_grep`** ([File tools](#file-tools)) - Reports content search progress across multiple files
+- **`outline_generate`** ([Code outline](#code-outline)) - Reports parsing progress across multiple source files
+- **`rules_check`** ([Rules engine](#rules-engine)) - Reports rule checking progress across files
+- **`web_search`** ([Web tools](#web-tools)) - Reports search execution and content fetching progress
+- **`web_fetch`** ([Web tools](#web-tools)) - Reports page fetching and conversion progress
+
+Each tool sends notifications at appropriate milestones (file batches, command output lines, workflow states) to provide responsive feedback without overwhelming the client.
 
 For detailed information about the notification system architecture, see the [MCP Server documentation](./architecture/mcp-server.md).
 
