@@ -7,12 +7,14 @@ use crate::context::CliContext;
 use crate::error::{CliError, CliResult};
 use futures_util::stream::StreamExt;
 use sha2::{Digest, Sha256};
+use std::collections::HashSet;
 use std::path::Path;
 use std::sync::Arc;
 use swissarmyhammer_agent_executor::{
     AgentExecutor, ClaudeCodeExecutor, LlamaAgentExecutorWrapper,
 };
 use swissarmyhammer_config::agent::{AgentConfig, AgentExecutorConfig};
+use swissarmyhammer_git::{BranchName, GitOperations};
 use swissarmyhammer_issues::{FileSystemIssueStorage, IssueStorage};
 use swissarmyhammer_prompts::PromptLibrary;
 use swissarmyhammer_tools::mcp::unified_server::{start_mcp_server, McpServerMode};
@@ -28,6 +30,103 @@ use super::cli::CheckCommand;
 struct CheckCommandRequest {
     cmd: CheckCommand,
     agent_config: Option<AgentConfig>,
+}
+
+/// Expand glob patterns to concrete file paths
+///
+/// Takes a list of glob patterns and expands them to actual file paths.
+/// Only returns files that exist, not directories.
+fn expand_glob_patterns(patterns: &[String]) -> CliResult<HashSet<String>> {
+    let mut files = HashSet::new();
+    
+    for pattern in patterns {
+        let glob_pattern = if Path::new(pattern).is_absolute() {
+            pattern.clone()
+        } else {
+            std::env::current_dir()
+                .map_err(|e| CliError::new(format!("Failed to get current directory: {}", e), 1))?
+                .join(pattern)
+                .to_string_lossy()
+                .to_string()
+        };
+        
+        let mut glob_options = glob::MatchOptions::new();
+        glob_options.case_sensitive = true;
+        glob_options.require_literal_separator = false;
+        glob_options.require_literal_leading_dot = false;
+        
+        let entries = glob::glob_with(&glob_pattern, glob_options)
+            .map_err(|e| CliError::new(format!("Invalid glob pattern '{}': {}", pattern, e), 1))?;
+        
+        for entry in entries {
+            match entry {
+                Ok(path) => {
+                    if path.is_file() {
+                        files.insert(path.to_string_lossy().to_string());
+                    }
+                }
+                Err(err) => {
+                    tracing::warn!("Error accessing file during glob expansion: {}", err);
+                }
+            }
+        }
+    }
+    
+    Ok(files)
+}
+
+/// Get changed files from git
+///
+/// Gets files that have changed on the current branch using git operations.
+fn get_changed_files() -> CliResult<HashSet<String>> {
+    let git_ops = GitOperations::new()
+        .map_err(|e| CliError::new(format!("Failed to initialize git operations: {}", e), 1))?;
+    
+    // Get current branch
+    let current_branch = git_ops.current_branch()
+        .map_err(|e| CliError::new(format!("Failed to get current branch: {}", e), 1))?;
+    
+    tracing::info!("Getting changed files for branch: {}", current_branch);
+    
+    // Try to find parent branch
+    let parent_branch = {
+        let branch_name = BranchName::new(&current_branch)
+            .map_err(|e| CliError::new(format!("Invalid branch name: {}", e), 1))?;
+        
+        match git_ops.find_merge_target_for_issue(&branch_name) {
+            Ok(target) if target != current_branch => Some(target),
+            _ => None,
+        }
+    };
+    
+    // Get changed files based on whether we have a parent branch
+    let mut files = if let Some(ref parent) = parent_branch {
+        // Feature/issue branch: get files changed from parent
+        tracing::info!("Feature branch detected, parent: {}", parent);
+        git_ops
+            .get_changed_files_from_parent(&current_branch, parent)
+            .map_err(|e| CliError::new(format!("Failed to get changed files: {}", e), 1))?
+    } else {
+        // Main/trunk branch: get only uncommitted changes
+        tracing::info!("Main/trunk branch detected, getting uncommitted changes only");
+        Vec::new()
+    };
+    
+    // Add uncommitted changes
+    let status = git_ops.get_status()
+        .map_err(|e| CliError::new(format!("Failed to get git status: {}", e), 1))?;
+    
+    let mut uncommitted = status.all_changed_files();
+    uncommitted.extend(status.untracked);
+    
+    tracing::info!("Found {} uncommitted changes", uncommitted.len());
+    files.extend(uncommitted);
+    
+    // Deduplicate
+    let file_set: HashSet<String> = files.into_iter().collect();
+    tracing::info!("Total changed files: {}", file_set.len());
+    
+    Ok(file_set)
 }
 
 impl CheckCommandRequest {
@@ -213,12 +312,55 @@ async fn execute_check_command_impl(
         CheckMode::FailFast
     };
 
+    // Determine patterns based on changed flag
+    let patterns = if request.cmd.changed {
+        tracing::info!("Changed files filter enabled");
+        
+        // Get changed files from git
+        let changed_files = get_changed_files()?;
+        
+        if changed_files.is_empty() {
+            if !context.quiet {
+                println!("No changed files to check");
+            }
+            return Ok(());
+        }
+        
+        tracing::info!("Found {} changed files", changed_files.len());
+        
+        // If patterns are provided, expand and intersect with changed files
+        if !request.cmd.patterns.is_empty() {
+            tracing::info!("Intersecting changed files with patterns: {:?}", request.cmd.patterns);
+            let matched_files = expand_glob_patterns(&request.cmd.patterns)?;
+            let intersection: Vec<String> = changed_files
+                .intersection(&matched_files)
+                .cloned()
+                .collect();
+            
+            if intersection.is_empty() {
+                if !context.quiet {
+                    println!("No changed files match the specified patterns");
+                }
+                return Ok(());
+            }
+            
+            tracing::info!("After intersection: {} files to check", intersection.len());
+            intersection
+        } else {
+            // No patterns provided, use all changed files directly
+            changed_files.into_iter().collect()
+        }
+    } else {
+        // Not filtering by changed files, use provided patterns
+        request.cmd.patterns
+    };
+
     // Create rule check request with filters
     let rule_request = RuleCheckRequest {
         rule_names: request.cmd.rule,
         severity,
         category: request.cmd.category,
-        patterns: request.cmd.patterns,
+        patterns,
         check_mode,
         force: request.cmd.force,
         max_errors: request.cmd.max_errors,
@@ -447,6 +589,7 @@ mod tests {
             no_fail_fast: false,
             force: false,
             max_errors: None,
+            changed: false,
         };
 
         let request = CheckCommandRequest::with_config(cmd, setup_test_agent_config());
@@ -468,6 +611,7 @@ mod tests {
             no_fail_fast: false,
             force: false,
             max_errors: None,
+            changed: false,
         };
 
         let request = CheckCommandRequest::with_config(cmd, setup_test_agent_config());
@@ -489,6 +633,7 @@ mod tests {
             no_fail_fast: false,
             force: false,
             max_errors: None,
+            changed: false,
         };
 
         let request = CheckCommandRequest::with_config(cmd, setup_test_agent_config());
@@ -510,6 +655,7 @@ mod tests {
             no_fail_fast: false,
             force: false,
             max_errors: None,
+            changed: false,
         };
 
         let request = CheckCommandRequest::with_config(cmd, setup_test_agent_config());
@@ -531,6 +677,7 @@ mod tests {
             no_fail_fast: false,
             force: false,
             max_errors: None,
+            changed: false,
         };
 
         let request = CheckCommandRequest::with_config(cmd, setup_test_agent_config());
@@ -552,6 +699,7 @@ mod tests {
             no_fail_fast: false,
             force: false,
             max_errors: None,
+            changed: false,
         };
 
         let request = CheckCommandRequest::with_config(cmd, setup_test_agent_config());
@@ -573,6 +721,7 @@ mod tests {
             no_fail_fast: false,
             force: false,
             max_errors: None,
+            changed: false,
         };
 
         // Request ClaudeCode - it should work now without fallback
@@ -821,6 +970,7 @@ mod tests {
             no_fail_fast: false,
             force: false,
             max_errors: None,
+            changed: false,
         };
 
         let request = CheckCommandRequest::with_config(cmd, setup_test_agent_config());
@@ -842,6 +992,7 @@ mod tests {
             no_fail_fast: true,
             force: false,
             max_errors: None,
+            changed: false,
         };
 
         let request = CheckCommandRequest::with_config(cmd, setup_test_agent_config());
@@ -863,6 +1014,7 @@ mod tests {
             no_fail_fast: true,
             force: false,
             max_errors: None,
+            changed: false,
         };
 
         let request = CheckCommandRequest::with_config(cmd, setup_test_agent_config());
@@ -884,6 +1036,7 @@ mod tests {
             no_fail_fast: false,
             force: true,
             max_errors: None,
+            changed: false,
         };
 
         let request = CheckCommandRequest::with_config(cmd, setup_test_agent_config());

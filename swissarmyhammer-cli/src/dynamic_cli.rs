@@ -1193,6 +1193,12 @@ Run rules against code files and report violations.
                             .value_name("N")
                             .value_parser(clap::value_parser!(usize))
                             .default_value("1"),
+                    )
+                    .arg(
+                        Arg::new("changed")
+                            .long("changed")
+                            .help("Check only changed files (intersects with patterns if provided)")
+                            .action(ArgAction::SetTrue),
                     ),
             )
     }

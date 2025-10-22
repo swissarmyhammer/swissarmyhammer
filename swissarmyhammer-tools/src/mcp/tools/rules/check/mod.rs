@@ -10,7 +10,8 @@ use rmcp::model::CallToolResult;
 use rmcp::ErrorData as McpError;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::path::Path;
 use std::sync::Arc;
 use std::time::Instant;
 use swissarmyhammer_agent_executor::AgentExecutor;
@@ -80,6 +81,125 @@ pub struct RuleCheckRequest {
     /// Optional maximum number of ERROR violations to return
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_errors: Option<usize>,
+
+    /// Check only changed files (intersects with file_paths if provided)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub changed: Option<bool>,
+}
+
+/// Expand glob patterns to concrete file paths
+///
+/// Takes a list of glob patterns and expands them to actual file paths.
+/// Only returns files that exist, not directories.
+///
+/// # Arguments
+///
+/// * `patterns` - List of glob patterns to expand
+///
+/// # Returns
+///
+/// A set of file paths that match the patterns
+async fn expand_glob_patterns(patterns: &[String]) -> Result<HashSet<String>, McpError> {
+    let mut files = HashSet::new();
+    
+    for pattern in patterns {
+        let glob_pattern = if Path::new(pattern).is_absolute() {
+            pattern.clone()
+        } else {
+            // For relative patterns, use current directory
+            std::env::current_dir()
+                .map_err(|e| McpError::internal_error(format!("Failed to get current directory: {}", e), None))?
+                .join(pattern)
+                .to_string_lossy()
+                .to_string()
+        };
+        
+        let mut glob_options = glob::MatchOptions::new();
+        glob_options.case_sensitive = true;
+        glob_options.require_literal_separator = false;
+        glob_options.require_literal_leading_dot = false;
+        
+        let entries = glob::glob_with(&glob_pattern, glob_options)
+            .map_err(|e| McpError::invalid_params(format!("Invalid glob pattern '{}': {}", pattern, e), None))?;
+        
+        for entry in entries {
+            match entry {
+                Ok(path) => {
+                    if path.is_file() {
+                        files.insert(path.to_string_lossy().to_string());
+                    }
+                }
+                Err(err) => {
+                    tracing::warn!("Error accessing file during glob expansion: {}", err);
+                }
+            }
+        }
+    }
+    
+    Ok(files)
+}
+
+/// Get changed files from git
+///
+/// Uses the git_changes tool logic to get files that have changed on the current branch.
+///
+/// # Arguments
+///
+/// * `context` - Tool context with git operations
+///
+/// # Returns
+///
+/// A set of changed file paths
+async fn get_changed_files(context: &ToolContext) -> Result<HashSet<String>, McpError> {
+    // Get git operations from context
+    let git_ops_guard = context.git_ops.lock().await;
+    let git_ops = git_ops_guard
+        .as_ref()
+        .ok_or_else(|| McpError::internal_error("Git operations not available", None))?;
+    
+    // Get current branch
+    let current_branch = git_ops.current_branch()
+        .map_err(|e| McpError::internal_error(format!("Failed to get current branch: {}", e), None))?;
+    
+    tracing::info!("Getting changed files for branch: {}", current_branch);
+    
+    // Try to find parent branch
+    let parent_branch = {
+        use swissarmyhammer_git::BranchName;
+        let branch_name = BranchName::new(&current_branch)
+            .map_err(|e| McpError::invalid_params(format!("Invalid branch name: {}", e), None))?;
+        
+        match git_ops.find_merge_target_for_issue(&branch_name) {
+            Ok(target) if target != current_branch => Some(target),
+            _ => None,
+        }
+    };
+    
+    // Get changed files based on whether we have a parent branch
+    let mut files = if let Some(ref parent) = parent_branch {
+        // Feature/issue branch: get files changed from parent
+        tracing::info!("Feature branch detected, parent: {}", parent);
+        git_ops
+            .get_changed_files_from_parent(&current_branch, parent)
+            .map_err(|e| McpError::internal_error(format!("Failed to get changed files: {}", e), None))?
+    } else {
+        // Main/trunk branch: get only uncommitted changes
+        tracing::info!("Main/trunk branch detected, getting uncommitted changes only");
+        Vec::new()
+    };
+    
+    // Add uncommitted changes
+    let uncommitted = crate::mcp::tools::git::changes::get_uncommitted_changes(git_ops)
+        .map_err(|e| McpError::internal_error(format!("Failed to get uncommitted changes: {}", e), None))?;
+    
+    tracing::info!("Found {} uncommitted changes", uncommitted.len());
+    files.extend(uncommitted);
+    
+    // Deduplicate
+    let file_set: HashSet<String> = files.into_iter().collect();
+    tracing::info!("Total changed files: {}", file_set.len());
+    
+    Ok(file_set)
 }
 
 /// Tool for checking code against rules via direct library integration
@@ -199,6 +319,10 @@ impl McpTool for RuleCheckTool {
                     "type": "integer",
                     "minimum": 1,
                     "description": "Optional maximum number of ERROR violations to return (default: unlimited)"
+                },
+                "changed": {
+                    "type": "boolean",
+                    "description": "Optional flag to check only changed files (intersects with file_paths if provided)"
                 }
             }
         })
@@ -251,15 +375,57 @@ impl McpTool for RuleCheckTool {
             }
         }
 
+        // Determine patterns based on changed flag
+        let patterns = if request.changed.unwrap_or(false) {
+            tracing::info!("Changed files filter enabled");
+            
+            // Get changed files from git
+            let changed_files = get_changed_files(context).await?;
+            
+            if changed_files.is_empty() {
+                tracing::info!("No changed files found");
+                // Return early with no violations if no files have changed
+                let result_text = "✅ No changed files to check".to_string();
+                return Ok(BaseToolImpl::create_success_response(&result_text));
+            }
+            
+            tracing::info!("Found {} changed files", changed_files.len());
+            
+            // If file_paths is provided, expand patterns and intersect with changed files
+            if let Some(ref patterns) = request.file_paths {
+                tracing::info!("Intersecting changed files with patterns: {:?}", patterns);
+                let matched_files = expand_glob_patterns(patterns).await?;
+                let intersection: Vec<String> = changed_files
+                    .intersection(&matched_files)
+                    .cloned()
+                    .collect();
+                
+                if intersection.is_empty() {
+                    tracing::info!("No files match both changed files and patterns");
+                    let result_text = "✅ No changed files match the specified patterns".to_string();
+                    return Ok(BaseToolImpl::create_success_response(&result_text));
+                }
+                
+                tracing::info!("After intersection: {} files to check", intersection.len());
+                intersection
+            } else {
+                // No patterns provided, use all changed files directly
+                changed_files.into_iter().collect()
+            }
+        } else {
+            // Not filtering by changed files, use provided patterns or default
+            request
+                .file_paths
+                .clone()
+                .unwrap_or_else(|| vec!["**/*.*".to_string()])
+        };
+
         // Map MCP request to domain request
         let domain_request = DomainRuleCheckRequest {
             rule_names: request.rule_names.clone(),
             severity: request.severity,
             category: request.category.clone(),
-            patterns: request
-                .file_paths
-                .clone()
-                .unwrap_or_else(|| vec!["**/*.*".to_string()]),
+            patterns,
             check_mode: swissarmyhammer_rules::CheckMode::FailFast,
             force: false, // MCP tool doesn't expose force flag yet
             max_errors: request.max_errors,
@@ -666,5 +832,122 @@ fn complex_function() {
                 panic!("Tool execution failed: {}", e);
             }
         }
+    }
+
+    /// Test that changed parameter is properly parsed
+    #[tokio::test]
+    async fn test_rule_check_request_with_changed() {
+        let args = json!({
+            "rule_names": ["test-rule"],
+            "changed": true
+        });
+
+        let request: RuleCheckRequest = serde_json::from_value(args).unwrap();
+        assert_eq!(request.changed, Some(true));
+    }
+
+    /// Test that changed parameter defaults to None when not provided
+    #[tokio::test]
+    async fn test_rule_check_request_changed_default() {
+        let args = json!({
+            "rule_names": ["test-rule"]
+        });
+
+        let request: RuleCheckRequest = serde_json::from_value(args).unwrap();
+        assert_eq!(request.changed, None);
+    }
+
+    /// Test expand_glob_patterns helper function
+    #[tokio::test]
+    async fn test_expand_glob_patterns() {
+        use std::fs;
+        use tempfile::TempDir;
+
+        let temp_dir = TempDir::new().unwrap();
+        
+        // Create test files
+        let rs_file = temp_dir.path().join("test.rs");
+        let txt_file = temp_dir.path().join("test.txt");
+        fs::write(&rs_file, "fn main() {}").unwrap();
+        fs::write(&txt_file, "hello").unwrap();
+
+        // Change to temp directory
+        let original_dir = std::env::current_dir().unwrap();
+        std::env::set_current_dir(temp_dir.path()).unwrap();
+
+        // Test glob expansion
+        let patterns = vec!["*.rs".to_string()];
+        let result = expand_glob_patterns(&patterns).await;
+        
+        // Restore original directory
+        std::env::set_current_dir(original_dir).unwrap();
+
+        assert!(result.is_ok());
+        let files = result.unwrap();
+        assert_eq!(files.len(), 1);
+        assert!(files.iter().any(|f| f.ends_with("test.rs")));
+    }
+
+    /// Test that changed files integration returns early when no changed files
+    #[tokio::test]
+    async fn test_rule_check_with_changed_no_files() {
+        use std::fs;
+        use tempfile::TempDir;
+
+        let temp_dir = TempDir::new().unwrap();
+        
+        // Initialize git repo with committed file
+        let repo_path = temp_dir.path();
+        std::process::Command::new("git")
+            .args(["init"])
+            .current_dir(repo_path)
+            .output()
+            .unwrap();
+        
+        std::process::Command::new("git")
+            .args(["config", "user.email", "test@example.com"])
+            .current_dir(repo_path)
+            .output()
+            .unwrap();
+        
+        std::process::Command::new("git")
+            .args(["config", "user.name", "Test User"])
+            .current_dir(repo_path)
+            .output()
+            .unwrap();
+        
+        let test_file = repo_path.join("test.rs");
+        fs::write(&test_file, "fn main() {}").unwrap();
+        
+        std::process::Command::new("git")
+            .args(["add", "."])
+            .current_dir(repo_path)
+            .output()
+            .unwrap();
+        
+        std::process::Command::new("git")
+            .args(["commit", "-m", "Initial commit"])
+            .current_dir(repo_path)
+            .output()
+            .unwrap();
+
+        // Create tool and context with git ops
+        let tool = RuleCheckTool::new();
+        let git_ops = swissarmyhammer_git::GitOperations::with_work_dir(repo_path).unwrap();
+        let context = crate::test_utils::create_test_context().await;
+        *context.git_ops.lock().await = Some(git_ops);
+
+        // Create request with changed flag but no uncommitted changes
+        let mut arguments = serde_json::Map::new();
+        arguments.insert("changed".to_string(), json!(true));
+
+        // Execute the tool
+        let result = tool.execute(arguments, &context).await;
+
+        // Should succeed with message about no changed files
+        assert!(result.is_ok());
+        let response = result.unwrap();
+        let text = format!("{:?}", response);
+        assert!(text.contains("No changed files"));
     }
 }

@@ -41,6 +41,8 @@ pub struct CheckCommand {
     /// Maximum number of ERROR violations to return. Defaults to 1 for fast feedback
     /// and incremental error fixing. Use higher values to see more errors at once.
     pub max_errors: Option<usize>,
+    /// Check only changed files
+    pub changed: bool,
 }
 
 /// Cache command for managing the rule evaluation cache.
@@ -116,6 +118,7 @@ pub fn parse_rule_command(matches: &ArgMatches) -> RuleCommand {
                 no_fail_fast: sub_matches.get_flag("no-fail-fast"),
                 force: sub_matches.get_flag("force"),
                 max_errors: sub_matches.get_one::<usize>("max-errors").copied(),
+                changed: sub_matches.get_flag("changed"),
             };
             RuleCommand::Check(check_cmd)
         }
@@ -227,6 +230,11 @@ mod tests {
                         Arg::new("max-errors")
                             .long("max-errors")
                             .value_parser(clap::value_parser!(usize)),
+                    )
+                    .arg(
+                        Arg::new("changed")
+                            .long("changed")
+                            .action(ArgAction::SetTrue),
                     ),
             )
             .try_get_matches_from(["rule", "check", "file1.rs", "file2.rs"])
@@ -242,6 +250,7 @@ mod tests {
                 assert!(!check_cmd.create_issues);
                 assert!(!check_cmd.no_fail_fast);
                 assert!(!check_cmd.force);
+                assert!(!check_cmd.changed);
             }
             _ => panic!("Expected Check command"),
         }
@@ -276,6 +285,11 @@ mod tests {
                         Arg::new("max-errors")
                             .long("max-errors")
                             .value_parser(clap::value_parser!(usize)),
+                    )
+                    .arg(
+                        Arg::new("changed")
+                            .long("changed")
+                            .action(ArgAction::SetTrue),
                     ),
             )
             .try_get_matches_from([
@@ -298,6 +312,7 @@ mod tests {
                 assert!(!check_cmd.create_issues);
                 assert!(!check_cmd.no_fail_fast);
                 assert!(!check_cmd.force);
+                assert!(!check_cmd.changed);
             }
             _ => panic!("Expected Check command"),
         }
@@ -347,6 +362,7 @@ mod tests {
             no_fail_fast: false,
             force: false,
             max_errors: None,
+            changed: false,
         };
 
         match RuleCommand::Check(check_cmd) {
@@ -359,6 +375,7 @@ mod tests {
                 assert!(!cmd.no_fail_fast);
                 assert!(!cmd.force);
                 assert_eq!(cmd.max_errors, None);
+                assert!(!cmd.changed);
             }
             _ => panic!("CheckCommand should match RuleCommand::Check"),
         }
@@ -412,6 +429,11 @@ mod tests {
                         Arg::new("max-errors")
                             .long("max-errors")
                             .value_parser(clap::value_parser!(usize)),
+                    )
+                    .arg(
+                        Arg::new("changed")
+                            .long("changed")
+                            .action(ArgAction::SetTrue),
                     ),
             )
             .try_get_matches_from(["rule", "check", "--create-issues", "file.rs"])
@@ -458,6 +480,11 @@ mod tests {
                         Arg::new("max-errors")
                             .long("max-errors")
                             .value_parser(clap::value_parser!(usize)),
+                    )
+                    .arg(
+                        Arg::new("changed")
+                            .long("changed")
+                            .action(ArgAction::SetTrue),
                     ),
             )
             .try_get_matches_from(["rule", "check", "--no-fail-fast", "file.rs"])
@@ -504,6 +531,11 @@ mod tests {
                         Arg::new("max-errors")
                             .long("max-errors")
                             .value_parser(clap::value_parser!(usize)),
+                    )
+                    .arg(
+                        Arg::new("changed")
+                            .long("changed")
+                            .action(ArgAction::SetTrue),
                     ),
             )
             .try_get_matches_from([
@@ -557,6 +589,11 @@ mod tests {
                             .long("max-errors")
                             .value_parser(clap::value_parser!(usize))
                             .default_value("1"),
+                    )
+                    .arg(
+                        Arg::new("changed")
+                            .long("changed")
+                            .action(ArgAction::SetTrue),
                     ),
             )
             .try_get_matches_from(["rule", "check", "file.rs"])
@@ -606,6 +643,11 @@ mod tests {
                             .long("max-errors")
                             .value_parser(clap::value_parser!(usize))
                             .default_value("1"),
+                    )
+                    .arg(
+                        Arg::new("changed")
+                            .long("changed")
+                            .action(ArgAction::SetTrue),
                     ),
             )
             .try_get_matches_from(["rule", "check", "--max-errors", "10", "file.rs"])
