@@ -335,6 +335,60 @@ impl SwissArmyHammerError {
     }
 }
 
+/// Implementation of Severity trait for SwissArmyHammerError
+///
+/// This implementation categorizes all SwissArmyHammerError variants by their
+/// severity level to enable appropriate error handling, logging, and user notification.
+///
+/// # Severity Assignment Guidelines
+///
+/// - **Critical**: System-level failures that prevent continued operation
+///   - Repository not found (NotInGitRepository)
+///   - Directory creation/access failures (DirectoryCreation, DirectoryAccess)
+///   - Workflow system failures (WorkflowNotFound, WorkflowRunNotFound)
+///   - Storage backend failures (Storage)
+///   - Permission denied for critical resources (PermissionDenied)
+///
+/// - **Error**: Operation-specific failures that are recoverable
+///   - I/O errors (Io, IoContext)
+///   - Serialization failures (Serialization, Json)
+///   - File operations (FileNotFound, NotAFile, InvalidFilePath, InvalidPath)
+///   - Semantic search errors (Semantic)
+///   - General errors with context (Context, Other)
+///
+/// - **Warning**: Non-critical issues that don't prevent operation
+///   - Rule violations (RuleViolation)
+impl Severity for SwissArmyHammerError {
+    fn severity(&self) -> ErrorSeverity {
+        match self {
+            // Critical: System cannot continue, requires immediate attention
+            SwissArmyHammerError::NotInGitRepository => ErrorSeverity::Critical,
+            SwissArmyHammerError::DirectoryCreation(_) => ErrorSeverity::Critical,
+            SwissArmyHammerError::DirectoryAccess(_) => ErrorSeverity::Critical,
+            SwissArmyHammerError::WorkflowNotFound(_) => ErrorSeverity::Critical,
+            SwissArmyHammerError::WorkflowRunNotFound(_) => ErrorSeverity::Critical,
+            SwissArmyHammerError::Storage(_) => ErrorSeverity::Critical,
+            SwissArmyHammerError::PermissionDenied { .. } => ErrorSeverity::Critical,
+
+            // Error: Operation failed but system can continue
+            SwissArmyHammerError::Io(_) => ErrorSeverity::Error,
+            SwissArmyHammerError::Serialization(_) => ErrorSeverity::Error,
+            SwissArmyHammerError::Json(_) => ErrorSeverity::Error,
+            SwissArmyHammerError::FileNotFound { .. } => ErrorSeverity::Error,
+            SwissArmyHammerError::NotAFile { .. } => ErrorSeverity::Error,
+            SwissArmyHammerError::InvalidFilePath { .. } => ErrorSeverity::Error,
+            SwissArmyHammerError::InvalidPath { .. } => ErrorSeverity::Error,
+            SwissArmyHammerError::IoContext { .. } => ErrorSeverity::Error,
+            SwissArmyHammerError::Semantic { .. } => ErrorSeverity::Error,
+            SwissArmyHammerError::Context { .. } => ErrorSeverity::Error,
+            SwissArmyHammerError::Other { .. } => ErrorSeverity::Error,
+
+            // Warning: Non-critical issues
+            SwissArmyHammerError::RuleViolation(_) => ErrorSeverity::Warning,
+        }
+    }
+}
+
 /// Extension trait for adding context to errors
 pub trait ErrorContext<T> {
     /// Add context to an error
@@ -466,5 +520,84 @@ mod tests {
         assert_eq!(critical.severity(), ErrorSeverity::Critical);
         assert_eq!(error.severity(), ErrorSeverity::Error);
         assert_eq!(warning.severity(), ErrorSeverity::Warning);
+    }
+
+    #[test]
+    fn test_swissarmyhammer_error_critical_severity() {
+        let errors = vec![
+            SwissArmyHammerError::NotInGitRepository,
+            SwissArmyHammerError::DirectoryCreation("test".to_string()),
+            SwissArmyHammerError::DirectoryAccess("test".to_string()),
+            SwissArmyHammerError::WorkflowNotFound("test".to_string()),
+            SwissArmyHammerError::WorkflowRunNotFound("test".to_string()),
+            SwissArmyHammerError::Storage("test".to_string()),
+            SwissArmyHammerError::PermissionDenied {
+                path: "test".to_string(),
+                error: "denied".to_string(),
+                suggestion: "check permissions".to_string(),
+            },
+        ];
+
+        for error in errors {
+            assert_eq!(
+                error.severity(),
+                ErrorSeverity::Critical,
+                "Expected Critical severity for: {}",
+                error
+            );
+        }
+    }
+
+    #[test]
+    fn test_swissarmyhammer_error_error_severity() {
+        use std::io;
+
+        let errors: Vec<SwissArmyHammerError> = vec![
+            SwissArmyHammerError::Io(io::Error::new(io::ErrorKind::NotFound, "test")),
+            SwissArmyHammerError::FileNotFound {
+                path: "test".to_string(),
+                suggestion: "check path".to_string(),
+            },
+            SwissArmyHammerError::NotAFile {
+                path: "test".to_string(),
+                suggestion: "check path".to_string(),
+            },
+            SwissArmyHammerError::InvalidFilePath {
+                path: "test".to_string(),
+                suggestion: "fix path".to_string(),
+            },
+            SwissArmyHammerError::InvalidPath {
+                path: PathBuf::from("test"),
+            },
+            SwissArmyHammerError::IoContext {
+                message: "test".to_string(),
+            },
+            SwissArmyHammerError::Semantic {
+                message: "test".to_string(),
+            },
+            SwissArmyHammerError::Other {
+                message: "test".to_string(),
+            },
+        ];
+
+        for error in errors {
+            assert_eq!(
+                error.severity(),
+                ErrorSeverity::Error,
+                "Expected Error severity for: {}",
+                error
+            );
+        }
+    }
+
+    #[test]
+    fn test_swissarmyhammer_error_warning_severity() {
+        let error = SwissArmyHammerError::RuleViolation("test".to_string());
+        assert_eq!(
+            error.severity(),
+            ErrorSeverity::Warning,
+            "Expected Warning severity for: {}",
+            error
+        );
     }
 }
