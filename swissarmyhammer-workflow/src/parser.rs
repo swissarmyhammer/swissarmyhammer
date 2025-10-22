@@ -12,6 +12,7 @@ use mermaid_parser::{
     parse_diagram,
 };
 use std::collections::HashMap;
+use swissarmyhammer_common::{ErrorSeverity, Severity};
 use thiserror::Error;
 
 /// Errors that can occur during Mermaid parsing
@@ -46,6 +47,21 @@ pub enum ParseError {
 
 /// Result type for parsing operations
 pub type ParseResult<T> = Result<T, ParseError>;
+
+/// Implementation of Severity trait for ParseError
+impl Severity for ParseError {
+    fn severity(&self) -> ErrorSeverity {
+        match self {
+            // Critical: Missing required workflow structure elements
+            ParseError::NoInitialState => ErrorSeverity::Critical,
+            ParseError::NoTerminalStates => ErrorSeverity::Critical,
+            // Error: Parsing failures that prevent workflow creation
+            ParseError::MermaidError(_) => ErrorSeverity::Error,
+            ParseError::WrongDiagramType { .. } => ErrorSeverity::Error,
+            ParseError::InvalidStructure { .. } => ErrorSeverity::Error,
+        }
+    }
+}
 
 /// Mermaid parser for converting state diagrams to workflows
 pub struct MermaidParser;
@@ -1451,5 +1467,29 @@ Content here
         assert_eq!(workflow.name.as_str(), "test_workflow");
         assert!(workflow.parameters.is_empty()); // No parameters
         assert_eq!(workflow.states.len(), 2); // State1 and State2 (not [*])
+    }
+
+    #[test]
+    fn test_parse_error_severity() {
+        // Critical severity errors
+        let no_initial = ParseError::NoInitialState;
+        assert_eq!(no_initial.severity(), ErrorSeverity::Critical);
+
+        let no_terminal = ParseError::NoTerminalStates;
+        assert_eq!(no_terminal.severity(), ErrorSeverity::Critical);
+
+        // Error severity errors
+        let mermaid_err = ParseError::MermaidError("parse failed".to_string());
+        assert_eq!(mermaid_err.severity(), ErrorSeverity::Error);
+
+        let wrong_type = ParseError::WrongDiagramType {
+            diagram_type: "flowchart".to_string(),
+        };
+        assert_eq!(wrong_type.severity(), ErrorSeverity::Error);
+
+        let invalid_struct = ParseError::InvalidStructure {
+            message: "missing state".to_string(),
+        };
+        assert_eq!(invalid_struct.severity(), ErrorSeverity::Error);
     }
 }

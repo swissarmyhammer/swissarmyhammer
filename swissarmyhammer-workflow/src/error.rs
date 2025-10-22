@@ -1,3 +1,4 @@
+use swissarmyhammer_common::{ErrorSeverity, Severity};
 use thiserror::Error as ThisError;
 
 /// Workflow-specific errors
@@ -60,4 +61,70 @@ pub enum WorkflowError {
         /// The duration after which the workflow timed out
         duration: std::time::Duration,
     },
+}
+
+/// Implementation of Severity trait for WorkflowError
+impl Severity for WorkflowError {
+    fn severity(&self) -> ErrorSeverity {
+        match self {
+            // Critical: Structural problems that prevent workflow execution
+            WorkflowError::CircularDependency { .. } => ErrorSeverity::Critical,
+            WorkflowError::ExecutionFailed { .. } => ErrorSeverity::Critical,
+            // Error: Configuration issues that prevent specific operations
+            WorkflowError::NotFound { .. } => ErrorSeverity::Error,
+            WorkflowError::Invalid { .. } => ErrorSeverity::Error,
+            WorkflowError::StateNotFound { .. } => ErrorSeverity::Error,
+            WorkflowError::InvalidTransition { .. } => ErrorSeverity::Error,
+            WorkflowError::Timeout { .. } => ErrorSeverity::Error,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_workflow_error_severity() {
+        // Critical severity errors
+        let circular_dep = WorkflowError::CircularDependency {
+            cycle: "A -> B -> A".to_string(),
+        };
+        assert_eq!(circular_dep.severity(), ErrorSeverity::Critical);
+
+        let exec_failed = WorkflowError::ExecutionFailed {
+            reason: "action failed".to_string(),
+        };
+        assert_eq!(exec_failed.severity(), ErrorSeverity::Critical);
+
+        // Error severity errors
+        let not_found = WorkflowError::NotFound {
+            name: "test_workflow".to_string(),
+        };
+        assert_eq!(not_found.severity(), ErrorSeverity::Error);
+
+        let invalid = WorkflowError::Invalid {
+            name: "bad_workflow".to_string(),
+            reason: "missing states".to_string(),
+        };
+        assert_eq!(invalid.severity(), ErrorSeverity::Error);
+
+        let state_not_found = WorkflowError::StateNotFound {
+            state: "missing_state".to_string(),
+            workflow: "test_workflow".to_string(),
+        };
+        assert_eq!(state_not_found.severity(), ErrorSeverity::Error);
+
+        let invalid_transition = WorkflowError::InvalidTransition {
+            from: "state_a".to_string(),
+            to: "state_b".to_string(),
+            workflow: "test_workflow".to_string(),
+        };
+        assert_eq!(invalid_transition.severity(), ErrorSeverity::Error);
+
+        let timeout = WorkflowError::Timeout {
+            duration: std::time::Duration::from_secs(30),
+        };
+        assert_eq!(timeout.severity(), ErrorSeverity::Error);
+    }
 }

@@ -7,6 +7,7 @@ mod tests;
 pub mod validation;
 
 use crate::{ActionError, StateId};
+use swissarmyhammer_common::{ErrorSeverity, Severity};
 use thiserror::Error;
 
 /// Errors that can occur during workflow execution
@@ -50,6 +51,25 @@ impl From<ExecutorError> for swissarmyhammer_common::SwissArmyHammerError {
     fn from(err: ExecutorError) -> Self {
         swissarmyhammer_common::SwissArmyHammerError::Other {
             message: format!("Executor error: {}", err),
+        }
+    }
+}
+
+/// Implementation of Severity trait for ExecutorError
+impl Severity for ExecutorError {
+    fn severity(&self) -> ErrorSeverity {
+        match self {
+            // Critical: System-level failures that prevent workflow execution
+            ExecutorError::ValidationFailed(_) => ErrorSeverity::Critical,
+            ExecutorError::TransitionLimitExceeded { .. } => ErrorSeverity::Critical,
+            ExecutorError::ExecutionFailed(_) => ErrorSeverity::Critical,
+            ExecutorError::Abort(_) => ErrorSeverity::Critical,
+            // Error: Recoverable operation failures
+            ExecutorError::StateNotFound(_) => ErrorSeverity::Error,
+            ExecutorError::InvalidTransition(_) => ErrorSeverity::Error,
+            ExecutorError::ExpressionError(_) => ErrorSeverity::Error,
+            ExecutorError::ActionError(_) => ErrorSeverity::Error,
+            ExecutorError::ManualInterventionRequired(_) => ErrorSeverity::Error,
         }
     }
 }
@@ -111,3 +131,42 @@ impl std::fmt::Display for ExecutionEventType {
 
 // Re-export main types
 pub use core::WorkflowExecutor;
+
+#[cfg(test)]
+mod severity_tests {
+    use super::*;
+
+    #[test]
+    fn test_executor_error_severity() {
+        // Critical severity errors
+        let validation_failed = ExecutorError::ValidationFailed("invalid workflow".to_string());
+        assert_eq!(validation_failed.severity(), ErrorSeverity::Critical);
+
+        let transition_limit = ExecutorError::TransitionLimitExceeded { limit: 1000 };
+        assert_eq!(transition_limit.severity(), ErrorSeverity::Critical);
+
+        let exec_failed = ExecutorError::ExecutionFailed("action failed".to_string());
+        assert_eq!(exec_failed.severity(), ErrorSeverity::Critical);
+
+        let abort = ExecutorError::Abort("user cancelled".to_string());
+        assert_eq!(abort.severity(), ErrorSeverity::Critical);
+
+        // Error severity errors
+        let state_not_found = ExecutorError::StateNotFound(StateId::from("missing"));
+        assert_eq!(state_not_found.severity(), ErrorSeverity::Error);
+
+        let invalid_transition = ExecutorError::InvalidTransition("invalid".to_string());
+        assert_eq!(invalid_transition.severity(), ErrorSeverity::Error);
+
+        let expr_error = ExecutorError::ExpressionError("eval failed".to_string());
+        assert_eq!(expr_error.severity(), ErrorSeverity::Error);
+
+        let action_error =
+            ExecutorError::ActionError(ActionError::ExecutionError("failed".to_string()));
+        assert_eq!(action_error.severity(), ErrorSeverity::Error);
+
+        let manual_intervention =
+            ExecutorError::ManualInterventionRequired("approval needed".to_string());
+        assert_eq!(manual_intervention.severity(), ErrorSeverity::Error);
+    }
+}

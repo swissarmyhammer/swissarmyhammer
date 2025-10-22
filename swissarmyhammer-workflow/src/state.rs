@@ -2,6 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use swissarmyhammer_common::{ErrorSeverity, Severity};
 use thiserror::Error;
 
 /// Types of workflow states
@@ -40,6 +41,16 @@ pub enum StateError {
 
 /// Result type for state operations
 pub type StateResult<T> = Result<T, StateError>;
+
+/// Implementation of Severity trait for StateError
+impl Severity for StateError {
+    fn severity(&self) -> ErrorSeverity {
+        match self {
+            // Error: Invalid input but system can continue
+            StateError::EmptyStateId => ErrorSeverity::Error,
+        }
+    }
+}
 
 /// Unique identifier for workflow states
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -254,5 +265,11 @@ mod tests {
 
         assert_eq!(state, deserialized);
         assert_eq!(deserialized.state_type, StateType::Fork);
+    }
+
+    #[test]
+    fn test_state_error_severity() {
+        let error = StateError::EmptyStateId;
+        assert_eq!(error.severity(), ErrorSeverity::Error);
     }
 }
