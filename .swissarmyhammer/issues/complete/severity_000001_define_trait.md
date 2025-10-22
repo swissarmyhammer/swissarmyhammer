@@ -114,3 +114,78 @@ pub use error::{ErrorSeverity, Severity};
 ## Next Step
 
 Step 2: Implement Severity for SwissArmyHammerError
+
+
+
+## Proposed Solution
+
+Based on examining the current code:
+
+1. **ErrorSeverity enum already exists** (lines 12-19 of error.rs) but:
+   - Has `#[allow(dead_code)]` which should be removed
+   - Lacks detailed documentation on each variant
+   - Missing `Eq` derive (has PartialEq but not Eq)
+
+2. **Implementation steps**:
+   - Define the `Severity` trait with clear documentation
+   - Enhance ErrorSeverity documentation with examples for each severity level
+   - Add the `Eq` derive to ErrorSeverity
+   - Remove `#[allow(dead_code)]` 
+   - Export both Severity and ErrorSeverity from lib.rs (ErrorSeverity already exported via `pub use error::*;`)
+   - Write comprehensive tests for the trait
+
+3. **Test strategy**:
+   - Test that ErrorSeverity has proper ordering/equality
+   - Test that a sample implementation of Severity works correctly
+   - Test that the trait is accessible from the crate root
+   - Verify documentation builds
+
+This follows TDD: write tests first, then implement the trait to make tests pass.
+
+
+
+## Implementation Notes
+
+Successfully implemented the `Severity` trait following TDD principles:
+
+### Changes Made
+
+1. **Enhanced ErrorSeverity enum** (swissarmyhammer-common/src/error.rs:12-74):
+   - Added comprehensive documentation with examples
+   - Added detailed docs for each variant (Warning, Error, Critical)
+   - Added `Eq` derive (was only `PartialEq`)
+   - Removed `#[allow(dead_code)]` annotation
+
+2. **Added Severity trait** (swissarmyhammer-common/src/error.rs:76-129):
+   - Comprehensive trait documentation with guidelines
+   - Clear examples showing how to implement the trait
+   - Single method: `fn severity(&self) -> ErrorSeverity`
+
+3. **Updated exports** (swissarmyhammer-common/src/lib.rs:62):
+   - Exported both `Severity` and `ErrorSeverity` from crate root
+   - Available via `use swissarmyhammer_common::{Severity, ErrorSeverity}`
+
+4. **Added comprehensive tests**:
+   - Unit tests in error.rs for ErrorSeverity equality
+   - Unit tests in error.rs for Severity trait implementation
+   - Integration tests in tests/exports.rs verifying crate exports
+
+### Test Results
+
+- All 196 tests pass in swissarmyhammer-common
+- Entire workspace builds successfully
+- Documentation builds without errors
+
+### Files Modified
+
+- `swissarmyhammer-common/src/error.rs` - Added trait and enhanced docs
+- `swissarmyhammer-common/src/lib.rs` - Added exports
+- `swissarmyhammer-common/tests/exports.rs` - New integration test file
+
+### Acceptance Criteria Status
+
+- ✅ Severity trait defined with comprehensive documentation
+- ✅ ErrorSeverity enum has detailed docs for each variant
+- ✅ Trait and enum are exported from crate root
+- ✅ Code compiles: `cargo build -p swissarmyhammer-common`
+- ✅ Documentation builds: `cargo doc -p swissarmyhammer-common --no-deps`

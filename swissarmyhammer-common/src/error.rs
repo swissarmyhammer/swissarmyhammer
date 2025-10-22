@@ -9,13 +9,123 @@ use std::io;
 use std::path::PathBuf;
 use thiserror::Error as ThisError;
 
-/// Severity levels for validation errors
-#[derive(Debug, Clone, Copy, PartialEq)]
-#[allow(dead_code)]
+/// Severity levels for error classification
+///
+/// These levels help categorize errors by their impact and urgency, enabling
+/// appropriate handling, logging, and user notification strategies.
+///
+/// # Severity Levels
+///
+/// - **Warning**: Potential issue but operation can proceed. The system continues
+///   normally but alerts users to non-critical concerns.
+/// - **Error**: Operation failed but the system can continue. The specific operation
+///   cannot complete, but the system remains stable.
+/// - **Critical**: System cannot continue, requires immediate attention. Indicates
+///   severe problems that prevent continued operation.
+///
+/// # Examples
+///
+/// ```rust
+/// use swissarmyhammer_common::ErrorSeverity;
+///
+/// // Warning: empty file is unusual but not fatal
+/// let empty_file = ErrorSeverity::Warning;
+///
+/// // Error: file not found prevents this operation but system continues
+/// let not_found = ErrorSeverity::Error;
+///
+/// // Critical: database corruption requires immediate action
+/// let corruption = ErrorSeverity::Critical;
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ErrorSeverity {
+    /// Potential issue but operation can proceed
+    ///
+    /// Use for non-critical issues that should be noted but don't prevent
+    /// successful operation.
+    ///
+    /// # Examples
+    /// - Empty files that are expected to contain data
+    /// - Deprecation notices
+    /// - Non-critical configuration issues
     Warning,
+
+    /// Operation failed but system can continue
+    ///
+    /// Use when a specific operation cannot complete but the system remains
+    /// stable and can handle other operations.
+    ///
+    /// # Examples
+    /// - File not found
+    /// - Invalid format
+    /// - Permission denied for non-critical resource
     Error,
+
+    /// System cannot continue, requires immediate attention
+    ///
+    /// Use when the system encounters a problem that prevents continued
+    /// operation or risks data integrity.
+    ///
+    /// # Examples
+    /// - Database corruption
+    /// - Workflow execution failures
+    /// - Critical resource unavailable
     Critical,
+}
+
+/// Trait for error types that have severity levels
+///
+/// All SwissArmyHammer error types should implement this trait to provide
+/// consistent severity reporting across the codebase. This enables:
+///
+/// - Consistent error classification across all SwissArmyHammer crates
+/// - Appropriate logging levels based on severity
+/// - Error filtering and handling strategies
+/// - User-facing error presentation
+///
+/// # Severity Guidelines
+///
+/// When implementing this trait, follow these guidelines:
+///
+/// - **Warning**: Use for issues that don't prevent operation completion
+///   - Empty files, deprecation notices, non-critical configuration issues
+/// - **Error**: Use when a specific operation fails but the system continues
+///   - File not found, invalid format, permission denied
+/// - **Critical**: Use for system-level failures requiring immediate attention
+///   - Database corruption, workflow failures, critical resource unavailable
+///
+/// # Example
+///
+/// ```rust
+/// use swissarmyhammer_common::{ErrorSeverity, Severity};
+///
+/// #[derive(Debug)]
+/// enum MyError {
+///     DatabaseCorrupted,
+///     FileNotFound,
+///     EmptyFile,
+/// }
+///
+/// impl Severity for MyError {
+///     fn severity(&self) -> ErrorSeverity {
+///         match self {
+///             MyError::DatabaseCorrupted => ErrorSeverity::Critical,
+///             MyError::FileNotFound => ErrorSeverity::Error,
+///             MyError::EmptyFile => ErrorSeverity::Warning,
+///         }
+///     }
+/// }
+///
+/// let error = MyError::DatabaseCorrupted;
+/// assert_eq!(error.severity(), ErrorSeverity::Critical);
+/// ```
+pub trait Severity {
+    /// Get the severity level of this error
+    ///
+    /// This method should return the appropriate severity level based on
+    /// the error variant. The severity should reflect the impact and urgency
+    /// of the error condition.
+    fn severity(&self) -> ErrorSeverity;
 }
 
 /// Result type alias for SwissArmyHammer operations
@@ -315,5 +425,46 @@ mod tests {
 
         let other = SwissArmyHammerError::other("test".to_string());
         assert!(!other.is_rule_violation());
+    }
+
+    #[test]
+    fn test_error_severity_equality() {
+        // Test that ErrorSeverity variants can be compared for equality
+        assert_eq!(ErrorSeverity::Warning, ErrorSeverity::Warning);
+        assert_eq!(ErrorSeverity::Error, ErrorSeverity::Error);
+        assert_eq!(ErrorSeverity::Critical, ErrorSeverity::Critical);
+
+        assert_ne!(ErrorSeverity::Warning, ErrorSeverity::Error);
+        assert_ne!(ErrorSeverity::Error, ErrorSeverity::Critical);
+        assert_ne!(ErrorSeverity::Warning, ErrorSeverity::Critical);
+    }
+
+    #[test]
+    fn test_severity_trait_implementation() {
+        // Test enum that implements Severity trait
+        #[derive(Debug)]
+        enum TestError {
+            CriticalFailure,
+            NotFound,
+            Deprecated,
+        }
+
+        impl Severity for TestError {
+            fn severity(&self) -> ErrorSeverity {
+                match self {
+                    TestError::CriticalFailure => ErrorSeverity::Critical,
+                    TestError::NotFound => ErrorSeverity::Error,
+                    TestError::Deprecated => ErrorSeverity::Warning,
+                }
+            }
+        }
+
+        let critical = TestError::CriticalFailure;
+        let error = TestError::NotFound;
+        let warning = TestError::Deprecated;
+
+        assert_eq!(critical.severity(), ErrorSeverity::Critical);
+        assert_eq!(error.severity(), ErrorSeverity::Error);
+        assert_eq!(warning.severity(), ErrorSeverity::Warning);
     }
 }
