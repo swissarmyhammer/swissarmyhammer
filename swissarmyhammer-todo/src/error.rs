@@ -58,7 +58,7 @@ impl Severity for TodoError {
         match self {
             // Critical: Filesystem failures that prevent todo operations
             TodoError::Io(_) => ErrorSeverity::Critical,
-            
+
             // Error: Serialization and operation failures
             TodoError::Yaml(_) => ErrorSeverity::Error,
             TodoError::InvalidTodoListName(_) => ErrorSeverity::Error,
@@ -66,10 +66,10 @@ impl Severity for TodoError {
             TodoError::TodoListNotFound(_) => ErrorSeverity::Error,
             TodoError::TodoItemNotFound(_, _) => ErrorSeverity::Error,
             TodoError::Other(_) => ErrorSeverity::Error,
-            
+
             // Warning: Validation issues
             TodoError::EmptyTask => ErrorSeverity::Warning,
-            
+
             // Delegate to wrapped error's severity
             TodoError::Common(err) => err.severity(),
         }
@@ -127,7 +127,7 @@ mod severity_tests {
             "failed to create directory".to_string(),
         );
         let expected_severity = common_error.severity();
-        
+
         let todo_error = TodoError::Common(common_error);
         assert_eq!(todo_error.severity(), expected_severity);
     }

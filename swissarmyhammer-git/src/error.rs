@@ -172,10 +172,10 @@ impl Severity for GitError {
         match self {
             // Critical: Filesystem failures that prevent git operations
             GitError::IoError { .. } => ErrorSeverity::Critical,
-            
+
             // Critical: Merge conflicts require immediate resolution
             GitError::MergeOperationFailed { .. } => ErrorSeverity::Critical,
-            
+
             // Error: Operations that fail but don't corrupt state
             GitError::RepositoryNotFound { .. } => ErrorSeverity::Error,
             GitError::RepositoryOperationFailed { .. } => ErrorSeverity::Error,
@@ -185,7 +185,7 @@ impl Severity for GitError {
             GitError::InvalidBranchName { .. } => ErrorSeverity::Error,
             GitError::Git2Error { .. } => ErrorSeverity::Error,
             GitError::Generic { .. } => ErrorSeverity::Error,
-            
+
             // Warning: Informational state that doesn't prevent operations
             GitError::BranchAlreadyExists { .. } => ErrorSeverity::Warning,
             GitError::WorkingDirectoryDirty { .. } => ErrorSeverity::Warning,
@@ -214,15 +214,23 @@ mod severity_tests {
     #[test]
     fn test_git_error_error_severity() {
         // Repository not found
-        let repo_error = GitError::repository_not_found("/path/to/repo", "not a git repository".to_string());
+        let repo_error =
+            GitError::repository_not_found("/path/to/repo", "not a git repository".to_string());
         assert_eq!(repo_error.severity(), ErrorSeverity::Error);
 
         // Repository operation failed
-        let repo_op_error = GitError::repository_operation_failed("clone".to_string(), "failed to clone".to_string());
+        let repo_op_error = GitError::repository_operation_failed(
+            "clone".to_string(),
+            "failed to clone".to_string(),
+        );
         assert_eq!(repo_op_error.severity(), ErrorSeverity::Error);
 
         // Branch operation failed
-        let branch_op_error = GitError::branch_operation_failed("checkout".to_string(), "main".to_string(), "branch not found".to_string());
+        let branch_op_error = GitError::branch_operation_failed(
+            "checkout".to_string(),
+            "main".to_string(),
+            "branch not found".to_string(),
+        );
         assert_eq!(branch_op_error.severity(), ErrorSeverity::Error);
 
         // Branch not found
@@ -230,11 +238,17 @@ mod severity_tests {
         assert_eq!(branch_error.severity(), ErrorSeverity::Error);
 
         // Commit operation failed
-        let commit_error = GitError::commit_operation_failed("commit".to_string(), "nothing to commit".to_string());
+        let commit_error = GitError::commit_operation_failed(
+            "commit".to_string(),
+            "nothing to commit".to_string(),
+        );
         assert_eq!(commit_error.severity(), ErrorSeverity::Error);
 
         // Invalid branch name
-        let invalid_branch = GitError::invalid_branch_name("bad/branch".to_string(), "contains invalid characters".to_string());
+        let invalid_branch = GitError::invalid_branch_name(
+            "bad/branch".to_string(),
+            "contains invalid characters".to_string(),
+        );
         assert_eq!(invalid_branch.severity(), ErrorSeverity::Error);
 
         // Generic error
@@ -249,7 +263,10 @@ mod severity_tests {
         assert_eq!(branch_exists.severity(), ErrorSeverity::Warning);
 
         // Working directory dirty
-        let dirty_wd = GitError::working_directory_dirty(vec!["file1.txt".to_string(), "file2.txt".to_string()]);
+        let dirty_wd = GitError::working_directory_dirty(vec![
+            "file1.txt".to_string(),
+            "file2.txt".to_string(),
+        ]);
         assert_eq!(dirty_wd.severity(), ErrorSeverity::Warning);
     }
 }

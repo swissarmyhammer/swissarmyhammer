@@ -69,14 +69,14 @@ impl Severity for Error {
         match self {
             // Critical: Filesystem failures that prevent issue operations
             Error::Io(_) => ErrorSeverity::Critical,
-            
+
             // Error: Issue operations that fail
             Error::IssueNotFound(_) => ErrorSeverity::Error,
             Error::Other(_) => ErrorSeverity::Error,
-            
+
             // Warning: Issue already exists can be handled
             Error::IssueAlreadyExists(_) => ErrorSeverity::Warning,
-            
+
             // Delegate to wrapped error's severity
             Error::Git(err) => err.severity(),
             Error::Common(err) => err.severity(),
@@ -121,7 +121,7 @@ mod severity_tests {
         // Test that Git errors delegate to wrapped error's severity
         let git_error = swissarmyhammer_git::GitError::branch_not_found("main".to_string());
         let expected_severity = git_error.severity();
-        
+
         let issue_error = Error::Git(git_error);
         assert_eq!(issue_error.severity(), expected_severity);
     }
@@ -133,7 +133,7 @@ mod severity_tests {
             "failed to create directory".to_string(),
         );
         let expected_severity = common_error.severity();
-        
+
         let issue_error = Error::Common(common_error);
         assert_eq!(issue_error.severity(), expected_severity);
     }
