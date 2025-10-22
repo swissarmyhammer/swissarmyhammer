@@ -1,6 +1,6 @@
 # MCP Tools Overview
 
-SwissArmyHammer provides 25+ MCP tools that integrate seamlessly with Claude Code and other MCP clients. These tools are automatically exposed via both the MCP protocol and the CLI interface.
+SwissArmyHammer provides 28 MCP tools that integrate seamlessly with Claude Code and other MCP clients. These tools are automatically exposed via both the MCP protocol and the CLI interface.
 
 ## Tool Categories
 
@@ -19,33 +19,54 @@ Git-integrated project management using markdown files:
 - `issue_list` - List all issues with filtering
 - `issue_show` - Display issue details
 - `issue_update` - Update issue content
+- `issue_all_complete` - Check if all issues are completed
 
-### Memo System
+### Todo Operations
+Ephemeral task tracking for development sessions:
+- `todo_create` - Create new todo items
+- `todo_show` - Retrieve specific todo item or next incomplete
+- `todo_mark_complete` - Mark todo items as completed
+
+### Memoranda Operations
 Personal knowledge management with full-text search:
 - `memo_create` - Create new memos with titles and content
-- `memo_search` - Search memos by content
+- `memo_get` - Retrieve specific memo by title
 - `memo_list` - List all available memos
-- `memo_get` - Retrieve specific memo by ID
+- `memo_get_all_context` - Get all memo content for AI context
 
 ### Semantic Search
 Vector-based code search with TreeSitter parsing:
 - `search_index` - Index code files for semantic search
 - `search_query` - Query indexed content with natural language
 
-### Web Tools
-Internet integration for data gathering:
-- `web_fetch` - Fetch and convert web pages to markdown
-- `web_search` - Search the web with DuckDuckGo integration
+### Outline Operations
+Generate structured code overviews:
+- `outline_generate` - Create hierarchical code outlines with symbols
+
+### Git Operations
+Git repository analysis and file change tracking:
+- `git_changes` - List files changed on a branch relative to parent
+
+### Rules Operations
+Automated code quality checking:
+- `rules_check` - Check code against defined quality rules
+
+### Flow Operations
+Dynamic workflow execution via MCP:
+- `flow` - Execute or list workflows with parameters
 
 ### Shell Integration
 Safe command execution with security controls:
 - `shell_execute` - Execute shell commands with timeout and validation
 
-### Utility Tools
-Supporting functionality for workflows:
-- `todo_create` - Ephemeral task tracking
-- `abort_create` - Signal workflow termination
-- `outline_generate` - Generate code structure overviews
+### Web Tools
+Internet integration for data gathering:
+- `web_fetch` - Fetch and convert web pages to markdown
+- `web_search` - Search the web with DuckDuckGo integration
+
+### Abort Operations
+Workflow termination signaling:
+- `abort_create` - Signal workflow termination with reason
 
 ## Usage Patterns
 
