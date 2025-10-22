@@ -6,8 +6,8 @@
 //! ## Key Concept
 //!
 //! The tool determines the "scope of changes" for any branch:
-//! - **Feature/Issue branches**: Files changed since diverging from the parent branch
-//! - **Main/trunk branches**: All tracked files (cumulative changes)
+//! - **Feature/Issue branches**: Files changed since diverging from the parent branch (plus uncommitted changes)
+//! - **Main/trunk branches**: Only uncommitted changes (staged + unstaged + untracked)
 //!
 //! The distinction is based on whether a branch has a clear parent it diverged from.
 
@@ -143,9 +143,12 @@ impl McpTool for GitChangesTool {
                     )
                 })?
         } else {
-            // Main/trunk branch: get all tracked files
-            git_ops.get_all_tracked_files().map_err(|e| {
-                rmcp::ErrorData::internal_error(format!("Failed to get tracked files: {}", e), None)
+            // Main/trunk branch: get only uncommitted changes
+            get_uncommitted_changes(git_ops).map_err(|e| {
+                rmcp::ErrorData::internal_error(
+                    format!("Failed to get uncommitted changes: {}", e),
+                    None,
+                )
             })?
         };
 
@@ -349,9 +352,8 @@ mod tests {
         let parsed: GitChangesResponse = serde_json::from_str(response_text).unwrap();
         assert_eq!(parsed.branch, "main");
         assert_eq!(parsed.parent_branch, None);
-        assert_eq!(parsed.files.len(), 2);
-        assert!(parsed.files.contains(&"file1.txt".to_string()));
-        assert!(parsed.files.contains(&"file2.txt".to_string()));
+        // Main branch with no uncommitted changes should return empty list
+        assert_eq!(parsed.files.len(), 0);
     }
 
     #[tokio::test]
@@ -532,13 +534,14 @@ mod tests {
         };
         let parsed: GitChangesResponse = serde_json::from_str(response_text).unwrap();
 
-        // Verify all tracked files and uncommitted files are included
+        // Main branch should only return uncommitted files, not all tracked files
         assert_eq!(parsed.branch, "main");
         assert_eq!(parsed.parent_branch, None);
-        assert_eq!(parsed.files.len(), 3);
-        assert!(parsed.files.contains(&"file1.txt".to_string()));
-        assert!(parsed.files.contains(&"file2.txt".to_string()));
+        assert_eq!(parsed.files.len(), 1);
         assert!(parsed.files.contains(&"uncommitted.txt".to_string()));
+        // Committed files should NOT be included
+        assert!(!parsed.files.contains(&"file1.txt".to_string()));
+        assert!(!parsed.files.contains(&"file2.txt".to_string()));
     }
 
     #[tokio::test]
@@ -561,9 +564,8 @@ mod tests {
 
         let result = tool.execute(arguments, &context).await;
 
-        // For non-existent branches, the tool falls back to get_all_tracked_files
-        // which may succeed. This is acceptable behavior - the tool shows tracked files
-        // rather than failing. Let's verify it returns a valid response.
+        // For non-existent branches, the tool falls back to get_uncommitted_changes
+        // which returns only uncommitted files. This is acceptable behavior.
         assert!(result.is_ok());
         let response = result.unwrap();
         assert_eq!(response.is_error, Some(false));
@@ -576,6 +578,8 @@ mod tests {
         assert_eq!(parsed.branch, "non-existent-branch");
         // Should have no parent since it doesn't exist
         assert_eq!(parsed.parent_branch, None);
+        // Should have no files since there are no uncommitted changes
+        assert_eq!(parsed.files.len(), 0);
     }
 
     #[tokio::test]
