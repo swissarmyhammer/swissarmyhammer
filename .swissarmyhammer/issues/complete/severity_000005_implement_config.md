@@ -149,3 +149,85 @@ mod severity_tests {
 ## Next Step
 
 Step 6: Implement Severity for rules errors
+
+
+## Proposed Solution
+
+After analyzing the actual error variants in the codebase:
+
+### ConfigurationError Severity Mapping
+
+Based on actual variants in `swissarmyhammer-config/src/error.rs`:
+
+- **Critical**: `FigmentError`, `LoadError` - Core configuration system failures that prevent system operation
+- **Error**: `DiscoveryError`, `EnvVarError`, `TemplateContextError`, `IoError`, `JsonError` - Configuration issues that affect functionality but allow fallback/defaults
+
+**Rationale**: 
+- `LoadError` and `FigmentError` are critical because they represent fundamental configuration system failures
+- Other errors affect specific operations but the system can potentially continue with defaults
+
+### AgentError Severity Mapping
+
+Based on actual variants in `swissarmyhammer-config/src/agent.rs`:
+
+- **Critical**: `ParseError`, `ConfigError` - Cannot parse or validate agent configuration
+- **Error**: `NotFound`, `InvalidPath`, `IoError` - Agent operations failed but system can continue
+
+**Rationale**:
+- Parse and config validation failures are critical because they prevent using the agent entirely
+- Not finding an agent or path issues are errors but allow fallback to other agents
+
+### Implementation Plan
+
+1. Add Severity trait implementation to ConfigurationError in error.rs
+2. Add comprehensive tests for ConfigurationError severity
+3. Add Severity trait implementation to AgentError in agent.rs
+4. Add comprehensive tests for AgentError severity
+5. Verify compilation and all tests pass
+
+
+
+## Implementation Notes
+
+### Completed Tasks
+
+1. **ConfigurationError Severity Implementation** (swissarmyhammer-config/src/error.rs:92-107)
+   - Added `use swissarmyhammer_common::{ErrorSeverity, Severity};` import
+   - Implemented Severity trait with the following mappings:
+     - **Critical**: `LoadError`, `FigmentError` - Core configuration system failures
+     - **Error**: `DiscoveryError`, `EnvVarError`, `TemplateContextError`, `IoError`, `JsonError` - Configuration issues that allow fallback
+
+2. **ConfigurationError Tests** (swissarmyhammer-config/src/error.rs:109-146)
+   - Added 7 comprehensive tests covering all error variants
+   - Tests verify correct severity levels for each error type
+   - Fixed type ambiguity in `test_figment_error_is_critical` by explicitly typing intermediate variable
+
+3. **AgentError Severity Implementation** (swissarmyhammer-config/src/agent.rs:489-502)
+   - Added `use swissarmyhammer_common::{ErrorSeverity, Severity};` import
+   - Implemented Severity trait with the following mappings:
+     - **Critical**: `ParseError`, `ConfigError` - Cannot parse or validate agent configuration
+     - **Error**: `NotFound`, `InvalidPath`, `IoError` - Agent operations failed but system can continue
+
+4. **AgentError Tests** (swissarmyhammer-config/src/agent.rs:2617-2651)
+   - Added 5 comprehensive tests covering all error variants
+   - Tests verify correct severity levels for each error type
+
+### Test Results
+
+- **Build**: ✅ Successful (`cargo build -p swissarmyhammer-config`)
+- **Tests**: ✅ All 235 tests passed (`cargo nextest run -p swissarmyhammer-config`)
+- **Clippy**: ✅ No warnings (`cargo clippy -p swissarmyhammer-config`)
+
+### Design Decisions
+
+1. **Critical vs Error Distinction**:
+   - Critical errors prevent the configuration/agent system from functioning at all
+   - Error-level issues affect specific operations but allow the system to continue with fallbacks or defaults
+
+2. **No Warning-level errors**: 
+   - The existing error types in both enums represent actual failures, not warnings
+   - Future additions could introduce warning-level variants for deprecations or non-critical issues
+
+3. **Test Coverage**:
+   - Every error variant is tested
+   - Tests use realistic error construction patterns matching production code
