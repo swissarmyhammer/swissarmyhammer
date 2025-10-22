@@ -94,7 +94,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 ## Tool Categories
 
-SwissArmyHammer provides 40+ tools organized into logical categories:
+SwissArmyHammer provides 28 tools organized into logical categories:
 
 - **Files** (`files_*`): Read, write, edit, glob pattern matching, and grep search with security validation
 - **Search** (`search_*`): Semantic code search with indexing and vector similarity using tree-sitter

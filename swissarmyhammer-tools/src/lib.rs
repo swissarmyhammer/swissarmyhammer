@@ -21,13 +21,47 @@
 //!
 //! ## Usage
 //!
-//! Basic usage example:
-//! ```rust,ignore
-//! use swissarmyhammer_tools::McpServer;
-//! use swissarmyhammer_prompts::PromptLibrary;
+//! ### Basic Server Setup
 //!
+//! ```rust
+//! use swissarmyhammer_tools::{McpServer, ToolRegistry, ToolContext};
+//! use swissarmyhammer_prompts::PromptLibrary;
+//! use std::sync::Arc;
+//!
+//! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+//! // Initialize the prompt library
 //! let library = PromptLibrary::new();
-//! let server = McpServer::new(library)?;
+//!
+//! // Create the MCP server
+//! let server = McpServer::new(library, None).await?;
+//!
+//! // Initialize to register all tools
+//! server.initialize().await?;
+//!
+//! // The server is now ready to handle MCP requests
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! ### Registering Custom Tools
+//!
+//! ```rust
+//! use swissarmyhammer_tools::ToolRegistry;
+//!
+//! # fn example() {
+//! let mut registry = ToolRegistry::new();
+//!
+//! // Register individual tool categories
+//! swissarmyhammer_tools::register_file_tools(&mut registry);
+//! swissarmyhammer_tools::register_search_tools(&mut registry);
+//! swissarmyhammer_tools::register_issue_tools(&mut registry);
+//!
+//! // Access registered tools
+//! let tool_names: Vec<_> = registry.list_tools().iter()
+//!     .map(|t| t.name())
+//!     .collect();
+//! println!("Registered {} tools", tool_names.len());
+//! # }
 //! ```
 
 /// Model Context Protocol (MCP) server and tools
