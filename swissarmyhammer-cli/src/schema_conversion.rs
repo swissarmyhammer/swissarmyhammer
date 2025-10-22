@@ -631,10 +631,9 @@ mod tests {
         assert_eq!(unsupported_type.severity(), ErrorSeverity::Error);
 
         // Test delegation to ValidationError severity
-        let validation_error =
-            ConversionError::ValidationError(ValidationError::InvalidSchema {
-                message: "Bad schema".to_string(),
-            });
+        let validation_error = ConversionError::ValidationError(ValidationError::InvalidSchema {
+            message: "Bad schema".to_string(),
+        });
         assert_eq!(validation_error.severity(), ErrorSeverity::Critical);
 
         // Test delegation for Warning level ValidationError

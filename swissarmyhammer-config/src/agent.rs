@@ -2637,8 +2637,8 @@ agent:
 
     #[test]
     fn test_agent_error_parse_error_is_critical() {
-        let yaml_err = serde_yaml::from_str::<serde_yaml::Value>("invalid: yaml: content")
-            .unwrap_err();
+        let yaml_err =
+            serde_yaml::from_str::<serde_yaml::Value>("invalid: yaml: content").unwrap_err();
         let error = AgentError::from(yaml_err);
         assert_eq!(error.severity(), ErrorSeverity::Critical);
     }

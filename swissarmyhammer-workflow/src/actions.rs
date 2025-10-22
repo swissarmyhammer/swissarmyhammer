@@ -53,11 +53,11 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
+use swissarmyhammer_common::{ErrorSeverity, Severity};
 use syntect::easy::HighlightLines;
 use syntect::highlighting::ThemeSet;
 use syntect::parsing::SyntaxSet;
 use syntect::util::as_24_bit_terminal_escaped;
-use swissarmyhammer_common::{ErrorSeverity, Severity};
 use thiserror::Error;
 
 use swissarmyhammer_config::agent::{AgentConfig, AgentExecutorConfig, AgentExecutorType};
@@ -3369,8 +3369,9 @@ mod tests {
         ));
         assert_eq!(io_err.severity(), ErrorSeverity::Error);
 
-        let json_err = ActionError::JsonError(serde_json::from_str::<serde_json::Value>("invalid")
-            .unwrap_err());
+        let json_err = ActionError::JsonError(
+            serde_json::from_str::<serde_json::Value>("invalid").unwrap_err(),
+        );
         assert_eq!(json_err.severity(), ErrorSeverity::Error);
 
         let rate_limit_err = ActionError::RateLimit {

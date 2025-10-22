@@ -122,7 +122,8 @@ mod severity_tests {
 
     #[test]
     fn test_figment_error_is_critical() {
-        let figment_error: figment::Error = figment::error::Kind::MissingField("test".into()).into();
+        let figment_error: figment::Error =
+            figment::error::Kind::MissingField("test".into()).into();
         let error = ConfigurationError::from(figment_error);
         assert_eq!(error.severity(), ErrorSeverity::Critical);
     }
@@ -147,17 +148,14 @@ mod severity_tests {
 
     #[test]
     fn test_io_error_is_error() {
-        let error = ConfigurationError::from(io::Error::new(
-            io::ErrorKind::NotFound,
-            "file not found",
-        ));
+        let error =
+            ConfigurationError::from(io::Error::new(io::ErrorKind::NotFound, "file not found"));
         assert_eq!(error.severity(), ErrorSeverity::Error);
     }
 
     #[test]
     fn test_json_error_is_error() {
-        let json_err = serde_json::from_str::<serde_json::Value>("invalid json")
-            .unwrap_err();
+        let json_err = serde_json::from_str::<serde_json::Value>("invalid json").unwrap_err();
         let error = ConfigurationError::from(json_err);
         assert_eq!(error.severity(), ErrorSeverity::Error);
     }

@@ -68,7 +68,6 @@ impl ValidationError {
             }
         }
     }
-
 }
 
 impl Severity for ValidationError {
