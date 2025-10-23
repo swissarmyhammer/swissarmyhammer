@@ -2,9 +2,33 @@
 
 > **Write specs, not code.** The only coding assistant you'll ever need.
 
+[![Rust](https://img.shields.io/badge/rust-1.70%2B-orange.svg)](https://www.rust-lang.org/)
+[![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
 ## 📚 [Complete Documentation →](https://swissarmyhammer.github.io/swissarmyhammer-tools/)
 
 **Read the full documentation at [swissarmyhammer.github.io/swissarmyhammer-tools](https://swissarmyhammer.github.io/swissarmyhammer-tools/)** for comprehensive guides, examples, and API reference.
+
+---
+
+## Table of Contents
+
+- [Overview](#overview)
+- [What Problem Does This Solve?](#what-problem-does-this-solve)
+- [How It Works](#how-it-works)
+- [Key Features](#key-features)
+- [Quick Start](#quick-start)
+- [Tool Categories](#tool-categories)
+- [Architecture](#architecture)
+- [Documentation](#documentation)
+- [Requirements](#requirements)
+- [License](#license)
+- [Contributing](#contributing)
+- [Related Projects](#related-projects)
+
+---
+
+## Overview
 
 SwissArmyHammer Tools provides a comprehensive MCP (Model Context Protocol) server that exposes powerful AI development capabilities through standardized tools and prompts. This enables AI assistants like Claude to work effectively with codebases, manage development workflows, and automate complex software engineering tasks.
 
@@ -127,10 +151,26 @@ Each tool implements the `McpTool` trait providing:
 
 ## Documentation
 
-- **[Architecture Overview](https://swissarmyhammer.github.io/swissarmyhammer-tools/architecture.html)**: System design and component relationships
-- **[Getting Started](https://swissarmyhammer.github.io/swissarmyhammer-tools/getting-started.html)**: Installation and configuration guide
-- **[Features](https://swissarmyhammer.github.io/swissarmyhammer-tools/features.html)**: Detailed feature descriptions and examples
-- **[Troubleshooting](https://swissarmyhammer.github.io/swissarmyhammer-tools/troubleshooting.html)**: Common issues and solutions
+### Core Documentation
+
+- **[Getting Started](https://swissarmyhammer.github.io/swissarmyhammer-tools/01-getting-started/introduction.html)**: Installation, quick start, and configuration
+- **[Architecture Overview](https://swissarmyhammer.github.io/swissarmyhammer-tools/02-concepts/architecture.html)**: System design and component relationships
+- **[Features Overview](https://swissarmyhammer.github.io/swissarmyhammer-tools/02-concepts/features-overview.html)**: Detailed feature descriptions and capabilities
+
+### Tool Documentation
+
+- **[MCP Tools Overview](https://swissarmyhammer.github.io/swissarmyhammer-tools/05-tools/overview.html)**: All available MCP tools
+- **[MCP Integration Guide](https://swissarmyhammer.github.io/swissarmyhammer-tools/05-tools/mcp-integration-guide.html)**: Comprehensive guide for using tools with Claude Code
+- **[File Operations](https://swissarmyhammer.github.io/swissarmyhammer-tools/05-tools/file-tools/introduction.html)**: Read, write, edit, glob, grep
+- **[Issue Management](https://swissarmyhammer.github.io/swissarmyhammer-tools/05-tools/issue-management/introduction.html)**: Git-integrated work tracking
+- **[Search Operations](https://swissarmyhammer.github.io/swissarmyhammer-tools/05-tools/search-tools/introduction.html)**: Semantic code search
+
+### Guides and Examples
+
+- **[Basic Examples](https://swissarmyhammer.github.io/swissarmyhammer-tools/examples/basic.html)**: Simple, practical examples
+- **[Advanced Examples](https://swissarmyhammer.github.io/swissarmyhammer-tools/examples/advanced.html)**: Complex integration patterns
+- **[Troubleshooting](https://swissarmyhammer.github.io/swissarmyhammer-tools/07-reference/troubleshooting.html)**: Common issues and solutions
+- **[CLI Reference](https://swissarmyhammer.github.io/swissarmyhammer-tools/07-reference/cli-reference.html)**: Complete command reference
 
 ## Requirements
 
