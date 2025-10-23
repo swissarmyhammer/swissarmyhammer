@@ -123,7 +123,7 @@ Complete reference of all SwissArmyHammer Tools organized by category.
     // Tool-specific data
   }
 }
-```text
+```
 
 ### Error Response
 
@@ -139,7 +139,7 @@ Complete reference of all SwissArmyHammer Tools organized by category.
     }
   }
 }
-```text
+```
 
 ## Tool Compatibility
 

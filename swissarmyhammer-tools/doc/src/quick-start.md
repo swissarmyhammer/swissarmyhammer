@@ -12,16 +12,16 @@ Open a terminal and start the server in stdio mode:
 
 ```bash
 sah serve
-```text
+```
 
 You should see output indicating the server has started:
 
-```text
+```
 SwissArmyHammer MCP Server v0.1.0
 Mode: stdio
 Registered 28 tools
 Ready for requests
-```text
+```
 
 ## Step 2: Configure Claude Code
 
@@ -29,7 +29,7 @@ Add SwissArmyHammer as an MCP server to Claude Code:
 
 ```bash
 claude mcp add --scope user sah sah serve
-```text
+```
 
 Restart Claude Code to load the new configuration.
 
@@ -37,9 +37,9 @@ Restart Claude Code to load the new configuration.
 
 In Claude Code, ask:
 
-```text
+```
 What SwissArmyHammer tools are available?
-```text
+```
 
 Claude should respond with a list of available tools organized by category.
 
@@ -51,24 +51,24 @@ Memos are perfect for capturing project knowledge and decisions.
 
 **Create a memo:**
 
-```text
+```
 Create a memo with title "Project Setup Notes" and content:
 - Using Rust 1.70
 - MCP server integration complete
 - Claude Code configured successfully
-```text
+```
 
 **List memos:**
 
-```text
+```
 List all memos
-```text
+```
 
 **Retrieve the memo:**
 
-```text
+```
 Show me the "Project Setup Notes" memo
-```text
+```
 
 ### Task 2: Semantic Code Search
 
@@ -78,21 +78,21 @@ Semantic search helps you find code based on meaning, not just keywords.
 
 Navigate to a Rust project and ask Claude:
 
-```text
+```
 Index all Rust files in this project for semantic search
-```text
+```
 
 **Search for code:**
 
-```text
+```
 Search for "error handling" code in this project
-```text
+```
 
 **View code structure:**
 
-```text
+```
 Generate an outline of src/main.rs
-```text
+```
 
 ### Task 3: Issue Tracking
 
@@ -100,7 +100,7 @@ Issues are tracked as markdown files in `.swissarmyhammer/issues/`.
 
 **Create an issue:**
 
-```text
+```
 Create an issue named "add-logging" with content:
 # Add Structured Logging
 
@@ -111,25 +111,25 @@ Add structured logging using the tracing crate throughout the application.
 - [ ] Initialize tracing subscriber
 - [ ] Replace println! with tracing macros
 - [ ] Add span instrumentation to key functions
-```text
+```
 
 **List issues:**
 
-```text
+```
 List all issues
-```text
+```
 
 **Show issue details:**
 
-```text
+```
 Show the "add-logging" issue
-```text
+```
 
 **Mark complete:**
 
-```text
+```
 Mark the "add-logging" issue as complete
-```text
+```
 
 ### Task 4: File Operations
 
@@ -137,31 +137,31 @@ File tools provide safe, validated file system access.
 
 **Read a file:**
 
-```text
+```
 Read the contents of Cargo.toml
-```text
+```
 
 **Find files by pattern:**
 
-```text
+```
 Find all Rust source files in the src directory
-```text
+```
 
 **Search file contents:**
 
-```text
+```
 Search for the word "async" in all Rust files
-```text
+```
 
 **Edit a file:**
 
-```text
+```
 In Cargo.toml, replace the line:
 version = "0.1.0"
 
 with:
 version = "0.2.0"
-```text
+```
 
 ### Task 5: Git Integration
 
@@ -169,9 +169,9 @@ Track what files have changed on your branch.
 
 **Check changed files:**
 
-```text
+```
 What files have changed on my current branch?
-```text
+```
 
 This is useful for understanding the scope of your work and what needs to be reviewed.
 
@@ -181,15 +181,15 @@ Execute shell commands with proper output capture.
 
 **Run a command:**
 
-```text
+```
 Run the command: cargo build --release
-```text
+```
 
 **Check git status:**
 
-```text
+```
 Execute: git status
-```text
+```
 
 ### Task 7: Code Quality Rules
 
@@ -197,9 +197,9 @@ Check your code against defined quality standards.
 
 **Check for violations:**
 
-```text
+```
 Run rules check on all Rust files
-```text
+```
 
 This will report any violations of configured coding standards.
 
@@ -252,7 +252,7 @@ The MCP server operates in a working directory, which defaults to where you star
 
 ```bash
 sah --cwd /path/to/project serve
-```text
+```
 
 All relative paths in tool operations are resolved relative to this working directory.
 

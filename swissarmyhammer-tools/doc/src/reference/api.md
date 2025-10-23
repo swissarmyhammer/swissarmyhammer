@@ -20,7 +20,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     server.run().await?;
     Ok(())
 }
-```text
+```
 
 **Methods:**
 - `new(library, config)` - Create new server
@@ -50,7 +50,7 @@ for tool in tools {
 
 // Get specific tool
 let tool = registry.get_tool("files_read")?;
-```text
+```
 
 **Methods:**
 - `new()` - Create empty registry
@@ -75,7 +75,7 @@ let context = Arc::new(ToolContext::new(
     library,
     working_dir,
 )?);
-```text
+```
 
 **Fields:**
 - `library: PromptLibrary` - Access to prompt templates
@@ -109,7 +109,7 @@ pub trait McpTool: Send + Sync {
         context: Arc<ToolContext>,
     ) -> Result<Value>;
 }
-```text
+```
 
 ## Tool Registration Functions
 
@@ -130,7 +130,7 @@ register_shell_tools(&mut registry);       // Shell execution
 register_rules_tools(&mut registry);       // Quality checks
 register_web_fetch_tools(&mut registry);   // Web fetching
 register_web_search_tools(&mut registry);  // Web search
-```text
+```
 
 ## Custom Tool Implementation
 
@@ -192,7 +192,7 @@ impl McpTool for MyTool {
         Ok(serde_json::to_value(result)?)
     }
 }
-```text
+```
 
 ### Register Custom Tool
 
@@ -208,7 +208,7 @@ registry.register(Box::new(MyTool));
 // Use with server
 let context = Arc::new(ToolContext::new(library, working_dir)?);
 let server = McpServer::with_registry(registry, context).await?;
-```text
+```
 
 ## Server Configuration
 
@@ -224,7 +224,7 @@ let config = ServerConfig {
 };
 
 let server = McpServer::new(library, Some(config)).await?;
-```text
+```
 
 ### HTTP Server Mode
 
@@ -234,7 +234,7 @@ server.initialize().await?;
 
 // Start HTTP server on custom port
 server.run_http_mode(8080).await?;
-```text
+```
 
 ### Stdio Server Mode
 
@@ -244,7 +244,7 @@ server.initialize().await?;
 
 // Start stdio mode (default)
 server.run_stdio_mode().await?;
-```text
+```
 
 ## Error Types
 
@@ -260,7 +260,7 @@ pub enum McpError {
     InvalidParams { details: String },
     InternalError { message: String, source: Option<Box<dyn Error>> },
 }
-```text
+```
 
 ### Tool Errors
 
@@ -275,7 +275,7 @@ async fn execute(&self, ...) -> Result<Value> {
 
     Ok(json!({ "data": data }))
 }
-```text
+```
 
 ## Testing Utilities
 
@@ -295,7 +295,7 @@ async fn test_my_tool() {
     let result = tool.execute(params, context).await;
     assert!(result.is_ok());
 }
-```text
+```
 
 ### Mock File System
 
@@ -307,7 +307,7 @@ async fn test_with_temp_dir() {
 
     // Test with temporary directory
 }
-```text
+```
 
 ## Integration Examples
 
@@ -338,7 +338,7 @@ impl MyApplication {
         self.mcp_server.execute_tool(name, params).await
     }
 }
-```text
+```
 
 ### Custom Tool Set
 
@@ -353,7 +353,7 @@ register_search_tools(&mut registry);
 
 let context = Arc::new(ToolContext::new(library, working_dir)?);
 let server = McpServer::with_registry(registry, context).await?;
-```text
+```
 
 ### Programmatic Execution
 
@@ -368,7 +368,7 @@ let params = json!({
 
 let result = server.execute_tool("files_read", params).await?;
 println!("Result: {}", result);
-```text
+```
 
 ## API Stability
 

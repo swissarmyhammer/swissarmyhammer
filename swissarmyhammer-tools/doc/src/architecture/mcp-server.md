@@ -29,7 +29,7 @@ pub async fn run_stdio_mode(&self) -> Result<()> {
     // Process requests from stdin
     // Write responses to stdout
 }
-```text
+```
 
 ###HTTP Mode
 
@@ -60,7 +60,7 @@ pub async fn run_http_mode(&self, port: u16) -> Result<()> {
         .serve(app.into_make_service())
         .await?;
 }
-```text
+```
 
 ## Request Processing
 
@@ -81,7 +81,7 @@ MCP uses JSON-RPC 2.0 for message format:
     }
   }
 }
-```text
+```
 
 **Response:**
 ```json
@@ -94,7 +94,7 @@ MCP uses JSON-RPC 2.0 for message format:
     "encoding": "utf-8"
   }
 }
-```text
+```
 
 **Error Response:**
 ```json
@@ -109,7 +109,7 @@ MCP uses JSON-RPC 2.0 for message format:
     }
   }
 }
-```text
+```
 
 ### Request Flow
 
@@ -134,7 +134,7 @@ Clients discover available tools via the `tools/list` method:
   "id": 1,
   "method": "tools/list"
 }
-```text
+```
 
 **Response:**
 ```json
@@ -160,7 +160,7 @@ Clients discover available tools via the `tools/list` method:
     ]
   }
 }
-```text
+```
 
 ## Type Safety
 
@@ -191,7 +191,7 @@ impl McpTool for FilesRead {
         })
     }
 }
-```text
+```
 
 ### Runtime Validation
 
@@ -206,7 +206,7 @@ pub fn validate_params(
     // Check type constraints
     // Verify value ranges
 }
-```text
+```
 
 ## Error Handling
 
@@ -220,7 +220,7 @@ pub enum McpError {
     InvalidParams { details: String },
     InternalError { message: String, source: Option<Box<dyn Error>> },
 }
-```text
+```
 
 ### Error Codes
 
@@ -243,7 +243,7 @@ McpError::InvalidParams {
         request_id
     )
 }
-```text
+```
 
 ## State Management
 
@@ -278,7 +278,7 @@ pub async fn execute_tool(
 
     tool.execute(params, context).await
 }
-```text
+```
 
 ### Concurrent Requests
 
@@ -321,7 +321,7 @@ HTTP mode uses connection pooling:
 let pool = ConnectionPool::new()
     .max_connections(100)
     .idle_timeout(Duration::from_secs(60));
-```text
+```
 
 ### Request Batching
 
@@ -331,7 +331,7 @@ Support for batched JSON-RPC requests:
   {"jsonrpc": "2.0", "id": 1, "method": "tools/call", ...},
   {"jsonrpc": "2.0", "id": 2, "method": "tools/call", ...}
 ]
-```text
+```
 
 ### Response Streaming
 
@@ -343,7 +343,7 @@ pub async fn stream_response(
 ) -> Result<()> {
     // Stream response chunks
 }
-```text
+```
 
 ## Monitoring and Observability
 
@@ -356,7 +356,7 @@ tracing::info!(
     duration_ms = %duration.as_millis(),
     "Tool execution completed"
 );
-```text
+```
 
 ### Metrics
 
@@ -377,7 +377,7 @@ pub async fn health_check() -> Json<HealthStatus> {
         tools_registered: registry.count(),
     })
 }
-```text
+```
 
 ## Lifecycle
 

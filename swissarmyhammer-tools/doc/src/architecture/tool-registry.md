@@ -29,7 +29,7 @@ pub trait McpTool: Send + Sync {
         context: Arc<ToolContext>,
     ) -> Result<serde_json::Value>;
 }
-```text
+```
 
 ## Registration
 
@@ -45,7 +45,7 @@ pub fn register_file_tools(registry: &mut ToolRegistry) {
     registry.register(Box::new(FilesGlob));
     registry.register(Box::new(FilesGrep));
 }
-```text
+```
 
 ### Automatic Registration
 
@@ -68,7 +68,7 @@ impl McpServer {
         // ... additional categories
     }
 }
-```text
+```
 
 ## Tool Lookup
 
@@ -78,7 +78,7 @@ Tools are retrieved by their unique name:
 
 ```rust
 let tool = registry.get_tool("files_read")?;
-```text
+```
 
 ### List All Tools
 
@@ -89,7 +89,7 @@ let tools = registry.list_tools();
 for tool in tools {
     println!("{}: {}", tool.name(), tool.description());
 }
-```text
+```
 
 ## Tool Execution
 
@@ -111,7 +111,7 @@ pub struct ToolContext {
     pub working_directory: PathBuf,
     // ... other shared resources
 }
-```text
+```
 
 ## Tool Organization
 
@@ -227,7 +227,7 @@ impl McpTool for FilesRead {
         Ok(serde_json::to_value(result)?)
     }
 }
-```text
+```
 
 ## Tool Categories
 

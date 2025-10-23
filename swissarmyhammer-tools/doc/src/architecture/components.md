@@ -4,7 +4,7 @@ This document details how the major components of SwissArmyHammer Tools interact
 
 ## Component Overview
 
-```text
+```
 ┌─────────────────────────────────────────────────────────────┐
 │                      MCP Server                             │
 ├─────────────────────────────────────────────────────────────┤
@@ -32,14 +32,14 @@ This document details how the major components of SwissArmyHammer Tools interact
 │  (Issues, Git, │  │  (Files, DB)  │  │   Services   │
 │   Search, etc.)│  └───────────────┘  │  (Git, Shell)│
 └────────────────┘                     └──────────────┘
-```text
+```
 
 ## Request Flow
 
 ### 1. Request Reception
 
 **Stdio Mode:**
-```text
+```
 ┌──────────┐    JSON-RPC    ┌───────────┐
 │  Client  │───────────────▶│   Stdin   │
 │ (Claude) │                │  Handler  │
@@ -47,10 +47,10 @@ This document details how the major components of SwissArmyHammer Tools interact
                                   │
                                   ▼
                             Parse Request
-```text
+```
 
 **HTTP Mode:**
-```text
+```
 ┌──────────┐     HTTP       ┌───────────┐
 │  Client  │───────────────▶│   Axum    │
 │  (Web)   │                │  Handler  │
@@ -58,11 +58,11 @@ This document details how the major components of SwissArmyHammer Tools interact
                                   │
                                   ▼
                             Parse Request
-```text
+```
 
 ### 2. Request Routing
 
-```text
+```
 Parse Request
       │
       ▼
@@ -81,11 +81,11 @@ Parse Request
                          │
                          ▼
                    Registry Lookup
-```text
+```
 
 ### 3. Tool Execution
 
-```text
+```
 Registry Lookup
       │
       ▼
@@ -111,7 +111,7 @@ Registry Lookup
 │ Format       │
 │ Response     │
 └──────────────┘
-```text
+```
 
 ## Component Interactions
 
@@ -128,7 +128,7 @@ register_search_tools(&mut registry);
 
 // Server uses registry for lookups
 let tool = registry.get_tool("files_read")?;
-```text
+```
 
 **Tool Invocation:**
 ```rust
@@ -136,7 +136,7 @@ let tool = registry.get_tool("files_read")?;
 let result = registry
     .execute_tool(tool_name, params, context)
     .await?;
-```text
+```
 
 ### Tool ↔ Tool Context
 
@@ -156,7 +156,7 @@ async fn execute(
     // Perform tool operation
     // ...
 }
-```text
+```
 
 ### Tools ↔ Domain Crates
 
@@ -174,7 +174,7 @@ async fn execute(&self, params: ..., context: ...) -> Result<...> {
 
     // Return result
 }
-```text
+```
 
 **Example: Search Tools → swissarmyhammer-search**
 ```rust
@@ -192,7 +192,7 @@ async fn execute(&self, params: ..., context: ...) -> Result<...> {
 
     // Format and return
 }
-```text
+```
 
 ### Tools ↔ Storage
 
@@ -201,14 +201,14 @@ async fn execute(&self, params: ..., context: ...) -> Result<...> {
 // Files stored at known locations
 let issues_dir = working_dir.join(".swissarmyhammer/issues");
 let memos_dir = working_dir.join(".swissarmyhammer/memoranda");
-```text
+```
 
 **Database:**
 ```rust
 // Search index in DuckDB
 let search_db = working_dir.join(".swissarmyhammer/search.db");
 let conn = Connection::open(&search_db)?;
-```text
+```
 
 **Git Integration:**
 ```rust
@@ -217,13 +217,13 @@ use swissarmyhammer_git::Repository;
 
 let repo = Repository::open(&working_dir)?;
 let changes = repo.get_changes("main")?;
-```text
+```
 
 ## Data Flow Examples
 
 ### File Read Operation
 
-```text
+```
 Client Request
       │
       ▼
@@ -243,11 +243,11 @@ files_read tool
       │
       ▼
 Return to client
-```text
+```
 
 ### Semantic Search
 
-```text
+```
 Client Request
       │
       ▼
@@ -267,11 +267,11 @@ search_query tool
       │
       ▼
 Return to client
-```text
+```
 
 ### Issue Creation
 
-```text
+```
 Client Request
       │
       ▼
@@ -291,11 +291,11 @@ issue_create tool
       │
       ▼
 Return to client
-```text
+```
 
 ## Error Propagation
 
-```text
+```
 Tool Execution Error
       │
       ▼
@@ -309,7 +309,7 @@ Server formats as JSON-RPC error
       │
       ▼
 Client receives structured error
-```text
+```
 
 Example:
 ```rust
@@ -330,7 +330,7 @@ return Err(IssueError::NotFound { name });
     "data": { "details": "Issue not found: ..." }
   }
 }
-```text
+```
 
 ## Concurrency Model
 
@@ -338,7 +338,7 @@ return Err(IssueError::NotFound { name });
 
 All I/O operations are async:
 
-```text
+```
 Client Request (async)
       │
       ▼
@@ -353,7 +353,7 @@ Tool Execution (async)
       │
       ▼
 Response (async)
-```text
+```
 
 ### Shared State
 
@@ -368,24 +368,24 @@ Arc<ToolContext>
 
 // Per-request state (not shared)
 Request { id, method, params }
-```text
+```
 
 ## Lifecycle
 
 ### Startup
 
-```text
+```
 1. Create PromptLibrary
 2. Create ToolContext
 3. Create ToolRegistry
 4. Register all tools
 5. Start server (stdio or HTTP)
 6. Begin accepting requests
-```text
+```
 
 ### Request Handling
 
-```text
+```
 1. Receive request
 2. Parse JSON-RPC
 3. Validate method/params
@@ -393,17 +393,17 @@ Request { id, method, params }
 5. Execute async
 6. Format response
 7. Send to client
-```text
+```
 
 ### Shutdown
 
-```text
+```
 1. Stop accepting requests
 2. Wait for in-flight requests
 3. Close database connections
 4. Flush logs
 5. Exit cleanly
-```text
+```
 
 ## Next Steps
 

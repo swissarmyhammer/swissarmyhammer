@@ -25,7 +25,7 @@ Read file contents with optional partial reading.
 {
   "path": "Cargo.toml"
 }
-```text
+```
 
 **Example with offset/limit:**
 ```json
@@ -34,7 +34,7 @@ Read file contents with optional partial reading.
   "offset": 100,
   "limit": 50
 }
-```text
+```
 
 ### files_write
 
@@ -53,7 +53,7 @@ Write content to file atomically with encoding preservation.
   "file_path": "/path/to/project/config.toml",
   "content": "[server]\nport = 3000\n"
 }
-```text
+```
 
 **Features:**
 - Atomic writes (write to temp, then rename)
@@ -85,7 +85,7 @@ Perform precise string replacement in files.
   "old_string": "version = \"0.1.0\"",
   "new_string": "version = \"0.2.0\""
 }
-```text
+```
 
 **Features:**
 - Exact string matching (no regex)
@@ -113,7 +113,7 @@ Find files matching glob patterns with gitignore support.
 {
   "pattern": "**/*.rs"
 }
-```text
+```
 
 **Pattern Examples:**
 - `*.rs` - All Rust files in current directory
@@ -147,7 +147,7 @@ Format depends on `output_mode`:
   "type": "rust",
   "output_mode": "content"
 }
-```text
+```
 
 **Pattern Examples:**
 - `error` - Find "error" in any file
@@ -159,38 +159,38 @@ Format depends on `output_mode`:
 
 ### Reading Configuration
 
-```text
+```
 Use files_read to read Cargo.toml
-```text
+```
 
 ### Updating Dependencies
 
-```text
+```
 Use files_edit to update dependency version in Cargo.toml:
 old: tokio = "1.0"
 new: tokio = "1.35"
-```text
+```
 
 ### Finding All Tests
 
-```text
+```
 Use files_glob with pattern "**/*_test.rs"
-```text
+```
 
 ### Searching for TODOs
 
-```text
+```
 Use files_grep with pattern "TODO|FIXME"
-```text
+```
 
 ### Batch File Updates
 
-```text
+```
 1. Use files_glob to find all target files
 2. Use files_read to read each file
 3. Use files_edit to make changes
 4. Repeat for all files
-```text
+```
 
 ## Security Features
 
@@ -233,14 +233,14 @@ Write operations are atomic:
 {
   "path": "src/main.rs"  // Good: relative to working directory
 }
-```text
+```
 
 Instead of:
 ```json
 {
   "path": "/home/user/project/src/main.rs"  // Avoid: absolute paths
 }
-```text
+```
 
 ### Read Large Files Partially
 
@@ -250,7 +250,7 @@ Instead of:
   "offset": 1000,
   "limit": 100
 }
-```text
+```
 
 ### Use Specific Glob Patterns
 
@@ -258,14 +258,14 @@ Instead of:
 {
   "pattern": "src/**/*.rs"  // Good: specific
 }
-```text
+```
 
 Instead of:
 ```json
 {
   "pattern": "**/*"  // Avoid: too broad
 }
-```text
+```
 
 ### Validate Before Write
 
@@ -303,21 +303,21 @@ Common errors and solutions:
 ### 1. Use Glob for Finding Files
 
 Glob is optimized and respects gitignore:
-```text
+```
 files_glob pattern="**/*.rs"
-```text
+```
 
 Instead of:
-```text
+```
 shell_execute command="find . -name '*.rs'"
-```text
+```
 
 ### 2. Use Grep for Content Search
 
 Grep uses ripgrep (very fast):
-```text
+```
 files_grep pattern="TODO" type="rust"
-```text
+```
 
 ### 3. Read Large Files Partially
 
@@ -327,7 +327,7 @@ Only read what you need:
   "offset": 1000,
   "limit": 100
 }
-```text
+```
 
 ### 4. Filter Early
 
@@ -338,7 +338,7 @@ Use glob and type filters to reduce file set:
   "glob": "**/*.rs",
   "type": "rust"
 }
-```text
+```
 
 ## Next Steps
 

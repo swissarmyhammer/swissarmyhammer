@@ -81,7 +81,7 @@ Each tool is self-contained and independently registered, making it easy to:
 
 ## Architecture at a Glance
 
-```text
+```
 ┌─────────────────────────────────────────────────────────────┐
 │                    AI Assistants                            │
 │              (Claude Code, Custom Clients)                  │
@@ -101,7 +101,7 @@ Each tool is self-contained and independently registered, making it easy to:
 │   Tools    │ │   Tools     │ │   Tools    │
 └────────────┘ └─────────────┘ └────────────┘
      ...           ...             ...
-```text
+```
 
 ## Use Cases
 

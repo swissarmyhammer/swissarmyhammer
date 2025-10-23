@@ -249,7 +249,7 @@ SAH_LOG_LEVEL=trace sah serve
 
 # Specific modules
 RUST_LOG="swissarmyhammer_tools=debug,swissarmyhammer_search=trace" sah serve
-```text
+```
 
 ### Check Server Status
 
@@ -259,7 +259,7 @@ curl http://localhost:3000/health
 
 # List tools
 curl http://localhost:3000/tools
-```text
+```
 
 ### Test Tools Individually
 
@@ -268,13 +268,13 @@ Create a test script:
 ```bash
 #!/bin/bash
 echo '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' | sah serve
-```text
+```
 
 ### Capture Full Logs
 
 ```bash
 SAH_LOG_LEVEL=debug sah serve 2>&1 | tee sah-server.log
-```text
+```
 
 ### Verify Configuration
 
@@ -285,7 +285,7 @@ cat ./.swissarmyhammer/sah.toml
 
 # Check environment
 env | grep SAH_
-```text
+```
 
 ## Error Messages
 
@@ -303,7 +303,7 @@ sah serve --http --port 8080
 
 # Or kill conflicting process
 kill <PID>
-```text
+```
 
 ### "Permission denied"
 
@@ -317,7 +317,7 @@ ls -la /path/to/file
 # Fix permissions
 chmod 644 /path/to/file  # For files
 chmod 755 /path/to/dir   # For directories
-```text
+```
 
 ### "Tool not found"
 
@@ -345,13 +345,13 @@ chmod 755 /path/to/dir   # For directories
 ```bash
 # Increase timeout
 SAH_TOOL_TIMEOUT=600 sah serve  # 10 minutes
-```text
+```
 
 Or in configuration:
 ```toml
 [performance]
 tool_timeout_seconds = 600
-```text
+```
 
 ## Getting Help
 
@@ -365,7 +365,7 @@ tool_timeout_seconds = 600
 
 ```bash
 SAH_LOG_LEVEL=debug sah serve 2>&1 | tee debug.log
-```text
+```
 
 ### 3. Collect Information
 
@@ -391,7 +391,7 @@ valgrind --tool=massif sah serve
 
 # macOS: Instruments
 instruments -t Allocations -D sah-memory.trace sah serve
-```text
+```
 
 ### Performance Profiling
 
@@ -402,7 +402,7 @@ perf report
 
 # macOS: sample
 sample sah 10 -file sah-profile.txt
-```text
+```
 
 ### Network Debugging
 
@@ -412,7 +412,7 @@ tcpdump -i lo -A port 3000
 
 # Stdio mode: log JSON-RPC
 sah serve 2>&1 | tee -a stdio.log
-```text
+```
 
 ## Next Steps
 
