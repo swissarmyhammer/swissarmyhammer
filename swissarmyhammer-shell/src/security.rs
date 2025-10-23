@@ -9,7 +9,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 use std::time::{SystemTime, UNIX_EPOCH};
-use swissarmyhammer_common::{Result, SwissArmyHammerError};
+use swissarmyhammer_common::{ErrorSeverity, Result, Severity, SwissArmyHammerError};
 use thiserror::Error;
 use tracing::{error, info, warn};
 
@@ -78,6 +78,23 @@ pub enum ShellSecurityError {
         /// Reason for the validation failure
         reason: String,
     },
+}
+
+impl Severity for ShellSecurityError {
+    fn severity(&self) -> ErrorSeverity {
+        match self {
+            // Critical: Security violations and unauthorized access attempts
+            ShellSecurityError::BlockedCommandPattern { .. } => ErrorSeverity::Critical,
+            ShellSecurityError::DirectoryAccessDenied { .. } => ErrorSeverity::Critical,
+
+            // Error: Validation failures that prevent operation but aren't security violations
+            ShellSecurityError::CommandTooLong { .. } => ErrorSeverity::Error,
+            ShellSecurityError::InvalidDirectory { .. } => ErrorSeverity::Error,
+            ShellSecurityError::InvalidEnvironmentVariable { .. } => ErrorSeverity::Error,
+            ShellSecurityError::InvalidEnvironmentVariableValue { .. } => ErrorSeverity::Error,
+            ShellSecurityError::ValidationFailed { .. } => ErrorSeverity::Error,
+        }
+    }
 }
 
 /// Shell security policy configuration
@@ -763,6 +780,110 @@ mod tests {
                 result2.is_err(),
                 "Direct validator call for '{}' should also be blocked",
                 path
+            );
+        }
+    }
+
+    #[test]
+    fn test_shell_security_error_severity_critical() {
+        use swissarmyhammer_common::Severity;
+
+        // Test security violations are Critical
+        let blocked_pattern = ShellSecurityError::BlockedCommandPattern {
+            pattern: "rm -rf /".to_string(),
+            command: "rm -rf /".to_string(),
+        };
+        assert_eq!(
+            blocked_pattern.severity(),
+            ErrorSeverity::Critical,
+            "Blocked command pattern should be Critical"
+        );
+
+        let directory_denied = ShellSecurityError::DirectoryAccessDenied {
+            directory: PathBuf::from("/etc"),
+        };
+        assert_eq!(
+            directory_denied.severity(),
+            ErrorSeverity::Critical,
+            "Directory access denied should be Critical"
+        );
+    }
+
+    #[test]
+    fn test_shell_security_error_severity_error() {
+        use swissarmyhammer_common::Severity;
+
+        // Test validation failures are Error level
+        let command_too_long = ShellSecurityError::CommandTooLong {
+            length: 5000,
+            limit: 4096,
+        };
+        assert_eq!(
+            command_too_long.severity(),
+            ErrorSeverity::Error,
+            "Command too long should be Error"
+        );
+
+        let invalid_dir = ShellSecurityError::InvalidDirectory {
+            directory: "/invalid".to_string(),
+            reason: "does not exist".to_string(),
+        };
+        assert_eq!(
+            invalid_dir.severity(),
+            ErrorSeverity::Error,
+            "Invalid directory should be Error"
+        );
+
+        let invalid_env = ShellSecurityError::InvalidEnvironmentVariable {
+            name: "123INVALID".to_string(),
+        };
+        assert_eq!(
+            invalid_env.severity(),
+            ErrorSeverity::Error,
+            "Invalid environment variable should be Error"
+        );
+
+        let invalid_env_value = ShellSecurityError::InvalidEnvironmentVariableValue {
+            name: "VAR".to_string(),
+            reason: "contains null bytes".to_string(),
+        };
+        assert_eq!(
+            invalid_env_value.severity(),
+            ErrorSeverity::Error,
+            "Invalid environment variable value should be Error"
+        );
+
+        let validation_failed = ShellSecurityError::ValidationFailed {
+            reason: "generic failure".to_string(),
+        };
+        assert_eq!(
+            validation_failed.severity(),
+            ErrorSeverity::Error,
+            "Validation failed should be Error"
+        );
+    }
+
+    #[test]
+    fn test_all_security_violations_are_critical() {
+        use swissarmyhammer_common::Severity;
+
+        // Ensure all actual security violations are Critical
+        let security_errors = vec![
+            ShellSecurityError::BlockedCommandPattern {
+                pattern: "sudo".to_string(),
+                command: "sudo rm".to_string(),
+            },
+            ShellSecurityError::DirectoryAccessDenied {
+                directory: PathBuf::from("../etc"),
+            },
+        ];
+
+        for error in security_errors {
+            assert_eq!(
+                error.severity(),
+                ErrorSeverity::Critical,
+                "Security violation should be Critical: {:?}",
+                error
             );
         }
     }

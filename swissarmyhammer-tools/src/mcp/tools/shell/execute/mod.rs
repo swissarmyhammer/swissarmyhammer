@@ -13,6 +13,7 @@ use serde_json::json;
 use std::fmt;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
+use swissarmyhammer_common::{ErrorSeverity, Severity};
 // Replaced sah_config with local defaults for shell configuration
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::{Child, Command};
@@ -638,6 +639,21 @@ impl std::error::Error for ShellError {
         match self {
             ShellError::CommandSpawnError { source, .. } => Some(source),
             _ => None,
+        }
+    }
+}
+
+impl Severity for ShellError {
+    fn severity(&self) -> ErrorSeverity {
+        match self {
+            // Critical: System-level failures that prevent shell from functioning
+            ShellError::CommandSpawnError { .. } => ErrorSeverity::Critical,
+            ShellError::SystemError { .. } => ErrorSeverity::Critical,
+
+            // Error: Command execution failures but system remains functional
+            ShellError::ExecutionError { .. } => ErrorSeverity::Error,
+            ShellError::InvalidCommand { .. } => ErrorSeverity::Error,
+            ShellError::WorkingDirectoryError { .. } => ErrorSeverity::Error,
         }
     }
 }
@@ -3637,6 +3653,90 @@ mod tests {
             );
         } else {
             panic!("Completion notification should have metadata");
+        }
+    }
+
+    #[test]
+    fn test_shell_error_severity_critical() {
+        // Test system-level failures are Critical
+        let spawn_error = ShellError::CommandSpawnError {
+            command: "test".to_string(),
+            source: std::io::Error::new(std::io::ErrorKind::NotFound, "command not found"),
+        };
+        assert_eq!(
+            spawn_error.severity(),
+            ErrorSeverity::Critical,
+            "CommandSpawnError should be Critical"
+        );
+
+        let system_error = ShellError::SystemError {
+            message: "system failure".to_string(),
+        };
+        assert_eq!(
+            system_error.severity(),
+            ErrorSeverity::Critical,
+            "SystemError should be Critical"
+        );
+    }
+
+    #[test]
+    fn test_shell_error_severity_error() {
+        // Test execution/validation failures are Error level
+        let execution_error = ShellError::ExecutionError {
+            command: "test".to_string(),
+            message: "execution failed".to_string(),
+        };
+        assert_eq!(
+            execution_error.severity(),
+            ErrorSeverity::Error,
+            "ExecutionError should be Error"
+        );
+
+        let invalid_command = ShellError::InvalidCommand {
+            message: "invalid syntax".to_string(),
+        };
+        assert_eq!(
+            invalid_command.severity(),
+            ErrorSeverity::Error,
+            "InvalidCommand should be Error"
+        );
+
+        let working_dir_error = ShellError::WorkingDirectoryError {
+            message: "directory not found".to_string(),
+        };
+        assert_eq!(
+            working_dir_error.severity(),
+            ErrorSeverity::Error,
+            "WorkingDirectoryError should be Error"
+        );
+    }
+
+    #[test]
+    fn test_all_shell_errors_have_severity() {
+        // Ensure all ShellError variants have severity assigned
+        let errors = vec![
+            ShellError::CommandSpawnError {
+                command: "test".to_string(),
+                source: std::io::Error::new(std::io::ErrorKind::Other, "test"),
+            },
+            ShellError::ExecutionError {
+                command: "test".to_string(),
+                message: "test".to_string(),
+            },
+            ShellError::InvalidCommand {
+                message: "test".to_string(),
+            },
+            ShellError::SystemError {
+                message: "test".to_string(),
+            },
+            ShellError::WorkingDirectoryError {
+                message: "test".to_string(),
+            },
+        ];
+
+        for error in errors {
+            // This will fail to compile if Severity is not implemented
+            let _severity = error.severity();
         }
     }
 }
