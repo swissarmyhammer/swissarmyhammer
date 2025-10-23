@@ -1,8 +1,12 @@
 # Quick Start
 
-Get up and running with SwissArmyHammer in 5 minutes. This guide will walk you through creating your first prompt and using it with Claude Code.
+Get up and running with SwissArmyHammer in 5 minutes. This guide will show you how to use full auto coding to turn specifications into working code.
 
-## Step 1: Verify Installation
+## Full Auto Coding
+
+SwissArmyHammer's most powerful feature is its ability to transform natural language specifications into complete, tested applications. Here's how:
+
+### Step 1: Verify Installation
 
 First, make sure SwissArmyHammer is properly installed:
 
@@ -13,7 +17,92 @@ sah doctor
 
 The `doctor` command will check your installation and suggest any needed fixes.
 
-## Step 2: Create Your First Prompt
+### Step 2: Create a Specification
+
+Create a markdown file describing what you want to build. You can use plain language, use cases, or code snippets:
+
+```bash
+mkdir -p specification
+cat > specification/index.md << 'EOF'
+# Calculator Application
+
+Build a command-line calculator that:
+- Supports basic operations: add, subtract, multiply, divide
+- Has a REPL interface for interactive use
+- Handles errors gracefully
+- Includes comprehensive tests
+- Has proper documentation
+EOF
+```
+
+### Step 3: Generate the Plan
+
+Run the planning workflow to analyze your specification and create implementation issues:
+
+```bash
+sah plan specification/index.md
+```
+
+This generates a set of issues in the `./issues` directory. Each issue represents a specific task.
+
+### Step 4: Commit the Plan
+
+```bash
+git add issues
+git commit -m "plan: add calculator implementation issues"
+```
+
+### Step 5: Execute the Implementation
+
+Now let SwissArmyHammer implement your specification:
+
+```bash
+sah flow run implement
+```
+
+This will:
+- Work through each issue automatically
+- Write the code
+- Run tests and fix any failures
+- Commit changes as it progresses
+- Continue until all issues are complete
+
+The implementation typically takes a few hours, but it's faster than manual coding and produces high-quality, tested code.
+
+### Step 6: Review the Results
+
+Once complete, you'll have a fully working application with:
+- Complete source code
+- Passing tests
+- Documentation
+- Git history showing the implementation process
+
+## Example: Calcutron
+
+For a complete example, check out [Calcutron](https://github.com/swissarmyhammer/calcutron), a sample calculator built entirely with SwissArmyHammer:
+
+```bash
+# Clone the example
+git clone git@github.com:swissarmyhammer/calcutron.git
+cd calcutron
+
+# Run the preflight check
+sah doctor
+
+# Generate the plan
+sah plan specification/index.md
+git add issues
+git commit -am 'plan'
+
+# Let it build
+sah flow run implement
+```
+
+## Manual Workflow Examples
+
+For more targeted tasks, you can use SwissArmyHammer's manual workflows and prompts.
+
+### Create Your First Prompt
 
 Create a personal prompts directory and your first prompt:
 
@@ -289,15 +378,13 @@ Environment: {{NODE_ENV | default: "development"}}
 
 Now that you have SwissArmyHammer working:
 
-1. **Explore Features**: Read about [Prompts](prompts.md), [Workflows](workflows.md), and [Templates](templates.md)
-2. **Advanced Usage**: Check out the [CLI Reference](cli-reference.md) for all commands
-3. **Integration**: Learn about [MCP Integration](mcp.md) for deeper Claude Code integration
-4. **Examples**: Browse [Examples](examples/basic.md) for inspiration
-5. **Customize**: Set up [Configuration](configuration.md) to match your workflow
+1. **Try Full Auto Coding**: Create your own specification and let SwissArmyHammer build it
+2. **Explore Built-in Workflows**: Run `sah flow list` to see available workflows
+3. **Create Custom Prompts**: Build prompts tailored to your specific needs
+4. **Integrate with Claude Code**: Use SwissArmyHammer as an MCP server for enhanced AI assistance
 
 ## Getting Help
 
 - Run `sah --help` for command help
 - Use `sah doctor` to diagnose issues
-- Check [Troubleshooting](troubleshooting.md) for common problems
 - Visit the [GitHub repository](https://github.com/swissarmyhammer/swissarmyhammer) for issues and discussions

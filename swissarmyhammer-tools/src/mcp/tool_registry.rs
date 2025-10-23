@@ -226,6 +226,7 @@ use rmcp::ErrorData as McpError;
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use swissarmyhammer_common::{ErrorSeverity, Severity};
 use swissarmyhammer_config::agent::AgentConfig;
 use swissarmyhammer_git::GitOperations;
 use swissarmyhammer_issues::IssueStorage;
@@ -1161,6 +1162,21 @@ impl std::fmt::Display for ToolValidationError {
 
 impl std::error::Error for ToolValidationError {}
 
+impl Severity for ToolValidationError {
+    fn severity(&self) -> ErrorSeverity {
+        match self {
+            // Critical: Schema validation failures prevent tool from functioning
+            ToolValidationError::SchemaValidation { .. } => ErrorSeverity::Critical,
+
+            // Error: Configuration issues that prevent proper tool operation
+            ToolValidationError::MissingCliCategory { .. } => ErrorSeverity::Error,
+            ToolValidationError::InvalidCliName { .. } => ErrorSeverity::Error,
+            ToolValidationError::InvalidDescription { .. } => ErrorSeverity::Error,
+            ToolValidationError::NameConflict { .. } => ErrorSeverity::Error,
+        }
+    }
+}
+
 /// Validation warning for tools
 #[derive(Debug, Clone)]
 pub struct ToolValidationWarning {
@@ -1272,6 +1288,19 @@ impl std::fmt::Display for ValidationError {
 }
 
 impl std::error::Error for ValidationError {}
+
+impl Severity for ValidationError {
+    fn severity(&self) -> ErrorSeverity {
+        match self {
+            // Critical: Invalid schema structure prevents tool operation
+            ValidationError::InvalidSchema { .. } => ErrorSeverity::Critical,
+
+            // Error: Schema validation issues that need fixing
+            ValidationError::UnsupportedSchemaType { .. } => ErrorSeverity::Error,
+            ValidationError::MissingSchemaField { .. } => ErrorSeverity::Error,
+        }
+    }
+}
 
 // Simple schema validator for the tool registry
 // This is a simplified version - in practice, we'd import the full validator
@@ -2203,5 +2232,99 @@ mod tests {
         let missing_cat_tool = MissingCategoryTool;
         let result = registry.validate_tool(&missing_cat_tool);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_tool_validation_error_severity() {
+        use swissarmyhammer_common::Severity;
+
+        // Test Critical severity for schema validation
+        let schema_error = ToolValidationError::SchemaValidation {
+            tool_name: "test".to_string(),
+            error: ValidationError::InvalidSchema {
+                message: "test".to_string(),
+            },
+        };
+        assert_eq!(
+            schema_error.severity(),
+            ErrorSeverity::Critical,
+            "Schema validation should be Critical"
+        );
+
+        // Test Error severity for configuration issues
+        let missing_category = ToolValidationError::MissingCliCategory {
+            tool_name: "test".to_string(),
+        };
+        assert_eq!(
+            missing_category.severity(),
+            ErrorSeverity::Error,
+            "Missing CLI category should be Error"
+        );
+
+        let invalid_cli_name = ToolValidationError::InvalidCliName {
+            tool_name: "test".to_string(),
+            cli_name: "123invalid".to_string(),
+            reason: "starts with number".to_string(),
+        };
+        assert_eq!(
+            invalid_cli_name.severity(),
+            ErrorSeverity::Error,
+            "Invalid CLI name should be Error"
+        );
+
+        let invalid_description = ToolValidationError::InvalidDescription {
+            tool_name: "test".to_string(),
+            reason: "too short".to_string(),
+        };
+        assert_eq!(
+            invalid_description.severity(),
+            ErrorSeverity::Error,
+            "Invalid description should be Error"
+        );
+
+        let name_conflict = ToolValidationError::NameConflict {
+            tool_name: "test".to_string(),
+            conflicting_tool: "other".to_string(),
+        };
+        assert_eq!(
+            name_conflict.severity(),
+            ErrorSeverity::Error,
+            "Name conflict should be Error"
+        );
+    }
+
+    #[test]
+    fn test_validation_error_severity() {
+        use swissarmyhammer_common::Severity;
+
+        // Test Critical severity for invalid schema
+        let invalid_schema = ValidationError::InvalidSchema {
+            message: "schema is malformed".to_string(),
+        };
+        assert_eq!(
+            invalid_schema.severity(),
+            ErrorSeverity::Critical,
+            "Invalid schema should be Critical"
+        );
+
+        // Test Error severity for schema issues
+        let unsupported_type = ValidationError::UnsupportedSchemaType {
+            schema_type: "object".to_string(),
+            parameter: "param".to_string(),
+        };
+        assert_eq!(
+            unsupported_type.severity(),
+            ErrorSeverity::Error,
+            "Unsupported schema type should be Error"
+        );
+
+        let missing_field = ValidationError::MissingSchemaField {
+            field: "type".to_string(),
+        };
+        assert_eq!(
+            missing_field.severity(),
+            ErrorSeverity::Error,
+            "Missing schema field should be Error"
+        );
     }
 }

@@ -11,7 +11,7 @@
 use crate::schema_validation::{SchemaValidator, ValidationError};
 use clap::ArgMatches;
 use serde_json::{Map, Value};
-
+use swissarmyhammer_common::{ErrorSeverity, Severity};
 use thiserror::Error;
 
 /// Errors that can occur during schema conversion
@@ -46,6 +46,19 @@ pub enum ConversionError {
 
     #[error("Schema validation error: {0}")]
     ValidationError(#[from] ValidationError),
+}
+
+impl Severity for ConversionError {
+    fn severity(&self) -> ErrorSeverity {
+        match self {
+            ConversionError::MissingRequired { .. } => ErrorSeverity::Error,
+            ConversionError::InvalidType { .. } => ErrorSeverity::Error,
+            ConversionError::SchemaValidation { .. } => ErrorSeverity::Critical,
+            ConversionError::ParseError { .. } => ErrorSeverity::Error,
+            ConversionError::UnsupportedSchemaType { .. } => ErrorSeverity::Error,
+            ConversionError::ValidationError(validation_err) => validation_err.severity(),
+        }
+    }
 }
 
 /// Schema converter for bidirectional JSON Schema ↔ Clap conversion
@@ -576,5 +589,59 @@ mod tests {
             result.unwrap_err(),
             ConversionError::ValidationError(_)
         ));
+    }
+
+    #[test]
+    fn test_conversion_error_severity_levels() {
+        use crate::schema_validation::ValidationError;
+
+        // Test Error severity for MissingRequired
+        let missing_required = ConversionError::MissingRequired {
+            field: "test_field".to_string(),
+        };
+        assert_eq!(missing_required.severity(), ErrorSeverity::Error);
+
+        // Test Error severity for InvalidType
+        let invalid_type = ConversionError::InvalidType {
+            name: "test".to_string(),
+            expected: "string".to_string(),
+            actual: "number".to_string(),
+        };
+        assert_eq!(invalid_type.severity(), ErrorSeverity::Error);
+
+        // Test Critical severity for SchemaValidation
+        let schema_validation = ConversionError::SchemaValidation {
+            message: "Invalid schema".to_string(),
+        };
+        assert_eq!(schema_validation.severity(), ErrorSeverity::Critical);
+
+        // Test Error severity for ParseError
+        let parse_error = ConversionError::ParseError {
+            field: "count".to_string(),
+            data_type: "integer".to_string(),
+            message: "invalid digit".to_string(),
+        };
+        assert_eq!(parse_error.severity(), ErrorSeverity::Error);
+
+        // Test Error severity for UnsupportedSchemaType
+        let unsupported_type = ConversionError::UnsupportedSchemaType {
+            schema_type: "object".to_string(),
+            parameter: "param".to_string(),
+        };
+        assert_eq!(unsupported_type.severity(), ErrorSeverity::Error);
+
+        // Test delegation to ValidationError severity
+        let validation_error = ConversionError::ValidationError(ValidationError::InvalidSchema {
+            message: "Bad schema".to_string(),
+        });
+        assert_eq!(validation_error.severity(), ErrorSeverity::Critical);
+
+        // Test delegation for Warning level ValidationError
+        let validation_warning =
+            ConversionError::ValidationError(ValidationError::InvalidParameterName {
+                parameter: "bad@name".to_string(),
+                reason: "Invalid chars".to_string(),
+            });
+        assert_eq!(validation_warning.severity(), ErrorSeverity::Warning);
     }
 }

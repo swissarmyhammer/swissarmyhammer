@@ -651,8 +651,22 @@ impl ServerHandler for McpServer {
                     .iter()
                     .filter(|p| !p.is_partial_template()) // Filter out partial templates
                     .map(|p| {
-                        // Domain prompts don't have parameters yet - using empty list for now
-                        let arguments = None;
+                        // Convert SwissArmyHammer prompt parameters to MCP PromptArguments
+                        let arguments = if p.parameters.is_empty() {
+                            None
+                        } else {
+                            Some(
+                                p.parameters
+                                    .iter()
+                                    .map(|param| PromptArgument {
+                                        name: param.name.clone(),
+                                        title: None, // Could use param.name here if we want to display it
+                                        description: Some(param.description.clone()),
+                                        required: Some(param.required),
+                                    })
+                                    .collect(),
+                            )
+                        };
 
                         Prompt {
                             name: p.name.clone(),

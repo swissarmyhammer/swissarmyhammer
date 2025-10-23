@@ -1,4 +1,5 @@
 use std::path::PathBuf;
+use swissarmyhammer_common::{ErrorSeverity, Severity};
 use thiserror::Error;
 
 /// Result type for configuration operations
@@ -85,5 +86,77 @@ impl From<figment::Error> for ConfigurationError {
         Self::FigmentError {
             source: Box::new(error),
         }
+    }
+}
+
+impl Severity for ConfigurationError {
+    fn severity(&self) -> ErrorSeverity {
+        match self {
+            // Critical: Core configuration system failures
+            Self::LoadError { .. } => ErrorSeverity::Critical,
+            Self::FigmentError { .. } => ErrorSeverity::Critical,
+
+            // Error: Configuration issues that affect functionality but allow fallback
+            Self::DiscoveryError { .. } => ErrorSeverity::Error,
+            Self::EnvVarError { .. } => ErrorSeverity::Error,
+            Self::TemplateContextError { .. } => ErrorSeverity::Error,
+            Self::IoError { .. } => ErrorSeverity::Error,
+            Self::JsonError { .. } => ErrorSeverity::Error,
+        }
+    }
+}
+
+#[cfg(test)]
+mod severity_tests {
+    use super::*;
+    use std::io;
+
+    #[test]
+    fn test_load_error_is_critical() {
+        let error = ConfigurationError::load(
+            PathBuf::from("/test/config.yaml"),
+            figment::error::Kind::MissingField("test".into()).into(),
+        );
+        assert_eq!(error.severity(), ErrorSeverity::Critical);
+    }
+
+    #[test]
+    fn test_figment_error_is_critical() {
+        let figment_error: figment::Error =
+            figment::error::Kind::MissingField("test".into()).into();
+        let error = ConfigurationError::from(figment_error);
+        assert_eq!(error.severity(), ErrorSeverity::Critical);
+    }
+
+    #[test]
+    fn test_discovery_error_is_error() {
+        let error = ConfigurationError::discovery("Failed to discover config");
+        assert_eq!(error.severity(), ErrorSeverity::Error);
+    }
+
+    #[test]
+    fn test_env_var_error_is_error() {
+        let error = ConfigurationError::env_var("Missing env var");
+        assert_eq!(error.severity(), ErrorSeverity::Error);
+    }
+
+    #[test]
+    fn test_template_context_error_is_error() {
+        let error = ConfigurationError::template_context("Template error");
+        assert_eq!(error.severity(), ErrorSeverity::Error);
+    }
+
+    #[test]
+    fn test_io_error_is_error() {
+        let error =
+            ConfigurationError::from(io::Error::new(io::ErrorKind::NotFound, "file not found"));
+        assert_eq!(error.severity(), ErrorSeverity::Error);
+    }
+
+    #[test]
+    fn test_json_error_is_error() {
+        let json_err = serde_json::from_str::<serde_json::Value>("invalid json").unwrap_err();
+        let error = ConfigurationError::from(json_err);
+        assert_eq!(error.severity(), ErrorSeverity::Error);
     }
 }

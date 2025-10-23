@@ -118,6 +118,4 @@ claude mcp add --scope user sah sah serve
 ## Next Steps
 
 - [Installation](installation.md) - Get SwissArmyHammer installed
-- [Quick Start](quick-start.md) - Your first prompt in 5 minutes
-- [Configuration](configuration.md) - Customize your setup
-- [Architecture Overview](architecture.md) - Understand the system design
+- [Quick Start](quick-start.md) - Start with full auto coding in 5 minutes

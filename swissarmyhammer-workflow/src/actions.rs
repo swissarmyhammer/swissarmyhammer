@@ -53,6 +53,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
+use swissarmyhammer_common::{ErrorSeverity, Severity};
 use syntect::easy::HighlightLines;
 use syntect::highlighting::ThemeSet;
 use syntect::parsing::SyntaxSet;
@@ -141,6 +142,23 @@ pub enum ActionError {
 
 /// Result type for action operations
 pub type ActionResult<T> = std::result::Result<T, ActionError>;
+
+/// Implementation of Severity trait for ActionError
+impl Severity for ActionError {
+    fn severity(&self) -> ErrorSeverity {
+        match self {
+            // Error: All action errors are recoverable operation failures
+            ActionError::ClaudeError(_) => ErrorSeverity::Error,
+            ActionError::VariableError(_) => ErrorSeverity::Error,
+            ActionError::ParseError(_) => ErrorSeverity::Error,
+            ActionError::ExecutionError(_) => ErrorSeverity::Error,
+            ActionError::IoError(_) => ErrorSeverity::Error,
+            ActionError::JsonError(_) => ErrorSeverity::Error,
+            ActionError::RateLimit { .. } => ErrorSeverity::Error,
+            ActionError::ShellSecurityError(_) => ErrorSeverity::Error,
+        }
+    }
+}
 
 /// Agent execution context for prompt execution
 #[derive(Debug)]
@@ -3329,5 +3347,37 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn test_action_error_severity() {
+        let claude_err = ActionError::ClaudeError("execution failed".to_string());
+        assert_eq!(claude_err.severity(), ErrorSeverity::Error);
+
+        let var_err = ActionError::VariableError("variable not found".to_string());
+        assert_eq!(var_err.severity(), ErrorSeverity::Error);
+
+        let parse_err = ActionError::ParseError("invalid syntax".to_string());
+        assert_eq!(parse_err.severity(), ErrorSeverity::Error);
+
+        let exec_err = ActionError::ExecutionError("command failed".to_string());
+        assert_eq!(exec_err.severity(), ErrorSeverity::Error);
+
+        let io_err = ActionError::IoError(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "file not found",
+        ));
+        assert_eq!(io_err.severity(), ErrorSeverity::Error);
+
+        let json_err = ActionError::JsonError(
+            serde_json::from_str::<serde_json::Value>("invalid").unwrap_err(),
+        );
+        assert_eq!(json_err.severity(), ErrorSeverity::Error);
+
+        let rate_limit_err = ActionError::RateLimit {
+            message: "too many requests".to_string(),
+            wait_time: Duration::from_secs(60),
+        };
+        assert_eq!(rate_limit_err.severity(), ErrorSeverity::Error);
     }
 }

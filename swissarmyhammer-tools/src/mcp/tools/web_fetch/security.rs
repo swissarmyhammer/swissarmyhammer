@@ -4,6 +4,7 @@
 //! access policies for web content fetching.
 
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+use swissarmyhammer_common::{ErrorSeverity, Severity};
 use tracing::{info, warn};
 use url::Url;
 
@@ -22,6 +23,19 @@ pub enum SecurityError {
     /// URL scheme is not supported (only HTTP/HTTPS allowed)
     #[error("Unsupported scheme: {0}")]
     UnsupportedScheme(String),
+}
+
+impl Severity for SecurityError {
+    fn severity(&self) -> ErrorSeverity {
+        match self {
+            // All security errors are Critical - they represent security policy violations
+            // that prevent safe operation and could indicate attack attempts
+            SecurityError::InvalidUrl(_) => ErrorSeverity::Critical,
+            SecurityError::BlockedDomain(_) => ErrorSeverity::Critical,
+            SecurityError::SsrfAttempt(_) => ErrorSeverity::Critical,
+            SecurityError::UnsupportedScheme(_) => ErrorSeverity::Critical,
+        }
+    }
 }
 
 /// Security policy for web fetch operations
@@ -562,6 +576,28 @@ mod tests {
                 validator.is_private_ipv4(&ip),
                 should_be_private,
                 "IP {ip_str} private detection failed"
+            );
+        }
+    }
+
+    #[test]
+    fn test_security_error_severity() {
+        use swissarmyhammer_common::Severity;
+
+        // All security errors should be Critical
+        let errors = vec![
+            SecurityError::InvalidUrl("test".to_string()),
+            SecurityError::BlockedDomain("evil.com".to_string()),
+            SecurityError::SsrfAttempt("127.0.0.1".to_string()),
+            SecurityError::UnsupportedScheme("ftp".to_string()),
+        ];
+
+        for error in errors {
+            assert_eq!(
+                error.severity(),
+                swissarmyhammer_common::ErrorSeverity::Critical,
+                "Expected Critical severity for security error: {}",
+                error
             );
         }
     }

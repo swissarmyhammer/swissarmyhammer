@@ -28,6 +28,7 @@
 //! # }
 //! ```
 
+use swissarmyhammer_common::{ErrorSeverity, Severity};
 use thiserror::Error;
 
 pub mod extractors;
@@ -75,6 +76,21 @@ pub enum OutlineError {
 /// Result type for outline operations
 pub type Result<T> = std::result::Result<T, OutlineError>;
 
+impl Severity for OutlineError {
+    fn severity(&self) -> ErrorSeverity {
+        match self {
+            // All outline errors are operation-level failures
+            // No critical errors as outline generation failures don't prevent system operation
+            OutlineError::FileSystem(_) => ErrorSeverity::Error,
+            OutlineError::InvalidGlobPattern { .. } => ErrorSeverity::Error,
+            OutlineError::FileDiscovery(_) => ErrorSeverity::Error,
+            OutlineError::LanguageDetection(_) => ErrorSeverity::Error,
+            OutlineError::TreeSitter(_) => ErrorSeverity::Error,
+            OutlineError::Generation(_) => ErrorSeverity::Error,
+        }
+    }
+}
+
 // Re-export main types and functionality
 pub use extractors::*;
 pub use file_discovery::*;
@@ -87,3 +103,35 @@ pub use utils::*;
 
 // Re-export error for convenience
 pub use OutlineError as Error;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_outline_error_error_severity() {
+        let error = OutlineError::FileSystem(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "file not found",
+        ));
+        assert_eq!(error.severity(), ErrorSeverity::Error);
+
+        let error = OutlineError::InvalidGlobPattern {
+            pattern: "**[".to_string(),
+            message: "invalid pattern".to_string(),
+        };
+        assert_eq!(error.severity(), ErrorSeverity::Error);
+
+        let error = OutlineError::FileDiscovery("discovery failed".to_string());
+        assert_eq!(error.severity(), ErrorSeverity::Error);
+
+        let error = OutlineError::LanguageDetection("unknown language".to_string());
+        assert_eq!(error.severity(), ErrorSeverity::Error);
+
+        let error = OutlineError::TreeSitter("parse failed".to_string());
+        assert_eq!(error.severity(), ErrorSeverity::Error);
+
+        let error = OutlineError::Generation("generation failed".to_string());
+        assert_eq!(error.severity(), ErrorSeverity::Error);
+    }
+}

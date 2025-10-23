@@ -126,6 +126,48 @@ impl fmt::Display for RuleError {
 
 impl std::error::Error for RuleError {}
 
+/// Implementation of Severity trait for RuleError
+///
+/// This implementation categorizes all RuleError variants by their severity level
+/// to enable appropriate error handling, logging, and user notification.
+///
+/// # Severity Assignment Guidelines
+///
+/// - **Critical**: System-level failures that prevent the rule system from functioning
+///   - LoadError: Cannot load rule definitions
+///   - ValidationError: Invalid rule configuration
+///   - GlobExpansionError: Cannot find files to check
+///
+/// - **Error**: Operation-specific failures during rule checking
+///   - CheckError: Error occurred during rule checking
+///   - AgentError: LLM agent execution failed
+///   - LanguageDetectionError: Cannot detect file language
+///   - CacheError: Cache operation failed
+///
+/// - **Warning**: Non-critical issues that don't prevent system operation
+///   - Violation: Rule violation found (informational, should not block)
+impl swissarmyhammer_common::Severity for RuleError {
+    fn severity(&self) -> swissarmyhammer_common::ErrorSeverity {
+        use swissarmyhammer_common::ErrorSeverity;
+
+        match self {
+            // Critical: Rule system cannot function
+            RuleError::LoadError(_) => ErrorSeverity::Critical,
+            RuleError::ValidationError(_) => ErrorSeverity::Critical,
+            RuleError::GlobExpansionError(_) => ErrorSeverity::Critical,
+
+            // Error: Operation failures during checking
+            RuleError::CheckError(_) => ErrorSeverity::Error,
+            RuleError::AgentError(_) => ErrorSeverity::Error,
+            RuleError::LanguageDetectionError(_) => ErrorSeverity::Error,
+            RuleError::CacheError(_) => ErrorSeverity::Error,
+
+            // Warning: Non-critical issues
+            RuleError::Violation(_) => ErrorSeverity::Warning,
+        }
+    }
+}
+
 /// Conversion from RuleError to SwissArmyHammerError
 impl From<RuleError> for SwissArmyHammerError {
     fn from(error: RuleError) -> Self {
@@ -449,5 +491,64 @@ mod tests {
             }
             _ => panic!("Expected RuleViolation variant"),
         }
+    }
+}
+
+#[cfg(test)]
+mod severity_tests {
+    use super::*;
+    use swissarmyhammer_common::{ErrorSeverity, Severity as SeverityTrait};
+
+    #[test]
+    fn test_critical_rule_errors() {
+        let errors = vec![
+            RuleError::LoadError("File not found".to_string()),
+            RuleError::ValidationError("Invalid rule".to_string()),
+            RuleError::GlobExpansionError("Invalid pattern".to_string()),
+        ];
+
+        for error in errors {
+            assert_eq!(
+                error.severity(),
+                ErrorSeverity::Critical,
+                "Expected Critical severity for: {}",
+                error
+            );
+        }
+    }
+
+    #[test]
+    fn test_error_level_rule_errors() {
+        let errors = vec![
+            RuleError::CheckError("Failed to read file".to_string()),
+            RuleError::AgentError("API timeout".to_string()),
+            RuleError::LanguageDetectionError("Unknown extension".to_string()),
+            RuleError::CacheError("Cache write failed".to_string()),
+        ];
+
+        for error in errors {
+            assert_eq!(
+                error.severity(),
+                ErrorSeverity::Error,
+                "Expected Error severity for: {}",
+                error
+            );
+        }
+    }
+
+    #[test]
+    fn test_warning_rule_errors() {
+        let violation = RuleViolation::new(
+            "test-rule".to_string(),
+            PathBuf::from("test.rs"),
+            Severity::Error,
+            "Test violation".to_string(),
+        );
+        let error = RuleError::Violation(violation);
+        assert_eq!(
+            error.severity(),
+            ErrorSeverity::Warning,
+            "Expected Warning severity for rule violations"
+        );
     }
 }

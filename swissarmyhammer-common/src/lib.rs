@@ -59,7 +59,7 @@ pub use utils::{
 };
 
 // Re-export error types for convenience
-pub use error::{Result, SwissArmyHammerError};
+pub use error::{ErrorSeverity, Result, Severity, SwissArmyHammerError};
 
 // Re-export env_loader for convenience
 pub use env_loader::EnvLoader;

@@ -5,6 +5,7 @@
 
 use super::{StateId, Workflow};
 use std::collections::{HashMap, HashSet, VecDeque};
+use swissarmyhammer_common::{ErrorSeverity, Severity};
 
 /// Result of graph analysis operations
 pub type GraphResult<T> = Result<T, GraphError>;
@@ -19,6 +20,18 @@ pub enum GraphError {
     /// The specified state was not found in the workflow
     #[error("State not found in workflow: {0}")]
     StateNotFound(StateId),
+}
+
+/// Implementation of Severity trait for GraphError
+impl Severity for GraphError {
+    fn severity(&self) -> ErrorSeverity {
+        match self {
+            // Critical: Cycle in workflow graph prevents proper execution
+            GraphError::CycleDetected(_) => ErrorSeverity::Critical,
+            // Error: State not found but system can continue
+            GraphError::StateNotFound(_) => ErrorSeverity::Error,
+        }
+    }
 }
 
 /// Analyzes workflow graph structure
@@ -381,5 +394,14 @@ mod tests {
         let cycle = analyzer.detect_cycle_from(&StateId::new("start"));
 
         assert!(cycle.is_some());
+    }
+
+    #[test]
+    fn test_graph_error_severity() {
+        let cycle_error = GraphError::CycleDetected(StateId::new("test_state"));
+        assert_eq!(cycle_error.severity(), ErrorSeverity::Critical);
+
+        let not_found_error = GraphError::StateNotFound(StateId::new("missing_state"));
+        assert_eq!(not_found_error.severity(), ErrorSeverity::Error);
     }
 }

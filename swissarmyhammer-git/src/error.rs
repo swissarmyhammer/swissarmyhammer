@@ -4,6 +4,7 @@
 //! with detailed context and recovery suggestions.
 
 use std::path::PathBuf;
+use swissarmyhammer_common::{ErrorSeverity, Severity};
 use thiserror::Error;
 
 /// Result type for Git operations
@@ -164,4 +165,108 @@ pub fn convert_git2_error(operation: &str, error: git2::Error) -> GitError {
 /// Convert std::io::Error to GitError with operation context
 pub fn convert_io_error(operation: &str, error: std::io::Error) -> GitError {
     GitError::from_io(operation.to_string(), error)
+}
+
+impl Severity for GitError {
+    fn severity(&self) -> ErrorSeverity {
+        match self {
+            // Critical: Filesystem failures that prevent git operations
+            GitError::IoError { .. } => ErrorSeverity::Critical,
+
+            // Critical: Merge conflicts require immediate resolution
+            GitError::MergeOperationFailed { .. } => ErrorSeverity::Critical,
+
+            // Error: Operations that fail but don't corrupt state
+            GitError::RepositoryNotFound { .. } => ErrorSeverity::Error,
+            GitError::RepositoryOperationFailed { .. } => ErrorSeverity::Error,
+            GitError::BranchOperationFailed { .. } => ErrorSeverity::Error,
+            GitError::BranchNotFound { .. } => ErrorSeverity::Error,
+            GitError::CommitOperationFailed { .. } => ErrorSeverity::Error,
+            GitError::InvalidBranchName { .. } => ErrorSeverity::Error,
+            GitError::Git2Error { .. } => ErrorSeverity::Error,
+            GitError::Generic { .. } => ErrorSeverity::Error,
+
+            // Warning: Informational state that doesn't prevent operations
+            GitError::BranchAlreadyExists { .. } => ErrorSeverity::Warning,
+            GitError::WorkingDirectoryDirty { .. } => ErrorSeverity::Warning,
+        }
+    }
+}
+
+#[cfg(test)]
+mod severity_tests {
+    use super::*;
+
+    #[test]
+    fn test_git_error_critical_severity() {
+        // IO errors are critical
+        let io_error = GitError::from_io(
+            "test operation".to_string(),
+            std::io::Error::new(std::io::ErrorKind::NotFound, "file not found"),
+        );
+        assert_eq!(io_error.severity(), ErrorSeverity::Critical);
+
+        // Merge operation failures are critical
+        let merge_error = GitError::merge_operation_failed("conflict detected".to_string());
+        assert_eq!(merge_error.severity(), ErrorSeverity::Critical);
+    }
+
+    #[test]
+    fn test_git_error_error_severity() {
+        // Repository not found
+        let repo_error =
+            GitError::repository_not_found("/path/to/repo", "not a git repository".to_string());
+        assert_eq!(repo_error.severity(), ErrorSeverity::Error);
+
+        // Repository operation failed
+        let repo_op_error = GitError::repository_operation_failed(
+            "clone".to_string(),
+            "failed to clone".to_string(),
+        );
+        assert_eq!(repo_op_error.severity(), ErrorSeverity::Error);
+
+        // Branch operation failed
+        let branch_op_error = GitError::branch_operation_failed(
+            "checkout".to_string(),
+            "main".to_string(),
+            "branch not found".to_string(),
+        );
+        assert_eq!(branch_op_error.severity(), ErrorSeverity::Error);
+
+        // Branch not found
+        let branch_error = GitError::branch_not_found("feature".to_string());
+        assert_eq!(branch_error.severity(), ErrorSeverity::Error);
+
+        // Commit operation failed
+        let commit_error = GitError::commit_operation_failed(
+            "commit".to_string(),
+            "nothing to commit".to_string(),
+        );
+        assert_eq!(commit_error.severity(), ErrorSeverity::Error);
+
+        // Invalid branch name
+        let invalid_branch = GitError::invalid_branch_name(
+            "bad/branch".to_string(),
+            "contains invalid characters".to_string(),
+        );
+        assert_eq!(invalid_branch.severity(), ErrorSeverity::Error);
+
+        // Generic error
+        let generic_error = GitError::generic("something went wrong");
+        assert_eq!(generic_error.severity(), ErrorSeverity::Error);
+    }
+
+    #[test]
+    fn test_git_error_warning_severity() {
+        // Branch already exists
+        let branch_exists = GitError::branch_already_exists("feature".to_string());
+        assert_eq!(branch_exists.severity(), ErrorSeverity::Warning);
+
+        // Working directory dirty
+        let dirty_wd = GitError::working_directory_dirty(vec![
+            "file1.txt".to_string(),
+            "file2.txt".to_string(),
+        ]);
+        assert_eq!(dirty_wd.severity(), ErrorSeverity::Warning);
+    }
 }

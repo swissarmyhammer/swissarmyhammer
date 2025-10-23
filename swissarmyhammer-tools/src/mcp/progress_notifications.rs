@@ -35,6 +35,7 @@
 //! ```
 
 use serde::{Deserialize, Serialize};
+use swissarmyhammer_common::{ErrorSeverity, Severity};
 use tokio::sync::mpsc;
 
 /// Progress notification for MCP tool operations
@@ -82,6 +83,16 @@ pub enum SendError {
     /// Channel was closed, receiver no longer exists
     #[error("Progress notification channel closed: {0}")]
     ChannelClosed(String),
+}
+
+impl Severity for SendError {
+    fn severity(&self) -> ErrorSeverity {
+        match self {
+            // Warning: Notification failures should not block operations
+            // System continues to function even if progress updates cannot be delivered
+            SendError::ChannelClosed(_) => ErrorSeverity::Warning,
+        }
+    }
 }
 
 /// Progress notification sender with channel-based async delivery
@@ -538,5 +549,18 @@ mod tests {
 
         // Metadata should be flattened into the top level
         assert_eq!(json.get("key").unwrap(), "value");
+    }
+
+    #[test]
+    fn test_send_error_severity() {
+        use swissarmyhammer_common::Severity;
+
+        // SendError should be Warning - progress notification failures shouldn't block operations
+        let error = SendError::ChannelClosed("progress channel closed".to_string());
+        assert_eq!(
+            error.severity(),
+            swissarmyhammer_common::ErrorSeverity::Warning,
+            "SendError should be Warning severity"
+        );
     }
 }

@@ -6,7 +6,7 @@
 
 use serde_json::{Map, Value};
 use std::collections::HashSet;
-use swissarmyhammer_common::ErrorSeverity;
+use swissarmyhammer_common::{ErrorSeverity, Severity};
 use thiserror::Error;
 
 /// Errors that can occur during schema validation
@@ -68,10 +68,10 @@ impl ValidationError {
             }
         }
     }
+}
 
-    /// Get the severity level of the validation error
-    #[allow(dead_code)]
-    pub fn severity(&self) -> ErrorSeverity {
+impl Severity for ValidationError {
+    fn severity(&self) -> ErrorSeverity {
         match self {
             ValidationError::UnsupportedSchemaType { .. } => ErrorSeverity::Error,
             ValidationError::InvalidSchema { .. } => ErrorSeverity::Critical,

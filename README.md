@@ -144,6 +144,7 @@ Other AI coding tools make you supervise every step. SwissArmyHammer works like 
 - **Git-native workflows** - Branches, commits, and PRs handled automatically
 - **Industrial tooling** - Shell execution, file operations, web integration
 - **Type-safe everywhere** - Rust's safety guarantees throughout
+- **Consistent error handling** - Unified Severity trait (Warning/Error/Critical) enables appropriate error handling, logging, and user notification across all 20+ error types in the codebase. See [swissarmyhammer-common](swissarmyhammer-common/README.md) for details
 
 ### **MCP Integration Leader**
 SwissArmyHammer pioneered comprehensive MCP server implementation:

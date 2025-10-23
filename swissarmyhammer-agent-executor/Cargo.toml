@@ -27,6 +27,7 @@ tempfile = { workspace = true }
 which = { workspace = true }
 
 # SwissArmyHammer dependencies
+swissarmyhammer-common = { path = "../swissarmyhammer-common" }
 swissarmyhammer-config = { path = "../swissarmyhammer-config" }
 swissarmyhammer-prompts = { path = "../swissarmyhammer-prompts" }
 

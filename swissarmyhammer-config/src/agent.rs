@@ -168,6 +168,7 @@
 
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
+use swissarmyhammer_common::{ErrorSeverity, Severity};
 use thiserror::Error;
 
 /// Agent executor type enumeration
@@ -483,6 +484,21 @@ pub enum AgentError {
     /// Configuration validation error
     #[error("Configuration error: {0}")]
     ConfigError(String),
+}
+
+impl Severity for AgentError {
+    fn severity(&self) -> ErrorSeverity {
+        match self {
+            // Critical: Cannot parse or validate agent configuration
+            Self::ParseError(_) => ErrorSeverity::Critical,
+            Self::ConfigError(_) => ErrorSeverity::Critical,
+
+            // Error: Agent operations failed but system can continue
+            Self::NotFound(_) => ErrorSeverity::Error,
+            Self::InvalidPath(_) => ErrorSeverity::Error,
+            Self::IoError(_) => ErrorSeverity::Error,
+        }
+    }
 }
 
 /// Agent information structure
@@ -2596,5 +2612,40 @@ agent:
         }
 
         env::set_current_dir(&original_dir).expect("Failed to restore original dir");
+    }
+
+    #[test]
+    fn test_agent_error_not_found_is_error() {
+        let error = AgentError::NotFound("test-agent".to_string());
+        assert_eq!(error.severity(), ErrorSeverity::Error);
+    }
+
+    #[test]
+    fn test_agent_error_invalid_path_is_error() {
+        let error = AgentError::InvalidPath(PathBuf::from("/invalid/path"));
+        assert_eq!(error.severity(), ErrorSeverity::Error);
+    }
+
+    #[test]
+    fn test_agent_error_io_error_is_error() {
+        let error = AgentError::from(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "file not found",
+        ));
+        assert_eq!(error.severity(), ErrorSeverity::Error);
+    }
+
+    #[test]
+    fn test_agent_error_parse_error_is_critical() {
+        let yaml_err =
+            serde_yaml::from_str::<serde_yaml::Value>("invalid: yaml: content").unwrap_err();
+        let error = AgentError::from(yaml_err);
+        assert_eq!(error.severity(), ErrorSeverity::Critical);
+    }
+
+    #[test]
+    fn test_agent_error_config_error_is_critical() {
+        let error = AgentError::ConfigError("Invalid configuration".to_string());
+        assert_eq!(error.severity(), ErrorSeverity::Critical);
     }
 }

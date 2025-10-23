@@ -129,6 +129,4 @@ claude mcp restart sah
 
 ## Next Steps
 
-- [Quick Start](quick-start.md) - Create your first prompt
-- [Configuration](configuration.md) - Customize your setup
-- [CLI Reference](cli-reference.md) - Learn all available commands
+- [Quick Start](quick-start.md) - Start with full auto coding
