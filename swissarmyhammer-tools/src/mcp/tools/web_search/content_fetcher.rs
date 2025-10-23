@@ -13,6 +13,7 @@ use regex::Regex;
 use reqwest::Client;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
+use swissarmyhammer_common::{ErrorSeverity, Severity};
 use tokio::sync::Semaphore;
 use tracing::{debug, warn};
 use url::Url;
@@ -70,6 +71,23 @@ pub enum ContentFetchError {
         /// The invalid URL string
         url: String,
     },
+}
+
+impl Severity for ContentFetchError {
+    fn severity(&self) -> ErrorSeverity {
+        match self {
+            // Error: Fetch operations failed but system can continue with other URLs
+            ContentFetchError::HttpError { .. } => ErrorSeverity::Error,
+            ContentFetchError::NetworkError { .. } => ErrorSeverity::Error,
+            ContentFetchError::ProcessingError { .. } => ErrorSeverity::Error,
+            ContentFetchError::RateLimited { .. } => ErrorSeverity::Error,
+            ContentFetchError::Timeout { .. } => ErrorSeverity::Error,
+            ContentFetchError::InvalidUrl { .. } => ErrorSeverity::Error,
+
+            // Warning: Content available but quality is below threshold
+            ContentFetchError::QualityCheckFailed { .. } => ErrorSeverity::Warning,
+        }
+    }
 }
 
 /// Configuration for content fetching operations
@@ -910,5 +928,50 @@ mod tests {
         assert_eq!(quality_config.max_content_length, 50_000);
         assert!(!quality_config.spam_indicators.is_empty());
         assert!(!quality_config.paywall_indicators.is_empty());
+    }
+
+    #[test]
+    fn test_content_fetch_error_severity() {
+        use swissarmyhammer_common::Severity;
+
+        // Test Error severity for fetch failures
+        let error_variants = vec![
+            ContentFetchError::HttpError {
+                status: 404,
+                message: "Not Found".to_string(),
+            },
+            ContentFetchError::NetworkError {
+                message: "Connection failed".to_string(),
+            },
+            ContentFetchError::ProcessingError {
+                message: "Processing failed".to_string(),
+            },
+            ContentFetchError::RateLimited {
+                domain: "example.com".to_string(),
+            },
+            ContentFetchError::Timeout { seconds: 30 },
+            ContentFetchError::InvalidUrl {
+                url: "invalid".to_string(),
+            },
+        ];
+
+        for error in error_variants {
+            assert_eq!(
+                error.severity(),
+                swissarmyhammer_common::ErrorSeverity::Error,
+                "Expected Error severity for: {}",
+                error
+            );
+        }
+
+        // Test Warning severity for quality check failures
+        let quality_error = ContentFetchError::QualityCheckFailed {
+            reason: "Content too short".to_string(),
+        };
+        assert_eq!(
+            quality_error.severity(),
+            swissarmyhammer_common::ErrorSeverity::Warning,
+            "Expected Warning severity for quality check failure"
+        );
     }
 }

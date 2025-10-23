@@ -4,6 +4,7 @@
 //! during long-running workflow execution via MCP notifications.
 
 use serde::{Deserialize, Serialize};
+use swissarmyhammer_common::{ErrorSeverity, Severity};
 use tokio::sync::mpsc;
 
 /// Flow notification for MCP progress updates
@@ -268,6 +269,16 @@ pub enum SendError {
     /// Channel was closed, receiver no longer exists
     #[error("Notification channel closed: {0}")]
     ChannelClosed(String),
+}
+
+impl Severity for SendError {
+    fn severity(&self) -> ErrorSeverity {
+        match self {
+            // Warning: Notification failures should not block operations
+            // System continues to function even if notifications cannot be delivered
+            SendError::ChannelClosed(_) => ErrorSeverity::Warning,
+        }
+    }
 }
 
 /// Notification sender for flow progress updates
@@ -775,5 +786,18 @@ mod tests {
         let display_str = format!("{}", error);
         assert!(display_str.contains("Notification channel closed"));
         assert!(display_str.contains("test error"));
+    }
+
+    #[test]
+    fn test_send_error_severity() {
+        use swissarmyhammer_common::Severity;
+
+        // SendError should be Warning - notification failures shouldn't block operations
+        let error = SendError::ChannelClosed("notification channel closed".to_string());
+        assert_eq!(
+            error.severity(),
+            swissarmyhammer_common::ErrorSeverity::Warning,
+            "SendError should be Warning severity"
+        );
     }
 }
