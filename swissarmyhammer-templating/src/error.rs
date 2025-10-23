@@ -1,5 +1,6 @@
 //! Error types for the templating domain
 
+use swissarmyhammer_common::{ErrorSeverity, Severity};
 use thiserror::Error;
 
 /// Result type for templating operations
@@ -69,5 +70,104 @@ impl From<String> for TemplatingError {
 impl From<&str> for TemplatingError {
     fn from(err: &str) -> Self {
         TemplatingError::Other(err.to_string())
+    }
+}
+
+/// Implementation of Severity trait for TemplatingError
+///
+/// This implementation categorizes all TemplatingError variants by their
+/// severity level to enable appropriate error handling, logging, and user notification.
+///
+/// # Severity Assignment Guidelines
+///
+/// - **Error**: All template errors prevent successful template operations
+///   - Parse errors: Template syntax is invalid
+///   - Render errors: Template rendering failed
+///   - Security errors: Unsafe operations blocked
+///   - Partial errors: Partial template loading failed
+///   - Variable extraction errors: Cannot extract template variables
+///   - Timeout errors: Template rendering took too long
+///   - I/O errors: File system operations failed
+///   - JSON errors: Serialization/deserialization failed
+///   - Other errors: Unexpected template failures
+impl Severity for TemplatingError {
+    fn severity(&self) -> ErrorSeverity {
+        match self {
+            // All template errors are operation-level failures
+            // They prevent completing the specific template operation
+            // but the system remains stable
+            TemplatingError::Parse(_) => ErrorSeverity::Error,
+            TemplatingError::Render(_) => ErrorSeverity::Error,
+            TemplatingError::Security(_) => ErrorSeverity::Error,
+            TemplatingError::Partial(_) => ErrorSeverity::Error,
+            TemplatingError::VariableExtraction(_) => ErrorSeverity::Error,
+            TemplatingError::Timeout { .. } => ErrorSeverity::Error,
+            TemplatingError::Io(_) => ErrorSeverity::Error,
+            TemplatingError::Json(_) => ErrorSeverity::Error,
+            TemplatingError::Other(_) => ErrorSeverity::Error,
+        }
+    }
+}
+
+#[cfg(test)]
+mod severity_tests {
+    use super::*;
+    use swissarmyhammer_common::{ErrorSeverity, Severity};
+
+    #[test]
+    fn test_parse_error_is_error_level() {
+        let error = TemplatingError::Parse("invalid syntax".to_string());
+        assert_eq!(error.severity(), ErrorSeverity::Error);
+    }
+
+    #[test]
+    fn test_render_error_is_error_level() {
+        let error = TemplatingError::Render("render failed".to_string());
+        assert_eq!(error.severity(), ErrorSeverity::Error);
+    }
+
+    #[test]
+    fn test_security_error_is_error_level() {
+        let error = TemplatingError::Security("unsafe operation".to_string());
+        assert_eq!(error.severity(), ErrorSeverity::Error);
+    }
+
+    #[test]
+    fn test_partial_error_is_error_level() {
+        let error = TemplatingError::Partial("partial not found".to_string());
+        assert_eq!(error.severity(), ErrorSeverity::Error);
+    }
+
+    #[test]
+    fn test_variable_extraction_error_is_error_level() {
+        let error = TemplatingError::VariableExtraction("failed to extract".to_string());
+        assert_eq!(error.severity(), ErrorSeverity::Error);
+    }
+
+    #[test]
+    fn test_timeout_error_is_error_level() {
+        let error = TemplatingError::Timeout { timeout_ms: 5000 };
+        assert_eq!(error.severity(), ErrorSeverity::Error);
+    }
+
+    #[test]
+    fn test_io_error_is_error_level() {
+        let io_err = std::io::Error::new(std::io::ErrorKind::NotFound, "file not found");
+        let error = TemplatingError::Io(io_err);
+        assert_eq!(error.severity(), ErrorSeverity::Error);
+    }
+
+    #[test]
+    fn test_json_error_is_error_level() {
+        let json_err = serde_json::from_str::<serde_json::Value>("invalid json")
+            .unwrap_err();
+        let error = TemplatingError::Json(json_err);
+        assert_eq!(error.severity(), ErrorSeverity::Error);
+    }
+
+    #[test]
+    fn test_other_error_is_error_level() {
+        let error = TemplatingError::Other("unexpected error".to_string());
+        assert_eq!(error.severity(), ErrorSeverity::Error);
     }
 }

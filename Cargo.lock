@@ -6571,6 +6571,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serial_test",
+ "swissarmyhammer-common",
  "swissarmyhammer-config",
  "swissarmyhammer-prompts",
  "swissarmyhammer-tools",
