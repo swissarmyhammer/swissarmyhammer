@@ -6,7 +6,7 @@
 use crate::fs_utils::{FileSystem, FileSystemUtils};
 use std::path::{Path, PathBuf};
 
-use swissarmyhammer_common::SwissArmyHammerError;
+use swissarmyhammer_common::{Severity, SwissArmyHammerError};
 use thiserror::Error as ThisError;
 
 /// Plan command specific errors
@@ -108,9 +108,10 @@ impl PlanCommandError {
     pub fn log_error(&self) {
         tracing::error!("{}", self);
     }
+}
 
-    /// Get error severity level
-    pub fn severity(&self) -> swissarmyhammer_common::ErrorSeverity {
+impl Severity for PlanCommandError {
+    fn severity(&self) -> swissarmyhammer_common::ErrorSeverity {
         match self {
             PlanCommandError::FileNotFound { .. } => swissarmyhammer_common::ErrorSeverity::Error,
             PlanCommandError::PermissionDenied { .. } => {
@@ -612,5 +613,76 @@ mod tests {
         let validated_file = result.unwrap();
         assert_eq!(validated_file.content, content);
         assert_eq!(validated_file.size, content.len() as u64);
+    }
+
+    #[test]
+    fn test_plan_command_error_severity_critical() {
+        use swissarmyhammer_common::{ErrorSeverity, Severity};
+
+        let error = PlanCommandError::PermissionDenied {
+            path: "test.md".to_string(),
+            source: std::io::Error::new(std::io::ErrorKind::PermissionDenied, "test"),
+        };
+        assert_eq!(error.severity(), ErrorSeverity::Critical);
+
+        let error = PlanCommandError::WorkflowExecutionFailed {
+            plan_filename: "test.md".to_string(),
+            source: swissarmyhammer_common::SwissArmyHammerError::Io(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                "test",
+            )),
+        };
+        assert_eq!(error.severity(), ErrorSeverity::Critical);
+
+        let error = PlanCommandError::IssuesDirectoryNotWritable {
+            path: "issues".to_string(),
+            source: std::io::Error::new(std::io::ErrorKind::PermissionDenied, "test"),
+        };
+        assert_eq!(error.severity(), ErrorSeverity::Critical);
+    }
+
+    #[test]
+    fn test_plan_command_error_severity_error() {
+        use swissarmyhammer_common::{ErrorSeverity, Severity};
+
+        let error = PlanCommandError::FileNotFound {
+            path: "test.md".to_string(),
+            source: std::io::Error::new(std::io::ErrorKind::NotFound, "test"),
+        };
+        assert_eq!(error.severity(), ErrorSeverity::Error);
+
+        let error = PlanCommandError::InvalidFileFormat {
+            path: "test.md".to_string(),
+            reason: "Invalid format".to_string(),
+        };
+        assert_eq!(error.severity(), ErrorSeverity::Error);
+
+        let error = PlanCommandError::EmptyPlanFile {
+            path: "test.md".to_string(),
+        };
+        assert_eq!(error.severity(), ErrorSeverity::Error);
+
+        let error = PlanCommandError::IssueCreationFailed {
+            plan_filename: "test.md".to_string(),
+            source: Box::new(std::io::Error::new(std::io::ErrorKind::Other, "test")),
+        };
+        assert_eq!(error.severity(), ErrorSeverity::Error);
+    }
+
+    #[test]
+    fn test_plan_command_error_severity_warning() {
+        use swissarmyhammer_common::{ErrorSeverity, Severity};
+
+        let error = PlanCommandError::FileTooLarge {
+            path: "test.md".to_string(),
+            size: 1000000,
+        };
+        assert_eq!(error.severity(), ErrorSeverity::Warning);
+
+        let error = PlanCommandError::InsufficientContent {
+            path: "test.md".to_string(),
+            length: 10,
+        };
+        assert_eq!(error.severity(), ErrorSeverity::Warning);
     }
 }

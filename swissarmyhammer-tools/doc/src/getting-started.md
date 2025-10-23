@@ -16,7 +16,7 @@ The easiest way to install SwissArmyHammer Tools is through the SwissArmyHammer 
 
 ```bash
 cargo install swissarmyhammer
-```
+```text
 
 This installs the `sah` command which includes the MCP server functionality.
 
@@ -31,7 +31,7 @@ cd swissarmyhammer
 
 # Build and install
 cargo install --path swissarmyhammer-cli
-```
+```text
 
 ### Verify Installation
 
@@ -39,7 +39,7 @@ Check that the installation was successful:
 
 ```bash
 sah --version
-```
+```text
 
 You should see output showing the version number.
 
@@ -57,7 +57,7 @@ Example:
 
 ```bash
 export SAH_LOG_LEVEL=info
-```
+```text
 
 ### Configuration File
 
@@ -77,7 +77,7 @@ level = "info"
 
 # Log file path (optional)
 # file = "/var/log/sah-server.log"
-```
+```text
 
 ## Running the MCP Server
 
@@ -87,7 +87,7 @@ Start the server in stdio mode, which communicates over standard input/output:
 
 ```bash
 sah serve
-```
+```text
 
 This is the recommended mode for integration with Claude Code and other desktop applications.
 
@@ -97,13 +97,13 @@ Start an HTTP server for web-based integrations:
 
 ```bash
 sah serve --http
-```
+```text
 
 By default, this starts the server on `http://localhost:3000`. Use `--port` to customize:
 
 ```bash
 sah serve --http --port 8080
-```
+```text
 
 ### Change Working Directory
 
@@ -111,7 +111,7 @@ Set the working directory before starting the server:
 
 ```bash
 sah --cwd /path/to/project serve
-```
+```text
 
 ## Integration with Claude Code
 
@@ -123,7 +123,7 @@ The easiest way is to use the Claude CLI:
 
 ```bash
 claude mcp add --scope user sah sah serve
-```
+```text
 
 This adds the SwissArmyHammer MCP server to your user configuration.
 
@@ -145,7 +145,7 @@ Alternatively, edit your Claude Code MCP configuration file manually:
     }
   }
 }
-```
+```text
 
 ### Verify Integration
 
@@ -168,7 +168,7 @@ Add to your `Cargo.toml`:
 swissarmyhammer-tools = "0.1"
 swissarmyhammer-prompts = "0.1"
 tokio = { version = "1", features = ["full"] }
-```
+```text
 
 ### Basic Server Setup
 
@@ -196,7 +196,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     Ok(())
 }
-```
+```text
 
 ### Custom Tool Registration
 
@@ -225,13 +225,13 @@ let tool_names: Vec<_> = registry.list_tools()
     .collect();
 
 println!("Registered {} tools: {:?}", tool_names.len(), tool_names);
-```
+```text
 
 ## Directory Structure
 
 SwissArmyHammer Tools uses a standard directory structure for storing data:
 
-```
+```text
 ~/.swissarmyhammer/          # User directory
 ├── memoranda/               # Personal notes
 ├── issues/                  # Issue tracking
@@ -244,7 +244,7 @@ SwissArmyHammer Tools uses a standard directory structure for storing data:
 ├── memoranda/               # Project notes
 ├── issues/                  # Project issues
 └── .abort                  # Workflow abort signal (temporary)
-```
+```text
 
 The project directory (`./.swissarmyhammer/`) should be committed to version control, while the user directory contains personal data.
 
@@ -260,7 +260,7 @@ curl http://localhost:3000/tools
 
 # Or check via Claude Code
 # Ask Claude: "What SwissArmyHammer tools are available?"
-```
+```text
 
 ### Test File Operations
 
@@ -273,7 +273,7 @@ cd /tmp/sah-test
 
 # Start the server with this working directory
 sah serve
-```
+```text
 
 Then in Claude Code:
 - "Create a memo with title 'test' and content 'Hello from SwissArmyHammer'"
@@ -290,7 +290,7 @@ cd ~/projects/my-rust-project
 
 # Start server
 sah serve
-```
+```text
 
 Then in Claude Code:
 - "Index all Rust files for semantic search"

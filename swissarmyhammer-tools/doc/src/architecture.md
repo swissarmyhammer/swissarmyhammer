@@ -4,7 +4,7 @@ SwissArmyHammer Tools is designed as a modular, extensible MCP server with clear
 
 ## System Architecture
 
-```
+```text
 ┌──────────────────────────────────────────────────────────────┐
 │                       AI Clients                             │
 │         (Claude Code, Custom Applications)                   │
@@ -28,7 +28,7 @@ SwissArmyHammer Tools is designed as a modular, extensible MCP server with clear
 │ (Issues, Git,│  │ (28 tools)│  │   (Templates)    │
 │ Search, etc.)│  │           │  │                  │
 └──────────────┘  └───────────┘  └──────────────────┘
-```
+```text
 
 ## Core Components
 
@@ -63,7 +63,7 @@ pub fn register_file_tools(registry: &mut ToolRegistry) {
     registry.register(Box::new(FilesEdit));
     // ... more tools
 }
-```
+```text
 
 ### Tool Context
 
@@ -80,7 +80,7 @@ pub struct ToolContext {
     pub working_directory: PathBuf,
     // ... other shared resources
 }
-```
+```text
 
 ## Domain Crates
 
@@ -173,7 +173,7 @@ graph TD
     E -->|Not Found| I
     F -->|Exception| I
     I --> H
-```
+```text
 
 ### Tool Execution
 
@@ -193,7 +193,7 @@ graph TD
     I --> H
     J --> H
     K --> H
-```
+```text
 
 ### File Operations
 
@@ -212,7 +212,7 @@ graph TD
     H --> K[Error Response]
     I --> K
     J --> K
-```
+```text
 
 ## Tool Categories
 

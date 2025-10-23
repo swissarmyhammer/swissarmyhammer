@@ -39,7 +39,7 @@ max_search_results = 1000
 # Performance tuning
 max_concurrent_tools = 10
 tool_timeout_seconds = 300
-```
+```text
 
 ## Environment Variables
 
@@ -79,7 +79,7 @@ export SAH_LOG_LEVEL=debug
 export SAH_PORT=8080
 export SAH_MAX_FILE_SIZE=5242880  # 5MB
 sah serve --http
-```
+```text
 
 ## Command-Line Arguments
 
@@ -89,7 +89,7 @@ Command-line arguments have the highest precedence.
 
 ```bash
 sah serve [OPTIONS]
-```
+```text
 
 **Options:**
 
@@ -112,13 +112,13 @@ sah serve --cwd /path/to/project
 
 # HTTP server with custom working directory
 sah serve --http --port 3000 --cwd /home/user/projects/myapp
-```
+```text
 
 ### Global Options
 
 ```bash
 sah [GLOBAL OPTIONS] <COMMAND>
-```
+```text
 
 **Global Options:**
 
@@ -135,7 +135,7 @@ Stdio mode is designed for integration with desktop applications like Claude Cod
 ```toml
 [server]
 stdio = true
-```
+```text
 
 **Characteristics:**
 - Communicates over stdin/stdout
@@ -151,7 +151,7 @@ HTTP mode provides a REST API for the MCP server.
 [server]
 http = true
 port = 3000
-```
+```text
 
 **Characteristics:**
 - RESTful HTTP API
@@ -182,14 +182,14 @@ Configure logging verbosity:
 ```toml
 [logging]
 level = "info"
-```
+```text
 
 **File**:
 ```toml
 [logging]
 level = "info"
 file = "/var/log/sah-server.log"
-```
+```text
 
 **Both console and file**:
 ```toml
@@ -197,7 +197,7 @@ file = "/var/log/sah-server.log"
 level = "info"
 file = "/var/log/sah-server.log"
 console = true
-```
+```text
 
 ### Structured Logging
 
@@ -210,7 +210,7 @@ export RUST_LOG="swissarmyhammer_tools=debug,swissarmyhammer_search=trace"
 
 # Filter by target
 export RUST_LOG="swissarmyhammer_tools::mcp::tools=debug"
-```
+```text
 
 ## Security Configuration
 
@@ -229,7 +229,7 @@ allowed_extensions = ["rs", "toml", "md", "txt", "json", "yaml"]
 
 # Denied path patterns
 denied_patterns = ["**/target/**", "**/.git/**", "**/node_modules/**"]
-```
+```text
 
 ### Shell Command Restrictions
 
@@ -243,7 +243,7 @@ allowed_commands = ["cargo", "git", "npm", "rustc"]
 
 # Denied commands (blacklist)
 denied_commands = ["rm", "sudo", "chmod"]
-```
+```text
 
 ## Performance Configuration
 
@@ -256,7 +256,7 @@ max_concurrent_tools = 10
 
 # Tool execution timeout (seconds)
 tool_timeout_seconds = 300
-```
+```text
 
 ### Caching
 
@@ -270,7 +270,7 @@ template_cache_size = 1000
 
 # Cache TTL (seconds)
 template_cache_ttl = 3600
-```
+```text
 
 ### Search Configuration
 
@@ -290,7 +290,7 @@ chunk_size = 1000
 
 # Chunk overlap (characters)
 chunk_overlap = 200
-```
+```text
 
 ## Integration Configuration
 
@@ -312,7 +312,7 @@ Configure SwissArmyHammer in Claude Code's MCP settings:
     }
   }
 }
-```
+```text
 
 ### Custom Client Integration
 
@@ -326,7 +326,7 @@ let library = PromptLibrary::new();
 
 let server = McpServer::new(library, Some(config)).await?;
 server.initialize().await?;
-```
+```text
 
 ## Advanced Configuration
 
@@ -344,7 +344,7 @@ swissarmyhammer_tools::register_file_tools(&mut registry);
 swissarmyhammer_tools::register_search_tools(&mut registry);
 
 // Don't register shell or web tools for security
-```
+```text
 
 ### Custom Working Directory
 
@@ -359,7 +359,7 @@ default = "."
 [directories.projects]
 web_app = "/home/user/projects/web-app"
 api_service = "/home/user/projects/api-service"
-```
+```text
 
 ### Issue and Memo Storage
 
@@ -375,7 +375,7 @@ memos_dir = ".swissarmyhammer/memoranda"
 
 # User-level storage
 user_memos_dir = "~/.swissarmyhammer/memoranda"
-```
+```text
 
 ## Configuration Examples
 
@@ -392,7 +392,7 @@ console = true
 
 [security]
 max_file_size = 52428800  # 50MB for development
-```
+```text
 
 ### Production Setup
 
@@ -413,7 +413,7 @@ max_search_results = 500
 [performance]
 max_concurrent_tools = 20
 tool_timeout_seconds = 180
-```
+```text
 
 ### CI/CD Integration
 
@@ -431,7 +431,7 @@ max_file_size = 5242880  # 5MB
 [performance]
 max_concurrent_tools = 5
 tool_timeout_seconds = 60
-```
+```text
 
 ## Environment-Specific Configuration
 
@@ -448,7 +448,7 @@ export SAH_ENV=production
 export SAH_LOG_LEVEL=info
 export SAH_LOG_FILE=/var/log/sah-server.log
 sah serve --http --port 8080
-```
+```text
 
 ## Validation
 
@@ -460,7 +460,7 @@ sah config validate
 
 # Show effective configuration
 sah config show
-```
+```text
 
 ## Next Steps
 

@@ -25,11 +25,11 @@ cargo nextest run
 
 # Run specific tests
 cargo nextest run --test test_name
-```
+```text
 
 ### Project Structure
 
-```
+```text
 swissarmyhammer-tools/
 ├── src/
 │   ├── lib.rs              # Library entry point
@@ -44,7 +44,7 @@ swissarmyhammer-tools/
 ├── tests/                # Integration tests
 ├── doc/                  # Documentation source
 └── Cargo.toml           # Dependencies
-```
+```text
 
 ## Adding a New Tool
 
@@ -52,7 +52,7 @@ swissarmyhammer-tools/
 
 Create a new module in `src/mcp/tools/<category>/`:
 
-```rust
+```rust,ignore
 // src/mcp/tools/files/my_tool/mod.rs
 
 use async_trait::async_trait;
@@ -120,24 +120,24 @@ impl McpTool for MyTool {
         Ok(serde_json::to_value(result)?)
     }
 }
-```
+```text
 
 ### 2. Register Tool
 
 Add to category registration in `src/mcp/tools/<category>/mod.rs`:
 
-```rust
+```rust,ignore
 pub fn register_file_tools(registry: &mut ToolRegistry) {
     // ... existing tools
     registry.register(Box::new(MyTool));
 }
-```
+```text
 
 ### 3. Write Tests
 
 Create tests in `src/mcp/tools/<category>/my_tool/mod.rs`:
 
-```rust
+```rust,ignore
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -166,7 +166,7 @@ mod tests {
         assert!(result.is_err());
     }
 }
-```
+```text
 
 ### 4. Document Tool
 
@@ -178,32 +178,32 @@ Add documentation in `doc/src/features/` and update `SUMMARY.md`.
 
 Test individual functions and components:
 
-```rust
+```rust,ignore
 #[tokio::test]
 async fn test_function() {
     let result = my_function().await;
     assert_eq!(result, expected);
 }
-```
+```text
 
 ### Integration Tests
 
 Test complete tool execution:
 
-```rust
+```rust,ignore
 #[tokio::test]
 async fn test_tool_integration() {
     let server = McpServer::new(...).await?;
     let result = server.execute_tool("tool_name", params).await?;
     // Verify result
 }
-```
+```text
 
 ### Property-Based Tests
 
 Use proptest for property testing:
 
-```rust
+```rust,ignore
 use proptest::prelude::*;
 
 proptest! {
@@ -212,7 +212,7 @@ proptest! {
         // Test property holds for any input
     }
 }
-```
+```text
 
 ## Code Style
 
@@ -223,7 +223,7 @@ Use rustfmt:
 ```bash
 cargo fmt
 cargo fmt -- --check  # CI check
-```
+```text
 
 ### Linting
 
@@ -232,7 +232,7 @@ Use clippy:
 ```bash
 cargo clippy
 cargo clippy -- -D warnings  # CI check
-```
+```text
 
 ### Documentation
 
@@ -242,7 +242,7 @@ cargo clippy -- -D warnings  # CI check
 
 Example:
 
-```rust
+```rust,ignore
 /// Read file contents with optional offset and limit.
 ///
 /// # Parameters
@@ -266,7 +266,7 @@ Example:
 pub async fn execute(...) -> Result<...> {
     // Implementation
 }
-```
+```text
 
 ## Pull Request Process
 
@@ -279,7 +279,7 @@ git clone https://github.com/YOUR_USERNAME/swissarmyhammer
 
 # Create a branch
 git checkout -b feature/my-new-tool
-```
+```text
 
 ### 2. Make Changes
 
@@ -301,7 +301,7 @@ cargo fmt
 
 # Build documentation
 cd doc && mdbook build
-```
+```text
 
 ### 4. Commit
 
@@ -311,7 +311,7 @@ Use conventional commit messages:
 git commit -m "feat: add new tool for X"
 git commit -m "fix: resolve issue with Y"
 git commit -m "docs: update tool documentation"
-```
+```text
 
 Types:
 - `feat`: New feature
@@ -325,7 +325,7 @@ Types:
 
 ```bash
 git push origin feature/my-new-tool
-```
+```text
 
 Then create a pull request on GitHub with:
 - Clear description of changes
@@ -346,7 +346,7 @@ Then create a pull request on GitHub with:
 cd doc
 mdbook build
 mdbook serve  # Preview locally
-```
+```text
 
 ### Documentation Structure
 

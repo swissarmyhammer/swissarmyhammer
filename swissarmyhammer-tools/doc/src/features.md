@@ -203,61 +203,61 @@ Signal workflow termination.
 
 ### Pattern 1: Code Understanding
 
-```
+```text
 1. search_index - Index the codebase
 2. search_query - Find relevant code
 3. files_read - Read specific files
 4. outline_generate - Understand structure
-```
+```text
 
 ### Pattern 2: Feature Development
 
-```
+```text
 1. issue_create - Create feature issue
 2. memo_create - Document design decisions
 3. files_edit - Implement changes
 4. rules_check - Validate quality
 5. issue_mark_complete - Close issue
-```
+```text
 
 ### Pattern 3: Code Review
 
-```
+```text
 1. git_changes - See what changed
 2. files_read - Review specific files
 3. search_query - Find related code
 4. rules_check - Check standards
 5. memo_create - Document findings
-```
+```text
 
 ### Pattern 4: Documentation
 
-```
+```text
 1. outline_generate - Extract structure
 2. files_read - Read source comments
 3. search_query - Find examples
 4. files_write - Create documentation
-```
+```text
 
 ## Tool Composition
 
 Tools are designed to work together. For example:
 
 **Find and fix issues:**
-```
+```text
 1. files_grep - Search for problematic pattern
 2. files_read - Read files with issues
 3. files_edit - Fix the problems
 4. rules_check - Verify fixes are correct
-```
+```text
 
 **Research and implement:**
-```
+```text
 1. web_search - Find implementation approaches
 2. web_fetch - Read documentation
 3. memo_create - Document the approach
 4. files_edit - Implement the solution
-```
+```text
 
 ## Next Steps
 

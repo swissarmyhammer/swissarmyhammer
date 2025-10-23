@@ -10,7 +10,64 @@ Refactor the existing `severity()` method on `PlanCommandError` to implement the
 
 PlanCommandError in the main swissarmyhammer crate ALREADY has a severity() method (lines 113-135 of `swissarmyhammer/src/plan_utils.rs`). We need to refactor it to implement the trait.
 
-This is exactly like what we did for ValidationError in step 4.
+This is exactly like what was done for ValidationError in step 4.
+
+## Proposed Solution
+
+I will refactor the existing `severity()` method on `PlanCommandError` to implement the `Severity` trait by:
+
+1. **Adding the import**: Add `use swissarmyhammer_common::Severity;` at the top of the file
+2. **Converting the method to trait implementation**: Change from `impl PlanCommandError { pub fn severity(...) }` to `impl Severity for PlanCommandError { fn severity(...) }`
+3. **Preserving all existing severity assignments** - the match logic remains identical
+4. **Writing tests first** (TDD approach):
+   - Test Critical severity cases (PermissionDenied, WorkflowExecutionFailed, IssuesDirectoryNotWritable)
+   - Test Error severity cases (FileNotFound, InvalidFileFormat, EmptyPlanFile, IssueCreationFailed)
+   - Test Warning severity cases (FileTooLarge, InsufficientContent)
+5. **Running tests to verify** they pass after the refactor
+6. **Verifying the build** with cargo build and cargo clippy
+
+The refactor is straightforward because:
+- The method signature stays the same
+- The implementation logic is unchanged
+- Only the trait implementation syntax changes
+- No existing callers need modification
+
+## Implementation Notes
+
+### Changes Made
+
+1. **Added Severity trait import** at swissarmyhammer/src/plan_utils.rs:7
+   - Changed: `use swissarmyhammer_common::SwissArmyHammerError;`
+   - To: `use swissarmyhammer_common::{Severity, SwissArmyHammerError};`
+
+2. **Refactored severity() method to trait implementation** at swissarmyhammer/src/plan_utils.rs:103-135
+   - Moved `severity()` method from `impl PlanCommandError` block
+   - Created new `impl Severity for PlanCommandError` block
+   - Preserved all severity assignments exactly as they were:
+     - **Critical**: PermissionDenied, WorkflowExecutionFailed, IssuesDirectoryNotWritable
+     - **Error**: FileNotFound, InvalidFileFormat, EmptyPlanFile, IssueCreationFailed
+     - **Warning**: FileTooLarge, InsufficientContent
+
+3. **Added comprehensive tests** at swissarmyhammer/src/plan_utils.rs:619-685
+   - `test_plan_command_error_severity_critical()` - Tests all 3 Critical severity variants
+   - `test_plan_command_error_severity_error()` - Tests all 4 Error severity variants
+   - `test_plan_command_error_severity_warning()` - Tests all 2 Warning severity variants
+   - All tests import and use the Severity trait to verify trait implementation
+
+### Verification
+
+- ✅ All 134 tests in swissarmyhammer package pass
+- ✅ cargo build -p swissarmyhammer succeeds
+- ✅ cargo clippy -p swissarmyhammer is clean (no warnings or errors)
+- ✅ All severity assignments preserved exactly as before
+- ✅ Trait implementation is consistent with previous steps (e.g., ValidationError in step 4)
+
+### Files Modified
+
+- `swissarmyhammer/src/plan_utils.rs`
+  - Added Severity trait import
+  - Refactored severity() method to trait implementation
+  - Added 3 new test functions with 9 test cases total
 
 ## Tasks
 
@@ -135,13 +192,13 @@ mod severity_tests {
 
 ## Acceptance Criteria
 
-- [ ] PlanCommandError implements Severity trait
-- [ ] All existing severity assignments preserved
-- [ ] Use statement added for Severity trait
-- [ ] Tests added or existing tests pass
-- [ ] Tests pass: `cargo test -p swissarmyhammer`
-- [ ] Code compiles: `cargo build -p swissarmyhammer`
-- [ ] Clippy clean: `cargo clippy -p swissarmyhammer`
+- ✅ PlanCommandError implements Severity trait
+- ✅ All existing severity assignments preserved
+- ✅ Use statement added for Severity trait
+- ✅ Tests added or existing tests pass
+- ✅ Tests pass: `cargo test -p swissarmyhammer`
+- ✅ Code compiles: `cargo build -p swissarmyhammer`
+- ✅ Clippy clean: `cargo clippy -p swissarmyhammer`
 
 ## Files to Modify
 
