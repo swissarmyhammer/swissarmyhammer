@@ -1,12 +1,5 @@
 Check source code files against SwissArmyHammer rules for code quality and standards compliance.
 
-## Parameters
-
-- `rule_names` (optional): Array of specific rule names to check
-- `file_paths` (optional): Array of file paths or glob patterns to check (default: `**/*.*`)
-- `category` (optional): Category filter
-- `severity` (optional): Severity filter - "error", "warning", "info", or "hint"
-
 ## Examples
 
 ```json

@@ -1,9 +1,5 @@
 Retrieve a memo by its title.
 
-## Parameters
-
-- `title` (required): Title of the memo to retrieve
-
 ## Examples
 
 ```json

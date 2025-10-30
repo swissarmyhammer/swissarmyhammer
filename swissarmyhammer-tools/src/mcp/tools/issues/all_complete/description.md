@@ -1,9 +1,5 @@
 Check if all issues are completed.
 
-## Parameters
-
-None required.
-
 ## Examples
 
 ```json

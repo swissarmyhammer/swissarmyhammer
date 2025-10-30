@@ -1,9 +1,5 @@
 Mark an issue as complete by moving it to ./issues/complete directory.
 
-## Parameters
-
-- `name` (required): Issue name to mark as complete
-
 ## Examples
 
 ```json

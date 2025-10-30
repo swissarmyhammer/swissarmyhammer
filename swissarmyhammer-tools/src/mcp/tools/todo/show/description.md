@@ -1,9 +1,5 @@
 Retrieve a specific todo item or the next incomplete item from a todo list.
 
-## Parameters
-
-- `item` (required): Either a specific ULID or "next" to get the first incomplete item
-
 ## Examples
 
 Get a specific todo item by ULID:

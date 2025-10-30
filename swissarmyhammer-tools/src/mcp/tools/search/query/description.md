@@ -1,10 +1,5 @@
 Perform semantic search across indexed files using vector similarity.
 
-## Parameters
-
-- `query` (required): Search query string
-- `limit` (optional): Number of results to return (default: 10)
-
 ## Examples
 
 ```json

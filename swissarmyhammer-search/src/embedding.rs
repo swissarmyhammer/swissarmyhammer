@@ -383,14 +383,25 @@ impl EmbeddingEngine {
 
     /// Create embedding engine for testing with custom config using real small model
     pub async fn new_for_testing_with_config(config: EmbeddingConfig) -> SearchResult<Self> {
-        // Use a global lock to prevent concurrent model initialization during tests
-        // This prevents race conditions when multiple tests try to download/initialize the model
-        use std::sync::Mutex;
-        use std::sync::OnceLock;
+        // Use a file-based lock to prevent concurrent model initialization during tests
+        // This works across processes (nextest runs tests in separate processes)
+        // and prevents race conditions when multiple tests try to access the model cache
+        use std::fs::File;
+        use std::path::PathBuf;
 
-        static TEST_INIT_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-        let lock = TEST_INIT_LOCK.get_or_init(|| Mutex::new(()));
-        let _guard = lock.lock().unwrap();
+        let lock_path = PathBuf::from("/tmp/.swissarmyhammer-embedding-test.lock");
+        let lock_file = File::create(&lock_path).map_err(|e| {
+            SearchError::Embedding(format!("Failed to create test lock file: {e}"))
+        })?;
+
+        // Acquire exclusive lock - this will block until available
+        #[cfg(test)]
+        {
+            use fs2::FileExt;
+            lock_file.lock_exclusive().map_err(|e| {
+                SearchError::Embedding(format!("Failed to acquire test lock: {e}"))
+            })?;
+        }
 
         info!("Creating embedding engine for testing with real small model");
 
@@ -423,6 +434,11 @@ impl EmbeddingEngine {
             "Test embedding engine created successfully with {} dimensions",
             actual_dimensions
         );
+
+        // Explicitly drop the lock file to release the lock
+        // The file lock is automatically released when the file is closed/dropped
+        drop(lock_file);
+
         Ok(Self {
             config,
             model_info,

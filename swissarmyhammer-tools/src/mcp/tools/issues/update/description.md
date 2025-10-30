@@ -1,11 +1,5 @@
 Update the content of an existing issue.
 
-## Parameters
-
-- `name` (required): Issue name to update
-- `content` (required): New markdown content for the issue
-- `append` (optional): If true, append to existing content instead of replacing (default: false)
-
 ## Examples
 
 Replace issue content:

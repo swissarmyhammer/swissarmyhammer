@@ -1,10 +1,5 @@
 Generate structured code overviews using Tree-sitter parsing.
 
-## Parameters
-
-- `patterns` (required): Array of glob patterns to match files (e.g., `["**/*.rs"]`)
-- `output_format` (optional): Output format - "yaml" or "json" (default: "yaml")
-
 ## Examples
 
 ```json

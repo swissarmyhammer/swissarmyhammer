@@ -1,12 +1,5 @@
 Perform precise string replacements in files with atomic operations.
 
-## Parameters
-
-- `file_path` (required): Absolute path to the file to modify
-- `old_string` (required): Exact text to replace
-- `new_string` (required): Replacement text
-- `replace_all` (optional): Replace all occurrences (default: false)
-
 ## Examples
 
 ```json

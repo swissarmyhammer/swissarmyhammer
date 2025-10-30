@@ -1,9 +1,5 @@
 Create an abort file to signal workflow termination.
 
-## Parameters
-
-- `reason` (required): String containing the abort reason/message
-
 ## Examples
 
 ```json

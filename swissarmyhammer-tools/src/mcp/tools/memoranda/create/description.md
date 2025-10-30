@@ -1,10 +1,5 @@
 Create a new memo with the given title and content.
 
-## Parameters
-
-- `title` (required): Title of the memo
-- `content` (required): Markdown content of the memo
-
 ## Examples
 
 ```json

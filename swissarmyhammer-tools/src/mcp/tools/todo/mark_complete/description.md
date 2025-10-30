@@ -1,9 +1,5 @@
 Mark a todo item as completed in a todo list.
 
-## Parameters
-
-- `id` (required): ULID of the todo item to mark as complete
-
 ## Examples
 
 ```json

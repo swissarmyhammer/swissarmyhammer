@@ -1,10 +1,5 @@
 Display details of a specific issue by name.
 
-## Parameters
-
-- `name` (required): Name of the issue to show. Use "next" for the next pending issue.
-- `raw` (optional): Show raw content only without formatting (default: false)
-
 ## Examples
 
 Show a specific issue by name:

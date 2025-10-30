@@ -1,9 +1,5 @@
 List all available memos with their titles, IDs, and content previews.
 
-## Parameters
-
-None required.
-
 ## Examples
 
 ```json
