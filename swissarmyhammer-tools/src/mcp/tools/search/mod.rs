@@ -6,6 +6,9 @@
 pub mod index;
 pub mod query;
 
+#[cfg(test)]
+mod test_utils;
+
 use crate::mcp::tool_registry::ToolRegistry;
 
 /// Register all search-related tools with the registry

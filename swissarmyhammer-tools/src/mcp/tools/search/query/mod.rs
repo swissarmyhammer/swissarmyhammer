@@ -2,15 +2,25 @@
 //!
 //! This module provides the SearchQueryTool for performing semantic search queries through the MCP protocol.
 
+use crate::mcp::progress_notifications::generate_progress_token;
 use crate::mcp::search_types::{SearchQueryRequest, SearchQueryResponse, SearchResult};
 use crate::mcp::tool_registry::{BaseToolImpl, McpTool, ToolContext};
 use async_trait::async_trait;
 use rmcp::model::CallToolResult;
 use rmcp::ErrorData as McpError;
+use serde_json::json;
 use std::time::Instant;
 use swissarmyhammer_search::{
     searcher::SemanticSearcher, storage::VectorStorage, SearchQuery, SemanticConfig,
 };
+
+/// Default similarity threshold for semantic search queries
+///
+/// This threshold determines the minimum similarity score required for a result to be included.
+/// Lower values (closer to 0) return more results with lower relevance, while higher values
+/// (closer to 1) return fewer but more relevant results. The value of 0.5 provides a good
+/// balance for most search queries.
+const DEFAULT_SIMILARITY_THRESHOLD: f32 = 0.5;
 
 /// Tool for performing semantic search queries
 #[derive(Default)]
@@ -24,42 +34,7 @@ impl SearchQueryTool {
 
     #[cfg(test)]
     fn create_test_config() -> SemanticConfig {
-        // Create a unique temporary database path for each test execution
-        use std::thread;
-        use std::time::{SystemTime, UNIX_EPOCH};
-
-        let thread_id = format!("{:?}", thread::current().id());
-        let timestamp = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        let unique_id = format!(
-            "{}_{}",
-            thread_id.replace("ThreadId(", "").replace(")", ""),
-            timestamp
-        );
-
-        let persistent_path =
-            std::env::temp_dir().join(format!("swissarmyhammer_test_{unique_id}"));
-        std::fs::create_dir_all(&persistent_path).expect("Failed to create persistent test dir");
-        let db_path = persistent_path.join("semantic.db");
-
-        SemanticConfig {
-            database_path: db_path,
-            embedding_model: swissarmyhammer_config::DEFAULT_TEST_EMBEDDING_MODEL.to_string(),
-            chunk_size: 512,
-            chunk_overlap: 64,
-            similarity_threshold: 0.7,
-            excerpt_length: 200,
-            context_lines: 2,
-            simple_search_threshold: 0.5,
-            code_similarity_threshold: 0.7,
-            content_preview_length: 100,
-            min_chunk_size: 50,
-            max_chunk_size: 2000,
-            max_chunks_per_file: 100,
-            max_file_size_bytes: 10 * 1024 * 1024,
-        }
+        super::test_utils::create_test_semantic_config()
     }
 }
 
@@ -79,10 +54,43 @@ impl McpTool for SearchQueryTool {
             .expect("Failed to generate schema")
     }
 
+    /// Execute the search_query tool with progress notifications
+    ///
+    /// # Progress Notification Flow
+    ///
+    /// This method implements a simple two-notification pattern:
+    ///
+    /// 1. **Start notification** (progress=0): "Searching: {query}"
+    ///    - Sent immediately when search begins
+    ///    - Includes metadata: query, limit, similarity_threshold
+    ///
+    /// 2. **Completion notification** (progress=100): "Search completed: {N} results in {X}s"
+    ///    - Sent when search completes
+    ///    - Includes metadata: query, results_found, results_returned, duration_ms
+    ///
+    /// # Error Handling
+    ///
+    /// Progress notification failures are intentionally ignored (using `.ok()`) to ensure
+    /// that search operations continue successfully even if the notification channel
+    /// encounters issues. This design prioritizes the core search functionality over
+    /// progress reporting.
+    ///
+    /// # Arguments
+    ///
+    /// * `arguments` - JSON object containing query (string) and limit (optional number)
+    /// * `_context` - Tool context including optional progress sender for notifications
+    ///
+    /// # Returns
+    ///
+    /// Returns a `CallToolResult` containing a JSON-formatted `SearchQueryResponse` with:
+    /// - `total_results`: Number of matching results found
+    /// - `results`: Array of `SearchResult` objects with file paths, line numbers, similarity scores, excerpts, and code context
+    /// - `query`: The original search query string
+    /// - `execution_time_ms`: Time taken to execute the search in milliseconds
     async fn execute(
         &self,
         arguments: serde_json::Map<String, serde_json::Value>,
-        _context: &ToolContext, // Search tools don't need shared context
+        _context: &ToolContext,
     ) -> std::result::Result<CallToolResult, McpError> {
         let request: SearchQueryRequest = BaseToolImpl::parse_arguments(arguments)?;
 
@@ -94,12 +102,30 @@ impl McpTool for SearchQueryTool {
 
         if request.query.trim().is_empty() {
             return Err(McpError::invalid_request(
-                "Search query cannot be empty",
+                "Search query cannot be empty. Please provide a search query string.",
                 None,
             ));
         }
 
         let start_time = Instant::now();
+        // Generate unique token for correlating all progress notifications for this search
+        let progress_token = generate_progress_token();
+
+        // Send start notification
+        if let Some(sender) = &_context.progress_sender {
+            sender
+                .send_progress_with_metadata(
+                    &progress_token,
+                    Some(0),
+                    format!("Searching: {}", request.query),
+                    json!({
+                        "query": request.query,
+                        "limit": request.limit,
+                        "similarity_threshold": DEFAULT_SIMILARITY_THRESHOLD
+                    }),
+                )
+                .ok();
+        }
 
         // Initialize semantic search components
         let config = {
@@ -150,7 +176,7 @@ impl McpTool for SearchQueryTool {
         let search_query = SearchQuery {
             text: request.query.clone(),
             limit: request.limit,
-            similarity_threshold: 0.5, // Use lower threshold for more results
+            similarity_threshold: DEFAULT_SIMILARITY_THRESHOLD,
             language_filter: None,
         };
 
@@ -178,12 +204,36 @@ impl McpTool for SearchQueryTool {
             })
             .collect();
 
+        let results_count = results.len();
+        let duration_ms = duration.as_millis() as u64;
+
         let response = SearchQueryResponse {
-            total_results: results.len(),
+            total_results: results_count,
             results,
-            query: request.query,
-            execution_time_ms: duration.as_millis() as u64,
+            query: request.query.clone(),
+            execution_time_ms: duration_ms,
         };
+
+        // Send completion notification
+        if let Some(sender) = &_context.progress_sender {
+            sender
+                .send_progress_with_metadata(
+                    &progress_token,
+                    Some(100),
+                    format!(
+                        "Search completed: {} results in {:.1}s",
+                        results_count,
+                        duration_ms as f64 / 1000.0
+                    ),
+                    json!({
+                        "query": response.query,
+                        "results_found": results_count,
+                        "results_returned": results_count,
+                        "duration_ms": duration_ms
+                    }),
+                )
+                .ok();
+        }
 
         tracing::info!(
             "Search query completed: found {} results for '{}' in {:?}",
@@ -319,5 +369,265 @@ mod tests {
 
         let result = tool.execute(arguments, &context).await;
         assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_search_query_sends_progress_notifications() {
+        use crate::mcp::progress_notifications::ProgressSender;
+        use tokio::sync::mpsc;
+
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let progress_sender = ProgressSender::new(tx);
+
+        let mut context = create_test_context().await;
+        context.progress_sender = Some(progress_sender);
+
+        let tool = SearchQueryTool::new();
+        let mut arguments = serde_json::Map::new();
+        arguments.insert(
+            "query".to_string(),
+            serde_json::Value::String("test function".to_string()),
+        );
+        arguments.insert(
+            "limit".to_string(),
+            serde_json::Value::Number(serde_json::Number::from(5)),
+        );
+
+        // Execute the tool (may fail if embedding model not available, which is expected in test environments)
+        let _ = tool.execute(arguments, &context).await;
+
+        // Collect all notifications
+        let mut notifications = Vec::new();
+        while let Ok(notif) = rx.try_recv() {
+            notifications.push(notif);
+        }
+
+        // If search succeeded, verify notifications were sent
+        if !notifications.is_empty() {
+            // Should have at least: start notification and completion notification
+            assert!(
+                notifications.len() >= 2,
+                "Expected at least 2 notifications (start, completion), got {}",
+                notifications.len()
+            );
+
+            // First notification should be the start notification with 0% progress
+            assert_eq!(
+                notifications[0].progress,
+                Some(0),
+                "First notification should be start with 0% progress"
+            );
+            assert!(
+                notifications[0].message.contains("Searching"),
+                "Start notification should mention searching"
+            );
+
+            // Verify start notification metadata
+            if let Some(ref metadata) = notifications[0].metadata {
+                assert!(
+                    metadata.get("query").is_some(),
+                    "Start notification should include query in metadata"
+                );
+                assert_eq!(
+                    metadata.get("query").unwrap(),
+                    &json!("test function"),
+                    "Start notification query should match request"
+                );
+                assert!(
+                    metadata.get("limit").is_some(),
+                    "Start notification should include limit in metadata"
+                );
+                assert_eq!(
+                    metadata.get("limit").unwrap(),
+                    &json!(5),
+                    "Start notification limit should match request"
+                );
+                assert!(
+                    metadata.get("similarity_threshold").is_some(),
+                    "Start notification should include similarity_threshold in metadata"
+                );
+                assert_eq!(
+                    metadata.get("similarity_threshold").unwrap(),
+                    &json!(0.5),
+                    "Start notification similarity_threshold should be 0.5"
+                );
+            }
+
+            // Last notification should be completion with 100% progress
+            let last = notifications.last().unwrap();
+            assert_eq!(
+                last.progress,
+                Some(100),
+                "Last notification should be completion with 100% progress"
+            );
+            assert!(
+                last.message.contains("Search completed") || last.message.contains("results"),
+                "Completion notification should mention completion or results"
+            );
+
+            // Verify completion notification metadata
+            if let Some(ref metadata) = last.metadata {
+                assert!(
+                    metadata.get("query").is_some(),
+                    "Completion notification should include query in metadata"
+                );
+                assert_eq!(
+                    metadata.get("query").unwrap(),
+                    &json!("test function"),
+                    "Completion notification query should match request"
+                );
+                assert!(
+                    metadata.get("results_found").is_some(),
+                    "Completion notification should include results_found in metadata"
+                );
+                // Verify results_found is a number (value depends on test environment)
+                assert!(
+                    metadata.get("results_found").unwrap().is_number(),
+                    "Completion notification results_found should be a number"
+                );
+                assert!(
+                    metadata.get("results_returned").is_some(),
+                    "Completion notification should include results_returned in metadata"
+                );
+                // Verify results_returned matches results_found
+                assert_eq!(
+                    metadata.get("results_returned").unwrap(),
+                    metadata.get("results_found").unwrap(),
+                    "Completion notification results_returned should match results_found"
+                );
+                assert!(
+                    metadata.get("duration_ms").is_some(),
+                    "Completion notification should include duration_ms in metadata"
+                );
+                // Verify duration_ms is a number
+                assert!(
+                    metadata.get("duration_ms").unwrap().is_number(),
+                    "Completion notification duration_ms should be a number"
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_search_query_progress_notifications_empty_results() {
+        use crate::mcp::progress_notifications::ProgressSender;
+        use tokio::sync::mpsc;
+
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let progress_sender = ProgressSender::new(tx);
+
+        let mut context = create_test_context().await;
+        context.progress_sender = Some(progress_sender);
+
+        let tool = SearchQueryTool::new();
+        let mut arguments = serde_json::Map::new();
+        // Use a query unlikely to match anything in an empty/new database
+        arguments.insert(
+            "query".to_string(),
+            serde_json::Value::String("xyzzy_nonexistent_magic_query_12345".to_string()),
+        );
+        arguments.insert(
+            "limit".to_string(),
+            serde_json::Value::Number(serde_json::Number::from(10)),
+        );
+
+        // Execute the tool (may fail if embedding model not available, which is expected in test environments)
+        let _ = tool.execute(arguments, &context).await;
+
+        // Collect all notifications
+        let mut notifications = Vec::new();
+        while let Ok(notif) = rx.try_recv() {
+            notifications.push(notif);
+        }
+
+        // If search succeeded, verify notifications were sent with 0 results
+        if !notifications.is_empty() {
+            // Should have at least: start notification and completion notification
+            assert!(
+                notifications.len() >= 2,
+                "Expected at least 2 notifications (start, completion), got {}",
+                notifications.len()
+            );
+
+            // First notification should be the start notification
+            assert_eq!(
+                notifications[0].progress,
+                Some(0),
+                "First notification should be start with 0% progress"
+            );
+
+            // Last notification should be completion with 100% progress
+            let last = notifications.last().unwrap();
+            assert_eq!(
+                last.progress,
+                Some(100),
+                "Last notification should be completion with 100% progress"
+            );
+
+            // Verify completion notification metadata reports 0 results
+            if let Some(ref metadata) = last.metadata {
+                assert!(
+                    metadata.get("results_found").is_some(),
+                    "Completion notification should include results_found in metadata"
+                );
+                assert_eq!(
+                    metadata.get("results_found").unwrap(),
+                    &json!(0),
+                    "Completion notification should report 0 results_found for empty results"
+                );
+                assert!(
+                    metadata.get("results_returned").is_some(),
+                    "Completion notification should include results_returned in metadata"
+                );
+                assert_eq!(
+                    metadata.get("results_returned").unwrap(),
+                    &json!(0),
+                    "Completion notification should report 0 results_returned for empty results"
+                );
+            }
+
+            // Verify completion message mentions 0 results
+            assert!(
+                last.message.contains("0 results") || last.message.contains("completed"),
+                "Completion notification should mention 0 results or completion: {}",
+                last.message
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn test_search_query_continues_when_progress_sender_fails() {
+        use crate::mcp::progress_notifications::ProgressSender;
+        use tokio::sync::mpsc;
+
+        let (tx, rx) = mpsc::unbounded_channel();
+        let progress_sender = ProgressSender::new(tx);
+
+        let mut context = create_test_context().await;
+        context.progress_sender = Some(progress_sender);
+
+        // Drop the receiver to close the channel
+        drop(rx);
+
+        let tool = SearchQueryTool::new();
+        let mut arguments = serde_json::Map::new();
+        arguments.insert(
+            "query".to_string(),
+            serde_json::Value::String("test".to_string()),
+        );
+
+        // Execute the tool - should not fail due to notification channel being closed
+        let result = tool.execute(arguments, &context).await;
+
+        // The result may be an error due to missing embedding model, but it should not
+        // be due to progress notification failures
+        if let Err(e) = &result {
+            let error_msg = e.to_string();
+            assert!(
+                !error_msg.contains("progress") && !error_msg.contains("notification"),
+                "Error should not be related to progress notifications: {}",
+                error_msg
+            );
+        }
     }
 }
