@@ -390,17 +390,16 @@ impl EmbeddingEngine {
         use std::path::PathBuf;
 
         let lock_path = PathBuf::from("/tmp/.swissarmyhammer-embedding-test.lock");
-        let lock_file = File::create(&lock_path).map_err(|e| {
-            SearchError::Embedding(format!("Failed to create test lock file: {e}"))
-        })?;
+        let lock_file = File::create(&lock_path)
+            .map_err(|e| SearchError::Embedding(format!("Failed to create test lock file: {e}")))?;
 
         // Acquire exclusive lock - this will block until available
         #[cfg(test)]
         {
             use fs2::FileExt;
-            lock_file.lock_exclusive().map_err(|e| {
-                SearchError::Embedding(format!("Failed to acquire test lock: {e}"))
-            })?;
+            lock_file
+                .lock_exclusive()
+                .map_err(|e| SearchError::Embedding(format!("Failed to acquire test lock: {e}")))?;
         }
 
         info!("Creating embedding engine for testing with real small model");

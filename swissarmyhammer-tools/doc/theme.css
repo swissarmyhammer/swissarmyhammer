@@ -1,0 +1,237 @@
+/* Spartan Black & White mdBook Theme */
+
+@import url("https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap");
+@import url("https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&display=swap");
+
+:root {
+  /* Colors */
+  --bg: #ffffff;
+  --fg: #111111;
+  --bg-secondary: #f5f5f5;
+  --border: #e0e0e0;
+  --links: #0066cc;
+  --links-hover: #0052a3;
+  --code-bg: #f8f8f8;
+  --inline-code: #d73a49;
+
+  /* Sidebar */
+  --sidebar-fg: #111111;
+  --sidebar-bg: #fffffe;
+  --sidebar-active: #fffffe;
+  --sidebar-hover: #eeeeee;
+
+  /* Typography */
+  --sans-font: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI",
+    sans-serif;
+  --mono-font: "JetBrains Mono", "Courier New", monospace;
+}
+
+/* Reset and Base */
+* {
+  box-sizing: border-box;
+}
+
+html {
+  font-family: var(--sans-font);
+  color: var(--fg);
+  background-color: var(--bg);
+}
+
+body {
+  margin: 0;
+  font-size: 16px;
+  line-height: 1.5;
+  font-weight: 400;
+}
+
+/* Sidebar */
+.sidebar {
+  background-color: var(--sidebar-bg);
+  color: var(--sidebar-fg);
+}
+
+.sidebar .sidebar-scrollbox {
+  padding: 1rem;
+}
+
+.sidebar .chapter li.chapter-item a {
+  color: var(--sidebar-fg);
+  text-decoration: none;
+  display: block;
+  padding: 0.5rem;
+  transition: background-color 0.2s;
+}
+
+.sidebar .chapter li.chapter-item a:hover {
+  background-color: var(--sidebar-hover);
+}
+
+.sidebar .chapter li.chapter-item a.active {
+  background-color: var(--links);
+  font-weight: 500;
+}
+
+/* Content */
+.content {
+  max-width: 800px;
+  margin: 0 auto;
+  padding: 2rem;
+}
+
+/* Typography */
+.content h1,
+.content h2,
+.content h3,
+.content h4,
+.content h5,
+.content h6 {
+  color: var(--fg);
+  font-weight: 600;
+  margin: 2rem 0 1rem 0;
+  line-height: 1.2;
+}
+
+.content h1 {
+  font-size: 2rem;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 0.5rem;
+  margin-top: 0;
+}
+
+.content h2 {
+  font-size: 1.5rem;
+}
+
+.content h3 {
+  font-size: 1.25rem;
+}
+
+.content h4 {
+  font-size: 1rem;
+  font-weight: 600;
+}
+
+.content p {
+  margin: 1rem 0;
+}
+
+/* Links */
+.content a {
+  color: var(--links);
+  text-decoration: underline;
+}
+
+.content a:hover {
+  color: var(--links-hover);
+}
+
+/* Code */
+.content :not(pre) > code {
+  background-color: var(--bg-secondary);
+  color: var(--inline-code);
+  padding: 0.125rem 0.25rem;
+  font-family: var(--mono-font);
+  font-size: 0.9em;
+}
+
+.content pre {
+  background-color: var(--code-bg);
+  border: 1px solid var(--border);
+  padding: 1rem;
+  overflow-x: auto;
+  margin: 1rem 0;
+}
+
+.content pre > code {
+  background-color: transparent;
+  color: var(--fg);
+  padding: 0;
+  font-family: var(--mono-font);
+  font-size: 0.9rem;
+}
+
+/* Lists */
+.content ul,
+.content ol {
+  margin: 1rem 0;
+  padding-left: 1.5rem;
+}
+
+.content li {
+  margin: 0.25rem 0;
+}
+
+/* Blockquotes */
+.content blockquote {
+  border-left: 3px solid var(--border);
+  margin: 1rem 0;
+  padding: 0.5rem 1rem;
+  background-color: var(--bg-secondary);
+}
+
+/* Tables */
+.content table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 1rem 0;
+}
+
+.content table th,
+.content table td {
+  border: 1px solid var(--border);
+  padding: 0.5rem;
+  text-align: left;
+}
+
+.content table th {
+  background-color: var(--bg-secondary);
+  font-weight: 600;
+}
+
+/* Navigation */
+.nav-chapters {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 2rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--border);
+}
+
+.nav-chapters a {
+  color: var(--links);
+  text-decoration: none;
+  padding: 0.5rem 1rem;
+  border: 1px solid var(--border);
+  background-color: var(--bg);
+}
+
+.nav-chapters a:hover {
+  background-color: var(--bg-secondary);
+}
+
+/* Search */
+#searchbar {
+  width: 100%;
+  padding: 0.5rem;
+  border: 1px solid var(--border);
+  background-color: var(--bg);
+  font-size: 16px;
+  font-family: var(--sans-font);
+}
+
+#searchbar:focus {
+  outline: 2px solid var(--links);
+  outline-offset: -2px;
+}
+
+/* Mobile */
+@media (max-width: 768px) {
+  .content {
+    padding: 1rem;
+  }
+
+  .nav-chapters {
+    flex-direction: column;
+    gap: 0.5rem;
+  }
+}

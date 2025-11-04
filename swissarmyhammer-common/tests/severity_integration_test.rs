@@ -14,8 +14,8 @@
 //! across different workspace crates). Each crate has its own unit tests for
 //! Severity trait implementations.
 
-use swissarmyhammer_common::{ErrorSeverity, Severity, SwissArmyHammerError};
 use std::path::PathBuf;
+use swissarmyhammer_common::{ErrorSeverity, Severity, SwissArmyHammerError};
 
 #[test]
 fn test_severity_trait_basics() {
@@ -65,12 +65,12 @@ fn test_swissarmyhammer_error_error_severity() {
     // Test that all error-level errors are properly classified
 
     // Create a serialization error by trying to parse invalid YAML
-    let yaml_error: serde_yaml::Error = serde_yaml::from_str::<serde_yaml::Value>("invalid: yaml: content:")
-        .unwrap_err();
+    let yaml_error: serde_yaml::Error =
+        serde_yaml::from_str::<serde_yaml::Value>("invalid: yaml: content:").unwrap_err();
 
     // Create a JSON error by trying to parse invalid JSON
-    let json_error: serde_json::Error = serde_json::from_str::<serde_json::Value>("{invalid json")
-        .unwrap_err();
+    let json_error: serde_json::Error =
+        serde_json::from_str::<serde_json::Value>("{invalid json").unwrap_err();
 
     let error_level_errors: Vec<SwissArmyHammerError> = vec![
         SwissArmyHammerError::Io(std::io::Error::new(
@@ -164,8 +164,7 @@ fn test_severity_usage_pattern() {
 
     match error.severity() {
         ErrorSeverity::Critical => {
-            // This should be the path taken
-            assert!(true, "Critical errors should be handled specially");
+            // This is the expected path - no assertion needed
         }
         ErrorSeverity::Error => {
             panic!("Expected Critical severity");
@@ -185,53 +184,105 @@ fn test_all_error_variants_have_severity() {
 
     let test_cases = vec![
         // Critical
-        (SwissArmyHammerError::NotInGitRepository, ErrorSeverity::Critical),
-        (SwissArmyHammerError::DirectoryCreation("test".to_string()), ErrorSeverity::Critical),
-        (SwissArmyHammerError::DirectoryAccess("test".to_string()), ErrorSeverity::Critical),
-        (SwissArmyHammerError::WorkflowNotFound("test".to_string()), ErrorSeverity::Critical),
-        (SwissArmyHammerError::WorkflowRunNotFound("test".to_string()), ErrorSeverity::Critical),
-        (SwissArmyHammerError::Storage("test".to_string()), ErrorSeverity::Critical),
-        (SwissArmyHammerError::PermissionDenied {
-            path: "test".to_string(),
-            error: "test".to_string(),
-            suggestion: "test".to_string(),
-        }, ErrorSeverity::Critical),
-
+        (
+            SwissArmyHammerError::NotInGitRepository,
+            ErrorSeverity::Critical,
+        ),
+        (
+            SwissArmyHammerError::DirectoryCreation("test".to_string()),
+            ErrorSeverity::Critical,
+        ),
+        (
+            SwissArmyHammerError::DirectoryAccess("test".to_string()),
+            ErrorSeverity::Critical,
+        ),
+        (
+            SwissArmyHammerError::WorkflowNotFound("test".to_string()),
+            ErrorSeverity::Critical,
+        ),
+        (
+            SwissArmyHammerError::WorkflowRunNotFound("test".to_string()),
+            ErrorSeverity::Critical,
+        ),
+        (
+            SwissArmyHammerError::Storage("test".to_string()),
+            ErrorSeverity::Critical,
+        ),
+        (
+            SwissArmyHammerError::PermissionDenied {
+                path: "test".to_string(),
+                error: "test".to_string(),
+                suggestion: "test".to_string(),
+            },
+            ErrorSeverity::Critical,
+        ),
         // Error
-        (SwissArmyHammerError::Io(io::Error::new(io::ErrorKind::Other, "test")), ErrorSeverity::Error),
-        (SwissArmyHammerError::Serialization(
-            serde_yaml::from_str::<serde_yaml::Value>("invalid: yaml: content:").unwrap_err()
-        ), ErrorSeverity::Error),
-        (SwissArmyHammerError::Json(
-            serde_json::from_str::<serde_json::Value>("{invalid json").unwrap_err()
-        ), ErrorSeverity::Error),
-        (SwissArmyHammerError::FileNotFound {
-            path: "test".to_string(),
-            suggestion: "test".to_string(),
-        }, ErrorSeverity::Error),
-        (SwissArmyHammerError::NotAFile {
-            path: "test".to_string(),
-            suggestion: "test".to_string(),
-        }, ErrorSeverity::Error),
-        (SwissArmyHammerError::InvalidFilePath {
-            path: "test".to_string(),
-            suggestion: "test".to_string(),
-        }, ErrorSeverity::Error),
-        (SwissArmyHammerError::InvalidPath {
-            path: PathBuf::from("test"),
-        }, ErrorSeverity::Error),
-        (SwissArmyHammerError::IoContext {
-            message: "test".to_string(),
-        }, ErrorSeverity::Error),
-        (SwissArmyHammerError::Semantic {
-            message: "test".to_string(),
-        }, ErrorSeverity::Error),
-        (SwissArmyHammerError::Other {
-            message: "test".to_string(),
-        }, ErrorSeverity::Error),
-
+        (
+            SwissArmyHammerError::Io(io::Error::new(io::ErrorKind::Other, "test")),
+            ErrorSeverity::Error,
+        ),
+        (
+            SwissArmyHammerError::Serialization(
+                serde_yaml::from_str::<serde_yaml::Value>("invalid: yaml: content:").unwrap_err(),
+            ),
+            ErrorSeverity::Error,
+        ),
+        (
+            SwissArmyHammerError::Json(
+                serde_json::from_str::<serde_json::Value>("{invalid json").unwrap_err(),
+            ),
+            ErrorSeverity::Error,
+        ),
+        (
+            SwissArmyHammerError::FileNotFound {
+                path: "test".to_string(),
+                suggestion: "test".to_string(),
+            },
+            ErrorSeverity::Error,
+        ),
+        (
+            SwissArmyHammerError::NotAFile {
+                path: "test".to_string(),
+                suggestion: "test".to_string(),
+            },
+            ErrorSeverity::Error,
+        ),
+        (
+            SwissArmyHammerError::InvalidFilePath {
+                path: "test".to_string(),
+                suggestion: "test".to_string(),
+            },
+            ErrorSeverity::Error,
+        ),
+        (
+            SwissArmyHammerError::InvalidPath {
+                path: PathBuf::from("test"),
+            },
+            ErrorSeverity::Error,
+        ),
+        (
+            SwissArmyHammerError::IoContext {
+                message: "test".to_string(),
+            },
+            ErrorSeverity::Error,
+        ),
+        (
+            SwissArmyHammerError::Semantic {
+                message: "test".to_string(),
+            },
+            ErrorSeverity::Error,
+        ),
+        (
+            SwissArmyHammerError::Other {
+                message: "test".to_string(),
+            },
+            ErrorSeverity::Error,
+        ),
         // Warning
-        (SwissArmyHammerError::RuleViolation("test".to_string()), ErrorSeverity::Warning),
+        (
+            SwissArmyHammerError::RuleViolation("test".to_string()),
+            ErrorSeverity::Warning,
+        ),
     ];
 
     for (error, expected_severity) in test_cases {

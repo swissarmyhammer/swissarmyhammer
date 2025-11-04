@@ -826,7 +826,7 @@ async fn process_child_output_with_limits(
     output_limits: &OutputLimits,
     progress_sender: Option<&ProgressSender>,
     progress_token: &str,
-) -> Result<(std::process::ExitStatus, OutputBuffer), ShellError> {
+) -> Result<(std::process::ExitStatus, OutputBuffer, u32), ShellError> {
     // Take stdout and stderr from the child process
     let stdout = child.stdout.take().ok_or_else(|| ShellError::SystemError {
         message: "Failed to capture stdout from child process".to_string(),
@@ -843,6 +843,11 @@ async fn process_child_output_with_limits(
     let mut stdout_reader = BufReader::new(stdout).lines();
     let mut stderr_reader = BufReader::new(stderr).lines();
 
+    // Track line count for batched progress notifications
+    let mut line_count: u32 = 0;
+    let mut binary_notified = false;
+    const BATCH_SIZE: u32 = 10;
+
     // Process output streams concurrently until process exits
     loop {
         tokio::select! {
@@ -850,11 +855,19 @@ async fn process_child_output_with_limits(
             stdout_line = stdout_reader.next_line() => {
                 match stdout_line {
                     Ok(Some(line)) => {
-                        // Send progress notification for this line
-                        if let Some(sender) = progress_sender {
-                            sender
-                                .send_progress(progress_token, None, &line)
-                                .ok();
+                        line_count += 1;
+
+                        // Send batched progress notifications every BATCH_SIZE lines
+                        if line_count % BATCH_SIZE == 0 {
+                            if let Some(sender) = progress_sender {
+                                sender
+                                    .send_progress(
+                                        progress_token,
+                                        Some(line_count),
+                                        format!("Processing output: {} lines", line_count)
+                                    )
+                                    .ok();
+                            }
                         }
 
                         let line_bytes = line.as_bytes();
@@ -863,6 +876,20 @@ async fn process_child_output_with_limits(
                         line_with_newline.push(b'\n');
 
                         let bytes_written = output_buffer.append_stdout(&line_with_newline);
+
+                        // Check for binary detection and notify once
+                        if output_buffer.has_binary_content() && !binary_notified {
+                            binary_notified = true;
+                            if let Some(sender) = progress_sender {
+                                sender
+                                    .send_progress(
+                                        progress_token,
+                                        Some(line_count),
+                                        "Binary output detected"
+                                    )
+                                    .ok();
+                            }
+                        }
 
                         // If we couldn't write anything, we've hit the limit
                         if bytes_written == 0 && output_buffer.is_at_limit() {
@@ -885,11 +912,19 @@ async fn process_child_output_with_limits(
             stderr_line = stderr_reader.next_line() => {
                 match stderr_line {
                     Ok(Some(line)) => {
-                        // Send progress notification for this line
-                        if let Some(sender) = progress_sender {
-                            sender
-                                .send_progress(progress_token, None, &line)
-                                .ok();
+                        line_count += 1;
+
+                        // Send batched progress notifications every BATCH_SIZE lines
+                        if line_count % BATCH_SIZE == 0 {
+                            if let Some(sender) = progress_sender {
+                                sender
+                                    .send_progress(
+                                        progress_token,
+                                        Some(line_count),
+                                        format!("Processing output: {} lines", line_count)
+                                    )
+                                    .ok();
+                            }
                         }
 
                         let line_bytes = line.as_bytes();
@@ -898,6 +933,20 @@ async fn process_child_output_with_limits(
                         line_with_newline.push(b'\n');
 
                         let bytes_written = output_buffer.append_stderr(&line_with_newline);
+
+                        // Check for binary detection and notify once
+                        if output_buffer.has_binary_content() && !binary_notified {
+                            binary_notified = true;
+                            if let Some(sender) = progress_sender {
+                                sender
+                                    .send_progress(
+                                        progress_token,
+                                        Some(line_count),
+                                        "Binary output detected"
+                                    )
+                                    .ok();
+                            }
+                        }
 
                         // If we couldn't write anything, we've hit the limit
                         if bytes_written == 0 && output_buffer.is_at_limit() {
@@ -930,17 +979,40 @@ async fn process_child_output_with_limits(
                             if output_buffer.is_at_limit() {
                                 break;
                             }
-                            // Send progress notification for this line
-                            if let Some(sender) = progress_sender {
-                                sender
-                                    .send_progress(progress_token, None, &line)
-                                    .ok();
+                            line_count += 1;
+
+                            // Send batched progress notifications every BATCH_SIZE lines
+                            if line_count % BATCH_SIZE == 0 {
+                                if let Some(sender) = progress_sender {
+                                    sender
+                                        .send_progress(
+                                            progress_token,
+                                            Some(line_count),
+                                            format!("Processing output: {} lines", line_count)
+                                        )
+                                        .ok();
+                                }
                             }
+
                             let line_bytes = line.as_bytes();
                             let mut line_with_newline = Vec::with_capacity(line_bytes.len() + 1);
                             line_with_newline.extend_from_slice(line_bytes);
                             line_with_newline.push(b'\n');
                             output_buffer.append_stdout(&line_with_newline);
+
+                            // Check for binary detection and notify once
+                            if output_buffer.has_binary_content() && !binary_notified {
+                                binary_notified = true;
+                                if let Some(sender) = progress_sender {
+                                    sender
+                                        .send_progress(
+                                            progress_token,
+                                            Some(line_count),
+                                            "Binary output detected"
+                                        )
+                                        .ok();
+                                }
+                            }
                         }
 
                         // Read remaining stderr
@@ -948,23 +1020,46 @@ async fn process_child_output_with_limits(
                             if output_buffer.is_at_limit() {
                                 break;
                             }
-                            // Send progress notification for this line
-                            if let Some(sender) = progress_sender {
-                                sender
-                                    .send_progress(progress_token, None, &line)
-                                    .ok();
+                            line_count += 1;
+
+                            // Send batched progress notifications every BATCH_SIZE lines
+                            if line_count % BATCH_SIZE == 0 {
+                                if let Some(sender) = progress_sender {
+                                    sender
+                                        .send_progress(
+                                            progress_token,
+                                            Some(line_count),
+                                            format!("Processing output: {} lines", line_count)
+                                        )
+                                        .ok();
+                                }
                             }
+
                             let line_bytes = line.as_bytes();
                             let mut line_with_newline = Vec::with_capacity(line_bytes.len() + 1);
                             line_with_newline.extend_from_slice(line_bytes);
                             line_with_newline.push(b'\n');
                             output_buffer.append_stderr(&line_with_newline);
+
+                            // Check for binary detection and notify once
+                            if output_buffer.has_binary_content() && !binary_notified {
+                                binary_notified = true;
+                                if let Some(sender) = progress_sender {
+                                    sender
+                                        .send_progress(
+                                            progress_token,
+                                            Some(line_count),
+                                            "Binary output detected"
+                                        )
+                                        .ok();
+                                }
+                            }
                         }
 
                         // Add truncation marker if needed
                         output_buffer.add_truncation_marker();
 
-                        return Ok((status, output_buffer));
+                        return Ok((status, output_buffer, line_count));
                     }
                     Err(e) => {
                         return Err(ShellError::ExecutionError {
@@ -993,7 +1088,7 @@ async fn process_child_output_with_limits(
     // Add truncation marker
     output_buffer.add_truncation_marker();
 
-    Ok((exit_status, output_buffer))
+    Ok((exit_status, output_buffer, line_count))
 }
 
 /// Execute a shell command with process management and full output capture
@@ -1162,15 +1257,13 @@ async fn execute_shell_command(
             })?;
 
         // Process output with limits using streaming
-        let (exit_status, output_buffer) = process_child_output_with_limits(
+        let (exit_status, output_buffer, line_count) = process_child_output_with_limits(
             child,
             &output_limits,
             progress_sender,
             progress_token,
         )
         .await?;
-
-        let (exit_status, output_buffer) = (exit_status, output_buffer);
         {
             let execution_time = start_time.elapsed();
             let execution_time_ms = execution_time.as_millis() as u64;
@@ -1212,11 +1305,15 @@ async fn execute_shell_command(
                 sender
                     .send_progress_with_metadata(
                         progress_token,
-                        Some(100),
-                        format!("Command completed with exit code {}", exit_code),
+                        Some(line_count),
+                        format!(
+                            "Command completed: {} lines, exit code {}",
+                            line_count, exit_code
+                        ),
                         json!({
                             "exit_code": exit_code,
                             "duration_ms": execution_time_ms,
+                            "line_count": line_count,
                             "output_truncated": output_buffer.is_truncated()
                         }),
                     )
@@ -3517,30 +3614,29 @@ mod tests {
             notifications.push(notif);
         }
 
-        // Should have at least: start notification, output lines, completion notification
+        // Should have at least: start notification and completion notification
         assert!(
-            notifications.len() >= 3,
-            "Expected at least 3 notifications (start, output, completion), got {}",
+            notifications.len() >= 2,
+            "Expected at least 2 notifications (start, completion), got {}",
             notifications.len()
         );
 
-        // First notification should be the start notification with 0% progress
+        // First notification should be the start notification with 0 progress
         assert_eq!(
             notifications[0].progress,
             Some(0),
-            "First notification should be start with 0% progress"
+            "First notification should be start with 0 progress"
         );
         assert!(
             notifications[0].message.contains("Executing"),
             "Start notification should mention executing"
         );
 
-        // Last notification should be completion with 100% progress
+        // Last notification should be completion with line count progress
         let last = notifications.last().unwrap();
-        assert_eq!(
-            last.progress,
-            Some(100),
-            "Last notification should be completion with 100% progress"
+        assert!(
+            last.progress.is_some() && last.progress.unwrap() > 0,
+            "Last notification should have non-zero progress (line count)"
         );
         assert!(
             last.message.contains("completed"),
@@ -3635,9 +3731,12 @@ mod tests {
 
         // Find the completion notification
         let completion = notifications.last().unwrap();
-        assert_eq!(completion.progress, Some(100));
+        assert!(
+            completion.progress.is_some() && completion.progress.unwrap() > 0,
+            "Completion should have non-zero progress (line count)"
+        );
 
-        // Check that metadata contains exit code and duration
+        // Check that metadata contains exit code, duration, and line count
         if let Some(metadata) = &completion.metadata {
             assert!(
                 metadata.get("exit_code").is_some(),
@@ -3646,6 +3745,10 @@ mod tests {
             assert!(
                 metadata.get("duration_ms").is_some(),
                 "Completion metadata should include duration_ms"
+            );
+            assert!(
+                metadata.get("line_count").is_some(),
+                "Completion metadata should include line_count"
             );
             assert!(
                 metadata.get("output_truncated").is_some(),
@@ -3738,5 +3841,173 @@ mod tests {
             // This will fail to compile if Severity is not implemented
             let _severity = error.severity();
         }
+    }
+
+    #[tokio::test]
+    async fn test_batched_progress_notifications() {
+        use crate::mcp::progress_notifications::ProgressSender;
+        use tokio::sync::mpsc;
+
+        let tool = ShellExecuteTool::new();
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let progress_sender = ProgressSender::new(tx);
+
+        let mut context = create_test_context();
+        context.progress_sender = Some(progress_sender);
+
+        let mut args = serde_json::Map::new();
+        // Generate 25 lines of output to test batching (should get notifications at 0, 10, 20, and final)
+        args.insert(
+            "command".to_string(),
+            serde_json::Value::String("for i in $(seq 1 25); do echo line $i; done".to_string()),
+        );
+
+        let result = tool.execute(args, &context).await;
+        assert!(result.is_ok(), "Command should execute successfully");
+
+        let call_result = result.unwrap();
+        assert_eq!(call_result.is_error, Some(false));
+
+        // Collect all notifications
+        let mut notifications = Vec::new();
+        while let Ok(notif) = rx.try_recv() {
+            notifications.push(notif);
+        }
+
+        // Should have at least: start (0), batched notifications, and completion
+        assert!(
+            notifications.len() >= 3,
+            "Expected at least 3 notifications (start, batched, completion), got {}",
+            notifications.len()
+        );
+
+        // First notification should be start with progress = 0
+        assert_eq!(
+            notifications[0].progress,
+            Some(0),
+            "First notification should be start with 0 progress"
+        );
+        assert!(
+            notifications[0].message.contains("Executing"),
+            "Start notification should mention executing"
+        );
+
+        // Last notification should be completion with final line count
+        let last = notifications.last().unwrap();
+        assert!(
+            last.progress.is_some() && last.progress.unwrap() > 0,
+            "Last notification should have non-zero progress (line count)"
+        );
+        assert!(
+            last.message.contains("completed"),
+            "Completion notification should mention completed"
+        );
+
+        // Verify progress values are monotonically increasing
+        let progresses: Vec<u32> = notifications.iter().filter_map(|n| n.progress).collect();
+        for window in progresses.windows(2) {
+            assert!(
+                window[0] <= window[1],
+                "Progress should increase monotonically: {} > {}",
+                window[0],
+                window[1]
+            );
+        }
+
+        // Check that we have batched notifications (at multiples of 10)
+        let batch_notifications: Vec<_> = notifications
+            .iter()
+            .filter(|n| {
+                n.progress.is_some()
+                    && n.progress.unwrap() % 10 == 0
+                    && n.progress.unwrap() > 0
+                    && n.message.contains("Processing output")
+            })
+            .collect();
+
+        assert!(
+            batch_notifications.len() >= 2,
+            "Should have at least 2 batched progress notifications (at lines 10, 20)"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_binary_detection_notification() {
+        use crate::mcp::progress_notifications::ProgressSender;
+        use tokio::sync::mpsc;
+
+        let tool = ShellExecuteTool::new();
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let progress_sender = ProgressSender::new(tx);
+
+        let mut context = create_test_context();
+        context.progress_sender = Some(progress_sender);
+
+        let mut args = serde_json::Map::new();
+        // Use printf to output binary data (null bytes)
+        args.insert(
+            "command".to_string(),
+            serde_json::Value::String(
+                "printf '\\x00\\x01\\x02\\x03\\x04\\x05\\x06\\x07\\x08\\x09\\n'".to_string(),
+            ),
+        );
+
+        let result = tool.execute(args, &context).await;
+        assert!(result.is_ok(), "Command should execute successfully");
+
+        // Collect all notifications
+        let mut notifications = Vec::new();
+        while let Ok(notif) = rx.try_recv() {
+            notifications.push(notif);
+        }
+
+        // Should have at least start and completion notifications
+        assert!(
+            notifications.len() >= 2,
+            "Expected at least 2 notifications"
+        );
+
+        // Check if any notification mentions binary detection
+        let binary_notification = notifications
+            .iter()
+            .find(|n| n.message.contains("Binary output detected"));
+
+        assert!(
+            binary_notification.is_some(),
+            "Should have a notification about binary output detection"
+        );
+
+        // Verify binary notification only appears once
+        let binary_count = notifications
+            .iter()
+            .filter(|n| n.message.contains("Binary output detected"))
+            .count();
+
+        assert_eq!(
+            binary_count, 1,
+            "Binary detection notification should appear exactly once"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_progress_without_sender() {
+        let tool = ShellExecuteTool::new();
+        let mut context = create_test_context();
+        context.progress_sender = None;
+
+        let mut args = serde_json::Map::new();
+        args.insert(
+            "command".to_string(),
+            serde_json::Value::String("echo test".to_string()),
+        );
+
+        let result = tool.execute(args, &context).await;
+        assert!(
+            result.is_ok(),
+            "Command should execute successfully even without progress sender"
+        );
+
+        let call_result = result.unwrap();
+        assert_eq!(call_result.is_error, Some(false));
     }
 }

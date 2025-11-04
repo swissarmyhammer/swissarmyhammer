@@ -159,8 +159,7 @@ mod severity_tests {
 
     #[test]
     fn test_json_error_is_error_level() {
-        let json_err = serde_json::from_str::<serde_json::Value>("invalid json")
-            .unwrap_err();
+        let json_err = serde_json::from_str::<serde_json::Value>("invalid json").unwrap_err();
         let error = TemplatingError::Json(json_err);
         assert_eq!(error.severity(), ErrorSeverity::Error);
     }

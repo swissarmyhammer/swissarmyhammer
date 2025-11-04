@@ -5,9 +5,20 @@
 [![Rust](https://img.shields.io/badge/rust-1.70%2B-orange.svg)](https://www.rust-lang.org/)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-## 📚 [Complete Documentation →](https://swissarmyhammer.github.io/swissarmyhammer-tools/)
+## 📚 Documentation
 
-**Read the full documentation at [swissarmyhammer.github.io/swissarmyhammer-tools](https://swissarmyhammer.github.io/swissarmyhammer-tools/)** for comprehensive guides, examples, and API reference.
+**Complete documentation is available in the `doc/` directory.** Build it with:
+
+```bash
+cd doc && mdbook build
+```
+
+The built documentation will be in `doc/book/` and includes:
+- Getting Started guides
+- Architecture overview
+- Complete MCP tools reference
+- Examples and use cases
+- Troubleshooting and FAQ
 
 ---
 
