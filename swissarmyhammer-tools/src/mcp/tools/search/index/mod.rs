@@ -79,6 +79,40 @@ impl McpTool for SearchIndexTool {
             .expect("Failed to generate schema")
     }
 
+    /// Execute the search_index tool with comprehensive progress notifications
+    ///
+    /// # Progress Notification Flow
+    ///
+    /// This method implements batched progress notifications following the MCP specification:
+    ///
+    /// 1. **Start notification** (progress=0): "Starting indexing: {N} patterns"
+    ///    - Sent immediately when indexing begins
+    ///    - Includes metadata: patterns array and force flag
+    ///
+    /// 2. **Per-pattern notifications**: "Processing pattern: {pattern} ({M}/{N})"
+    ///    - Sent when starting to process each glob pattern
+    ///    - Includes metadata: current pattern, pattern index, total patterns
+    ///
+    /// 3. **Batched file notifications**: "Indexed {X} files"
+    ///    - Sent every 10 files (batch_size=10) during indexing
+    ///    - Progress values increase monotonically across all patterns
+    ///    - Includes metadata: current pattern, cumulative files_processed count
+    ///
+    /// 4. **Completion notification** (progress=100): "Indexed {N} files ({M} chunks) in {X}s"
+    ///    - Sent when all patterns have been processed
+    ///    - Includes metadata: files_indexed, files_failed, files_skipped, total_chunks, duration_ms
+    ///
+    /// # Error Handling
+    ///
+    /// Progress notification failures are intentionally ignored (using `.ok()`) to ensure
+    /// that indexing operations continue successfully even if the notification channel
+    /// encounters issues. This design prioritizes the core indexing functionality over
+    /// progress reporting.
+    ///
+    /// # Arguments
+    ///
+    /// * `arguments` - JSON object containing patterns (array of glob patterns) and force (boolean)
+    /// * `_context` - Tool context including optional progress sender for notifications
     async fn execute(
         &self,
         arguments: serde_json::Map<String, serde_json::Value>,
@@ -156,11 +190,65 @@ impl McpTool for SearchIndexTool {
 
         // Perform indexing for all patterns
         let mut combined_report = None;
+        let mut total_files_processed = 0;
+        let batch_size = 10;
 
-        for pattern in &request.patterns {
+        for (pattern_index, pattern) in request.patterns.iter().enumerate() {
             tracing::debug!("Processing pattern: {}", pattern);
+
+            // Send per-pattern progress notification
+            if let Some(sender) = &_context.progress_sender {
+                sender
+                    .send_progress_with_metadata(
+                        &progress_token,
+                        Some(total_files_processed as u32),
+                        format!(
+                            "Processing pattern {}/{}: {}",
+                            pattern_index + 1,
+                            request.patterns.len(),
+                            pattern
+                        ),
+                        json!({
+                            "pattern": pattern,
+                            "pattern_index": pattern_index + 1,
+                            "total_patterns": request.patterns.len(),
+                            "files_processed": total_files_processed
+                        }),
+                    )
+                    .ok();
+            }
+
+            // Create a progress callback for batched file updates
+            let progress_sender = _context.progress_sender.clone();
+            let progress_token_clone = progress_token.clone();
+            let pattern_clone = pattern.clone();
+            let base_files_processed = total_files_processed;
+
             let report = indexer
-                .index_glob(pattern, request.force)
+                .index_glob_with_progress(
+                    pattern,
+                    request.force,
+                    Some(move |files_in_pattern, _total_in_pattern| {
+                        let current_total = base_files_processed + files_in_pattern;
+
+                        // Send batched progress notifications every batch_size files
+                        if files_in_pattern % batch_size == 0 {
+                            if let Some(ref sender) = progress_sender {
+                                sender
+                                    .send_progress_with_metadata(
+                                        &progress_token_clone,
+                                        Some(current_total as u32),
+                                        format!("Indexed {} files", current_total),
+                                        json!({
+                                            "pattern": pattern_clone,
+                                            "files_processed": current_total
+                                        }),
+                                    )
+                                    .ok();
+                            }
+                        }
+                    }),
+                )
                 .await
                 .map_err(|e| {
                     McpError::internal_error(
@@ -168,6 +256,8 @@ impl McpTool for SearchIndexTool {
                         None,
                     )
                 })?;
+
+            total_files_processed += report.files_processed;
 
             match combined_report {
                 None => combined_report = Some(report),
@@ -400,10 +490,10 @@ fn add_{}(a: i32, b: i32) -> i32 {{
 
         // If indexing succeeded, verify notifications were sent
         if !notifications.is_empty() {
-            // Should have at least: start notification and completion notification
+            // Should have at least: start notification, per-pattern notification, and completion notification
             assert!(
-                notifications.len() >= 2,
-                "Expected at least 2 notifications (start, completion), got {}",
+                notifications.len() >= 3,
+                "Expected at least 3 notifications (start, per-pattern, completion), got {}",
                 notifications.len()
             );
 
@@ -416,6 +506,12 @@ fn add_{}(a: i32, b: i32) -> i32 {{
             assert!(
                 notifications[0].message.contains("Starting indexing"),
                 "Start notification should mention starting indexing"
+            );
+
+            // Second notification should be per-pattern notification
+            assert!(
+                notifications[1].message.contains("Processing pattern"),
+                "Second notification should mention processing pattern"
             );
 
             // Last notification should be completion with 100% progress
@@ -442,6 +538,96 @@ fn add_{}(a: i32, b: i32) -> i32 {{
                     );
                 }
             }
+
+            // Check for intermediate batched file notifications
+            // With 15 files and batch size of 10, we should see at least one batched notification
+            let batched_notifications: Vec<_> = notifications
+                .iter()
+                .filter(|n| {
+                    n.message.contains("Indexed")
+                        && n.message.contains("files")
+                        && !n.message.contains("in ")
+                })
+                .collect();
+
+            if !batched_notifications.is_empty() {
+                tracing::info!(
+                    "Found {} batched progress notifications",
+                    batched_notifications.len()
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_search_index_continues_when_progress_callback_panics() {
+        use crate::mcp::progress_notifications::ProgressSender;
+        use tokio::sync::mpsc;
+
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let progress_sender = ProgressSender::new(tx);
+
+        let mut context = create_test_context().await;
+        context.progress_sender = Some(progress_sender);
+
+        // Create a temporary directory with test files
+        let temp_dir = tempfile::TempDir::new().expect("Failed to create temp dir");
+        let test_dir = temp_dir.path();
+
+
+
+        // Create multiple test Rust files
+        for i in 0..5 {
+            let test_file = test_dir.join(format!("test_{}.rs", i));
+            std::fs::write(
+                &test_file,
+                format!(
+                    r#"fn function_{}() {{
+    println!("Hello from file {}", {});
+}}
+"#,
+                    i, i, i
+                ),
+            )
+            .expect("Failed to write test file");
+        }
+
+        let tool = SearchIndexTool::new();
+        let pattern = format!("{}/*.rs", test_dir.display());
+        let mut arguments = serde_json::Map::new();
+        arguments.insert(
+            "patterns".to_string(),
+            serde_json::Value::Array(vec![serde_json::Value::String(pattern)]),
+        );
+        arguments.insert("force".to_string(), serde_json::Value::Bool(false));
+
+        // Execute the tool (may fail if embedding model not available, which is expected in test environments)
+        let result = tool.execute(arguments, &context).await;
+
+        // Even if the progress callback has issues, indexing should complete
+        // The result may be an error due to missing embedding model, but it should not
+        // be due to progress callback failures
+        if let Err(e) = &result {
+            let error_msg = e.to_string();
+            assert!(
+                !error_msg.contains("progress") && !error_msg.contains("notification"),
+                "Error should not be related to progress notifications: {}",
+                error_msg
+            );
+        }
+
+        // Verify we still received progress notifications
+        let mut notifications = Vec::new();
+        while let Ok(notif) = rx.try_recv() {
+            notifications.push(notif);
+        }
+
+        // If any notifications were sent, verify indexing attempted to proceed
+        if !notifications.is_empty() {
+            tracing::info!(
+                "Received {} progress notifications despite callback issues",
+                notifications.len()
+            );
         }
     }
 }

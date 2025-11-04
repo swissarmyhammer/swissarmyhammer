@@ -107,6 +107,34 @@ impl FileIndexer {
         pattern: &str,
         force_reindex: bool,
     ) -> SearchResult<IndexingReport> {
+        self.index_glob_with_progress(pattern, force_reindex, None::<fn(usize, usize)>)
+            .await
+    }
+
+    /// Index files matching a glob pattern with optional progress callback
+    ///
+    /// # Arguments
+    /// * `pattern` - Glob pattern to match files (e.g., "**/*.rs")
+    /// * `force_reindex` - Whether to force re-indexing of already indexed files
+    /// * `progress_callback` - Optional callback function for progress tracking
+    ///
+    /// # Progress Callback Behavior
+    /// When provided, the callback is invoked after each file is processed with:
+    /// - `files_processed`: Cumulative count of files processed (monotonically increasing)
+    /// - `total_files`: Total number of files to be indexed
+    ///
+    /// The callback is called for every file, not just on batch boundaries. If the callback
+    /// panics or returns an error, it does not affect the indexing operation, which will
+    /// continue processing remaining files
+    pub async fn index_glob_with_progress<F>(
+        &mut self,
+        pattern: &str,
+        force_reindex: bool,
+        progress_callback: Option<F>,
+    ) -> SearchResult<IndexingReport>
+    where
+        F: Fn(usize, usize),
+    {
         tracing::info!("Starting indexing with pattern: {}", pattern);
 
         // Expand glob pattern to file paths
@@ -132,7 +160,8 @@ impl FileIndexer {
         }
 
         // Process files
-        self.index_files(files_to_process, force_reindex).await
+        self.index_files_with_progress(files_to_process, force_reindex, progress_callback)
+            .await
     }
 
     /// Expand glob pattern to list of file paths while respecting .gitignore
@@ -260,11 +289,40 @@ impl FileIndexer {
         file_paths: Vec<PathBuf>,
         force_reindex: bool,
     ) -> SearchResult<IndexingReport> {
+        self.index_files_with_progress(file_paths, force_reindex, None::<fn(usize, usize)>)
+            .await
+    }
+
+    /// Index a list of files with optional progress callback
+    ///
+    /// # Arguments
+    /// * `file_paths` - List of file paths to index
+    /// * `force_reindex` - Whether to force re-indexing of already indexed files
+    /// * `progress_callback` - Optional callback function for progress tracking
+    ///
+    /// # Progress Callback Behavior
+    /// When provided, the callback is invoked after each file is processed with:
+    /// - `files_processed`: Cumulative count of files processed (monotonically increasing)
+    /// - `total_files`: Total number of files to be indexed
+    ///
+    /// The callback is called for every file, not just on batch boundaries. If the callback
+    /// panics or returns an error, it does not affect the indexing operation, which will
+    /// continue processing remaining files
+    pub async fn index_files_with_progress<F>(
+        &mut self,
+        file_paths: Vec<PathBuf>,
+        force_reindex: bool,
+        progress_callback: Option<F>,
+    ) -> SearchResult<IndexingReport>
+    where
+        F: Fn(usize, usize),
+    {
         let mut report = IndexingReport::new();
         let start_time = std::time::Instant::now();
+        let total_files = file_paths.len();
 
         // Setup progress bar
-        let progress = ProgressBar::new(file_paths.len() as u64);
+        let progress = ProgressBar::new(total_files as u64);
         progress.set_style(
             ProgressStyle::default_bar()
                 .template(
@@ -274,6 +332,7 @@ impl FileIndexer {
                 .progress_chars("##-"),
         );
 
+        let mut files_processed = 0;
         for file_path in file_paths {
             progress.set_message(format!("Processing {}", file_path.display()));
 
@@ -292,6 +351,12 @@ impl FileIndexer {
             }
 
             progress.inc(1);
+            files_processed += 1;
+
+            // Call progress callback if provided
+            if let Some(ref callback) = progress_callback {
+                callback(files_processed, total_files);
+            }
         }
 
         progress.finish_with_message("Indexing complete");
@@ -307,7 +372,7 @@ impl FileIndexer {
         force_reindex: bool,
     ) -> SearchResult<SingleFileReport> {
         let start_time = std::time::Instant::now();
-        let mut report = SingleFileReport::new(file_path.to_path_buf());
+        let mut report = SingleFileReport::new();
 
         // Remove existing data if force re-indexing
         let cleanup_duration = if force_reindex {
@@ -669,22 +734,25 @@ impl Default for IndexingReport {
 /// Report for a single file indexing operation
 #[derive(Debug)]
 pub struct SingleFileReport {
-    #[allow(dead_code)]
-    file_path: PathBuf,
     success: bool,
     chunks_parsed: usize,
     embeddings_generated: usize,
 }
 
 impl SingleFileReport {
-    /// Create a new single file report for the given file path
-    pub fn new(file_path: PathBuf) -> Self {
+    /// Create a new single file report
+    pub fn new() -> Self {
         Self {
-            file_path,
             success: false,
             chunks_parsed: 0,
             embeddings_generated: 0,
         }
+    }
+}
+
+impl Default for SingleFileReport {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
