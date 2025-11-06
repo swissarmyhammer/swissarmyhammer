@@ -222,7 +222,7 @@ use super::notifications::NotificationSender;
 use super::progress_notifications::ProgressSender;
 use super::tool_handlers::ToolHandlers;
 use rmcp::model::{Annotated, CallToolResult, RawContent, RawTextContent, Tool};
-use rmcp::ErrorData as McpError;
+use rmcp::{ErrorData as McpError, Peer, RoleServer};
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -333,6 +333,20 @@ pub struct ToolContext {
     /// by the HTTP server on startup. Uses interior mutability to allow updates
     /// after context creation.
     pub mcp_server_port: Arc<RwLock<Option<u16>>>,
+
+    /// Optional MCP peer for tools that need to communicate with the client
+    ///
+    /// When present, tools can send requests to the MCP client (e.g., elicitation requests).
+    /// This field is populated during tool execution in the call_tool handler.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// if let Some(peer) = &context.peer {
+    ///     let result = peer.create_elicitation(request).await?;
+    /// }
+    /// ```
+    pub peer: Option<Arc<Peer<RoleServer>>>,
 }
 
 impl ToolContext {
@@ -353,6 +367,7 @@ impl ToolContext {
             notification_sender: None,
             progress_sender: None,
             mcp_server_port: Arc::new(RwLock::new(None)),
+            peer: None,
         }
     }
 
@@ -387,6 +402,7 @@ impl ToolContext {
             notification_sender: Some(notification_sender),
             progress_sender: None,
             mcp_server_port: Arc::new(RwLock::new(None)),
+            peer: None,
         }
     }
 
@@ -404,6 +420,23 @@ impl ToolContext {
     /// A new `ToolContext` with the progress sender set
     pub fn with_progress_sender(mut self, sender: ProgressSender) -> Self {
         self.progress_sender = Some(sender);
+        self
+    }
+
+    /// Set the MCP peer for this context
+    ///
+    /// Creates a new context with the peer added. This allows tools to
+    /// communicate with the MCP client (e.g., for elicitation requests).
+    ///
+    /// # Arguments
+    ///
+    /// * `peer` - The MCP peer to use
+    ///
+    /// # Returns
+    ///
+    /// A new `ToolContext` with the peer set
+    pub fn with_peer(mut self, peer: Arc<Peer<RoleServer>>) -> Self {
+        self.peer = Some(peer);
         self
     }
 }
@@ -1402,6 +1435,12 @@ pub fn register_search_tools(registry: &mut ToolRegistry) {
 pub fn register_outline_tools(registry: &mut ToolRegistry) {
     use super::tools::outline;
     outline::register_outline_tools(registry);
+}
+
+/// Register all question-related tools with the registry
+pub fn register_questions_tools(registry: &mut ToolRegistry) {
+    use super::tools::questions;
+    questions::register_questions_tools(registry);
 }
 
 /// Register all rules-related tools with the registry

@@ -21,9 +21,9 @@ use tokio::sync::{Mutex, RwLock};
 use super::tool_handlers::ToolHandlers;
 use super::tool_registry::{
     register_abort_tools, register_file_tools, register_flow_tools, register_git_tools,
-    register_issue_tools, register_memo_tools, register_outline_tools, register_rules_tools,
-    register_search_tools, register_shell_tools, register_todo_tools, register_web_fetch_tools,
-    register_web_search_tools, ToolContext, ToolRegistry,
+    register_issue_tools, register_memo_tools, register_outline_tools, register_questions_tools,
+    register_rules_tools, register_search_tools, register_shell_tools, register_todo_tools,
+    register_web_fetch_tools, register_web_search_tools, ToolContext, ToolRegistry,
 };
 
 /// MCP server for all SwissArmyHammer functionality.
@@ -181,6 +181,7 @@ impl McpServer {
         register_issue_tools(&mut tool_registry);
         register_memo_tools(&mut tool_registry);
         register_outline_tools(&mut tool_registry);
+        register_questions_tools(&mut tool_registry);
         register_rules_tools(&mut tool_registry);
         register_search_tools(&mut tool_registry);
         register_shell_tools(&mut tool_registry);
@@ -775,7 +776,7 @@ impl ServerHandler for McpServer {
     async fn call_tool(
         &self,
         request: CallToolRequestParam,
-        _context: RequestContext<RoleServer>,
+        context: RequestContext<RoleServer>,
     ) -> std::result::Result<CallToolResult, McpError> {
         tracing::debug!(
             "🔧 call_tool() invoked for tool: {}, arguments: {:?}",
@@ -784,8 +785,17 @@ impl ServerHandler for McpServer {
         );
         if let Some(tool) = self.tool_registry.get_tool(&request.name) {
             tracing::info!("🔧 Executing tool: {}", request.name);
+
+            // Create a tool context with the peer for elicitation support
+            let tool_context_with_peer = (*self.tool_context)
+                .clone()
+                .with_peer(Arc::new(context.peer.clone()));
+
             let result = tool
-                .execute(request.arguments.unwrap_or_default(), &self.tool_context)
+                .execute(
+                    request.arguments.unwrap_or_default(),
+                    &tool_context_with_peer,
+                )
                 .await;
             tracing::debug!(
                 "🔧 Tool execution result for {}: {:?}",

@@ -42,6 +42,7 @@ pub mod git;
 pub mod issues;
 pub mod memoranda;
 pub mod outline;
+pub mod questions;
 pub mod rules;
 pub mod search;
 pub mod shell;

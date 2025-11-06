@@ -283,6 +283,7 @@ mod tests {
             notification_sender: None,
             progress_sender: None,
             mcp_server_port: Arc::new(RwLock::new(None)),
+            peer: None,
         }
     }
 
