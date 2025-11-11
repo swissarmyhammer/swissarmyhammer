@@ -1,3 +1,4 @@
+use crate::mcp::progress_notifications::generate_progress_token;
 use crate::mcp::shared_utils::{McpErrorHandler, McpValidation};
 use crate::mcp::tool_registry::{BaseToolImpl, McpTool, ToolContext};
 use async_trait::async_trait;
@@ -44,12 +45,15 @@ impl McpTool for MarkCompleteTodoTool {
     async fn execute(
         &self,
         arguments: serde_json::Map<String, serde_json::Value>,
-        _context: &ToolContext,
+        context: &ToolContext,
     ) -> std::result::Result<CallToolResult, McpError> {
         // Parse arguments using base tool implementation
         let request: MarkCompleteTodoRequest = BaseToolImpl::parse_arguments(arguments)?;
 
         tracing::debug!("Marking todo item '{}' complete", request.id);
+
+        // Generate progress token for notifications
+        let progress_token = generate_progress_token();
 
         // Validate ID
         McpValidation::validate_not_empty(request.id.as_str(), "todo item ID")
@@ -65,6 +69,22 @@ impl McpTool for MarkCompleteTodoTool {
         match storage.mark_todo_complete(&request.id).await {
             Ok(()) => {
                 tracing::info!("Marked todo item {} complete", request.id);
+
+                // Send progress notification for todo completion
+                if let Some(sender) = &context.progress_sender {
+                    if let Err(e) = sender.send_progress_with_metadata(
+                        &progress_token,
+                        Some(100),
+                        "Todo completed",
+                        json!({
+                            "action": "todo_completed",
+                            "todo_id": request.id.as_str()
+                        }),
+                    ) {
+                        tracing::warn!("Failed to send todo completion notification: {}", e);
+                    }
+                }
+
                 Ok(BaseToolImpl::create_success_response(
                     json!({
                         "message": format!("Marked todo item '{}' as complete", request.id),

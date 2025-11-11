@@ -1,3 +1,4 @@
+use crate::mcp::progress_notifications::generate_progress_token;
 use crate::mcp::shared_utils::{McpErrorHandler, McpValidation};
 use crate::mcp::tool_registry::{BaseToolImpl, McpTool, ToolContext};
 use async_trait::async_trait;
@@ -48,12 +49,15 @@ impl McpTool for CreateTodoTool {
     async fn execute(
         &self,
         arguments: serde_json::Map<String, serde_json::Value>,
-        _context: &ToolContext,
+        context: &ToolContext,
     ) -> std::result::Result<CallToolResult, McpError> {
         // Parse arguments using base tool implementation
         let request: CreateTodoRequest = BaseToolImpl::parse_arguments(arguments)?;
 
         tracing::debug!("Creating todo item");
+
+        // Generate progress token for notifications
+        let progress_token = generate_progress_token();
 
         // Validate task
         McpValidation::validate_not_empty(&request.task, "task description")
@@ -65,11 +69,28 @@ impl McpTool for CreateTodoTool {
 
         // Create the todo item
         match storage
-            .create_todo_item(request.task, request.context)
+            .create_todo_item(request.task.clone(), request.context.clone())
             .await
         {
             Ok(item) => {
                 tracing::info!("Created todo item {}", item.id);
+
+                // Send progress notification for todo creation
+                if let Some(sender) = &context.progress_sender {
+                    if let Err(e) = sender.send_progress_with_metadata(
+                        &progress_token,
+                        Some(100),
+                        "Todo created",
+                        json!({
+                            "action": "todo_created",
+                            "todo_id": item.id.as_str(),
+                            "task": item.task
+                        }),
+                    ) {
+                        tracing::warn!("Failed to send todo creation notification: {}", e);
+                    }
+                }
+
                 Ok(BaseToolImpl::create_success_response(
                     json!({
                         "message": "Created todo item",
