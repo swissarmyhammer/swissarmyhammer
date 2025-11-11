@@ -12,8 +12,6 @@ use swissarmyhammer_prompts::{PromptLibrary, PromptResolver};
 /// because it requires specific parameters
 #[rstest]
 #[case("code/issue")]
-#[case("code/review")]
-#[case("review/code")]
 #[case("issue/complete")]
 #[case(".system")]
 fn test_builtin_prompt_renders_successfully(#[case] prompt_name: &str) {
@@ -75,13 +73,7 @@ fn test_all_builtin_prompts_load_without_errors() {
         .expect("Should be able to list prompt names");
 
     // Check that key prompts are present
-    let expected_prompts = vec![
-        "code/issue",
-        "code/review",
-        "issue/complete",
-        ".system",
-        ".check",
-    ];
+    let expected_prompts = vec!["code/issue", "issue/complete", ".system", ".check"];
 
     for expected in expected_prompts {
         assert!(

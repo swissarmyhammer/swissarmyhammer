@@ -14,10 +14,6 @@ The goal is to:
 ## Rules
 
 - NEVER skip todos
-- Always read the task and context carefully
-- Complete only the specific work described in the todo
-- Use todo_mark_complete after successfully finishing the work
-- If the todo cannot be completed, document why and ask for help
 - DO NOT commit to git
 
 ## Process
@@ -28,9 +24,3 @@ The goal is to:
 - Verify the work is complete and correct
 - Use todo_mark_complete with the todo's id to mark it as done
 - Report what was accomplished
-
-## Reporting
-
-Show progress as:
-
-✅ Completed todo: <task description>

@@ -12,8 +12,7 @@ stateDiagram-v2
     [*] --> start
     start --> code
     code --> review
-    review --> code_review
-    code_review --> test
+    review --> test
     test --> complete
     complete --> commit
     commit --> [*]
@@ -23,8 +22,7 @@ stateDiagram-v2
 
 - start: log "Working an issue"
 - code: execute prompt "code/issue"
-- review: execute prompt "review/code"
-- code_review: execute prompt "code/review"
+- review: run workflow "review"
 - test: run workflow "test"
 - complete: execute prompt "issue/complete"
 - commit: execute prompt "commit"

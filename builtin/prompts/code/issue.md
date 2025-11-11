@@ -34,5 +34,3 @@ Your job is to resolve an issue by coding a solution.
 - DO NOT mark an issue complete with the issue_mark_complete tool
 - As you code, keep notes on your decisions and add them to the issue file
 - Report your progress
-
-{% render "review_format" %}
