@@ -16,7 +16,10 @@ use std::sync::Arc;
 use std::time::Instant;
 use swissarmyhammer_agent_executor::AgentExecutor;
 use swissarmyhammer_config::AgentConfig;
-use swissarmyhammer_rules::{RuleCheckRequest as DomainRuleCheckRequest, RuleChecker, Severity};
+use swissarmyhammer_rules::{
+    RuleCheckRequest as DomainRuleCheckRequest, RuleChecker, RuleViolation, Severity,
+};
+use swissarmyhammer_todo::{TodoId, TodoStorage};
 use tokio::sync::OnceCell;
 
 // Progress notification milestones
@@ -85,6 +88,10 @@ pub struct RuleCheckRequest {
     /// Check only changed files (intersects with file_paths if provided)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub changed: Option<bool>,
+
+    /// Automatically create a todo item for each rule violation found
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub create_todo: Option<bool>,
 }
 
 /// Expand glob patterns to concrete file paths
@@ -143,6 +150,69 @@ async fn expand_glob_patterns(patterns: &[String]) -> Result<HashSet<String>, Mc
     }
 
     Ok(files)
+}
+
+/// Create a todo item for a rule violation
+///
+/// Creates a todo with formatted task and context fields containing
+/// all relevant violation details.
+///
+/// # Arguments
+///
+/// * `violation` - The rule violation to create a todo for
+///
+/// # Returns
+///
+/// The ID of the created todo item, or an error if creation fails
+async fn create_todo_for_violation(violation: &RuleViolation) -> Result<TodoId, McpError> {
+    // Format the task field
+    let task = format!(
+        "Fix {} violation in {}",
+        violation.rule_name,
+        violation.file_path.display()
+    );
+
+    // Format the context field with rich markdown
+    let context = format!(
+        r#"## Rule Violation
+
+**Rule**: {}
+**File**: {}
+**Severity**: {:?}
+
+## Violation Details
+
+{}
+
+## How to Fix
+
+See rule documentation for guidance on resolving this violation."#,
+        violation.rule_name,
+        violation.file_path.display(),
+        violation.severity,
+        violation.message
+    );
+
+    // Create the todo storage
+    let storage = TodoStorage::new_default().map_err(|e| {
+        McpError::internal_error(format!("Failed to initialize todo storage: {}", e), None)
+    })?;
+
+    // Create the todo item
+    let todo_item = storage
+        .create_todo_item(task, Some(context))
+        .await
+        .map_err(|e| {
+            McpError::internal_error(format!("Failed to create todo item: {}", e), None)
+        })?;
+
+    tracing::info!(
+        "Created todo {} for violation in {}",
+        todo_item.id,
+        violation.file_path.display()
+    );
+
+    Ok(todo_item.id)
 }
 
 /// Get changed files from git
@@ -334,6 +404,10 @@ impl McpTool for RuleCheckTool {
                 "changed": {
                     "type": "boolean",
                     "description": "Optional flag to check only changed files (intersects with file_paths if provided)"
+                },
+                "create_todo": {
+                    "type": "boolean",
+                    "description": "Automatically create a todo item for each rule violation found (default: false)"
                 }
             }
         })
@@ -495,25 +569,90 @@ impl McpTool for RuleCheckTool {
 
         tracing::info!("Check completed: found {} violations", violations.len());
 
+        // Create todos for violations if requested
+        let mut todos_created = Vec::new();
+        if request.create_todo.unwrap_or(false) && !violations.is_empty() {
+            tracing::info!("Creating todos for {} violations", violations.len());
+
+            for violation in &violations {
+                match create_todo_for_violation(violation).await {
+                    Ok(todo_id) => {
+                        todos_created.push(json!({
+                            "todo_id": todo_id.to_string(),
+                            "rule": violation.rule_name.clone(),
+                            "file": violation.file_path.to_string_lossy().to_string()
+                        }));
+
+                        // Send progress notification for each todo created
+                        if let Some(sender) = &context.progress_sender {
+                            if let Err(e) = sender.send_progress_with_metadata(
+                                &progress_token,
+                                None, // Indeterminate progress during todo creation
+                                format!(
+                                    "Created todo for {} violation in {}",
+                                    violation.rule_name,
+                                    violation.file_path.display()
+                                ),
+                                json!({
+                                    "todo_id": todo_id.to_string(),
+                                    "rule": violation.rule_name
+                                }),
+                            ) {
+                                tracing::debug!("Failed to send progress notification: {}", e);
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        // Log warning but don't fail the check
+                        tracing::warn!(
+                            "Failed to create todo for violation in {}: {}",
+                            violation.file_path.display(),
+                            e
+                        );
+                    }
+                }
+            }
+
+            tracing::info!("Created {} todos for violations", todos_created.len());
+        }
+
         let duration = start_time.elapsed();
 
         // Send completion notification
         if let Some(sender) = &context.progress_sender {
             let duration_ms = duration.as_millis() as u64;
-            if let Err(e) = sender.send_progress_with_metadata(
-                &progress_token,
-                Some(PROGRESS_COMPLETE),
+            let mut metadata = json!({
+                "violations_found": violations.len(),
+                "files_with_violations": files_with_violations.len(),
+                "violation_count_by_severity": violation_count_by_severity,
+                "duration_ms": duration_ms
+            });
+
+            // Add todos_created to metadata if any were created
+            if !todos_created.is_empty() {
+                metadata["todos_created"] = json!(todos_created.len());
+            }
+
+            let message = if !todos_created.is_empty() {
+                format!(
+                    "Rules check complete: {} violations in {} files, {} todos created",
+                    violations.len(),
+                    files_with_violations.len(),
+                    todos_created.len()
+                )
+            } else {
                 format!(
                     "Rules check complete: {} violations in {} files",
                     violations.len(),
                     files_with_violations.len()
-                ),
-                json!({
-                    "violations_found": violations.len(),
-                    "files_with_violations": files_with_violations.len(),
-                    "violation_count_by_severity": violation_count_by_severity,
-                    "duration_ms": duration_ms
-                }),
+                )
+            };
+
+            if let Err(e) = sender.send_progress_with_metadata(
+                &progress_token,
+                Some(PROGRESS_COMPLETE),
+                message,
+                metadata,
             ) {
                 tracing::debug!("Failed to send progress notification: {}", e);
             }
@@ -869,6 +1008,29 @@ fn complex_function() {
         assert_eq!(request.changed, None);
     }
 
+    /// Test that create_todo parameter is properly parsed
+    #[tokio::test]
+    async fn test_rule_check_request_with_create_todo() {
+        let args = json!({
+            "rule_names": ["test-rule"],
+            "create_todo": true
+        });
+
+        let request: RuleCheckRequest = serde_json::from_value(args).unwrap();
+        assert_eq!(request.create_todo, Some(true));
+    }
+
+    /// Test that create_todo parameter defaults to None when not provided
+    #[tokio::test]
+    async fn test_rule_check_request_create_todo_default() {
+        let args = json!({
+            "rule_names": ["test-rule"]
+        });
+
+        let request: RuleCheckRequest = serde_json::from_value(args).unwrap();
+        assert_eq!(request.create_todo, None);
+    }
+
     /// Test expand_glob_patterns helper function
     #[tokio::test]
     async fn test_expand_glob_patterns() {
@@ -898,6 +1060,132 @@ fn complex_function() {
         let files = result.unwrap();
         assert_eq!(files.len(), 1);
         assert!(files.iter().any(|f| f.ends_with("test.rs")));
+    }
+
+    /// Test that create_todo parameter creates todos for violations
+    #[tokio::test]
+    async fn test_rule_check_with_create_todo() {
+        use std::fs;
+        use tempfile::TempDir;
+
+        // Create temporary directories for both test file and todos
+        let temp_dir = TempDir::new().unwrap();
+        let todo_dir = TempDir::new().unwrap();
+
+        // Create a test file with a known violation
+        let test_file = temp_dir.path().join("test.rs");
+        fs::write(
+            &test_file,
+            r#"
+// TODO: This is a todo comment that should trigger a violation
+fn example() {
+    let x = vec![1, 2, 3];
+    println!("x: {:?}", x);
+}
+"#,
+        )
+        .unwrap();
+
+        // Create tool and context
+        let tool = RuleCheckTool::new();
+        let context = crate::test_utils::create_test_context().await;
+
+        // Override the todo directory for this test
+        std::env::set_var(
+            "SAH_TODO_DIR",
+            todo_dir.path().to_string_lossy().to_string(),
+        );
+
+        // Create request with create_todo enabled
+        let mut arguments = serde_json::Map::new();
+        arguments.insert(
+            "rule_names".to_string(),
+            json!(["code-quality/no-todo-comments"]),
+        );
+        arguments.insert(
+            "file_paths".to_string(),
+            json!([test_file.to_string_lossy().to_string()]),
+        );
+        arguments.insert("create_todo".to_string(), json!(true));
+
+        // Execute the tool
+        let result = tool.execute(arguments, &context).await;
+
+        // Clean up environment variable
+        std::env::remove_var("SAH_TODO_DIR");
+
+        match result {
+            Ok(call_result) => {
+                let text = format!("{:?}", call_result);
+                println!("Create todo test result: {}", text);
+
+                // Should have found violations and created todos
+                assert!(
+                    text.contains("violation") || text.contains("todos created"),
+                    "Should have found violations and mentioned todo creation. Got: {}",
+                    text
+                );
+
+                // Check that a todo file was actually created
+                let todo_file = todo_dir.path().join("todo.yaml");
+                if todo_file.exists() {
+                    let todo_content = fs::read_to_string(&todo_file).unwrap();
+                    println!("Todo file content:\n{}", todo_content);
+
+                    // Verify the todo contains expected information
+                    assert!(
+                        todo_content.contains("Fix") && todo_content.contains("violation"),
+                        "Todo should contain violation fix information"
+                    );
+                    assert!(
+                        todo_content.contains("Rule Violation"),
+                        "Todo context should contain violation details"
+                    );
+                }
+            }
+            Err(e) => {
+                panic!("Tool execution failed: {}", e);
+            }
+        }
+    }
+
+    /// Test that create_todo gracefully handles errors without failing the check
+    #[tokio::test]
+    async fn test_rule_check_create_todo_error_handling() {
+        use std::fs;
+        use tempfile::TempDir;
+
+        let temp_dir = TempDir::new().unwrap();
+
+        // Create a test file
+        let test_file = temp_dir.path().join("test.rs");
+        fs::write(&test_file, "fn main() {}").unwrap();
+
+        // Create tool and context
+        let tool = RuleCheckTool::new();
+        let context = crate::test_utils::create_test_context().await;
+
+        // Set an invalid todo directory path to force an error
+        std::env::set_var("SAH_TODO_DIR", "/invalid/readonly/path/that/does/not/exist");
+
+        // Create request with create_todo enabled
+        let mut arguments = serde_json::Map::new();
+        arguments.insert(
+            "file_paths".to_string(),
+            json!([test_file.to_string_lossy().to_string()]),
+        );
+        arguments.insert("create_todo".to_string(), json!(true));
+
+        // Execute should succeed even if todo creation fails
+        let result = tool.execute(arguments, &context).await;
+
+        // Clean up environment variable
+        std::env::remove_var("SAH_TODO_DIR");
+
+        assert!(
+            result.is_ok(),
+            "Rule check should succeed even if todo creation fails"
+        );
     }
 
     /// Test that changed files integration returns early when no changed files

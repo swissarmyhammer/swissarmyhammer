@@ -11,7 +11,7 @@ use tempfile::TempDir;
 fn run_sah_command_with_cwd(args: &[&str], cwd: &std::path::Path) -> std::process::Output {
     // Canonicalize the path to resolve symlinks (important on macOS where /var -> /private/var)
     let canonical_cwd = cwd.canonicalize().expect("Failed to canonicalize cwd");
-    
+
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_sah"));
     cmd.args(args).current_dir(canonical_cwd);
     cmd.output().expect("Failed to execute sah command")
@@ -20,7 +20,7 @@ fn run_sah_command_with_cwd(args: &[&str], cwd: &std::path::Path) -> std::proces
 /// Initialize a minimal git repository in the given directory
 fn init_git_repo(path: &std::path::Path) {
     let repo = Repository::init(path).expect("Failed to initialize git repo");
-    
+
     // Set git config for the repo
     let mut config = repo.config().expect("Failed to get git config");
     config
@@ -42,16 +42,13 @@ fn test_todo_commands_in_help() {
     let _stdout = String::from_utf8_lossy(&output.stdout);
     // Help should not contain 'todo' as a top-level command (it's a tool category)
     // but running 'sah todo --help' should work
-    
+
     let todo_help = Command::new(env!("CARGO_BIN_EXE_sah"))
         .args(["todo", "--help"])
         .output()
         .expect("Failed to execute sah todo --help");
 
-    assert!(
-        todo_help.status.success(),
-        "todo --help should succeed"
-    );
+    assert!(todo_help.status.success(), "todo --help should succeed");
 
     let todo_stdout = String::from_utf8_lossy(&todo_help.stdout);
     assert!(
@@ -128,10 +125,7 @@ fn test_todo_create_without_context() {
     std::fs::create_dir_all(temp_path.join(".swissarmyhammer"))
         .expect("Failed to create .swissarmyhammer dir");
 
-    let output = run_sah_command_with_cwd(
-        &["todo", "create", "--task", "Simple task"],
-        temp_path,
-    );
+    let output = run_sah_command_with_cwd(&["todo", "create", "--task", "Simple task"], temp_path);
 
     assert!(
         output.status.success(),
@@ -158,14 +152,9 @@ fn test_todo_show_next() {
         .expect("Failed to create .swissarmyhammer dir");
 
     // First create a todo item
-    let create_output = run_sah_command_with_cwd(
-        &["todo", "create", "--task", "Task to show"],
-        temp_path,
-    );
-    assert!(
-        create_output.status.success(),
-        "todo create should succeed"
-    );
+    let create_output =
+        run_sah_command_with_cwd(&["todo", "create", "--task", "Task to show"], temp_path);
+    assert!(create_output.status.success(), "todo create should succeed");
 
     // Now show the next item
     let show_output = run_sah_command_with_cwd(&["todo", "show", "--item", "next"], temp_path);
@@ -222,18 +211,16 @@ fn test_todo_complete_command() {
         .expect("Failed to create .swissarmyhammer dir");
 
     // First create a todo item
-    let create_output = run_sah_command_with_cwd(
-        &["todo", "create", "--task", "Task to complete"],
-        temp_path,
-    );
-    assert!(
-        create_output.status.success(),
-        "todo create should succeed"
-    );
+    let create_output =
+        run_sah_command_with_cwd(&["todo", "create", "--task", "Task to complete"], temp_path);
+    assert!(create_output.status.success(), "todo create should succeed");
 
     // Extract the ID from the creation output
     let create_stdout = String::from_utf8_lossy(&create_output.stdout);
-    let id_start = create_stdout.find("\"id\":\"").expect("Should find id in output") + 6;
+    let id_start = create_stdout
+        .find("\"id\":\"")
+        .expect("Should find id in output")
+        + 6;
     let id_end = create_stdout[id_start..]
         .find('\"')
         .expect("Should find end of id")

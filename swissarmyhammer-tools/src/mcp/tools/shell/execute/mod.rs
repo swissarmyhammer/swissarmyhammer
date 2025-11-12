@@ -2104,19 +2104,19 @@ mod tests {
                 total_size, response_json["binary_output_detected"], response_json["stdout"]
             );
 
-            // If we got output, it should contain binary markers and be detected as binary
-            if total_size > 0 {
-                assert_eq!(response_json["binary_output_detected"], true);
+            // Command must produce output for this test to be valid
+            assert!(
+                total_size > 0,
+                "Command must produce output to test binary detection"
+            );
 
-                // stdout should indicate binary content rather than showing raw bytes
-                let stdout = response_json["stdout"].as_str().unwrap();
-                assert!(stdout.contains("Binary content"));
-                assert!(stdout.contains("bytes"));
-            } else {
-                // If no output captured, skip the binary detection test
-                // This can happen with different echo implementations
-                println!("No output captured, skipping binary detection test");
-            }
+            // Output should contain binary markers and be detected as binary
+            assert_eq!(response_json["binary_output_detected"], true);
+
+            // stdout should indicate binary content rather than showing raw bytes
+            let stdout = response_json["stdout"].as_str().unwrap();
+            assert!(stdout.contains("Binary content"));
+            assert!(stdout.contains("bytes"));
         }
     }
 

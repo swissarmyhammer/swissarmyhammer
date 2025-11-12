@@ -23,6 +23,12 @@ use swissarmyhammer_rules::{CheckMode, RuleCheckRequest, RuleChecker, RuleViolat
 
 use super::cli::CheckCommand;
 
+/// Exit code for error conditions
+const EXIT_CODE_ERROR: i32 = 1;
+
+/// Port number representing dynamic port allocation (OS will assign an available port)
+const DYNAMIC_PORT: u16 = 0;
+
 /// Request structure for check command execution
 ///
 /// Combines the command parameters with optional agent configuration
@@ -44,7 +50,12 @@ fn expand_glob_patterns(patterns: &[String]) -> CliResult<HashSet<String>> {
             pattern.clone()
         } else {
             std::env::current_dir()
-                .map_err(|e| CliError::new(format!("Failed to get current directory: {}", e), 1))?
+                .map_err(|e| {
+                    CliError::new(
+                        format!("Failed to get current directory: {}", e),
+                        EXIT_CODE_ERROR,
+                    )
+                })?
                 .join(pattern)
                 .to_string_lossy()
                 .to_string()
@@ -55,8 +66,12 @@ fn expand_glob_patterns(patterns: &[String]) -> CliResult<HashSet<String>> {
         glob_options.require_literal_separator = false;
         glob_options.require_literal_leading_dot = false;
 
-        let entries = glob::glob_with(&glob_pattern, glob_options)
-            .map_err(|e| CliError::new(format!("Invalid glob pattern '{}': {}", pattern, e), 1))?;
+        let entries = glob::glob_with(&glob_pattern, glob_options).map_err(|e| {
+            CliError::new(
+                format!("Invalid glob pattern '{}': {}", pattern, e),
+                EXIT_CODE_ERROR,
+            )
+        })?;
 
         for entry in entries {
             match entry {
@@ -79,20 +94,27 @@ fn expand_glob_patterns(patterns: &[String]) -> CliResult<HashSet<String>> {
 ///
 /// Gets files that have changed on the current branch using git operations.
 fn get_changed_files() -> CliResult<HashSet<String>> {
-    let git_ops = GitOperations::new()
-        .map_err(|e| CliError::new(format!("Failed to initialize git operations: {}", e), 1))?;
+    let git_ops = GitOperations::new().map_err(|e| {
+        CliError::new(
+            format!("Failed to initialize git operations: {}", e),
+            EXIT_CODE_ERROR,
+        )
+    })?;
 
     // Get current branch
-    let current_branch = git_ops
-        .current_branch()
-        .map_err(|e| CliError::new(format!("Failed to get current branch: {}", e), 1))?;
+    let current_branch = git_ops.current_branch().map_err(|e| {
+        CliError::new(
+            format!("Failed to get current branch: {}", e),
+            EXIT_CODE_ERROR,
+        )
+    })?;
 
     tracing::info!("Getting changed files for branch: {}", current_branch);
 
     // Try to find parent branch
     let parent_branch = {
         let branch_name = BranchName::new(&current_branch)
-            .map_err(|e| CliError::new(format!("Invalid branch name: {}", e), 1))?;
+            .map_err(|e| CliError::new(format!("Invalid branch name: {}", e), EXIT_CODE_ERROR))?;
 
         match git_ops.find_merge_target_for_issue(&branch_name) {
             Ok(target) if target != current_branch => Some(target),
@@ -106,7 +128,12 @@ fn get_changed_files() -> CliResult<HashSet<String>> {
         tracing::info!("Feature branch detected, parent: {}", parent);
         git_ops
             .get_changed_files_from_parent(&current_branch, parent)
-            .map_err(|e| CliError::new(format!("Failed to get changed files: {}", e), 1))?
+            .map_err(|e| {
+                CliError::new(
+                    format!("Failed to get changed files: {}", e),
+                    EXIT_CODE_ERROR,
+                )
+            })?
     } else {
         // Main/trunk branch: get only uncommitted changes
         tracing::info!("Main/trunk branch detected, getting uncommitted changes only");
@@ -116,7 +143,7 @@ fn get_changed_files() -> CliResult<HashSet<String>> {
     // Add uncommitted changes
     let status = git_ops
         .get_status()
-        .map_err(|e| CliError::new(format!("Failed to get git status: {}", e), 1))?;
+        .map_err(|e| CliError::new(format!("Failed to get git status: {}", e), EXIT_CODE_ERROR))?;
 
     let mut uncommitted = status.all_changed_files();
     uncommitted.extend(status.untracked);
@@ -223,8 +250,13 @@ async fn execute_check_command_impl(
         config
     } else {
         // Load from configuration files (sah.yaml)
-        let template_context = swissarmyhammer_config::TemplateContext::load_for_cli()
-            .map_err(|e| CliError::new(format!("Failed to load configuration: {}", e), 1))?;
+        let template_context =
+            swissarmyhammer_config::TemplateContext::load_for_cli().map_err(|e| {
+                CliError::new(
+                    format!("Failed to load configuration: {}", e),
+                    EXIT_CODE_ERROR,
+                )
+            })?;
         template_context.get_agent_config(None)
     };
 
@@ -242,7 +274,7 @@ async fn execute_check_command_impl(
             tracing::info!("Starting MCP server for LlamaAgent");
             let tools_mcp_handle = start_mcp_server(
                 McpServerMode::Http {
-                    port: if llama_config.mcp_server.port == 0 {
+                    port: if llama_config.mcp_server.port == DYNAMIC_PORT {
                         None
                     } else {
                         Some(llama_config.mcp_server.port)
@@ -251,7 +283,12 @@ async fn execute_check_command_impl(
                 Some(PromptLibrary::default()),
             )
             .await
-            .map_err(|e| CliError::new(format!("Failed to start MCP server: {}", e), 1))?;
+            .map_err(|e| {
+                CliError::new(
+                    format!("Failed to start MCP server: {}", e),
+                    EXIT_CODE_ERROR,
+                )
+            })?;
 
             tracing::info!(
                 "MCP server started on port {:?}",
@@ -259,7 +296,7 @@ async fn execute_check_command_impl(
             );
 
             // Convert tools McpServerHandle to agent-executor McpServerHandle
-            let port = tools_mcp_handle.info.port.unwrap_or(0);
+            let port = tools_mcp_handle.info.port.unwrap_or(DYNAMIC_PORT);
             let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
 
             // Store handles in guard to ensure proper cleanup when function exits
@@ -274,7 +311,7 @@ async fn execute_check_command_impl(
             exec.initialize().await.map_err(|e| {
                 CliError::new(
                     format!("Failed to initialize LlamaAgent executor: {}", e),
-                    1,
+                    EXIT_CODE_ERROR,
                 )
             })?;
 
@@ -287,7 +324,7 @@ async fn execute_check_command_impl(
             exec.initialize().await.map_err(|e| {
                 CliError::new(
                     format!("Failed to initialize ClaudeCode executor: {}", e),
-                    1,
+                    EXIT_CODE_ERROR,
                 )
             })?;
             Box::new(exec)
@@ -295,15 +332,22 @@ async fn execute_check_command_impl(
     };
 
     let agent: Arc<dyn AgentExecutor> = Arc::from(executor);
-    let checker = RuleChecker::new(agent)
-        .map_err(|e| CliError::new(format!("Failed to create rule checker: {}", e), 1))?;
+    let checker = RuleChecker::new(agent).map_err(|e| {
+        CliError::new(
+            format!("Failed to create rule checker: {}", e),
+            EXIT_CODE_ERROR,
+        )
+    })?;
 
     // Parse severity from string if provided
     let severity = request
         .cmd
         .severity
         .as_ref()
-        .map(|s| s.parse().map_err(|e: String| CliError::new(e, 1)))
+        .map(|s| {
+            s.parse()
+                .map_err(|e: String| CliError::new(e, EXIT_CODE_ERROR))
+        })
         .transpose()?;
 
     // Determine check mode from CLI flags
@@ -372,15 +416,21 @@ async fn execute_check_command_impl(
     };
 
     // All modes now use the unified streaming check API
-    let mut stream = checker
-        .check(rule_request)
-        .await
-        .map_err(|e| CliError::new(format!("Failed to start rule check: {}", e), 1))?;
+    let mut stream = checker.check(rule_request).await.map_err(|e| {
+        CliError::new(
+            format!("Failed to start rule check: {}", e),
+            EXIT_CODE_ERROR,
+        )
+    })?;
 
     // Handle violations based on create_issues flag
     if request.cmd.create_issues {
-        let storage = FileSystemIssueStorage::new_default()
-            .map_err(|e| CliError::new(format!("Failed to initialize issue storage: {}", e), 1))?;
+        let storage = FileSystemIssueStorage::new_default().map_err(|e| {
+            CliError::new(
+                format!("Failed to initialize issue storage: {}", e),
+                EXIT_CODE_ERROR,
+            )
+        })?;
 
         let mut created_count = 0;
         let mut skipped_count = 0;
@@ -402,7 +452,10 @@ async fn execute_check_command_impl(
                 }
                 Err(e) => {
                     // Non-violation error
-                    return Err(CliError::new(format!("Check failed: {}", e), 1));
+                    return Err(CliError::new(
+                        format!("Check failed: {}", e),
+                        EXIT_CODE_ERROR,
+                    ));
                 }
             }
         }
@@ -419,7 +472,7 @@ async fn execute_check_command_impl(
         if violation_count > 0 {
             return Err(CliError::new(
                 format!("Found {} ERROR violation(s)", violation_count),
-                1,
+                EXIT_CODE_ERROR,
             ));
         }
 
@@ -435,7 +488,10 @@ async fn execute_check_command_impl(
                 }
                 Err(e) => {
                     // Non-violation error
-                    return Err(CliError::new(format!("Check failed: {}", e), 1));
+                    return Err(CliError::new(
+                        format!("Check failed: {}", e),
+                        EXIT_CODE_ERROR,
+                    ));
                 }
             }
         }
@@ -453,7 +509,7 @@ async fn execute_check_command_impl(
         if violation_count > 0 {
             return Err(CliError::new(
                 format!("Found {} ERROR violation(s)", violation_count),
-                1,
+                EXIT_CODE_ERROR,
             ));
         }
 
@@ -462,6 +518,7 @@ async fn execute_check_command_impl(
 }
 
 /// Number of characters to use from the file path hash in issue names
+/// 8 characters provides sufficient uniqueness (2^32 combinations) while keeping issue names readable and manageable
 const ISSUE_HASH_LENGTH: usize = 8;
 
 /// Generate a deterministic hash for a file path
@@ -537,7 +594,10 @@ async fn create_issue_for_violation(
                 .create_issue(issue_name.clone(), issue_content)
                 .await
                 .map_err(|e| {
-                    CliError::new(format!("Failed to create issue '{}': {}", issue_name, e), 1)
+                    CliError::new(
+                        format!("Failed to create issue '{}': {}", issue_name, e),
+                        EXIT_CODE_ERROR,
+                    )
                 })?;
 
             if !quiet {
@@ -943,8 +1003,11 @@ mod tests {
         use std::path::PathBuf;
         use swissarmyhammer_rules::{RuleViolation, Severity};
 
+        /// Length of test message for verifying long message handling
+        const TEST_LONG_MESSAGE_LENGTH: usize = 10000;
+
         // Create a very long message
-        let long_message = "A".repeat(10000);
+        let long_message = "A".repeat(TEST_LONG_MESSAGE_LENGTH);
 
         let violation = RuleViolation::new(
             "test-rule".to_string(),

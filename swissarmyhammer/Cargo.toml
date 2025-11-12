@@ -134,7 +134,6 @@ is-terminal = { workspace = true }
 [dev-dependencies]
 tempfile = { workspace = true }
 proptest = { workspace = true }
-criterion = { workspace = true }
 tracing-subscriber = { workspace = true }
 sysinfo = { workspace = true }
 serial_test = "3.1"

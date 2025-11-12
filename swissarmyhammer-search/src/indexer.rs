@@ -3,9 +3,9 @@
 use crate::{
     embedding::EmbeddingEngine,
     error::{SearchError, SearchResult},
-    parser::{CodeParser, ParserConfig},
+    parser::CodeParser,
     storage::VectorStorage,
-    types::{CodeChunk, FileId, IndexedFile},
+    types::{FileId, IndexedFile},
     utils::{FileChangeTracker, FileHasher},
 };
 use chrono::Utc;
@@ -32,6 +32,44 @@ pub struct IndexingOptions {
     pub max_files: Option<usize>,
 }
 
+/// Parse a glob pattern to extract base directory and file pattern
+fn parse_glob_pattern(pattern: &str) -> SearchResult<(PathBuf, String)> {
+    let path = Path::new(pattern);
+
+    // Find the first component with glob characters
+    let mut base_components = Vec::new();
+    let mut pattern_components = Vec::new();
+    let mut found_glob = false;
+
+    for component in path.components() {
+        let component_str = component.as_os_str().to_string_lossy();
+        if !found_glob
+            && !component_str.contains('*')
+            && !component_str.contains('?')
+            && !component_str.contains('[')
+        {
+            base_components.push(component);
+        } else {
+            found_glob = true;
+            pattern_components.push(component_str.to_string());
+        }
+    }
+
+    let base_dir = if base_components.is_empty() {
+        PathBuf::from(".")
+    } else {
+        base_components.iter().collect()
+    };
+
+    let file_pattern = if pattern_components.is_empty() {
+        "*".to_string()
+    } else {
+        pattern_components.join("/")
+    };
+
+    Ok((base_dir, file_pattern))
+}
+
 impl FileIndexer {
     /// Create a new FileIndexer with default configuration
     ///
@@ -53,44 +91,16 @@ impl FileIndexer {
         })
     }
 
-    /// Create a FileIndexer with a custom embedding engine
+    /// Create a new FileIndexer for testing with test embedding engine
     ///
     /// # Arguments
     /// * `storage` - Vector storage backend for persisting chunks and embeddings
-    /// * `embedding_engine` - Pre-configured embedding engine to use for generating embeddings
     ///
     /// # Returns
-    /// A new FileIndexer instance with the provided embedding engine and default parser configuration
-    pub async fn with_custom_embedding_engine(
-        storage: VectorStorage,
-        embedding_engine: EmbeddingEngine,
-    ) -> SearchResult<Self> {
+    /// A new FileIndexer instance with test embedding engine and default parser configuration
+    pub async fn new_for_testing(storage: VectorStorage) -> SearchResult<Self> {
+        let embedding_engine = EmbeddingEngine::new_for_testing().await?;
         let parser = CodeParser::new(Default::default())?;
-        let change_tracker = FileChangeTracker::new(storage.clone());
-
-        Ok(Self {
-            storage,
-            embedding_engine,
-            parser,
-            change_tracker,
-        })
-    }
-
-    /// Create a FileIndexer with custom embedding engine and parser configuration
-    ///
-    /// # Arguments
-    /// * `storage` - Vector storage backend for persisting chunks and embeddings
-    /// * `embedding_engine` - Pre-configured embedding engine to use for generating embeddings
-    /// * `parser_config` - Custom parser configuration for code chunk extraction
-    ///
-    /// # Returns
-    /// A new FileIndexer instance with all custom components configured
-    pub async fn with_custom_config(
-        storage: VectorStorage,
-        embedding_engine: EmbeddingEngine,
-        parser_config: ParserConfig,
-    ) -> SearchResult<Self> {
-        let parser = CodeParser::new(parser_config)?;
         let change_tracker = FileChangeTracker::new(storage.clone());
 
         Ok(Self {
@@ -139,7 +149,46 @@ impl FileIndexer {
         tracing::info!("Starting indexing with pattern: {}", pattern);
 
         // Expand glob pattern to file paths
-        let file_paths = self.expand_glob_pattern(pattern)?;
+        let mut file_paths = Vec::new();
+
+        // Parse the pattern to extract base directory and file pattern
+        let (base_dir, file_pattern) = parse_glob_pattern(pattern)?;
+
+        // Compile the glob pattern once for reuse
+        let glob_pattern = glob::Pattern::new(&file_pattern).map_err(|e| {
+            SearchError::Config(format!("Invalid glob pattern '{file_pattern}': {e}"))
+        })?;
+
+        // Create a walker that respects .gitignore files
+        let walker = WalkBuilder::new(&base_dir)
+            .git_ignore(true) // Respect .gitignore files
+            .git_global(true) // Respect global gitignore
+            .git_exclude(true) // Respect .git/info/exclude
+            .hidden(false) // Include hidden files (let gitignore decide)
+            .parents(true) // Check parent directories for .gitignore
+            .build();
+
+        // Walk the directory structure and collect matching files
+        for entry in walker {
+            match entry {
+                Ok(dir_entry) => {
+                    let path = dir_entry.path();
+                    if path.is_file() {
+                        // Check if the file matches the glob pattern
+                        let path_str = path.to_string_lossy();
+                        if glob_pattern.matches(&path_str) {
+                            // Filter supported file types
+                            if self.parser.is_supported_file(path) {
+                                file_paths.push(path.to_path_buf());
+                            }
+                        }
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!("Error processing directory entry: {}", e);
+                }
+            }
+        }
 
         if file_paths.is_empty() {
             tracing::warn!("No files found matching pattern: {}", pattern);
@@ -163,100 +212,6 @@ impl FileIndexer {
         // Process files
         self.index_files_with_progress(files_to_process, force_reindex, progress_callback)
             .await
-    }
-
-    /// Expand glob pattern to list of file paths while respecting .gitignore
-    fn expand_glob_pattern(&self, pattern: &str) -> SearchResult<Vec<PathBuf>> {
-        let mut paths = Vec::new();
-
-        // Parse the pattern to extract base directory and file pattern
-        let (base_dir, file_pattern) = self.parse_glob_pattern(pattern)?;
-
-        // Create a walker that respects .gitignore files
-        let walker = WalkBuilder::new(&base_dir)
-            .git_ignore(true) // Respect .gitignore files
-            .git_global(true) // Respect global gitignore
-            .git_exclude(true) // Respect .git/info/exclude
-            .hidden(false) // Include hidden files (let gitignore decide)
-            .parents(true) // Check parent directories for .gitignore
-            .build();
-
-        // Walk the directory structure and collect matching files
-        for entry in walker {
-            match entry {
-                Ok(dir_entry) => {
-                    let path = dir_entry.path();
-                    if path.is_file() {
-                        // Check if the file matches the glob pattern
-                        if self.matches_glob_pattern(path, &file_pattern)? {
-                            // Filter supported file types
-                            if self.is_supported_file(path) {
-                                paths.push(path.to_path_buf());
-                            }
-                        }
-                    }
-                }
-                Err(e) => {
-                    tracing::warn!("Error processing directory entry: {}", e);
-                }
-            }
-        }
-
-        Ok(paths)
-    }
-
-    /// Parse a glob pattern to extract base directory and file pattern
-    fn parse_glob_pattern(&self, pattern: &str) -> SearchResult<(PathBuf, String)> {
-        let path = Path::new(pattern);
-
-        // Find the first component with glob characters
-        let mut base_components = Vec::new();
-        let mut pattern_components = Vec::new();
-        let mut found_glob = false;
-
-        for component in path.components() {
-            let component_str = component.as_os_str().to_string_lossy();
-            if !found_glob
-                && !component_str.contains('*')
-                && !component_str.contains('?')
-                && !component_str.contains('[')
-            {
-                base_components.push(component);
-            } else {
-                found_glob = true;
-                pattern_components.push(component_str.to_string());
-            }
-        }
-
-        let base_dir = if base_components.is_empty() {
-            PathBuf::from(".")
-        } else {
-            base_components.iter().collect()
-        };
-
-        let file_pattern = if pattern_components.is_empty() {
-            "*".to_string()
-        } else {
-            pattern_components.join("/")
-        };
-
-        Ok((base_dir, file_pattern))
-    }
-
-    /// Check if a file path matches a glob pattern
-    fn matches_glob_pattern(&self, path: &Path, pattern: &str) -> SearchResult<bool> {
-        // Use the glob crate to compile the pattern and test the path
-        let glob_pattern = glob::Pattern::new(pattern)
-            .map_err(|e| SearchError::Config(format!("Invalid glob pattern '{pattern}': {e}")))?;
-
-        // Extract the relative path from the base for matching
-        let path_str = path.to_string_lossy();
-        Ok(glob_pattern.matches(&path_str))
-    }
-
-    /// Check if a file is supported for indexing
-    fn is_supported_file(&self, path: &Path) -> bool {
-        self.parser.is_supported_file(path)
     }
 
     /// Filter files based on change detection
@@ -474,7 +429,22 @@ impl FileIndexer {
         }
 
         // Store file metadata
-        let file_metadata = self.create_file_metadata(file_path, &chunks)?;
+        let language = self.parser.detect_language(file_path);
+        let content_hash = FileHasher::hash_file(file_path).map_err(|e| {
+            SearchError::FileSystem(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                e.to_string(),
+            ))
+        })?;
+        let file_id = FileId(file_path.to_string_lossy().to_string());
+        let file_metadata = IndexedFile {
+            file_id,
+            path: file_path.to_path_buf(),
+            language,
+            content_hash,
+            chunk_count: chunks.len(),
+            indexed_at: Utc::now(),
+        };
         self.storage
             .store_indexed_file(&file_metadata)
             .map_err(|e| {
@@ -520,31 +490,6 @@ impl FileIndexer {
 
         report.success = true;
         Ok(report)
-    }
-
-    /// Create file metadata for storage
-    fn create_file_metadata(
-        &self,
-        file_path: &Path,
-        chunks: &[CodeChunk],
-    ) -> SearchResult<IndexedFile> {
-        let language = self.parser.detect_language(file_path);
-        let content_hash = FileHasher::hash_file(file_path).map_err(|e| {
-            SearchError::FileSystem(std::io::Error::new(
-                std::io::ErrorKind::Other,
-                e.to_string(),
-            ))
-        })?;
-        let file_id = FileId(file_path.to_string_lossy().to_string());
-
-        Ok(IndexedFile {
-            file_id,
-            path: file_path.to_path_buf(),
-            language,
-            content_hash,
-            chunk_count: chunks.len(),
-            indexed_at: Utc::now(),
-        })
     }
 
     /// Index files in smaller batches to manage memory usage
@@ -624,12 +569,6 @@ impl FileIndexer {
             chunk_count: total_chunks,
             embedding_count: storage_stats.total_embeddings,
         })
-    }
-
-    /// Create a FileIndexer for testing with mock embedding engine (no network required)
-    pub async fn new_for_testing(storage: VectorStorage) -> SearchResult<Self> {
-        let embedding_engine = EmbeddingEngine::new_for_testing().await?;
-        Self::with_custom_embedding_engine(storage, embedding_engine).await
     }
 }
 
@@ -800,8 +739,15 @@ mod tests {
             .initialize()
             .map_err(|e| SearchError::Index(e.to_string()))?;
 
-        let indexer =
-            FileIndexer::with_custom_config(storage, embedding_service, parser_config).await?;
+        let parser = CodeParser::new(parser_config)?;
+        let change_tracker = FileChangeTracker::new(storage.clone());
+
+        let indexer = FileIndexer {
+            storage,
+            embedding_engine: embedding_service,
+            parser,
+            change_tracker,
+        };
         Ok((indexer, temp_dir))
     }
 
@@ -1043,63 +989,42 @@ mod tests {
 
     #[tokio::test]
     async fn test_glob_pattern_parsing() {
-        // Skip test if embedding models aren't available
-        let indexer_result = create_test_indexer().await;
-        let (indexer, _temp_dir) = match indexer_result {
-            Ok(result) => result,
-            Err(e) => {
-                tracing::warn!("Skipping test_glob_pattern_parsing: {e}");
-                return;
-            }
-        };
-
         // Test simple patterns
-        let (base, pattern) = indexer.parse_glob_pattern("*.rs").unwrap();
+        let (base, pattern) = parse_glob_pattern("*.rs").unwrap();
         assert_eq!(base, PathBuf::from("."));
         assert_eq!(pattern, "*.rs");
 
         // Test directory with pattern
-        let (base, pattern) = indexer.parse_glob_pattern("src/*.rs").unwrap();
+        let (base, pattern) = parse_glob_pattern("src/*.rs").unwrap();
         assert_eq!(base, PathBuf::from("src"));
         assert_eq!(pattern, "*.rs");
 
         // Test nested directory with pattern
-        let (base, pattern) = indexer.parse_glob_pattern("src/main/**/*.rs").unwrap();
+        let (base, pattern) = parse_glob_pattern("src/main/**/*.rs").unwrap();
         assert_eq!(base, PathBuf::from("src/main"));
         assert_eq!(pattern, "**/*.rs");
 
         // Test absolute path
-        let (base, pattern) = indexer.parse_glob_pattern("/usr/local/*.rs").unwrap();
+        let (base, pattern) = parse_glob_pattern("/usr/local/*.rs").unwrap();
         assert_eq!(base, PathBuf::from("/usr/local"));
         assert_eq!(pattern, "*.rs");
     }
 
     #[tokio::test]
     async fn test_pattern_matching() {
-        let (indexer, _temp_dir) = create_test_indexer().await.unwrap();
-
         // Test simple glob patterns
-        assert!(indexer
-            .matches_glob_pattern(Path::new("test.rs"), "*.rs")
-            .unwrap());
-        assert!(!indexer
-            .matches_glob_pattern(Path::new("test.py"), "*.rs")
-            .unwrap());
+        let pattern = glob::Pattern::new("*.rs").unwrap();
+        assert!(pattern.matches("test.rs"));
+        assert!(!pattern.matches("test.py"));
 
         // Test directory patterns
-        assert!(indexer
-            .matches_glob_pattern(Path::new("src/main.rs"), "src/*.rs")
-            .unwrap());
-        assert!(!indexer
-            .matches_glob_pattern(Path::new("lib/main.rs"), "src/*.rs")
-            .unwrap());
+        let pattern = glob::Pattern::new("src/*.rs").unwrap();
+        assert!(pattern.matches("src/main.rs"));
+        assert!(!pattern.matches("lib/main.rs"));
 
         // Test recursive patterns
-        assert!(indexer
-            .matches_glob_pattern(Path::new("src/deep/main.rs"), "**/*.rs")
-            .unwrap());
-        assert!(indexer
-            .matches_glob_pattern(Path::new("main.rs"), "**/*.rs")
-            .unwrap());
+        let pattern = glob::Pattern::new("**/*.rs").unwrap();
+        assert!(pattern.matches("src/deep/main.rs"));
+        assert!(pattern.matches("main.rs"));
     }
 }

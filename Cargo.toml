@@ -156,7 +156,6 @@ chromiumoxide = "0.7"
 assert_cmd = "2.0"
 predicates = "3.0"
 proptest = "1.0"
-criterion = "0.5"
 sysinfo = "0.30"
 
 
