@@ -42,6 +42,10 @@ impl McpTool for MarkCompleteTodoTool {
         })
     }
 
+    fn cli_name(&self) -> &'static str {
+        "complete"
+    }
+
     async fn execute(
         &self,
         arguments: serde_json::Map<String, serde_json::Value>,

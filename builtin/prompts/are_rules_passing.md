@@ -16,6 +16,6 @@ Create todo items for each rule violation found
 ## Process
 
 - Use the rules_check MCP tool with `changed: true` to check only changed files
-- Use max_errors parameter set to 1 to stop on first error for faster correction loop
+- Use `max_errors: 1` to stop on first error for faster correction loop
 - If there are any violations, use todo_create to create a todo item for each violation with the file path, line number, and violation message
 - Respond with only YES or NO based on whether violations exist

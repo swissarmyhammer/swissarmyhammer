@@ -119,13 +119,14 @@ impl FileIndexer {
     /// * `progress_callback` - Optional callback function for progress tracking
     ///
     /// # Progress Callback Behavior
-    /// When provided, the callback is invoked after each file is processed with:
-    /// - `files_processed`: Cumulative count of files processed (monotonically increasing)
-    /// - `total_files`: Total number of files to be indexed
-    ///
-    /// The callback is called for every file, not just on batch boundaries. If the callback
-    /// panics or returns an error, it does not affect the indexing operation, which will
-    /// continue processing remaining files
+    /// When provided, the callback is invoked after each individual file completes processing:
+    /// - **Invocation timing**: Called once per file, immediately after that file's indexing completes
+    /// - **No batching**: Files are not batched; each file triggers an immediate callback
+    /// - **Parameters**:
+    ///   - `files_processed`: Cumulative count of files processed so far (1, 2, 3, ..., total_files)
+    ///   - `total_files`: Total number of files to be indexed (constant throughout)
+    /// - **Error handling**: Callback errors or panics do not stop the indexing operation
+    /// - **Threading**: Callbacks are invoked sequentially on the same thread that performs indexing
     pub async fn index_glob_with_progress<F>(
         &mut self,
         pattern: &str,
@@ -301,13 +302,14 @@ impl FileIndexer {
     /// * `progress_callback` - Optional callback function for progress tracking
     ///
     /// # Progress Callback Behavior
-    /// When provided, the callback is invoked after each file is processed with:
-    /// - `files_processed`: Cumulative count of files processed (monotonically increasing)
-    /// - `total_files`: Total number of files to be indexed
-    ///
-    /// The callback is called for every file, not just on batch boundaries. If the callback
-    /// panics or returns an error, it does not affect the indexing operation, which will
-    /// continue processing remaining files
+    /// When provided, the callback is invoked after each individual file completes processing:
+    /// - **Invocation timing**: Called once per file, immediately after that file's indexing completes
+    /// - **No batching**: Files are not batched; each file triggers an immediate callback
+    /// - **Parameters**:
+    ///   - `files_processed`: Cumulative count of files processed so far (1, 2, 3, ..., total_files)
+    ///   - `total_files`: Total number of files to be indexed (constant throughout)
+    /// - **Error handling**: Callback errors or panics do not stop the indexing operation
+    /// - **Threading**: Callbacks are invoked sequentially on the same thread that performs indexing
     pub async fn index_files_with_progress<F>(
         &mut self,
         file_paths: Vec<PathBuf>,
