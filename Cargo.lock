@@ -6861,6 +6861,7 @@ dependencies = [
 name = "swissarmyhammer-todo"
 version = "0.2.0"
 dependencies = [
+ "chrono",
  "serde",
  "serde_yaml",
  "swissarmyhammer-common",

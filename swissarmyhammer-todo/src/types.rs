@@ -1,6 +1,7 @@
 //! Core types for todo management
 
 use crate::error::{Result, TodoError};
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use swissarmyhammer_common::generate_monotonic_ulid;
 
@@ -70,16 +71,23 @@ pub struct TodoItem {
     pub context: Option<String>,
     /// Boolean flag indicating completion status
     pub done: bool,
+    /// UTC timestamp when this todo was created
+    pub created_at: DateTime<Utc>,
+    /// UTC timestamp when this todo was last updated
+    pub updated_at: DateTime<Utc>,
 }
 
 impl TodoItem {
     /// Create a new todo item
     pub fn new(task: String, context: Option<String>) -> Self {
+        let now = Utc::now();
         Self {
             id: TodoId::new(),
             task,
             context,
             done: false,
+            created_at: now,
+            updated_at: now,
         }
     }
 
