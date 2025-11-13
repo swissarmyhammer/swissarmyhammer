@@ -305,7 +305,7 @@ impl RuleChecker {
 
         // Check cache before proceeding with LLM evaluation
         if let Some(cached_result) = self.cache.get(&cache_key)? {
-            tracing::trace!(
+            tracing::debug!(
                 "Cache hit for {} against rule {} - skipping LLM call",
                 target_path.display(),
                 rule.name
