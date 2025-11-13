@@ -6,6 +6,7 @@ use crate::mcp::progress_notifications::{generate_progress_token, ProgressSender
 use crate::mcp::shared_utils::{McpErrorHandler, McpValidation};
 use crate::mcp::tool_registry::{BaseToolImpl, McpTool, ToolContext};
 use async_trait::async_trait;
+use byte_unit::Byte;
 use rmcp::model::CallToolResult;
 use rmcp::ErrorData as McpError;
 use serde::{Deserialize, Serialize};
@@ -20,106 +21,20 @@ use tokio::process::{Child, Command};
 
 // Performance and integration tests would use additional dependencies like futures, assert_cmd, etc.
 
-/// Error types for size string parsing
-#[derive(Debug, Clone, PartialEq)]
-enum SizeParseError {
-    EmptyString,
-    InvalidUnit(String),
-    InvalidNumber(String),
-    Overflow(String),
-}
-
-impl fmt::Display for SizeParseError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            SizeParseError::EmptyString => write!(f, "Size string cannot be empty"),
-            SizeParseError::InvalidUnit(input) => write!(f, "Invalid size unit in '{}'", input),
-            SizeParseError::InvalidNumber(input) => {
-                write!(f, "Invalid number in size string '{}'", input)
-            }
-            SizeParseError::Overflow(input) => write!(f, "Size value too large in '{}'", input),
-        }
-    }
-}
-
-impl std::error::Error for SizeParseError {}
-
 // Default shell configuration constants (replacing sah_config)
 
-/// Maximum output size for shell commands (10MB)
+/// Maximum output size for shell commands (10MiB)
 ///
 /// This string format allows for easy parsing and modification while
 /// maintaining human-readable configuration values.
-const DEFAULT_MAX_OUTPUT_SIZE: &str = "10MB";
+/// Uses MiB (mebibytes) for binary units (1024-based).
+const DEFAULT_MAX_OUTPUT_SIZE: &str = "10MiB";
 
 /// Maximum length for individual output lines (2000 characters)
 ///
 /// Lines longer than this are truncated to prevent memory issues
 /// from commands that output very long single lines.
 const DEFAULT_MAX_LINE_LENGTH: usize = 2000;
-
-/// Parse size strings with units (e.g., "10MB", "1GB", "512KB") into bytes
-///
-/// Supports the following formats:
-/// - Pure numbers (treated as bytes): "1024", "500"
-/// - With explicit units: "1KB", "10MB", "2GB", "1024B"
-/// - Case-insensitive: "1kb", "10Mb", "2gb"
-/// - Whitespace is trimmed automatically
-///
-/// # Examples
-///
-/// Basic usage (examples cannot be tested as function is private):
-/// - `parse_size_string("1024")` returns `Ok(1024)`
-/// - `parse_size_string("1KB")` returns `Ok(1024)`
-/// - `parse_size_string("1MB")` returns `Ok(1024 * 1024)`
-///
-/// # Errors
-///
-/// Returns `SizeParseError` for:
-/// - Empty or whitespace-only input
-/// - Invalid units (anything other than B, KB, MB, GB)
-/// - Invalid numbers (non-numeric values, decimals, negative numbers)
-/// - Overflow conditions
-fn parse_size_string(size_str: &str) -> Result<usize, SizeParseError> {
-    let size_str = size_str.trim().to_uppercase();
-
-    if size_str.is_empty() {
-        return Err(SizeParseError::EmptyString);
-    }
-
-    // Handle numeric-only values (assumed to be bytes)
-    if let Ok(bytes) = size_str.parse::<usize>() {
-        return Ok(bytes);
-    }
-
-    // Handle size with units - need to handle the B suffix differently
-    let (num_part, multiplier) = if size_str.ends_with("GB") {
-        (&size_str[..size_str.len() - 2], 1_024_usize * 1_024 * 1_024)
-    } else if size_str.ends_with("MB") {
-        (&size_str[..size_str.len() - 2], 1_024_usize * 1_024)
-    } else if size_str.ends_with("KB") {
-        (&size_str[..size_str.len() - 2], 1_024_usize)
-    } else if size_str.ends_with("B")
-        && !size_str.ends_with("KB")
-        && !size_str.ends_with("MB")
-        && !size_str.ends_with("GB")
-    {
-        (&size_str[..size_str.len() - 1], 1_usize)
-    } else {
-        return Err(SizeParseError::InvalidUnit(size_str.to_string()));
-    };
-
-    let num: usize = num_part
-        .parse()
-        .map_err(|_| SizeParseError::InvalidNumber(size_str.to_string()))?;
-
-    // Check for overflow before multiplication
-    if num > usize::MAX / multiplier {
-        return Err(SizeParseError::Overflow(size_str.to_string()));
-    }
-
-    Ok(num * multiplier)
-}
 
 /// Default shell configuration providing hardcoded sensible defaults
 ///
@@ -175,7 +90,9 @@ impl DefaultShellConfig {
     /// # Examples
     /// Returns 10,485,760 bytes (10MB limit)
     fn max_output_size() -> usize {
-        parse_size_string(DEFAULT_MAX_OUTPUT_SIZE).expect("Default size should be valid")
+        Byte::parse_str(DEFAULT_MAX_OUTPUT_SIZE, true)
+            .expect("Default size should be valid")
+            .as_u64() as usize
     }
 
     /// Maximum line length in characters (2000)
@@ -3365,224 +3282,10 @@ mod tests {
     */
 
     #[test]
-    fn test_parse_size_string_numeric_only() {
-        // Test numeric-only values (assumed to be bytes)
-        assert_eq!(parse_size_string("1024").unwrap(), 1024);
-        assert_eq!(parse_size_string("0").unwrap(), 0);
-        assert_eq!(parse_size_string("1").unwrap(), 1);
-        assert_eq!(parse_size_string("999999").unwrap(), 999999);
-    }
-
-    #[test]
-    fn test_parse_size_string_with_whitespace() {
-        // Test with leading/trailing whitespace
-        assert_eq!(parse_size_string("  1024  ").unwrap(), 1024);
-        assert_eq!(parse_size_string("\t10MB\n").unwrap(), 10 * 1024 * 1024);
-        assert_eq!(parse_size_string(" 5KB ").unwrap(), 5 * 1024);
-    }
-
-    #[test]
-    fn test_parse_size_string_bytes_unit() {
-        // Test explicit bytes unit
-        assert_eq!(parse_size_string("1024B").unwrap(), 1024);
-        assert_eq!(parse_size_string("1B").unwrap(), 1);
-        assert_eq!(parse_size_string("0B").unwrap(), 0);
-        assert_eq!(parse_size_string("500B").unwrap(), 500);
-    }
-
-    #[test]
-    fn test_parse_size_string_kilobytes() {
-        // Test kilobyte units
-        assert_eq!(parse_size_string("1KB").unwrap(), 1024);
-        assert_eq!(parse_size_string("5KB").unwrap(), 5 * 1024);
-        assert_eq!(parse_size_string("10KB").unwrap(), 10 * 1024);
-        assert_eq!(parse_size_string("1024KB").unwrap(), 1024 * 1024);
-    }
-
-    #[test]
-    fn test_parse_size_string_megabytes() {
-        // Test megabyte units
-        assert_eq!(parse_size_string("1MB").unwrap(), 1024 * 1024);
-        assert_eq!(parse_size_string("5MB").unwrap(), 5 * 1024 * 1024);
-        assert_eq!(parse_size_string("10MB").unwrap(), 10 * 1024 * 1024);
-        assert_eq!(parse_size_string("100MB").unwrap(), 100 * 1024 * 1024);
-    }
-
-    #[test]
-    fn test_parse_size_string_gigabytes() {
-        // Test gigabyte units
-        assert_eq!(parse_size_string("1GB").unwrap(), 1024 * 1024 * 1024);
-        assert_eq!(parse_size_string("2GB").unwrap(), 2 * 1024 * 1024 * 1024);
-        assert_eq!(parse_size_string("5GB").unwrap(), 5 * 1024 * 1024 * 1024);
-    }
-
-    #[test]
-    fn test_parse_size_string_case_insensitive() {
-        // Test case insensitivity
-        assert_eq!(parse_size_string("1kb").unwrap(), 1024);
-        assert_eq!(parse_size_string("1Kb").unwrap(), 1024);
-        assert_eq!(parse_size_string("1kB").unwrap(), 1024);
-        assert_eq!(parse_size_string("1KB").unwrap(), 1024);
-
-        assert_eq!(parse_size_string("1mb").unwrap(), 1024 * 1024);
-        assert_eq!(parse_size_string("1Mb").unwrap(), 1024 * 1024);
-        assert_eq!(parse_size_string("1mB").unwrap(), 1024 * 1024);
-        assert_eq!(parse_size_string("1MB").unwrap(), 1024 * 1024);
-
-        assert_eq!(parse_size_string("1gb").unwrap(), 1024 * 1024 * 1024);
-        assert_eq!(parse_size_string("1Gb").unwrap(), 1024 * 1024 * 1024);
-        assert_eq!(parse_size_string("1gB").unwrap(), 1024 * 1024 * 1024);
-        assert_eq!(parse_size_string("1GB").unwrap(), 1024 * 1024 * 1024);
-    }
-
-    #[test]
-    fn test_parse_size_string_error_cases() {
-        // Test empty string
-        assert!(parse_size_string("").is_err());
-        assert!(parse_size_string("   ").is_err());
-
-        // Test invalid units
-        assert!(parse_size_string("1TB").is_err());
-        assert!(parse_size_string("1PB").is_err());
-        assert!(parse_size_string("1XB").is_err());
-        assert!(parse_size_string("1INVALID").is_err());
-
-        // Test invalid numbers
-        assert!(parse_size_string("invalidKB").is_err());
-        assert!(parse_size_string("1.5KB").is_err()); // No decimal support
-        assert!(parse_size_string("-1KB").is_err()); // No negative numbers
-
-        // Test malformed inputs
-        assert!(parse_size_string("KB1").is_err());
-        assert!(parse_size_string("1 KB").is_err()); // Space between number and unit
-        assert!(parse_size_string("1KBextra").is_err());
-    }
-
-    #[test]
-    fn test_parse_size_string_edge_cases() {
-        // Test zero values
-        assert_eq!(parse_size_string("0").unwrap(), 0);
-        assert_eq!(parse_size_string("0B").unwrap(), 0);
-        assert_eq!(parse_size_string("0KB").unwrap(), 0);
-        assert_eq!(parse_size_string("0MB").unwrap(), 0);
-        assert_eq!(parse_size_string("0GB").unwrap(), 0);
-
-        // Test large values
-        assert_eq!(parse_size_string("4294967295").unwrap(), 4294967295); // Max u32
-
-        // Test boundary conditions around unit detection
-        assert_eq!(parse_size_string("1B").unwrap(), 1);
-        assert!(parse_size_string("B").is_err()); // No number
-    }
-
-    #[test]
-    fn test_parse_size_string_default_config_values() {
-        // Test that the default configuration values parse correctly
-        assert_eq!(
-            parse_size_string(DEFAULT_MAX_OUTPUT_SIZE).unwrap(),
-            10 * 1024 * 1024
-        );
-
+    fn test_default_config_values() {
         // Test DefaultShellConfig methods use valid defaults
         assert_eq!(DefaultShellConfig::max_output_size(), 10 * 1024 * 1024);
         assert_eq!(DefaultShellConfig::max_line_length(), 2000);
-    }
-
-    #[test]
-    fn test_parse_size_string_realistic_values() {
-        // Test realistic configuration values
-        assert_eq!(parse_size_string("1MB").unwrap(), 1_048_576);
-        assert_eq!(parse_size_string("10MB").unwrap(), 10_485_760);
-        assert_eq!(parse_size_string("100MB").unwrap(), 104_857_600);
-        assert_eq!(parse_size_string("1GB").unwrap(), 1_073_741_824);
-
-        // Test common size values
-        assert_eq!(parse_size_string("512KB").unwrap(), 524_288);
-        assert_eq!(parse_size_string("2MB").unwrap(), 2_097_152);
-        assert_eq!(parse_size_string("5GB").unwrap(), 5_368_709_120);
-    }
-
-    #[test]
-    fn test_parse_size_string_error_type_specificity() {
-        // Test specific error types
-        assert!(matches!(
-            parse_size_string(""),
-            Err(SizeParseError::EmptyString)
-        ));
-        assert!(matches!(
-            parse_size_string("   "),
-            Err(SizeParseError::EmptyString)
-        ));
-
-        // Test invalid units - these should fail with InvalidNumber because "1T" isn't a valid number after stripping "B"
-        assert!(matches!(
-            parse_size_string("1TB"),
-            Err(SizeParseError::InvalidNumber(_))
-        ));
-        assert!(matches!(
-            parse_size_string("1PB"),
-            Err(SizeParseError::InvalidNumber(_))
-        ));
-        assert!(matches!(
-            parse_size_string("1INVALID"),
-            Err(SizeParseError::InvalidUnit(_))
-        ));
-
-        // Test invalid numbers
-        assert!(matches!(
-            parse_size_string("invalidKB"),
-            Err(SizeParseError::InvalidNumber(_))
-        ));
-        assert!(matches!(
-            parse_size_string("1.5KB"),
-            Err(SizeParseError::InvalidNumber(_))
-        ));
-        assert!(matches!(
-            parse_size_string("-1KB"),
-            Err(SizeParseError::InvalidNumber(_))
-        ));
-
-        // Test malformed inputs
-        assert!(matches!(
-            parse_size_string("KB1"),
-            Err(SizeParseError::InvalidUnit(_))
-        ));
-        assert!(matches!(
-            parse_size_string("1 KB"),
-            Err(SizeParseError::InvalidNumber(_))
-        ));
-    }
-
-    #[test]
-    fn test_parse_size_string_overflow_detection() {
-        // Test potential overflow conditions
-        // Use a very large number that would overflow when multiplied by GB multiplier
-        let huge_number = format!("{}GB", usize::MAX / 1024 / 1024 / 1024 + 1);
-        assert!(matches!(
-            parse_size_string(&huge_number),
-            Err(SizeParseError::Overflow(_))
-        ));
-    }
-
-    #[test]
-    fn test_size_parse_error_display() {
-        // Test error message formatting
-        assert_eq!(
-            SizeParseError::EmptyString.to_string(),
-            "Size string cannot be empty"
-        );
-        assert_eq!(
-            SizeParseError::InvalidUnit("1TB".to_string()).to_string(),
-            "Invalid size unit in '1TB'"
-        );
-        assert_eq!(
-            SizeParseError::InvalidNumber("invalidKB".to_string()).to_string(),
-            "Invalid number in size string 'invalidKB'"
-        );
-        assert_eq!(
-            SizeParseError::Overflow("999999999GB".to_string()).to_string(),
-            "Size value too large in '999999999GB'"
-        );
     }
 
     // Progress notification tests

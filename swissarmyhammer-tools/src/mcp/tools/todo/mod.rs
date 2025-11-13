@@ -6,6 +6,7 @@
 //! ## Available Tools
 //!
 //! - **todo_create**: Add a new item to a todo list
+//! - **todo_list**: List all todo items with optional filtering by completion status
 //! - **todo_show**: Retrieve a specific todo item or the next incomplete item
 //! - **todo_mark_complete**: Mark a todo item as completed
 //!
@@ -30,12 +31,15 @@ use crate::mcp::tool_registry::ToolRegistry;
 
 /// Todo item creation functionality
 pub mod create;
+/// Todo list display functionality
+pub mod list;
 /// Todo item completion functionality
 pub mod mark_complete;
 /// Todo item display functionality
 pub mod show;
 
 pub use create::CreateTodoTool;
+pub use list::ListTodoTool;
 pub use mark_complete::MarkCompleteTodoTool;
 pub use show::ShowTodoTool;
 
@@ -45,6 +49,7 @@ pub use show::ShowTodoTool;
 /// used by issues, memoranda, and other tool modules.
 pub fn register_todo_tools(registry: &mut ToolRegistry) {
     registry.register(CreateTodoTool);
+    registry.register(ListTodoTool);
     registry.register(ShowTodoTool);
     registry.register(MarkCompleteTodoTool);
 }

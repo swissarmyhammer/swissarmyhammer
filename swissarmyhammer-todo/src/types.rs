@@ -72,9 +72,16 @@ pub struct TodoItem {
     /// Boolean flag indicating completion status
     pub done: bool,
     /// UTC timestamp when this todo was created
+    #[serde(default = "default_timestamp")]
     pub created_at: DateTime<Utc>,
     /// UTC timestamp when this todo was last updated
+    #[serde(default = "default_timestamp")]
     pub updated_at: DateTime<Utc>,
+}
+
+/// Default timestamp for backward compatibility with old YAML files
+fn default_timestamp() -> DateTime<Utc> {
+    Utc::now()
 }
 
 impl TodoItem {
@@ -94,6 +101,7 @@ impl TodoItem {
     /// Mark this todo item as complete
     pub fn mark_complete(&mut self) {
         self.done = true;
+        self.updated_at = Utc::now();
     }
 
     /// Check if this todo item is complete
@@ -180,4 +188,55 @@ pub struct ShowTodoRequest {
 pub struct MarkCompleteTodoRequest {
     /// ULID of the todo item to mark as complete
     pub id: TodoId,
+}
+
+/// Request to list todo items
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ListTodosRequest {
+    /// Optional filter by completion status
+    /// - None: Show all todos (default)
+    /// - Some(true): Show only completed todos
+    /// - Some(false): Show only incomplete todos
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub completed: Option<bool>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::thread::sleep;
+    use std::time::Duration;
+
+    #[test]
+    fn test_mark_complete_updates_timestamp() {
+        // Create a new todo item
+        let mut item = TodoItem::new("Test task".to_string(), None);
+
+        // Store the original timestamps
+        let original_created_at = item.created_at;
+        let original_updated_at = item.updated_at;
+
+        // Sleep briefly to ensure time has passed
+        sleep(Duration::from_millis(10));
+
+        // Mark the item as complete
+        item.mark_complete();
+
+        // Verify the item is marked as done
+        assert!(item.is_complete(), "Item should be marked as complete");
+
+        // Verify created_at is unchanged
+        assert_eq!(
+            item.created_at, original_created_at,
+            "created_at should not change when marking complete"
+        );
+
+        // Verify updated_at has been updated
+        assert!(
+            item.updated_at > original_updated_at,
+            "updated_at should be updated when marking complete. Original: {}, Updated: {}",
+            original_updated_at,
+            item.updated_at
+        );
+    }
 }

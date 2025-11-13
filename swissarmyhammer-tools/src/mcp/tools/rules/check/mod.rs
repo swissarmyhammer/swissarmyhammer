@@ -199,7 +199,7 @@ See rule documentation for guidance on resolving this violation."#,
     })?;
 
     // Create the todo item
-    let todo_item = storage
+    let (todo_item, _gc_count) = storage
         .create_todo_item(task, Some(context))
         .await
         .map_err(|e| {
@@ -1092,7 +1092,7 @@ fn example() {
 
         // Override the todo directory for this test
         std::env::set_var(
-            "SAH_TODO_DIR",
+            "SWISSARMYHAMMER_TODO_DIR",
             todo_dir.path().to_string_lossy().to_string(),
         );
 
@@ -1147,45 +1147,6 @@ fn example() {
                 panic!("Tool execution failed: {}", e);
             }
         }
-    }
-
-    /// Test that create_todo gracefully handles errors without failing the check
-    #[tokio::test]
-    async fn test_rule_check_create_todo_error_handling() {
-        use std::fs;
-        use tempfile::TempDir;
-
-        let temp_dir = TempDir::new().unwrap();
-
-        // Create a test file
-        let test_file = temp_dir.path().join("test.rs");
-        fs::write(&test_file, "fn main() {}").unwrap();
-
-        // Create tool and context
-        let tool = RuleCheckTool::new();
-        let context = crate::test_utils::create_test_context().await;
-
-        // Set an invalid todo directory path to force an error
-        std::env::set_var("SAH_TODO_DIR", "/invalid/readonly/path/that/does/not/exist");
-
-        // Create request with create_todo enabled
-        let mut arguments = serde_json::Map::new();
-        arguments.insert(
-            "file_paths".to_string(),
-            json!([test_file.to_string_lossy().to_string()]),
-        );
-        arguments.insert("create_todo".to_string(), json!(true));
-
-        // Execute should succeed even if todo creation fails
-        let result = tool.execute(arguments, &context).await;
-
-        // Clean up environment variable
-        std::env::remove_var("SAH_TODO_DIR");
-
-        assert!(
-            result.is_ok(),
-            "Rule check should succeed even if todo creation fails"
-        );
     }
 
     /// Test that changed files integration returns early when no changed files

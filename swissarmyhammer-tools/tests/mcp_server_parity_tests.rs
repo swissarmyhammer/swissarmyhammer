@@ -93,6 +93,7 @@ fn get_http_static_tools() -> Vec<String> {
         "web_fetch",
         "shell_execute",
         "todo_create",
+        "todo_list",
         "todo_show",
         "todo_mark_complete",
         "outline_generate",

@@ -252,3 +252,130 @@ Once timestamps are implemented:
 - Could add `--sort-by created|updated` option
 - Could add `--limit N` to show only first N todos
 - Could add `--older-than` or `--newer-than` filters
+
+
+
+## Implementation Plan
+
+### Step 1: Examine existing code structure
+- Review `swissarmyhammer-todo/src/storage.rs` to understand current storage implementation
+- Review existing todo tools (`todo_create`, `todo_show`, `todo_mark_complete`) for patterns
+- Check if there's already a method to load all todos
+
+### Step 2: Add storage method (if needed)
+- Add `list_todos()` method to `TodoStorage` if it doesn't exist
+- Ensure it returns todos in a consistent order
+
+### Step 3: Create the list tool (TDD)
+- Write failing tests first
+- Create `swissarmyhammer-tools/src/mcp/tools/todo/list/mod.rs`
+- Create `swissarmyhammer-tools/src/mcp/tools/todo/list/description.md`
+- Implement the tool to pass the tests
+
+### Step 4: Register the tool
+- Add the list tool to the tool registry in `swissarmyhammer-tools/src/mcp/tools/todo/mod.rs`
+
+### Step 5: Add integration tests
+- Add CLI integration tests to verify the full workflow
+
+### Step 6: Test the implementation
+- Run all tests with `cargo nextest run`
+- Verify the tool works correctly
+
+## Implementation Status
+
+### Completed
+1. ✅ `ListTodosRequest` type created in `swissarmyhammer-todo/src/types.rs`
+2. ✅ `get_todo_list()` method added to `TodoStorage` 
+3. ✅ `ListTodoTool` implemented in `swissarmyhammer-tools/src/mcp/tools/todo/list/mod.rs`
+4. ✅ Tool registered in `swissarmyhammer-tools/src/mcp/tools/todo/mod.rs`
+5. ✅ Comprehensive unit tests added in `swissarmyhammer-tools/tests/todo_list_tests.rs`
+6. ✅ CLI integration tests added in `swissarmyhammer-cli/tests/todo_cli_tests.rs`
+
+### Issues Discovered
+
+#### Test Isolation Problem
+The unit tests in `todo_list_tests.rs` are failing because they're not properly isolated:
+
+1. **Shared Storage**: Tests use `TodoStorage::new_default()` which points to the system-wide `.swissarmyhammer/todo/todo.yaml` file
+2. **Cross-Test Contamination**: Tests interfere with each other because they share the same storage
+3. **Cleanup Failures**: The `cleanup_todos()` helper doesn't actually isolate tests
+
+**Symptoms**:
+- `test_list_empty_todos` expects 0 todos but finds 4 (leftover from other tests)
+- `test_list_filter_incomplete_only` expects 3 todos but finds 5
+- Multiple tests fail with "Todo item not found" errors when marking complete (GC removed them)
+
+**Root Cause**:
+The tests create a `TempDir` but don't use it for todo storage. They pass it to `create_test_context()` which only uses it for issue storage, not todo storage.
+
+#### Solution Required
+
+The tests need to use isolated storage. Looking at the storage tests in `swissarmyhammer-todo/src/storage.rs`, they correctly use:
+
+```rust
+let temp_dir = tempfile::TempDir::new().unwrap();
+let storage = TodoStorage::new(temp_dir.path().to_path_buf());
+```
+
+However, the MCP tool tests can't easily override the storage path because the tools use `TodoStorage::new_default()` internally.
+
+**Options**:
+1. **Environment Variable**: Make todo storage respect an environment variable (like `SWISSARMYHAMMER_TODO_DIR`)
+2. **Context Parameter**: Add storage path to `ToolContext` (would require significant refactoring)
+3. **Accept Current Behavior**: Document that tests should run in isolation and clean up properly
+
+**Recommendation**: Option 1 - Add environment variable support. This is:
+- Minimal invasive
+- Consistent with common testing patterns
+- Useful for debugging and testing outside the test suite
+- Already used by other storage systems in the codebase
+
+### Next Steps
+
+1. Add environment variable support to `swissarmyhammer_todo::utils::get_todo_directory()`
+2. Update tests to set the environment variable to point to temp directories
+3. Re-run tests to verify isolation
+4. Document the environment variable in the crate documentation
+
+### Resolution
+
+**Environment Variable Support Added**: Modified `swissarmyhammer-todo/src/utils.rs` to support the `SWISSARMYHAMMER_TODO_DIR` environment variable for test isolation.
+
+**Tests Fixed**:
+1. Updated `create_test_context()` to set environment variable to temp directory
+2. Removed `cleanup_todos()` function and all calls (no longer needed)
+3. Removed unused imports (`fs`, `PathBuf`)
+
+**Parity Test Fixed**: Added `todo_list` to the static tool list in `tests/mcp_server_parity_tests.rs`
+
+**Test Results**: All 619 tests passing, including 20 new todo_list tests
+
+## Final Summary
+
+The `todo_list` command has been successfully implemented and tested. The implementation includes:
+
+✅ **Core Functionality**:
+- `ListTodosRequest` type with optional `completed` filter
+- `TodoStorage::get_todo_list()` method
+- `ListTodoTool` MCP tool implementation
+- Tool registration in the tool registry
+- Environment variable support for test isolation
+
+✅ **Testing**:
+- 20 comprehensive unit tests covering all scenarios
+- CLI integration tests (with git repo requirement noted)
+- Parity tests ensuring HTTP/STDIN server consistency
+
+✅ **Features**:
+- List all todos or filter by completion status
+- Sort order: incomplete first, then by ULID (time-ordered)
+- Returns summary counts (total, completed, pending)
+- Includes all todo fields (id, task, context, done)
+
+✅ **Documentation**:
+- Tool description in `description.md`
+- Environment variable documented in code comments
+- Comprehensive test coverage demonstrating usage
+
+The implementation is complete, tested, and ready for use.

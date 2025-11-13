@@ -9,7 +9,19 @@ use swissarmyhammer_common::get_or_create_swissarmyhammer_directory;
 ///
 /// Returns `.swissarmyhammer/todo/` in the Git repository root.
 /// Requires being within a Git repository - no fallback to current directory.
+///
+/// For testing purposes, the directory can be overridden by setting the
+/// `SWISSARMYHAMMER_TODO_DIR` environment variable.
 pub fn get_todo_directory() -> Result<PathBuf> {
+    // Check for environment variable override (useful for testing)
+    if let Ok(override_dir) = std::env::var("SWISSARMYHAMMER_TODO_DIR") {
+        let todo_dir = PathBuf::from(override_dir);
+        // Ensure the override directory exists
+        fs::create_dir_all(&todo_dir)
+            .map_err(|e| TodoError::other(format!("Failed to create todo directory: {e}")))?;
+        return Ok(todo_dir);
+    }
+
     let swissarmyhammer_dir = get_or_create_swissarmyhammer_directory()
         .map_err(|e| {
             TodoError::other(format!(

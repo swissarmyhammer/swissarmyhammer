@@ -72,7 +72,7 @@ impl McpTool for CreateTodoTool {
             .create_todo_item(request.task.clone(), request.context.clone())
             .await
         {
-            Ok(item) => {
+            Ok((item, gc_count)) => {
                 tracing::info!("Created todo item {}", item.id);
 
                 // Send progress notification for todo creation
@@ -84,7 +84,8 @@ impl McpTool for CreateTodoTool {
                         json!({
                             "action": "todo_created",
                             "todo_id": item.id.as_str(),
-                            "task": item.task
+                            "task": item.task,
+                            "gc_count": gc_count
                         }),
                     ) {
                         tracing::warn!("Failed to send todo creation notification: {}", e);
@@ -98,8 +99,11 @@ impl McpTool for CreateTodoTool {
                             "id": item.id.as_str(),
                             "task": item.task,
                             "context": item.context,
-                            "done": item.done
-                        }
+                            "done": item.done,
+                            "created_at": item.created_at.to_rfc3339(),
+                            "updated_at": item.updated_at.to_rfc3339()
+                        },
+                        "gc_count": gc_count
                     })
                     .to_string(),
                 ))

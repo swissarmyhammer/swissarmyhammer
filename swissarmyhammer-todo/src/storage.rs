@@ -28,11 +28,13 @@ impl TodoStorage {
     }
 
     /// Create a new todo item
+    ///
+    /// Returns the created item and the number of completed items that were garbage collected
     pub async fn create_todo_item(
         &self,
         task: String,
         context: Option<String>,
-    ) -> Result<TodoItem> {
+    ) -> Result<(TodoItem, usize)> {
         if task.trim().is_empty() {
             return Err(TodoError::EmptyTask);
         }
@@ -46,6 +48,9 @@ impl TodoStorage {
             TodoList::new()
         };
 
+        // Garbage collect completed todos before adding new item
+        let gc_count = self.gc_completed_todos(&mut list)?;
+
         // Add new item
         let item = list.add_item(task, context);
         let new_item = item.clone();
@@ -53,7 +58,7 @@ impl TodoStorage {
         // Save the updated list
         self.save_todo_list(&path, &list).await?;
 
-        Ok(new_item)
+        Ok((new_item, gc_count))
     }
 
     /// Get a specific todo item by ID or the next incomplete item
@@ -117,6 +122,38 @@ impl TodoStorage {
         Ok(Some(list))
     }
 
+    /// Remove completed todos from the list to prevent accumulation
+    ///
+    /// This garbage collection method removes all completed todo items,
+    /// keeping only incomplete tasks. It's called automatically when
+    /// creating new todos to maintain a clean, focused list.
+    ///
+    /// Returns the number of completed items that were removed.
+    fn gc_completed_todos(&self, list: &mut TodoList) -> Result<usize> {
+        let original_count = list.todo.len();
+        let completed_count = list.complete_count();
+
+        // Remove all completed items
+        list.todo.retain(|item| !item.done);
+
+        if completed_count > 0 {
+            tracing::debug!(
+                "Garbage collected {} completed todo(s), {} remaining",
+                completed_count,
+                list.todo.len()
+            );
+        }
+
+        // Verify we removed exactly the completed items
+        debug_assert_eq!(
+            list.todo.len(),
+            original_count - completed_count,
+            "Garbage collection should remove exactly the completed items"
+        );
+
+        Ok(completed_count)
+    }
+
     /// Get the path for the single todo file
     fn get_todo_file_path(&self) -> Result<PathBuf> {
         Ok(self.base_dir.join("todo.yaml"))
@@ -132,6 +169,9 @@ impl TodoStorage {
             ))
         })?;
 
+        // Check if the YAML content is missing timestamp fields (old format)
+        let has_timestamps = content.contains("created_at:") && content.contains("updated_at:");
+
         let list: TodoList = serde_yaml::from_str(&content).map_err(|e| {
             TodoError::other(format!(
                 "Failed to parse todo list file '{}': {}",
@@ -139,6 +179,16 @@ impl TodoStorage {
                 e
             ))
         })?;
+
+        // Warn if we loaded an old format file
+        if !has_timestamps && !list.todo.is_empty() {
+            tracing::warn!(
+                "Loaded todo list from '{}' with old format (missing timestamps). \
+                Timestamps have been set to current time. The file will be updated \
+                with timestamps on next save.",
+                path.display()
+            );
+        }
 
         Ok(list)
     }
@@ -182,7 +232,7 @@ mod tests {
         fs::create_dir_all(&temp_dir).unwrap();
         let storage = TodoStorage::new(temp_dir.path().to_path_buf());
 
-        let item = storage
+        let (item, gc_count) = storage
             .create_todo_item("Test task".to_string(), Some("Test context".to_string()))
             .await
             .unwrap();
@@ -190,6 +240,63 @@ mod tests {
         assert_eq!(item.task, "Test task");
         assert_eq!(item.context, Some("Test context".to_string()));
         assert!(!item.done);
+        assert_eq!(gc_count, 0);
+    }
+
+    #[tokio::test]
+    async fn test_todo_item_timestamps_on_creation() {
+        use chrono::Utc;
+
+        // Create a temporary directory for todo storage instead of using default
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        fs::create_dir_all(&temp_dir).unwrap();
+        let storage = TodoStorage::new(temp_dir.path().to_path_buf());
+
+        let before = Utc::now();
+        let (item, _gc_count) = storage
+            .create_todo_item("Test task".to_string(), None)
+            .await
+            .unwrap();
+        let after = Utc::now();
+
+        // Verify created_at is set and within reasonable bounds
+        assert!(item.created_at >= before);
+        assert!(item.created_at <= after);
+
+        // Verify updated_at is set and within reasonable bounds
+        assert!(item.updated_at >= before);
+        assert!(item.updated_at <= after);
+
+        // Verify both timestamps are equal at creation
+        assert_eq!(item.created_at, item.updated_at);
+    }
+
+    #[tokio::test]
+    async fn test_todo_item_timestamps_persist() {
+        // Create a temporary directory for todo storage instead of using default
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        fs::create_dir_all(&temp_dir).unwrap();
+        let storage = TodoStorage::new(temp_dir.path().to_path_buf());
+
+        // Create an item
+        let (item, _gc_count) = storage
+            .create_todo_item("Test task".to_string(), None)
+            .await
+            .unwrap();
+
+        let original_created_at = item.created_at;
+        let original_updated_at = item.updated_at;
+
+        // Retrieve the item by ID
+        let retrieved = storage
+            .get_todo_item(item.id.as_str())
+            .await
+            .unwrap()
+            .unwrap();
+
+        // Verify timestamps are preserved after persistence and retrieval
+        assert_eq!(retrieved.created_at, original_created_at);
+        assert_eq!(retrieved.updated_at, original_updated_at);
     }
 
     #[tokio::test]
@@ -200,7 +307,7 @@ mod tests {
         let storage = TodoStorage::new(temp_dir.path().to_path_buf());
 
         // Create two items
-        let item1 = storage
+        let (item1, _gc_count) = storage
             .create_todo_item("Task 1".to_string(), None)
             .await
             .unwrap();
@@ -224,7 +331,7 @@ mod tests {
         fs::create_dir_all(&temp_dir).unwrap();
         let storage = TodoStorage::new(temp_dir.path().to_path_buf());
 
-        let item = storage
+        let (item, _gc_count) = storage
             .create_todo_item("Test task".to_string(), None)
             .await
             .unwrap();
@@ -244,7 +351,7 @@ mod tests {
         fs::create_dir_all(&temp_dir).unwrap();
         let storage = TodoStorage::new(temp_dir.path().to_path_buf());
 
-        let item1 = storage
+        let (item1, _gc_count) = storage
             .create_todo_item("Task 1".to_string(), None)
             .await
             .unwrap();
@@ -274,7 +381,7 @@ mod tests {
         fs::create_dir_all(&temp_dir).unwrap();
         let storage = TodoStorage::new(temp_dir.path().to_path_buf());
 
-        let item = storage
+        let (item, _gc_count) = storage
             .create_todo_item("Test task".to_string(), None)
             .await
             .unwrap();
@@ -317,5 +424,288 @@ mod tests {
         let id = TodoId::new();
         let result = storage.mark_todo_complete(&id).await;
         assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_backward_compatibility_old_yaml_format() {
+        use chrono::Utc;
+
+        // Create a temporary directory for todo storage instead of using default
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        fs::create_dir_all(&temp_dir).unwrap();
+        let storage = TodoStorage::new(temp_dir.path().to_path_buf());
+
+        // Create an old format YAML file (without timestamps)
+        let old_yaml = r#"todo:
+- id: 01K68A5EJJ61XP2W1T5VDP2XBC
+  task: Check system status
+  context: null
+  done: false
+- id: 01K68A5EJJ61XP2W1T5VDP2XBD
+  task: Another task
+  context: Some context
+  done: true
+"#;
+
+        let todo_file = temp_dir.path().join("todo.yaml");
+        fs::write(&todo_file, old_yaml).unwrap();
+
+        // Load the old format file
+        let before_load = Utc::now();
+        let list = storage.load_todo_list(&todo_file).await.unwrap();
+        let after_load = Utc::now();
+
+        // Verify the list was loaded successfully
+        assert_eq!(list.todo.len(), 2);
+
+        // Verify first item
+        assert_eq!(list.todo[0].task, "Check system status");
+        assert_eq!(list.todo[0].context, None);
+        assert!(!list.todo[0].done);
+
+        // Verify timestamps were added with default values (current time)
+        assert!(list.todo[0].created_at >= before_load);
+        assert!(list.todo[0].created_at <= after_load);
+        assert!(list.todo[0].updated_at >= before_load);
+        assert!(list.todo[0].updated_at <= after_load);
+
+        // Verify second item
+        assert_eq!(list.todo[1].task, "Another task");
+        assert_eq!(list.todo[1].context, Some("Some context".to_string()));
+        assert!(list.todo[1].done);
+
+        // Verify timestamps were added
+        assert!(list.todo[1].created_at >= before_load);
+        assert!(list.todo[1].created_at <= after_load);
+        assert!(list.todo[1].updated_at >= before_load);
+        assert!(list.todo[1].updated_at <= after_load);
+
+        // Now save the list and verify it has timestamps in the YAML
+        storage.save_todo_list(&todo_file, &list).await.unwrap();
+
+        let new_content = fs::read_to_string(&todo_file).unwrap();
+        assert!(new_content.contains("created_at:"));
+        assert!(new_content.contains("updated_at:"));
+    }
+
+    #[tokio::test]
+    async fn test_gc_completed_todos_empty_list() {
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        fs::create_dir_all(&temp_dir).unwrap();
+        let storage = TodoStorage::new(temp_dir.path().to_path_buf());
+
+        let mut list = TodoList::new();
+
+        // GC on empty list should not error
+        storage.gc_completed_todos(&mut list).unwrap();
+
+        assert_eq!(list.todo.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_gc_completed_todos_no_completed() {
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        fs::create_dir_all(&temp_dir).unwrap();
+        let storage = TodoStorage::new(temp_dir.path().to_path_buf());
+
+        let mut list = TodoList::new();
+        list.add_item("Task 1".to_string(), None);
+        list.add_item("Task 2".to_string(), None);
+        list.add_item("Task 3".to_string(), None);
+
+        // GC with no completed items should not remove anything
+        storage.gc_completed_todos(&mut list).unwrap();
+
+        assert_eq!(list.todo.len(), 3);
+        assert_eq!(list.incomplete_count(), 3);
+    }
+
+    #[tokio::test]
+    async fn test_gc_completed_todos_all_completed() {
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        fs::create_dir_all(&temp_dir).unwrap();
+        let storage = TodoStorage::new(temp_dir.path().to_path_buf());
+
+        let mut list = TodoList::new();
+        list.add_item("Task 1".to_string(), None);
+        list.add_item("Task 2".to_string(), None);
+        list.add_item("Task 3".to_string(), None);
+
+        // Mark all as complete
+        for item in &mut list.todo {
+            item.mark_complete();
+        }
+
+        assert_eq!(list.complete_count(), 3);
+
+        // GC should remove all items
+        storage.gc_completed_todos(&mut list).unwrap();
+
+        assert_eq!(list.todo.len(), 0);
+        assert_eq!(list.incomplete_count(), 0);
+        assert_eq!(list.complete_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_gc_completed_todos_mixed() {
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        fs::create_dir_all(&temp_dir).unwrap();
+        let storage = TodoStorage::new(temp_dir.path().to_path_buf());
+
+        let mut list = TodoList::new();
+        list.add_item("Task 1".to_string(), None);
+        list.add_item("Task 2".to_string(), None);
+        list.add_item("Task 3".to_string(), None);
+        list.add_item("Task 4".to_string(), None);
+        list.add_item("Task 5".to_string(), None);
+
+        // Mark some as complete (index 1 and 3)
+        list.todo[1].mark_complete();
+        list.todo[3].mark_complete();
+
+        assert_eq!(list.complete_count(), 2);
+        assert_eq!(list.incomplete_count(), 3);
+
+        // Store the tasks of incomplete items
+        let incomplete_tasks: Vec<String> = list
+            .todo
+            .iter()
+            .filter(|item| !item.done)
+            .map(|item| item.task.clone())
+            .collect();
+
+        // GC should remove only completed items
+        storage.gc_completed_todos(&mut list).unwrap();
+
+        assert_eq!(list.todo.len(), 3);
+        assert_eq!(list.incomplete_count(), 3);
+        assert_eq!(list.complete_count(), 0);
+
+        // Verify the remaining tasks are the ones that were incomplete
+        let remaining_tasks: Vec<String> = list.todo.iter().map(|item| item.task.clone()).collect();
+
+        assert_eq!(remaining_tasks, incomplete_tasks);
+        assert_eq!(remaining_tasks, vec!["Task 1", "Task 3", "Task 5"]);
+    }
+
+    #[tokio::test]
+    async fn test_gc_completed_todos_called_on_create() {
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        fs::create_dir_all(&temp_dir).unwrap();
+        let storage = TodoStorage::new(temp_dir.path().to_path_buf());
+
+        // Create three items
+        let (item1, _gc_count) = storage
+            .create_todo_item("Task 1".to_string(), None)
+            .await
+            .unwrap();
+        let (item2, _gc_count) = storage
+            .create_todo_item("Task 2".to_string(), None)
+            .await
+            .unwrap();
+        let (item3, _gc_count) = storage
+            .create_todo_item("Task 3".to_string(), None)
+            .await
+            .unwrap();
+
+        // Mark first two as complete
+        storage.mark_todo_complete(&item1.id).await.unwrap();
+        storage.mark_todo_complete(&item2.id).await.unwrap();
+
+        // Verify we have 1 incomplete and 2 complete
+        let list = storage.get_todo_list().await.unwrap().unwrap();
+        assert_eq!(list.todo.len(), 3);
+        assert_eq!(list.complete_count(), 2);
+        assert_eq!(list.incomplete_count(), 1);
+
+        // Create a new item - this should trigger GC
+        let (item4, _gc_count) = storage
+            .create_todo_item("Task 4".to_string(), None)
+            .await
+            .unwrap();
+
+        // Reload the list and verify completed items were removed
+        let list = storage.get_todo_list().await.unwrap().unwrap();
+        assert_eq!(
+            list.todo.len(),
+            2,
+            "Should have 2 items: the incomplete one and the new one"
+        );
+        assert_eq!(
+            list.complete_count(),
+            0,
+            "All completed items should be garbage collected"
+        );
+        assert_eq!(list.incomplete_count(), 2, "Should have 2 incomplete items");
+
+        // Verify the correct items remain
+        let remaining_ids: Vec<String> = list.todo.iter().map(|item| item.id.to_string()).collect();
+
+        assert!(
+            remaining_ids.contains(&item3.id.to_string()),
+            "Task 3 should remain"
+        );
+        assert!(
+            remaining_ids.contains(&item4.id.to_string()),
+            "Task 4 should remain"
+        );
+        assert!(
+            !remaining_ids.contains(&item1.id.to_string()),
+            "Task 1 should be GC'd"
+        );
+        assert!(
+            !remaining_ids.contains(&item2.id.to_string()),
+            "Task 2 should be GC'd"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_gc_preserves_order_of_incomplete_items() {
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        fs::create_dir_all(&temp_dir).unwrap();
+        let storage = TodoStorage::new(temp_dir.path().to_path_buf());
+
+        let mut list = TodoList::new();
+        list.add_item("A".to_string(), None);
+        list.add_item("B".to_string(), None);
+        list.add_item("C".to_string(), None);
+        list.add_item("D".to_string(), None);
+        list.add_item("E".to_string(), None);
+
+        // Mark B and D as complete
+        list.todo[1].mark_complete();
+        list.todo[3].mark_complete();
+
+        // GC should preserve order of incomplete items
+        storage.gc_completed_todos(&mut list).unwrap();
+
+        assert_eq!(list.todo.len(), 3);
+        assert_eq!(list.todo[0].task, "A");
+        assert_eq!(list.todo[1].task, "C");
+        assert_eq!(list.todo[2].task, "E");
+    }
+
+    #[tokio::test]
+    async fn test_gc_preserves_timestamps() {
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        fs::create_dir_all(&temp_dir).unwrap();
+        let storage = TodoStorage::new(temp_dir.path().to_path_buf());
+
+        let mut list = TodoList::new();
+        list.add_item("Task 1".to_string(), None);
+        list.add_item("Task 2".to_string(), None);
+
+        let task1_created_at = list.todo[0].created_at;
+        let task1_updated_at = list.todo[0].updated_at;
+
+        // Mark second item as complete
+        list.todo[1].mark_complete();
+
+        // GC should not affect timestamps of remaining items
+        storage.gc_completed_todos(&mut list).unwrap();
+
+        assert_eq!(list.todo.len(), 1);
+        assert_eq!(list.todo[0].created_at, task1_created_at);
+        assert_eq!(list.todo[0].updated_at, task1_updated_at);
     }
 }
