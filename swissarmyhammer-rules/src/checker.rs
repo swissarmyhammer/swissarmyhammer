@@ -598,8 +598,11 @@ impl RuleChecker {
 
         // Phase 4: Expand glob patterns to get target files
         let config = GlobExpansionConfig::default();
-        let target_files = expand_glob_patterns(&request.patterns, &config)
+        let mut target_files = expand_glob_patterns(&request.patterns, &config)
             .map_err(|e| RuleError::CheckError(format!("Failed to expand glob patterns: {}", e)))?;
+
+        // Sort target files for consistent ordering
+        target_files.sort();
 
         if target_files.is_empty() {
             tracing::info!("No files matched the patterns");
