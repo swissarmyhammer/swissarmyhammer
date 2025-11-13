@@ -109,6 +109,9 @@ impl RuleLoader {
             }
         }
 
+        // Sort rules by name for consistent ordering
+        rules.sort_by(|a, b| a.name.cmp(&b.name));
+
         Ok(rules)
     }
 
