@@ -14,6 +14,8 @@ If you run rules check, and all rules pass, respond only with YES
 
 ## Process
 
-- Use the rules_check MCP tool with `changed: true` to check only changed files
-- Use `max_errors: 1` to stop on first error for faster correction loop
+- Use the rules_check MCP tool with 
+  - `changed: true` to check only changed files
+  - `create_todo: true` so that we have a todo to correct the error
+  - `max_errors: 1` to stop on first error for faster correction loop
 - Respond with only YES or NO based on whether violations exist
