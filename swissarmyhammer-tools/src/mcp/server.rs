@@ -32,7 +32,7 @@ pub struct McpServer {
     library: Arc<RwLock<PromptLibrary>>,
 
     file_watcher: Arc<Mutex<FileWatcher>>,
-    tool_registry: Arc<ToolRegistry>,
+    tool_registry: Arc<RwLock<ToolRegistry>>,
     pub tool_context: Arc<ToolContext>,
 }
 
@@ -190,10 +190,18 @@ impl McpServer {
         register_web_search_tools(&mut tool_registry);
         tracing::debug!("Registered all tool handlers");
 
+        // Wrap registry in Arc<RwLock> and add to context
+        let tool_registry_arc = Arc::new(RwLock::new(tool_registry));
+        let tool_context = Arc::new(
+            Arc::try_unwrap(tool_context)
+                .unwrap_or_else(|arc| (*arc).clone())
+                .with_tool_registry(tool_registry_arc.clone())
+        );
+
         Ok(Self {
             library: Arc::new(RwLock::new(library)),
             file_watcher: Arc::new(Mutex::new(FileWatcher::new())),
-            tool_registry: Arc::new(tool_registry),
+            tool_registry: tool_registry_arc,
             tool_context,
         })
     }
@@ -280,8 +288,8 @@ impl McpServer {
     /// # Returns
     ///
     /// * `Vec<rmcp::model::Tool>` - List of all registered tools
-    pub fn list_tools(&self) -> Vec<rmcp::model::Tool> {
-        self.tool_registry.list_tools()
+    pub async fn list_tools(&self) -> Vec<rmcp::model::Tool> {
+        self.tool_registry.read().await.list_tools()
     }
 
     /// Get a tool by name for execution.
@@ -292,9 +300,9 @@ impl McpServer {
     ///
     /// # Returns
     ///
-    /// * `Option<&dyn McpTool>` - The tool if found, None otherwise
-    pub fn get_tool(&self, name: &str) -> Option<&dyn crate::mcp::tool_registry::McpTool> {
-        self.tool_registry.get_tool(name)
+    /// * `bool` - True if the tool exists, false otherwise
+    pub async fn has_tool(&self, name: &str) -> bool {
+        self.tool_registry.read().await.get_tool(name).is_some()
     }
 
     /// Execute a tool by name with the given arguments.
@@ -312,7 +320,8 @@ impl McpServer {
         name: &str,
         arguments: serde_json::Value,
     ) -> std::result::Result<rmcp::model::CallToolResult, rmcp::ErrorData> {
-        if let Some(tool) = self.tool_registry.get_tool(name) {
+        let registry = self.tool_registry.read().await;
+        if let Some(tool) = registry.get_tool(name) {
             // Convert Value to Map<String, Value> for tool execution
             let arguments_map = match arguments {
                 serde_json::Value::Object(map) => map,
@@ -768,7 +777,7 @@ impl ServerHandler for McpServer {
         _context: RequestContext<RoleServer>,
     ) -> std::result::Result<ListToolsResult, McpError> {
         Ok(ListToolsResult {
-            tools: self.tool_registry.list_tools(),
+            tools: self.tool_registry.read().await.list_tools(),
             next_cursor: None,
         })
     }
@@ -783,7 +792,9 @@ impl ServerHandler for McpServer {
             request.name,
             request.arguments
         );
-        if let Some(tool) = self.tool_registry.get_tool(&request.name) {
+
+        let registry = self.tool_registry.read().await;
+        if let Some(tool) = registry.get_tool(&request.name) {
             tracing::info!("🔧 Executing tool: {}", request.name);
 
             // Create a tool context with the peer for elicitation support

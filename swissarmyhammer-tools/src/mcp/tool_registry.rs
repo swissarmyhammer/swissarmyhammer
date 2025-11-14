@@ -347,6 +347,23 @@ pub struct ToolContext {
     /// }
     /// ```
     pub peer: Option<Arc<Peer<RoleServer>>>,
+
+    /// Optional tool registry for tools that need to call other tools
+    ///
+    /// When present, tools can call other tools through their MCP interface.
+    /// This enables tool composition while maintaining proper layering.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// if let Some(registry) = &context.tool_registry {
+    ///     let result = context.call_tool("todo_create", json!({
+    ///         "task": "Fix issue",
+    ///         "context": "Details..."
+    ///     })).await?;
+    /// }
+    /// ```
+    pub tool_registry: Option<Arc<RwLock<ToolRegistry>>>,
 }
 
 impl ToolContext {
@@ -368,6 +385,7 @@ impl ToolContext {
             progress_sender: None,
             mcp_server_port: Arc::new(RwLock::new(None)),
             peer: None,
+            tool_registry: None,
         }
     }
 
@@ -403,6 +421,7 @@ impl ToolContext {
             progress_sender: None,
             mcp_server_port: Arc::new(RwLock::new(None)),
             peer: None,
+            tool_registry: None,
         }
     }
 
@@ -438,6 +457,97 @@ impl ToolContext {
     pub fn with_peer(mut self, peer: Arc<Peer<RoleServer>>) -> Self {
         self.peer = Some(peer);
         self
+    }
+
+    /// Set the tool registry for this context
+    ///
+    /// Creates a new context with the tool registry added. This allows tools to
+    /// call other tools through their MCP interface.
+    ///
+    /// # Arguments
+    ///
+    /// * `registry` - The tool registry to use
+    ///
+    /// # Returns
+    ///
+    /// A new `ToolContext` with the tool registry set
+    pub fn with_tool_registry(mut self, registry: Arc<RwLock<ToolRegistry>>) -> Self {
+        self.tool_registry = Some(registry);
+        self
+    }
+
+    /// Call another MCP tool from within a tool
+    ///
+    /// This method allows tools to compose by calling other tools through their
+    /// MCP interface, maintaining proper architectural layering. Tools should use
+    /// this instead of directly accessing storage or implementation details.
+    ///
+    /// # Arguments
+    ///
+    /// * `name` - The name of the tool to call
+    /// * `params` - The parameters to pass to the tool (must be a JSON object)
+    ///
+    /// # Returns
+    ///
+    /// * `Result<CallToolResult, McpError>` - The result from the called tool
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - The tool registry is not available in this context
+    /// - The specified tool is not found
+    /// - The parameters are not a JSON object
+    /// - The tool execution fails
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// async fn execute(&self, args: Args, context: &ToolContext) -> Result<CallToolResult, McpError> {
+    ///     // Call todo_create tool instead of direct storage access
+    ///     let result = context.call_tool("todo_create", json!({
+    ///         "task": "Fix violation",
+    ///         "context": "Details about the violation"
+    ///     })).await?;
+    ///     
+    ///     // Extract data from result if needed
+    ///     Ok(result)
+    /// }
+    /// ```
+    pub async fn call_tool(
+        &self,
+        name: &str,
+        params: serde_json::Value,
+    ) -> Result<CallToolResult, McpError> {
+        // Get the tool registry
+        let registry = self.tool_registry.as_ref().ok_or_else(|| {
+            McpError::internal_error(
+                "Tool registry not available in this context",
+                None,
+            )
+        })?;
+
+        // Look up the tool
+        let registry_guard = registry.read().await;
+        let tool = registry_guard.get_tool(name).ok_or_else(|| {
+            McpError::internal_error(
+                format!("Tool '{}' not found in registry", name),
+                None,
+            )
+        })?;
+
+        // Convert params to a map
+        let params_map = match params {
+            serde_json::Value::Object(map) => map,
+            _ => {
+                return Err(McpError::invalid_params(
+                    format!("Tool parameters must be a JSON object, got: {:?}", params),
+                    None,
+                ));
+            }
+        };
+
+        // Execute the tool
+        tool.execute(params_map, self).await
     }
 }
 

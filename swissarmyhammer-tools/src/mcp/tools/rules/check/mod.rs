@@ -6,7 +6,7 @@
 use crate::mcp::progress_notifications::generate_progress_token;
 use crate::mcp::tool_registry::{BaseToolImpl, McpTool, ToolContext};
 use async_trait::async_trait;
-use rmcp::model::CallToolResult;
+use rmcp::model::{CallToolResult, RawContent};
 use rmcp::ErrorData as McpError;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -19,7 +19,7 @@ use swissarmyhammer_config::AgentConfig;
 use swissarmyhammer_rules::{
     RuleCheckRequest as DomainRuleCheckRequest, RuleChecker, RuleViolation, Severity,
 };
-use swissarmyhammer_todo::{TodoId, TodoStorage};
+use swissarmyhammer_todo::TodoId;
 use tokio::sync::OnceCell;
 
 // Progress notification milestones
@@ -155,16 +155,21 @@ async fn expand_glob_patterns(patterns: &[String]) -> Result<HashSet<String>, Mc
 /// Create a todo item for a rule violation
 ///
 /// Creates a todo with formatted task and context fields containing
-/// all relevant violation details.
+/// all relevant violation details. Uses the todo_create MCP tool interface
+/// instead of direct storage access to maintain proper architectural layering.
 ///
 /// # Arguments
 ///
+/// * `context` - The tool context for calling other tools
 /// * `violation` - The rule violation to create a todo for
 ///
 /// # Returns
 ///
 /// The ID of the created todo item, or an error if creation fails
-async fn create_todo_for_violation(violation: &RuleViolation) -> Result<TodoId, McpError> {
+async fn create_todo_for_violation(
+    context: &ToolContext,
+    violation: &RuleViolation,
+) -> Result<TodoId, McpError> {
     // Format the task field
     let task = format!(
         "Fix {} violation in {}",
@@ -173,7 +178,7 @@ async fn create_todo_for_violation(violation: &RuleViolation) -> Result<TodoId, 
     );
 
     // Format the context field with rich markdown
-    let context = format!(
+    let context_str = format!(
         r#"## Rule Violation
 
 **Rule**: {}
@@ -193,26 +198,65 @@ See rule documentation for guidance on resolving this violation."#,
         violation.message
     );
 
-    // Create the todo storage
-    let storage = TodoStorage::new_default().map_err(|e| {
-        McpError::internal_error(format!("Failed to initialize todo storage: {}", e), None)
+    // Call todo_create tool through MCP interface
+    let result = context
+        .call_tool(
+            "todo_create",
+            json!({
+                "task": task,
+                "context": context_str
+            }),
+        )
+        .await?;
+
+    // Extract todo_id from the response
+    // The todo_create tool returns JSON with a "todo_item" object containing "id"
+    let response_text = if let Some(first_content) = result.content.first() {
+        match &first_content.raw {
+            RawContent::Text(text_content) => &text_content.text,
+            _ => {
+                return Err(McpError::internal_error(
+                    "Unexpected content type from todo_create tool",
+                    None,
+                ));
+            }
+        }
+    } else {
+        return Err(McpError::internal_error(
+            "No content returned from todo_create tool",
+            None,
+        ));
+    };
+
+    // Parse the JSON response
+    let response_json: serde_json::Value = serde_json::from_str(response_text).map_err(|e| {
+        McpError::internal_error(
+            format!("Failed to parse todo_create response: {}", e),
+            None,
+        )
     })?;
 
-    // Create the todo item
-    let (todo_item, _gc_count) = storage
-        .create_todo_item(task, Some(context))
-        .await
-        .map_err(|e| {
-            McpError::internal_error(format!("Failed to create todo item: {}", e), None)
+    // Extract the todo_id
+    let todo_id_str = response_json["todo_item"]["id"]
+        .as_str()
+        .ok_or_else(|| {
+            McpError::internal_error(
+                format!("No todo_id in response from todo_create: {}", response_json),
+                None,
+            )
         })?;
+
+    let todo_id = TodoId::from_string(todo_id_str.to_string()).map_err(|e| {
+        McpError::internal_error(format!("Invalid todo_id format: {}", e), None)
+    })?;
 
     tracing::info!(
         "Created todo {} for violation in {}",
-        todo_item.id,
+        todo_id,
         violation.file_path.display()
     );
 
-    Ok(todo_item.id)
+    Ok(todo_id)
 }
 
 /// Get changed files from git
@@ -575,7 +619,7 @@ impl McpTool for RuleCheckTool {
             tracing::info!("Creating todos for {} violations", violations.len());
 
             for violation in &violations {
-                match create_todo_for_violation(violation).await {
+                match create_todo_for_violation(context, violation).await {
                     Ok(todo_id) => {
                         todos_created.push(json!({
                             "todo_id": todo_id.to_string(),

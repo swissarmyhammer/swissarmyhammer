@@ -126,3 +126,64 @@ match create_todo_for_violation(context, violation).await {
 ## Notes
 
 This establishes the architectural pattern that tools compose through MCP interfaces rather than bypassing to implementation layers. This pattern will be useful for other tool compositions going forward.
+
+
+
+## Implementation Analysis
+
+After examining the code, the proposed solution is correct but needs refinement:
+
+### Current Architecture
+- `ToolContext` provides shared context (storage, git ops, etc.) to tools
+- `ToolRegistry` manages tool registration and execution
+- Tools execute via `registry.get_tool(name).execute(args, context)`
+- `ToolContext` does NOT currently have access to the `ToolRegistry`
+
+### Refined Implementation Plan
+
+1. **Add ToolRegistry reference to ToolContext**
+   - Store `Arc<RwLock<ToolRegistry>>` in `ToolContext`
+   - This allows tools to look up and call other tools
+
+2. **Add call_tool method to ToolContext**
+   ```rust
+   impl ToolContext {
+       pub async fn call_tool(
+           &self,
+           name: &str,
+           params: serde_json::Value,
+       ) -> Result<CallToolResult, McpError> {
+           let registry = self.tool_registry.read().await;
+           let tool = registry
+               .get_tool(name)
+               .ok_or_else(|| McpError::internal_error(
+                   format!("Tool '{}' not found", name),
+                   None
+               ))?;
+           
+           let params_map = match params {
+               serde_json::Value::Object(map) => map,
+               _ => return Err(McpError::invalid_params(
+                   "Tool parameters must be a JSON object",
+                   None
+               )),
+           };
+           
+           tool.execute(params_map, self).await
+       }
+   }
+   ```
+
+3. **Update create_todo_for_violation signature and implementation**
+   - Add `context: &ToolContext` parameter
+   - Call `context.call_tool("todo_create", ...)` instead of direct storage access
+   - Parse the returned `CallToolResult` to extract the todo_id
+
+4. **Update the caller at line 578**
+   - Pass context to `create_todo_for_violation`
+
+### Implementation Notes
+
+- Need to handle circular dependency between `ToolRegistry` and `ToolContext`
+- The registry reference should be added after construction to break the cycle
+- Need to extract todo_id from the JSON response of `todo_create` tool
