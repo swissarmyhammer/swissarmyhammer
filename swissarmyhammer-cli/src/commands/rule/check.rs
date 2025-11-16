@@ -413,6 +413,7 @@ async fn execute_check_command_impl(
         check_mode,
         force: request.cmd.force,
         max_errors: request.cmd.max_errors,
+        max_concurrency: None,
     };
 
     // All modes now use the unified streaming check API
