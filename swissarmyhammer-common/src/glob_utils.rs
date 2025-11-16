@@ -465,8 +465,10 @@ mod tests {
         std::env::set_current_dir(temp_dir.path()).unwrap();
 
         // Configure to exclude the "excluded" directory
-        let mut config = GlobExpansionConfig::default();
-        config.exclude_paths = vec![excluded_dir.clone()];
+        let config = GlobExpansionConfig {
+            exclude_paths: vec![excluded_dir.clone()],
+            ..Default::default()
+        };
 
         let patterns = vec!["**/*.rs".to_string()];
         let result = expand_glob_patterns(&patterns, &config).unwrap();

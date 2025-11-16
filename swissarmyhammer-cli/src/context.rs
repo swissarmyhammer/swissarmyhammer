@@ -203,6 +203,7 @@ impl CliContextBuilder {
         let mut prompt_library = PromptLibrary::new();
 
         // Add default prompt sources
+        #[allow(deprecated)]
         if let Ok(home_dir) = swissarmyhammer_common::utils::paths::get_swissarmyhammer_dir() {
             let prompts_dir = home_dir.join("prompts");
             if prompts_dir.exists() {

@@ -11,21 +11,16 @@ use serde_json::Value as JsonValue;
 /// ```ignore
 /// let level = NotifyLevel::Warn;
 /// ```
-#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema, PartialEq, Eq, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum NotifyLevel {
     /// Informational message (default)
+    #[default]
     Info,
     /// Warning message
     Warn,
     /// Error message
     Error,
-}
-
-impl Default for NotifyLevel {
-    fn default() -> Self {
-        Self::Info
-    }
 }
 
 impl From<&str> for NotifyLevel {

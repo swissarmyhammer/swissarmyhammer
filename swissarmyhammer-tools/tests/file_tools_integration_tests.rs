@@ -4220,6 +4220,7 @@ async fn test_read_offset_limit_consistency_properties() {
 }
 
 #[tokio::test]
+#[allow(clippy::useless_vec)]
 async fn test_grep_pattern_robustness_properties() {
     let registry = create_test_registry();
     let context = create_test_context().await;

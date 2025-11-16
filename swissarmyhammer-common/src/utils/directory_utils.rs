@@ -123,6 +123,7 @@ pub fn get_or_create_swissarmyhammer_directory() -> Result<PathBuf> {
             return Err(SwissArmyHammerError::directory_creation(e));
         }
     };
+    #[allow(deprecated)]
     get_or_create_swissarmyhammer_directory_from(&current_dir)
 }
 
@@ -216,6 +217,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(deprecated)]
     fn test_get_or_create_swissarmyhammer_directory_from_create() {
         let temp_dir = TempDir::new().unwrap();
         let base = temp_dir.path();
@@ -233,6 +235,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(deprecated)]
     fn test_get_or_create_swissarmyhammer_directory_from_existing() {
         let temp_dir = TempDir::new().unwrap();
         let base = temp_dir.path();
@@ -251,6 +254,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(deprecated)]
     fn test_get_or_create_swissarmyhammer_directory_from_no_git_repo() {
         let temp_dir = TempDir::new().unwrap();
         let base = temp_dir.path();

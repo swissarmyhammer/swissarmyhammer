@@ -677,6 +677,7 @@ impl ErrorMessageEnhancer {
         for (i, row) in matrix.iter_mut().enumerate().take(a_len + 1) {
             row[0] = i;
         }
+        #[allow(clippy::needless_range_loop)]
         for j in 0..=b_len {
             matrix[0][j] = j;
         }

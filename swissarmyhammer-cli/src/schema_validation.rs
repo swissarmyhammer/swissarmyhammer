@@ -1103,6 +1103,7 @@ mod tests {
 
     #[test]
     fn test_error_severity_levels() {
+        #[allow(clippy::useless_vec)]
         let errors = vec![
             ValidationError::UnsupportedSchemaType {
                 schema_type: "object".to_string(),

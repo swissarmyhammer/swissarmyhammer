@@ -299,6 +299,7 @@ impl SemanticConfig {
         }
 
         // Try Git repository .swissarmyhammer directory first
+        #[allow(deprecated)]
         if let Ok(swissarmyhammer_dir) =
             swissarmyhammer_common::utils::paths::get_swissarmyhammer_dir()
         {

@@ -54,6 +54,7 @@ pub use utils::{generate_monotonic_ulid, generate_monotonic_ulid_string};
 pub use file_loader::{FileEntry, FileSource, VirtualFileSystem};
 
 // Re-export commonly used directory functions for convenience
+#[allow(deprecated)]
 pub use utils::{
     find_git_repository_root_from, get_or_create_swissarmyhammer_directory,
     get_or_create_swissarmyhammer_directory_from,

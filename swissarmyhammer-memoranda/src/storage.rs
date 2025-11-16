@@ -44,6 +44,7 @@ impl MarkdownMemoStorage {
 
     /// Create new storage with default directory
     pub async fn new_default() -> Result<Self> {
+        #[allow(deprecated)]
         let memos_dir = swissarmyhammer_common::utils::paths::get_swissarmyhammer_dir()
             .map_err(|e| {
                 MemorandaError::Storage(format!("Failed to get SwissArmyHammer directory: {}", e))
