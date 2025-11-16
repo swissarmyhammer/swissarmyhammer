@@ -2,7 +2,7 @@
 title: Missing Tests
 description: Check that public functions and types have corresponding tests
 category: code-quality
-severity: warning
+severity: error
 tags: ["code-quality", "testing"]
 ---
 

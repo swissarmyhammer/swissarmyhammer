@@ -1,7 +1,7 @@
 //! Check command implementation for rules
 //!
 //! Checks code files against rules to find violations and optionally creates
-//! issues for ERROR level violations when --create-issues flag is provided
+//! todos for ERROR level violations when --create-todos flag is provided
 
 use crate::context::CliContext;
 use crate::error::{CliError, CliResult};
@@ -351,8 +351,8 @@ async fn execute_check_command_impl(
         .transpose()?;
 
     // Determine check mode from CLI flags
-    // Both --no-fail-fast and --create-issues enable CollectAll mode
-    let check_mode = if request.cmd.no_fail_fast || request.cmd.create_issues {
+    // Both --no-fail-fast and --create-todos enable CollectAll mode
+    let check_mode = if request.cmd.no_fail_fast || request.cmd.create_todos {
         CheckMode::CollectAll
     } else {
         CheckMode::FailFast
@@ -424,8 +424,8 @@ async fn execute_check_command_impl(
         )
     })?;
 
-    // Handle violations based on create_issues flag
-    if request.cmd.create_issues {
+    // Handle violations based on create_todos flag
+    if request.cmd.create_todos {
         let storage = FileSystemIssueStorage::new_default().map_err(|e| {
             CliError::new(
                 format!("Failed to initialize issue storage: {}", e),
@@ -651,7 +651,7 @@ mod tests {
             rule: Some(vec!["nonexistent-rule".to_string()]),
             severity: None,
             category: None,
-            create_issues: false,
+            create_todos: false,
             no_fail_fast: false,
             force: false,
             max_errors: None,
@@ -673,7 +673,7 @@ mod tests {
             rule: None,
             severity: None,
             category: None,
-            create_issues: false,
+            create_todos: false,
             no_fail_fast: false,
             force: false,
             max_errors: None,
@@ -695,7 +695,7 @@ mod tests {
             rule: None,
             severity: Some("error".to_string()),
             category: None,
-            create_issues: false,
+            create_todos: false,
             no_fail_fast: false,
             force: false,
             max_errors: None,
@@ -717,7 +717,7 @@ mod tests {
             rule: None,
             severity: None,
             category: Some("security".to_string()),
-            create_issues: false,
+            create_todos: false,
             no_fail_fast: false,
             force: false,
             max_errors: None,
@@ -739,7 +739,7 @@ mod tests {
             rule: Some(vec!["specific-rule".to_string()]),
             severity: None,
             category: None,
-            create_issues: false,
+            create_todos: false,
             no_fail_fast: false,
             force: false,
             max_errors: None,
@@ -761,7 +761,7 @@ mod tests {
             rule: Some(vec!["specific-rule".to_string()]),
             severity: Some("error".to_string()),
             category: Some("security".to_string()),
-            create_issues: false,
+            create_todos: false,
             no_fail_fast: false,
             force: false,
             max_errors: None,
@@ -783,7 +783,7 @@ mod tests {
             rule: Some(vec!["nonexistent-rule".to_string()]),
             severity: None,
             category: None,
-            create_issues: false,
+            create_todos: false,
             no_fail_fast: false,
             force: false,
             max_errors: None,
@@ -1035,7 +1035,7 @@ mod tests {
             rule: Some(vec!["nonexistent-rule".to_string()]),
             severity: None,
             category: None,
-            create_issues: true,
+            create_todos: true,
             no_fail_fast: false,
             force: false,
             max_errors: None,
@@ -1057,7 +1057,7 @@ mod tests {
             rule: Some(vec!["nonexistent-rule".to_string()]),
             severity: None,
             category: None,
-            create_issues: false,
+            create_todos: false,
             no_fail_fast: true,
             force: false,
             max_errors: None,
@@ -1079,7 +1079,7 @@ mod tests {
             rule: Some(vec!["nonexistent-rule".to_string()]),
             severity: None,
             category: None,
-            create_issues: true,
+            create_todos: true,
             no_fail_fast: true,
             force: false,
             max_errors: None,
@@ -1101,7 +1101,7 @@ mod tests {
             rule: Some(vec!["nonexistent-rule".to_string()]),
             severity: None,
             category: None,
-            create_issues: false,
+            create_todos: false,
             no_fail_fast: false,
             force: true,
             max_errors: None,

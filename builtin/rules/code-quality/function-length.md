@@ -2,7 +2,7 @@
 title: Function Length Limit
 description: Functions should be less than 50 lines
 category: code-quality
-severity: warning
+severity: error
 tags: ["code-quality", "maintainability"]
 ---
 

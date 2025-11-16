@@ -2,7 +2,7 @@
 title: Missing Documentation
 description: Check that public functions and types have documentation comments
 category: code-quality
-severity: info
+severity: error
 tags: ["code-quality", "documentation"]
 ---
 

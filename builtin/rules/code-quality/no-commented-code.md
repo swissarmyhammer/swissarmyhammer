@@ -2,7 +2,7 @@
 title: No Commented-Out Code
 description: Detect large blocks of commented-out code
 category: code-quality
-severity: info
+severity: error
 tags: ["code-quality", "cleanup"]
 ---
 

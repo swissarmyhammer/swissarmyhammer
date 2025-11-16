@@ -35,7 +35,7 @@ pub struct CheckCommand {
     pub rule: Option<Vec<String>>,
     pub severity: Option<String>,
     pub category: Option<String>,
-    pub create_issues: bool,
+    pub create_todos: bool,
     pub no_fail_fast: bool,
     pub force: bool,
     /// Maximum number of ERROR violations to return. Defaults to 1 for fast feedback
@@ -114,7 +114,7 @@ pub fn parse_rule_command(matches: &ArgMatches) -> RuleCommand {
                     .map(|vals| vals.cloned().collect()),
                 severity: sub_matches.get_one::<String>("severity").cloned(),
                 category: sub_matches.get_one::<String>("category").cloned(),
-                create_issues: sub_matches.get_flag("create-issues"),
+                create_todos: sub_matches.get_flag("create-todos"),
                 no_fail_fast: sub_matches.get_flag("no-fail-fast"),
                 force: sub_matches.get_flag("force"),
                 max_errors: sub_matches.get_one::<usize>("max-errors").copied(),
@@ -216,8 +216,8 @@ mod tests {
                     .arg(Arg::new("severity").short('s').long("severity"))
                     .arg(Arg::new("category").short('c').long("category"))
                     .arg(
-                        Arg::new("create-issues")
-                            .long("create-issues")
+                        Arg::new("create-todos")
+                            .long("create-todos")
                             .action(ArgAction::SetTrue),
                     )
                     .arg(
@@ -247,7 +247,7 @@ mod tests {
                 assert_eq!(check_cmd.patterns, vec!["file1.rs", "file2.rs"]);
                 assert_eq!(check_cmd.severity, None);
                 assert_eq!(check_cmd.category, None);
-                assert!(!check_cmd.create_issues);
+                assert!(!check_cmd.create_todos);
                 assert!(!check_cmd.no_fail_fast);
                 assert!(!check_cmd.force);
                 assert!(!check_cmd.changed);
@@ -271,8 +271,8 @@ mod tests {
                     .arg(Arg::new("severity").short('s').long("severity"))
                     .arg(Arg::new("category").short('c').long("category"))
                     .arg(
-                        Arg::new("create-issues")
-                            .long("create-issues")
+                        Arg::new("create-todos")
+                            .long("create-todos")
                             .action(ArgAction::SetTrue),
                     )
                     .arg(
@@ -309,7 +309,7 @@ mod tests {
                 assert_eq!(check_cmd.patterns, vec!["file.rs"]);
                 assert_eq!(check_cmd.severity, Some("error".to_string()));
                 assert_eq!(check_cmd.category, Some("security".to_string()));
-                assert!(!check_cmd.create_issues);
+                assert!(!check_cmd.create_todos);
                 assert!(!check_cmd.no_fail_fast);
                 assert!(!check_cmd.force);
                 assert!(!check_cmd.changed);
@@ -358,7 +358,7 @@ mod tests {
             rule: Some(vec!["test-rule".to_string()]),
             severity: Some("error".to_string()),
             category: Some("security".to_string()),
-            create_issues: false,
+            create_todos: false,
             no_fail_fast: false,
             force: false,
             max_errors: None,
@@ -371,7 +371,7 @@ mod tests {
                 assert_eq!(cmd.rule, Some(vec!["test-rule".to_string()]));
                 assert_eq!(cmd.severity, Some("error".to_string()));
                 assert_eq!(cmd.category, Some("security".to_string()));
-                assert!(!cmd.create_issues);
+                assert!(!cmd.create_todos);
                 assert!(!cmd.no_fail_fast);
                 assert!(!cmd.force);
                 assert_eq!(cmd.max_errors, None);
@@ -401,7 +401,7 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_check_command_with_create_issues() {
+    fn test_parse_check_command_with_create_todos() {
         let matches = Command::new("rule")
             .subcommand(
                 Command::new("check")
@@ -415,8 +415,8 @@ mod tests {
                     .arg(Arg::new("severity").short('s').long("severity"))
                     .arg(Arg::new("category").short('c').long("category"))
                     .arg(
-                        Arg::new("create-issues")
-                            .long("create-issues")
+                        Arg::new("create-todos")
+                            .long("create-todos")
                             .action(ArgAction::SetTrue),
                     )
                     .arg(
@@ -436,14 +436,14 @@ mod tests {
                             .action(ArgAction::SetTrue),
                     ),
             )
-            .try_get_matches_from(["rule", "check", "--create-issues", "file.rs"])
+            .try_get_matches_from(["rule", "check", "--create-todos", "file.rs"])
             .unwrap();
 
         let parsed = parse_rule_command(&matches);
         match parsed {
             RuleCommand::Check(check_cmd) => {
                 assert_eq!(check_cmd.patterns, vec!["file.rs"]);
-                assert!(check_cmd.create_issues);
+                assert!(check_cmd.create_todos);
                 assert!(!check_cmd.no_fail_fast);
                 assert!(!check_cmd.force);
             }
@@ -466,8 +466,8 @@ mod tests {
                     .arg(Arg::new("severity").short('s').long("severity"))
                     .arg(Arg::new("category").short('c').long("category"))
                     .arg(
-                        Arg::new("create-issues")
-                            .long("create-issues")
+                        Arg::new("create-todos")
+                            .long("create-todos")
                             .action(ArgAction::SetTrue),
                     )
                     .arg(
@@ -494,7 +494,7 @@ mod tests {
         match parsed {
             RuleCommand::Check(check_cmd) => {
                 assert_eq!(check_cmd.patterns, vec!["file.rs"]);
-                assert!(!check_cmd.create_issues);
+                assert!(!check_cmd.create_todos);
                 assert!(check_cmd.no_fail_fast);
                 assert!(!check_cmd.force);
             }
@@ -517,8 +517,8 @@ mod tests {
                     .arg(Arg::new("severity").short('s').long("severity"))
                     .arg(Arg::new("category").short('c').long("category"))
                     .arg(
-                        Arg::new("create-issues")
-                            .long("create-issues")
+                        Arg::new("create-todos")
+                            .long("create-todos")
                             .action(ArgAction::SetTrue),
                     )
                     .arg(
@@ -541,7 +541,7 @@ mod tests {
             .try_get_matches_from([
                 "rule",
                 "check",
-                "--create-issues",
+                "--create-todos",
                 "--no-fail-fast",
                 "file.rs",
             ])
@@ -551,7 +551,7 @@ mod tests {
         match parsed {
             RuleCommand::Check(check_cmd) => {
                 assert_eq!(check_cmd.patterns, vec!["file.rs"]);
-                assert!(check_cmd.create_issues);
+                assert!(check_cmd.create_todos);
                 assert!(check_cmd.no_fail_fast);
                 assert!(!check_cmd.force);
             }
@@ -574,8 +574,8 @@ mod tests {
                     .arg(Arg::new("severity").short('s').long("severity"))
                     .arg(Arg::new("category").short('c').long("category"))
                     .arg(
-                        Arg::new("create-issues")
-                            .long("create-issues")
+                        Arg::new("create-todos")
+                            .long("create-todos")
                             .action(ArgAction::SetTrue),
                     )
                     .arg(
@@ -628,8 +628,8 @@ mod tests {
                     .arg(Arg::new("severity").short('s').long("severity"))
                     .arg(Arg::new("category").short('c').long("category"))
                     .arg(
-                        Arg::new("create-issues")
-                            .long("create-issues")
+                        Arg::new("create-todos")
+                            .long("create-todos")
                             .action(ArgAction::SetTrue),
                     )
                     .arg(

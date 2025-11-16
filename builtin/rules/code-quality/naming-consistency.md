@@ -2,7 +2,7 @@
 title: Naming Consistency
 description: Check that naming conventions match existing codebase patterns
 category: code-quality
-severity: warning
+severity: error
 tags: ["code-quality", "consistency", "style"]
 ---
 
