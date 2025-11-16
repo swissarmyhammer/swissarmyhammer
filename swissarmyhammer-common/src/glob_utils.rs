@@ -23,6 +23,8 @@ pub struct GlobExpansionConfig {
     pub max_files: usize,
     /// Whether to sort results by modification time (most recent first)
     pub sort_by_mtime: bool,
+    /// Paths to explicitly exclude (e.g., .swissarmyhammer directory)
+    pub exclude_paths: Vec<PathBuf>,
 }
 
 impl Default for GlobExpansionConfig {
@@ -33,6 +35,7 @@ impl Default for GlobExpansionConfig {
             include_hidden: false,
             max_files: MAX_FILES,
             sort_by_mtime: false,
+            exclude_paths: Vec::new(),
         }
     }
 }
@@ -190,6 +193,31 @@ pub fn expand_glob_patterns(
                 }
             }
         }
+    }
+
+    // Filter out excluded paths using canonicalized path comparison
+    if !config.exclude_paths.is_empty() {
+        target_files.retain(|file_path| {
+            // Try to canonicalize paths for accurate comparison
+            let should_keep = if let Ok(canonical_file) = file_path.canonicalize() {
+                // Check if file is under any excluded path
+                !config.exclude_paths.iter().any(|excluded| {
+                    if let Ok(canonical_excluded) = excluded.canonicalize() {
+                        canonical_file.starts_with(&canonical_excluded)
+                    } else {
+                        // If excluded path can't be canonicalized, try direct comparison
+                        file_path.starts_with(excluded)
+                    }
+                })
+            } else {
+                // If file can't be canonicalized, try direct comparison with excluded paths
+                !config.exclude_paths.iter().any(|excluded| {
+                    file_path.starts_with(excluded)
+                })
+            };
+
+            should_keep
+        });
     }
 
     // Sort by modification time if requested
@@ -418,6 +446,36 @@ mod tests {
         std::env::set_current_dir(orig_dir).unwrap();
 
         assert_eq!(result.len(), 2);
+    }
+
+    #[test]
+    fn test_expand_glob_patterns_with_exclusions() {
+        let temp_dir = TempDir::new().unwrap();
+
+        // Create files in different locations
+        fs::write(temp_dir.path().join("include.rs"), "fn main() {}").unwrap();
+
+        // Create excluded directory with files
+        let excluded_dir = temp_dir.path().join("excluded");
+        fs::create_dir(&excluded_dir).unwrap();
+        fs::write(excluded_dir.join("skip.rs"), "fn skip() {}").unwrap();
+
+        // Change to temp directory
+        let orig_dir = std::env::current_dir().unwrap();
+        std::env::set_current_dir(temp_dir.path()).unwrap();
+
+        // Configure to exclude the "excluded" directory
+        let mut config = GlobExpansionConfig::default();
+        config.exclude_paths = vec![excluded_dir.clone()];
+
+        let patterns = vec!["**/*.rs".to_string()];
+        let result = expand_glob_patterns(&patterns, &config).unwrap();
+
+        std::env::set_current_dir(orig_dir).unwrap();
+
+        // Should only find include.rs, not skip.rs
+        assert_eq!(result.len(), 1);
+        assert!(result[0].ends_with("include.rs"));
     }
 
     #[test]

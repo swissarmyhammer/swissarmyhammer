@@ -597,7 +597,13 @@ impl RuleChecker {
         }
 
         // Phase 4: Expand glob patterns to get target files
-        let config = GlobExpansionConfig::default();
+        // Exclude .swissarmyhammer directory from rule checking
+        let mut config = GlobExpansionConfig::default();
+        if let Ok(sah_dir) = swissarmyhammer_common::SwissarmyhammerDirectory::from_git_root() {
+            config.exclude_paths = vec![sah_dir.root().to_path_buf()];
+            tracing::debug!("Excluding .swissarmyhammer directory from rule checking: {}", sah_dir.root().display());
+        }
+
         let mut target_files = expand_glob_patterns(&request.patterns, &config)
             .map_err(|e| RuleError::CheckError(format!("Failed to expand glob patterns: {}", e)))?;
 

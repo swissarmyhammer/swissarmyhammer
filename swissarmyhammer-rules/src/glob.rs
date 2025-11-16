@@ -54,6 +54,7 @@ pub fn expand_files_for_rules(patterns: &[String]) -> Result<Vec<PathBuf>> {
         include_hidden: false,
         max_files: 10_000,
         sort_by_mtime: false,
+        exclude_paths: Vec::new(),
     };
 
     expand_glob_patterns(&patterns_to_use, &config)
