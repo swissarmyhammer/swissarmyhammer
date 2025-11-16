@@ -92,6 +92,10 @@ pub struct RuleCheckRequest {
     /// Automatically create a todo item for each rule violation found
     #[serde(skip_serializing_if = "Option::is_none")]
     pub create_todo: Option<bool>,
+
+    /// Maximum number of concurrent rule checks (default: 4)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_concurrency: Option<usize>,
 }
 
 /// Expand glob patterns to concrete file paths
@@ -448,6 +452,12 @@ impl McpTool for RuleCheckTool {
                 "create_todo": {
                     "type": "boolean",
                     "description": "Automatically create a todo item for each rule violation found (default: false)"
+                },
+                "max_concurrency": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 50,
+                    "description": "Maximum number of concurrent rule checks (default: 4)"
                 }
             }
         })
@@ -555,6 +565,7 @@ impl McpTool for RuleCheckTool {
             check_mode: swissarmyhammer_rules::CheckMode::FailFast,
             force: false, // MCP tool doesn't expose force flag yet
             max_errors: request.max_errors,
+            max_concurrency: request.max_concurrency,
         };
 
         tracing::info!("Domain request patterns: {:?}", domain_request.patterns);

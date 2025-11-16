@@ -10,7 +10,7 @@ use crate::{
     detect_language, CachedResult, Result, Rule, RuleCache, RuleError, RuleViolation, Severity,
 };
 use futures_util::stream::{self, Stream, StreamExt};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use swissarmyhammer_agent_executor::{AgentExecutionContext, AgentExecutor};
 use swissarmyhammer_common::glob_utils::{expand_glob_patterns, GlobExpansionConfig};
@@ -50,6 +50,7 @@ pub enum CheckMode {
 ///     check_mode: CheckMode::FailFast,
 ///     force: false,
 ///     max_errors: None,
+///     max_concurrency: None,
 /// };
 /// ```
 #[derive(Debug, Clone)]
@@ -68,6 +69,8 @@ pub struct RuleCheckRequest {
     pub force: bool,
     /// Maximum number of ERROR violations to return (None = unlimited)
     pub max_errors: Option<usize>,
+    /// Maximum number of concurrent rule checks (None = default of 4)
+    pub max_concurrency: Option<usize>,
 }
 
 /// Core rule checker that performs two-stage rendering and executes checks via LLM agent
@@ -616,23 +619,36 @@ impl RuleChecker {
             return Ok(stream::iter(vec![]).boxed());
         }
 
-        // Phase 5: Create stream that yields violations as they're discovered
-        // Wrap checker in Arc so it can be cloned for each stream element
+        // Phase 5: Create flat work queue of (rule, file) pairs
+        let work_items: Vec<(Rule, PathBuf)> = rules
+            .iter()
+            .flat_map(|rule| {
+                target_files
+                    .iter()
+                    .map(move |file| (rule.clone(), file.clone()))
+            })
+            .collect();
+
+        tracing::info!("Created work queue with {} check items", work_items.len());
+
+        // Wrap checker in Arc so it can be cloned for parallel execution
         let checker = Arc::new(self.clone_for_streaming());
         let check_mode = request.check_mode;
         let max_errors = request.max_errors;
+        let concurrency = request.max_concurrency.unwrap_or(4);
 
-        // Create a stream that checks files lazily and yields violations immediately
-        let stream = stream::iter(rules)
-            .flat_map(move |rule| {
-                let targets = target_files.clone();
+        tracing::debug!(
+            "Processing work queue with concurrency={}",
+            concurrency
+        );
+
+        // Process work queue in parallel using buffer_unordered
+        let stream = stream::iter(work_items)
+            .map(move |(rule, target)| {
                 let checker = Arc::clone(&checker);
-                stream::iter(targets).then(move |target| {
-                    let rule = rule.clone();
-                    let checker = Arc::clone(&checker);
-                    async move { checker.check_file(&rule, &target).await }
-                })
+                async move { checker.check_file(&rule, &target).await }
             })
+            .buffer_unordered(concurrency)
             .filter_map(|result| async move {
                 match result {
                     Ok(Some(violation)) if violation.severity == Severity::Error => {
@@ -773,6 +789,7 @@ mod tests {
             check_mode: CheckMode::FailFast,
             force: false,
             max_errors: None,
+            max_concurrency: None,
         };
 
         let mut stream = checker
@@ -939,6 +956,7 @@ mod tests {
             check_mode: CheckMode::FailFast,
             force: false,
             max_errors: None,
+            max_concurrency: None,
         };
 
         let mut stream = checker.check(request).await.expect("Should create stream");
@@ -963,6 +981,7 @@ mod tests {
             check_mode: CheckMode::FailFast,
             force: false,
             max_errors: None,
+            max_concurrency: None,
         };
 
         let mut stream = checker.check(request).await.expect("Should create stream");
@@ -986,6 +1005,7 @@ mod tests {
             check_mode: CheckMode::CollectAll,
             force: false,
             max_errors: None,
+            max_concurrency: None,
         };
 
         let mut stream = checker.check(request).await.expect("Should create stream");
@@ -1016,6 +1036,7 @@ mod tests {
             check_mode: CheckMode::CollectAll,
             force: false,
             max_errors: Some(2),
+            max_concurrency: None,
         };
 
         let mut stream = checker.check(request).await.expect("Should create stream");
@@ -1050,6 +1071,7 @@ mod tests {
             check_mode: CheckMode::CollectAll,
             force: false,
             max_errors: None,
+            max_concurrency: None,
         };
 
         let stream_result = checker.check(request).await;
