@@ -1168,9 +1168,9 @@ Run rules against code files and report violations.
                             .value_name("CATEGORY"),
                     )
                     .arg(
-                        Arg::new("create-issues")
-                            .long("create-issues")
-                            .help("Automatically create issues for ERROR level violations")
+                        Arg::new("create-todos")
+                            .long("create-todos")
+                            .help("Automatically create todos for ERROR level violations")
                             .action(ArgAction::SetTrue),
                     )
                     .arg(

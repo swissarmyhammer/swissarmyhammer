@@ -559,7 +559,7 @@ fn format_issue_content(violation: &RuleViolation) -> String {
 {}
 
 ---
-*This issue was automatically created by `sah rule check --create-issues`*
+*This issue was automatically created by `sah rule check --create-todos`*
 "#,
         violation.rule_name,
         violation.file_path.display(),
@@ -1044,7 +1044,7 @@ mod tests {
 
         let request = CheckCommandRequest::with_config(cmd, setup_test_agent_config());
         let result = execute_check_command_impl(request, &context).await;
-        // Should succeed when no rules match (no violations to create issues for)
+        // Should succeed when no rules match (no violations to create todos for)
         assert!(result.is_ok());
     }
 
