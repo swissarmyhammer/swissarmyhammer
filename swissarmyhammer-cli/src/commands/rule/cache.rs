@@ -95,8 +95,8 @@ mod tests {
         let result = execute_cache_command(command, &context).await;
         assert!(result.is_ok());
 
-        // Verify cache is empty
+        // In test mode, cache should NOT be cleared (protection against clearing production cache)
         let cache = RuleCache::new().unwrap();
-        assert!(cache.get(&key).unwrap().is_none());
+        assert!(cache.get(&key).unwrap().is_some(), "Cache should still have entries in test mode");
     }
 }

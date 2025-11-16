@@ -4,6 +4,7 @@
 //! the SwissArmyHammer system. This centralizes the abort file creation logic to
 //! eliminate duplication between different components.
 
+use crate::directory::SwissarmyhammerDirectory;
 use crate::Result;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -23,17 +24,9 @@ use std::path::{Path, PathBuf};
 fn get_swissarmyhammer_dir_for_path<P: AsRef<Path>>(work_dir: P) -> Result<PathBuf> {
     let work_dir = work_dir.as_ref();
 
-    if work_dir == std::env::current_dir()? {
-        // If work_dir is current directory, use the common utility
-        Ok(crate::utils::paths::get_swissarmyhammer_dir()?)
-    } else {
-        // For other work directories, create the directory as needed
-        let sah_dir = work_dir.join(".swissarmyhammer");
-        if !sah_dir.exists() {
-            fs::create_dir_all(&sah_dir)?;
-        }
-        Ok(sah_dir)
-    }
+    // Use SwissarmyhammerDirectory for consistent directory resolution
+    let sah_dir = SwissarmyhammerDirectory::from_custom_root(work_dir.to_path_buf())?;
+    Ok(sah_dir.root().to_path_buf())
 }
 
 /// Create an abort file with the specified reason
