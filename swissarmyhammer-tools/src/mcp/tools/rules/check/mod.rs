@@ -191,6 +191,8 @@ async fn create_todo_for_violation(
 
 ## How to Fix
 
+Only change the specific file mentioned above to resolve this violation.
+
 See rule documentation for guidance on resolving this violation."#,
         violation.rule_name,
         violation.file_path.display(),
@@ -230,25 +232,19 @@ See rule documentation for guidance on resolving this violation."#,
 
     // Parse the JSON response
     let response_json: serde_json::Value = serde_json::from_str(response_text).map_err(|e| {
+        McpError::internal_error(format!("Failed to parse todo_create response: {}", e), None)
+    })?;
+
+    // Extract the todo_id
+    let todo_id_str = response_json["todo_item"]["id"].as_str().ok_or_else(|| {
         McpError::internal_error(
-            format!("Failed to parse todo_create response: {}", e),
+            format!("No todo_id in response from todo_create: {}", response_json),
             None,
         )
     })?;
 
-    // Extract the todo_id
-    let todo_id_str = response_json["todo_item"]["id"]
-        .as_str()
-        .ok_or_else(|| {
-            McpError::internal_error(
-                format!("No todo_id in response from todo_create: {}", response_json),
-                None,
-            )
-        })?;
-
-    let todo_id = TodoId::from_string(todo_id_str.to_string()).map_err(|e| {
-        McpError::internal_error(format!("Invalid todo_id format: {}", e), None)
-    })?;
+    let todo_id = TodoId::from_string(todo_id_str.to_string())
+        .map_err(|e| McpError::internal_error(format!("Invalid todo_id format: {}", e), None))?;
 
     tracing::info!(
         "Created todo {} for violation in {}",

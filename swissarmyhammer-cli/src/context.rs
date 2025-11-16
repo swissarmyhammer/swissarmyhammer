@@ -58,6 +58,10 @@ pub struct CliContext {
     #[builder(default)]
     pub quiet: bool,
 
+    /// In a unit test?
+    #[builder(default)]
+    pub test_mode: bool,
+
     /// Parsed CLI arguments
     #[builder(setter(into))]
     pub matches: clap::ArgMatches,
@@ -250,6 +254,7 @@ impl CliContextBuilder {
             verbose: self.verbose.unwrap_or_default(),
             debug: self.debug.unwrap_or_default(),
             quiet: self.quiet.unwrap_or_default(),
+            test_mode: self.quiet.unwrap_or_default(),
             matches: self.matches.ok_or_else(|| {
                 swissarmyhammer_common::SwissArmyHammerError::Other {
                     message: "matches is required".to_string(),

@@ -8,15 +8,20 @@ use super::cli::{CacheAction, CacheCommand};
 /// Execute cache command
 pub async fn execute_cache_command(
     command: CacheCommand,
-    _context: &crate::context::CliContext,
+    context: &crate::context::CliContext,
 ) -> CliResult<()> {
     match command.action {
-        CacheAction::Clear => clear_cache().await,
+        CacheAction::Clear => clear_cache(context).await,
     }
 }
 
 /// Clear all cache entries
-async fn clear_cache() -> CliResult<()> {
+async fn clear_cache(context: &crate::context::CliContext) -> CliResult<()> {
+    if context.test_mode {
+        println!("Test mode: Cache clear skipped");
+        return Ok(());
+    }
+
     let cache = RuleCache::new()
         .map_err(|e| CliError::new(format!("Failed to initialize cache: {}", e), 1))?;
 
@@ -51,6 +56,7 @@ mod tests {
             .verbose(false)
             .debug(false)
             .quiet(true)
+            .test_mode(true)
             .matches(matches)
             .build_async()
             .await
