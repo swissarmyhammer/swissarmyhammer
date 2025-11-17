@@ -5,6 +5,69 @@ use serde_json::json;
 use std::sync::Arc;
 use swissarmyhammer_tools::mcp::tool_registry::ToolRegistry;
 
+/// Helper function to create a test tool registry and CLI builder
+fn create_test_registry_and_builder() -> (Arc<tokio::sync::RwLock<ToolRegistry>>, CliBuilder) {
+    let registry = Arc::new(tokio::sync::RwLock::new(ToolRegistry::new()));
+    let builder = CliBuilder::new(registry.clone());
+    (registry, builder)
+}
+
+/// Helper function to handle workflow storage loading and conditional test execution
+fn with_workflow_storage<F>(test_fn: F)
+where
+    F: FnOnce(&swissarmyhammer_workflow::WorkflowStorage),
+{
+    use swissarmyhammer_workflow::WorkflowStorage;
+    if let Ok(storage) = WorkflowStorage::file_system() {
+        test_fn(&storage);
+    }
+}
+
+/// Helper function to validate that help text contains expected items
+fn assert_help_contains(cli: &Command, expected_items: &[String], context: &str) {
+    let help = get_help_text(cli);
+    for item in expected_items {
+        assert!(
+            help.contains(item),
+            "Help text should contain {} '{}'",
+            context,
+            item
+        );
+    }
+}
+
+/// Helper function to assert ordering of items in help text
+fn assert_help_position_before(help: &str, first_item: &str, second_item: &str, context: &str) {
+    let first_pos = help
+        .find(first_item)
+        .unwrap_or_else(|| panic!("'{}' should appear in help", first_item));
+    if let Some(second_pos) = help.find(second_item) {
+        assert!(
+            first_pos < second_pos,
+            "{} should appear before {}",
+            context,
+            second_item
+        );
+    }
+}
+
+/// Helper function to extract help text from a CLI command
+fn get_help_text(cli: &Command) -> String {
+    use clap::error::ErrorKind;
+
+    // Try to get matches which will fail with help error
+    match cli
+        .clone()
+        .try_get_matches_from(vec!["swissarmyhammer", "--help"])
+    {
+        Err(e) if e.kind() == ErrorKind::DisplayHelp => {
+            format!("{}", e)
+        }
+        Ok(_) => panic!("Expected help error"),
+        Err(e) => panic!("Unexpected error: {:?}", e),
+    }
+}
+
 #[test]
 fn test_string_interning_deduplication() {
     // Test that the same string is only leaked once
@@ -76,20 +139,15 @@ fn test_validation_stats_zero_tools() {
 
 #[test]
 fn test_cli_builder_creates_tool_registry() {
-    // Create a tool registry
-    let registry = Arc::new(tokio::sync::RwLock::new(ToolRegistry::new()));
-
     // Create CLI builder - this tests that CliBuilder::new() succeeds
-    let _builder = CliBuilder::new(registry.clone());
+    let (_registry, _builder) = create_test_registry_and_builder();
 
     // Builder should be created successfully without panicking
 }
 
 #[test]
 fn test_cli_builder_graceful_degradation() {
-    // Create a tool registry
-    let registry = Arc::new(tokio::sync::RwLock::new(ToolRegistry::new()));
-    let builder = CliBuilder::new(registry);
+    let (_registry, builder) = create_test_registry_and_builder();
 
     // Build CLI with warnings should not panic even with no workflows
     let cli = builder.build_cli_with_warnings(None);
@@ -159,9 +217,7 @@ fn test_precompute_arg_data_types() {
 
 #[test]
 fn test_build_cli_basic_structure() {
-    // Create a tool registry and CLI builder
-    let registry = Arc::new(tokio::sync::RwLock::new(ToolRegistry::new()));
-    let builder = CliBuilder::new(registry);
+    let (_registry, builder) = create_test_registry_and_builder();
 
     // Build CLI
     let cli = builder.build_cli(None);
@@ -183,81 +239,45 @@ fn test_build_cli_basic_structure() {
     // This test uses an empty registry, so rule won't appear here
 }
 
-/// Helper function to extract help text from a CLI command
-fn get_help_text(cli: &Command) -> String {
-    use clap::error::ErrorKind;
-
-    // Try to get matches which will fail with help error
-    match cli
-        .clone()
-        .try_get_matches_from(vec!["swissarmyhammer", "--help"])
-    {
-        Err(e) if e.kind() == ErrorKind::DisplayHelp => {
-            format!("{}", e)
-        }
-        Ok(_) => panic!("Expected help error"),
-        Err(e) => panic!("Unexpected error: {:?}", e),
-    }
-}
-
 #[test]
 fn test_mcp_tool_categories_appear_in_help() {
-    // Create a tool registry and CLI builder
-    let registry = Arc::new(tokio::sync::RwLock::new(ToolRegistry::new()));
-    let builder = CliBuilder::new(registry.clone());
+    let (registry, builder) = create_test_registry_and_builder();
 
     // Build CLI without workflows
     let cli = builder.build_cli(None);
 
-    // Get help text
-    let help = get_help_text(&cli);
-
     // Verify MCP tool categories appear in help text
     let reg = registry.try_read().unwrap();
-    let categories = reg.get_cli_categories();
-    for category in categories {
-        assert!(
-            help.contains(&category),
-            "Help text should contain MCP tool category '{}'",
-            category
-        );
-    }
+    let categories: Vec<String> = reg.get_cli_categories().iter().map(|s| s.to_string()).collect();
+    assert_help_contains(&cli, &categories, "MCP tool category");
 }
 
 #[test]
 fn test_workflow_shortcuts_appear_in_help_when_present() {
-    use swissarmyhammer_workflow::WorkflowStorage;
+    with_workflow_storage(|storage| {
+        let (_registry, builder) = create_test_registry_and_builder();
 
-    // Create a tool registry and CLI builder
-    let registry = Arc::new(tokio::sync::RwLock::new(ToolRegistry::new()));
-    let builder = CliBuilder::new(registry);
-
-    // Try to load workflow storage
-    if let Ok(storage) = WorkflowStorage::file_system() {
         // Build CLI with workflows
-        let cli = builder.build_cli(Some(&storage));
-
-        // Get help text
-        let help = get_help_text(&cli);
+        let cli = builder.build_cli(Some(storage));
 
         // If workflows are available, verify they appear in help
         let workflows = storage.list_workflows().unwrap_or_default();
         if !workflows.is_empty() {
+            let workflow_names: Vec<String> = workflows.iter().map(|w| w.name.to_string()).collect();
+            let help = get_help_text(&cli);
             // Just verify at least one workflow appears
-            let has_workflow = workflows.iter().any(|w| help.contains(&w.name.to_string()));
+            let has_workflow = workflow_names.iter().any(|name| help.contains(name));
             assert!(
                 has_workflow,
                 "Help text should contain workflow shortcuts when workflows are present"
             );
         }
-    }
+    });
 }
 
 #[test]
 fn test_static_commands_appear_before_mcp_tools() {
-    // Create a tool registry and CLI builder
-    let registry = Arc::new(tokio::sync::RwLock::new(ToolRegistry::new()));
-    let builder = CliBuilder::new(registry.clone());
+    let (registry, builder) = create_test_registry_and_builder();
 
     // Build CLI
     let cli = builder.build_cli(None);
@@ -265,71 +285,50 @@ fn test_static_commands_appear_before_mcp_tools() {
     // Get help text
     let help = get_help_text(&cli);
 
-    // Find positions of static command (serve) and first MCP tool category
-    let serve_pos = help.find("serve").expect("'serve' should appear in help");
-
     // Find first MCP tool category
     let reg = registry.try_read().unwrap();
     let categories = reg.get_cli_categories();
     if !categories.is_empty() {
         let first_category = &categories[0];
-        if let Some(tool_pos) = help.find(first_category) {
-            // Static commands should appear before MCP tool categories
-            assert!(
-                serve_pos < tool_pos,
-                "Static commands should appear before MCP tool categories"
-            );
-        }
+        assert_help_position_before(&help, "serve", first_category, "Static commands");
     }
 }
 
 #[test]
 fn test_workflows_appear_before_mcp_tools_when_present() {
-    use swissarmyhammer_workflow::WorkflowStorage;
+    with_workflow_storage(|storage| {
+        let (registry, builder) = create_test_registry_and_builder();
 
-    // Create a tool registry and CLI builder
-    let registry = Arc::new(tokio::sync::RwLock::new(ToolRegistry::new()));
-    let builder = CliBuilder::new(registry.clone());
-
-    // Try to load workflow storage
-    if let Ok(storage) = WorkflowStorage::file_system() {
         let workflows = storage.list_workflows().unwrap_or_default();
 
         // Only test if workflows are actually present
         if !workflows.is_empty() {
             // Build CLI with workflows
-            let cli = builder.build_cli(Some(&storage));
+            let cli = builder.build_cli(Some(storage));
 
             // Get help text
             let help = get_help_text(&cli);
 
             // Find position of first workflow and first MCP tool category
             if let Some(first_workflow) = workflows.first() {
-                let workflow_pos = help.find(&first_workflow.name.to_string());
-
                 let reg = registry.try_read().unwrap();
-    let categories = reg.get_cli_categories();
+                let categories = reg.get_cli_categories();
                 if !categories.is_empty() {
-                    let first_category_pos = help.find(&categories[0]);
-
-                    if let (Some(wf_pos), Some(cat_pos)) = (workflow_pos, first_category_pos) {
-                        // Workflow should appear before MCP tool category
-                        assert!(
-                            wf_pos < cat_pos,
-                            "Workflows should appear before MCP tool categories"
-                        );
-                    }
+                    assert_help_position_before(
+                        &help,
+                        &first_workflow.name.to_string(),
+                        &categories[0],
+                        "Workflows",
+                    );
                 }
             }
         }
-    }
+    });
 }
 
 #[test]
 fn test_mcp_tool_categories_are_sorted() {
-    // Create a tool registry and CLI builder
-    let registry = Arc::new(tokio::sync::RwLock::new(ToolRegistry::new()));
-    let builder = CliBuilder::new(registry.clone());
+    let (registry, builder) = create_test_registry_and_builder();
 
     // Build CLI
     let cli = builder.build_cli(None);
@@ -366,20 +365,15 @@ fn test_mcp_tool_categories_are_sorted() {
 
 #[test]
 fn test_workflow_shortcuts_are_sorted_when_built() {
-    use swissarmyhammer_workflow::WorkflowStorage;
-
-    // Try to load workflow storage
-    if let Ok(storage) = WorkflowStorage::file_system() {
+    with_workflow_storage(|storage| {
         let workflows = storage.list_workflows().unwrap_or_default();
 
         // Only test if we have multiple workflows
         if workflows.len() > 1 {
-            // Create a tool registry and CLI builder
-            let registry = Arc::new(tokio::sync::RwLock::new(ToolRegistry::new()));
-            let builder = CliBuilder::new(registry);
+            let (_registry, builder) = create_test_registry_and_builder();
 
             // Build CLI with workflows - this is where sorting happens
-            let cli = builder.build_cli(Some(&storage));
+            let cli = builder.build_cli(Some(storage));
 
             // Filter to workflow commands (those with "shortcut for 'flow" in their about text)
             let workflow_names: Vec<&str> = cli
@@ -402,16 +396,14 @@ fn test_workflow_shortcuts_are_sorted_when_built() {
                 );
             }
         }
-    }
+    });
 }
 
 #[test]
 fn test_command_descriptions_are_clean() {
     use swissarmyhammer_workflow::WorkflowStorage;
 
-    // Create a tool registry and CLI builder
-    let registry = Arc::new(tokio::sync::RwLock::new(ToolRegistry::new()));
-    let builder = CliBuilder::new(registry.clone());
+    let (_registry, builder) = create_test_registry_and_builder();
 
     // Try to load workflow storage
     let cli = if let Ok(storage) = WorkflowStorage::file_system() {

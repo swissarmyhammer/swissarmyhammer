@@ -9,6 +9,5 @@ pub mod agent;
 pub mod doctor;
 pub mod flow;
 pub mod prompt;
-pub mod rule;
 pub mod serve;
 pub mod validate;
