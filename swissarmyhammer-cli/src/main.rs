@@ -153,10 +153,11 @@ async fn handle_tool_validation(cli_tool_context: Arc<CliToolContext>, verbose: 
     if validation_stats.is_all_valid() {
         println!("✅ All tools passed validation!");
         if verbose {
-            let categories = tool_registry.get_cli_categories();
+            let registry = tool_registry.read().await;
+            let categories = registry.get_cli_categories();
             println!("\n📋 Validated CLI categories ({}):", categories.len());
             for category in categories {
-                let tools = tool_registry.get_tools_for_category(&category);
+                let tools = registry.get_tools_for_category(&category);
                 println!("   {} - {} tools", category, tools.len());
                 if verbose {
                     for tool in tools {
@@ -319,14 +320,12 @@ async fn handle_dynamic_tool_command(
     cli_tool_context: Arc<CliToolContext>,
 ) -> i32 {
     // Look up the tool by category and CLI name
-    let tool = match cli_tool_context
-        .get_tool_registry()
-        .get_tool_by_cli_name(category, tool_name)
-    {
+    let registry_arc = cli_tool_context.get_tool_registry_arc();
+    let registry = registry_arc.read().await;
+    let tool = match registry.get_tool_by_cli_name(category, tool_name) {
         Some(tool) => tool,
         None => {
-            let available_tools: Vec<String> = cli_tool_context
-                .get_tool_registry()
+            let available_tools: Vec<String> = registry
                 .get_tools_for_category(category)
                 .iter()
                 .map(|t| format!("{} -> {}", t.cli_name(), t.name()))
@@ -389,8 +388,9 @@ async fn convert_matches_to_arguments(
     let mut arguments = serde_json::Map::new();
 
     // Get the tool to access its schema
-    let tool = cli_tool_context
-        .get_tool_registry()
+    let registry_arc = cli_tool_context.get_tool_registry_arc();
+    let registry = registry_arc.read().await;
+    let tool = registry
         .get_tool(tool_name)
         .ok_or_else(|| format!("Tool not found: {}", tool_name))?;
 

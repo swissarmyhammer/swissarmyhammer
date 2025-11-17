@@ -77,7 +77,7 @@ fn test_validation_stats_zero_tools() {
 #[test]
 fn test_cli_builder_creates_tool_registry() {
     // Create a tool registry
-    let registry = Arc::new(ToolRegistry::new());
+    let registry = Arc::new(tokio::sync::RwLock::new(ToolRegistry::new()));
 
     // Create CLI builder - this tests that CliBuilder::new() succeeds
     let _builder = CliBuilder::new(registry.clone());
@@ -88,7 +88,7 @@ fn test_cli_builder_creates_tool_registry() {
 #[test]
 fn test_cli_builder_graceful_degradation() {
     // Create a tool registry
-    let registry = Arc::new(ToolRegistry::new());
+    let registry = Arc::new(tokio::sync::RwLock::new(ToolRegistry::new()));
     let builder = CliBuilder::new(registry);
 
     // Build CLI with warnings should not panic even with no workflows
@@ -160,7 +160,7 @@ fn test_precompute_arg_data_types() {
 #[test]
 fn test_build_cli_basic_structure() {
     // Create a tool registry and CLI builder
-    let registry = Arc::new(ToolRegistry::new());
+    let registry = Arc::new(tokio::sync::RwLock::new(ToolRegistry::new()));
     let builder = CliBuilder::new(registry);
 
     // Build CLI
@@ -203,7 +203,7 @@ fn get_help_text(cli: &Command) -> String {
 #[test]
 fn test_mcp_tool_categories_appear_in_help() {
     // Create a tool registry and CLI builder
-    let registry = Arc::new(ToolRegistry::new());
+    let registry = Arc::new(tokio::sync::RwLock::new(ToolRegistry::new()));
     let builder = CliBuilder::new(registry.clone());
 
     // Build CLI without workflows
@@ -213,7 +213,8 @@ fn test_mcp_tool_categories_appear_in_help() {
     let help = get_help_text(&cli);
 
     // Verify MCP tool categories appear in help text
-    let categories = registry.get_cli_categories();
+    let reg = registry.try_read().unwrap();
+    let categories = reg.get_cli_categories();
     for category in categories {
         assert!(
             help.contains(&category),
@@ -228,7 +229,7 @@ fn test_workflow_shortcuts_appear_in_help_when_present() {
     use swissarmyhammer_workflow::WorkflowStorage;
 
     // Create a tool registry and CLI builder
-    let registry = Arc::new(ToolRegistry::new());
+    let registry = Arc::new(tokio::sync::RwLock::new(ToolRegistry::new()));
     let builder = CliBuilder::new(registry);
 
     // Try to load workflow storage
@@ -255,7 +256,7 @@ fn test_workflow_shortcuts_appear_in_help_when_present() {
 #[test]
 fn test_static_commands_appear_before_mcp_tools() {
     // Create a tool registry and CLI builder
-    let registry = Arc::new(ToolRegistry::new());
+    let registry = Arc::new(tokio::sync::RwLock::new(ToolRegistry::new()));
     let builder = CliBuilder::new(registry.clone());
 
     // Build CLI
@@ -268,7 +269,8 @@ fn test_static_commands_appear_before_mcp_tools() {
     let serve_pos = help.find("serve").expect("'serve' should appear in help");
 
     // Find first MCP tool category
-    let categories = registry.get_cli_categories();
+    let reg = registry.try_read().unwrap();
+    let categories = reg.get_cli_categories();
     if !categories.is_empty() {
         let first_category = &categories[0];
         if let Some(tool_pos) = help.find(first_category) {
@@ -286,7 +288,7 @@ fn test_workflows_appear_before_mcp_tools_when_present() {
     use swissarmyhammer_workflow::WorkflowStorage;
 
     // Create a tool registry and CLI builder
-    let registry = Arc::new(ToolRegistry::new());
+    let registry = Arc::new(tokio::sync::RwLock::new(ToolRegistry::new()));
     let builder = CliBuilder::new(registry.clone());
 
     // Try to load workflow storage
@@ -305,7 +307,8 @@ fn test_workflows_appear_before_mcp_tools_when_present() {
             if let Some(first_workflow) = workflows.first() {
                 let workflow_pos = help.find(&first_workflow.name.to_string());
 
-                let categories = registry.get_cli_categories();
+                let reg = registry.try_read().unwrap();
+    let categories = reg.get_cli_categories();
                 if !categories.is_empty() {
                     let first_category_pos = help.find(&categories[0]);
 
@@ -325,14 +328,15 @@ fn test_workflows_appear_before_mcp_tools_when_present() {
 #[test]
 fn test_mcp_tool_categories_are_sorted() {
     // Create a tool registry and CLI builder
-    let registry = Arc::new(ToolRegistry::new());
+    let registry = Arc::new(tokio::sync::RwLock::new(ToolRegistry::new()));
     let builder = CliBuilder::new(registry.clone());
 
     // Build CLI
     let cli = builder.build_cli(None);
 
     // Get all MCP tool category names
-    let categories = registry.get_cli_categories();
+    let reg = registry.try_read().unwrap();
+    let categories = reg.get_cli_categories();
     if categories.len() > 1 {
         // Get the category names from the built CLI
         let subcommand_names: Vec<&str> = cli.get_subcommands().map(|cmd| cmd.get_name()).collect();
@@ -371,7 +375,7 @@ fn test_workflow_shortcuts_are_sorted_when_built() {
         // Only test if we have multiple workflows
         if workflows.len() > 1 {
             // Create a tool registry and CLI builder
-            let registry = Arc::new(ToolRegistry::new());
+            let registry = Arc::new(tokio::sync::RwLock::new(ToolRegistry::new()));
             let builder = CliBuilder::new(registry);
 
             // Build CLI with workflows - this is where sorting happens
@@ -406,7 +410,7 @@ fn test_command_descriptions_are_clean() {
     use swissarmyhammer_workflow::WorkflowStorage;
 
     // Create a tool registry and CLI builder
-    let registry = Arc::new(ToolRegistry::new());
+    let registry = Arc::new(tokio::sync::RwLock::new(ToolRegistry::new()));
     let builder = CliBuilder::new(registry.clone());
 
     // Try to load workflow storage

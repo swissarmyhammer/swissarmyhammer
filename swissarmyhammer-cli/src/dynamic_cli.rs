@@ -12,6 +12,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 use swissarmyhammer_tools::mcp::tool_registry::{McpTool, ToolRegistry};
 use swissarmyhammer_workflow::WorkflowStorage;
+use tokio::sync::RwLock;
 
 /// Global string cache to prevent memory leaks from Box::leak
 /// Strings are interned once and reused, satisfying clap's 'static lifetime requirement
@@ -111,7 +112,7 @@ impl CliValidationStats {
 
 /// Dynamic CLI builder that generates commands from MCP tool registry
 pub struct CliBuilder {
-    tool_registry: Arc<ToolRegistry>,
+    tool_registry: Arc<RwLock<ToolRegistry>>,
     // Pre-computed command data with owned strings
     category_commands: HashMap<String, CommandData>,
     tool_commands: HashMap<String, HashMap<String, CommandData>>,
@@ -119,13 +120,15 @@ pub struct CliBuilder {
 
 impl CliBuilder {
     /// Create a new CLI builder with the given tool registry
-    pub fn new(tool_registry: Arc<ToolRegistry>) -> Self {
+    pub fn new(tool_registry: Arc<RwLock<ToolRegistry>>) -> Self {
         let mut category_commands = HashMap::new();
         let mut tool_commands = HashMap::new();
 
-        // Pre-compute all command data
-        let categories = tool_registry.get_cli_categories();
-        for category in categories {
+        // Pre-compute all command data in a scope so guard is dropped
+        {
+            let registry = tool_registry.try_read().expect("ToolRegistry should not be locked");
+            let categories = registry.get_cli_categories();
+            for category in categories {
             let category_name = category.to_string();
 
             // Create category command data
@@ -142,7 +145,7 @@ impl CliBuilder {
 
             // Create tool commands for this category
             let mut tools_in_category = HashMap::new();
-            let tools = tool_registry.get_tools_for_category(&category);
+            let tools = registry.get_tools_for_category(&category);
 
             for tool in tools {
                 if !tool.hidden_from_cli() {
@@ -154,7 +157,8 @@ impl CliBuilder {
             }
 
             tool_commands.insert(category_name, tools_in_category);
-        }
+            }
+        } // Drop registry guard
 
         Self {
             tool_registry,
@@ -454,9 +458,10 @@ Example:
     pub fn validate_all_tools(&self) -> Vec<ValidationError> {
         let mut errors = Vec::new();
 
-        let categories = self.tool_registry.get_cli_categories();
+        let registry = self.tool_registry.try_read().expect("ToolRegistry should not be locked");
+        let categories = registry.get_cli_categories();
         for category in categories {
-            let tools = self.tool_registry.get_tools_for_category(&category);
+            let tools = registry.get_tools_for_category(&category);
             for tool in tools {
                 if let Err(tool_errors) = self.validate_single_tool(tool) {
                     errors.extend(tool_errors);
@@ -529,9 +534,10 @@ Example:
     pub fn get_validation_stats(&self) -> CliValidationStats {
         let mut stats = CliValidationStats::new();
 
-        let categories = self.tool_registry.get_cli_categories();
+        let registry = self.tool_registry.try_read().expect("ToolRegistry should not be locked");
+        let categories = registry.get_cli_categories();
         for category in categories {
-            let tools = self.tool_registry.get_tools_for_category(&category);
+            let tools = registry.get_tools_for_category(&category);
             for tool in tools {
                 stats.total_tools += 1;
 

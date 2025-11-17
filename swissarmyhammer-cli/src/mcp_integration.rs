@@ -22,7 +22,7 @@ type IssueStorageArc = Arc<RwLock<Box<dyn swissarmyhammer_issues::IssueStorage>>
 
 /// CLI-specific tool context that can create and execute MCP tools
 pub struct CliToolContext {
-    tool_registry: Arc<ToolRegistry>,
+    tool_registry: Arc<RwLock<ToolRegistry>>,
     tool_context: ToolContext,
 }
 
@@ -52,10 +52,14 @@ impl CliToolContext {
             agent_config,
         );
 
-        let tool_registry = Arc::new(Self::create_tool_registry());
+        let tool_registry = Self::create_tool_registry();
+        let tool_registry_arc = Arc::new(RwLock::new(tool_registry));
+
+        // Add registry to context so tools can call other tools
+        let tool_context = tool_context.with_tool_registry(tool_registry_arc.clone());
 
         Ok(Self {
-            tool_registry,
+            tool_registry: tool_registry_arc,
             tool_context,
         })
     }
@@ -131,7 +135,8 @@ impl CliToolContext {
         tool_name: &str,
         arguments: Map<String, serde_json::Value>,
     ) -> Result<CallToolResult, McpError> {
-        if let Some(tool) = self.tool_registry.get_tool(tool_name) {
+        let registry = self.tool_registry.read().await;
+        if let Some(tool) = registry.get_tool(tool_name) {
             tool.execute(arguments, &self.tool_context).await
         } else {
             Err(McpError::internal_error(
@@ -143,13 +148,8 @@ impl CliToolContext {
 
     /// Helper to convert CLI arguments to MCP tool arguments
     ///
-    /// Get a reference to the tool registry for dynamic CLI generation
-    pub fn get_tool_registry(&self) -> &ToolRegistry {
-        &self.tool_registry
-    }
-
     /// Get an Arc to the tool registry for dynamic CLI generation
-    pub fn get_tool_registry_arc(&self) -> Arc<ToolRegistry> {
+    pub fn get_tool_registry_arc(&self) -> Arc<RwLock<ToolRegistry>> {
         self.tool_registry.clone()
     }
 
@@ -217,7 +217,7 @@ mod tests {
     #[tokio::test]
     async fn test_create_arguments() {
         let _context = CliToolContext {
-            tool_registry: Arc::new(ToolRegistry::new()),
+            tool_registry: Arc::new(RwLock::new(ToolRegistry::new())),
             tool_context: create_mock_tool_context().await,
         };
 

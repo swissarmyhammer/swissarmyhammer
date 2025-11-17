@@ -138,7 +138,7 @@ fn test_shortcut_has_standard_flags() {
 #[test]
 fn test_cli_builder_integration() {
     // Create a tool registry and CLI builder
-    let tool_registry = Arc::new(ToolRegistry::new());
+    let tool_registry = Arc::new(tokio::sync::RwLock::new(ToolRegistry::new()));
     let cli_builder = CliBuilder::new(tool_registry);
 
     // Create workflow storage
@@ -167,7 +167,7 @@ fn test_cli_builder_integration() {
 #[test]
 fn test_cli_builder_without_workflow_storage() {
     // Create a tool registry and CLI builder
-    let tool_registry = Arc::new(ToolRegistry::new());
+    let tool_registry = Arc::new(tokio::sync::RwLock::new(ToolRegistry::new()));
     let cli_builder = CliBuilder::new(tool_registry);
 
     // Build CLI without shortcuts (workflow_storage = None)
@@ -229,7 +229,7 @@ fn test_shortcut_positional_args_for_required_params() {
 #[test]
 fn test_build_cli_with_warnings_accepts_workflow_storage() {
     // Create a tool registry and CLI builder
-    let tool_registry = Arc::new(ToolRegistry::new());
+    let tool_registry = Arc::new(tokio::sync::RwLock::new(ToolRegistry::new()));
     let cli_builder = CliBuilder::new(tool_registry);
 
     // Create workflow storage
