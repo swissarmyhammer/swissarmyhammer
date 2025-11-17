@@ -1,5 +1,6 @@
 use crate::commands;
 use clap::{Parser, Subcommand, ValueEnum};
+use std::str::FromStr;
 
 #[derive(ValueEnum, Clone, Copy, Debug, PartialEq, Default)]
 pub enum OutputFormat {
@@ -7,6 +8,19 @@ pub enum OutputFormat {
     Table,
     Json,
     Yaml,
+}
+
+impl FromStr for OutputFormat {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "json" => Ok(OutputFormat::Json),
+            "yaml" => Ok(OutputFormat::Yaml),
+            "table" => Ok(OutputFormat::Table),
+            _ => Ok(OutputFormat::Table), // Default to Table for unknown formats
+        }
+    }
 }
 
 // Re-export PromptSource from the library

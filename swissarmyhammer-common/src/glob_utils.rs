@@ -211,9 +211,10 @@ pub fn expand_glob_patterns(
                 })
             } else {
                 // If file can't be canonicalized, try direct comparison with excluded paths
-                !config.exclude_paths.iter().any(|excluded| {
-                    file_path.starts_with(excluded)
-                })
+                !config
+                    .exclude_paths
+                    .iter()
+                    .any(|excluded| file_path.starts_with(excluded))
             };
 
             should_keep

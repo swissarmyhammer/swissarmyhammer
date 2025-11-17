@@ -122,21 +122,67 @@ impl SchemaValidator {
     /// assert!(SchemaValidator::validate_schema(&schema).is_ok());
     /// ```
     pub fn validate_schema(schema: &Value) -> Result<(), ValidationError> {
-        // Validate basic schema structure
-        Self::validate_schema_structure(schema)?;
+        let errors = Self::validate_schema_internal(schema, false)?;
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            // Should never happen in fail-fast mode, but handle defensively
+            Err(errors.into_iter().next().unwrap())
+        }
+    }
+
+    /// Internal schema validation with configurable error handling strategy
+    ///
+    /// # Arguments
+    /// * `schema` - The JSON schema to validate
+    /// * `collect_all` - If true, collect all errors; if false, fail fast on first error
+    ///
+    /// # Returns
+    /// * `Ok(Vec<ValidationError>)` - List of errors found (empty if valid)
+    /// * `Err(ValidationError)` - Critical error that prevents further validation (fail-fast mode only)
+    fn validate_schema_internal(
+        schema: &Value,
+        collect_all: bool,
+    ) -> Result<Vec<ValidationError>, ValidationError> {
+        let mut errors = Vec::new();
+
+        macro_rules! handle_result {
+            ($result:expr) => {
+                match $result {
+                    Err(e) => {
+                        if collect_all {
+                            errors.push(e);
+                        } else {
+                            return Err(e);
+                        }
+                    }
+                    Ok(_) => {}
+                }
+            };
+        }
+
+        // Validate basic schema structure (always fail-fast on structure errors)
+        handle_result!(Self::validate_schema_structure(schema));
+
+        // If structure validation failed in collect_all mode, return early
+        if !errors.is_empty() && collect_all {
+            return Ok(errors);
+        }
 
         // Extract and validate properties
         if let Some(properties) = schema.get("properties").and_then(|p| p.as_object()) {
-            Self::validate_properties(properties)?;
-            Self::validate_property_consistency(properties)?;
+            let prop_errors = Self::validate_properties_internal(properties, collect_all)?;
+            errors.extend(prop_errors);
+
+            handle_result!(Self::validate_property_consistency(properties));
         }
 
         // Validate required fields if present
         if let Some(required) = schema.get("required") {
-            Self::validate_required_fields(required, schema)?;
+            handle_result!(Self::validate_required_fields(required, schema));
         }
 
-        Ok(())
+        Ok(errors)
     }
 
     /// Validate the basic structure of a JSON schema
@@ -185,25 +231,49 @@ impl SchemaValidator {
 
     /// Validate individual property schemas
     pub fn validate_properties(properties: &Map<String, Value>) -> Result<(), ValidationError> {
-        for (prop_name, prop_schema) in properties {
-            Self::validate_parameter_name(prop_name)?;
-            Self::validate_property_schema(prop_name, prop_schema)?;
+        let errors = Self::validate_properties_internal(properties, false)?;
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            // Should never happen in fail-fast mode, but handle defensively
+            Err(errors.into_iter().next().unwrap())
         }
-        Ok(())
     }
 
-    /// Validate individual property schemas and collect all errors (for comprehensive validation)
-    fn validate_properties_comprehensive(properties: &Map<String, Value>) -> Vec<ValidationError> {
+    /// Internal property validation with configurable error handling strategy
+    ///
+    /// # Arguments
+    /// * `properties` - The property map to validate
+    /// * `collect_all` - If true, collect all errors; if false, fail fast on first error
+    ///
+    /// # Returns
+    /// * `Ok(Vec<ValidationError>)` - List of errors found (empty if valid)
+    /// * `Err(ValidationError)` - Critical error in fail-fast mode
+    fn validate_properties_internal(
+        properties: &Map<String, Value>,
+        collect_all: bool,
+    ) -> Result<Vec<ValidationError>, ValidationError> {
         let mut errors = Vec::new();
+
         for (prop_name, prop_schema) in properties {
             if let Err(e) = Self::validate_parameter_name(prop_name) {
-                errors.push(e);
+                if collect_all {
+                    errors.push(e);
+                } else {
+                    return Err(e);
+                }
             }
+
             if let Err(e) = Self::validate_property_schema(prop_name, prop_schema) {
-                errors.push(e);
+                if collect_all {
+                    errors.push(e);
+                } else {
+                    return Err(e);
+                }
             }
         }
-        errors
+
+        Ok(errors)
     }
 
     /// Validate a parameter name for CLI compatibility
@@ -434,30 +504,10 @@ impl SchemaValidator {
     /// This method collects all validation errors instead of stopping at the first one,
     /// providing comprehensive feedback about all issues in the schema.
     pub fn validate_schema_comprehensive(schema: &Value) -> Vec<ValidationError> {
-        let mut errors = Vec::new();
-
-        // Validate schema structure
-        if let Err(e) = Self::validate_schema_structure(schema) {
-            errors.push(e);
-            return errors; // Can't continue if structure is invalid
+        match Self::validate_schema_internal(schema, true) {
+            Ok(errors) => errors,
+            Err(e) => vec![e], // Shouldn't happen in collect_all mode, but handle defensively
         }
-
-        // Validate properties
-        if let Some(properties) = schema.get("properties").and_then(|p| p.as_object()) {
-            errors.extend(Self::validate_properties_comprehensive(properties));
-            if let Err(e) = Self::validate_property_consistency(properties) {
-                errors.push(e);
-            }
-        }
-
-        // Validate required fields
-        if let Some(required) = schema.get("required") {
-            if let Err(e) = Self::validate_required_fields(required, schema) {
-                errors.push(e);
-            }
-        }
-
-        errors
     }
 
     /// Get user-friendly error summary

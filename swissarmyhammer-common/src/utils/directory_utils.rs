@@ -115,7 +115,10 @@ pub fn find_swissarmyhammer_directory_from(start_dir: &Path) -> Option<PathBuf> 
 ///
 /// * `NotInGitRepository` - If not currently in a Git repository
 /// * `DirectoryCreation` - If .swissarmyhammer directory cannot be created
-#[deprecated(since = "0.3.0", note = "Use SwissarmyhammerDirectory::from_git_root() instead")]
+#[deprecated(
+    since = "0.3.0",
+    note = "Use SwissarmyhammerDirectory::from_git_root() instead"
+)]
 pub fn get_or_create_swissarmyhammer_directory() -> Result<PathBuf> {
     let current_dir = match std::env::current_dir() {
         Ok(dir) => dir,
@@ -143,7 +146,10 @@ pub fn get_or_create_swissarmyhammer_directory() -> Result<PathBuf> {
 /// # Returns
 ///
 /// * `Result<PathBuf>` - Path to the .swissarmyhammer directory on success
-#[deprecated(since = "0.3.0", note = "Use SwissarmyhammerDirectory::from_custom_root() instead")]
+#[deprecated(
+    since = "0.3.0",
+    note = "Use SwissarmyhammerDirectory::from_custom_root() instead"
+)]
 pub fn get_or_create_swissarmyhammer_directory_from(start_dir: &Path) -> Result<PathBuf> {
     let git_root =
         find_git_repository_root_from(start_dir).ok_or(SwissArmyHammerError::NotInGitRepository)?;

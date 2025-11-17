@@ -349,6 +349,17 @@ impl SemanticConfig {
         .map_err(|e| crate::error::SearchError::Config(e.to_string()))
     }
 
+    /// Validate that a threshold value is within the valid range of 0.0 to 1.0
+    fn validate_threshold(&self, value: f32, name: &str) -> crate::error::SearchResult<()> {
+        if !(0.0..=1.0).contains(&value) {
+            return Err(crate::error::SearchError::Config(format!(
+                "{} ({}) must be between 0.0 and 1.0",
+                name, value
+            )));
+        }
+        Ok(())
+    }
+
     /// Validate all configuration parameters
     pub fn validate(&self) -> crate::error::SearchResult<()> {
         // Validate chunk size parameters
@@ -366,26 +377,9 @@ impl SemanticConfig {
         }
 
         // Validate similarity thresholds (must be between 0.0 and 1.0)
-        if !(0.0..=1.0).contains(&self.similarity_threshold) {
-            return Err(crate::error::SearchError::Config(format!(
-                "similarity_threshold ({}) must be between 0.0 and 1.0",
-                self.similarity_threshold
-            )));
-        }
-
-        if !(0.0..=1.0).contains(&self.simple_search_threshold) {
-            return Err(crate::error::SearchError::Config(format!(
-                "simple_search_threshold ({}) must be between 0.0 and 1.0",
-                self.simple_search_threshold
-            )));
-        }
-
-        if !(0.0..=1.0).contains(&self.code_similarity_threshold) {
-            return Err(crate::error::SearchError::Config(format!(
-                "code_similarity_threshold ({}) must be between 0.0 and 1.0",
-                self.code_similarity_threshold
-            )));
-        }
+        self.validate_threshold(self.similarity_threshold, "similarity_threshold")?;
+        self.validate_threshold(self.simple_search_threshold, "simple_search_threshold")?;
+        self.validate_threshold(self.code_similarity_threshold, "code_similarity_threshold")?;
 
         // Validate length parameters
         if self.excerpt_length == 0 {
@@ -417,6 +411,56 @@ impl SemanticConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Helper function to assert that a threshold validation fails with the expected field name
+    fn assert_threshold_validation_fails(
+        create_invalid_config: impl Fn() -> SemanticConfig,
+        expected_field_name: &str,
+    ) {
+        let config = create_invalid_config();
+        let result = config.validate();
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains(expected_field_name));
+    }
+
+    /// Helper function to assert that a zero-length validation fails with the expected field name
+    fn assert_zero_length_validation_fails(
+        create_invalid_config: impl Fn() -> SemanticConfig,
+        expected_field_name: &str,
+    ) {
+        let config = create_invalid_config();
+        let result = config.validate();
+        assert!(result.is_err());
+        let error_message = result.unwrap_err().to_string();
+        assert!(error_message.contains(expected_field_name));
+        assert!(error_message.contains("must be greater than 0"));
+    }
+
+    /// RAII guard for managing SWISSARMYHAMMER_SEMANTIC_DB_PATH environment variable in tests
+    /// Automatically saves and restores the original value on drop
+    struct SemanticDbEnvGuard {
+        original: Option<String>,
+    }
+
+    impl SemanticDbEnvGuard {
+        fn new() -> Self {
+            let original = std::env::var("SWISSARMYHAMMER_SEMANTIC_DB_PATH").ok();
+            std::env::remove_var("SWISSARMYHAMMER_SEMANTIC_DB_PATH");
+            Self { original }
+        }
+    }
+
+    impl Drop for SemanticDbEnvGuard {
+        fn drop(&mut self) {
+            match &self.original {
+                Some(path) => std::env::set_var("SWISSARMYHAMMER_SEMANTIC_DB_PATH", path),
+                None => std::env::remove_var("SWISSARMYHAMMER_SEMANTIC_DB_PATH"),
+            }
+        }
+    }
 
     #[test]
     fn test_file_id() {
@@ -518,16 +562,13 @@ mod tests {
             .lock()
             .unwrap();
 
-        // Save original environment variable state
-        let original_db_path = std::env::var("SWISSARMYHAMMER_SEMANTIC_DB_PATH").ok();
-
-        // Ensure no environment variable override is set for this test
-        std::env::remove_var("SWISSARMYHAMMER_SEMANTIC_DB_PATH");
+        // Use SemanticDbEnvGuard to manage environment variable
+        let _env_guard = SemanticDbEnvGuard::new();
 
         // Create config WHILE environment variable is cleared
         let config = SemanticConfig::default();
 
-        // Perform all assertions BEFORE restoring environment
+        // Perform all assertions
         assert!(config
             .database_path
             .to_string_lossy()
@@ -558,11 +599,7 @@ mod tests {
         assert_eq!(config.max_chunks_per_file, 100);
         assert_eq!(config.max_file_size_bytes, 10 * 1024 * 1024);
 
-        // Restore original environment variable state after all assertions
-        match original_db_path {
-            Some(path) => std::env::set_var("SWISSARMYHAMMER_SEMANTIC_DB_PATH", path),
-            None => std::env::remove_var("SWISSARMYHAMMER_SEMANTIC_DB_PATH"),
-        }
+        // Environment variable is automatically restored by SemanticDbEnvGuard's Drop
     }
 
     #[test]
@@ -624,84 +661,81 @@ mod tests {
     }
 
     #[test]
-    fn test_config_validation_similarity_threshold_invalid() {
-        let config = SemanticConfig {
-            similarity_threshold: 1.5, // Greater than 1.0
-            ..Default::default()
-        };
-        let result = config.validate();
-        assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("similarity_threshold"));
+    fn test_config_validation_threshold_invalid() {
+        // Test similarity_threshold > 1.0
+        assert_threshold_validation_fails(
+            || SemanticConfig {
+                similarity_threshold: 1.5,
+                ..Default::default()
+            },
+            "similarity_threshold",
+        );
 
-        let config = SemanticConfig {
-            similarity_threshold: -0.1, // Less than 0.0
-            ..Default::default()
-        };
-        let result = config.validate();
-        assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("similarity_threshold"));
+        // Test similarity_threshold < 0.0
+        assert_threshold_validation_fails(
+            || SemanticConfig {
+                similarity_threshold: -0.1,
+                ..Default::default()
+            },
+            "similarity_threshold",
+        );
+
+        // Test simple_search_threshold > 1.0
+        assert_threshold_validation_fails(
+            || SemanticConfig {
+                simple_search_threshold: 2.0,
+                ..Default::default()
+            },
+            "simple_search_threshold",
+        );
+
+        // Test simple_search_threshold < 0.0
+        assert_threshold_validation_fails(
+            || SemanticConfig {
+                simple_search_threshold: -0.1,
+                ..Default::default()
+            },
+            "simple_search_threshold",
+        );
+
+        // Test code_similarity_threshold > 1.0
+        assert_threshold_validation_fails(
+            || SemanticConfig {
+                code_similarity_threshold: 1.5,
+                ..Default::default()
+            },
+            "code_similarity_threshold",
+        );
+
+        // Test code_similarity_threshold < 0.0
+        assert_threshold_validation_fails(
+            || SemanticConfig {
+                code_similarity_threshold: -1.0,
+                ..Default::default()
+            },
+            "code_similarity_threshold",
+        );
     }
 
     #[test]
-    fn test_config_validation_simple_search_threshold_invalid() {
-        let config = SemanticConfig {
-            simple_search_threshold: 2.0, // Greater than 1.0
-            ..Default::default()
-        };
-        let result = config.validate();
-        assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("simple_search_threshold"));
-    }
+    fn test_config_validation_length_parameters_zero() {
+        // Test excerpt_length == 0
+        assert_zero_length_validation_fails(
+            || SemanticConfig {
+                excerpt_length: 0,
+                ..Default::default()
+            },
+            "excerpt_length",
+        );
 
-    #[test]
-    fn test_config_validation_code_similarity_threshold_invalid() {
-        let config = SemanticConfig {
-            code_similarity_threshold: -1.0, // Less than 0.0
-            ..Default::default()
-        };
-        let result = config.validate();
-        assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("code_similarity_threshold"));
-    }
-
-    #[test]
-    fn test_config_validation_excerpt_length_zero() {
-        let config = SemanticConfig {
-            excerpt_length: 0,
-            ..Default::default()
-        };
-        let result = config.validate();
-        assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("excerpt_length must be greater than 0"));
-    }
-
-    #[test]
-    fn test_config_validation_content_preview_length_zero() {
-        let config = SemanticConfig {
-            content_preview_length: 0,
-            ..Default::default()
-        };
-        let result = config.validate();
-        assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("content_preview_length must be greater than 0"));
+        // Test content_preview_length == 0
+        assert_zero_length_validation_fails(
+            || SemanticConfig {
+                content_preview_length: 0,
+                ..Default::default()
+            },
+            "content_preview_length",
+        );
     }
 
     #[test]
@@ -929,11 +963,8 @@ mod tests {
         // Use mutex to prevent race conditions between tests
         let _guard = ENV_LOCK_GIT.get_or_init(|| Mutex::new(())).lock().unwrap();
 
-        // Save original environment variable state
-        let original_db_path = std::env::var("SWISSARMYHAMMER_SEMANTIC_DB_PATH").ok();
-
-        // Ensure no environment variable override is set for this test
-        std::env::remove_var("SWISSARMYHAMMER_SEMANTIC_DB_PATH");
+        // Use SemanticDbEnvGuard to manage environment variable
+        let _env_guard = SemanticDbEnvGuard::new();
 
         // This test verifies that the new Git-centric approach works by testing that
         // when we're in a Git repository with .swissarmyhammer, the database path
@@ -942,12 +973,6 @@ mod tests {
 
         // Create a simple config and verify it follows expected patterns
         let config = SemanticConfig::default();
-
-        // Restore original environment variable state before any assertions
-        match original_db_path {
-            Some(path) => std::env::set_var("SWISSARMYHAMMER_SEMANTIC_DB_PATH", path),
-            None => std::env::remove_var("SWISSARMYHAMMER_SEMANTIC_DB_PATH"),
-        }
 
         // Should always contain semantic.db
         assert!(config
@@ -965,6 +990,8 @@ mod tests {
             "Expected path to contain .swissarmyhammer or end with semantic.db, got: {}",
             path_str
         );
+
+        // Environment variable is automatically restored by SemanticDbEnvGuard's Drop
     }
 
     #[test]
@@ -974,9 +1001,8 @@ mod tests {
         // Acquire the global semantic DB environment lock to prevent race conditions
         let _lock_guard = crate::test_utils::acquire_semantic_db_lock();
 
-        // Store original environment variable and remove it for test isolation
-        let original_db_path = std::env::var("SWISSARMYHAMMER_SEMANTIC_DB_PATH").ok();
-        std::env::remove_var("SWISSARMYHAMMER_SEMANTIC_DB_PATH");
+        // Use SemanticDbEnvGuard to manage environment variable
+        let _env_guard = SemanticDbEnvGuard::new();
 
         // Create a temporary directory that doesn't have .git (not a Git repository)
         let temp_dir = TempDir::new().unwrap();
@@ -984,11 +1010,6 @@ mod tests {
         // Change to a directory without .git repository
         let original_dir = std::env::current_dir().ok();
         if std::env::set_current_dir(temp_dir.path()).is_err() {
-            // Restore environment variable if test setup failed
-            match original_db_path {
-                Some(path) => std::env::set_var("SWISSARMYHAMMER_SEMANTIC_DB_PATH", path),
-                None => std::env::remove_var("SWISSARMYHAMMER_SEMANTIC_DB_PATH"),
-            }
             return; // Skip test if can't change directory
         }
 
@@ -1016,11 +1037,7 @@ mod tests {
             path_str
         );
 
-        // Restore original environment variable
-        match original_db_path {
-            Some(path) => std::env::set_var("SWISSARMYHAMMER_SEMANTIC_DB_PATH", path),
-            None => std::env::remove_var("SWISSARMYHAMMER_SEMANTIC_DB_PATH"),
-        }
+        // Environment variable is automatically restored by SemanticDbEnvGuard's Drop
     }
 
     #[test]
@@ -1031,9 +1048,8 @@ mod tests {
         // Acquire the global semantic DB environment lock to prevent race conditions
         let _lock_guard = crate::test_utils::acquire_semantic_db_lock();
 
-        // Store original environment variable and remove it for test isolation
-        let original_db_path = std::env::var("SWISSARMYHAMMER_SEMANTIC_DB_PATH").ok();
-        std::env::remove_var("SWISSARMYHAMMER_SEMANTIC_DB_PATH");
+        // Use SemanticDbEnvGuard to manage environment variable
+        let _env_guard = SemanticDbEnvGuard::new();
 
         let temp_dir = TempDir::new().unwrap();
 
@@ -1044,11 +1060,6 @@ mod tests {
         // Change to the temp directory to simulate being in a Git repository
         let original_dir = std::env::current_dir().ok();
         if std::env::set_current_dir(temp_dir.path()).is_err() {
-            // Restore environment variable if test setup failed
-            match original_db_path {
-                Some(path) => std::env::set_var("SWISSARMYHAMMER_SEMANTIC_DB_PATH", path),
-                None => std::env::remove_var("SWISSARMYHAMMER_SEMANTIC_DB_PATH"),
-            }
             return; // Skip test if can't change directory
         }
 
@@ -1069,17 +1080,12 @@ mod tests {
             path_str
         );
 
-        // Restore original environment variable
-        match original_db_path {
-            Some(path) => std::env::set_var("SWISSARMYHAMMER_SEMANTIC_DB_PATH", path),
-            None => std::env::remove_var("SWISSARMYHAMMER_SEMANTIC_DB_PATH"),
-        }
-
         // Should either be home directory or relative fallback
-        let path_str = config.database_path.to_string_lossy();
         assert!(
             path_str.ends_with(".swissarmyhammer/semantic.db") || path_str.ends_with("semantic.db")
         );
+
+        // Environment variable is automatically restored by SemanticDbEnvGuard's Drop
     }
 
     #[test]

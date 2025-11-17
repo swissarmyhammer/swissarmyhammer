@@ -62,6 +62,31 @@ pub struct SwissarmyhammerDirectory {
 }
 
 impl SwissarmyhammerDirectory {
+    /// Create a new SwissarmyhammerDirectory with the given root path
+    ///
+    /// This private helper handles the common logic of ensuring the directory
+    /// exists and constructing the struct.
+    ///
+    /// # Arguments
+    ///
+    /// * `root` - The path to the .swissarmyhammer directory
+    /// * `root_type` - The type of root location
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(SwissarmyhammerDirectory)` - Successfully created/found directory
+    ///
+    /// # Errors
+    ///
+    /// * `DirectoryCreation` - If .swissarmyhammer directory cannot be created
+    fn new(root: PathBuf, root_type: DirectoryRootType) -> Result<Self> {
+        if !root.exists() {
+            fs::create_dir_all(&root).map_err(SwissArmyHammerError::directory_creation)?;
+        }
+
+        Ok(Self { root, root_type })
+    }
+
     /// Create from Git repository root (default for project operations)
     ///
     /// Finds the Git repository root and creates .swissarmyhammer directory there.
@@ -85,17 +110,10 @@ impl SwissarmyhammerDirectory {
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     pub fn from_git_root() -> Result<Self> {
-        let git_root = find_git_repository_root().ok_or(SwissArmyHammerError::NotInGitRepository)?;
+        let git_root =
+            find_git_repository_root().ok_or(SwissArmyHammerError::NotInGitRepository)?;
         let root = git_root.join(".swissarmyhammer");
-
-        if !root.exists() {
-            fs::create_dir_all(&root).map_err(SwissArmyHammerError::directory_creation)?;
-        }
-
-        Ok(Self {
-            root,
-            root_type: DirectoryRootType::GitRoot,
-        })
+        Self::new(root, DirectoryRootType::GitRoot)
     }
 
     /// Create from user's home directory (for user-level config/rules)
@@ -120,22 +138,12 @@ impl SwissarmyhammerDirectory {
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     pub fn from_user_home() -> Result<Self> {
-        let home = dirs::home_dir().ok_or_else(|| {
-            SwissArmyHammerError::Other {
-                message: "Cannot determine home directory".to_string(),
-            }
+        let home = dirs::home_dir().ok_or_else(|| SwissArmyHammerError::Other {
+            message: "Cannot determine home directory".to_string(),
         })?;
 
         let root = home.join(".swissarmyhammer");
-
-        if !root.exists() {
-            fs::create_dir_all(&root).map_err(SwissArmyHammerError::directory_creation)?;
-        }
-
-        Ok(Self {
-            root,
-            root_type: DirectoryRootType::UserHome,
-        })
+        Self::new(root, DirectoryRootType::UserHome)
     }
 
     /// Create from custom root path (for testing)
@@ -167,15 +175,7 @@ impl SwissarmyhammerDirectory {
     /// ```
     pub fn from_custom_root(custom_root: PathBuf) -> Result<Self> {
         let root = custom_root.join(".swissarmyhammer");
-
-        if !root.exists() {
-            fs::create_dir_all(&root).map_err(SwissArmyHammerError::directory_creation)?;
-        }
-
-        Ok(Self {
-            root,
-            root_type: DirectoryRootType::Custom(custom_root),
-        })
+        Self::new(root, DirectoryRootType::Custom(custom_root))
     }
 
     /// Get the root .swissarmyhammer directory path
@@ -304,8 +304,8 @@ mod tests {
     #[test]
     fn test_from_custom_root() {
         let temp = TempDir::new().unwrap();
-        let sah_dir = SwissarmyhammerDirectory::from_custom_root(temp.path().to_path_buf())
-            .unwrap();
+        let sah_dir =
+            SwissarmyhammerDirectory::from_custom_root(temp.path().to_path_buf()).unwrap();
 
         assert!(sah_dir.root().exists());
         assert!(sah_dir.root().is_dir());
@@ -351,8 +351,8 @@ mod tests {
     #[test]
     fn test_subdir() {
         let temp = TempDir::new().unwrap();
-        let sah_dir = SwissarmyhammerDirectory::from_custom_root(temp.path().to_path_buf())
-            .unwrap();
+        let sah_dir =
+            SwissarmyhammerDirectory::from_custom_root(temp.path().to_path_buf()).unwrap();
 
         let todo_path = sah_dir.subdir("todo");
         assert_eq!(todo_path, sah_dir.root().join("todo"));
@@ -363,8 +363,8 @@ mod tests {
     #[test]
     fn test_ensure_subdir() {
         let temp = TempDir::new().unwrap();
-        let sah_dir = SwissarmyhammerDirectory::from_custom_root(temp.path().to_path_buf())
-            .unwrap();
+        let sah_dir =
+            SwissarmyhammerDirectory::from_custom_root(temp.path().to_path_buf()).unwrap();
 
         let todo_dir = sah_dir.ensure_subdir("todo").unwrap();
         assert_eq!(todo_dir, sah_dir.root().join("todo"));
@@ -376,8 +376,8 @@ mod tests {
     #[test]
     fn test_ensure_subdir_nested() {
         let temp = TempDir::new().unwrap();
-        let sah_dir = SwissarmyhammerDirectory::from_custom_root(temp.path().to_path_buf())
-            .unwrap();
+        let sah_dir =
+            SwissarmyhammerDirectory::from_custom_root(temp.path().to_path_buf()).unwrap();
 
         let nested_dir = sah_dir.ensure_subdir("cache/rules").unwrap();
         assert!(nested_dir.exists());
@@ -388,8 +388,8 @@ mod tests {
     #[test]
     fn test_contains_path() {
         let temp = TempDir::new().unwrap();
-        let sah_dir = SwissarmyhammerDirectory::from_custom_root(temp.path().to_path_buf())
-            .unwrap();
+        let sah_dir =
+            SwissarmyhammerDirectory::from_custom_root(temp.path().to_path_buf()).unwrap();
 
         // Create a file inside .swissarmyhammer
         let todo_dir = sah_dir.ensure_subdir("todo").unwrap();
@@ -408,8 +408,8 @@ mod tests {
     #[test]
     fn test_contains_path_relative() {
         let temp = TempDir::new().unwrap();
-        let sah_dir = SwissarmyhammerDirectory::from_custom_root(temp.path().to_path_buf())
-            .unwrap();
+        let sah_dir =
+            SwissarmyhammerDirectory::from_custom_root(temp.path().to_path_buf()).unwrap();
 
         // contains_path uses canonicalize which requires paths to exist
         // So we test with the actual root path
@@ -419,7 +419,10 @@ mod tests {
     #[test]
     fn test_root_type_display() {
         assert_eq!(DirectoryRootType::UserHome.to_string(), "user home");
-        assert_eq!(DirectoryRootType::GitRoot.to_string(), "git repository root");
+        assert_eq!(
+            DirectoryRootType::GitRoot.to_string(),
+            "git repository root"
+        );
 
         let custom = DirectoryRootType::Custom(PathBuf::from("/tmp/test"));
         assert!(custom.to_string().contains("custom path"));

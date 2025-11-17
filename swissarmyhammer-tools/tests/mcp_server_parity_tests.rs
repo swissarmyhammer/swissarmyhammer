@@ -13,22 +13,42 @@ use swissarmyhammer_tools::mcp::tool_registry::{
 };
 use tracing::info;
 
+/// Helper function to set up tool comparison tests
+fn setup_tool_comparison_test(test_name: &str) -> (Vec<String>, Vec<String>) {
+    let _ = tracing_subscriber::fmt::try_init();
+    info!("🧪 Testing {}", test_name);
+    let http_tools = get_http_static_tools();
+    let stdin_tools = get_stdin_registry_tools();
+    (http_tools, stdin_tools)
+}
+
+/// Helper function to assert that tools contain expected tools
+fn assert_tools_present(tools: &[String], expected_tools: &[&str], context: &str) {
+    let tool_set: HashSet<String> = tools.iter().cloned().collect();
+    for &expected_tool in expected_tools {
+        assert!(
+            tool_set.contains(expected_tool),
+            "{} missing expected tool: {}. Available tools: {:?}",
+            context, expected_tool, tools
+        );
+    }
+}
+
+/// Helper function to log test success with tool counts
+fn log_test_success(message: &str, count: usize) {
+    info!("✅ {}: {}", message, count);
+}
+
 /// Test that HTTP and STDIN MCP tool registries are identical
 #[tokio::test]
 async fn test_http_stdin_mcp_tool_parity() -> Result<()> {
-    let _ = tracing_subscriber::fmt::try_init();
+    let (http_tools, stdin_tools) =
+        setup_tool_comparison_test("MCP server tool parity between HTTP and STDIN modes");
 
-    info!("🧪 Testing MCP server tool parity between HTTP and STDIN modes");
-
-    // Get tool list from HTTP server static definition
-    let http_tools = get_http_static_tools();
     info!(
         "📡 HTTP MCP server static definition has {} tools",
         http_tools.len()
     );
-
-    // Get tool list from STDIN registry (the authoritative source)
-    let stdin_tools = get_stdin_registry_tools();
     info!("📥 STDIN MCP registry has {} tools", stdin_tools.len());
 
     // Compare tool sets
@@ -54,9 +74,9 @@ async fn test_http_stdin_mcp_tool_parity() -> Result<()> {
         http_tool_names.len(), stdin_tool_names.len()
     );
 
-    info!(
-        "✅ SUCCESS: HTTP and STDIN MCP servers expose identical {} tools",
-        http_tool_names.len()
+    log_test_success(
+        "HTTP and STDIN MCP servers expose identical tools",
+        http_tool_names.len(),
     );
 
     // Log some of the shared tools for verification
@@ -130,11 +150,10 @@ fn get_stdin_registry_tools() -> Vec<String> {
 /// Test that both tool definitions return expected minimum number of tools
 #[tokio::test]
 async fn test_mcp_tool_definitions_return_sufficient_tools() -> Result<()> {
-    let _ = tracing_subscriber::fmt::try_init();
-    info!("🧪 Testing that MCP tool definitions return expected number of tools");
+    let (http_tools, stdin_tools) =
+        setup_tool_comparison_test("MCP tool definitions return expected number of tools");
 
     // Test HTTP static definition
-    let http_tools = get_http_static_tools();
     assert!(
         http_tools.len() >= 25,
         "HTTP static definition should have at least 25 tools, got {}. Tools: {:?}",
@@ -143,7 +162,6 @@ async fn test_mcp_tool_definitions_return_sufficient_tools() -> Result<()> {
     );
 
     // Test STDIN registry
-    let stdin_tools = get_stdin_registry_tools();
     assert!(
         stdin_tools.len() >= 25,
         "STDIN registry should have at least 25 tools, got {}. Tools: {:?}",
@@ -152,7 +170,7 @@ async fn test_mcp_tool_definitions_return_sufficient_tools() -> Result<()> {
     );
 
     info!(
-        "✅ Both tool definitions have sufficient tools (HTTP: {}, STDIN: {})",
+        "Both tool definitions have sufficient tools (HTTP: {}, STDIN: {})",
         http_tools.len(),
         stdin_tools.len()
     );
@@ -163,8 +181,8 @@ async fn test_mcp_tool_definitions_return_sufficient_tools() -> Result<()> {
 /// Test that both tool definitions include expected core tools
 #[tokio::test]
 async fn test_mcp_tool_definitions_include_core_tools() -> Result<()> {
-    let _ = tracing_subscriber::fmt::try_init();
-    info!("🧪 Testing that MCP tool definitions include expected core tools");
+    let (http_tools, stdin_tools) =
+        setup_tool_comparison_test("MCP tool definitions include expected core tools");
 
     let expected_core_tools = [
         "files_read",
@@ -179,32 +197,12 @@ async fn test_mcp_tool_definitions_include_core_tools() -> Result<()> {
     ];
 
     // Test HTTP static definition
-    let http_tools = get_http_static_tools();
-    let http_tool_set: HashSet<String> = http_tools.iter().cloned().collect();
-
-    for &expected_tool in &expected_core_tools {
-        assert!(
-            http_tool_set.contains(expected_tool),
-            "HTTP static definition missing expected tool: {}. Available tools: {:?}",
-            expected_tool,
-            http_tools
-        );
-    }
+    assert_tools_present(&http_tools, &expected_core_tools, "HTTP static definition");
 
     // Test STDIN registry
-    let stdin_tools = get_stdin_registry_tools();
-    let stdin_tool_set: HashSet<String> = stdin_tools.iter().cloned().collect();
+    assert_tools_present(&stdin_tools, &expected_core_tools, "STDIN registry");
 
-    for &expected_tool in &expected_core_tools {
-        assert!(
-            stdin_tool_set.contains(expected_tool),
-            "STDIN registry missing expected tool: {}. Available tools: {:?}",
-            expected_tool,
-            stdin_tools
-        );
-    }
-
-    info!("✅ Both tool definitions include all expected core tools");
+    info!("Both tool definitions include all expected core tools");
 
     Ok(())
 }

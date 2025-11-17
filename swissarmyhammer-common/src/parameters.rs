@@ -483,6 +483,27 @@ impl ErrorMessageEnhancer {
         Self
     }
 
+    /// Create a ValidationFailedWithContext error with consistent structure
+    fn create_validation_context_error(
+        parameter: String,
+        value: String,
+        message: String,
+        explanation: String,
+        suggestions: Vec<String>,
+    ) -> ParameterError {
+        ParameterError::ValidationFailedWithContext {
+            parameter,
+            details: Box::new(ValidationFailedDetails {
+                value,
+                message,
+                explanation: Some(explanation),
+                examples: vec![],
+                suggestions,
+            }),
+            recoverable: true,
+        }
+    }
+
     /// Enhance a ParameterError with better user experience
     pub fn enhance_parameter_error(&self, error: &ParameterError) -> ParameterError {
         match error {
@@ -515,92 +536,74 @@ impl ErrorMessageEnhancer {
             }
 
             ParameterError::StringTooShort { name, min_length, actual_length } => {
-                ParameterError::ValidationFailedWithContext {
-                    parameter: name.clone(),
-                    details: Box::new(ValidationFailedDetails {
-                        value: format!("{actual_length} characters"),
-                        message: format!("Must be at least {min_length} characters long"),
-                        explanation: Some(format!(
-                            "Your input has {actual_length} characters, but {min_length} characters are required"
-                        )),
-                        examples: vec![
-                            format!("Example with {min_length} characters: {}",
-                                   "a".repeat(*min_length))
-                        ],
-                        suggestions: vec![
-                            format!("Add {} more characters to meet the minimum requirement",
-                                   min_length - actual_length)
-                        ],
-                    }),
-                    recoverable: true,
-                }
+                Self::create_validation_context_error(
+                    name.clone(),
+                    format!("{actual_length} characters"),
+                    format!("Must be at least {min_length} characters long"),
+                    format!(
+                        "Your input has {actual_length} characters, but {min_length} characters are required"
+                    ),
+                    vec![format!(
+                        "Add {} more characters to meet the minimum requirement",
+                        min_length - actual_length
+                    )],
+                )
             }
 
             ParameterError::StringTooLong { name, max_length, actual_length } => {
-                ParameterError::ValidationFailedWithContext {
-                    parameter: name.clone(),
-                    details: Box::new(ValidationFailedDetails {
-                        value: format!("{actual_length} characters"),
-                        message: format!("Must be at most {max_length} characters long"),
-                        explanation: Some(format!(
-                            "Your input has {actual_length} characters, but only {max_length} characters are allowed"
-                        )),
-                        examples: vec![],
-                        suggestions: vec![
-                            format!("Remove {} characters to meet the maximum limit",
-                                   actual_length - max_length)
-                        ],
-                    }),
-                    recoverable: true,
-                }
+                Self::create_validation_context_error(
+                    name.clone(),
+                    format!("{actual_length} characters"),
+                    format!("Must be at most {max_length} characters long"),
+                    format!(
+                        "Your input has {actual_length} characters, but only {max_length} characters are allowed"
+                    ),
+                    vec![format!(
+                        "Remove {} characters to meet the maximum limit",
+                        actual_length - max_length
+                    )],
+                )
             }
 
             ParameterError::OutOfRange { name, value, min, max } => {
                 let mut suggestions = vec![];
-                let mut explanation = format!("Value {value} is outside the allowed range");
-                if let (Some(min_val), Some(max_val)) = (min, max) {
-                    explanation = format!("Value {value} must be between {min_val} and {max_val}");
+                let explanation = if let (Some(min_val), Some(max_val)) = (min, max) {
                     if *value < *min_val {
                         suggestions.push(format!("Try a value >= {min_val}"));
                     } else {
                         suggestions.push(format!("Try a value <= {max_val}"));
                     }
+                    format!("Value {value} must be between {min_val} and {max_val}")
                 } else if let Some(min_val) = min {
-                    explanation = format!("Value {value} must be at least {min_val}");
                     suggestions.push(format!("Try a value >= {min_val}"));
+                    format!("Value {value} must be at least {min_val}")
                 } else if let Some(max_val) = max {
-                    explanation = format!("Value {value} must be at most {max_val}");
                     suggestions.push(format!("Try a value <= {max_val}"));
-                }
+                    format!("Value {value} must be at most {max_val}")
+                } else {
+                    format!("Value {value} is outside the allowed range")
+                };
 
-                ParameterError::ValidationFailedWithContext {
-                    parameter: name.clone(),
-                    details: Box::new(ValidationFailedDetails {
-                        value: value.to_string(),
-                        message: explanation.clone(),
-                        explanation: Some(explanation),
-                        examples: vec![],
-                        suggestions,
-                    }),
-                    recoverable: true,
-                }
+                Self::create_validation_context_error(
+                    name.clone(),
+                    value.to_string(),
+                    explanation.clone(),
+                    explanation,
+                    suggestions,
+                )
             }
 
             ParameterError::ConditionalParameterMissing { parameter, condition } => {
-                ParameterError::ValidationFailedWithContext {
-                    parameter: parameter.clone(),
-                    details: Box::new(ValidationFailedDetails {
-                        value: "missing".to_string(),
-                        message: "Parameter required for your current configuration".to_string(),
-                        explanation: Some(self.explain_condition(condition)),
-                        examples: vec![],
-                        suggestions: vec![
-                            format!("Provide --{}", parameter.replace('_', "-")),
-                            "Use --interactive mode for guided input".to_string(),
-                        ],
-                    }),
-                    recoverable: true,
-                }
+                Self::create_validation_context_error(
+                    parameter.clone(),
+                    "missing".to_string(),
+                    "Parameter required for your current configuration".to_string(),
+                    self.explain_condition(condition),
+                    vec![
+                        format!("Provide --{}", parameter.replace('_', "-")),
+                        "Use --interactive mode for guided input".to_string(),
+                    ],
+                )
             }
 
             _ => {
@@ -658,6 +661,11 @@ impl ErrorMessageEnhancer {
     }
 
     /// Calculate Levenshtein distance between two strings
+    ///
+    /// This is a standard dynamic programming implementation of the Levenshtein algorithm
+    /// for computing edit distance between two strings. The algorithm uses a matrix to
+    /// track the minimum number of single-character edits (insertions, deletions, or
+    /// substitutions) needed to transform one string into another.
     fn levenshtein_distance(&self, a: &str, b: &str) -> usize {
         let a_chars: Vec<char> = a.chars().collect();
         let b_chars: Vec<char> = b.chars().collect();
@@ -682,7 +690,7 @@ impl ErrorMessageEnhancer {
             matrix[0][j] = j;
         }
 
-        // Fill matrix
+        // Fill matrix using dynamic programming
         for i in 1..=a_len {
             for j in 1..=b_len {
                 let cost = if a_chars[i - 1] == b_chars[j - 1] {
@@ -1339,6 +1347,36 @@ impl ParameterValidator {
         Ok(())
     }
 
+    /// Helper function to validate selection count constraints
+    fn validate_selection_count(
+        param: &Parameter,
+        count: usize,
+        min: Option<usize>,
+        max: Option<usize>,
+    ) -> ParameterResult<()> {
+        if let Some(min_selections) = min {
+            if count < min_selections {
+                return Err(ParameterError::TooFewSelections {
+                    name: param.name.clone(),
+                    min_selections,
+                    actual_selections: count,
+                });
+            }
+        }
+
+        if let Some(max_selections) = max {
+            if count > max_selections {
+                return Err(ParameterError::TooManySelections {
+                    name: param.name.clone(),
+                    max_selections,
+                    actual_selections: count,
+                });
+            }
+        }
+
+        Ok(())
+    }
+
     /// Validate multi-choice parameter with advanced rules
     fn validate_multi_choice_with_rules(
         &self,
@@ -1346,31 +1384,12 @@ impl ParameterValidator {
         array: &[serde_json::Value],
         validation: &ValidationRules,
     ) -> ParameterResult<()> {
-        let selection_count = array.len();
-
-        // Minimum selections validation
-        if let Some(min_selections) = validation.min_selections {
-            if selection_count < min_selections {
-                return Err(ParameterError::TooFewSelections {
-                    name: param.name.clone(),
-                    min_selections,
-                    actual_selections: selection_count,
-                });
-            }
-        }
-
-        // Maximum selections validation
-        if let Some(max_selections) = validation.max_selections {
-            if selection_count > max_selections {
-                return Err(ParameterError::TooManySelections {
-                    name: param.name.clone(),
-                    max_selections,
-                    actual_selections: selection_count,
-                });
-            }
-        }
-
-        Ok(())
+        Self::validate_selection_count(
+            param,
+            array.len(),
+            validation.min_selections,
+            validation.max_selections,
+        )
     }
 
     /// Get the type name of a JSON value

@@ -259,6 +259,31 @@ See rule documentation for guidance on resolving this violation."#,
     Ok(todo_id)
 }
 
+/// Send a progress notification, handling errors gracefully
+///
+/// # Arguments
+///
+/// * `context` - The tool context containing the progress sender
+/// * `token` - The progress token for this operation
+/// * `progress` - Optional progress percentage (0-100)
+/// * `message` - Progress message to display
+/// * `metadata` - Additional metadata to include
+fn send_progress(
+    context: &ToolContext,
+    token: &str,
+    progress: Option<u32>,
+    message: impl Into<String>,
+    metadata: serde_json::Value,
+) {
+    if let Some(sender) = &context.progress_sender {
+        if let Err(e) =
+            sender.send_progress_with_metadata(token, progress, message.into(), metadata)
+        {
+            tracing::debug!("Failed to send progress notification: {}", e);
+        }
+    }
+}
+
 /// Get changed files from git
 ///
 /// Uses the git_changes tool logic to get files that have changed on the current branch.
@@ -478,37 +503,31 @@ impl McpTool for RuleCheckTool {
         let progress_token = generate_progress_token();
 
         // Send start notification
-        if let Some(sender) = &context.progress_sender {
-            if let Err(e) = sender.send_progress_with_metadata(
-                &progress_token,
-                Some(PROGRESS_START),
-                "Starting rules check",
-                json!({
-                    "rule_names": request.rule_names,
-                    "file_paths": request.file_paths,
-                    "category": request.category,
-                    "severity": request.severity
-                }),
-            ) {
-                tracing::debug!("Failed to send progress notification: {}", e);
-            }
-        }
+        send_progress(
+            context,
+            &progress_token,
+            Some(PROGRESS_START),
+            "Starting rules check",
+            json!({
+                "rule_names": request.rule_names,
+                "file_paths": request.file_paths,
+                "category": request.category,
+                "severity": request.severity
+            }),
+        );
 
         // Get or initialize the rule checker with context's agent configuration
         let checker = self.get_checker(context).await?;
         tracing::info!("RuleChecker initialized successfully");
 
         // Send rules loaded notification
-        if let Some(sender) = &context.progress_sender {
-            if let Err(e) = sender.send_progress_with_metadata(
-                &progress_token,
-                Some(PROGRESS_INITIALIZED),
-                "Rule checker initialized",
-                json!({}),
-            ) {
-                tracing::debug!("Failed to send progress notification: {}", e);
-            }
-        }
+        send_progress(
+            context,
+            &progress_token,
+            Some(PROGRESS_INITIALIZED),
+            "Rule checker initialized",
+            json!({}),
+        );
 
         // Determine patterns based on changed flag
         let patterns = if request.changed.unwrap_or(false) {
@@ -579,16 +598,13 @@ impl McpTool for RuleCheckTool {
             .map_err(|e| McpError::internal_error(format!("Rule check failed: {}", e), None))?;
 
         // Send checking progress notification
-        if let Some(sender) = &context.progress_sender {
-            if let Err(e) = sender.send_progress_with_metadata(
-                &progress_token,
-                Some(PROGRESS_CHECKING),
-                "Checking files against rules",
-                json!({}),
-            ) {
-                tracing::debug!("Failed to send progress notification: {}", e);
-            }
-        }
+        send_progress(
+            context,
+            &progress_token,
+            Some(PROGRESS_CHECKING),
+            "Checking files against rules",
+            json!({}),
+        );
 
         // Collect all violations from the stream and track statistics.
         // This loop processes the violation stream, counting violations by severity
@@ -635,23 +651,20 @@ impl McpTool for RuleCheckTool {
                         }));
 
                         // Send progress notification for each todo created
-                        if let Some(sender) = &context.progress_sender {
-                            if let Err(e) = sender.send_progress_with_metadata(
-                                &progress_token,
-                                None, // Indeterminate progress during todo creation
-                                format!(
-                                    "Created todo for {} violation in {}",
-                                    violation.rule_name,
-                                    violation.file_path.display()
-                                ),
-                                json!({
-                                    "todo_id": todo_id.to_string(),
-                                    "rule": violation.rule_name
-                                }),
-                            ) {
-                                tracing::debug!("Failed to send progress notification: {}", e);
-                            }
-                        }
+                        send_progress(
+                            context,
+                            &progress_token,
+                            None, // Indeterminate progress during todo creation
+                            format!(
+                                "Created todo for {} violation in {}",
+                                violation.rule_name,
+                                violation.file_path.display()
+                            ),
+                            json!({
+                                "todo_id": todo_id.to_string(),
+                                "rule": violation.rule_name
+                            }),
+                        );
                     }
                     Err(e) => {
                         // Log warning but don't fail the check
@@ -670,44 +683,41 @@ impl McpTool for RuleCheckTool {
         let duration = start_time.elapsed();
 
         // Send completion notification
-        if let Some(sender) = &context.progress_sender {
-            let duration_ms = duration.as_millis() as u64;
-            let mut metadata = json!({
-                "violations_found": violations.len(),
-                "files_with_violations": files_with_violations.len(),
-                "violation_count_by_severity": violation_count_by_severity,
-                "duration_ms": duration_ms
-            });
+        let duration_ms = duration.as_millis() as u64;
+        let mut metadata = json!({
+            "violations_found": violations.len(),
+            "files_with_violations": files_with_violations.len(),
+            "violation_count_by_severity": violation_count_by_severity,
+            "duration_ms": duration_ms
+        });
 
-            // Add todos_created to metadata if any were created
-            if !todos_created.is_empty() {
-                metadata["todos_created"] = json!(todos_created.len());
-            }
-
-            let message = if !todos_created.is_empty() {
-                format!(
-                    "Rules check complete: {} violations in {} files, {} todos created",
-                    violations.len(),
-                    files_with_violations.len(),
-                    todos_created.len()
-                )
-            } else {
-                format!(
-                    "Rules check complete: {} violations in {} files",
-                    violations.len(),
-                    files_with_violations.len()
-                )
-            };
-
-            if let Err(e) = sender.send_progress_with_metadata(
-                &progress_token,
-                Some(PROGRESS_COMPLETE),
-                message,
-                metadata,
-            ) {
-                tracing::debug!("Failed to send progress notification: {}", e);
-            }
+        // Add todos_created to metadata if any were created
+        if !todos_created.is_empty() {
+            metadata["todos_created"] = json!(todos_created.len());
         }
+
+        let message = if !todos_created.is_empty() {
+            format!(
+                "Rules check complete: {} violations in {} files, {} todos created",
+                violations.len(),
+                files_with_violations.len(),
+                todos_created.len()
+            )
+        } else {
+            format!(
+                "Rules check complete: {} violations in {} files",
+                violations.len(),
+                files_with_violations.len()
+            )
+        };
+
+        send_progress(
+            context,
+            &progress_token,
+            Some(PROGRESS_COMPLETE),
+            message,
+            metadata,
+        );
 
         // Format the response
         let result_text = if violations.is_empty() {
@@ -742,6 +752,102 @@ impl McpTool for RuleCheckTool {
 mod tests {
     use super::*;
     use serde_json::json;
+    use std::fs;
+    use std::path::Path;
+    use tempfile::TempDir;
+
+    /// Helper function to set up a test with a temporary file containing code
+    ///
+    /// Creates a TempDir, writes test code to a file, sets up tool and context,
+    /// and prepares arguments for rule checking.
+    ///
+    /// # Arguments
+    ///
+    /// * `test_code` - The Rust code to write to the test file
+    /// * `rule_names` - List of rule names to check
+    /// * `additional_args` - Optional additional arguments to include
+    ///
+    /// # Returns
+    ///
+    /// A tuple of (tool, context, temp_dir, arguments) ready for testing
+    async fn setup_rule_check_test(
+        test_code: &str,
+        rule_names: Vec<&str>,
+        additional_args: Option<serde_json::Map<String, serde_json::Value>>,
+    ) -> (
+        RuleCheckTool,
+        ToolContext,
+        TempDir,
+        serde_json::Map<String, serde_json::Value>,
+    ) {
+        let temp_dir = TempDir::new().unwrap();
+        let test_file = temp_dir.path().join("test.rs");
+        fs::write(&test_file, test_code).unwrap();
+
+        let tool = RuleCheckTool::new();
+        let context = crate::test_utils::create_test_context().await;
+
+        let mut arguments = serde_json::Map::new();
+        arguments.insert("rule_names".to_string(), json!(rule_names));
+        arguments.insert(
+            "file_paths".to_string(),
+            json!([test_file.to_string_lossy().to_string()]),
+        );
+
+        if let Some(extra_args) = additional_args {
+            arguments.extend(extra_args);
+        }
+
+        (tool, context, temp_dir, arguments)
+    }
+
+    /// Helper function to initialize a git repository with a file
+    ///
+    /// Creates a git repo, configures user, adds and commits a file.
+    ///
+    /// # Arguments
+    ///
+    /// * `repo_path` - Path to initialize the git repository
+    /// * `filename` - Name of the file to create
+    /// * `content` - Content to write to the file
+    ///
+    /// # Returns
+    ///
+    /// Result indicating success or IO error
+    fn init_git_repo_with_file(
+        repo_path: &Path,
+        filename: &str,
+        content: &str,
+    ) -> std::io::Result<()> {
+        use std::process::Command;
+
+        Command::new("git")
+            .args(["init"])
+            .current_dir(repo_path)
+            .output()?;
+        Command::new("git")
+            .args(["config", "user.email", "test@example.com"])
+            .current_dir(repo_path)
+            .output()?;
+        Command::new("git")
+            .args(["config", "user.name", "Test User"])
+            .current_dir(repo_path)
+            .output()?;
+
+        let file_path = repo_path.join(filename);
+        std::fs::write(&file_path, content)?;
+
+        Command::new("git")
+            .args(["add", "."])
+            .current_dir(repo_path)
+            .output()?;
+        Command::new("git")
+            .args(["commit", "-m", "Initial commit"])
+            .current_dir(repo_path)
+            .output()?;
+
+        Ok(())
+    }
 
     /// Verifies that the tool reports its correct name for MCP registration
     #[tokio::test]
@@ -843,39 +949,16 @@ mod tests {
     /// and verifies that rules are loaded and checked properly.
     #[tokio::test]
     async fn test_rule_check_tool_execute_integration() {
-        use std::fs;
-        use tempfile::TempDir;
-
-        // Create a temporary directory and test file
-        let temp_dir = TempDir::new().unwrap();
-        let test_file = temp_dir.path().join("test.rs");
-        fs::write(
-            &test_file,
-            r#"
+        let test_code = r#"
 fn example() {
     let x = vec![1, 2, 3];
     let first = x.first().unwrap(); // This should trigger no-unwrap if that rule exists
     println!("first: {}", first);
 }
-"#,
-        )
-        .unwrap();
+"#;
 
-        // Create tool and context
-        let tool = RuleCheckTool::new();
-        let context = crate::test_utils::create_test_context().await;
-
-        // Create request to check a single rule against the test file for speed
-        // Use a simple rule that should pass quickly
-        let mut arguments = serde_json::Map::new();
-        arguments.insert(
-            "rule_names".to_string(),
-            json!(["code-quality/no-commented-code"]),
-        );
-        arguments.insert(
-            "file_paths".to_string(),
-            json!([test_file.to_string_lossy().to_string()]),
-        );
+        let (tool, context, _temp_dir, arguments) =
+            setup_rule_check_test(test_code, vec!["code-quality/no-commented-code"], None).await;
 
         // Execute the tool
         let result = tool.execute(arguments, &context).await;
@@ -918,15 +1001,7 @@ fn example() {
     /// This reproduces the issue where calling with specific rule names returns 0 rules
     #[tokio::test]
     async fn test_rule_check_tool_with_rule_name_filter() {
-        use std::fs;
-        use tempfile::TempDir;
-
-        // Create a temporary directory and test file
-        let temp_dir = TempDir::new().unwrap();
-        let test_file = temp_dir.path().join("test.rs");
-        fs::write(
-            &test_file,
-            r#"
+        let test_code = r#"
 fn complex_function() {
     if condition1 {
         if condition2 {
@@ -939,24 +1014,10 @@ fn complex_function() {
         }
     }
 }
-"#,
-        )
-        .unwrap();
+"#;
 
-        // Create tool and context
-        let tool = RuleCheckTool::new();
-        let context = crate::test_utils::create_test_context().await;
-
-        // Create request with specific rule name filter
-        let mut arguments = serde_json::Map::new();
-        arguments.insert(
-            "rule_names".to_string(),
-            json!(["code-quality/cognitive-complexity"]),
-        );
-        arguments.insert(
-            "file_paths".to_string(),
-            json!([test_file.to_string_lossy().to_string()]),
-        );
+        let (tool, context, _temp_dir, arguments) =
+            setup_rule_check_test(test_code, vec!["code-quality/cognitive-complexity"], None).await;
 
         // Execute the tool
         let result = tool.execute(arguments, &context).await;
@@ -1116,48 +1177,33 @@ fn complex_function() {
     /// Test that create_todo parameter creates todos for violations
     #[tokio::test]
     async fn test_rule_check_with_create_todo() {
-        use std::fs;
-        use tempfile::TempDir;
-
-        // Create temporary directories for both test file and todos
-        let temp_dir = TempDir::new().unwrap();
+        // Create temporary directory for todos
         let todo_dir = TempDir::new().unwrap();
 
-        // Create a test file with a known violation
-        let test_file = temp_dir.path().join("test.rs");
-        fs::write(
-            &test_file,
-            r#"
+        let test_code = r#"
 // TODO: This is a todo comment that should trigger a violation
 fn example() {
     let x = vec![1, 2, 3];
     println!("x: {:?}", x);
 }
-"#,
-        )
-        .unwrap();
+"#;
 
-        // Create tool and context
-        let tool = RuleCheckTool::new();
-        let context = crate::test_utils::create_test_context().await;
+        // Create additional args with create_todo enabled
+        let mut additional_args = serde_json::Map::new();
+        additional_args.insert("create_todo".to_string(), json!(true));
+
+        let (tool, context, _temp_dir, arguments) = setup_rule_check_test(
+            test_code,
+            vec!["code-quality/no-todo-comments"],
+            Some(additional_args),
+        )
+        .await;
 
         // Override the todo directory for this test
         std::env::set_var(
             "SWISSARMYHAMMER_TODO_DIR",
             todo_dir.path().to_string_lossy().to_string(),
         );
-
-        // Create request with create_todo enabled
-        let mut arguments = serde_json::Map::new();
-        arguments.insert(
-            "rule_names".to_string(),
-            json!(["code-quality/no-todo-comments"]),
-        );
-        arguments.insert(
-            "file_paths".to_string(),
-            json!([test_file.to_string_lossy().to_string()]),
-        );
-        arguments.insert("create_todo".to_string(), json!(true));
 
         // Execute the tool
         let result = tool.execute(arguments, &context).await;
@@ -1203,45 +1249,11 @@ fn example() {
     /// Test that changed files integration returns early when no changed files
     #[tokio::test]
     async fn test_rule_check_with_changed_no_files() {
-        use std::fs;
-        use tempfile::TempDir;
-
         let temp_dir = TempDir::new().unwrap();
-
-        // Initialize git repo with committed file
         let repo_path = temp_dir.path();
-        std::process::Command::new("git")
-            .args(["init"])
-            .current_dir(repo_path)
-            .output()
-            .unwrap();
 
-        std::process::Command::new("git")
-            .args(["config", "user.email", "test@example.com"])
-            .current_dir(repo_path)
-            .output()
-            .unwrap();
-
-        std::process::Command::new("git")
-            .args(["config", "user.name", "Test User"])
-            .current_dir(repo_path)
-            .output()
-            .unwrap();
-
-        let test_file = repo_path.join("test.rs");
-        fs::write(&test_file, "fn main() {}").unwrap();
-
-        std::process::Command::new("git")
-            .args(["add", "."])
-            .current_dir(repo_path)
-            .output()
-            .unwrap();
-
-        std::process::Command::new("git")
-            .args(["commit", "-m", "Initial commit"])
-            .current_dir(repo_path)
-            .output()
-            .unwrap();
+        // Initialize git repo with committed file using helper
+        init_git_repo_with_file(repo_path, "test.rs", "fn main() {}").unwrap();
 
         // Create tool and context with git ops
         let tool = RuleCheckTool::new();

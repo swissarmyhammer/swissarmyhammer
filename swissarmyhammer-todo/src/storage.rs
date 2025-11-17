@@ -7,7 +7,7 @@ use crate::error::{Result, TodoError};
 use crate::types::{TodoId, TodoItem, TodoList};
 use crate::utils::get_todo_directory;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// Storage backend for todo list operations
 pub struct TodoStorage {
@@ -159,15 +159,20 @@ impl TodoStorage {
         Ok(self.base_dir.join("todo.yaml"))
     }
 
+    /// Helper method for filesystem error handling
+    fn fs_error(&self, operation: &str, path: &Path, error: std::io::Error) -> TodoError {
+        TodoError::other(format!(
+            "Failed to {} '{}': {}",
+            operation,
+            path.display(),
+            error
+        ))
+    }
+
     /// Load a todo list from a YAML file
     async fn load_todo_list(&self, path: &PathBuf) -> Result<TodoList> {
-        let content = fs::read_to_string(path).map_err(|e| {
-            TodoError::other(format!(
-                "Failed to read todo list file '{}': {}",
-                path.display(),
-                e
-            ))
-        })?;
+        let content =
+            fs::read_to_string(path).map_err(|e| self.fs_error("read todo list file", path, e))?;
 
         // Check if the YAML content is missing timestamp fields (old format)
         let has_timestamps = content.contains("created_at:") && content.contains("updated_at:");
@@ -197,25 +202,14 @@ impl TodoStorage {
     async fn save_todo_list(&self, path: &PathBuf, list: &TodoList) -> Result<()> {
         // Ensure parent directory exists
         if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent).map_err(|e| {
-                TodoError::other(format!(
-                    "Failed to create todo directory '{}': {}",
-                    parent.display(),
-                    e
-                ))
-            })?;
+            fs::create_dir_all(parent)
+                .map_err(|e| self.fs_error("create todo directory", parent, e))?;
         }
 
         let content = serde_yaml::to_string(list)
             .map_err(|e| TodoError::other(format!("Failed to serialize todo list: {e}")))?;
 
-        fs::write(path, content).map_err(|e| {
-            TodoError::other(format!(
-                "Failed to write todo list file '{}': {}",
-                path.display(),
-                e
-            ))
-        })?;
+        fs::write(path, content).map_err(|e| self.fs_error("write todo list file", path, e))?;
 
         Ok(())
     }
@@ -225,12 +219,24 @@ impl TodoStorage {
 mod tests {
     use super::*;
 
-    #[tokio::test]
-    async fn test_create_todo_item() {
-        // Create a temporary directory for todo storage instead of using default
+    /// Helper function to set up test storage with a temporary directory
+    fn setup_test_storage() -> (TodoStorage, tempfile::TempDir) {
         let temp_dir = tempfile::TempDir::new().unwrap();
         fs::create_dir_all(&temp_dir).unwrap();
         let storage = TodoStorage::new(temp_dir.path().to_path_buf());
+        (storage, temp_dir)
+    }
+
+    /// Helper function to assert todo list counts
+    fn assert_todo_counts(list: &TodoList, total: usize, complete: usize, incomplete: usize) {
+        assert_eq!(list.todo.len(), total);
+        assert_eq!(list.complete_count(), complete);
+        assert_eq!(list.incomplete_count(), incomplete);
+    }
+
+    #[tokio::test]
+    async fn test_create_todo_item() {
+        let (storage, _temp_dir) = setup_test_storage();
 
         let (item, gc_count) = storage
             .create_todo_item("Test task".to_string(), Some("Test context".to_string()))
@@ -247,10 +253,7 @@ mod tests {
     async fn test_todo_item_timestamps_on_creation() {
         use chrono::Utc;
 
-        // Create a temporary directory for todo storage instead of using default
-        let temp_dir = tempfile::TempDir::new().unwrap();
-        fs::create_dir_all(&temp_dir).unwrap();
-        let storage = TodoStorage::new(temp_dir.path().to_path_buf());
+        let (storage, _temp_dir) = setup_test_storage();
 
         let before = Utc::now();
         let (item, _gc_count) = storage
@@ -273,10 +276,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_todo_item_timestamps_persist() {
-        // Create a temporary directory for todo storage instead of using default
-        let temp_dir = tempfile::TempDir::new().unwrap();
-        fs::create_dir_all(&temp_dir).unwrap();
-        let storage = TodoStorage::new(temp_dir.path().to_path_buf());
+        let (storage, _temp_dir) = setup_test_storage();
 
         // Create an item
         let (item, _gc_count) = storage
@@ -301,10 +301,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_next_todo_item() {
-        // Create a temporary directory for todo storage instead of using default
-        let temp_dir = tempfile::TempDir::new().unwrap();
-        fs::create_dir_all(&temp_dir).unwrap();
-        let storage = TodoStorage::new(temp_dir.path().to_path_buf());
+        let (storage, _temp_dir) = setup_test_storage();
 
         // Create two items
         let (item1, _gc_count) = storage
@@ -326,10 +323,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_mark_complete() {
-        // Create a temporary directory for todo storage instead of using default
-        let temp_dir = tempfile::TempDir::new().unwrap();
-        fs::create_dir_all(&temp_dir).unwrap();
-        let storage = TodoStorage::new(temp_dir.path().to_path_buf());
+        let (storage, _temp_dir) = setup_test_storage();
 
         let (item, _gc_count) = storage
             .create_todo_item("Test task".to_string(), None)
@@ -346,10 +340,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_mark_complete_partial() {
-        // Create a temporary directory for todo storage instead of using default
-        let temp_dir = tempfile::TempDir::new().unwrap();
-        fs::create_dir_all(&temp_dir).unwrap();
-        let storage = TodoStorage::new(temp_dir.path().to_path_buf());
+        let (storage, _temp_dir) = setup_test_storage();
 
         let (item1, _gc_count) = storage
             .create_todo_item("Task 1".to_string(), None)
@@ -366,8 +357,7 @@ mod tests {
 
         // List should still exist with one incomplete item
         let list = storage.get_todo_list().await.unwrap().unwrap();
-        assert_eq!(list.incomplete_count(), 1);
-        assert_eq!(list.complete_count(), 1);
+        assert_todo_counts(&list, 2, 1, 1);
 
         // Next should return the second task
         let next = storage.get_todo_item("next").await.unwrap().unwrap();
@@ -376,10 +366,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_specific_item() {
-        // Create a temporary directory for todo storage instead of using default
-        let temp_dir = tempfile::TempDir::new().unwrap();
-        fs::create_dir_all(&temp_dir).unwrap();
-        let storage = TodoStorage::new(temp_dir.path().to_path_buf());
+        let (storage, _temp_dir) = setup_test_storage();
 
         let (item, _gc_count) = storage
             .create_todo_item("Test task".to_string(), None)
@@ -399,10 +386,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_validation_errors() {
-        // Create a temporary directory for todo storage instead of using default
-        let temp_dir = tempfile::TempDir::new().unwrap();
-        fs::create_dir_all(&temp_dir).unwrap();
-        let storage = TodoStorage::new(temp_dir.path().to_path_buf());
+        let (storage, _temp_dir) = setup_test_storage();
 
         // Empty task
         let result = storage.create_todo_item("".to_string(), None).await;
@@ -411,10 +395,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_nonexistent_todo_file() {
-        // Create a temporary directory for todo storage instead of using default
-        let temp_dir = tempfile::TempDir::new().unwrap();
-        fs::create_dir_all(&temp_dir).unwrap();
-        let storage = TodoStorage::new(temp_dir.path().to_path_buf());
+        let (storage, _temp_dir) = setup_test_storage();
 
         // Get from nonexistent todo file
         let result = storage.get_todo_item("next").await.unwrap();
@@ -430,10 +411,7 @@ mod tests {
     async fn test_backward_compatibility_old_yaml_format() {
         use chrono::Utc;
 
-        // Create a temporary directory for todo storage instead of using default
-        let temp_dir = tempfile::TempDir::new().unwrap();
-        fs::create_dir_all(&temp_dir).unwrap();
-        let storage = TodoStorage::new(temp_dir.path().to_path_buf());
+        let (storage, temp_dir) = setup_test_storage();
 
         // Create an old format YAML file (without timestamps)
         let old_yaml = r#"todo:
@@ -490,9 +468,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_gc_completed_todos_empty_list() {
-        let temp_dir = tempfile::TempDir::new().unwrap();
-        fs::create_dir_all(&temp_dir).unwrap();
-        let storage = TodoStorage::new(temp_dir.path().to_path_buf());
+        let (storage, _temp_dir) = setup_test_storage();
 
         let mut list = TodoList::new();
 
@@ -504,9 +480,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_gc_completed_todos_no_completed() {
-        let temp_dir = tempfile::TempDir::new().unwrap();
-        fs::create_dir_all(&temp_dir).unwrap();
-        let storage = TodoStorage::new(temp_dir.path().to_path_buf());
+        let (storage, _temp_dir) = setup_test_storage();
 
         let mut list = TodoList::new();
         list.add_item("Task 1".to_string(), None);
@@ -522,9 +496,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_gc_completed_todos_all_completed() {
-        let temp_dir = tempfile::TempDir::new().unwrap();
-        fs::create_dir_all(&temp_dir).unwrap();
-        let storage = TodoStorage::new(temp_dir.path().to_path_buf());
+        let (storage, _temp_dir) = setup_test_storage();
 
         let mut list = TodoList::new();
         list.add_item("Task 1".to_string(), None);
@@ -541,16 +513,12 @@ mod tests {
         // GC should remove all items
         storage.gc_completed_todos(&mut list).unwrap();
 
-        assert_eq!(list.todo.len(), 0);
-        assert_eq!(list.incomplete_count(), 0);
-        assert_eq!(list.complete_count(), 0);
+        assert_todo_counts(&list, 0, 0, 0);
     }
 
     #[tokio::test]
     async fn test_gc_completed_todos_mixed() {
-        let temp_dir = tempfile::TempDir::new().unwrap();
-        fs::create_dir_all(&temp_dir).unwrap();
-        let storage = TodoStorage::new(temp_dir.path().to_path_buf());
+        let (storage, _temp_dir) = setup_test_storage();
 
         let mut list = TodoList::new();
         list.add_item("Task 1".to_string(), None);
@@ -577,9 +545,7 @@ mod tests {
         // GC should remove only completed items
         storage.gc_completed_todos(&mut list).unwrap();
 
-        assert_eq!(list.todo.len(), 3);
-        assert_eq!(list.incomplete_count(), 3);
-        assert_eq!(list.complete_count(), 0);
+        assert_todo_counts(&list, 3, 0, 3);
 
         // Verify the remaining tasks are the ones that were incomplete
         let remaining_tasks: Vec<String> = list.todo.iter().map(|item| item.task.clone()).collect();
@@ -590,9 +556,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_gc_completed_todos_called_on_create() {
-        let temp_dir = tempfile::TempDir::new().unwrap();
-        fs::create_dir_all(&temp_dir).unwrap();
-        let storage = TodoStorage::new(temp_dir.path().to_path_buf());
+        let (storage, _temp_dir) = setup_test_storage();
 
         // Create three items
         let (item1, _gc_count) = storage
@@ -614,9 +578,7 @@ mod tests {
 
         // Verify we have 1 incomplete and 2 complete
         let list = storage.get_todo_list().await.unwrap().unwrap();
-        assert_eq!(list.todo.len(), 3);
-        assert_eq!(list.complete_count(), 2);
-        assert_eq!(list.incomplete_count(), 1);
+        assert_todo_counts(&list, 3, 2, 1);
 
         // Create a new item - this should trigger GC
         let (item4, _gc_count) = storage
@@ -626,17 +588,7 @@ mod tests {
 
         // Reload the list and verify completed items were removed
         let list = storage.get_todo_list().await.unwrap().unwrap();
-        assert_eq!(
-            list.todo.len(),
-            2,
-            "Should have 2 items: the incomplete one and the new one"
-        );
-        assert_eq!(
-            list.complete_count(),
-            0,
-            "All completed items should be garbage collected"
-        );
-        assert_eq!(list.incomplete_count(), 2, "Should have 2 incomplete items");
+        assert_todo_counts(&list, 2, 0, 2);
 
         // Verify the correct items remain
         let remaining_ids: Vec<String> = list.todo.iter().map(|item| item.id.to_string()).collect();
@@ -661,9 +613,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_gc_preserves_order_of_incomplete_items() {
-        let temp_dir = tempfile::TempDir::new().unwrap();
-        fs::create_dir_all(&temp_dir).unwrap();
-        let storage = TodoStorage::new(temp_dir.path().to_path_buf());
+        let (storage, _temp_dir) = setup_test_storage();
 
         let mut list = TodoList::new();
         list.add_item("A".to_string(), None);
@@ -687,9 +637,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_gc_preserves_timestamps() {
-        let temp_dir = tempfile::TempDir::new().unwrap();
-        fs::create_dir_all(&temp_dir).unwrap();
-        let storage = TodoStorage::new(temp_dir.path().to_path_buf());
+        let (storage, _temp_dir) = setup_test_storage();
 
         let mut list = TodoList::new();
         list.add_item("Task 1".to_string(), None);

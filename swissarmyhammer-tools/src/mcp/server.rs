@@ -26,6 +26,16 @@ use super::tool_registry::{
     register_web_fetch_tools, register_web_search_tools, ToolContext, ToolRegistry,
 };
 
+/// Server instructions displayed to MCP clients
+const SERVER_INSTRUCTIONS: &str =
+    "The only coding assistant you'll ever need. Write specs, not code.";
+
+/// Maximum retry attempts for operations with transient errors
+const MAX_RETRIES: u32 = 3;
+
+/// Initial backoff delay in milliseconds for retry operations
+const INITIAL_BACKOFF_MS: u64 = 100;
+
 /// MCP server for all SwissArmyHammer functionality.
 #[derive(Clone)]
 pub struct McpServer {
@@ -34,6 +44,132 @@ pub struct McpServer {
     file_watcher: Arc<Mutex<FileWatcher>>,
     tool_registry: Arc<RwLock<ToolRegistry>>,
     pub tool_context: Arc<ToolContext>,
+}
+
+/// Execute an operation with a temporary working directory, restoring the original directory afterwards.
+///
+/// # Arguments
+///
+/// * `work_dir` - The temporary working directory to use
+/// * `operation` - The operation to execute in the temporary directory
+///
+/// # Returns
+///
+/// * `Result<T>` - The result of the operation
+fn with_temporary_work_dir<F, T>(work_dir: &std::path::Path, operation: F) -> Result<T>
+where
+    F: FnOnce() -> Result<T>,
+{
+    let original_dir = std::env::current_dir().ok();
+    let needs_dir_change = original_dir.as_ref().map_or(true, |dir| work_dir != *dir);
+
+    // Set working directory context if different from current
+    if needs_dir_change {
+        std::env::set_current_dir(work_dir).map_err(|e| SwissArmyHammerError::Other {
+            message: format!("Failed to set working directory: {e}"),
+        })?;
+    }
+
+    // Execute the operation
+    let result = operation();
+
+    // Always restore original working directory if we changed it and it still exists
+    if needs_dir_change {
+        if let Some(ref original_dir) = original_dir {
+            if let Err(e) = std::env::set_current_dir(original_dir) {
+                tracing::warn!("Failed to restore original working directory: {}", e);
+            }
+        }
+    }
+
+    result
+}
+
+/// Retry an async operation with exponential backoff.
+///
+/// # Arguments
+///
+/// * `operation` - The async operation to retry
+/// * `is_retryable` - Function to determine if an error is retryable
+/// * `operation_name` - Name of the operation for logging
+///
+/// # Returns
+///
+/// * `Result<T>` - The result of the operation
+async fn retry_with_backoff<F, T, Fut>(
+    mut operation: F,
+    is_retryable: fn(&SwissArmyHammerError) -> bool,
+    operation_name: &str,
+) -> Result<T>
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = Result<T>>,
+{
+    let mut last_error = None;
+    let mut backoff_ms = INITIAL_BACKOFF_MS;
+
+    for attempt in 1..=MAX_RETRIES {
+        match operation().await {
+            Ok(result) => {
+                if attempt > 1 {
+                    tracing::info!("✅ {} succeeded on attempt {}", operation_name, attempt);
+                }
+                return Ok(result);
+            }
+            Err(e) => {
+                last_error = Some(e);
+
+                // Check if this is a retryable error
+                if attempt < MAX_RETRIES && last_error.as_ref().is_some_and(is_retryable) {
+                    tracing::warn!(
+                        "⚠️ {} attempt {} failed, retrying in {}ms: {}",
+                        operation_name,
+                        attempt,
+                        backoff_ms,
+                        last_error
+                            .as_ref()
+                            .map_or("Unknown error".to_string(), |e| e.to_string())
+                    );
+
+                    tokio::time::sleep(tokio::time::Duration::from_millis(backoff_ms)).await;
+                    backoff_ms *= 2; // Exponential backoff
+                } else {
+                    break;
+                }
+            }
+        }
+    }
+
+    Err(last_error.unwrap_or_else(|| SwissArmyHammerError::Other {
+        message: format!("{} failed", operation_name),
+    }))
+}
+
+/// Create ServerCapabilities for MCP protocol
+fn create_server_capabilities() -> ServerCapabilities {
+    ServerCapabilities {
+        prompts: Some(PromptsCapability {
+            list_changed: Some(true),
+        }),
+        tools: Some(ToolsCapability {
+            list_changed: Some(true),
+        }),
+        resources: None,
+        logging: None,
+        completions: None,
+        experimental: None,
+    }
+}
+
+/// Create Implementation information for the MCP server
+fn create_server_implementation() -> Implementation {
+    Implementation {
+        name: "SwissArmyHammer".into(),
+        version: crate::VERSION.into(),
+        icons: None,
+        title: Some("SwissArmyHammer MCP Server".into()),
+        website_url: Some("https://github.com/swissarmyhammer/swissarmyhammer".into()),
+    }
 }
 
 impl McpServer {
@@ -72,36 +208,16 @@ impl McpServer {
     ///
     pub async fn new_with_work_dir(library: PromptLibrary, work_dir: PathBuf) -> Result<Self> {
         // Initialize issue storage using new storage defaults with working directory context
-        let issue_storage = {
-            let original_dir = std::env::current_dir().ok();
-            let needs_dir_change = original_dir.as_ref().map_or(true, |dir| work_dir != *dir);
-
-            // Set working directory context for storage creation if different from current
-            if needs_dir_change {
-                std::env::set_current_dir(&work_dir).map_err(|e| SwissArmyHammerError::Other {
-                    message: format!("Failed to set working directory: {e}"),
-                })?;
-            }
-
-            // Create storage
-            let storage = FileSystemIssueStorage::new_default().map_err(|e| {
-                tracing::error!("Failed to create issue storage: {}", e);
-                SwissArmyHammerError::Other {
-                    message: format!("Failed to create issue storage: {e}"),
-                }
-            })?;
-
-            // Always restore original working directory if we changed it and it still exists
-            if needs_dir_change {
-                if let Some(ref original_dir) = original_dir {
-                    if let Err(e) = std::env::set_current_dir(original_dir) {
-                        tracing::warn!("Failed to restore original working directory: {}", e);
+        let issue_storage = with_temporary_work_dir(&work_dir, || {
+            FileSystemIssueStorage::new_default()
+                .map(|storage| Box::new(storage) as Box<dyn IssueStorage>)
+                .map_err(|e| {
+                    tracing::error!("Failed to create issue storage: {}", e);
+                    SwissArmyHammerError::Other {
+                        message: format!("Failed to create issue storage: {e}"),
                     }
-                }
-            }
-
-            Box::new(storage) as Box<dyn IssueStorage>
-        };
+                })
+        })?;
 
         // Initialize memo storage with environment variable support, then default location, fallback to temp dir for tests
         let memo_storage = {
@@ -195,7 +311,7 @@ impl McpServer {
         let tool_context = Arc::new(
             Arc::try_unwrap(tool_context)
                 .unwrap_or_else(|arc| (*arc).clone())
-                .with_tool_registry(tool_registry_arc.clone())
+                .with_tool_registry(tool_registry_arc.clone()),
         );
 
         Ok(Self {
@@ -430,43 +546,12 @@ impl McpServer {
 
     /// Reload prompts with retry logic for transient file system errors
     async fn reload_prompts_with_retry(&self) -> Result<()> {
-        const MAX_RETRIES: u32 = 3;
-        const INITIAL_BACKOFF_MS: u64 = 100;
-
-        let mut last_error = None;
-        let mut backoff_ms = INITIAL_BACKOFF_MS;
-
-        for attempt in 1..=MAX_RETRIES {
-            match self.reload_prompts_internal().await {
-                Ok(()) => return Ok(()),
-                Err(e) => {
-                    last_error = Some(e);
-
-                    // Check if this is a retryable error
-                    if attempt < MAX_RETRIES
-                        && last_error.as_ref().is_some_and(Self::is_retryable_fs_error)
-                    {
-                        tracing::warn!(
-                            "⚠️ Reload attempt {} failed, retrying in {}ms: {}",
-                            attempt,
-                            backoff_ms,
-                            last_error
-                                .as_ref()
-                                .map_or("Unknown error".to_string(), |e| e.to_string())
-                        );
-
-                        tokio::time::sleep(tokio::time::Duration::from_millis(backoff_ms)).await;
-                        backoff_ms *= 2; // Exponential backoff
-                    } else {
-                        break;
-                    }
-                }
-            }
-        }
-
-        Err(last_error.unwrap_or_else(|| SwissArmyHammerError::Other {
-            message: "Prompt reload failed".to_string(),
-        }))
+        retry_with_backoff(
+            || self.reload_prompts_internal(),
+            Self::is_retryable_fs_error,
+            "Reload",
+        )
+        .await
     }
 
     /// Check if an error is a retryable file system error
@@ -537,57 +622,18 @@ impl McpServer {
     ///
     /// Returns an error if file watching cannot be initialized.
     pub async fn start_file_watching(&self, peer: rmcp::Peer<RoleServer>) -> Result<()> {
-        const MAX_RETRIES: u32 = 3;
-        const INITIAL_BACKOFF_MS: u64 = 100;
-
         // Create callback that handles file changes and notifications
         let callback = McpFileWatcherCallback::new(self.clone(), peer);
 
-        let mut last_error = None;
-        let mut backoff_ms = INITIAL_BACKOFF_MS;
-
-        for attempt in 1..=MAX_RETRIES {
-            // Start watching using the file watcher module
-            let result = {
+        retry_with_backoff(
+            || async {
                 let mut watcher = self.file_watcher.lock().await;
                 watcher.start_watching(callback.clone()).await
-            };
-
-            match result {
-                Ok(()) => {
-                    if attempt > 1 {
-                        tracing::info!(
-                            "✅ File watcher started successfully on attempt {}",
-                            attempt
-                        );
-                    }
-                    return Ok(());
-                }
-                Err(e) => {
-                    last_error = Some(e);
-
-                    if attempt < MAX_RETRIES
-                        && last_error.as_ref().is_some_and(Self::is_retryable_fs_error)
-                    {
-                        tracing::warn!(
-                            "⚠️ File watcher initialization attempt {} failed, retrying in {}ms: {}",
-                            attempt,
-                            backoff_ms,
-                            last_error.as_ref().map_or("Unknown error".to_string(), |e| e.to_string())
-                        );
-
-                        tokio::time::sleep(tokio::time::Duration::from_millis(backoff_ms)).await;
-                        backoff_ms *= 2; // Exponential backoff
-                    } else {
-                        break;
-                    }
-                }
-            }
-        }
-
-        Err(last_error.unwrap_or_else(|| SwissArmyHammerError::Other {
-            message: "File watcher initialization failed".to_string(),
-        }))
+            },
+            Self::is_retryable_fs_error,
+            "File watcher initialization",
+        )
+        .await
     }
 
     /// Stop watching prompt directories for file changes.
@@ -624,28 +670,9 @@ impl ServerHandler for McpServer {
 
         Ok(InitializeResult {
             protocol_version: ProtocolVersion::default(),
-            capabilities: ServerCapabilities {
-                prompts: Some(PromptsCapability {
-                    list_changed: Some(true),
-                }),
-                tools: Some(ToolsCapability {
-                    list_changed: Some(true),
-                }),
-                resources: None,
-                logging: None,
-                completions: None,
-                experimental: None,
-            },
-            instructions: Some(
-                "The only coding assistant you'll ever need. Write specs, not code.".into(),
-            ),
-            server_info: Implementation {
-                name: "SwissArmyHammer".into(),
-                version: crate::VERSION.into(),
-                icons: None,
-                title: Some("SwissArmyHammer MCP Server".into()),
-                website_url: Some("https://github.com/swissarmyhammer/swissarmyhammer".into()),
-            },
+            capabilities: create_server_capabilities(),
+            instructions: Some(SERVER_INSTRUCTIONS.into()),
+            server_info: create_server_implementation(),
         })
     }
 
@@ -826,28 +853,9 @@ impl ServerHandler for McpServer {
     fn get_info(&self) -> ServerInfo {
         ServerInfo {
             protocol_version: ProtocolVersion::default(),
-            capabilities: ServerCapabilities {
-                prompts: Some(PromptsCapability {
-                    list_changed: Some(true),
-                }),
-                tools: Some(ToolsCapability {
-                    list_changed: Some(true),
-                }),
-                resources: None,
-                logging: None,
-                completions: None,
-                experimental: None,
-            },
-            server_info: Implementation {
-                name: "SwissArmyHammer".into(),
-                version: crate::VERSION.into(),
-                icons: None,
-                title: Some("SwissArmyHammer MCP Server".into()),
-                website_url: Some("https://github.com/swissarmyhammer/swissarmyhammer".into()),
-            },
-            instructions: Some(
-                "The only coding assistant you'll ever need. Write specs, not code.".into(),
-            ),
+            capabilities: create_server_capabilities(),
+            server_info: create_server_implementation(),
+            instructions: Some(SERVER_INSTRUCTIONS.into()),
         }
     }
 }

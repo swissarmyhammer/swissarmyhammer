@@ -6,7 +6,6 @@ use crate::mcp::progress_notifications::{generate_progress_token, ProgressSender
 use crate::mcp::shared_utils::{McpErrorHandler, McpValidation};
 use crate::mcp::tool_registry::{BaseToolImpl, McpTool, ToolContext};
 use async_trait::async_trait;
-use byte_unit::Byte;
 use rmcp::model::CallToolResult;
 use rmcp::ErrorData as McpError;
 use serde::{Deserialize, Serialize};
@@ -20,21 +19,6 @@ use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::{Child, Command};
 
 // Performance and integration tests would use additional dependencies like futures, assert_cmd, etc.
-
-// Default shell configuration constants (replacing sah_config)
-
-/// Maximum output size for shell commands (10MiB)
-///
-/// This string format allows for easy parsing and modification while
-/// maintaining human-readable configuration values.
-/// Uses MiB (mebibytes) for binary units (1024-based).
-const DEFAULT_MAX_OUTPUT_SIZE: &str = "10MiB";
-
-/// Maximum length for individual output lines (2000 characters)
-///
-/// Lines longer than this are truncated to prevent memory issues
-/// from commands that output very long single lines.
-const DEFAULT_MAX_LINE_LENGTH: usize = 2000;
 
 /// Default shell configuration providing hardcoded sensible defaults
 ///
@@ -81,30 +65,34 @@ const DEFAULT_MAX_LINE_LENGTH: usize = 2000;
 struct DefaultShellConfig;
 
 impl DefaultShellConfig {
-    /// Maximum output size in bytes (10MB)
+    /// Maximum output size in bytes (10MB = 10,485,760 bytes)
     ///
     /// This limit prevents memory exhaustion from commands that produce
     /// massive output. When exceeded, output is truncated with a clear
     /// indication to the user.
-    ///
-    /// # Examples
-    /// Returns 10,485,760 bytes (10MB limit)
-    fn max_output_size() -> usize {
-        Byte::parse_str(DEFAULT_MAX_OUTPUT_SIZE, true)
-            .expect("Default size should be valid")
-            .as_u64() as usize
-    }
+    const MAX_OUTPUT_SIZE: usize = 10 * 1024 * 1024;
 
     /// Maximum line length in characters (2000)
     ///
     /// Individual lines longer than this limit are truncated. This prevents
     /// single lines from consuming excessive memory while allowing most
     /// real-world command output to pass through unchanged.
+    const MAX_LINE_LENGTH: usize = 2000;
+
+    /// Maximum output size in bytes (10MB)
+    ///
+    /// # Examples
+    /// Returns 10,485,760 bytes (10MB limit)
+    fn max_output_size() -> usize {
+        Self::MAX_OUTPUT_SIZE
+    }
+
+    /// Maximum line length in characters (2000)
     ///
     /// # Examples
     /// Returns 2000 characters (2KB line limit)
     fn max_line_length() -> usize {
-        DEFAULT_MAX_LINE_LENGTH
+        Self::MAX_LINE_LENGTH
     }
 }
 
@@ -267,6 +255,77 @@ pub struct OutputBuffer {
     total_bytes_processed: usize,
 }
 
+/// Helper function to find a safe point to truncate data (preferably at line boundary)
+fn find_safe_truncation_point(data: &[u8]) -> usize {
+    if data.is_empty() {
+        return 0;
+    }
+
+    // Look for the last newline in the data to preserve line structure
+    for i in (0..data.len()).rev() {
+        if data[i] == b'\n' {
+            return i + 1; // Include the newline
+        }
+    }
+
+    // If no newline found, truncate at a reasonable boundary (not mid-UTF8 sequence)
+    // Look backwards for a safe UTF-8 boundary
+    for i in (0..data.len()).rev() {
+        // Check if this byte could be a valid UTF-8 start
+        if data[i] & 0x80 == 0 || data[i] & 0xC0 == 0xC0 {
+            return i;
+        }
+    }
+
+    // Fallback: return the full length (should not happen with reasonable data)
+    data.len()
+}
+
+/// Shared implementation for appending data to a buffer with size limit enforcement
+///
+/// This helper function eliminates the code duplication between append_stdout and append_stderr
+/// by extracting the common logic while working around Rust's borrow checker limitations.
+fn append_to_buffer_impl(
+    data: &[u8],
+    buffer: &mut Vec<u8>,
+    total_bytes_processed: &mut usize,
+    binary_detected: &mut bool,
+    truncated: &mut bool,
+    max_size: usize,
+    current_size: usize,
+) -> usize {
+    *total_bytes_processed += data.len();
+
+    // Check for binary content in this chunk
+    if !*binary_detected && is_binary_content(data) {
+        *binary_detected = true;
+    }
+
+    // Calculate how much we can append without exceeding limit
+    let available_space = max_size.saturating_sub(current_size);
+
+    if available_space == 0 {
+        *truncated = true;
+        return 0;
+    }
+
+    let bytes_to_append = std::cmp::min(data.len(), available_space);
+
+    if bytes_to_append < data.len() {
+        *truncated = true;
+    }
+
+    // Try to truncate at line boundaries to preserve readability
+    let actual_bytes = if bytes_to_append < data.len() {
+        find_safe_truncation_point(&data[..bytes_to_append])
+    } else {
+        bytes_to_append
+    };
+
+    buffer.extend_from_slice(&data[..actual_bytes]);
+    actual_bytes
+}
+
 impl OutputBuffer {
     /// Create a new output buffer with specified size limit
     pub fn new(max_size: usize) -> Self {
@@ -292,96 +351,30 @@ impl OutputBuffer {
 
     /// Append data to stdout buffer with size limit enforcement
     pub fn append_stdout(&mut self, data: &[u8]) -> usize {
-        self.total_bytes_processed += data.len();
-
-        // Check for binary content in this chunk
-        if !self.binary_detected && is_binary_content(data) {
-            self.binary_detected = true;
-        }
-
-        // Calculate how much we can append without exceeding limit
-        let available_space = self.max_size.saturating_sub(self.current_size());
-
-        if available_space == 0 {
-            self.truncated = true;
-            return 0;
-        }
-
-        let bytes_to_append = std::cmp::min(data.len(), available_space);
-
-        if bytes_to_append < data.len() {
-            self.truncated = true;
-        }
-
-        // For stdout, try to truncate at line boundaries to preserve readability
-        let actual_bytes = if bytes_to_append < data.len() {
-            self.find_safe_truncation_point(&data[..bytes_to_append])
-        } else {
-            bytes_to_append
-        };
-
-        self.stdout_buffer.extend_from_slice(&data[..actual_bytes]);
-        actual_bytes
+        let current_size = self.current_size();
+        append_to_buffer_impl(
+            data,
+            &mut self.stdout_buffer,
+            &mut self.total_bytes_processed,
+            &mut self.binary_detected,
+            &mut self.truncated,
+            self.max_size,
+            current_size,
+        )
     }
 
     /// Append data to stderr buffer with size limit enforcement
     pub fn append_stderr(&mut self, data: &[u8]) -> usize {
-        self.total_bytes_processed += data.len();
-
-        // Check for binary content in this chunk
-        if !self.binary_detected && is_binary_content(data) {
-            self.binary_detected = true;
-        }
-
-        // Calculate how much we can append without exceeding limit
-        let available_space = self.max_size.saturating_sub(self.current_size());
-
-        if available_space == 0 {
-            self.truncated = true;
-            return 0;
-        }
-
-        let bytes_to_append = std::cmp::min(data.len(), available_space);
-
-        if bytes_to_append < data.len() {
-            self.truncated = true;
-        }
-
-        // For stderr, try to truncate at line boundaries to preserve readability
-        let actual_bytes = if bytes_to_append < data.len() {
-            self.find_safe_truncation_point(&data[..bytes_to_append])
-        } else {
-            bytes_to_append
-        };
-
-        self.stderr_buffer.extend_from_slice(&data[..actual_bytes]);
-        actual_bytes
-    }
-
-    /// Find a safe point to truncate data (preferably at line boundary)
-    fn find_safe_truncation_point(&self, data: &[u8]) -> usize {
-        if data.is_empty() {
-            return 0;
-        }
-
-        // Look for the last newline in the data to preserve line structure
-        for i in (0..data.len()).rev() {
-            if data[i] == b'\n' {
-                return i + 1; // Include the newline
-            }
-        }
-
-        // If no newline found, truncate at a reasonable boundary (not mid-UTF8 sequence)
-        // Look backwards for a safe UTF-8 boundary
-        for i in (0..data.len()).rev() {
-            // Check if this byte could be a valid UTF-8 start
-            if data[i] & 0x80 == 0 || data[i] & 0xC0 == 0xC0 {
-                return i;
-            }
-        }
-
-        // Fallback: return the full length (should not happen with reasonable data)
-        data.len()
+        let current_size = self.current_size();
+        append_to_buffer_impl(
+            data,
+            &mut self.stderr_buffer,
+            &mut self.total_bytes_processed,
+            &mut self.binary_detected,
+            &mut self.truncated,
+            self.max_size,
+            current_size,
+        )
     }
 
     /// Get stdout as formatted string with binary content handling
@@ -725,6 +718,73 @@ impl Drop for AsyncProcessGuard {
     }
 }
 
+/// Helper function to process a single output line with common logic
+///
+/// This eliminates code duplication between stdout and stderr processing,
+/// as well as between pre-exit and post-exit output processing.
+///
+/// # Arguments
+///
+/// * `line` - The output line to process
+/// * `line_count` - Mutable reference to the line counter
+/// * `output_buffer` - Mutable reference to the output buffer
+/// * `append_fn` - Function to append data to the appropriate buffer (stdout or stderr)
+/// * `binary_notified` - Mutable reference to the binary notification flag
+/// * `progress_sender` - Optional progress sender for notifications
+/// * `progress_token` - Progress token for notifications
+/// * `batch_size` - Number of lines between progress notifications
+///
+/// # Returns
+///
+/// Returns the number of bytes written, or 0 if the buffer limit was reached
+#[inline]
+fn process_output_line(
+    line: String,
+    line_count: &mut u32,
+    output_buffer: &mut OutputBuffer,
+    append_fn: impl FnOnce(&mut OutputBuffer, &[u8]) -> usize,
+    binary_notified: &mut bool,
+    progress_sender: Option<&ProgressSender>,
+    progress_token: &str,
+    batch_size: u32,
+) -> usize {
+    *line_count += 1;
+
+    // Send batched progress notifications every batch_size lines
+    if *line_count % batch_size == 0 {
+        if let Some(sender) = progress_sender {
+            sender
+                .send_progress(
+                    progress_token,
+                    Some(*line_count),
+                    format!("Processing output: {} lines", line_count),
+                )
+                .ok();
+        }
+    }
+
+    // Convert line to bytes with newline
+    let line_bytes = line.as_bytes();
+    let mut line_with_newline = Vec::with_capacity(line_bytes.len() + 1);
+    line_with_newline.extend_from_slice(line_bytes);
+    line_with_newline.push(b'\n');
+
+    // Append to the appropriate buffer
+    let bytes_written = append_fn(output_buffer, &line_with_newline);
+
+    // Check for binary detection and notify once
+    if output_buffer.has_binary_content() && !*binary_notified {
+        *binary_notified = true;
+        if let Some(sender) = progress_sender {
+            sender
+                .send_progress(progress_token, Some(*line_count), "Binary output detected")
+                .ok();
+        }
+    }
+
+    bytes_written
+}
+
 /// Process child output streams with limits using async streaming
 ///
 /// This function handles the streaming capture of stdout and stderr from a child process
@@ -772,41 +832,16 @@ async fn process_child_output_with_limits(
             stdout_line = stdout_reader.next_line() => {
                 match stdout_line {
                     Ok(Some(line)) => {
-                        line_count += 1;
-
-                        // Send batched progress notifications every BATCH_SIZE lines
-                        if line_count % BATCH_SIZE == 0 {
-                            if let Some(sender) = progress_sender {
-                                sender
-                                    .send_progress(
-                                        progress_token,
-                                        Some(line_count),
-                                        format!("Processing output: {} lines", line_count)
-                                    )
-                                    .ok();
-                            }
-                        }
-
-                        let line_bytes = line.as_bytes();
-                        let mut line_with_newline = Vec::with_capacity(line_bytes.len() + 1);
-                        line_with_newline.extend_from_slice(line_bytes);
-                        line_with_newline.push(b'\n');
-
-                        let bytes_written = output_buffer.append_stdout(&line_with_newline);
-
-                        // Check for binary detection and notify once
-                        if output_buffer.has_binary_content() && !binary_notified {
-                            binary_notified = true;
-                            if let Some(sender) = progress_sender {
-                                sender
-                                    .send_progress(
-                                        progress_token,
-                                        Some(line_count),
-                                        "Binary output detected"
-                                    )
-                                    .ok();
-                            }
-                        }
+                        let bytes_written = process_output_line(
+                            line,
+                            &mut line_count,
+                            &mut output_buffer,
+                            |buf, data| buf.append_stdout(data),
+                            &mut binary_notified,
+                            progress_sender,
+                            progress_token,
+                            BATCH_SIZE,
+                        );
 
                         // If we couldn't write anything, we've hit the limit
                         if bytes_written == 0 && output_buffer.is_at_limit() {
@@ -829,41 +864,16 @@ async fn process_child_output_with_limits(
             stderr_line = stderr_reader.next_line() => {
                 match stderr_line {
                     Ok(Some(line)) => {
-                        line_count += 1;
-
-                        // Send batched progress notifications every BATCH_SIZE lines
-                        if line_count % BATCH_SIZE == 0 {
-                            if let Some(sender) = progress_sender {
-                                sender
-                                    .send_progress(
-                                        progress_token,
-                                        Some(line_count),
-                                        format!("Processing output: {} lines", line_count)
-                                    )
-                                    .ok();
-                            }
-                        }
-
-                        let line_bytes = line.as_bytes();
-                        let mut line_with_newline = Vec::with_capacity(line_bytes.len() + 1);
-                        line_with_newline.extend_from_slice(line_bytes);
-                        line_with_newline.push(b'\n');
-
-                        let bytes_written = output_buffer.append_stderr(&line_with_newline);
-
-                        // Check for binary detection and notify once
-                        if output_buffer.has_binary_content() && !binary_notified {
-                            binary_notified = true;
-                            if let Some(sender) = progress_sender {
-                                sender
-                                    .send_progress(
-                                        progress_token,
-                                        Some(line_count),
-                                        "Binary output detected"
-                                    )
-                                    .ok();
-                            }
-                        }
+                        let bytes_written = process_output_line(
+                            line,
+                            &mut line_count,
+                            &mut output_buffer,
+                            |buf, data| buf.append_stderr(data),
+                            &mut binary_notified,
+                            progress_sender,
+                            progress_token,
+                            BATCH_SIZE,
+                        );
 
                         // If we couldn't write anything, we've hit the limit
                         if bytes_written == 0 && output_buffer.is_at_limit() {
@@ -896,40 +906,16 @@ async fn process_child_output_with_limits(
                             if output_buffer.is_at_limit() {
                                 break;
                             }
-                            line_count += 1;
-
-                            // Send batched progress notifications every BATCH_SIZE lines
-                            if line_count % BATCH_SIZE == 0 {
-                                if let Some(sender) = progress_sender {
-                                    sender
-                                        .send_progress(
-                                            progress_token,
-                                            Some(line_count),
-                                            format!("Processing output: {} lines", line_count)
-                                        )
-                                        .ok();
-                                }
-                            }
-
-                            let line_bytes = line.as_bytes();
-                            let mut line_with_newline = Vec::with_capacity(line_bytes.len() + 1);
-                            line_with_newline.extend_from_slice(line_bytes);
-                            line_with_newline.push(b'\n');
-                            output_buffer.append_stdout(&line_with_newline);
-
-                            // Check for binary detection and notify once
-                            if output_buffer.has_binary_content() && !binary_notified {
-                                binary_notified = true;
-                                if let Some(sender) = progress_sender {
-                                    sender
-                                        .send_progress(
-                                            progress_token,
-                                            Some(line_count),
-                                            "Binary output detected"
-                                        )
-                                        .ok();
-                                }
-                            }
+                            process_output_line(
+                                line,
+                                &mut line_count,
+                                &mut output_buffer,
+                                |buf, data| buf.append_stdout(data),
+                                &mut binary_notified,
+                                progress_sender,
+                                progress_token,
+                                BATCH_SIZE,
+                            );
                         }
 
                         // Read remaining stderr
@@ -937,40 +923,16 @@ async fn process_child_output_with_limits(
                             if output_buffer.is_at_limit() {
                                 break;
                             }
-                            line_count += 1;
-
-                            // Send batched progress notifications every BATCH_SIZE lines
-                            if line_count % BATCH_SIZE == 0 {
-                                if let Some(sender) = progress_sender {
-                                    sender
-                                        .send_progress(
-                                            progress_token,
-                                            Some(line_count),
-                                            format!("Processing output: {} lines", line_count)
-                                        )
-                                        .ok();
-                                }
-                            }
-
-                            let line_bytes = line.as_bytes();
-                            let mut line_with_newline = Vec::with_capacity(line_bytes.len() + 1);
-                            line_with_newline.extend_from_slice(line_bytes);
-                            line_with_newline.push(b'\n');
-                            output_buffer.append_stderr(&line_with_newline);
-
-                            // Check for binary detection and notify once
-                            if output_buffer.has_binary_content() && !binary_notified {
-                                binary_notified = true;
-                                if let Some(sender) = progress_sender {
-                                    sender
-                                        .send_progress(
-                                            progress_token,
-                                            Some(line_count),
-                                            "Binary output detected"
-                                        )
-                                        .ok();
-                                }
-                            }
+                            process_output_line(
+                                line,
+                                &mut line_count,
+                                &mut output_buffer,
+                                |buf, data| buf.append_stderr(data),
+                                &mut binary_notified,
+                                progress_sender,
+                                progress_token,
+                                BATCH_SIZE,
+                            );
                         }
 
                         // Add truncation marker if needed

@@ -121,17 +121,29 @@ pub struct CliBuilder {
 impl CliBuilder {
     /// Create a new CLI builder with the given tool registry
     pub fn new(tool_registry: Arc<RwLock<ToolRegistry>>) -> Self {
+        let (category_commands, tool_commands) = {
+            let registry = tool_registry
+                .try_read()
+                .expect("ToolRegistry should not be locked");
+            let category_commands = Self::precompute_category_commands(&registry);
+            let tool_commands = Self::precompute_tool_commands(&registry);
+            (category_commands, tool_commands)
+        }; // Drop registry guard
+
+        Self {
+            tool_registry,
+            category_commands,
+            tool_commands,
+        }
+    }
+
+    /// Pre-compute category command data
+    fn precompute_category_commands(registry: &ToolRegistry) -> HashMap<String, CommandData> {
         let mut category_commands = HashMap::new();
-        let mut tool_commands = HashMap::new();
+        let categories = registry.get_cli_categories();
 
-        // Pre-compute all command data in a scope so guard is dropped
-        {
-            let registry = tool_registry.try_read().expect("ToolRegistry should not be locked");
-            let categories = registry.get_cli_categories();
-            for category in categories {
+        for category in categories {
             let category_name = category.to_string();
-
-            // Create category command data
             let category_cmd_data = CommandData {
                 name: category_name.clone(),
                 about: Some(format!(
@@ -141,15 +153,26 @@ impl CliBuilder {
                 long_about: None,
                 args: Vec::new(),
             };
-            category_commands.insert(category_name.clone(), category_cmd_data);
+            category_commands.insert(category_name, category_cmd_data);
+        }
 
-            // Create tool commands for this category
+        category_commands
+    }
+
+    /// Pre-compute tool command data
+    fn precompute_tool_commands(
+        registry: &ToolRegistry,
+    ) -> HashMap<String, HashMap<String, CommandData>> {
+        let mut tool_commands = HashMap::new();
+        let categories = registry.get_cli_categories();
+
+        for category in categories {
+            let category_name = category.to_string();
             let mut tools_in_category = HashMap::new();
             let tools = registry.get_tools_for_category(&category);
 
             for tool in tools {
                 if !tool.hidden_from_cli() {
-                    // Only add tools that pass validation
                     if let Some(tool_cmd_data) = Self::precompute_tool_command(tool) {
                         tools_in_category.insert(tool.cli_name().to_string(), tool_cmd_data);
                     }
@@ -157,14 +180,9 @@ impl CliBuilder {
             }
 
             tool_commands.insert(category_name, tools_in_category);
-            }
-        } // Drop registry guard
-
-        Self {
-            tool_registry,
-            category_commands,
-            tool_commands,
         }
+
+        tool_commands
     }
 
     /// Pre-compute command data for a tool with validation
@@ -456,20 +474,51 @@ Example:
     ///
     /// Vec of validation errors (empty if all tools are valid)
     pub fn validate_all_tools(&self) -> Vec<ValidationError> {
-        let mut errors = Vec::new();
+        self.collect_validation_results(|result| result.err())
+            .into_iter()
+            .flatten()
+            .flatten()
+            .collect()
+    }
 
-        let registry = self.tool_registry.try_read().expect("ToolRegistry should not be locked");
+    /// Collect validation results with a mapper function
+    ///
+    /// This provides a single source of truth for tool validation iteration
+    /// and processing. The mapper function transforms each validation result
+    /// into the desired output type.
+    ///
+    /// # Type Parameters
+    ///
+    /// * `T` - Output type from the mapper function
+    /// * `F` - Mapper function type
+    ///
+    /// # Parameters
+    ///
+    /// * `mapper` - Function to transform validation results
+    ///
+    /// # Returns
+    ///
+    /// Vector of mapped results
+    fn collect_validation_results<T, F>(&self, mapper: F) -> Vec<T>
+    where
+        F: Fn(Result<(), Vec<ValidationError>>) -> T,
+    {
+        let registry = self
+            .tool_registry
+            .try_read()
+            .expect("ToolRegistry should not be locked");
         let categories = registry.get_cli_categories();
+
+        let mut results = Vec::new();
         for category in categories {
             let tools = registry.get_tools_for_category(&category);
             for tool in tools {
-                if let Err(tool_errors) = self.validate_single_tool(tool) {
-                    errors.extend(tool_errors);
-                }
+                let validation_result = self.validate_single_tool(tool);
+                results.push(mapper(validation_result));
             }
         }
 
-        errors
+        results
     }
 
     /// Validate a single tool for CLI compatibility
@@ -532,16 +581,11 @@ Example:
     ///
     /// `CliValidationStats` with counts and status information
     pub fn get_validation_stats(&self) -> CliValidationStats {
-        let mut stats = CliValidationStats::new();
-
-        let registry = self.tool_registry.try_read().expect("ToolRegistry should not be locked");
-        let categories = registry.get_cli_categories();
-        for category in categories {
-            let tools = registry.get_tools_for_category(&category);
-            for tool in tools {
+        self.collect_validation_results(|result| result)
+            .into_iter()
+            .fold(CliValidationStats::new(), |mut stats, result| {
                 stats.total_tools += 1;
-
-                match self.validate_single_tool(tool) {
+                match result {
                     Ok(()) => {
                         stats.valid_tools += 1;
                     }
@@ -550,10 +594,23 @@ Example:
                         stats.validation_errors += errors.len();
                     }
                 }
-            }
+                stats
+            })
+    }
+
+    /// Build base command from command data (shared between category and tool commands)
+    fn build_command_base(data: &CommandData) -> Command {
+        let mut cmd = Command::new(intern_string(data.name.clone()));
+
+        if let Some(about) = &data.about {
+            cmd = cmd.about(intern_string(about.clone()));
         }
 
-        stats
+        if let Some(long_about) = &data.long_about {
+            cmd = cmd.long_about(intern_string(long_about.clone()));
+        }
+
+        cmd
     }
 
     /// Build a command for a specific tool category from pre-computed data
@@ -562,16 +619,7 @@ Example:
         category_name: &str,
         category_data: &CommandData,
     ) -> Command {
-        let mut cmd = Command::new(intern_string(category_data.name.clone()));
-
-        if let Some(about) = &category_data.about {
-            cmd = cmd.about(intern_string(about.clone()));
-        }
-
-        if let Some(long_about) = &category_data.long_about {
-            cmd = cmd.long_about(intern_string(long_about.clone()));
-        }
-
+        let mut cmd = Self::build_command_base(category_data);
         cmd = cmd.subcommand_help_heading("Tools");
 
         // Add tool subcommands for this category
@@ -586,15 +634,7 @@ Example:
 
     /// Build a command for a specific MCP tool from pre-computed data
     fn build_tool_command_from_data(&self, tool_data: &CommandData) -> Command {
-        let mut cmd = Command::new(intern_string(tool_data.name.clone()));
-
-        if let Some(about) = &tool_data.about {
-            cmd = cmd.about(intern_string(about.clone()));
-        }
-
-        if let Some(long_about) = &tool_data.long_about {
-            cmd = cmd.long_about(intern_string(long_about.clone()));
-        }
+        let mut cmd = Self::build_command_base(tool_data);
 
         // Add arguments from pre-computed data
         for arg_data in &tool_data.args {
@@ -1000,8 +1040,6 @@ Examples:
                     .help("Workflow name (or 'list') followed by arguments"),
             )
     }
-
-
 
     /// Build the agent command with all its subcommands
     pub fn build_agent_command() -> Command {

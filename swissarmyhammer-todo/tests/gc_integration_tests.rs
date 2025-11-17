@@ -10,67 +10,101 @@ use chrono::Utc;
 use std::fs;
 use std::path::PathBuf;
 use std::time::Duration;
-use swissarmyhammer_todo::{TodoItem, TodoStorage};
+use swissarmyhammer_todo::{TodoId, TodoItem, TodoList, TodoStorage};
 use tempfile::TempDir;
 
-/// Helper to create a TodoStorage with a temporary directory
-fn create_test_storage() -> (TodoStorage, TempDir) {
-    let temp_dir = TempDir::new().expect("Failed to create temp dir");
-    fs::create_dir_all(temp_dir.path()).expect("Failed to create temp dir");
-    let storage = TodoStorage::new(temp_dir.path().to_path_buf());
-    (storage, temp_dir)
+/// Test fixture that encapsulates TodoStorage and temporary directory
+struct TestFixture {
+    storage: TodoStorage,
+    _temp_dir: TempDir,
 }
 
-/// Helper to get the todo file path
-fn get_todo_file_path(temp_dir: &TempDir) -> PathBuf {
-    temp_dir.path().join("todo.yaml")
+impl TestFixture {
+    /// Create a new test fixture with TodoStorage and temporary directory
+    fn new() -> Self {
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+        fs::create_dir_all(temp_dir.path()).expect("Failed to create temp dir");
+        let storage = TodoStorage::new(temp_dir.path().to_path_buf());
+        Self {
+            storage,
+            _temp_dir: temp_dir,
+        }
+    }
+
+    /// Get the path to the todo file
+    fn todo_file_path(&self) -> PathBuf {
+        self._temp_dir.path().join("todo.yaml")
+    }
+
+    /// Create a todo item with simplified error handling
+    async fn create_item(&self, task: &str) -> TodoItem {
+        self.storage
+            .create_todo_item(task.to_string(), None)
+            .await
+            .expect("Failed to create todo item")
+            .0
+    }
+
+    /// Get the todo list, expecting it to exist
+    async fn get_list(&self) -> TodoList {
+        self.storage
+            .get_todo_list()
+            .await
+            .expect("Failed to get list")
+            .expect("List should exist")
+    }
+
+    /// Get the todo list as an option
+    async fn get_list_opt(&self) -> Option<TodoList> {
+        self.storage
+            .get_todo_list()
+            .await
+            .expect("Failed to get list")
+    }
+
+    /// Mark a todo item as complete
+    async fn complete_item(&self, id: &TodoId) {
+        self.storage
+            .mark_todo_complete(id)
+            .await
+            .expect("Failed to complete todo item")
+    }
+}
+
+/// Assert that a timestamp is within a given range
+fn assert_timestamp_in_range(
+    timestamp: chrono::DateTime<chrono::Utc>,
+    start: chrono::DateTime<chrono::Utc>,
+    end: chrono::DateTime<chrono::Utc>,
+    context: &str,
+) {
+    assert!(
+        timestamp >= start && timestamp <= end,
+        "{} should be in time range",
+        context
+    );
 }
 
 /// Test that GC removes completed todos when creating new items
 #[tokio::test]
 async fn test_gc_on_create_removes_completed() {
-    let (storage, temp_dir) = create_test_storage();
+    let fixture = TestFixture::new();
 
     // Create three initial todos
-    let (item1, _gc_count) = storage
-        .create_todo_item("Task 1".to_string(), None)
-        .await
-        .expect("Failed to create item 1");
-
-    let (item2, _gc_count) = storage
-        .create_todo_item("Task 2".to_string(), None)
-        .await
-        .expect("Failed to create item 2");
-
-    storage
-        .create_todo_item("Task 3".to_string(), None)
-        .await
-        .expect("Failed to create item 3");
+    let item1 = fixture.create_item("Task 1").await;
+    let item2 = fixture.create_item("Task 2").await;
+    fixture.create_item("Task 3").await;
 
     // Verify we have 3 items
-    let list = storage
-        .get_todo_list()
-        .await
-        .expect("Failed to get list")
-        .expect("List should exist");
+    let list = fixture.get_list().await;
     assert_eq!(list.todo.len(), 3, "Should have 3 todos");
 
     // Mark first two as complete
-    storage
-        .mark_todo_complete(&item1.id)
-        .await
-        .expect("Failed to complete item 1");
-    storage
-        .mark_todo_complete(&item2.id)
-        .await
-        .expect("Failed to complete item 2");
+    fixture.complete_item(&item1.id).await;
+    fixture.complete_item(&item2.id).await;
 
     // Verify we still have 3 items (2 complete, 1 incomplete)
-    let list_before_gc = storage
-        .get_todo_list()
-        .await
-        .expect("Failed to get list")
-        .expect("List should exist");
+    let list_before_gc = fixture.get_list().await;
     assert_eq!(
         list_before_gc.todo.len(),
         3,
@@ -88,17 +122,10 @@ async fn test_gc_on_create_removes_completed() {
     );
 
     // Create a new item - this should trigger GC
-    storage
-        .create_todo_item("Task 4".to_string(), None)
-        .await
-        .expect("Failed to create item 4");
+    fixture.create_item("Task 4").await;
 
     // Verify completed items were garbage collected
-    let list_after_gc = storage
-        .get_todo_list()
-        .await
-        .expect("Failed to get list")
-        .expect("List should exist");
+    let list_after_gc = fixture.get_list().await;
     assert_eq!(
         list_after_gc.todo.len(),
         2,
@@ -139,30 +166,24 @@ async fn test_gc_on_create_removes_completed() {
     );
 
     // Verify file exists
-    let todo_file = get_todo_file_path(&temp_dir);
+    let todo_file = fixture.todo_file_path();
     assert!(todo_file.exists(), "Todo file should exist");
 }
 
 /// Test that file is deleted when all todos are completed
 #[tokio::test]
 async fn test_file_deleted_when_all_complete() {
-    let (storage, temp_dir) = create_test_storage();
+    let fixture = TestFixture::new();
 
     // Create a single todo
-    let (item, _gc_count) = storage
-        .create_todo_item("Single task".to_string(), None)
-        .await
-        .expect("Failed to create item");
+    let item = fixture.create_item("Single task").await;
 
     // Verify file exists
-    let todo_file = get_todo_file_path(&temp_dir);
+    let todo_file = fixture.todo_file_path();
     assert!(todo_file.exists(), "Todo file should exist after creation");
 
     // Complete the only todo
-    storage
-        .mark_todo_complete(&item.id)
-        .await
-        .expect("Failed to complete item");
+    fixture.complete_item(&item.id).await;
 
     // Verify file is deleted
     assert!(
@@ -171,45 +192,30 @@ async fn test_file_deleted_when_all_complete() {
     );
 
     // Verify list is empty/none
-    let list = storage.get_todo_list().await.expect("Failed to get list");
+    let list = fixture.get_list_opt().await;
     assert!(list.is_none(), "List should be None after file deletion");
 }
 
 /// Test GC with time passage simulation
 #[tokio::test]
 async fn test_gc_with_time_passage_simulation() {
-    let (storage, temp_dir) = create_test_storage();
+    let fixture = TestFixture::new();
 
     // Phase 1: Create initial todos at T0
     let t0_start = Utc::now();
-    let (item1, _gc_count) = storage
-        .create_todo_item("Task at T0-1".to_string(), None)
-        .await
-        .expect("Failed to create item 1");
-    let (item2, _gc_count) = storage
-        .create_todo_item("Task at T0-2".to_string(), None)
-        .await
-        .expect("Failed to create item 2");
+    let item1 = fixture.create_item("Task at T0-1").await;
+    let item2 = fixture.create_item("Task at T0-2").await;
     let t0_end = Utc::now();
 
     // Verify timestamps are within T0 range
-    assert!(
-        item1.created_at >= t0_start && item1.created_at <= t0_end,
-        "Item 1 should be created in T0 range"
-    );
-    assert!(
-        item2.created_at >= t0_start && item2.created_at <= t0_end,
-        "Item 2 should be created in T0 range"
-    );
+    assert_timestamp_in_range(item1.created_at, t0_start, t0_end, "Item 1 created_at");
+    assert_timestamp_in_range(item2.created_at, t0_start, t0_end, "Item 2 created_at");
 
     // Phase 2: Wait and create more todos at T1
     tokio::time::sleep(Duration::from_millis(100)).await;
 
     let t1_start = Utc::now();
-    let (item3, _gc_count) = storage
-        .create_todo_item("Task at T1".to_string(), None)
-        .await
-        .expect("Failed to create item 3");
+    let item3 = fixture.create_item("Task at T1").await;
     let t1_end = Utc::now();
 
     // Verify T1 timestamp is after T0
@@ -217,31 +223,18 @@ async fn test_gc_with_time_passage_simulation() {
         item3.created_at > item1.created_at,
         "Item 3 should be created after item 1"
     );
-    assert!(
-        item3.created_at >= t1_start && item3.created_at <= t1_end,
-        "Item 3 should be created in T1 range"
-    );
+    assert_timestamp_in_range(item3.created_at, t1_start, t1_end, "Item 3 created_at");
 
     // Phase 3: Complete some items at T2
     tokio::time::sleep(Duration::from_millis(100)).await;
 
     let t2_start = Utc::now();
-    storage
-        .mark_todo_complete(&item1.id)
-        .await
-        .expect("Failed to complete item 1");
-    storage
-        .mark_todo_complete(&item2.id)
-        .await
-        .expect("Failed to complete item 2");
+    fixture.complete_item(&item1.id).await;
+    fixture.complete_item(&item2.id).await;
     let t2_end = Utc::now();
 
     // Verify list has correct state before GC
-    let list_before_gc = storage
-        .get_todo_list()
-        .await
-        .expect("Failed to get list")
-        .expect("List should exist");
+    let list_before_gc = fixture.get_list().await;
     assert_eq!(list_before_gc.todo.len(), 3, "Should have 3 items");
     assert_eq!(list_before_gc.complete_count(), 2, "Should have 2 complete");
 
@@ -252,9 +245,11 @@ async fn test_gc_with_time_passage_simulation() {
         .filter(|item| item.done)
         .collect();
     for item in completed_items {
-        assert!(
-            item.updated_at >= t2_start && item.updated_at <= t2_end,
-            "Completed item should have updated_at in T2 range"
+        assert_timestamp_in_range(
+            item.updated_at,
+            t2_start,
+            t2_end,
+            "Completed item updated_at",
         );
     }
 
@@ -262,24 +257,14 @@ async fn test_gc_with_time_passage_simulation() {
     tokio::time::sleep(Duration::from_millis(100)).await;
 
     let t3_start = Utc::now();
-    let (item4, _gc_count) = storage
-        .create_todo_item("Task at T3".to_string(), None)
-        .await
-        .expect("Failed to create item 4");
+    let item4 = fixture.create_item("Task at T3").await;
     let t3_end = Utc::now();
 
     // Verify T3 timestamp
-    assert!(
-        item4.created_at >= t3_start && item4.created_at <= t3_end,
-        "Item 4 should be created in T3 range"
-    );
+    assert_timestamp_in_range(item4.created_at, t3_start, t3_end, "Item 4 created_at");
 
     // Verify GC removed completed items
-    let list_after_gc = storage
-        .get_todo_list()
-        .await
-        .expect("Failed to get list")
-        .expect("List should exist");
+    let list_after_gc = fixture.get_list().await;
     assert_eq!(list_after_gc.todo.len(), 2, "Should have 2 items after GC");
     assert_eq!(
         list_after_gc.complete_count(),
@@ -313,20 +298,17 @@ async fn test_gc_with_time_passage_simulation() {
     );
 
     // Verify the file exists
-    let todo_file = get_todo_file_path(&temp_dir);
+    let todo_file = fixture.todo_file_path();
     assert!(todo_file.exists(), "Todo file should exist");
 }
 
 /// Test GC preserves timestamps across multiple GC cycles
 #[tokio::test]
 async fn test_gc_preserves_timestamps_across_multiple_cycles() {
-    let (storage, _temp_dir) = create_test_storage();
+    let fixture = TestFixture::new();
 
     // Create initial item
-    let (initial_item, _gc_count) = storage
-        .create_todo_item("Initial task".to_string(), None)
-        .await
-        .expect("Failed to create initial item");
+    let initial_item = fixture.create_item("Initial task").await;
 
     let original_created_at = initial_item.created_at;
     let original_updated_at = initial_item.updated_at;
@@ -337,32 +319,19 @@ async fn test_gc_preserves_timestamps_across_multiple_cycles() {
         tokio::time::sleep(Duration::from_millis(50)).await;
 
         // Create a new item and complete it
-        let (temp_item, _gc_count) = storage
-            .create_todo_item(format!("Temp task {i}"), None)
-            .await
-            .expect("Failed to create temp item");
+        let temp_item = fixture.create_item(&format!("Temp task {i}")).await;
 
         tokio::time::sleep(Duration::from_millis(50)).await;
 
-        storage
-            .mark_todo_complete(&temp_item.id)
-            .await
-            .expect("Failed to complete temp item");
+        fixture.complete_item(&temp_item.id).await;
 
         // Create another item to trigger GC
         tokio::time::sleep(Duration::from_millis(50)).await;
 
-        storage
-            .create_todo_item(format!("Trigger GC {i}"), None)
-            .await
-            .expect("Failed to create trigger item");
+        fixture.create_item(&format!("Trigger GC {i}")).await;
 
         // Verify initial item timestamps remain unchanged
-        let list = storage
-            .get_todo_list()
-            .await
-            .expect("Failed to get list")
-            .expect("List should exist");
+        let list = fixture.get_list().await;
 
         let preserved_item = list
             .todo
@@ -384,49 +353,21 @@ async fn test_gc_preserves_timestamps_across_multiple_cycles() {
 /// Test that GC works correctly when all but one item is completed
 #[tokio::test]
 async fn test_gc_with_single_incomplete_item() {
-    let (storage, temp_dir) = create_test_storage();
+    let fixture = TestFixture::new();
 
     // Create multiple items
-    let (item1, _gc_count) = storage
-        .create_todo_item("Keep this".to_string(), None)
-        .await
-        .expect("Failed to create item 1");
-
-    let (item2, _gc_count) = storage
-        .create_todo_item("Complete this 1".to_string(), None)
-        .await
-        .expect("Failed to create item 2");
-
-    let (item3, _gc_count) = storage
-        .create_todo_item("Complete this 2".to_string(), None)
-        .await
-        .expect("Failed to create item 3");
-
-    let (item4, _gc_count) = storage
-        .create_todo_item("Complete this 3".to_string(), None)
-        .await
-        .expect("Failed to create item 4");
+    let item1 = fixture.create_item("Keep this").await;
+    let item2 = fixture.create_item("Complete this 1").await;
+    let item3 = fixture.create_item("Complete this 2").await;
+    let item4 = fixture.create_item("Complete this 3").await;
 
     // Complete all but the first
-    storage
-        .mark_todo_complete(&item2.id)
-        .await
-        .expect("Failed to complete item 2");
-    storage
-        .mark_todo_complete(&item3.id)
-        .await
-        .expect("Failed to complete item 3");
-    storage
-        .mark_todo_complete(&item4.id)
-        .await
-        .expect("Failed to complete item 4");
+    fixture.complete_item(&item2.id).await;
+    fixture.complete_item(&item3.id).await;
+    fixture.complete_item(&item4.id).await;
 
     // Verify state before GC
-    let list_before = storage
-        .get_todo_list()
-        .await
-        .expect("Failed to get list")
-        .expect("List should exist");
+    let list_before = fixture.get_list().await;
     assert_eq!(list_before.todo.len(), 4, "Should have 4 items");
     assert_eq!(list_before.complete_count(), 3, "Should have 3 complete");
     assert_eq!(
@@ -436,17 +377,10 @@ async fn test_gc_with_single_incomplete_item() {
     );
 
     // Create new item to trigger GC
-    storage
-        .create_todo_item("New item".to_string(), None)
-        .await
-        .expect("Failed to create new item");
+    fixture.create_item("New item").await;
 
     // Verify GC removed completed items
-    let list_after = storage
-        .get_todo_list()
-        .await
-        .expect("Failed to get list")
-        .expect("List should exist");
+    let list_after = fixture.get_list().await;
     assert_eq!(
         list_after.todo.len(),
         2,
@@ -475,46 +409,30 @@ async fn test_gc_with_single_incomplete_item() {
     );
 
     // Verify file exists
-    let todo_file = get_todo_file_path(&temp_dir);
+    let todo_file = fixture.todo_file_path();
     assert!(todo_file.exists(), "Todo file should exist");
 }
 
 /// Test rapid successive GC operations
 #[tokio::test]
 async fn test_rapid_successive_gc_operations() {
-    let (storage, _temp_dir) = create_test_storage();
+    let fixture = TestFixture::new();
 
     // Create base item
-    let (base_item, _gc_count) = storage
-        .create_todo_item("Base item".to_string(), None)
-        .await
-        .expect("Failed to create base item");
+    let base_item = fixture.create_item("Base item").await;
 
     // Rapidly create and complete items, triggering multiple GC cycles
     for i in 1..=10 {
-        let (temp_item, _gc_count) = storage
-            .create_todo_item(format!("Temp {i}"), None)
-            .await
-            .expect("Failed to create temp item");
+        let temp_item = fixture.create_item(&format!("Temp {i}")).await;
 
-        storage
-            .mark_todo_complete(&temp_item.id)
-            .await
-            .expect("Failed to complete temp item");
+        fixture.complete_item(&temp_item.id).await;
 
         // This will trigger GC
-        storage
-            .create_todo_item(format!("Next {i}"), None)
-            .await
-            .expect("Failed to create next item");
+        fixture.create_item(&format!("Next {i}")).await;
     }
 
     // Verify base item still exists
-    let final_list = storage
-        .get_todo_list()
-        .await
-        .expect("Failed to get list")
-        .expect("List should exist");
+    let final_list = fixture.get_list().await;
 
     let base_still_exists = final_list.todo.iter().any(|item| item.id == base_item.id);
     assert!(base_still_exists, "Base item should survive all GC cycles");
@@ -530,49 +448,32 @@ async fn test_rapid_successive_gc_operations() {
 /// Test that GC handles empty list after all items completed
 #[tokio::test]
 async fn test_gc_after_completing_all_items() {
-    let (storage, temp_dir) = create_test_storage();
+    let fixture = TestFixture::new();
 
     // Create multiple items
-    let (item1, _gc_count) = storage
-        .create_todo_item("Task 1".to_string(), None)
-        .await
-        .expect("Failed to create item 1");
-
-    let (item2, _gc_count) = storage
-        .create_todo_item("Task 2".to_string(), None)
-        .await
-        .expect("Failed to create item 2");
+    let item1 = fixture.create_item("Task 1").await;
+    let item2 = fixture.create_item("Task 2").await;
 
     // Complete all items
-    storage
-        .mark_todo_complete(&item1.id)
-        .await
-        .expect("Failed to complete item 1");
-
-    storage
-        .mark_todo_complete(&item2.id)
-        .await
-        .expect("Failed to complete item 2");
+    fixture.complete_item(&item1.id).await;
+    fixture.complete_item(&item2.id).await;
 
     // Verify file is deleted
-    let todo_file = get_todo_file_path(&temp_dir);
+    let todo_file = fixture.todo_file_path();
     assert!(
         !todo_file.exists(),
         "Todo file should be deleted after completing all items"
     );
 
     // Verify list is None
-    let list = storage.get_todo_list().await.expect("Failed to get list");
+    let list = fixture.get_list_opt().await;
     assert!(
         list.is_none(),
         "List should be None after all items complete"
     );
 
     // Create a new item - this should recreate the file
-    let (new_item, _gc_count) = storage
-        .create_todo_item("Fresh start".to_string(), None)
-        .await
-        .expect("Failed to create new item");
+    let new_item = fixture.create_item("Fresh start").await;
 
     // Verify file exists again
     assert!(
@@ -581,11 +482,7 @@ async fn test_gc_after_completing_all_items() {
     );
 
     // Verify list contains only the new item
-    let new_list = storage
-        .get_todo_list()
-        .await
-        .expect("Failed to get list")
-        .expect("List should exist");
+    let new_list = fixture.get_list().await;
     assert_eq!(new_list.todo.len(), 1, "Should have 1 item");
     assert_eq!(new_list.todo[0].id, new_item.id, "Should have the new item");
 }

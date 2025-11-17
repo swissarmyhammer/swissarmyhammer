@@ -30,7 +30,8 @@ pub fn get_todo_directory() -> Result<PathBuf> {
             ))
         })?;
 
-    let todo_dir = sah_dir.ensure_subdir("todo")
+    let todo_dir = sah_dir
+        .ensure_subdir("todo")
         .map_err(|e| TodoError::other(format!("Failed to create todo directory: {e}")))?;
 
     Ok(todo_dir)

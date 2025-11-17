@@ -604,7 +604,10 @@ impl RuleChecker {
         let mut config = GlobExpansionConfig::default();
         if let Ok(sah_dir) = swissarmyhammer_common::SwissarmyhammerDirectory::from_git_root() {
             config.exclude_paths = vec![sah_dir.root().to_path_buf()];
-            tracing::debug!("Excluding .swissarmyhammer directory from rule checking: {}", sah_dir.root().display());
+            tracing::debug!(
+                "Excluding .swissarmyhammer directory from rule checking: {}",
+                sah_dir.root().display()
+            );
         }
 
         let mut target_files = expand_glob_patterns(&request.patterns, &config)
@@ -637,10 +640,7 @@ impl RuleChecker {
         let max_errors = request.max_errors;
         let concurrency = request.max_concurrency.unwrap_or(4);
 
-        tracing::debug!(
-            "Processing work queue with concurrency={}",
-            concurrency
-        );
+        tracing::debug!("Processing work queue with concurrency={}", concurrency);
 
         // Process work queue in parallel using buffer_unordered
         let stream = stream::iter(work_items)

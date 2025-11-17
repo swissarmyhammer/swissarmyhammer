@@ -169,7 +169,9 @@ impl WorkflowExecutor {
                 tracing::error!("***Workflow Aborted***: {}", abort_reason);
 
                 // Create abort file for external detection
-                if let Ok(sah_dir) = swissarmyhammer_common::SwissarmyhammerDirectory::from_git_root() {
+                if let Ok(sah_dir) =
+                    swissarmyhammer_common::SwissarmyhammerDirectory::from_git_root()
+                {
                     let abort_path = sah_dir.root().join(".abort");
                     if let Err(e) = std::fs::write(abort_path, abort_reason) {
                         tracing::warn!("Failed to write abort file: {}", e);

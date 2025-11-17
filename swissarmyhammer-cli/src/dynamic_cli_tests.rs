@@ -23,6 +23,22 @@ where
     }
 }
 
+/// Helper function to set up workflow CLI with common setup logic
+fn with_workflow_cli<F>(test_fn: F)
+where
+    F: FnOnce(&Command, &[swissarmyhammer_workflow::Workflow], &str),
+{
+    with_workflow_storage(|storage| {
+        let workflows = storage.list_workflows().unwrap_or_default();
+        if !workflows.is_empty() {
+            let (_registry, builder) = create_test_registry_and_builder();
+            let cli = builder.build_cli(Some(storage));
+            let help = get_help_text(&cli);
+            test_fn(&cli, &workflows, &help);
+        }
+    });
+}
+
 /// Helper function to validate that help text contains expected items
 fn assert_help_contains(cli: &Command, expected_items: &[String], context: &str) {
     let help = get_help_text(cli);
@@ -88,53 +104,65 @@ fn test_string_interning_different_strings() {
     assert_ne!(s1 as *const str, s2 as *const str);
 }
 
+/// Helper function to test validation stats with different scenarios
+fn assert_validation_stats(
+    total: usize,
+    valid: usize,
+    invalid: usize,
+    errors: usize,
+    expected_all_valid: bool,
+    expected_rate: f64,
+    expected_summary_contains: &[&str],
+) {
+    let stats = CliValidationStats {
+        total_tools: total,
+        valid_tools: valid,
+        invalid_tools: invalid,
+        validation_errors: errors,
+    };
+    assert_eq!(stats.is_all_valid(), expected_all_valid);
+    assert_eq!(stats.success_rate(), expected_rate);
+    let summary = stats.summary();
+    for item in expected_summary_contains {
+        assert!(
+            summary.contains(item),
+            "Summary should contain '{}', but got: {}",
+            item,
+            summary
+        );
+    }
+}
+
 #[test]
 fn test_validation_stats_all_valid() {
-    let stats = CliValidationStats {
-        total_tools: 10,
-        valid_tools: 10,
-        invalid_tools: 0,
-        validation_errors: 0,
-    };
-
-    assert!(stats.is_all_valid());
-    assert_eq!(stats.success_rate(), 100.0);
-
-    let summary = stats.summary();
-    assert!(summary.contains("✅"));
-    assert!(summary.contains("All 10 CLI tools are valid"));
+    assert_validation_stats(
+        10,
+        10,
+        0,
+        0,
+        true,
+        100.0,
+        &["✅", "All 10 CLI tools are valid"],
+    );
 }
 
 #[test]
 fn test_validation_stats_some_invalid() {
-    let stats = CliValidationStats {
-        total_tools: 10,
-        valid_tools: 7,
-        invalid_tools: 3,
-        validation_errors: 5,
-    };
-
-    assert!(!stats.is_all_valid());
-    assert_eq!(stats.success_rate(), 70.0);
-
-    let summary = stats.summary();
-    assert!(summary.contains("⚠️"));
-    assert!(summary.contains("7 of 10"));
-    assert!(summary.contains("70.0%"));
-    assert!(summary.contains("5 validation errors"));
+    assert_validation_stats(
+        10,
+        7,
+        3,
+        5,
+        false,
+        70.0,
+        &["⚠️", "7 of 10", "70.0%", "5 validation errors"],
+    );
 }
 
 #[test]
 fn test_validation_stats_zero_tools() {
-    let stats = CliValidationStats {
-        total_tools: 0,
-        valid_tools: 0,
-        invalid_tools: 0,
-        validation_errors: 0,
-    };
-
-    assert!(stats.is_all_valid());
-    assert_eq!(stats.success_rate(), 100.0); // Should handle division by zero gracefully
+    // Should handle division by zero gracefully
+    assert_validation_stats(0, 0, 0, 0, true, 100.0, &[]);
 }
 
 #[test]
@@ -160,59 +188,97 @@ fn test_cli_builder_graceful_degradation() {
     assert!(cli.get_subcommands().any(|cmd| cmd.get_name() == "doctor"));
 }
 
+/// Helper function to test schema precomputation with different types
+fn assert_schema_precomputation<F>(
+    name: &str,
+    schema: serde_json::Value,
+    is_required: bool,
+    additional_checks: F,
+) where
+    F: FnOnce(&ArgData),
+{
+    let arg = CliBuilder::precompute_arg_data(name, &schema, is_required);
+    additional_checks(&arg);
+}
+
 #[test]
 fn test_precompute_arg_data_types() {
     // Test boolean type
-    let bool_schema = json!({
-        "type": "boolean",
-        "description": "Enable feature"
-    });
-    let bool_arg = CliBuilder::precompute_arg_data("feature_flag", &bool_schema, false);
-    assert!(matches!(bool_arg.arg_type, ArgType::Boolean));
-    assert_eq!(bool_arg.help, Some("Enable feature".to_string()));
+    assert_schema_precomputation(
+        "feature_flag",
+        json!({
+            "type": "boolean",
+            "description": "Enable feature"
+        }),
+        false,
+        |arg| {
+            assert!(matches!(arg.arg_type, ArgType::Boolean));
+            assert_eq!(arg.help, Some("Enable feature".to_string()));
+        },
+    );
 
     // Test integer type
-    let int_schema = json!({
-        "type": "integer",
-        "description": "Port number"
-    });
-    let int_arg = CliBuilder::precompute_arg_data("port", &int_schema, true);
-    assert!(matches!(int_arg.arg_type, ArgType::Integer));
-    assert!(int_arg.is_required);
+    assert_schema_precomputation(
+        "port",
+        json!({
+            "type": "integer",
+            "description": "Port number"
+        }),
+        true,
+        |arg| {
+            assert!(matches!(arg.arg_type, ArgType::Integer));
+            assert!(arg.is_required);
+        },
+    );
 
     // Test array type
-    let array_schema = json!({
-        "type": "array",
-        "description": "List of files"
-    });
-    let array_arg = CliBuilder::precompute_arg_data("files", &array_schema, false);
-    assert!(matches!(array_arg.arg_type, ArgType::Array));
+    assert_schema_precomputation(
+        "files",
+        json!({
+            "type": "array",
+            "description": "List of files"
+        }),
+        false,
+        |arg| {
+            assert!(matches!(arg.arg_type, ArgType::Array));
+        },
+    );
 
     // Test enum values
-    let enum_schema = json!({
-        "type": "string",
-        "enum": ["dev", "staging", "prod"],
-        "description": "Environment"
-    });
-    let enum_arg = CliBuilder::precompute_arg_data("env", &enum_schema, true);
-    assert!(matches!(enum_arg.arg_type, ArgType::String));
-    assert_eq!(
-        enum_arg.possible_values,
-        Some(vec![
-            "dev".to_string(),
-            "staging".to_string(),
-            "prod".to_string()
-        ])
+    assert_schema_precomputation(
+        "env",
+        json!({
+            "type": "string",
+            "enum": ["dev", "staging", "prod"],
+            "description": "Environment"
+        }),
+        true,
+        |arg| {
+            assert!(matches!(arg.arg_type, ArgType::String));
+            assert_eq!(
+                arg.possible_values,
+                Some(vec![
+                    "dev".to_string(),
+                    "staging".to_string(),
+                    "prod".to_string()
+                ])
+            );
+        },
     );
 
     // Test default value
-    let default_schema = json!({
-        "type": "string",
-        "default": "localhost",
-        "description": "Host"
-    });
-    let default_arg = CliBuilder::precompute_arg_data("host", &default_schema, false);
-    assert_eq!(default_arg.default_value, Some("localhost".to_string()));
+    assert_schema_precomputation(
+        "host",
+        json!({
+            "type": "string",
+            "default": "localhost",
+            "description": "Host"
+        }),
+        false,
+        |arg| {
+            assert_eq!(arg.default_value, Some("localhost".to_string()));
+        },
+    );
 }
 
 #[test]
@@ -248,30 +314,24 @@ fn test_mcp_tool_categories_appear_in_help() {
 
     // Verify MCP tool categories appear in help text
     let reg = registry.try_read().unwrap();
-    let categories: Vec<String> = reg.get_cli_categories().iter().map(|s| s.to_string()).collect();
+    let categories: Vec<String> = reg
+        .get_cli_categories()
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
     assert_help_contains(&cli, &categories, "MCP tool category");
 }
 
 #[test]
 fn test_workflow_shortcuts_appear_in_help_when_present() {
-    with_workflow_storage(|storage| {
-        let (_registry, builder) = create_test_registry_and_builder();
-
-        // Build CLI with workflows
-        let cli = builder.build_cli(Some(storage));
-
-        // If workflows are available, verify they appear in help
-        let workflows = storage.list_workflows().unwrap_or_default();
-        if !workflows.is_empty() {
-            let workflow_names: Vec<String> = workflows.iter().map(|w| w.name.to_string()).collect();
-            let help = get_help_text(&cli);
-            // Just verify at least one workflow appears
-            let has_workflow = workflow_names.iter().any(|name| help.contains(name));
-            assert!(
-                has_workflow,
-                "Help text should contain workflow shortcuts when workflows are present"
-            );
-        }
+    with_workflow_cli(|_cli, workflows, help| {
+        let workflow_names: Vec<String> = workflows.iter().map(|w| w.name.to_string()).collect();
+        // Just verify at least one workflow appears
+        let has_workflow = workflow_names.iter().any(|name| help.contains(name));
+        assert!(
+            has_workflow,
+            "Help text should contain workflow shortcuts when workflows are present"
+        );
     });
 }
 
@@ -298,18 +358,12 @@ fn test_static_commands_appear_before_mcp_tools() {
 fn test_workflows_appear_before_mcp_tools_when_present() {
     with_workflow_storage(|storage| {
         let (registry, builder) = create_test_registry_and_builder();
-
         let workflows = storage.list_workflows().unwrap_or_default();
 
-        // Only test if workflows are actually present
         if !workflows.is_empty() {
-            // Build CLI with workflows
             let cli = builder.build_cli(Some(storage));
-
-            // Get help text
             let help = get_help_text(&cli);
 
-            // Find position of first workflow and first MCP tool category
             if let Some(first_workflow) = workflows.first() {
                 let reg = registry.try_read().unwrap();
                 let categories = reg.get_cli_categories();
@@ -365,16 +419,9 @@ fn test_mcp_tool_categories_are_sorted() {
 
 #[test]
 fn test_workflow_shortcuts_are_sorted_when_built() {
-    with_workflow_storage(|storage| {
-        let workflows = storage.list_workflows().unwrap_or_default();
-
+    with_workflow_cli(|cli, workflows, _help| {
         // Only test if we have multiple workflows
         if workflows.len() > 1 {
-            let (_registry, builder) = create_test_registry_and_builder();
-
-            // Build CLI with workflows - this is where sorting happens
-            let cli = builder.build_cli(Some(storage));
-
             // Filter to workflow commands (those with "shortcut for 'flow" in their about text)
             let workflow_names: Vec<&str> = cli
                 .get_subcommands()

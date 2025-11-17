@@ -16,6 +16,7 @@ use dynamic_cli::CliBuilder;
 use exit_codes::{EXIT_ERROR, EXIT_SUCCESS, EXIT_WARNING};
 use logging::FileWriterGuard;
 use mcp_integration::CliToolContext;
+use std::path::PathBuf;
 use std::sync::Arc;
 use swissarmyhammer_config::TemplateContext;
 
@@ -37,6 +38,59 @@ fn load_cli_configuration() -> TemplateContext {
             TemplateContext::new()
         }
     }
+}
+
+/// Report validation issues for CLI tools
+///
+/// This function displays validation statistics and warnings with appropriate formatting.
+/// It provides a consistent reporting experience across different parts of the CLI.
+///
+/// # Arguments
+/// * `cli_builder` - The CLI builder containing validation state
+/// * `verbose` - Whether to show all warnings or just a summary
+/// * `max_warnings` - Maximum number of warnings to display when not in verbose mode
+fn report_validation_issues(cli_builder: &CliBuilder, verbose: bool, max_warnings: usize) {
+    let validation_stats = cli_builder.get_validation_stats();
+
+    if validation_stats.is_all_valid() {
+        return;
+    }
+
+    // Always show validation summary for issues
+    eprintln!("⚠️  CLI Validation Issues: {}", validation_stats.summary());
+
+    let warnings = cli_builder.get_validation_warnings();
+    if !warnings.is_empty() {
+        if verbose {
+            eprintln!("Validation warnings ({} issues):", warnings.len());
+            for (i, warning) in warnings.iter().enumerate() {
+                eprintln!("  {}. {}", i + 1, warning);
+            }
+        } else {
+            eprintln!("Validation warnings ({} issues):", warnings.len());
+            for (i, warning) in warnings.iter().enumerate().take(max_warnings) {
+                eprintln!("  {}. {}", i + 1, warning);
+            }
+            if warnings.len() > max_warnings {
+                eprintln!("  ... and {} more warnings", warnings.len() - max_warnings);
+                eprintln!("  Use --verbose for complete validation report");
+            }
+        }
+    }
+    eprintln!(); // Add blank line for readability
+}
+
+/// Ensure the .swissarmyhammer directory exists
+///
+/// This function creates the .swissarmyhammer directory if it doesn't exist,
+/// providing a consistent way to handle directory creation across the CLI.
+///
+/// # Returns
+/// The path to the .swissarmyhammer directory or an error if creation fails
+fn ensure_swissarmyhammer_dir() -> Result<PathBuf, std::io::Error> {
+    let log_dir = PathBuf::from(".swissarmyhammer");
+    std::fs::create_dir_all(&log_dir)?;
+    Ok(log_dir)
 }
 
 #[tokio::main]
@@ -83,28 +137,8 @@ async fn main() {
         }
     };
 
-    // Get validation statistics for startup reporting (only for non-serve commands)
-    let validation_stats = cli_builder.get_validation_stats();
-
     // Check for validation issues and report them
-    if !validation_stats.is_all_valid() {
-        // Always show validation summary for issues (not just in verbose mode)
-        eprintln!("⚠️  CLI Validation Issues: {}", validation_stats.summary());
-
-        // Show detailed warnings if there are validation problems
-        let warnings = cli_builder.get_validation_warnings();
-        if !warnings.is_empty() {
-            eprintln!("Validation warnings ({} issues):", warnings.len());
-            for (i, warning) in warnings.iter().enumerate().take(5) {
-                eprintln!("  {}. {}", i + 1, warning);
-            }
-            if warnings.len() > 5 {
-                eprintln!("  ... and {} more warnings", warnings.len() - 5);
-                eprintln!("  Use --verbose for complete validation report");
-            }
-        }
-        eprintln!(); // Add blank line for readability
-    }
+    report_validation_issues(&cli_builder, false, 5);
 
     // Build CLI with warnings for validation issues (graceful degradation)
     // This will skip problematic tools but continue building the CLI
@@ -213,15 +247,11 @@ async fn handle_dynamic_matches(
 
     // Handle global format flag
     use crate::cli::OutputFormat;
+    use std::str::FromStr;
     let format_option = matches
         .try_get_one::<String>("format")
         .unwrap_or(None)
-        .map(|s| match s.as_str() {
-            "json" => OutputFormat::Json,
-            "yaml" => OutputFormat::Yaml,
-            "table" => OutputFormat::Table,
-            _ => OutputFormat::Table,
-        });
+        .map(|s| OutputFormat::from_str(s).unwrap_or(OutputFormat::Table));
     let format = format_option.unwrap_or(OutputFormat::Table);
 
     // Check if this is a serve command for MCP mode logging
@@ -243,19 +273,17 @@ async fn handle_dynamic_matches(
         let cli_builder = CliBuilder::new(tool_registry);
         let validation_stats = cli_builder.get_validation_stats();
 
-        if verbose {
-            eprintln!("🔍 CLI Tool Validation Report:");
-            eprintln!("   {}", validation_stats.summary());
+        eprintln!("🔍 CLI Tool Validation Report:");
+        eprintln!("   {}", validation_stats.summary());
 
-            if !validation_stats.is_all_valid() {
-                eprintln!("   Tools with issues:");
-                let warnings = cli_builder.get_validation_warnings();
-                for (i, warning) in warnings.iter().enumerate() {
-                    eprintln!("     {}. {}", i + 1, warning);
-                }
+        if !validation_stats.is_all_valid() {
+            eprintln!("   Tools with issues:");
+            let warnings = cli_builder.get_validation_warnings();
+            for (i, warning) in warnings.iter().enumerate() {
+                eprintln!("     {}. {}", i + 1, warning);
             }
-            eprintln!(); // Add blank line
         }
+        eprintln!(); // Add blank line
     }
 
     // Create shared CLI context
@@ -582,6 +610,7 @@ async fn handle_validate_command(matches: &clap::ArgMatches, cli_context: &CliCo
 
 async fn handle_agent_command(matches: &clap::ArgMatches, context: &CliContext) -> i32 {
     use crate::cli::{AgentSubcommand, OutputFormat};
+    use std::str::FromStr;
 
     let subcommand = match matches.subcommand() {
         Some(("list", sub_matches)) => {
@@ -589,12 +618,7 @@ async fn handle_agent_command(matches: &clap::ArgMatches, context: &CliContext) 
             // clap should always provide a value
             let format = sub_matches
                 .get_one::<String>("format")
-                .map(|s| match s.as_str() {
-                    "json" => OutputFormat::Json,
-                    "yaml" => OutputFormat::Yaml,
-                    "table" => OutputFormat::Table,
-                    _ => OutputFormat::Table,
-                })
+                .map(|s| OutputFormat::from_str(s).unwrap_or(OutputFormat::Table))
                 .unwrap_or(OutputFormat::Table);
 
             AgentSubcommand::List { format }
@@ -638,18 +662,18 @@ async fn configure_logging(verbose: bool, debug: bool, quiet: bool, is_mcp_mode:
         std::env::set_var("SAH_CLI_MODE", "1");
 
         // In MCP mode, write logs to .swissarmyhammer/mcp.log for debugging
-        use std::fs;
-        use std::path::PathBuf;
-
-        let log_dir = PathBuf::from(".swissarmyhammer");
-        if let Err(e) = fs::create_dir_all(&log_dir) {
-            eprintln!("Warning: Could not create log directory: {}", e);
-        }
+        let log_dir = match ensure_swissarmyhammer_dir() {
+            Ok(dir) => dir,
+            Err(e) => {
+                eprintln!("Warning: Could not create log directory: {}", e);
+                PathBuf::from(".swissarmyhammer")
+            }
+        };
 
         let log_file_name =
             std::env::var("SWISSARMYHAMMER_LOG_FILE").unwrap_or_else(|_| "mcp.log".to_string());
         let log_file_path = log_dir.join(log_file_name);
-        match fs::File::create(&log_file_path) {
+        match std::fs::File::create(&log_file_path) {
             Ok(file) => {
                 let shared_file = Arc::new(std::sync::Mutex::new(file));
                 registry()

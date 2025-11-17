@@ -34,6 +34,40 @@ fn init_git_repo(path: &std::path::Path) {
         .expect("Failed to set git user name");
 }
 
+/// Helper function to create a temp directory with git repo and .swissarmyhammer initialized
+fn setup_todo_test_env() -> TempDir {
+    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let temp_path = temp_dir.path();
+
+    init_git_repo(temp_path);
+    std::fs::create_dir_all(temp_path.join(".swissarmyhammer"))
+        .expect("Failed to create .swissarmyhammer dir");
+
+    temp_dir
+}
+
+/// Helper function to extract todo ID from JSON output
+fn extract_todo_id_from_output(output: &str) -> &str {
+    let id_start = output.find("\"id\":\"").expect("Should find id in output") + JSON_ID_PREFIX_LEN;
+    let id_end = output[id_start..]
+        .find('\"')
+        .expect("Should find end of id")
+        + id_start;
+    &output[id_start..id_end]
+}
+
+/// Helper function to assert JSON field contains expected numeric value
+fn assert_json_field_value(output: &str, field: &str, value: u32) {
+    let compact = format!("\"{}\":{}", field, value);
+    let spaced = format!("\"{}\": {}", field, value);
+    assert!(
+        output.contains(&compact) || output.contains(&spaced),
+        "Should show {} {} todos",
+        value,
+        field
+    );
+}
+
 /// Test that todo commands are available in help output
 #[test]
 fn test_todo_commands_in_help() {
@@ -76,15 +110,8 @@ fn test_todo_commands_in_help() {
 #[test]
 #[ignore = "Git repo detection issue with symlinked temp paths on macOS - see issue notes"]
 fn test_todo_create_command() {
-    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let temp_dir = setup_todo_test_env();
     let temp_path = temp_dir.path();
-
-    // Initialize git repo (required for todo operations)
-    init_git_repo(temp_path);
-
-    // Create .swissarmyhammer directory for todo storage
-    std::fs::create_dir_all(temp_path.join(".swissarmyhammer"))
-        .expect("Failed to create .swissarmyhammer dir");
 
     let output = run_sah_command_with_cwd(
         &[
@@ -124,13 +151,8 @@ fn test_todo_create_command() {
 #[test]
 #[ignore = "Git repo detection issue with symlinked temp paths on macOS - see issue notes"]
 fn test_todo_create_without_context() {
-    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let temp_dir = setup_todo_test_env();
     let temp_path = temp_dir.path();
-
-    init_git_repo(temp_path);
-
-    std::fs::create_dir_all(temp_path.join(".swissarmyhammer"))
-        .expect("Failed to create .swissarmyhammer dir");
 
     let output = run_sah_command_with_cwd(&["todo", "create", "--task", "Simple task"], temp_path);
 
@@ -150,13 +172,8 @@ fn test_todo_create_without_context() {
 #[test]
 #[ignore = "Git repo detection issue with symlinked temp paths on macOS - see issue notes"]
 fn test_todo_show_next() {
-    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let temp_dir = setup_todo_test_env();
     let temp_path = temp_dir.path();
-
-    init_git_repo(temp_path);
-
-    std::fs::create_dir_all(temp_path.join(".swissarmyhammer"))
-        .expect("Failed to create .swissarmyhammer dir");
 
     // First create a todo item
     let create_output =
@@ -182,13 +199,8 @@ fn test_todo_show_next() {
 #[test]
 #[ignore = "Git repo detection issue with symlinked temp paths on macOS - see issue notes"]
 fn test_todo_show_next_empty() {
-    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let temp_dir = setup_todo_test_env();
     let temp_path = temp_dir.path();
-
-    init_git_repo(temp_path);
-
-    std::fs::create_dir_all(temp_path.join(".swissarmyhammer"))
-        .expect("Failed to create .swissarmyhammer dir");
 
     let output = run_sah_command_with_cwd(&["todo", "show", "--item", "next"], temp_path);
 
@@ -209,13 +221,8 @@ fn test_todo_show_next_empty() {
 #[test]
 #[ignore = "Git repo detection issue with symlinked temp paths on macOS - see issue notes"]
 fn test_todo_complete_command() {
-    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let temp_dir = setup_todo_test_env();
     let temp_path = temp_dir.path();
-
-    init_git_repo(temp_path);
-
-    std::fs::create_dir_all(temp_path.join(".swissarmyhammer"))
-        .expect("Failed to create .swissarmyhammer dir");
 
     // First create a todo item
     let create_output =
@@ -224,15 +231,7 @@ fn test_todo_complete_command() {
 
     // Extract the ID from the creation output
     let create_stdout = String::from_utf8_lossy(&create_output.stdout);
-    let id_start = create_stdout
-        .find("\"id\":\"")
-        .expect("Should find id in output")
-        + JSON_ID_PREFIX_LEN;
-    let id_end = create_stdout[id_start..]
-        .find('\"')
-        .expect("Should find end of id")
-        + id_start;
-    let todo_id = &create_stdout[id_start..id_end];
+    let todo_id = extract_todo_id_from_output(&create_stdout);
 
     // Now complete the item
     let complete_output =
@@ -275,13 +274,8 @@ fn test_todo_create_missing_task() {
 /// Test todo complete with invalid ID
 #[test]
 fn test_todo_complete_invalid_id() {
-    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let temp_dir = setup_todo_test_env();
     let temp_path = temp_dir.path();
-
-    init_git_repo(temp_path);
-
-    std::fs::create_dir_all(temp_path.join(".swissarmyhammer"))
-        .expect("Failed to create .swissarmyhammer dir");
 
     let output = run_sah_command_with_cwd(
         &["todo", "complete", "--id", "01INVALID00000000000000000"],
@@ -299,13 +293,8 @@ fn test_todo_complete_invalid_id() {
 #[test]
 #[ignore = "Git repo detection issue with symlinked temp paths on macOS - see issue notes"]
 fn test_todo_full_workflow() {
-    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let temp_dir = setup_todo_test_env();
     let temp_path = temp_dir.path();
-
-    init_git_repo(temp_path);
-
-    std::fs::create_dir_all(temp_path.join(".swissarmyhammer"))
-        .expect("Failed to create .swissarmyhammer dir");
 
     // Step 1: Create a todo
     let create_output = run_sah_command_with_cwd(
@@ -331,9 +320,7 @@ fn test_todo_full_workflow() {
     );
 
     // Extract ID from show output
-    let id_start = show_stdout.find("\"id\":\"").expect("Should find id") + JSON_ID_PREFIX_LEN;
-    let id_end = show_stdout[id_start..].find('\"').expect("Should find end") + id_start;
-    let todo_id = &show_stdout[id_start..id_end];
+    let todo_id = extract_todo_id_from_output(&show_stdout);
 
     // Step 3: Complete the todo
     let complete_output =
@@ -354,40 +341,24 @@ fn test_todo_full_workflow() {
 #[test]
 #[ignore = "Git repo detection issue with symlinked temp paths on macOS - see issue notes"]
 fn test_todo_list_empty() {
-    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let temp_dir = setup_todo_test_env();
     let temp_path = temp_dir.path();
-
-    init_git_repo(temp_path);
-
-    std::fs::create_dir_all(temp_path.join(".swissarmyhammer"))
-        .expect("Failed to create .swissarmyhammer dir");
 
     let output = run_sah_command_with_cwd(&["todo", "list"], temp_path);
 
     assert!(output.status.success(), "todo list should succeed");
 
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(
-        stdout.contains("\"total\":0") || stdout.contains("\"total\": 0"),
-        "Should show 0 total todos"
-    );
-    assert!(
-        stdout.contains("\"pending\":0") || stdout.contains("\"pending\": 0"),
-        "Should show 0 pending todos"
-    );
+    assert_json_field_value(&stdout, "total", 0);
+    assert_json_field_value(&stdout, "pending", 0);
 }
 
 /// Test todo list command with multiple todos
 #[test]
 #[ignore = "Git repo detection issue with symlinked temp paths on macOS - see issue notes"]
 fn test_todo_list_multiple() {
-    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let temp_dir = setup_todo_test_env();
     let temp_path = temp_dir.path();
-
-    init_git_repo(temp_path);
-
-    std::fs::create_dir_all(temp_path.join(".swissarmyhammer"))
-        .expect("Failed to create .swissarmyhammer dir");
 
     // Create multiple todos
     run_sah_command_with_cwd(&["todo", "create", "--task", "Task 1"], temp_path);
@@ -403,27 +374,16 @@ fn test_todo_list_multiple() {
         stdout.contains("Task 1") && stdout.contains("Task 2") && stdout.contains("Task 3"),
         "Should show all three tasks"
     );
-    assert!(
-        stdout.contains("\"total\":3") || stdout.contains("\"total\": 3"),
-        "Should show 3 total todos"
-    );
-    assert!(
-        stdout.contains("\"pending\":3") || stdout.contains("\"pending\": 3"),
-        "Should show 3 pending todos"
-    );
+    assert_json_field_value(&stdout, "total", 3);
+    assert_json_field_value(&stdout, "pending", 3);
 }
 
 /// Test todo list with filter for incomplete todos
 #[test]
 #[ignore = "Git repo detection issue with symlinked temp paths on macOS - see issue notes"]
 fn test_todo_list_filter_incomplete() {
-    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let temp_dir = setup_todo_test_env();
     let temp_path = temp_dir.path();
-
-    init_git_repo(temp_path);
-
-    std::fs::create_dir_all(temp_path.join(".swissarmyhammer"))
-        .expect("Failed to create .swissarmyhammer dir");
 
     // Create todos
     run_sah_command_with_cwd(&["todo", "create", "--task", "Task 1"], temp_path);
@@ -432,12 +392,7 @@ fn test_todo_list_filter_incomplete() {
 
     // Complete one task
     let create2_stdout = String::from_utf8_lossy(&create2.stdout);
-    let id_start = create2_stdout.find("\"id\":\"").expect("Should find id") + JSON_ID_PREFIX_LEN;
-    let id_end = create2_stdout[id_start..]
-        .find('\"')
-        .expect("Should find end")
-        + id_start;
-    let todo_id = &create2_stdout[id_start..id_end];
+    let todo_id = extract_todo_id_from_output(&create2_stdout);
     run_sah_command_with_cwd(&["todo", "complete", "--id", todo_id], temp_path);
 
     // List incomplete only
@@ -451,23 +406,15 @@ fn test_todo_list_filter_incomplete() {
         "Should show incomplete tasks"
     );
     assert!(!stdout.contains("Task 2"), "Should not show completed task");
-    assert!(
-        stdout.contains("\"total\":2") || stdout.contains("\"total\": 2"),
-        "Should show 2 todos (filtered)"
-    );
+    assert_json_field_value(&stdout, "total", 2);
 }
 
 /// Test todo list with filter for completed todos
 #[test]
 #[ignore = "Git repo detection issue with symlinked temp paths on macOS - see issue notes"]
 fn test_todo_list_filter_completed() {
-    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let temp_dir = setup_todo_test_env();
     let temp_path = temp_dir.path();
-
-    init_git_repo(temp_path);
-
-    std::fs::create_dir_all(temp_path.join(".swissarmyhammer"))
-        .expect("Failed to create .swissarmyhammer dir");
 
     // Create todos
     run_sah_command_with_cwd(&["todo", "create", "--task", "Task 1"], temp_path);
@@ -476,12 +423,7 @@ fn test_todo_list_filter_completed() {
 
     // Complete one task
     let create2_stdout = String::from_utf8_lossy(&create2.stdout);
-    let id_start = create2_stdout.find("\"id\":\"").expect("Should find id") + JSON_ID_PREFIX_LEN;
-    let id_end = create2_stdout[id_start..]
-        .find('\"')
-        .expect("Should find end")
-        + id_start;
-    let todo_id = &create2_stdout[id_start..id_end];
+    let todo_id = extract_todo_id_from_output(&create2_stdout);
     run_sah_command_with_cwd(&["todo", "complete", "--id", todo_id], temp_path);
 
     // List completed only
@@ -495,23 +437,15 @@ fn test_todo_list_filter_completed() {
         !stdout.contains("Task 1") && !stdout.contains("Task 3"),
         "Should not show incomplete tasks"
     );
-    assert!(
-        stdout.contains("\"total\":1") || stdout.contains("\"total\": 1"),
-        "Should show 1 todo (filtered)"
-    );
+    assert_json_field_value(&stdout, "total", 1);
 }
 
 /// Test todo list sort order (incomplete first)
 #[test]
 #[ignore = "Git repo detection issue with symlinked temp paths on macOS - see issue notes"]
 fn test_todo_list_sort_order() {
-    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let temp_dir = setup_todo_test_env();
     let temp_path = temp_dir.path();
-
-    init_git_repo(temp_path);
-
-    std::fs::create_dir_all(temp_path.join(".swissarmyhammer"))
-        .expect("Failed to create .swissarmyhammer dir");
 
     // Create todos
     let create1 = run_sah_command_with_cwd(&["todo", "create", "--task", "Task 1"], temp_path);
@@ -520,12 +454,7 @@ fn test_todo_list_sort_order() {
 
     // Complete the first task
     let create1_stdout = String::from_utf8_lossy(&create1.stdout);
-    let id_start = create1_stdout.find("\"id\":\"").expect("Should find id") + JSON_ID_PREFIX_LEN;
-    let id_end = create1_stdout[id_start..]
-        .find('\"')
-        .expect("Should find end")
-        + id_start;
-    let todo_id = &create1_stdout[id_start..id_end];
+    let todo_id = extract_todo_id_from_output(&create1_stdout);
     run_sah_command_with_cwd(&["todo", "complete", "--id", todo_id], temp_path);
 
     // List all todos
