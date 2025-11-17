@@ -283,7 +283,8 @@ async fn handle_dynamic_matches(
         }
         Some(("doctor", _)) => handle_doctor_command(&context).await,
         Some(("prompt", sub_matches)) => handle_prompt_command(sub_matches, &context).await,
-        Some(("rule", sub_matches)) => handle_rule_command(sub_matches, &context).await,
+        // "rule" command is now dynamically generated from MCP tools
+        // Keeping this comment for now to track the migration
         Some(("flow", sub_matches)) => handle_flow_command(sub_matches, &context).await,
         Some(("validate", sub_matches)) => handle_validate_command(sub_matches, &context).await,
         Some(("agent", sub_matches)) => handle_agent_command(sub_matches, &context).await,

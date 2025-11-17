@@ -700,6 +700,7 @@ pub trait McpTool: Send + Sync {
                 "outline" => Some("outline"),
                 "notify" => Some("notify"),
                 "abort" => Some("abort"),
+                "rules" => Some("rule"),
                 _ => None,
             }
         } else {

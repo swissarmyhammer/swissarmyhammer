@@ -754,7 +754,8 @@ Examples:
         cli = cli.subcommand(Self::build_agent_command());
 
         // Add rule command with subcommands
-        cli = cli.subcommand(Self::build_rule_command());
+        // Rule command is now dynamically generated from rules_check MCP tool
+        // cli = cli.subcommand(Self::build_rule_command());
 
         cli
     }
