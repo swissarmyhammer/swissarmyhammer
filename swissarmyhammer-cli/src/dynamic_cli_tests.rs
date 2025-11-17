@@ -179,7 +179,8 @@ fn test_build_cli_basic_structure() {
     assert!(subcommand_names.contains(&"validate"));
     // Note: plan and implement are now dynamic workflow shortcuts, not hardcoded commands
     assert!(subcommand_names.contains(&"agent"));
-    assert!(subcommand_names.contains(&"rule"));
+    // Note: rule command is now dynamically generated from rules_check MCP tool when tools are registered
+    // This test uses an empty registry, so rule won't appear here
 }
 
 /// Helper function to extract help text from a CLI command
