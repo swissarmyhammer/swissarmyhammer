@@ -996,6 +996,10 @@ Examples:
     }
 
     /// Build the rule command with all its subcommands
+    ///
+    /// NOTE: This function is no longer used. Rule command is now dynamically generated
+    /// from rules_check MCP tool. Keeping function for now to avoid breaking old code.
+    #[allow(dead_code)]
     pub fn build_rule_command() -> Command {
         Command::new("rule")
             .about("Manage and test code quality rules")

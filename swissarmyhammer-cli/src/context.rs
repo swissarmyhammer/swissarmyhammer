@@ -60,6 +60,7 @@ pub struct CliContext {
 
     /// In a unit test?
     #[builder(default)]
+    #[allow(dead_code)]
     pub test_mode: bool,
 
     /// Parsed CLI arguments
@@ -178,15 +179,6 @@ impl CliContext {
         }
     }
 
-    /// Display rules using display rows enum
-    pub fn display_rules(&self, rows: crate::commands::rule::display::DisplayRows) -> Result<()> {
-        use crate::commands::rule::display::DisplayRows;
-
-        match rows {
-            DisplayRows::Standard(items) => self.display(items),
-            DisplayRows::Verbose(items) => self.display(items),
-        }
-    }
 }
 
 impl CliContextBuilder {

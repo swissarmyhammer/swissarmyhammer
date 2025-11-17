@@ -545,16 +545,6 @@ async fn handle_prompt_command(matches: &clap::ArgMatches, context: &CliContext)
 ///
 /// # Returns
 /// Exit code (0 for success, non-zero for error)
-async fn handle_rule_command(matches: &clap::ArgMatches, context: &CliContext) -> i32 {
-    use crate::commands::rule::cli;
-
-    // Parse using the proper CLI parsing function
-    let command = cli::parse_rule_command(matches);
-
-    // Use the new typed handler
-    commands::rule::handle_command_typed(command, context).await
-}
-
 async fn handle_flow_command(sub_matches: &clap::ArgMatches, context: &CliContext) -> i32 {
     // Get the args vector from the trailing_var_arg
     let args: Vec<String> = sub_matches
