@@ -93,7 +93,7 @@ pub struct RuleCheckRequest {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub create_todo: Option<bool>,
 
-    /// Maximum number of concurrent rule checks (default: 4)
+    /// Maximum number of concurrent rule checks (default: cores/2, minimum 1)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_concurrency: Option<usize>,
 }
@@ -482,7 +482,7 @@ impl McpTool for RuleCheckTool {
                     "type": "integer",
                     "minimum": 1,
                     "maximum": 50,
-                    "description": "Maximum number of concurrent rule checks (default: 4)"
+                    "description": "Maximum number of concurrent rule checks (default: cores/2, minimum 1)"
                 }
             }
         })
@@ -960,41 +960,55 @@ fn example() {
         let (tool, context, _temp_dir, arguments) =
             setup_rule_check_test(test_code, vec!["code-quality/no-commented-code"], None).await;
 
-        // Execute the tool
         let result = tool.execute(arguments, &context).await;
+        let text = extract_result_text(result).expect("Should extract result text");
 
-        // The result should succeed (even if violations are found, execute() returns Ok
-        // with the formatted result in the response text)
+        println!("Integration test result: {}", text);
+
+        assert_contains_pattern(
+            &text,
+            &["No rule violations found", "violation"],
+            "Result should show check completed",
+        );
+    }
+
+    /// Helper function to extract text from a CallToolResult
+    ///
+    /// Extracts the text content from a CallToolResult for assertion purposes.
+    ///
+    /// # Arguments
+    ///
+    /// * `result` - The result to extract text from
+    ///
+    /// # Returns
+    ///
+    /// The extracted text as a String
+    fn extract_result_text(result: Result<CallToolResult, McpError>) -> Result<String, String> {
         match result {
             Ok(call_result) => {
-                // Verify we got some content back
-                assert!(
-                    !call_result.content.is_empty(),
-                    "Tool should return content"
-                );
-
-                // Extract text from the result - we know it's RawContent::Text from the response format
-                let text = if let Some(first_content) = call_result.content.first() {
-                    // Access the Annotated struct's raw field directly via debug formatting for now
-                    // In a real implementation, we'd use proper accessors
-                    format!("{:?}", first_content)
-                } else {
-                    String::from("No content returned")
-                };
-
-                // We should get a success message (no violations for this test file)
-                assert!(
-                    text.contains("No rule violations found") || text.contains("violation"),
-                    "Result should show check completed: {}",
-                    text
-                );
-
-                println!("Integration test result: {}", text);
+                let text = format!("{:?}", call_result);
+                Ok(text)
             }
-            Err(e) => {
-                panic!("Tool execution failed: {}", e);
-            }
+            Err(e) => Err(format!("Tool execution failed: {}", e)),
         }
+    }
+
+    /// Helper function to assert that result text contains expected patterns
+    ///
+    /// Checks that the result text contains at least one of the expected patterns.
+    ///
+    /// # Arguments
+    ///
+    /// * `text` - The text to check
+    /// * `patterns` - List of patterns to look for (at least one must match)
+    /// * `context_msg` - Context message for the assertion failure
+    fn assert_contains_pattern(text: &str, patterns: &[&str], context_msg: &str) {
+        let found = patterns.iter().any(|pattern| text.contains(pattern));
+        assert!(
+            found,
+            "{}\nExpected one of: {:?}\nGot: {}",
+            context_msg, patterns, text
+        );
     }
 
     /// Test that rule name filtering works correctly
@@ -1019,40 +1033,30 @@ fn complex_function() {
         let (tool, context, _temp_dir, arguments) =
             setup_rule_check_test(test_code, vec!["code-quality/cognitive-complexity"], None).await;
 
-        // Execute the tool
         let result = tool.execute(arguments, &context).await;
+        let text = extract_result_text(result).expect("Should extract result text");
 
-        match result {
-            Ok(call_result) => {
-                let text = format!("{:?}", call_result);
-                println!("Rule filter test result: {}", text);
+        println!("Rule filter test result: {}", text);
 
-                // The key assertion: we should NOT get "0 rules against 0 files"
-                if text.contains("Checked 0 rules against 0 files") {
-                    panic!(
-                        "Rule name filtering failed! Expected to find 'code-quality/cognitive-complexity' rule but got 0 rules.\nFull output: {}",
-                        text
-                    );
-                }
-
-                // We should get a check result (success or violations)
-                assert!(
-                    text.contains("No rule violations found") || text.contains("violation"),
-                    "Should have checked the cognitive-complexity rule. Got: {}",
-                    text
-                );
-            }
-            Err(e) => {
-                panic!("Tool execution failed: {}", e);
-            }
+        // The key assertion: we should NOT get "0 rules against 0 files"
+        if text.contains("Checked 0 rules against 0 files") {
+            panic!(
+                "Rule name filtering failed! Expected to find 'code-quality/cognitive-complexity' rule but got 0 rules.\nFull output: {}",
+                text
+            );
         }
+
+        assert_contains_pattern(
+            &text,
+            &["No rule violations found", "violation"],
+            "Should have checked the cognitive-complexity rule",
+        );
     }
 
     /// Test rule checking against an actual repo file
     /// Uses this crate's Cargo.toml which we know exists
     #[tokio::test]
     async fn test_rule_check_with_real_repo_file() {
-        // Use this crate's Cargo.toml
         let cargo_toml = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml");
 
         assert!(
@@ -1061,40 +1065,29 @@ fn complex_function() {
             cargo_toml
         );
 
-        // Create tool and context
         let tool = RuleCheckTool::new();
         let context = crate::test_utils::create_test_context().await;
 
-        // Create request - check a specific builtin rule against Cargo.toml
         let mut arguments = serde_json::Map::new();
         arguments.insert(
             "rule_names".to_string(),
-            json!(["code-quality/no-commented-code"]), // Use a specific builtin rule
+            json!(["code-quality/no-commented-code"]),
         );
         arguments.insert(
             "file_paths".to_string(),
             json!([cargo_toml.to_string_lossy().to_string()]),
         );
 
-        // Execute the tool
         let result = tool.execute(arguments, &context).await;
+        let text = extract_result_text(result).expect("Should extract result text");
 
-        match result {
-            Ok(call_result) => {
-                let text = format!("{:?}", call_result);
-                println!("Cargo.toml check result: {}", text);
+        println!("Cargo.toml check result: {}", text);
 
-                // Should have completed the check successfully
-                assert!(
-                    text.contains("No rule violations found") || text.contains("violation"),
-                    "Should have loaded 'code-quality/no-commented-code' rule and checked Cargo.toml. Got: {}",
-                    text
-                );
-            }
-            Err(e) => {
-                panic!("Tool execution failed: {}", e);
-            }
-        }
+        assert_contains_pattern(
+            &text,
+            &["No rule violations found", "violation"],
+            "Should have loaded 'code-quality/no-commented-code' rule and checked Cargo.toml",
+        );
     }
 
     /// Test that changed parameter is properly parsed
@@ -1146,26 +1139,19 @@ fn complex_function() {
     /// Test expand_glob_patterns helper function
     #[tokio::test]
     async fn test_expand_glob_patterns() {
-        use std::fs;
-        use tempfile::TempDir;
-
         let temp_dir = TempDir::new().unwrap();
 
-        // Create test files
         let rs_file = temp_dir.path().join("test.rs");
         let txt_file = temp_dir.path().join("test.txt");
         fs::write(&rs_file, "fn main() {}").unwrap();
         fs::write(&txt_file, "hello").unwrap();
 
-        // Change to temp directory
         let original_dir = std::env::current_dir().unwrap();
         std::env::set_current_dir(temp_dir.path()).unwrap();
 
-        // Test glob expansion
         let patterns = vec!["*.rs".to_string()];
         let result = expand_glob_patterns(&patterns).await;
 
-        // Restore original directory
         std::env::set_current_dir(original_dir).unwrap();
 
         assert!(result.is_ok());
@@ -1177,7 +1163,6 @@ fn complex_function() {
     /// Test that create_todo parameter creates todos for violations
     #[tokio::test]
     async fn test_rule_check_with_create_todo() {
-        // Create temporary directory for todos
         let todo_dir = TempDir::new().unwrap();
 
         let test_code = r#"
@@ -1188,7 +1173,6 @@ fn example() {
 }
 "#;
 
-        // Create additional args with create_todo enabled
         let mut additional_args = serde_json::Map::new();
         additional_args.insert("create_todo".to_string(), json!(true));
 
@@ -1199,50 +1183,37 @@ fn example() {
         )
         .await;
 
-        // Override the todo directory for this test
         std::env::set_var(
             "SWISSARMYHAMMER_TODO_DIR",
             todo_dir.path().to_string_lossy().to_string(),
         );
 
-        // Execute the tool
         let result = tool.execute(arguments, &context).await;
 
-        // Clean up environment variable
         std::env::remove_var("SAH_TODO_DIR");
 
-        match result {
-            Ok(call_result) => {
-                let text = format!("{:?}", call_result);
-                println!("Create todo test result: {}", text);
+        let text = extract_result_text(result).expect("Should extract result text");
+        println!("Create todo test result: {}", text);
 
-                // Should have found violations and created todos
-                assert!(
-                    text.contains("violation") || text.contains("todos created"),
-                    "Should have found violations and mentioned todo creation. Got: {}",
-                    text
-                );
+        assert_contains_pattern(
+            &text,
+            &["violation", "todos created"],
+            "Should have found violations and mentioned todo creation",
+        );
 
-                // Check that a todo file was actually created
-                let todo_file = todo_dir.path().join("todo.yaml");
-                if todo_file.exists() {
-                    let todo_content = fs::read_to_string(&todo_file).unwrap();
-                    println!("Todo file content:\n{}", todo_content);
+        let todo_file = todo_dir.path().join("todo.yaml");
+        if todo_file.exists() {
+            let todo_content = fs::read_to_string(&todo_file).unwrap();
+            println!("Todo file content:\n{}", todo_content);
 
-                    // Verify the todo contains expected information
-                    assert!(
-                        todo_content.contains("Fix") && todo_content.contains("violation"),
-                        "Todo should contain violation fix information"
-                    );
-                    assert!(
-                        todo_content.contains("Rule Violation"),
-                        "Todo context should contain violation details"
-                    );
-                }
-            }
-            Err(e) => {
-                panic!("Tool execution failed: {}", e);
-            }
+            assert!(
+                todo_content.contains("Fix") && todo_content.contains("violation"),
+                "Todo should contain violation fix information"
+            );
+            assert!(
+                todo_content.contains("Rule Violation"),
+                "Todo context should contain violation details"
+            );
         }
     }
 
@@ -1252,26 +1223,19 @@ fn example() {
         let temp_dir = TempDir::new().unwrap();
         let repo_path = temp_dir.path();
 
-        // Initialize git repo with committed file using helper
         init_git_repo_with_file(repo_path, "test.rs", "fn main() {}").unwrap();
 
-        // Create tool and context with git ops
         let tool = RuleCheckTool::new();
         let git_ops = swissarmyhammer_git::GitOperations::with_work_dir(repo_path).unwrap();
         let context = crate::test_utils::create_test_context().await;
         *context.git_ops.lock().await = Some(git_ops);
 
-        // Create request with changed flag but no uncommitted changes
         let mut arguments = serde_json::Map::new();
         arguments.insert("changed".to_string(), json!(true));
 
-        // Execute the tool
         let result = tool.execute(arguments, &context).await;
+        let text = extract_result_text(result).expect("Should extract result text");
 
-        // Should succeed with message about no changed files
-        assert!(result.is_ok());
-        let response = result.unwrap();
-        let text = format!("{:?}", response);
         assert!(text.contains("No changed files"));
     }
 }

@@ -16,6 +16,7 @@ thiserror = { workspace = true }
 tracing = { workspace = true }
 ulid = { workspace = true }
 chrono = { workspace = true }
+fs2 = { workspace = true }
 
 # Local workspace dependencies
 swissarmyhammer-common = { path = "../swissarmyhammer-common" }

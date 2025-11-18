@@ -11,6 +11,15 @@ use crate::cli::OutputFormat;
 use swissarmyhammer_prompts::PromptLibrary;
 use swissarmyhammer_workflow::WorkflowStorage;
 
+/// Helper function to create error mapping closures with context
+fn map_error<E: std::fmt::Display>(
+    context: &str,
+) -> impl FnOnce(E) -> swissarmyhammer_common::SwissArmyHammerError + '_ {
+    move |e| swissarmyhammer_common::SwissArmyHammerError::Other {
+        message: format!("{}: {}", context, e),
+    }
+}
+
 /// Shared CLI context containing all storage objects, configuration, and parsed arguments
 #[derive(derive_builder::Builder)]
 #[builder(pattern = "owned")]
@@ -97,11 +106,9 @@ impl CliContext {
         let mut library = swissarmyhammer_prompts::PromptLibrary::new();
         let mut resolver = swissarmyhammer::PromptResolver::new();
 
-        resolver.load_all_prompts(&mut library).map_err(|e| {
-            swissarmyhammer_common::SwissArmyHammerError::Other {
-                message: format!("Failed to load prompts: {e}"),
-            }
-        })?;
+        resolver
+            .load_all_prompts(&mut library)
+            .map_err(map_error("Failed to load prompts"))?;
 
         Ok(library)
     }
@@ -121,11 +128,12 @@ impl CliContext {
         }
 
         // Render the prompt with the merged context
-        library.render(prompt_name, &final_context).map_err(|e| {
-            swissarmyhammer_common::SwissArmyHammerError::Other {
-                message: format!("Failed to render prompt '{}': {}", prompt_name, e),
-            }
-        })
+        library
+            .render(prompt_name, &final_context)
+            .map_err(map_error(&format!(
+                "Failed to render prompt '{}'",
+                prompt_name
+            )))
     }
 
     /// Display items using the configured output format
@@ -147,19 +155,13 @@ impl CliContext {
                 }
             }
             OutputFormat::Json => {
-                let json = serde_json::to_string_pretty(&items).map_err(|e| {
-                    swissarmyhammer_common::SwissArmyHammerError::Other {
-                        message: format!("Failed to serialize to JSON: {e}"),
-                    }
-                })?;
+                let json = serde_json::to_string_pretty(&items)
+                    .map_err(map_error("Failed to serialize to JSON"))?;
                 println!("{}", json);
             }
             OutputFormat::Yaml => {
-                let yaml = serde_yaml::to_string(&items).map_err(|e| {
-                    swissarmyhammer_common::SwissArmyHammerError::Other {
-                        message: format!("Failed to serialize to YAML: {e}"),
-                    }
-                })?;
+                let yaml = serde_yaml::to_string(&items)
+                    .map_err(map_error("Failed to serialize to YAML"))?;
                 println!("{}", yaml);
             }
         }
@@ -186,9 +188,7 @@ impl CliContextBuilder {
         let workflow_storage = Arc::new(
             tokio::task::spawn_blocking(WorkflowStorage::file_system)
                 .await
-                .map_err(|e| swissarmyhammer_common::SwissArmyHammerError::Other {
-                    message: format!("Failed to create workflow storage: {e}"),
-                })??,
+                .map_err(map_error("Failed to create workflow storage"))??,
         );
 
         let mut prompt_library = PromptLibrary::new();
@@ -210,9 +210,7 @@ impl CliContextBuilder {
         let memo_storage = Arc::new(
             swissarmyhammer_memoranda::MarkdownMemoStorage::new_default()
                 .await
-                .map_err(|e| swissarmyhammer_common::SwissArmyHammerError::Other {
-                    message: format!("Failed to create memo storage: {e}"),
-                })?,
+                .map_err(map_error("Failed to create memo storage"))?,
         );
 
         let issue_storage =
@@ -271,6 +269,31 @@ mod tests {
         message: String,
     }
 
+    /// Helper function to verify table separator columns exist in data rows
+    fn verify_table_separators(table: &str, expected_emojis: &[&str]) {
+        let lines: Vec<&str> = table.lines().collect();
+        let data_rows: Vec<&str> = lines
+            .iter()
+            .filter(|line| expected_emojis.iter().any(|emoji| line.contains(emoji)))
+            .copied()
+            .collect();
+
+        assert_eq!(
+            data_rows.len(),
+            expected_emojis.len(),
+            "Should have {} data rows",
+            expected_emojis.len()
+        );
+
+        for row in &data_rows {
+            assert!(
+                row.contains('│'),
+                "Row should contain column separators: {}",
+                row
+            );
+        }
+    }
+
     /// Test that table rendering with emoji characters produces properly aligned output
     #[test]
     fn test_table_alignment_with_emojis() {
@@ -310,22 +333,7 @@ mod tests {
         );
 
         // Verify that column separators exist in data rows
-        let data_rows: Vec<&str> = lines
-            .iter()
-            .filter(|line| line.contains("✅") || line.contains("⚠️") || line.contains("❌"))
-            .copied()
-            .collect();
-
-        assert_eq!(data_rows.len(), 3, "Should have 3 data rows");
-
-        // Each data row should have column separators
-        for row in &data_rows {
-            assert!(
-                row.contains('│'),
-                "Row should contain column separators: {}",
-                row
-            );
-        }
+        verify_table_separators(&table, &["✅", "⚠️", "❌"]);
     }
 
     /// Test that table rendering handles long text correctly
@@ -359,20 +367,7 @@ mod tests {
         );
 
         // Verify column separators exist
-        let lines: Vec<&str> = table.lines().collect();
-        let data_rows: Vec<&str> = lines
-            .iter()
-            .filter(|line| line.contains("✅") || line.contains("⚠️"))
-            .copied()
-            .collect();
-
-        for row in &data_rows {
-            assert!(
-                row.contains('│'),
-                "Row should contain column separators: {}",
-                row
-            );
-        }
+        verify_table_separators(&table, &["✅", "⚠️"]);
     }
 
     /// Test that empty table is handled gracefully
@@ -414,19 +409,6 @@ mod tests {
         assert!(table.contains("™"), "Table should contain trademark");
 
         // Verify column separators exist
-        let lines: Vec<&str> = table.lines().collect();
-        let data_rows: Vec<&str> = lines
-            .iter()
-            .filter(|line| line.contains("✅") || line.contains("⚠️"))
-            .copied()
-            .collect();
-
-        for row in &data_rows {
-            assert!(
-                row.contains('│'),
-                "Row should contain column separators: {}",
-                row
-            );
-        }
+        verify_table_separators(&table, &["✅", "⚠️"]);
     }
 }

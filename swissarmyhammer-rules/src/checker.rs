@@ -69,7 +69,7 @@ pub struct RuleCheckRequest {
     pub force: bool,
     /// Maximum number of ERROR violations to return (None = unlimited)
     pub max_errors: Option<usize>,
-    /// Maximum number of concurrent rule checks (None = default of 4)
+    /// Maximum number of concurrent rule checks (None = default of cores/2, minimum 1)
     pub max_concurrency: Option<usize>,
 }
 
@@ -314,28 +314,7 @@ impl RuleChecker {
                 rule.name
             );
 
-            // Return cached result
-            match cached_result {
-                CachedResult::Pass => {
-                    tracing::trace!(
-                        "Cached check passed for {} against rule {}",
-                        target_path.display(),
-                        rule.name
-                    );
-                    return Ok(None);
-                }
-                CachedResult::Violation { violation } => {
-                    // Log the violation with appropriate severity
-                    match violation.severity {
-                        Severity::Error => tracing::error!("{}", violation),
-                        Severity::Warning => tracing::warn!("{}", violation),
-                        Severity::Info => tracing::info!("{}", violation),
-                        Severity::Hint => tracing::debug!("{}", violation),
-                    }
-
-                    return Ok(Some(violation));
-                }
-            }
+            return self.handle_cached_result(cached_result, target_path, &rule.name);
         }
 
         tracing::trace!(
@@ -446,9 +425,7 @@ impl RuleChecker {
 
             // Cache the PASS result
             let cached_result = CachedResult::Pass;
-            if let Err(e) = self.cache.store(&cache_key, &cached_result) {
-                tracing::warn!("Failed to cache result: {}", e);
-            }
+            self.store_cached_result_with_logging(&cache_key, &cached_result);
 
             Ok(None)
         } else {
@@ -461,20 +438,13 @@ impl RuleChecker {
             );
 
             // Log the violation at appropriate level
-            match violation.severity {
-                Severity::Error => tracing::error!("{}", violation),
-                Severity::Warning => tracing::warn!("{}", violation),
-                Severity::Info => tracing::info!("{}", violation),
-                Severity::Hint => tracing::debug!("{}", violation),
-            }
+            Self::log_violation(&violation);
 
             // Cache the VIOLATION result
             let cached_result = CachedResult::Violation {
                 violation: violation.clone(),
             };
-            if let Err(e) = self.cache.store(&cache_key, &cached_result) {
-                tracing::warn!("Failed to cache result: {}", e);
-            }
+            self.store_cached_result_with_logging(&cache_key, &cached_result);
 
             Ok(Some(violation))
         }
@@ -638,9 +608,16 @@ impl RuleChecker {
         let checker = Arc::new(self.clone_for_streaming());
         let check_mode = request.check_mode;
         let max_errors = request.max_errors;
-        let concurrency = request.max_concurrency.unwrap_or(4);
 
-        tracing::debug!("Processing work queue with concurrency={}", concurrency);
+        // Default concurrency: half of available CPU cores, minimum 1
+        let default_concurrency = (num_cpus::get() / 2).max(1);
+        let concurrency = request.max_concurrency.unwrap_or(default_concurrency);
+
+        tracing::debug!(
+            "Processing work queue with concurrency={} (available cores: {})",
+            concurrency,
+            num_cpus::get()
+        );
 
         // Process work queue in parallel using buffer_unordered
         let stream = stream::iter(work_items)
@@ -683,6 +660,46 @@ impl RuleChecker {
             prompt_library: Arc::clone(&self.prompt_library),
             rule_library: Arc::clone(&self.rule_library),
             cache: Arc::clone(&self.cache),
+        }
+    }
+
+    /// Log a violation at the appropriate level based on its severity
+    fn log_violation(violation: &RuleViolation) {
+        match violation.severity {
+            Severity::Error => tracing::error!("{}", violation),
+            Severity::Warning => tracing::warn!("{}", violation),
+            Severity::Info => tracing::info!("{}", violation),
+            Severity::Hint => tracing::debug!("{}", violation),
+        }
+    }
+
+    /// Store a cached result with error logging on failure
+    fn store_cached_result_with_logging(&self, cache_key: &str, result: &CachedResult) {
+        if let Err(e) = self.cache.store(cache_key, result) {
+            tracing::warn!("Failed to cache result: {}", e);
+        }
+    }
+
+    /// Handle a cached result by logging and returning the appropriate value
+    fn handle_cached_result(
+        &self,
+        cached_result: CachedResult,
+        target_path: &Path,
+        rule_name: &str,
+    ) -> Result<Option<RuleViolation>> {
+        match cached_result {
+            CachedResult::Pass => {
+                tracing::trace!(
+                    "Cached check passed for {} against rule {}",
+                    target_path.display(),
+                    rule_name
+                );
+                Ok(None)
+            }
+            CachedResult::Violation { violation } => {
+                Self::log_violation(&violation);
+                Ok(Some(violation))
+            }
         }
     }
 }

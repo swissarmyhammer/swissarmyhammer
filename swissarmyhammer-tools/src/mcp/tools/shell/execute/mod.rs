@@ -718,6 +718,16 @@ impl Drop for AsyncProcessGuard {
     }
 }
 
+/// Context for processing output lines
+struct OutputLineContext<'a> {
+    line_count: &'a mut u32,
+    output_buffer: &'a mut OutputBuffer,
+    binary_notified: &'a mut bool,
+    progress_sender: Option<&'a ProgressSender>,
+    progress_token: &'a str,
+    batch_size: u32,
+}
+
 /// Helper function to process a single output line with common logic
 ///
 /// This eliminates code duplication between stdout and stderr processing,
@@ -726,13 +736,8 @@ impl Drop for AsyncProcessGuard {
 /// # Arguments
 ///
 /// * `line` - The output line to process
-/// * `line_count` - Mutable reference to the line counter
-/// * `output_buffer` - Mutable reference to the output buffer
+/// * `ctx` - Context containing line counter, buffer, and progress tracking
 /// * `append_fn` - Function to append data to the appropriate buffer (stdout or stderr)
-/// * `binary_notified` - Mutable reference to the binary notification flag
-/// * `progress_sender` - Optional progress sender for notifications
-/// * `progress_token` - Progress token for notifications
-/// * `batch_size` - Number of lines between progress notifications
 ///
 /// # Returns
 ///
@@ -740,24 +745,19 @@ impl Drop for AsyncProcessGuard {
 #[inline]
 fn process_output_line(
     line: String,
-    line_count: &mut u32,
-    output_buffer: &mut OutputBuffer,
+    ctx: &mut OutputLineContext<'_>,
     append_fn: impl FnOnce(&mut OutputBuffer, &[u8]) -> usize,
-    binary_notified: &mut bool,
-    progress_sender: Option<&ProgressSender>,
-    progress_token: &str,
-    batch_size: u32,
 ) -> usize {
-    *line_count += 1;
+    *ctx.line_count += 1;
 
     // Send batched progress notifications every batch_size lines
-    if *line_count % batch_size == 0 {
-        if let Some(sender) = progress_sender {
+    if *ctx.line_count % ctx.batch_size == 0 {
+        if let Some(sender) = ctx.progress_sender {
             sender
                 .send_progress(
-                    progress_token,
-                    Some(*line_count),
-                    format!("Processing output: {} lines", line_count),
+                    ctx.progress_token,
+                    Some(*ctx.line_count),
+                    format!("Processing output: {} lines", ctx.line_count),
                 )
                 .ok();
         }
@@ -770,19 +770,96 @@ fn process_output_line(
     line_with_newline.push(b'\n');
 
     // Append to the appropriate buffer
-    let bytes_written = append_fn(output_buffer, &line_with_newline);
+    let bytes_written = append_fn(ctx.output_buffer, &line_with_newline);
 
     // Check for binary detection and notify once
-    if output_buffer.has_binary_content() && !*binary_notified {
-        *binary_notified = true;
-        if let Some(sender) = progress_sender {
+    if ctx.output_buffer.has_binary_content() && !*ctx.binary_notified {
+        *ctx.binary_notified = true;
+        if let Some(sender) = ctx.progress_sender {
             sender
-                .send_progress(progress_token, Some(*line_count), "Binary output detected")
+                .send_progress(
+                    ctx.progress_token,
+                    Some(*ctx.line_count),
+                    "Binary output detected",
+                )
                 .ok();
         }
     }
 
     bytes_written
+}
+
+/// Helper function to process a single stream line with error handling
+///
+/// This eliminates duplication in the tokio::select! branches by extracting the common
+/// pattern of processing a line result, handling EOF, and checking buffer limits.
+///
+/// # Returns
+///
+/// Returns true if processing should continue, false if it should stop (due to error or buffer limit)
+#[inline]
+fn process_stream_line_result(
+    line_result: Result<Option<String>, std::io::Error>,
+    ctx: &mut OutputLineContext<'_>,
+    append_fn: impl FnOnce(&mut OutputBuffer, &[u8]) -> usize,
+    stream_name: &str,
+) -> bool {
+    match line_result {
+        Ok(Some(line)) => {
+            let bytes_written = process_output_line(line, ctx, append_fn);
+
+            // If we couldn't write anything, we've hit the limit
+            if bytes_written == 0 && ctx.output_buffer.is_at_limit() {
+                tracing::debug!("Output buffer limit reached, stopping {stream_name} processing");
+                false
+            } else {
+                true
+            }
+        }
+        Ok(None) => {
+            // EOF on stream
+            tracing::debug!("{stream_name} EOF reached");
+            true
+        }
+        Err(e) => {
+            tracing::warn!("Error reading {stream_name}: {e}");
+            false
+        }
+    }
+}
+
+/// Helper function to read remaining output from a stream after process exit
+///
+/// This eliminates duplication in the post-exit output reading loops by providing
+/// a common implementation for both stdout and stderr.
+async fn read_remaining_stream_output(
+    reader: &mut tokio::io::Lines<BufReader<tokio::process::ChildStdout>>,
+    ctx: &mut OutputLineContext<'_>,
+    append_fn: impl Fn(&mut OutputBuffer, &[u8]) -> usize,
+) {
+    while let Ok(Some(line)) = reader.next_line().await {
+        if ctx.output_buffer.is_at_limit() {
+            break;
+        }
+        process_output_line(line, ctx, &append_fn);
+    }
+}
+
+/// Helper function to read remaining output from stderr after process exit
+///
+/// This is a specialized version for stderr since Rust's type system requires
+/// different types for stdout and stderr readers.
+async fn read_remaining_stderr_output(
+    reader: &mut tokio::io::Lines<BufReader<tokio::process::ChildStderr>>,
+    ctx: &mut OutputLineContext<'_>,
+    append_fn: impl Fn(&mut OutputBuffer, &[u8]) -> usize,
+) {
+    while let Ok(Some(line)) = reader.next_line().await {
+        if ctx.output_buffer.is_at_limit() {
+            break;
+        }
+        process_output_line(line, ctx, &append_fn);
+    }
 }
 
 /// Process child output streams with limits using async streaming
@@ -830,65 +907,41 @@ async fn process_child_output_with_limits(
         tokio::select! {
             // Read from stdout
             stdout_line = stdout_reader.next_line() => {
-                match stdout_line {
-                    Ok(Some(line)) => {
-                        let bytes_written = process_output_line(
-                            line,
-                            &mut line_count,
-                            &mut output_buffer,
-                            |buf, data| buf.append_stdout(data),
-                            &mut binary_notified,
-                            progress_sender,
-                            progress_token,
-                            BATCH_SIZE,
-                        );
-
-                        // If we couldn't write anything, we've hit the limit
-                        if bytes_written == 0 && output_buffer.is_at_limit() {
-                            tracing::debug!("Output buffer limit reached, stopping stdout processing");
-                            break;
-                        }
-                    }
-                    Ok(None) => {
-                        // EOF on stdout
-                        tracing::debug!("Stdout EOF reached");
-                    }
-                    Err(e) => {
-                        tracing::warn!("Error reading stdout: {}", e);
-                        break;
-                    }
+                let mut ctx = OutputLineContext {
+                    line_count: &mut line_count,
+                    output_buffer: &mut output_buffer,
+                    binary_notified: &mut binary_notified,
+                    progress_sender,
+                    progress_token,
+                    batch_size: BATCH_SIZE,
+                };
+                if !process_stream_line_result(
+                    stdout_line,
+                    &mut ctx,
+                    |buf, data| buf.append_stdout(data),
+                    "stdout",
+                ) {
+                    break;
                 }
             }
 
             // Read from stderr
             stderr_line = stderr_reader.next_line() => {
-                match stderr_line {
-                    Ok(Some(line)) => {
-                        let bytes_written = process_output_line(
-                            line,
-                            &mut line_count,
-                            &mut output_buffer,
-                            |buf, data| buf.append_stderr(data),
-                            &mut binary_notified,
-                            progress_sender,
-                            progress_token,
-                            BATCH_SIZE,
-                        );
-
-                        // If we couldn't write anything, we've hit the limit
-                        if bytes_written == 0 && output_buffer.is_at_limit() {
-                            tracing::debug!("Output buffer limit reached, stopping stderr processing");
-                            break;
-                        }
-                    }
-                    Ok(None) => {
-                        // EOF on stderr
-                        tracing::debug!("Stderr EOF reached");
-                    }
-                    Err(e) => {
-                        tracing::warn!("Error reading stderr: {}", e);
-                        break;
-                    }
+                let mut ctx = OutputLineContext {
+                    line_count: &mut line_count,
+                    output_buffer: &mut output_buffer,
+                    binary_notified: &mut binary_notified,
+                    progress_sender,
+                    progress_token,
+                    batch_size: BATCH_SIZE,
+                };
+                if !process_stream_line_result(
+                    stderr_line,
+                    &mut ctx,
+                    |buf, data| buf.append_stderr(data),
+                    "stderr",
+                ) {
+                    break;
                 }
             }
 
@@ -902,38 +955,34 @@ async fn process_child_output_with_limits(
                         // This is important for processes that exit quickly but have buffered output
 
                         // Read remaining stdout
-                        while let Ok(Some(line)) = stdout_reader.next_line().await {
-                            if output_buffer.is_at_limit() {
-                                break;
-                            }
-                            process_output_line(
-                                line,
-                                &mut line_count,
-                                &mut output_buffer,
-                                |buf, data| buf.append_stdout(data),
-                                &mut binary_notified,
-                                progress_sender,
-                                progress_token,
-                                BATCH_SIZE,
-                            );
-                        }
+                        let mut ctx = OutputLineContext {
+                            line_count: &mut line_count,
+                            output_buffer: &mut output_buffer,
+                            binary_notified: &mut binary_notified,
+                            progress_sender,
+                            progress_token,
+                            batch_size: BATCH_SIZE,
+                        };
+                        read_remaining_stream_output(
+                            &mut stdout_reader,
+                            &mut ctx,
+                            |buf, data| buf.append_stdout(data),
+                        ).await;
 
                         // Read remaining stderr
-                        while let Ok(Some(line)) = stderr_reader.next_line().await {
-                            if output_buffer.is_at_limit() {
-                                break;
-                            }
-                            process_output_line(
-                                line,
-                                &mut line_count,
-                                &mut output_buffer,
-                                |buf, data| buf.append_stderr(data),
-                                &mut binary_notified,
-                                progress_sender,
-                                progress_token,
-                                BATCH_SIZE,
-                            );
-                        }
+                        let mut ctx = OutputLineContext {
+                            line_count: &mut line_count,
+                            output_buffer: &mut output_buffer,
+                            binary_notified: &mut binary_notified,
+                            progress_sender,
+                            progress_token,
+                            batch_size: BATCH_SIZE,
+                        };
+                        read_remaining_stderr_output(
+                            &mut stderr_reader,
+                            &mut ctx,
+                            |buf, data| buf.append_stderr(data),
+                        ).await;
 
                         // Add truncation marker if needed
                         output_buffer.add_truncation_marker();
@@ -1443,6 +1492,82 @@ mod tests {
         )
     }
 
+    /// Helper function to assert that a list of commands are blocked by security validation
+    ///
+    /// This reduces duplication in security test cases by providing a common pattern
+    /// for testing that dangerous commands are properly rejected.
+    async fn assert_commands_blocked(
+        tool: &ShellExecuteTool,
+        context: &ToolContext,
+        commands: &[&str],
+    ) {
+        for cmd in commands {
+            let mut args = serde_json::Map::new();
+            args.insert(
+                "command".to_string(),
+                serde_json::Value::String(cmd.to_string()),
+            );
+
+            let result = tool.execute(args, context).await;
+            assert!(result.is_err(), "Command pattern '{cmd}' should be blocked");
+
+            // Verify the error message contains security-related information
+            if let Err(mcp_error) = result {
+                let error_str = mcp_error.to_string();
+                assert!(
+                    error_str.contains("security") || error_str.contains("unsafe"),
+                    "Error should mention security concern for command: {cmd}"
+                );
+            }
+        }
+    }
+
+    /// Helper function to assert that a list of paths are blocked by security validation
+    ///
+    /// This reduces duplication in path traversal security tests.
+    async fn assert_paths_blocked(tool: &ShellExecuteTool, context: &ToolContext, paths: &[&str]) {
+        for path in paths {
+            let mut args = serde_json::Map::new();
+            args.insert(
+                "command".to_string(),
+                serde_json::Value::String("echo test".to_string()),
+            );
+            args.insert(
+                "working_directory".to_string(),
+                serde_json::Value::String(path.to_string()),
+            );
+
+            let result = tool.execute(args, context).await;
+            assert!(
+                result.is_err(),
+                "Path traversal attempt '{path}' should be blocked"
+            );
+
+            // Verify the error message mentions security
+            if let Err(mcp_error) = result {
+                let error_str = mcp_error.to_string();
+                assert!(
+                    error_str.contains("security") || error_str.contains("directory"),
+                    "Error should mention security/directory concern for path: {path}"
+                );
+            }
+        }
+    }
+
+    /// Helper function to spawn a sleep process for testing process guards
+    ///
+    /// This reduces duplication in process guard tests by providing a common
+    /// way to create long-running test processes.
+    fn spawn_sleep_process(duration_secs: u64) -> AsyncProcessGuard {
+        let mut cmd = Command::new("sleep");
+        cmd.arg(duration_secs.to_string());
+        cmd.stdout(std::process::Stdio::null());
+        cmd.stderr(std::process::Stdio::null());
+
+        let child = cmd.spawn().expect("Failed to spawn sleep process for test");
+        AsyncProcessGuard::new(child, format!("sleep {duration_secs}"))
+    }
+
     #[test]
     fn test_tool_properties() {
         let tool = ShellExecuteTool::new();
@@ -1715,28 +1840,7 @@ mod tests {
             "eval 'echo dangerous'",  // Contains eval which is blocked
         ];
 
-        for cmd in &dangerous_commands {
-            let mut args = serde_json::Map::new();
-            args.insert(
-                "command".to_string(),
-                serde_json::Value::String(cmd.to_string()),
-            );
-
-            let result = tool.execute(args, &context).await;
-            assert!(
-                result.is_err(),
-                "Command injection pattern '{cmd}' should be blocked"
-            );
-
-            // Verify the error message contains security-related information
-            if let Err(mcp_error) = result {
-                let error_str = mcp_error.to_string();
-                assert!(
-                    error_str.contains("security") || error_str.contains("unsafe"),
-                    "Error should mention security concern for command: {cmd}"
-                );
-            }
-        }
+        assert_commands_blocked(&tool, &context, &dangerous_commands).await;
     }
 
     #[tokio::test]
@@ -1747,32 +1851,7 @@ mod tests {
         // Test path traversal attempts that should be blocked
         let dangerous_paths = ["../parent", "path/../parent", "/absolute/../parent"];
 
-        for path in &dangerous_paths {
-            let mut args = serde_json::Map::new();
-            args.insert(
-                "command".to_string(),
-                serde_json::Value::String("echo test".to_string()),
-            );
-            args.insert(
-                "working_directory".to_string(),
-                serde_json::Value::String(path.to_string()),
-            );
-
-            let result = tool.execute(args, &context).await;
-            assert!(
-                result.is_err(),
-                "Path traversal attempt '{path}' should be blocked"
-            );
-
-            // Verify the error message mentions security
-            if let Err(mcp_error) = result {
-                let error_str = mcp_error.to_string();
-                assert!(
-                    error_str.contains("security") || error_str.contains("directory"),
-                    "Error should mention security/directory concern for path: {path}"
-                );
-            }
-        }
+        assert_paths_blocked(&tool, &context, &dangerous_paths).await;
     }
 
     #[tokio::test]
@@ -2490,13 +2569,7 @@ mod tests {
     #[tokio::test]
     async fn test_async_process_guard_graceful_termination() {
         // Test graceful termination of a longer-running process
-        let mut cmd = Command::new("sleep");
-        cmd.arg("10"); // Sleep for 10 seconds
-        cmd.stdout(std::process::Stdio::null());
-        cmd.stderr(std::process::Stdio::null());
-
-        let child = cmd.spawn().expect("Failed to spawn sleep process");
-        let mut guard = AsyncProcessGuard::new(child, "sleep 10".to_string());
+        let mut guard = spawn_sleep_process(10);
 
         // Process should initially be running
         assert!(guard.is_running());
@@ -2522,13 +2595,7 @@ mod tests {
     #[tokio::test]
     async fn test_async_process_guard_force_kill() {
         // Test force killing a stubborn process
-        let mut cmd = Command::new("sleep");
-        cmd.arg("30"); // Long sleep
-        cmd.stdout(std::process::Stdio::null());
-        cmd.stderr(std::process::Stdio::null());
-
-        let child = cmd.spawn().expect("Failed to spawn sleep process");
-        let mut guard = AsyncProcessGuard::new(child, "sleep 30".to_string());
+        let mut guard = spawn_sleep_process(30);
 
         // Process should be running
         assert!(guard.is_running());
@@ -2579,12 +2646,7 @@ mod tests {
     #[tokio::test]
     async fn test_async_process_guard_drop_behavior() {
         // Test that dropping the guard cleans up properly
-        let mut cmd = Command::new("sleep");
-        cmd.arg("5");
-        cmd.stdout(std::process::Stdio::null());
-        cmd.stderr(std::process::Stdio::null());
-
-        let child = cmd.spawn().expect("Failed to spawn sleep process");
+        let child = spawn_sleep_process(5).take_child().unwrap();
         let guard = AsyncProcessGuard::new(child, "sleep 5".to_string());
 
         // Drop the guard (this will trigger the Drop implementation)

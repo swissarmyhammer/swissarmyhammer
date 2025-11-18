@@ -6772,6 +6772,7 @@ dependencies = [
  "ignore",
  "include_dir",
  "liquid",
+ "num_cpus",
  "regex",
  "serde",
  "serde_json",
@@ -6873,6 +6874,7 @@ name = "swissarmyhammer-todo"
 version = "0.2.0"
 dependencies = [
  "chrono",
+ "fs2",
  "serde",
  "serde_yaml",
  "swissarmyhammer-common",

@@ -1590,6 +1590,37 @@ pub fn register_web_search_tools(registry: &mut ToolRegistry) {
     web_search::register_web_search_tools(registry);
 }
 
+/// Create a fully registered tool registry with all available tools
+///
+/// This function creates a new ToolRegistry and registers all tool categories,
+/// providing a single source of truth for tool registration that can be used
+/// by both the MCP server implementation and tests.
+///
+/// # Returns
+///
+/// * `ToolRegistry` - A registry with all tools registered
+pub fn create_fully_registered_tool_registry() -> ToolRegistry {
+    let mut registry = ToolRegistry::new();
+
+    // Register all tools exactly like McpServer does
+    register_abort_tools(&mut registry);
+    register_file_tools(&mut registry);
+    register_flow_tools(&mut registry);
+    register_git_tools(&mut registry);
+    register_issue_tools(&mut registry);
+    register_memo_tools(&mut registry);
+    register_outline_tools(&mut registry);
+    register_questions_tools(&mut registry);
+    register_rules_tools(&mut registry);
+    register_search_tools(&mut registry);
+    register_shell_tools(&mut registry);
+    register_todo_tools(&mut registry);
+    register_web_fetch_tools(&mut registry);
+    register_web_search_tools(&mut registry);
+
+    registry
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

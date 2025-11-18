@@ -84,85 +84,125 @@ fn get_help_text(cli: &Command) -> String {
     }
 }
 
-#[test]
-fn test_string_interning_deduplication() {
-    // Test that the same string is only leaked once
-    let s1 = intern_string("test_string".to_string());
-    let s2 = intern_string("test_string".to_string());
+/// Helper function to get registry categories as a vector of strings
+fn get_registry_categories(registry: &Arc<tokio::sync::RwLock<ToolRegistry>>) -> Vec<String> {
+    let reg = registry.try_read().unwrap();
+    reg.get_cli_categories()
+        .iter()
+        .map(|s| s.to_string())
+        .collect()
+}
 
-    // Both should point to the same memory address
-    assert_eq!(s1 as *const str, s2 as *const str);
+/// Helper function to create CLI and execute test with command, help text, and registry
+fn with_cli_and_help<F>(test_fn: F)
+where
+    F: FnOnce(&Command, &str, &Arc<tokio::sync::RwLock<ToolRegistry>>),
+{
+    let (registry, builder) = create_test_registry_and_builder();
+    let cli = builder.build_cli(None);
+    let help = get_help_text(&cli);
+    test_fn(&cli, &help, &registry);
+}
+
+/// Helper function to create CLI with workflows and execute test
+fn with_workflows_and_cli<F>(test_fn: F)
+where
+    F: FnOnce(
+        &Command,
+        &[swissarmyhammer_workflow::Workflow],
+        &str,
+        &Arc<tokio::sync::RwLock<ToolRegistry>>,
+    ),
+{
+    with_workflow_storage(|storage| {
+        let workflows = storage.list_workflows().unwrap_or_default();
+        if !workflows.is_empty() {
+            let (registry, builder) = create_test_registry_and_builder();
+            let cli = builder.build_cli(Some(storage));
+            let help = get_help_text(&cli);
+            test_fn(&cli, &workflows, &help, &registry);
+        }
+    });
 }
 
 #[test]
-fn test_string_interning_different_strings() {
-    // Test that different strings get different addresses
-    let s1 = intern_string("string1".to_string());
-    let s2 = intern_string("string2".to_string());
+fn test_string_interning() {
+    // Table-driven test for string interning behavior
+    let test_cases = vec![
+        ("test_string", "test_string", true, "same strings"),
+        ("string1", "string2", false, "different strings"),
+    ];
 
-    // Should have different memory addresses
-    assert_ne!(s1 as *const str, s2 as *const str);
-}
-
-/// Helper function to test validation stats with different scenarios
-fn assert_validation_stats(
-    total: usize,
-    valid: usize,
-    invalid: usize,
-    errors: usize,
-    expected_all_valid: bool,
-    expected_rate: f64,
-    expected_summary_contains: &[&str],
-) {
-    let stats = CliValidationStats {
-        total_tools: total,
-        valid_tools: valid,
-        invalid_tools: invalid,
-        validation_errors: errors,
-    };
-    assert_eq!(stats.is_all_valid(), expected_all_valid);
-    assert_eq!(stats.success_rate(), expected_rate);
-    let summary = stats.summary();
-    for item in expected_summary_contains {
-        assert!(
-            summary.contains(item),
-            "Summary should contain '{}', but got: {}",
-            item,
-            summary
-        );
+    for (s1, s2, should_equal, description) in test_cases {
+        let ptr1 = intern_string(s1.to_string()) as *const str;
+        let ptr2 = intern_string(s2.to_string()) as *const str;
+        if should_equal {
+            assert_eq!(ptr1, ptr2, "Failed test case: {}", description);
+        } else {
+            assert_ne!(ptr1, ptr2, "Failed test case: {}", description);
+        }
     }
 }
 
 #[test]
-fn test_validation_stats_all_valid() {
-    assert_validation_stats(
-        10,
-        10,
-        0,
-        0,
-        true,
-        100.0,
-        &["✅", "All 10 CLI tools are valid"],
-    );
-}
+fn test_validation_stats() {
+    // Table-driven test cases for validation stats
+    let test_cases = vec![
+        // (total, valid, invalid, errors, expected_all_valid, expected_rate, expected_summary_contains, description)
+        (
+            10,
+            10,
+            0,
+            0,
+            true,
+            100.0,
+            vec!["✅", "All 10 CLI tools are valid"],
+            "all valid",
+        ),
+        (
+            10,
+            7,
+            3,
+            5,
+            false,
+            70.0,
+            vec!["⚠️", "7 of 10", "70.0%", "5 validation errors"],
+            "some invalid",
+        ),
+        (0, 0, 0, 0, true, 100.0, vec![], "zero tools"),
+    ];
 
-#[test]
-fn test_validation_stats_some_invalid() {
-    assert_validation_stats(
-        10,
-        7,
-        3,
-        5,
-        false,
-        70.0,
-        &["⚠️", "7 of 10", "70.0%", "5 validation errors"],
-    );
-}
-
-#[test]
-fn test_validation_stats_zero_tools() {
-    // Should handle division by zero gracefully
-    assert_validation_stats(0, 0, 0, 0, true, 100.0, &[]);
+    for (
+        total,
+        valid,
+        invalid,
+        errors,
+        expected_all_valid,
+        expected_rate,
+        expected_summary_contains,
+        description,
+    ) in test_cases
+    {
+        let error_msg = format!("Failed test case: {}", description);
+        let stats = CliValidationStats {
+            total_tools: total,
+            valid_tools: valid,
+            invalid_tools: invalid,
+            validation_errors: errors,
+        };
+        assert_eq!(stats.is_all_valid(), expected_all_valid, "{}", error_msg);
+        assert_eq!(stats.success_rate(), expected_rate, "{}", error_msg);
+        let summary = stats.summary();
+        for item in &expected_summary_contains {
+            assert!(
+                summary.contains(item),
+                "{}: Summary should contain '{}', but got: {}",
+                error_msg,
+                item,
+                summary
+            );
+        }
+    }
 }
 
 #[test]
@@ -188,97 +228,113 @@ fn test_cli_builder_graceful_degradation() {
     assert!(cli.get_subcommands().any(|cmd| cmd.get_name() == "doctor"));
 }
 
-/// Helper function to test schema precomputation with different types
-fn assert_schema_precomputation<F>(
-    name: &str,
+/// Test case structure for schema precomputation tests
+struct SchemaTestCase {
+    name: &'static str,
     schema: serde_json::Value,
     is_required: bool,
-    additional_checks: F,
-) where
-    F: FnOnce(&ArgData),
-{
-    let arg = CliBuilder::precompute_arg_data(name, &schema, is_required);
-    additional_checks(&arg);
+    check: Box<dyn Fn(&ArgData)>,
+}
+
+impl SchemaTestCase {
+    fn new<F>(name: &'static str, schema: serde_json::Value, is_required: bool, check: F) -> Self
+    where
+        F: Fn(&ArgData) + 'static,
+    {
+        Self {
+            name,
+            schema,
+            is_required,
+            check: Box::new(check),
+        }
+    }
 }
 
 #[test]
 fn test_precompute_arg_data_types() {
-    // Test boolean type
-    assert_schema_precomputation(
-        "feature_flag",
-        json!({
-            "type": "boolean",
-            "description": "Enable feature"
-        }),
-        false,
-        |arg| {
-            assert!(matches!(arg.arg_type, ArgType::Boolean));
-            assert_eq!(arg.help, Some("Enable feature".to_string()));
-        },
-    );
+    let test_cases = vec![
+        // Boolean type
+        SchemaTestCase::new(
+            "feature_flag",
+            json!({
+                "type": "boolean",
+                "description": "Enable feature"
+            }),
+            false,
+            |arg| {
+                assert!(matches!(arg.arg_type, ArgType::Boolean));
+                assert_eq!(arg.help, Some("Enable feature".to_string()));
+            },
+        ),
+        // Integer type
+        SchemaTestCase::new(
+            "port",
+            json!({
+                "type": "integer",
+                "description": "Port number"
+            }),
+            true,
+            |arg| {
+                assert!(matches!(arg.arg_type, ArgType::Integer));
+                assert!(arg.is_required);
+            },
+        ),
+        // Array type
+        SchemaTestCase::new(
+            "files",
+            json!({
+                "type": "array",
+                "description": "List of files"
+            }),
+            false,
+            |arg| {
+                assert!(matches!(arg.arg_type, ArgType::Array));
+            },
+        ),
+        // Enum values
+        SchemaTestCase::new(
+            "env",
+            json!({
+                "type": "string",
+                "enum": ["dev", "staging", "prod"],
+                "description": "Environment"
+            }),
+            true,
+            |arg| {
+                assert!(matches!(arg.arg_type, ArgType::String));
+                assert_eq!(
+                    arg.possible_values,
+                    Some(vec![
+                        "dev".to_string(),
+                        "staging".to_string(),
+                        "prod".to_string()
+                    ])
+                );
+            },
+        ),
+        // Default value
+        SchemaTestCase::new(
+            "host",
+            json!({
+                "type": "string",
+                "default": "localhost",
+                "description": "Host"
+            }),
+            false,
+            |arg| {
+                assert_eq!(arg.default_value, Some("localhost".to_string()));
+            },
+        ),
+    ];
 
-    // Test integer type
-    assert_schema_precomputation(
-        "port",
-        json!({
-            "type": "integer",
-            "description": "Port number"
-        }),
-        true,
-        |arg| {
-            assert!(matches!(arg.arg_type, ArgType::Integer));
-            assert!(arg.is_required);
-        },
-    );
-
-    // Test array type
-    assert_schema_precomputation(
-        "files",
-        json!({
-            "type": "array",
-            "description": "List of files"
-        }),
-        false,
-        |arg| {
-            assert!(matches!(arg.arg_type, ArgType::Array));
-        },
-    );
-
-    // Test enum values
-    assert_schema_precomputation(
-        "env",
-        json!({
-            "type": "string",
-            "enum": ["dev", "staging", "prod"],
-            "description": "Environment"
-        }),
-        true,
-        |arg| {
-            assert!(matches!(arg.arg_type, ArgType::String));
-            assert_eq!(
-                arg.possible_values,
-                Some(vec![
-                    "dev".to_string(),
-                    "staging".to_string(),
-                    "prod".to_string()
-                ])
-            );
-        },
-    );
-
-    // Test default value
-    assert_schema_precomputation(
-        "host",
-        json!({
-            "type": "string",
-            "default": "localhost",
-            "description": "Host"
-        }),
-        false,
-        |arg| {
-            assert_eq!(arg.default_value, Some("localhost".to_string()));
-        },
-    );
+    for test_case in test_cases {
+        let arg = CliBuilder::precompute_arg_data(
+            test_case.name,
+            &test_case.schema,
+            test_case.is_required,
+        );
+        (test_case.check)(&arg);
+    }
 }
 
 #[test]
@@ -307,19 +363,11 @@ fn test_build_cli_basic_structure() {
 
 #[test]
 fn test_mcp_tool_categories_appear_in_help() {
-    let (registry, builder) = create_test_registry_and_builder();
-
-    // Build CLI without workflows
-    let cli = builder.build_cli(None);
-
-    // Verify MCP tool categories appear in help text
-    let reg = registry.try_read().unwrap();
-    let categories: Vec<String> = reg
-        .get_cli_categories()
-        .iter()
-        .map(|s| s.to_string())
-        .collect();
-    assert_help_contains(&cli, &categories, "MCP tool category");
+    with_cli_and_help(|cli, _help, registry| {
+        // Verify MCP tool categories appear in help text
+        let categories = get_registry_categories(registry);
+        assert_help_contains(cli, &categories, "MCP tool category");
+    });
 }
 
 #[test]
@@ -337,44 +385,28 @@ fn test_workflow_shortcuts_appear_in_help_when_present() {
 
 #[test]
 fn test_static_commands_appear_before_mcp_tools() {
-    let (registry, builder) = create_test_registry_and_builder();
-
-    // Build CLI
-    let cli = builder.build_cli(None);
-
-    // Get help text
-    let help = get_help_text(&cli);
-
-    // Find first MCP tool category
-    let reg = registry.try_read().unwrap();
-    let categories = reg.get_cli_categories();
-    if !categories.is_empty() {
-        let first_category = &categories[0];
-        assert_help_position_before(&help, "serve", first_category, "Static commands");
-    }
+    with_cli_and_help(|_cli, help, registry| {
+        // Find first MCP tool category
+        let categories = get_registry_categories(registry);
+        if !categories.is_empty() {
+            let first_category = &categories[0];
+            assert_help_position_before(help, "serve", first_category, "Static commands");
+        }
+    });
 }
 
 #[test]
 fn test_workflows_appear_before_mcp_tools_when_present() {
-    with_workflow_storage(|storage| {
-        let (registry, builder) = create_test_registry_and_builder();
-        let workflows = storage.list_workflows().unwrap_or_default();
-
-        if !workflows.is_empty() {
-            let cli = builder.build_cli(Some(storage));
-            let help = get_help_text(&cli);
-
-            if let Some(first_workflow) = workflows.first() {
-                let reg = registry.try_read().unwrap();
-                let categories = reg.get_cli_categories();
-                if !categories.is_empty() {
-                    assert_help_position_before(
-                        &help,
-                        &first_workflow.name.to_string(),
-                        &categories[0],
-                        "Workflows",
-                    );
-                }
+    with_workflows_and_cli(|_cli, workflows, help, registry| {
+        if let Some(first_workflow) = workflows.first() {
+            let categories = get_registry_categories(registry);
+            if !categories.is_empty() {
+                assert_help_position_before(
+                    help,
+                    &first_workflow.name.to_string(),
+                    &categories[0],
+                    "Workflows",
+                );
             }
         }
     });
@@ -382,44 +414,41 @@ fn test_workflows_appear_before_mcp_tools_when_present() {
 
 #[test]
 fn test_mcp_tool_categories_are_sorted() {
-    let (registry, builder) = create_test_registry_and_builder();
+    with_cli_and_help(|cli, _help, registry| {
+        // Get all MCP tool category names
+        let categories = get_registry_categories(registry);
+        if categories.len() > 1 {
+            // Get the category names from the built CLI
+            let subcommand_names: Vec<&str> =
+                cli.get_subcommands().map(|cmd| cmd.get_name()).collect();
 
-    // Build CLI
-    let cli = builder.build_cli(None);
+            // Filter to only MCP tool categories
+            let mut mcp_categories = categories.clone();
+            mcp_categories.sort();
 
-    // Get all MCP tool category names
-    let reg = registry.try_read().unwrap();
-    let categories = reg.get_cli_categories();
-    if categories.len() > 1 {
-        // Get the category names from the built CLI
-        let subcommand_names: Vec<&str> = cli.get_subcommands().map(|cmd| cmd.get_name()).collect();
-
-        // Filter to only MCP tool categories
-        let mut mcp_categories: Vec<String> = categories.iter().map(|s| s.to_string()).collect();
-        mcp_categories.sort();
-
-        // Find first MCP category position
-        if let Some(first_cat_pos) = subcommand_names
-            .iter()
-            .position(|name| *name == mcp_categories[0])
-        {
-            // Check that subsequent MCP categories appear in sorted order
-            for cat in mcp_categories.iter().skip(1) {
-                if let Some(cat_pos) = subcommand_names.iter().position(|name| *name == cat) {
-                    // Each category should appear after the previous one
-                    assert!(
-                        cat_pos > first_cat_pos,
-                        "MCP tool categories should be sorted alphabetically"
-                    );
+            // Find first MCP category position
+            if let Some(first_cat_pos) = subcommand_names
+                .iter()
+                .position(|name| *name == mcp_categories[0])
+            {
+                // Check that subsequent MCP categories appear in sorted order
+                for cat in mcp_categories.iter().skip(1) {
+                    if let Some(cat_pos) = subcommand_names.iter().position(|name| *name == cat) {
+                        // Each category should appear after the previous one
+                        assert!(
+                            cat_pos > first_cat_pos,
+                            "MCP tool categories should be sorted alphabetically"
+                        );
+                    }
                 }
             }
         }
-    }
+    });
 }
 
 #[test]
 fn test_workflow_shortcuts_are_sorted_when_built() {
-    with_workflow_cli(|cli, workflows, _help| {
+    with_workflows_and_cli(|cli, workflows, _help, _registry| {
         // Only test if we have multiple workflows
         if workflows.len() > 1 {
             // Filter to workflow commands (those with "shortcut for 'flow" in their about text)
@@ -448,23 +477,11 @@ fn test_workflow_shortcuts_are_sorted_when_built() {
 
 #[test]
 fn test_command_descriptions_are_clean() {
-    use swissarmyhammer_workflow::WorkflowStorage;
-
-    let (_registry, builder) = create_test_registry_and_builder();
-
-    // Try to load workflow storage
-    let cli = if let Ok(storage) = WorkflowStorage::file_system() {
-        builder.build_cli(Some(&storage))
-    } else {
-        builder.build_cli(None)
-    };
-
-    // Get help text
-    let help = get_help_text(&cli);
-
-    // Verify no separator markers appear in command descriptions
-    assert!(
-        !help.contains("────────"),
-        "Help text should not contain visual separators"
-    );
+    with_cli_and_help(|_cli, help, _registry| {
+        // Verify no separator markers appear in command descriptions
+        assert!(
+            !help.contains("────────"),
+            "Help text should not contain visual separators"
+        );
+    });
 }

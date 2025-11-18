@@ -61,6 +61,7 @@ enum ArgType {
     Integer,
     Float,
     Boolean,
+    NullableBoolean,
     Array,
 }
 
@@ -134,6 +135,23 @@ impl CliBuilder {
             tool_registry,
             category_commands,
             tool_commands,
+        }
+    }
+
+    /// Iterate through all tools in the registry, applying a function to each
+    ///
+    /// This is a helper to eliminate the repeated pattern of iterating categories
+    /// and then tools within each category.
+    fn iter_all_tools<F>(registry: &ToolRegistry, mut f: F)
+    where
+        F: FnMut(&dyn McpTool),
+    {
+        let categories = registry.get_cli_categories();
+        for category in categories {
+            let tools = registry.get_tools_for_category(&category);
+            for tool in tools {
+                f(tool);
+            }
         }
     }
 
@@ -239,13 +257,31 @@ impl CliBuilder {
 
     /// Pre-compute data for a single argument
     fn precompute_arg_data(name: &str, schema: &Value, is_required: bool) -> ArgData {
-        // Determine argument type
-        let arg_type = match schema.get("type").and_then(|t| t.as_str()) {
-            Some("boolean") => ArgType::Boolean,
-            Some("integer") => ArgType::Integer,
-            Some("number") => ArgType::Float,
-            Some("array") => ArgType::Array,
-            _ => ArgType::String,
+        // Helper to check if a type contains a specific type name
+        let has_type = |type_name: &str| -> bool {
+            match schema.get("type") {
+                Some(Value::String(t)) => t == type_name,
+                Some(Value::Array(types)) => types.iter().any(|t| t.as_str() == Some(type_name)),
+                _ => false,
+            }
+        };
+
+        // Determine argument type - handle both string and array type specifications
+        let arg_type = if has_type("boolean") {
+            // Check if this is a nullable boolean (has both "boolean" and "null")
+            if has_type("null") {
+                ArgType::NullableBoolean
+            } else {
+                ArgType::Boolean
+            }
+        } else if has_type("integer") {
+            ArgType::Integer
+        } else if has_type("number") {
+            ArgType::Float
+        } else if has_type("array") {
+            ArgType::Array
+        } else {
+            ArgType::String
         };
 
         // Extract help text
@@ -507,16 +543,12 @@ Example:
             .tool_registry
             .try_read()
             .expect("ToolRegistry should not be locked");
-        let categories = registry.get_cli_categories();
 
         let mut results = Vec::new();
-        for category in categories {
-            let tools = registry.get_tools_for_category(&category);
-            for tool in tools {
-                let validation_result = self.validate_single_tool(tool);
-                results.push(mapper(validation_result));
-            }
-        }
+        Self::iter_all_tools(&registry, |tool| {
+            let validation_result = self.validate_single_tool(tool);
+            results.push(mapper(validation_result));
+        });
 
         results
     }
@@ -644,15 +676,30 @@ Example:
         cmd
     }
 
+    /// Helper to apply optional argument configuration
+    ///
+    /// Reduces duplication in conditional argument chaining
+    fn apply_optional_arg_config<T>(
+        arg: Arg,
+        value: &Option<T>,
+        applier: impl FnOnce(Arg, &T) -> Arg,
+    ) -> Arg {
+        if let Some(val) = value {
+            applier(arg, val)
+        } else {
+            arg
+        }
+    }
+
     /// Build a clap argument from pre-computed data
     fn build_arg_from_data(&self, arg_data: &ArgData) -> Arg {
         let name_static = intern_string(arg_data.name.clone());
         let mut arg = Arg::new(name_static).long(name_static);
 
         // Set help text
-        if let Some(help) = &arg_data.help {
-            arg = arg.help(intern_string(help.clone()));
-        }
+        arg = Self::apply_optional_arg_config(arg, &arg_data.help, |a, help| {
+            a.help(intern_string(help.clone()))
+        });
 
         // Set as required if specified
         if arg_data.is_required {
@@ -663,6 +710,12 @@ Example:
         match arg_data.arg_type {
             ArgType::Boolean => {
                 arg = arg.action(ArgAction::SetTrue);
+            }
+            ArgType::NullableBoolean => {
+                // For nullable booleans, accept true/false as string values
+                arg = arg
+                    .value_parser(clap::builder::PossibleValuesParser::new(["true", "false"]))
+                    .value_name("BOOL");
             }
             ArgType::Integer => {
                 arg = arg.value_parser(clap::value_parser!(i64));
@@ -690,18 +743,16 @@ Example:
         }
 
         // Handle enum values
-        if let Some(possible_values) = &arg_data.possible_values {
-            let str_values: Vec<&'static str> = possible_values
-                .iter()
-                .map(|s| intern_string(s.clone()))
-                .collect();
-            arg = arg.value_parser(clap::builder::PossibleValuesParser::new(str_values));
-        }
+        arg = Self::apply_optional_arg_config(arg, &arg_data.possible_values, |a, values| {
+            let str_values: Vec<&'static str> =
+                values.iter().map(|s| intern_string(s.clone())).collect();
+            a.value_parser(clap::builder::PossibleValuesParser::new(str_values))
+        });
 
         // Handle default values
-        if let Some(default_value) = &arg_data.default_value {
-            arg = arg.default_value(intern_string(default_value.clone()));
-        }
+        arg = Self::apply_optional_arg_config(arg, &arg_data.default_value, |a, default| {
+            a.default_value(intern_string(default.clone()))
+        });
 
         arg
     }
@@ -1145,6 +1196,44 @@ Examples:
         shortcuts
     }
 
+    /// Add standard workflow execution flags to a command
+    ///
+    /// Adds the three standard workflow flags: interactive, dry-run, and quiet
+    fn add_workflow_execution_flags(cmd: Command) -> Command {
+        cmd.arg(
+            Arg::new("interactive")
+                .long("interactive")
+                .short('i')
+                .action(ArgAction::SetTrue)
+                .help("Interactive mode - prompt at each state"),
+        )
+        .arg(
+            Arg::new("dry_run")
+                .long("dry-run")
+                .action(ArgAction::SetTrue)
+                .help("Dry run - show execution plan without running"),
+        )
+        .arg(
+            Arg::new("quiet")
+                .long("quiet")
+                .short('q')
+                .action(ArgAction::SetTrue)
+                .help("Quiet mode - only show errors"),
+        )
+    }
+
+    /// Create a workflow parameter argument
+    ///
+    /// Returns a pre-configured parameter argument for workflow commands
+    fn create_workflow_param_arg() -> Arg {
+        Arg::new("param")
+            .long("param")
+            .short('p')
+            .action(ArgAction::Append)
+            .value_name("KEY=VALUE")
+            .help("Optional workflow parameter")
+    }
+
     /// Build a single workflow shortcut command
     ///
     /// Creates a clap Command for a workflow shortcut with:
@@ -1193,37 +1282,10 @@ Examples:
         }
 
         // Add --param flag for optional parameters
-        cmd = cmd.arg(
-            Arg::new("param")
-                .long("param")
-                .short('p')
-                .action(ArgAction::Append)
-                .value_name("KEY=VALUE")
-                .help("Optional workflow parameter"),
-        );
+        cmd = cmd.arg(Self::create_workflow_param_arg());
 
         // Add standard workflow execution flags
-        cmd = cmd
-            .arg(
-                Arg::new("interactive")
-                    .long("interactive")
-                    .short('i')
-                    .action(ArgAction::SetTrue)
-                    .help("Interactive mode - prompt at each state"),
-            )
-            .arg(
-                Arg::new("dry_run")
-                    .long("dry-run")
-                    .action(ArgAction::SetTrue)
-                    .help("Dry run - show execution plan without running"),
-            )
-            .arg(
-                Arg::new("quiet")
-                    .long("quiet")
-                    .short('q')
-                    .action(ArgAction::SetTrue)
-                    .help("Quiet mode - only show errors"),
-            );
+        cmd = Self::add_workflow_execution_flags(cmd);
 
         cmd
     }

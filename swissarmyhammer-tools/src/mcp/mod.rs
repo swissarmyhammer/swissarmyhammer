@@ -88,6 +88,7 @@ pub mod responses;
 pub mod search_types;
 pub mod server;
 pub mod shared_utils;
+pub mod storage_init;
 pub mod tool_descriptions;
 pub mod tool_handlers;
 pub mod tool_registry;

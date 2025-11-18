@@ -40,6 +40,55 @@ fn load_cli_configuration() -> TemplateContext {
     }
 }
 
+/// Extract a vector of strings from clap matches
+///
+/// This helper function encapsulates the common pattern of extracting string vectors
+/// from clap argument matches with a default empty vector if the argument is not present.
+///
+/// # Arguments
+/// * `matches` - The clap ArgMatches to extract from
+/// * `key` - The argument key to extract
+///
+/// # Returns
+/// A vector of strings, or an empty vector if the argument is not present
+fn extract_string_vec(matches: &clap::ArgMatches, key: &str) -> Vec<String> {
+    matches
+        .try_get_many::<String>(key)
+        .ok()
+        .flatten()
+        .map(|vals| vals.cloned().collect())
+        .unwrap_or_default()
+}
+
+/// Display validation warnings with consistent formatting
+///
+/// This function handles displaying a list of warnings with truncation support.
+/// It provides a consistent display experience across different parts of the CLI.
+///
+/// # Arguments
+/// * `warnings` - The list of warning messages to display
+/// * `verbose` - Whether to show all warnings or just a summary
+/// * `max_display` - Maximum number of warnings to display when not in verbose mode
+fn display_validation_warnings(warnings: &[String], verbose: bool, max_display: usize) {
+    if warnings.is_empty() {
+        return;
+    }
+
+    if verbose {
+        for (i, warning) in warnings.iter().enumerate() {
+            eprintln!("  {}. {}", i + 1, warning);
+        }
+    } else {
+        for (i, warning) in warnings.iter().enumerate().take(max_display) {
+            eprintln!("  {}. {}", i + 1, warning);
+        }
+        if warnings.len() > max_display {
+            eprintln!("  ... and {} more warnings", warnings.len() - max_display);
+            eprintln!("  Use --verbose for complete validation report");
+        }
+    }
+}
+
 /// Report validation issues for CLI tools
 ///
 /// This function displays validation statistics and warnings with appropriate formatting.
@@ -61,21 +110,8 @@ fn report_validation_issues(cli_builder: &CliBuilder, verbose: bool, max_warning
 
     let warnings = cli_builder.get_validation_warnings();
     if !warnings.is_empty() {
-        if verbose {
-            eprintln!("Validation warnings ({} issues):", warnings.len());
-            for (i, warning) in warnings.iter().enumerate() {
-                eprintln!("  {}. {}", i + 1, warning);
-            }
-        } else {
-            eprintln!("Validation warnings ({} issues):", warnings.len());
-            for (i, warning) in warnings.iter().enumerate().take(max_warnings) {
-                eprintln!("  {}. {}", i + 1, warning);
-            }
-            if warnings.len() > max_warnings {
-                eprintln!("  ... and {} more warnings", warnings.len() - max_warnings);
-                eprintln!("  Use --verbose for complete validation report");
-            }
-        }
+        eprintln!("Validation warnings ({} issues):", warnings.len());
+        display_validation_warnings(&warnings, verbose, max_warnings);
     }
     eprintln!(); // Add blank line for readability
 }
@@ -216,13 +252,7 @@ async fn handle_tool_validation(cli_tool_context: Arc<CliToolContext>, verbose: 
         }
     } else {
         let warnings = cli_builder.get_validation_warnings();
-        for (i, warning) in warnings.iter().enumerate().take(10) {
-            println!("{}. {}", i + 1, warning);
-        }
-        if warnings.len() > 10 {
-            println!("   ... and {} more issues", warnings.len() - 10);
-            println!("   Use --verbose for complete details");
-        }
+        display_validation_warnings(&warnings, false, 10);
     }
 
     println!("🔧 To fix these issues:");
@@ -441,41 +471,72 @@ fn extract_clap_value(
     prop_name: &str,
     prop_schema: &serde_json::Value,
 ) -> Option<serde_json::Value> {
-    match prop_schema.get("type").and_then(|t| t.as_str()) {
-        Some("boolean") => {
-            if matches.get_flag(prop_name) {
-                Some(serde_json::Value::Bool(true))
-            } else {
-                None
+    // Helper to check if a type string or type array contains a specific type
+    let has_type = |type_name: &str| -> bool {
+        match prop_schema.get("type") {
+            Some(serde_json::Value::String(t)) => t == type_name,
+            Some(serde_json::Value::Array(types)) => {
+                types.iter().any(|t| t.as_str() == Some(type_name))
             }
+            _ => false,
         }
-        Some("integer") => matches
-            .get_one::<i64>(prop_name)
-            .map(|v| serde_json::Value::Number(serde_json::Number::from(*v))),
-        Some("number") => matches
-            .get_one::<f64>(prop_name)
-            .and_then(|v| serde_json::Number::from_f64(*v))
-            .map(serde_json::Value::Number),
-        Some("array") => {
-            let values: Vec<String> = matches
-                .get_many::<String>(prop_name)
-                .map(|vals| vals.cloned().collect())
-                .unwrap_or_default();
-            if values.is_empty() {
-                None
-            } else {
-                Some(serde_json::Value::Array(
-                    values.into_iter().map(serde_json::Value::String).collect(),
-                ))
-            }
-        }
-        _ => {
-            // Default to string
-            matches
+    };
+
+    // Check for boolean type (either "boolean" or ["boolean", "null"])
+    if has_type("boolean") {
+        // For nullable booleans, we expect a string value "true" or "false"
+        if has_type("null") {
+            // This is a nullable boolean - it accepts a value
+            return matches
                 .get_one::<String>(prop_name)
-                .map(|s| serde_json::Value::String(s.clone()))
+                .and_then(|s| match s.as_str() {
+                    "true" => Some(serde_json::Value::Bool(true)),
+                    "false" => Some(serde_json::Value::Bool(false)),
+                    _ => None,
+                });
+        } else {
+            // This is a regular boolean flag
+            if matches.get_flag(prop_name) {
+                return Some(serde_json::Value::Bool(true));
+            }
+            return None;
         }
     }
+
+    // Check for integer type
+    if has_type("integer") {
+        return matches
+            .get_one::<i64>(prop_name)
+            .map(|v| serde_json::Value::Number(serde_json::Number::from(*v)));
+    }
+
+    // Check for number type
+    if has_type("number") {
+        return matches
+            .get_one::<f64>(prop_name)
+            .and_then(|v| serde_json::Number::from_f64(*v))
+            .map(serde_json::Value::Number);
+    }
+
+    // Check for array type
+    if has_type("array") {
+        let values: Vec<String> = matches
+            .get_many::<String>(prop_name)
+            .map(|vals| vals.cloned().collect())
+            .unwrap_or_default();
+        if values.is_empty() {
+            return None;
+        } else {
+            return Some(serde_json::Value::Array(
+                values.into_iter().map(serde_json::Value::String).collect(),
+            ));
+        }
+    }
+
+    // Default to string
+    matches
+        .get_one::<String>(prop_name)
+        .map(|s| serde_json::Value::String(s.clone()))
 }
 
 async fn handle_doctor_command(cli_context: &CliContext) -> i32 {
@@ -510,18 +571,10 @@ async fn handle_workflow_shortcut(
     };
 
     // Extract positional arguments (may not exist if workflow has no required params)
-    let positional_args: Vec<String> = matches
-        .try_get_many::<String>("positional")
-        .ok()
-        .flatten()
-        .map(|vals| vals.cloned().collect())
-        .unwrap_or_default();
+    let positional_args = extract_string_vec(matches, "positional");
 
     // Extract --param arguments
-    let params: Vec<String> = matches
-        .get_many::<String>("param")
-        .map(|vals| vals.cloned().collect())
-        .unwrap_or_default();
+    let params = extract_string_vec(matches, "param");
 
     // Extract flags
     let interactive = matches.get_flag("interactive");
@@ -599,10 +652,7 @@ async fn handle_flow_command(sub_matches: &clap::ArgMatches, context: &CliContex
 }
 
 async fn handle_validate_command(matches: &clap::ArgMatches, cli_context: &CliContext) -> i32 {
-    let workflow_dirs = matches
-        .get_many::<String>("workflow-dirs")
-        .map(|vals| vals.cloned().collect())
-        .unwrap_or_default();
+    let workflow_dirs = extract_string_vec(matches, "workflow-dirs");
     let validate_tools = matches.get_flag("validate-tools");
 
     commands::validate::handle_command(workflow_dirs, validate_tools, cli_context).await
@@ -639,9 +689,33 @@ async fn handle_agent_command(matches: &clap::ArgMatches, context: &CliContext) 
     commands::agent::handle_command(subcommand, context).await
 }
 
+/// Build a tracing registry with the specified filter and writer
+///
+/// This helper function creates a tracing subscriber registry with a filter and fmt layer,
+/// eliminating duplication in logging configuration code.
+///
+/// # Arguments
+/// * `filter` - The EnvFilter to apply
+/// * `writer` - The writer to use for log output
+fn build_log_registry<W>(filter: tracing_subscriber::EnvFilter, writer: W)
+where
+    W: for<'a> tracing_subscriber::fmt::MakeWriter<'a> + Send + Sync + 'static,
+{
+    use tracing_subscriber::prelude::*;
+
+    tracing_subscriber::registry()
+        .with(filter)
+        .with(
+            tracing_subscriber::fmt::layer()
+                .with_writer(writer)
+                .with_ansi(false),
+        )
+        .init();
+}
+
 async fn configure_logging(verbose: bool, debug: bool, quiet: bool, is_mcp_mode: bool) {
     use tracing::Level;
-    use tracing_subscriber::{fmt, prelude::*, registry, EnvFilter};
+    use tracing_subscriber::EnvFilter;
 
     let log_level = if is_mcp_mode {
         Level::DEBUG // More verbose for MCP mode to help with debugging
@@ -676,33 +750,20 @@ async fn configure_logging(verbose: bool, debug: bool, quiet: bool, is_mcp_mode:
         match std::fs::File::create(&log_file_path) {
             Ok(file) => {
                 let shared_file = Arc::new(std::sync::Mutex::new(file));
-                registry()
-                    .with(create_filter())
-                    .with(
-                        fmt::layer()
-                            .with_writer(move || {
-                                let file = shared_file.clone();
-                                Box::new(FileWriterGuard::new(file)) as Box<dyn std::io::Write>
-                            })
-                            .with_ansi(false), // No color codes in file
-                    )
-                    .init();
+                build_log_registry(create_filter(), move || {
+                    let file = shared_file.clone();
+                    Box::new(FileWriterGuard::new(file)) as Box<dyn std::io::Write>
+                });
             }
             Err(e) => {
                 eprintln!(
                     "Warning: Could not create log file: {}. Falling back to stderr.",
                     e
                 );
-                registry()
-                    .with(create_filter())
-                    .with(fmt::layer().with_writer(std::io::stderr))
-                    .init();
+                build_log_registry(create_filter(), std::io::stderr);
             }
         }
     } else {
-        registry()
-            .with(create_filter())
-            .with(fmt::layer().with_writer(std::io::stderr))
-            .init();
+        build_log_registry(create_filter(), std::io::stderr);
     }
 }

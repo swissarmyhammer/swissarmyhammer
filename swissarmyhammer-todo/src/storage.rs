@@ -2,11 +2,18 @@
 //!
 //! This module provides filesystem-based storage for todo lists using YAML format.
 //! Todo lists are stored as `.todo.yaml` files in the `.swissarmyhammer/todo/` directory.
+//!
+//! ## Concurrency Safety
+//!
+//! This module uses file-based locking to ensure safe concurrent access to todo lists.
+//! When multiple processes attempt to modify the same todo file simultaneously, they
+//! acquire an exclusive lock on a separate `.lock` file to prevent race conditions.
 
 use crate::error::{Result, TodoError};
 use crate::types::{TodoId, TodoItem, TodoList};
 use crate::utils::get_todo_directory;
-use std::fs;
+use fs2::FileExt;
+use std::fs::{self, File};
 use std::path::{Path, PathBuf};
 
 /// Storage backend for todo list operations
@@ -30,6 +37,8 @@ impl TodoStorage {
     /// Create a new todo item
     ///
     /// Returns the created item and the number of completed items that were garbage collected
+    ///
+    /// This method acquires an exclusive lock to prevent concurrent modifications.
     pub async fn create_todo_item(
         &self,
         task: String,
@@ -40,6 +49,9 @@ impl TodoStorage {
         }
 
         let path = self.get_todo_file_path()?;
+
+        // Acquire exclusive lock for the entire read-modify-write operation
+        let _lock = self.acquire_lock(&path)?;
 
         // Load existing list or create new one
         let mut list = if path.exists() {
@@ -57,6 +69,8 @@ impl TodoStorage {
 
         // Save the updated list
         self.save_todo_list(&path, &list).await?;
+
+        // Lock is automatically released when _lock goes out of scope
 
         Ok((new_item, gc_count))
     }
@@ -80,12 +94,17 @@ impl TodoStorage {
     }
 
     /// Mark a todo item as complete
+    ///
+    /// This method acquires an exclusive lock to prevent concurrent modifications.
     pub async fn mark_todo_complete(&self, id: &TodoId) -> Result<()> {
         let path = self.get_todo_file_path()?;
 
         if !path.exists() {
             return Err(TodoError::TodoListNotFound("todo".to_string()));
         }
+
+        // Acquire exclusive lock for the entire read-modify-write operation
+        let _lock = self.acquire_lock(&path)?;
 
         let mut list = self.load_todo_list(&path).await?;
 
@@ -102,10 +121,18 @@ impl TodoStorage {
             fs::remove_file(&path).map_err(|e| {
                 TodoError::other(format!("Failed to delete completed todo list: {e}"))
             })?;
+
+            // Also clean up the lock file
+            let lock_path = self.get_lock_file_path(&path);
+            if lock_path.exists() {
+                let _ = fs::remove_file(&lock_path); // Ignore errors cleaning up lock file
+            }
         } else {
             // Save the updated list
             self.save_todo_list(&path, &list).await?;
         }
+
+        // Lock is automatically released when _lock goes out of scope
 
         Ok(())
     }
@@ -157,6 +184,40 @@ impl TodoStorage {
     /// Get the path for the single todo file
     fn get_todo_file_path(&self) -> Result<PathBuf> {
         Ok(self.base_dir.join("todo.yaml"))
+    }
+
+    /// Get the lock file path for a given todo file
+    fn get_lock_file_path(&self, todo_path: &Path) -> PathBuf {
+        todo_path.with_extension("yaml.lock")
+    }
+
+    /// Acquire an exclusive lock on the todo file
+    ///
+    /// Returns a File handle that holds the lock. The lock is automatically
+    /// released when the File handle is dropped (RAII pattern).
+    ///
+    /// This uses a separate `.lock` file to avoid conflicts with the actual data file.
+    fn acquire_lock(&self, todo_path: &Path) -> Result<File> {
+        let lock_path = self.get_lock_file_path(todo_path);
+
+        // Ensure parent directory exists for lock file
+        if let Some(parent) = lock_path.parent() {
+            fs::create_dir_all(parent)
+                .map_err(|e| self.fs_error("create todo lock directory", parent, e))?;
+        }
+
+        // Create or open the lock file
+        let lock_file = File::create(&lock_path)
+            .map_err(|e| self.fs_error("create lock file", &lock_path, e))?;
+
+        // Acquire exclusive lock (blocks until available)
+        lock_file
+            .lock_exclusive()
+            .map_err(|e| self.fs_error("acquire lock", &lock_path, e))?;
+
+        tracing::debug!("Acquired lock on {}", lock_path.display());
+
+        Ok(lock_file)
     }
 
     /// Helper method for filesystem error handling
@@ -234,6 +295,30 @@ mod tests {
         assert_eq!(list.incomplete_count(), incomplete);
     }
 
+    /// Helper function to assert timestamp bounds for a todo item
+    ///
+    /// Verifies that created_at and updated_at are within the expected time range.
+    /// If `expect_equal` is true, also verifies that both timestamps are equal.
+    fn assert_timestamp_bounds(
+        item: &TodoItem,
+        before: chrono::DateTime<chrono::Utc>,
+        after: chrono::DateTime<chrono::Utc>,
+        expect_equal: bool,
+    ) {
+        // Verify created_at is set and within reasonable bounds
+        assert!(item.created_at >= before);
+        assert!(item.created_at <= after);
+
+        // Verify updated_at is set and within reasonable bounds
+        assert!(item.updated_at >= before);
+        assert!(item.updated_at <= after);
+
+        // Optionally verify both timestamps are equal
+        if expect_equal {
+            assert_eq!(item.created_at, item.updated_at);
+        }
+    }
+
     #[tokio::test]
     async fn test_create_todo_item() {
         let (storage, _temp_dir) = setup_test_storage();
@@ -262,27 +347,23 @@ mod tests {
             .unwrap();
         let after = Utc::now();
 
-        // Verify created_at is set and within reasonable bounds
-        assert!(item.created_at >= before);
-        assert!(item.created_at <= after);
-
-        // Verify updated_at is set and within reasonable bounds
-        assert!(item.updated_at >= before);
-        assert!(item.updated_at <= after);
-
-        // Verify both timestamps are equal at creation
-        assert_eq!(item.created_at, item.updated_at);
+        // Verify timestamps are set correctly at creation
+        assert_timestamp_bounds(&item, before, after, true);
     }
 
     #[tokio::test]
     async fn test_todo_item_timestamps_persist() {
+        use chrono::Utc;
+
         let (storage, _temp_dir) = setup_test_storage();
 
         // Create an item
+        let before = Utc::now();
         let (item, _gc_count) = storage
             .create_todo_item("Test task".to_string(), None)
             .await
             .unwrap();
+        let after = Utc::now();
 
         let original_created_at = item.created_at;
         let original_updated_at = item.updated_at;
@@ -297,6 +378,9 @@ mod tests {
         // Verify timestamps are preserved after persistence and retrieval
         assert_eq!(retrieved.created_at, original_created_at);
         assert_eq!(retrieved.updated_at, original_updated_at);
+
+        // Verify timestamps are within bounds and equal
+        assert_timestamp_bounds(&retrieved, before, after, true);
     }
 
     #[tokio::test]
@@ -442,10 +526,7 @@ mod tests {
         assert!(!list.todo[0].done);
 
         // Verify timestamps were added with default values (current time)
-        assert!(list.todo[0].created_at >= before_load);
-        assert!(list.todo[0].created_at <= after_load);
-        assert!(list.todo[0].updated_at >= before_load);
-        assert!(list.todo[0].updated_at <= after_load);
+        assert_timestamp_bounds(&list.todo[0], before_load, after_load, false);
 
         // Verify second item
         assert_eq!(list.todo[1].task, "Another task");
@@ -453,10 +534,7 @@ mod tests {
         assert!(list.todo[1].done);
 
         // Verify timestamps were added
-        assert!(list.todo[1].created_at >= before_load);
-        assert!(list.todo[1].created_at <= after_load);
-        assert!(list.todo[1].updated_at >= before_load);
-        assert!(list.todo[1].updated_at <= after_load);
+        assert_timestamp_bounds(&list.todo[1], before_load, after_load, false);
 
         // Now save the list and verify it has timestamps in the YAML
         storage.save_todo_list(&todo_file, &list).await.unwrap();

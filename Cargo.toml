@@ -68,6 +68,7 @@ toml = "0.9.5"
 schemars = "0.8"
 governor = "0.7"
 nonzero_ext = "0.3"
+num_cpus = "1.16"
 
 # Semantic Search Dependencies
 ort = "2.0.0-rc.10"
@@ -84,6 +85,7 @@ tree-sitter-typescript = "0.23.2"
 tree-sitter-javascript = "0.23.1"
 tree-sitter-dart = "0.0.4"
 md5 = "0.7"
+fs2 = "0.4"
 
 # CLI specific dependencies
 clap = { version = "4", features = ["derive"] }

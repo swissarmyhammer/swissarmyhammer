@@ -10,33 +10,24 @@ use std::path::{Path, PathBuf};
 /// This prevents infinite loops and excessive filesystem traversal
 const MAX_DIRECTORY_DEPTH: usize = 10;
 
-/// Find the Git repository root starting from current directory
+/// Walk up the directory tree until a predicate is satisfied
 ///
-/// Walks up the directory tree looking for .git directory to identify
-/// a Git repository. This function respects MAX_DIRECTORY_DEPTH to prevent
-/// infinite traversal and returns None if no Git repository is found.
-///
-/// # Returns
-///
-/// * `Option<PathBuf>` - Some(path) if Git repository found, None otherwise
-pub fn find_git_repository_root() -> Option<PathBuf> {
-    let current_dir = std::env::current_dir().ok()?;
-    find_git_repository_root_from(&current_dir)
-}
-
-/// Find the Git repository root starting from a specific directory
-///
-/// This function searches upwards from the given directory until it finds
-/// a .git directory or reaches the maximum search depth.
+/// This helper function traverses upward from a starting directory,
+/// applying a predicate to each directory until one matches or
+/// the maximum search depth is reached.
 ///
 /// # Arguments
 ///
 /// * `start_dir` - The directory to start searching from
+/// * `predicate` - A function that returns true when the desired directory is found
 ///
 /// # Returns
 ///
-/// * `Option<PathBuf>` - Some(path) if Git repository found, None otherwise
-pub fn find_git_repository_root_from(start_dir: &Path) -> Option<PathBuf> {
+/// * `Option<PathBuf>` - Some(path) if predicate matches, None otherwise
+fn walk_up_directory_tree<F>(start_dir: &Path, predicate: F) -> Option<PathBuf>
+where
+    F: Fn(&Path) -> bool,
+{
     let mut path = start_dir;
     let mut depth = 0;
 
@@ -45,7 +36,7 @@ pub fn find_git_repository_root_from(start_dir: &Path) -> Option<PathBuf> {
             break;
         }
 
-        if path.join(".git").exists() {
+        if predicate(path) {
             return Some(path.to_path_buf());
         }
 
@@ -61,6 +52,35 @@ pub fn find_git_repository_root_from(start_dir: &Path) -> Option<PathBuf> {
     None
 }
 
+/// Find the Git repository root starting from current directory
+///
+/// Walks up the directory tree looking for .git directory to identify
+/// a Git repository. This function respects MAX_DIRECTORY_DEPTH to prevent
+/// infinite traversal and returns None if no Git repository is found.
+///
+/// # Returns
+///
+/// * `Option<PathBuf>` - Some(path) if Git repository found, None otherwise
+pub fn find_git_repository_root() -> Option<PathBuf> {
+    find_git_repository_root_from(&std::env::current_dir().ok()?)
+}
+
+/// Find the Git repository root starting from a specific directory
+///
+/// This function searches upwards from the given directory until it finds
+/// a .git directory or reaches the maximum search depth.
+///
+/// # Arguments
+///
+/// * `start_dir` - The directory to start searching from
+///
+/// # Returns
+///
+/// * `Option<PathBuf>` - Some(path) if Git repository found, None otherwise
+pub fn find_git_repository_root_from(start_dir: &Path) -> Option<PathBuf> {
+    walk_up_directory_tree(start_dir, |path| path.join(".git").exists())
+}
+
 /// Find the SwissArmyHammer directory for the current Git repository
 ///
 /// Returns None if not in a Git repository or if no .swissarmyhammer directory exists.
@@ -71,8 +91,7 @@ pub fn find_git_repository_root_from(start_dir: &Path) -> Option<PathBuf> {
 ///
 /// * `Option<PathBuf>` - Some(path) if Git repository found with .swissarmyhammer directory, None otherwise
 pub fn find_swissarmyhammer_directory() -> Option<PathBuf> {
-    let current_dir = std::env::current_dir().ok()?;
-    find_swissarmyhammer_directory_from(&current_dir)
+    find_swissarmyhammer_directory_from(&std::env::current_dir().ok()?)
 }
 
 /// Find the SwissArmyHammer directory starting from a specific directory
@@ -120,14 +139,10 @@ pub fn find_swissarmyhammer_directory_from(start_dir: &Path) -> Option<PathBuf> 
     note = "Use SwissarmyhammerDirectory::from_git_root() instead"
 )]
 pub fn get_or_create_swissarmyhammer_directory() -> Result<PathBuf> {
-    let current_dir = match std::env::current_dir() {
-        Ok(dir) => dir,
-        Err(e) => {
-            return Err(SwissArmyHammerError::directory_creation(e));
-        }
-    };
     #[allow(deprecated)]
-    get_or_create_swissarmyhammer_directory_from(&current_dir)
+    get_or_create_swissarmyhammer_directory_from(
+        &std::env::current_dir().map_err(SwissArmyHammerError::directory_creation)?,
+    )
 }
 
 /// Get or create the .swissarmyhammer directory starting from a specific directory

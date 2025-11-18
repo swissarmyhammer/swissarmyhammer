@@ -412,18 +412,26 @@ impl SemanticConfig {
 mod tests {
     use super::*;
 
+    /// Generic helper function to assert that validation fails with expected field name and custom checks
+    fn assert_validation_fails(
+        create_invalid_config: impl Fn() -> SemanticConfig,
+        expected_field_name: &str,
+        additional_check: impl Fn(&str),
+    ) {
+        let config = create_invalid_config();
+        let result = config.validate();
+        assert!(result.is_err());
+        let error_message = result.unwrap_err().to_string();
+        assert!(error_message.contains(expected_field_name));
+        additional_check(&error_message);
+    }
+
     /// Helper function to assert that a threshold validation fails with the expected field name
     fn assert_threshold_validation_fails(
         create_invalid_config: impl Fn() -> SemanticConfig,
         expected_field_name: &str,
     ) {
-        let config = create_invalid_config();
-        let result = config.validate();
-        assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains(expected_field_name));
+        assert_validation_fails(create_invalid_config, expected_field_name, |_| {});
     }
 
     /// Helper function to assert that a zero-length validation fails with the expected field name
@@ -431,12 +439,9 @@ mod tests {
         create_invalid_config: impl Fn() -> SemanticConfig,
         expected_field_name: &str,
     ) {
-        let config = create_invalid_config();
-        let result = config.validate();
-        assert!(result.is_err());
-        let error_message = result.unwrap_err().to_string();
-        assert!(error_message.contains(expected_field_name));
-        assert!(error_message.contains("must be greater than 0"));
+        assert_validation_fails(create_invalid_config, expected_field_name, |msg| {
+            assert!(msg.contains("must be greater than 0"));
+        });
     }
 
     /// RAII guard for managing SWISSARMYHAMMER_SEMANTIC_DB_PATH environment variable in tests
@@ -458,6 +463,28 @@ mod tests {
             match &self.original {
                 Some(path) => std::env::set_var("SWISSARMYHAMMER_SEMANTIC_DB_PATH", path),
                 None => std::env::remove_var("SWISSARMYHAMMER_SEMANTIC_DB_PATH"),
+            }
+        }
+    }
+
+    /// Test fixture for managing environment and locks in SemanticConfig tests
+    struct SemanticConfigTestFixture {
+        _env_guard: SemanticDbEnvGuard,
+        #[allow(dead_code)]
+        _lock_guard: Option<std::sync::MutexGuard<'static, ()>>,
+    }
+
+    impl SemanticConfigTestFixture {
+        fn new(need_lock: bool) -> Self {
+            let _lock_guard = if need_lock {
+                Some(crate::test_utils::acquire_semantic_db_lock())
+            } else {
+                None
+            };
+            let _env_guard = SemanticDbEnvGuard::new();
+            Self {
+                _env_guard,
+                _lock_guard,
             }
         }
     }
@@ -552,18 +579,7 @@ mod tests {
 
     #[test]
     fn test_semantic_config_default() {
-        use std::sync::{Mutex, OnceLock};
-
-        static ENV_LOCK_DEFAULT: OnceLock<Mutex<()>> = OnceLock::new();
-
-        // Use mutex to prevent race conditions between tests
-        let _guard = ENV_LOCK_DEFAULT
-            .get_or_init(|| Mutex::new(()))
-            .lock()
-            .unwrap();
-
-        // Use SemanticDbEnvGuard to manage environment variable
-        let _env_guard = SemanticDbEnvGuard::new();
+        let _fixture = SemanticConfigTestFixture::new(true);
 
         // Create config WHILE environment variable is cleared
         let config = SemanticConfig::default();
@@ -957,14 +973,7 @@ mod tests {
 
     #[test]
     fn test_semantic_config_git_repository_path() {
-        use std::sync::{Mutex, OnceLock};
-        static ENV_LOCK_GIT: OnceLock<Mutex<()>> = OnceLock::new();
-
-        // Use mutex to prevent race conditions between tests
-        let _guard = ENV_LOCK_GIT.get_or_init(|| Mutex::new(())).lock().unwrap();
-
-        // Use SemanticDbEnvGuard to manage environment variable
-        let _env_guard = SemanticDbEnvGuard::new();
+        let _fixture = SemanticConfigTestFixture::new(true);
 
         // This test verifies that the new Git-centric approach works by testing that
         // when we're in a Git repository with .swissarmyhammer, the database path
@@ -998,11 +1007,7 @@ mod tests {
     fn test_semantic_config_home_fallback() {
         use tempfile::TempDir;
 
-        // Acquire the global semantic DB environment lock to prevent race conditions
-        let _lock_guard = crate::test_utils::acquire_semantic_db_lock();
-
-        // Use SemanticDbEnvGuard to manage environment variable
-        let _env_guard = SemanticDbEnvGuard::new();
+        let _fixture = SemanticConfigTestFixture::new(true);
 
         // Create a temporary directory that doesn't have .git (not a Git repository)
         let temp_dir = TempDir::new().unwrap();
@@ -1045,11 +1050,7 @@ mod tests {
         use std::fs;
         use tempfile::TempDir;
 
-        // Acquire the global semantic DB environment lock to prevent race conditions
-        let _lock_guard = crate::test_utils::acquire_semantic_db_lock();
-
-        // Use SemanticDbEnvGuard to manage environment variable
-        let _env_guard = SemanticDbEnvGuard::new();
+        let _fixture = SemanticConfigTestFixture::new(true);
 
         let temp_dir = TempDir::new().unwrap();
 

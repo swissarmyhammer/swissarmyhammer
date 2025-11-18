@@ -660,6 +660,19 @@ impl ErrorMessageEnhancer {
         }
     }
 
+    /// Initialize a Levenshtein distance matrix with base values
+    fn initialize_distance_matrix(a_len: usize, b_len: usize) -> Vec<Vec<usize>> {
+        let mut matrix = vec![vec![0; b_len + 1]; a_len + 1];
+        for (i, row) in matrix.iter_mut().enumerate().take(a_len + 1) {
+            row[0] = i;
+        }
+        #[allow(clippy::needless_range_loop)]
+        for j in 0..=b_len {
+            matrix[0][j] = j;
+        }
+        matrix
+    }
+
     /// Calculate Levenshtein distance between two strings
     ///
     /// This is a standard dynamic programming implementation of the Levenshtein algorithm
@@ -679,16 +692,7 @@ impl ErrorMessageEnhancer {
             return a_len;
         }
 
-        let mut matrix = vec![vec![0; b_len + 1]; a_len + 1];
-
-        // Initialize first row and column
-        for (i, row) in matrix.iter_mut().enumerate().take(a_len + 1) {
-            row[0] = i;
-        }
-        #[allow(clippy::needless_range_loop)]
-        for j in 0..=b_len {
-            matrix[0][j] = j;
-        }
+        let mut matrix = Self::initialize_distance_matrix(a_len, b_len);
 
         // Fill matrix using dynamic programming
         for i in 1..=a_len {
@@ -1607,6 +1611,53 @@ mod enhanced_error_handling_tests {
 mod tests {
     use super::*;
 
+    #[cfg(test)]
+    mod test_helpers {
+        use super::*;
+
+        pub fn create_test_resolver() -> DefaultParameterResolver {
+            DefaultParameterResolver::new()
+        }
+
+        pub fn create_cli_args(pairs: Vec<(&str, &str)>) -> HashMap<String, String> {
+            pairs
+                .into_iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect()
+        }
+
+        pub fn test_pattern_validation_helper(
+            pattern: &str,
+            valid_inputs: Vec<&str>,
+            invalid_inputs: Vec<&str>,
+            param_name: &str,
+        ) {
+            let validator = ParameterValidator::new();
+            let param =
+                Parameter::new(param_name, param_name, ParameterType::String).with_pattern(pattern);
+
+            for input in valid_inputs {
+                let value = serde_json::Value::String(input.to_string());
+                assert!(
+                    validator.validate_parameter(&param, &value).is_ok(),
+                    "{} should be valid: {}",
+                    param_name,
+                    input
+                );
+            }
+
+            for input in invalid_inputs {
+                let value = serde_json::Value::String(input.to_string());
+                assert!(
+                    validator.validate_parameter(&param, &value).is_err(),
+                    "{} should be invalid: {}",
+                    param_name,
+                    input
+                );
+            }
+        }
+    }
+
     #[test]
     fn test_parameter_creation() {
         let param = Parameter::new("test_param", "A test parameter", ParameterType::String)
@@ -2184,73 +2235,35 @@ mod tests {
 
     #[test]
     fn test_email_pattern_validation() {
-        let validator = ParameterValidator::new();
-        let param = Parameter::new("email", "Email", ParameterType::String)
-            .with_pattern(CommonPatterns::EMAIL);
-
-        // Valid emails
-        let valid_emails = vec![
-            "test@example.com",
-            "user.name@domain.org",
-            "user+tag@example.co.uk",
-        ];
-
-        for email in valid_emails {
-            let value = serde_json::Value::String(email.to_string());
-            assert!(
-                validator.validate_parameter(&param, &value).is_ok(),
-                "Email should be valid: {email}"
-            );
-        }
-
-        // Invalid emails
-        let invalid_emails = vec![
-            "not-an-email",
-            "@example.com",
-            "user@",
-            "user name@example.com", // space in local part
-        ];
-
-        for email in invalid_emails {
-            let value = serde_json::Value::String(email.to_string());
-            assert!(
-                validator.validate_parameter(&param, &value).is_err(),
-                "Email should be invalid: {email}"
-            );
-        }
+        test_helpers::test_pattern_validation_helper(
+            CommonPatterns::EMAIL,
+            vec![
+                "test@example.com",
+                "user.name@domain.org",
+                "user+tag@example.co.uk",
+            ],
+            vec![
+                "not-an-email",
+                "@example.com",
+                "user@",
+                "user name@example.com", // space in local part
+            ],
+            "email",
+        );
     }
 
     #[test]
     fn test_url_pattern_validation() {
-        let validator = ParameterValidator::new();
-        let param =
-            Parameter::new("url", "URL", ParameterType::String).with_pattern(CommonPatterns::URL);
-
-        // Valid URLs
-        let valid_urls = vec![
-            "https://example.com",
-            "http://test.org/path",
-            "https://api.example.com/v1/users",
-        ];
-
-        for url in valid_urls {
-            let value = serde_json::Value::String(url.to_string());
-            assert!(
-                validator.validate_parameter(&param, &value).is_ok(),
-                "URL should be valid: {url}"
-            );
-        }
-
-        // Invalid URLs
-        let invalid_urls = vec!["not-a-url", "ftp://example.com", "just-text"];
-
-        for url in invalid_urls {
-            let value = serde_json::Value::String(url.to_string());
-            assert!(
-                validator.validate_parameter(&param, &value).is_err(),
-                "URL should be invalid: {url}"
-            );
-        }
+        test_helpers::test_pattern_validation_helper(
+            CommonPatterns::URL,
+            vec![
+                "https://example.com",
+                "http://test.org/path",
+                "https://api.example.com/v1/users",
+            ],
+            vec!["not-a-url", "ftp://example.com", "just-text"],
+            "url",
+        );
     }
 
     #[test]
@@ -2361,7 +2374,7 @@ mod tests {
 
     #[test]
     fn test_conditional_parameter_basic_scenario() {
-        let resolver = DefaultParameterResolver::new();
+        let resolver = test_helpers::create_test_resolver();
 
         // Base parameter that determines condition
         let deploy_env = Parameter::new(
@@ -2437,7 +2450,7 @@ mod tests {
 
     #[test]
     fn test_conditional_parameter_with_defaults() {
-        let resolver = DefaultParameterResolver::new();
+        let resolver = test_helpers::create_test_resolver();
 
         let enable_ssl = Parameter::new("enable_ssl", "Enable SSL", ParameterType::Boolean)
             .with_default(serde_json::json!(false))
@@ -2477,7 +2490,7 @@ mod tests {
 
     #[test]
     fn test_conditional_parameter_complex_logic() {
-        let resolver = DefaultParameterResolver::new();
+        let resolver = test_helpers::create_test_resolver();
 
         let env = Parameter::new("env", "Environment", ParameterType::String).required(true);
 
@@ -2520,7 +2533,7 @@ mod tests {
 
     #[test]
     fn test_conditional_parameter_dependency_chain() {
-        let resolver = DefaultParameterResolver::new();
+        let resolver = test_helpers::create_test_resolver();
 
         // Chain: database_type -> requires_ssl -> cert_path
         let database_type = Parameter::new("database_type", "Database type", ParameterType::Choice)
