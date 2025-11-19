@@ -1,1 +1,0 @@
-Running cargo nextest run --fail-fast
