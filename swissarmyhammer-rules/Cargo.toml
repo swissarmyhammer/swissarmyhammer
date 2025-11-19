@@ -41,7 +41,6 @@ glob = { workspace = true }
 ignore = { workspace = true }
 dirs = { workspace = true }
 sha2 = { workspace = true }
-num_cpus = { workspace = true }
 
 # Template engine
 liquid = { workspace = true }

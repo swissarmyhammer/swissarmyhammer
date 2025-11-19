@@ -25,8 +25,8 @@ const EXPECTED_CORE_TOOLS: &[&str] = &[
 fn setup_tool_comparison_test(test_name: &str) -> (Vec<String>, Vec<String>) {
     let _ = tracing_subscriber::fmt::try_init();
     info!("🧪 Testing {}", test_name);
-    let http_tools = get_http_static_tools();
-    let stdin_tools = get_stdin_registry_tools();
+    let http_tools = get_mcp_tools();
+    let stdin_tools = get_mcp_tools();
     (http_tools, stdin_tools)
 }
 
@@ -47,6 +47,38 @@ fn assert_tools_present(tools: &[String], expected_tools: &[&str], context: &str
 /// Helper function to log test success with tool counts
 fn log_test_success(message: &str, count: usize) {
     info!("✅ {}: {}", message, count);
+}
+
+/// Helper function to log tool differences between two sets
+///
+/// # Arguments
+///
+/// * `set_a` - First tool set
+/// * `set_b` - Second tool set
+/// * `label_a` - Label for first set
+fn log_tool_differences(set_a: &HashSet<String>, set_b: &HashSet<String>, label_a: &str) {
+    let only_in_a: Vec<&String> = set_a.difference(set_b).collect();
+    if !only_in_a.is_empty() {
+        eprintln!("❌ Tools only in {}: {:?}", label_a, only_in_a);
+    }
+}
+
+/// Helper function to log symmetric differences between two tool sets
+///
+/// # Arguments
+///
+/// * `set_a` - First tool set
+/// * `set_b` - Second tool set
+/// * `label_a` - Label for first set
+/// * `label_b` - Label for second set
+fn log_symmetric_differences(
+    set_a: &HashSet<String>,
+    set_b: &HashSet<String>,
+    label_a: &str,
+    label_b: &str,
+) {
+    log_tool_differences(set_a, set_b, label_a);
+    log_tool_differences(set_b, set_a, label_b);
 }
 
 /// Helper function to compare two tool sets and assert they are identical
@@ -70,17 +102,13 @@ fn compare_tool_sets(http_tools: Vec<String>, stdin_tools: Vec<String>) -> Resul
     let http_tool_names: HashSet<String> = http_tools.into_iter().collect();
     let stdin_tool_names: HashSet<String> = stdin_tools.into_iter().collect();
 
-    // Check for tools only in HTTP
-    let only_in_http: Vec<&String> = http_tool_names.difference(&stdin_tool_names).collect();
-    if !only_in_http.is_empty() {
-        eprintln!("❌ Tools only in HTTP server: {:?}", only_in_http);
-    }
-
-    // Check for tools only in STDIN
-    let only_in_stdin: Vec<&String> = stdin_tool_names.difference(&http_tool_names).collect();
-    if !only_in_stdin.is_empty() {
-        eprintln!("❌ Tools only in STDIN server: {:?}", only_in_stdin);
-    }
+    // Check for differences in both directions
+    log_symmetric_differences(
+        &http_tool_names,
+        &stdin_tool_names,
+        "HTTP server",
+        "STDIN server",
+    );
 
     // Verify they are identical
     assert_eq!(
@@ -119,6 +147,28 @@ fn assert_minimum_tool_count(tools: &[String], context: &str, minimum: usize) {
     );
 }
 
+/// Helper function to run dual tool tests with custom assertion logic
+///
+/// # Arguments
+///
+/// * `test_name` - Name of the test for logging
+/// * `success_message` - Message to log on successful test completion
+/// * `assertion_fn` - Function to run assertions on tool list and context
+///
+/// # Returns
+///
+/// * `Result<()>` - Ok if assertions pass, error otherwise
+fn run_dual_tool_test<F>(test_name: &str, success_message: &str, assertion_fn: F) -> Result<()>
+where
+    F: Fn(&[String], &str),
+{
+    let (http_tools, stdin_tools) = setup_tool_comparison_test(test_name);
+    assertion_fn(&http_tools, "HTTP static definition");
+    assertion_fn(&stdin_tools, "STDIN registry");
+    info!("{}", success_message);
+    Ok(())
+}
+
 /// Test that HTTP and STDIN MCP tool registries are identical
 #[tokio::test]
 async fn test_http_stdin_mcp_tool_parity() -> Result<()> {
@@ -128,50 +178,11 @@ async fn test_http_stdin_mcp_tool_parity() -> Result<()> {
     compare_tool_sets(http_tools, stdin_tools)
 }
 
-/// Get tool names from HTTP server static definition (from llama_agent_executor.rs)
-/// This should match exactly what the tool registry provides
-fn get_http_static_tools() -> Vec<String> {
-    // This mirrors the tool registry tools exactly, with sah__ prefix for MCP protocol
-    // Workflow/prompt tools are NOT included as they're handled separately by MCP server
-    let tools = [
-        "abort_create",
-        "files_edit",
-        "files_glob",
-        "files_grep",
-        "files_read",
-        "files_write",
-        "flow",
-        "git_changes",
-        "issue_all_complete",
-        "issue_create",
-        "issue_list",
-        "issue_mark_complete",
-        "issue_show",
-        "issue_update",
-        "memo_create",
-        "memo_get",
-        "memo_get_all_context",
-        "memo_list",
-        "outline_generate",
-        "question_ask",
-        "question_summary",
-        "rules_check",
-        "search_index",
-        "search_query",
-        "shell_execute",
-        "todo_create",
-        "todo_list",
-        "todo_mark_complete",
-        "todo_show",
-        "web_fetch",
-        "web_search",
-    ];
-
-    tools.into_iter().map(String::from).collect()
-}
-
-/// Get tool names from STDIN registry (the authoritative source)
-fn get_stdin_registry_tools() -> Vec<String> {
+/// Get tool names from the MCP tool registry (single source of truth)
+///
+/// This function is used by both HTTP and STDIN server tests to ensure
+/// they validate against the same authoritative tool list.
+fn get_mcp_tools() -> Vec<String> {
     let registry = create_fully_registered_tool_registry();
 
     // Get MCP tool names with sah__ prefix to match MCP protocol
@@ -185,37 +196,23 @@ fn get_stdin_registry_tools() -> Vec<String> {
 /// Test that both tool definitions return expected minimum number of tools
 #[tokio::test]
 async fn test_mcp_tool_definitions_return_sufficient_tools() -> Result<()> {
-    let (http_tools, stdin_tools) =
-        setup_tool_comparison_test("MCP tool definitions return expected number of tools");
-
-    // Test HTTP static definition
-    assert_minimum_tool_count(&http_tools, "HTTP static definition", 25);
-
-    // Test STDIN registry
-    assert_minimum_tool_count(&stdin_tools, "STDIN registry", 25);
-
-    info!(
-        "Both tool definitions have sufficient tools (HTTP: {}, STDIN: {})",
-        http_tools.len(),
-        stdin_tools.len()
-    );
-
-    Ok(())
+    run_dual_tool_test(
+        "MCP tool definitions return expected number of tools",
+        "Both tool definitions have sufficient tools",
+        |tools, context| {
+            assert_minimum_tool_count(tools, context, 25);
+        },
+    )
 }
 
 /// Test that both tool definitions include expected core tools
 #[tokio::test]
 async fn test_mcp_tool_definitions_include_core_tools() -> Result<()> {
-    let (http_tools, stdin_tools) =
-        setup_tool_comparison_test("MCP tool definitions include expected core tools");
-
-    // Test HTTP static definition
-    assert_tools_present(&http_tools, EXPECTED_CORE_TOOLS, "HTTP static definition");
-
-    // Test STDIN registry
-    assert_tools_present(&stdin_tools, EXPECTED_CORE_TOOLS, "STDIN registry");
-
-    info!("Both tool definitions include all expected core tools");
-
-    Ok(())
+    run_dual_tool_test(
+        "MCP tool definitions include expected core tools",
+        "Both tool definitions include all expected core tools",
+        |tools, context| {
+            assert_tools_present(tools, EXPECTED_CORE_TOOLS, context);
+        },
+    )
 }

@@ -2,13 +2,24 @@
 //!
 //! This test suite verifies that the todo CLI commands (create, show, complete)
 //! work correctly through the dynamic CLI interface.
+//!
+//! ## Test Helper Patterns
+//!
+//! This module uses several semantic wrapper functions (e.g., `assert_next_todo_contains`,
+//! `complete_todo_and_verify`) that wrap more generic helper functions with specific parameters.
+//! These wrappers exist to provide clarity at test call sites, making the test intent explicit
+//! without requiring readers to understand the underlying generic helpers.
 
 use git2::Repository;
+use serde_json::Value;
 use std::process::Command;
 use tempfile::TempDir;
 
 /// Length of the JSON prefix `"id":"` used when parsing todo IDs from command output
 const JSON_ID_PREFIX_LEN: usize = 6;
+
+/// Standard test tasks used across multiple test setup functions
+const TEST_TASKS: &[(&str, Option<&str>)] = &[("Task 1", None), ("Task 2", None), ("Task 3", None)];
 
 /// Helper function to run sah command with specific working directory
 fn run_sah_command_with_cwd(args: &[&str], cwd: &std::path::Path) -> std::process::Output {
@@ -35,6 +46,9 @@ fn init_git_repo(path: &std::path::Path) {
 }
 
 /// Helper function to create a temp directory with git repo and .swissarmyhammer initialized
+///
+/// Returns a tuple of (TempDir, Path) to reduce the repetitive pattern of calling
+/// `setup_todo_test_env()` followed by `temp_dir.path()` in every test.
 fn setup_todo_test_env() -> TempDir {
     let temp_dir = TempDir::new().expect("Failed to create temp dir");
     let temp_path = temp_dir.path();
@@ -44,6 +58,17 @@ fn setup_todo_test_env() -> TempDir {
         .expect("Failed to create .swissarmyhammer dir");
 
     temp_dir
+}
+
+/// Helper function that returns both TempDir and path for convenient test setup
+///
+/// This eliminates the common pattern of `let temp_dir = setup_todo_test_env(); let temp_path = temp_dir.path();`
+/// Usage: `let (temp_dir, temp_path) = setup_todo_test();`
+#[allow(dead_code)]
+fn setup_todo_test() -> (TempDir, std::path::PathBuf) {
+    let temp_dir = setup_todo_test_env();
+    let temp_path = temp_dir.path().to_path_buf();
+    (temp_dir, temp_path)
 }
 
 /// Helper function to extract todo ID from JSON output
@@ -56,16 +81,26 @@ fn extract_todo_id_from_output(output: &str) -> &str {
     &output[id_start..id_end]
 }
 
+/// Generic helper function to parse JSON and extract a numeric field value
+fn parse_json_field_u32(output: &str, field: &str) -> Result<u32, String> {
+    let parsed: Value = serde_json::from_str(output)
+        .map_err(|e| format!("Failed to parse JSON output: {}. Error: {}", output, e))?;
+
+    parsed[field]
+        .as_u64()
+        .ok_or_else(|| format!("Field '{}' not found or not a number in JSON", field))
+        .map(|v| v as u32)
+}
+
+/// Helper function to parse JSON output and extract a numeric field value (panics on error)
+fn get_json_field_value(output: &str, field: &str) -> u32 {
+    parse_json_field_u32(output, field).unwrap_or_else(|e| panic!("{}", e))
+}
+
 /// Helper function to assert JSON field contains expected numeric value
-fn assert_json_field_value(output: &str, field: &str, value: u32) {
-    let compact = format!("\"{}\":{}", field, value);
-    let spaced = format!("\"{}\": {}", field, value);
-    assert!(
-        output.contains(&compact) || output.contains(&spaced),
-        "Should show {} {} todos",
-        value,
-        field
-    );
+fn assert_json_field_value(output: &str, field: &str, expected: u32) {
+    let actual = get_json_field_value(output, field);
+    assert_eq!(actual, expected, "Field '{}' should be {}", field, expected);
 }
 
 /// Helper function to assert todo counts in JSON output
@@ -102,13 +137,53 @@ fn create_todo_and_get_id(
     extract_todo_id_from_output(&stdout).to_string()
 }
 
+/// Unified helper function to create todos and optionally complete specific ones by indices
+///
+/// This consolidates the setup logic, eliminating duplication across setup_todos_with_completed,
+/// setup_todos_with_one_completed, and create_three_test_todos.
+///
+/// # Arguments
+/// * `tasks` - Slice of (task, context) tuples to create
+/// * `temp_path` - Path to the test directory
+/// * `complete_indices` - Indices of todos to mark as complete after creation
+fn setup_todos_with_completion_pattern(
+    tasks: &[(&str, Option<&str>)],
+    temp_path: &std::path::Path,
+    complete_indices: &[usize],
+) -> Vec<String> {
+    let ids = create_multiple_todos(tasks, temp_path);
+
+    for &index in complete_indices {
+        assert!(
+            index < ids.len(),
+            "complete_index {} must be within bounds (got {}, max {})",
+            index,
+            index,
+            ids.len()
+        );
+
+        let complete_output =
+            run_sah_command_with_cwd(&["todo", "complete", "--id", &ids[index]], temp_path);
+        assert!(
+            complete_output.status.success(),
+            "todo complete should succeed"
+        );
+    }
+
+    ids
+}
+
 /// Helper function to create three test todos
 fn create_three_test_todos(temp_path: &std::path::Path) -> Vec<String> {
-    vec![
-        create_todo_and_get_id("Task 1", None, temp_path),
-        create_todo_and_get_id("Task 2", None, temp_path),
-        create_todo_and_get_id("Task 3", None, temp_path),
-    ]
+    setup_todos_with_completion_pattern(TEST_TASKS, temp_path, &[])
+}
+
+/// Helper function to create three todos and complete specific ones by indices
+fn setup_todos_with_completed(
+    temp_path: &std::path::Path,
+    complete_indices: &[usize],
+) -> Vec<String> {
+    setup_todos_with_completion_pattern(TEST_TASKS, temp_path, complete_indices)
 }
 
 /// Helper function to create three todos and complete one
@@ -116,23 +191,147 @@ fn setup_todos_with_one_completed(
     temp_path: &std::path::Path,
     complete_index: usize,
 ) -> Vec<String> {
-    let ids = create_three_test_todos(temp_path);
+    setup_todos_with_completed(temp_path, &[complete_index])
+}
 
-    assert!(
-        complete_index < ids.len(),
-        "complete_index must be within bounds"
-    );
-
-    let complete_output = run_sah_command_with_cwd(
-        &["todo", "complete", "--id", &ids[complete_index]],
+/// Helper function to show next todo and assert it contains expected task
+fn assert_next_todo_contains(temp_path: &std::path::Path, expected_task: &str) {
+    assert_output_contains(
+        &["todo", "show", "--item", "next"],
         temp_path,
+        true,
+        &[expected_task],
+        &[],
     );
+}
+
+/// Helper function to complete a todo and verify success
+fn complete_todo_and_verify(todo_id: &str, temp_path: &std::path::Path) {
+    assert_output_contains(
+        &["todo", "complete", "--id", todo_id],
+        temp_path,
+        true,
+        &[todo_id],
+        &[],
+    );
+}
+
+/// Helper function to run command and assert no incomplete todos state
+fn assert_no_incomplete_todos(args: &[&str], temp_path: &std::path::Path) {
+    let stdout = run_and_get_output(args, temp_path, true);
     assert!(
-        complete_output.status.success(),
-        "todo complete should succeed"
+        stdout.contains("No incomplete todo items") || stdout.contains("null"),
+        "Should indicate no incomplete items: {}",
+        stdout
+    );
+}
+
+/// Helper function to create multiple todos from a slice of (task, context) tuples
+fn create_multiple_todos(
+    tasks: &[(&str, Option<&str>)],
+    temp_path: &std::path::Path,
+) -> Vec<String> {
+    tasks
+        .iter()
+        .map(|(task, context)| create_todo_and_get_id(task, *context, temp_path))
+        .collect()
+}
+
+/// Helper function to run command and get stdout on success or stderr on failure
+fn run_and_get_output(args: &[&str], temp_path: &std::path::Path, expect_success: bool) -> String {
+    let output = run_sah_command_with_cwd(args, temp_path);
+    let status = output.status.success();
+
+    assert_eq!(
+        status,
+        expect_success,
+        "Command {} should {}. stderr: {}",
+        args.join(" "),
+        if expect_success { "succeed" } else { "fail" },
+        String::from_utf8_lossy(&output.stderr)
     );
 
-    ids
+    if status {
+        get_stdout_string(&output)
+    } else {
+        String::from_utf8_lossy(&output.stderr).to_string()
+    }
+}
+
+/// Unified helper function to assert command output contains/excludes specific fragments
+///
+/// This function consolidates the logic for running commands and verifying their output,
+/// eliminating duplication across assert_output_contains, assert_command_succeeds_with_output,
+/// and assert_todo_list_contains.
+fn assert_output_contains(
+    args: &[&str],
+    temp_path: &std::path::Path,
+    expect_success: bool,
+    expected_fragments: &[&str],
+    unexpected_fragments: &[&str],
+) -> String {
+    let output = run_and_get_output(args, temp_path, expect_success);
+
+    for fragment in expected_fragments {
+        assert!(
+            output.contains(fragment),
+            "Output should contain '{}'. Output: {}",
+            fragment,
+            output
+        );
+    }
+
+    for fragment in unexpected_fragments {
+        assert!(
+            !output.contains(fragment),
+            "Output should not contain '{}'. Output: {}",
+            fragment,
+            output
+        );
+    }
+
+    output
+}
+
+/// Helper function to test todo list filtering with specific completion status
+fn assert_todo_list_filter(
+    temp_path: &std::path::Path,
+    completed: bool,
+    expected_tasks: &[&str],
+    unexpected_tasks: &[&str],
+    expected_count: u32,
+) {
+    let completed_arg = if completed { "true" } else { "false" };
+
+    let stdout = assert_output_contains(
+        &["todo", "list", "--completed", completed_arg],
+        temp_path,
+        true,
+        expected_tasks,
+        unexpected_tasks,
+    );
+    assert_json_field_value(&stdout, "total", expected_count);
+}
+
+/// Helper function to assert help text contains all expected commands
+fn assert_help_contains_commands(help_text: &str, commands: &[&str]) {
+    for command in commands {
+        assert!(
+            help_text.contains(command),
+            "help should mention '{}' command",
+            command
+        );
+    }
+}
+
+/// Helper function to assert todo file was created in the .swissarmyhammer directory
+fn assert_todo_file_created(temp_path: &std::path::Path) {
+    let todo_file = temp_path.join(".swissarmyhammer").join("todo.yaml");
+    assert!(
+        todo_file.exists(),
+        "todo.yaml file should be created at {}",
+        todo_file.display()
+    );
 }
 
 /// Test that todo commands are available in help output
@@ -155,22 +354,7 @@ fn test_todo_commands_in_help() {
     assert!(todo_help.status.success(), "todo --help should succeed");
 
     let todo_stdout = String::from_utf8_lossy(&todo_help.stdout);
-    assert!(
-        todo_stdout.contains("create"),
-        "todo help should mention 'create' command"
-    );
-    assert!(
-        todo_stdout.contains("show"),
-        "todo help should mention 'show' command"
-    );
-    assert!(
-        todo_stdout.contains("list"),
-        "todo help should mention 'list' command"
-    );
-    assert!(
-        todo_stdout.contains("complete"),
-        "todo help should mention 'complete' command"
-    );
+    assert_help_contains_commands(&todo_stdout, &["create", "show", "list", "complete"]);
 }
 
 /// Test todo create command
@@ -180,7 +364,7 @@ fn test_todo_create_command() {
     let temp_dir = setup_todo_test_env();
     let temp_path = temp_dir.path();
 
-    let output = run_sah_command_with_cwd(
+    assert_output_contains(
         &[
             "todo",
             "create",
@@ -190,28 +374,12 @@ fn test_todo_create_command() {
             "Test context",
         ],
         temp_path,
+        true,
+        &["Created todo item", "Test task"],
+        &[],
     );
 
-    assert!(
-        output.status.success(),
-        "todo create should succeed. stderr: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-
-    let stdout = get_stdout_string(&output);
-    assert!(
-        stdout.contains("Created todo item"),
-        "Output should confirm creation"
-    );
-    assert!(stdout.contains("Test task"), "Output should contain task");
-
-    // Verify the todo file was created
-    let todo_file = temp_path.join(".swissarmyhammer").join("todo.yaml");
-    assert!(
-        todo_file.exists(),
-        "todo.yaml file should be created at {}",
-        todo_file.display()
-    );
+    assert_todo_file_created(temp_path);
 }
 
 /// Test todo create command without optional context
@@ -221,18 +389,15 @@ fn test_todo_create_without_context() {
     let temp_dir = setup_todo_test_env();
     let temp_path = temp_dir.path();
 
-    let output = run_sah_command_with_cwd(&["todo", "create", "--task", "Simple task"], temp_path);
-
-    assert!(
-        output.status.success(),
-        "todo create without context should succeed"
+    assert_output_contains(
+        &["todo", "create", "--task", "Simple task"],
+        temp_path,
+        true,
+        &["Created todo item", "Simple task"],
+        &[],
     );
 
-    let stdout = get_stdout_string(&output);
-    assert!(
-        stdout.contains("Created todo item"),
-        "Output should confirm creation"
-    );
+    assert_todo_file_created(temp_path);
 }
 
 /// Test todo show next command
@@ -242,24 +407,11 @@ fn test_todo_show_next() {
     let temp_dir = setup_todo_test_env();
     let temp_path = temp_dir.path();
 
-    // First create a todo item
-    let create_output =
-        run_sah_command_with_cwd(&["todo", "create", "--task", "Task to show"], temp_path);
-    assert!(create_output.status.success(), "todo create should succeed");
+    // Create a todo item
+    create_todo_and_get_id("Task to show", None, temp_path);
 
     // Now show the next item
-    let show_output = run_sah_command_with_cwd(&["todo", "show", "--item", "next"], temp_path);
-
-    assert!(
-        show_output.status.success(),
-        "todo show next should succeed"
-    );
-
-    let stdout = get_stdout_string(&show_output);
-    assert!(
-        stdout.contains("Task to show"),
-        "Output should contain the task we created"
-    );
+    assert_next_todo_contains(temp_path, "Task to show");
 }
 
 /// Test todo show next with no todos
@@ -269,19 +421,7 @@ fn test_todo_show_next_empty() {
     let temp_dir = setup_todo_test_env();
     let temp_path = temp_dir.path();
 
-    let output = run_sah_command_with_cwd(&["todo", "show", "--item", "next"], temp_path);
-
-    // Should succeed but indicate no items found
-    assert!(
-        output.status.success(),
-        "todo show next with no items should succeed"
-    );
-
-    let stdout = get_stdout_string(&output);
-    assert!(
-        stdout.contains("No incomplete todo items found") || stdout.contains("null"),
-        "Output should indicate no items found"
-    );
+    assert_no_incomplete_todos(&["todo", "show", "--item", "next"], temp_path);
 }
 
 /// Test todo complete command
@@ -295,37 +435,16 @@ fn test_todo_complete_command() {
     let todo_id = create_todo_and_get_id("Task to complete", None, temp_path);
 
     // Complete the item
-    let complete_output =
-        run_sah_command_with_cwd(&["todo", "complete", "--id", &todo_id], temp_path);
-
-    assert!(
-        complete_output.status.success(),
-        "todo complete should succeed. stderr: {}",
-        String::from_utf8_lossy(&complete_output.stderr)
-    );
-
-    let stdout = get_stdout_string(&complete_output);
-    assert!(
-        stdout.contains("marked_complete") || stdout.contains("Marked todo item"),
-        "Output should confirm completion"
-    );
-    assert!(stdout.contains(&todo_id), "Output should contain the ID");
+    complete_todo_and_verify(&todo_id, temp_path);
 }
 
 /// Test todo create with missing required argument
 #[test]
 fn test_todo_create_missing_task() {
-    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let temp_dir = setup_todo_test_env();
     let temp_path = temp_dir.path();
 
-    let output = run_sah_command_with_cwd(&["todo", "create"], temp_path);
-
-    assert!(
-        !output.status.success(),
-        "todo create without task should fail"
-    );
-
-    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stderr = run_and_get_output(&["todo", "create"], temp_path, false);
     assert!(
         stderr.contains("--task") || stderr.contains("required"),
         "Error should mention missing task argument"
@@ -338,15 +457,11 @@ fn test_todo_complete_invalid_id() {
     let temp_dir = setup_todo_test_env();
     let temp_path = temp_dir.path();
 
-    let output = run_sah_command_with_cwd(
+    // Should fail with an error about the ID not being found
+    run_and_get_output(
         &["todo", "complete", "--id", "01INVALID00000000000000000"],
         temp_path,
-    );
-
-    // Should fail with an error about the ID not being found
-    assert!(
-        !output.status.success(),
-        "todo complete with invalid ID should fail"
+        false,
     );
 }
 
@@ -365,27 +480,13 @@ fn test_todo_full_workflow() {
     );
 
     // Step 2: Show next todo
-    let show_output = run_sah_command_with_cwd(&["todo", "show", "--item", "next"], temp_path);
-    assert!(show_output.status.success(), "Show should succeed");
-    let show_stdout = get_stdout_string(&show_output);
-    assert!(
-        show_stdout.contains("Workflow test task"),
-        "Should show the created task"
-    );
+    assert_next_todo_contains(temp_path, "Workflow test task");
 
     // Step 3: Complete the todo
-    let complete_output =
-        run_sah_command_with_cwd(&["todo", "complete", "--id", &todo_id], temp_path);
-    assert!(complete_output.status.success(), "Complete should succeed");
+    complete_todo_and_verify(&todo_id, temp_path);
 
     // Step 4: Verify no more incomplete todos
-    let final_show = run_sah_command_with_cwd(&["todo", "show", "--item", "next"], temp_path);
-    assert!(final_show.status.success(), "Final show should succeed");
-    let final_stdout = get_stdout_string(&final_show);
-    assert!(
-        final_stdout.contains("No incomplete todo items") || final_stdout.contains("null"),
-        "Should have no incomplete items"
-    );
+    assert_no_incomplete_todos(&["todo", "show", "--item", "next"], temp_path);
 }
 
 /// Test todo list command with no todos
@@ -395,11 +496,7 @@ fn test_todo_list_empty() {
     let temp_dir = setup_todo_test_env();
     let temp_path = temp_dir.path();
 
-    let output = run_sah_command_with_cwd(&["todo", "list"], temp_path);
-
-    assert!(output.status.success(), "todo list should succeed");
-
-    let stdout = get_stdout_string(&output);
+    let stdout = run_and_get_output(&["todo", "list"], temp_path, true);
     assert_todo_counts(&stdout, 0, 0, 0);
 }
 
@@ -413,64 +510,51 @@ fn test_todo_list_multiple() {
     // Create three todos
     create_three_test_todos(temp_path);
 
-    let output = run_sah_command_with_cwd(&["todo", "list"], temp_path);
-
-    assert!(output.status.success(), "todo list should succeed");
-
-    let stdout = get_stdout_string(&output);
-    assert!(
-        stdout.contains("Task 1") && stdout.contains("Task 2") && stdout.contains("Task 3"),
-        "Should show all three tasks"
+    let stdout = assert_output_contains(
+        &["todo", "list"],
+        temp_path,
+        true,
+        &["Task 1", "Task 2", "Task 3"],
+        &[],
     );
     assert_todo_counts(&stdout, 3, 3, 0);
+}
+
+/// Parameterized test helper for todo list filtering tests
+fn test_todo_list_with_filter(
+    completed: bool,
+    expected_tasks: &[&str],
+    unexpected_tasks: &[&str],
+    expected_count: u32,
+) {
+    let temp_dir = setup_todo_test_env();
+    let temp_path = temp_dir.path();
+
+    // Create three todos with Task 2 completed
+    setup_todos_with_one_completed(temp_path, 1);
+
+    // List with specified filter
+    assert_todo_list_filter(
+        temp_path,
+        completed,
+        expected_tasks,
+        unexpected_tasks,
+        expected_count,
+    );
 }
 
 /// Test todo list with filter for incomplete todos
 #[test]
 #[ignore = "Git repo detection issue with symlinked temp paths on macOS - see issue notes"]
 fn test_todo_list_filter_incomplete() {
-    let temp_dir = setup_todo_test_env();
-    let temp_path = temp_dir.path();
-
-    // Create three todos with Task 2 completed
-    setup_todos_with_one_completed(temp_path, 1);
-
-    // List incomplete only
-    let output = run_sah_command_with_cwd(&["todo", "list", "--completed", "false"], temp_path);
-
-    assert!(output.status.success(), "todo list should succeed");
-
-    let stdout = get_stdout_string(&output);
-    assert!(
-        stdout.contains("Task 1") && stdout.contains("Task 3"),
-        "Should show incomplete tasks"
-    );
-    assert!(!stdout.contains("Task 2"), "Should not show completed task");
-    assert_json_field_value(&stdout, "total", 2);
+    test_todo_list_with_filter(false, &["Task 1", "Task 3"], &["Task 2"], 2);
 }
 
 /// Test todo list with filter for completed todos
 #[test]
 #[ignore = "Git repo detection issue with symlinked temp paths on macOS - see issue notes"]
 fn test_todo_list_filter_completed() {
-    let temp_dir = setup_todo_test_env();
-    let temp_path = temp_dir.path();
-
-    // Create three todos with Task 2 completed
-    setup_todos_with_one_completed(temp_path, 1);
-
-    // List completed only
-    let output = run_sah_command_with_cwd(&["todo", "list", "--completed", "true"], temp_path);
-
-    assert!(output.status.success(), "todo list should succeed");
-
-    let stdout = get_stdout_string(&output);
-    assert!(stdout.contains("Task 2"), "Should show completed task");
-    assert!(
-        !stdout.contains("Task 1") && !stdout.contains("Task 3"),
-        "Should not show incomplete tasks"
-    );
-    assert_json_field_value(&stdout, "total", 1);
+    test_todo_list_with_filter(true, &["Task 2"], &["Task 1", "Task 3"], 1);
 }
 
 /// Test todo list sort order (incomplete first)
@@ -483,12 +567,14 @@ fn test_todo_list_sort_order() {
     // Create three todos with Task 1 completed
     setup_todos_with_one_completed(temp_path, 0);
 
-    // List all todos
-    let output = run_sah_command_with_cwd(&["todo", "list"], temp_path);
-
-    assert!(output.status.success(), "todo list should succeed");
-
-    let stdout = get_stdout_string(&output);
+    // List all todos - verify all tasks are present
+    let stdout = assert_output_contains(
+        &["todo", "list"],
+        temp_path,
+        true,
+        &["Task 1", "Task 2", "Task 3"],
+        &[],
+    );
 
     // Find positions of tasks in output
     let task1_pos = stdout.find("Task 1").expect("Should find Task 1");

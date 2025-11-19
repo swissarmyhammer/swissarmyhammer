@@ -93,7 +93,7 @@ pub struct RuleCheckRequest {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub create_todo: Option<bool>,
 
-    /// Maximum number of concurrent rule checks (default: cores/2, minimum 1)
+    /// Maximum number of concurrent rule checks (default: 4)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_concurrency: Option<usize>,
 }
@@ -156,6 +156,57 @@ async fn expand_glob_patterns(patterns: &[String]) -> Result<HashSet<String>, Mc
     Ok(files)
 }
 
+/// Extract JSON field value from a tool call result
+///
+/// Consolidates the common pattern of extracting and parsing JSON from tool call results.
+///
+/// # Arguments
+///
+/// * `result` - The tool call result to extract JSON from
+/// * `field_path` - Path to the field to extract (e.g., ["todo_item", "id"])
+///
+/// # Returns
+///
+/// The extracted JSON value or an error if extraction fails
+fn extract_json_field_from_result(
+    result: &CallToolResult,
+    field_path: &[&str],
+) -> Result<serde_json::Value, McpError> {
+    let response_text = if let Some(first_content) = result.content.first() {
+        match &first_content.raw {
+            RawContent::Text(text_content) => &text_content.text,
+            _ => {
+                return Err(McpError::internal_error(
+                    "Unexpected content type from tool result",
+                    None,
+                ));
+            }
+        }
+    } else {
+        return Err(McpError::internal_error(
+            "No content returned from tool",
+            None,
+        ));
+    };
+
+    let mut response_json: serde_json::Value =
+        serde_json::from_str(response_text).map_err(|e| {
+            McpError::internal_error(format!("Failed to parse tool response: {}", e), None)
+        })?;
+
+    for field in field_path {
+        response_json = response_json[field].clone();
+        if response_json.is_null() {
+            return Err(McpError::internal_error(
+                format!("Field '{}' not found in tool response", field),
+                None,
+            ));
+        }
+    }
+
+    Ok(response_json)
+}
+
 /// Create a todo item for a rule violation
 ///
 /// Creates a todo with formatted task and context fields containing
@@ -215,36 +266,10 @@ See rule documentation for guidance on resolving this violation."#,
         )
         .await?;
 
-    // Extract todo_id from the response
-    // The todo_create tool returns JSON with a "todo_item" object containing "id"
-    let response_text = if let Some(first_content) = result.content.first() {
-        match &first_content.raw {
-            RawContent::Text(text_content) => &text_content.text,
-            _ => {
-                return Err(McpError::internal_error(
-                    "Unexpected content type from todo_create tool",
-                    None,
-                ));
-            }
-        }
-    } else {
-        return Err(McpError::internal_error(
-            "No content returned from todo_create tool",
-            None,
-        ));
-    };
-
-    // Parse the JSON response
-    let response_json: serde_json::Value = serde_json::from_str(response_text).map_err(|e| {
-        McpError::internal_error(format!("Failed to parse todo_create response: {}", e), None)
-    })?;
-
-    // Extract the todo_id
-    let todo_id_str = response_json["todo_item"]["id"].as_str().ok_or_else(|| {
-        McpError::internal_error(
-            format!("No todo_id in response from todo_create: {}", response_json),
-            None,
-        )
+    // Extract todo_id from the response using the common helper
+    let todo_id_value = extract_json_field_from_result(&result, &["todo_item", "id"])?;
+    let todo_id_str = todo_id_value.as_str().ok_or_else(|| {
+        McpError::internal_error(format!("todo_id is not a string: {}", todo_id_value), None)
     })?;
 
     let todo_id = TodoId::from_string(todo_id_str.to_string())
@@ -281,6 +306,51 @@ fn send_progress(
         {
             tracing::debug!("Failed to send progress notification: {}", e);
         }
+    }
+}
+
+/// Accumulates statistics about rule violations during checking
+///
+/// This struct provides a consolidated way to track violation counts by severity
+/// and which files contain violations, eliminating duplication in the stream
+/// processing logic.
+struct ViolationStatistics {
+    /// Count of violations by severity level (e.g., "Error", "Warning")
+    counts_by_severity: HashMap<String, usize>,
+    /// Set of unique file paths that contain violations
+    affected_files: HashSet<std::path::PathBuf>,
+}
+
+impl ViolationStatistics {
+    /// Creates a new empty statistics tracker
+    fn new() -> Self {
+        Self {
+            counts_by_severity: HashMap::new(),
+            affected_files: HashSet::new(),
+        }
+    }
+
+    /// Records a violation in the statistics
+    ///
+    /// Updates both severity counts and affected files set.
+    ///
+    /// # Arguments
+    ///
+    /// * `violation` - The violation to record
+    fn record(&mut self, violation: &RuleViolation) {
+        let severity_str = format!("{:?}", violation.severity);
+        *self.counts_by_severity.entry(severity_str).or_insert(0) += 1;
+        self.affected_files.insert(violation.file_path.clone());
+    }
+
+    /// Returns the count of violations by severity
+    fn counts_by_severity(&self) -> &HashMap<String, usize> {
+        &self.counts_by_severity
+    }
+
+    /// Returns the number of affected files
+    fn affected_files_count(&self) -> usize {
+        self.affected_files.len()
     }
 }
 
@@ -482,7 +552,7 @@ impl McpTool for RuleCheckTool {
                     "type": "integer",
                     "minimum": 1,
                     "maximum": 50,
-                    "description": "Maximum number of concurrent rule checks (default: cores/2, minimum 1)"
+                    "description": "Maximum number of concurrent rule checks (default: 4)"
                 }
             }
         })
@@ -610,19 +680,12 @@ impl McpTool for RuleCheckTool {
         // This loop processes the violation stream, counting violations by severity
         // and tracking which files contain violations for the completion notification.
         let mut violations = Vec::new();
-        let mut violation_count_by_severity: HashMap<String, usize> = HashMap::new();
-        let mut files_with_violations = std::collections::HashSet::new();
+        let mut statistics = ViolationStatistics::new();
 
         while let Some(result) = stream.next().await {
             match result {
                 Ok(violation) => {
-                    // Track severity counts
-                    let severity_str = format!("{:?}", violation.severity);
-                    *violation_count_by_severity.entry(severity_str).or_insert(0) += 1;
-
-                    // Track unique files with violations
-                    files_with_violations.insert(violation.file_path.clone());
-
+                    statistics.record(&violation);
                     violations.push(violation);
                 }
                 Err(e) => {
@@ -686,8 +749,8 @@ impl McpTool for RuleCheckTool {
         let duration_ms = duration.as_millis() as u64;
         let mut metadata = json!({
             "violations_found": violations.len(),
-            "files_with_violations": files_with_violations.len(),
-            "violation_count_by_severity": violation_count_by_severity,
+            "files_with_violations": statistics.affected_files_count(),
+            "violation_count_by_severity": statistics.counts_by_severity(),
             "duration_ms": duration_ms
         });
 
@@ -700,14 +763,14 @@ impl McpTool for RuleCheckTool {
             format!(
                 "Rules check complete: {} violations in {} files, {} todos created",
                 violations.len(),
-                files_with_violations.len(),
+                statistics.affected_files_count(),
                 todos_created.len()
             )
         } else {
             format!(
                 "Rules check complete: {} violations in {} files",
                 violations.len(),
-                files_with_violations.len()
+                statistics.affected_files_count()
             )
         };
 
@@ -756,97 +819,360 @@ mod tests {
     use std::path::Path;
     use tempfile::TempDir;
 
-    /// Helper function to set up a test with a temporary file containing code
+    /// RAII guard for environment variables that automatically cleans up on drop
     ///
-    /// Creates a TempDir, writes test code to a file, sets up tool and context,
-    /// and prepares arguments for rule checking.
+    /// This ensures environment variables are properly cleaned up even if tests panic.
+    struct EnvVarGuard {
+        key: String,
+    }
+
+    impl EnvVarGuard {
+        /// Sets an environment variable and returns a guard that will clean it up
+        fn set(key: impl Into<String>, value: impl AsRef<std::ffi::OsStr>) -> Self {
+            let key = key.into();
+            std::env::set_var(&key, value);
+            Self { key }
+        }
+    }
+
+    impl Drop for EnvVarGuard {
+        fn drop(&mut self) {
+            std::env::remove_var(&self.key);
+        }
+    }
+
+    /// Macro to generate builder methods with consistent patterns
+    ///
+    /// Reduces boilerplate in builder method implementations by generating
+    /// methods that insert values and return self. Supports any serializable type.
+    macro_rules! builder_method {
+        ($method_name:ident, $field_name:expr, $type:ty) => {
+            fn $method_name(mut self, value: $type) -> Self {
+                self.args.insert($field_name.to_string(), json!(value));
+                self
+            }
+        };
+    }
+
+    /// Builder for creating test arguments with fluent interface
+    ///
+    /// Eliminates duplication in test argument construction by providing
+    /// a declarative way to build argument maps. Uses macros to reduce
+    /// boilerplate in method definitions.
+    struct TestArgsBuilder {
+        args: serde_json::Map<String, serde_json::Value>,
+    }
+
+    impl TestArgsBuilder {
+        /// Creates a new builder with empty arguments
+        fn new() -> Self {
+            Self {
+                args: serde_json::Map::new(),
+            }
+        }
+
+        builder_method!(with_rule_names, "rule_names", Vec<&str>);
+        builder_method!(with_file_paths, "file_paths", Vec<String>);
+        builder_method!(with_create_todo, "create_todo", bool);
+        builder_method!(with_changed, "changed", bool);
+
+        /// Builds the final arguments map
+        fn build(self) -> serde_json::Map<String, serde_json::Value> {
+            self.args
+        }
+    }
+
+    /// Builder for git commands that chains operations and handles errors uniformly
+    ///
+    /// Provides a fluent interface for constructing and executing git commands,
+    /// eliminating duplication in git repository setup.
+    struct GitCommand<'a> {
+        repo_path: &'a Path,
+        command: Vec<String>,
+    }
+
+    impl<'a> GitCommand<'a> {
+        /// Creates a new git command builder for a subcommand
+        fn new(repo_path: &'a Path, subcommand: &str) -> Self {
+            Self {
+                repo_path,
+                command: vec![subcommand.to_string()],
+            }
+        }
+
+        /// Adds arguments to the command
+        fn args(mut self, args: &[&str]) -> Self {
+            self.command.extend(args.iter().map(|s| s.to_string()));
+            self
+        }
+
+        /// Executes the git command
+        fn execute(self) -> std::io::Result<()> {
+            use std::process::Command;
+            let args: Vec<&str> = self.command.iter().map(|s| s.as_str()).collect();
+            Command::new("git")
+                .args(&args)
+                .current_dir(self.repo_path)
+                .output()?;
+            Ok(())
+        }
+    }
+
+    /// Consolidates git command execution patterns for testing
+    ///
+    /// This helper eliminates duplication in git repository setup
+    /// by providing a unified interface for common git operations.
+    struct GitTestHelper;
+
+    impl GitTestHelper {
+        /// Configures git user for a repository
+        fn configure_user(repo_path: &Path) -> std::io::Result<()> {
+            GitCommand::new(repo_path, "config")
+                .args(&["user.email", "test@example.com"])
+                .execute()?;
+            GitCommand::new(repo_path, "config")
+                .args(&["user.name", "Test User"])
+                .execute()?;
+            Ok(())
+        }
+
+        /// Adds and commits files to the repository
+        fn add_and_commit(repo_path: &Path, message: &str) -> std::io::Result<()> {
+            GitCommand::new(repo_path, "add").args(&["."]).execute()?;
+            GitCommand::new(repo_path, "commit")
+                .args(&["-m", message])
+                .execute()?;
+            Ok(())
+        }
+
+        /// Initializes a git repository with a file
+        fn init_repo_with_file(
+            repo_path: &Path,
+            filename: &str,
+            content: &str,
+        ) -> std::io::Result<()> {
+            GitCommand::new(repo_path, "init").execute()?;
+            Self::configure_user(repo_path)?;
+
+            let file_path = repo_path.join(filename);
+            std::fs::write(&file_path, content)?;
+
+            Self::add_and_commit(repo_path, "Initial commit")?;
+
+            Ok(())
+        }
+    }
+
+    /// Creates a git context from an initialized repository
+    ///
+    /// Consolidates git setup logic by creating a ToolContext with git operations
+    /// configured for the specified repository path.
+    ///
+    /// # Arguments
+    ///
+    /// * `repo_path` - Path to the git repository
+    ///
+    /// # Returns
+    ///
+    /// Configured ToolContext with git operations
+    async fn create_git_context(repo_path: &Path) -> ToolContext {
+        let git_ops = swissarmyhammer_git::GitOperations::with_work_dir(repo_path).unwrap();
+        let context = crate::test_utils::create_test_context().await;
+        *context.git_ops.lock().await = Some(git_ops);
+        context
+    }
+
+    /// Unified test harness for rule check testing
+    ///
+    /// Consolidates all test setup concerns including temp directories,
+    /// git initialization, file creation, tool/context setup, and argument building.
+    /// Provides a fluent interface for test configuration.
+    struct TestHarness {
+        temp_dir: Option<TempDir>,
+        filename: String,
+        content: String,
+        rule_names: Vec<String>,
+        with_git: bool,
+        additional_args: serde_json::Map<String, serde_json::Value>,
+    }
+
+    impl TestHarness {
+        /// Creates a new test harness with default configuration
+        fn new() -> Self {
+            Self {
+                temp_dir: None,
+                filename: "test.rs".to_string(),
+                content: String::new(),
+                rule_names: Vec::new(),
+                with_git: false,
+                additional_args: serde_json::Map::new(),
+            }
+        }
+
+        /// Sets the file to create with the specified content
+        fn with_file(mut self, filename: &str, content: &str) -> Self {
+            self.filename = filename.to_string();
+            self.content = content.to_string();
+            self
+        }
+
+        /// Enables git repository initialization
+        fn with_git(mut self) -> Self {
+            self.with_git = true;
+            self
+        }
+
+        /// Sets the rule names to check
+        fn with_rules(mut self, rules: Vec<&str>) -> Self {
+            self.rule_names = rules.iter().map(|s| s.to_string()).collect();
+            self
+        }
+
+        /// Adds additional arguments to the test
+        fn with_args(mut self, args: serde_json::Map<String, serde_json::Value>) -> Self {
+            self.additional_args.extend(args);
+            self
+        }
+
+        /// Builds the test setup and returns all necessary components
+        ///
+        /// # Returns
+        ///
+        /// A tuple of (tool, context, temp_dir, arguments) ready for testing
+        async fn build(
+            mut self,
+        ) -> (
+            RuleCheckTool,
+            ToolContext,
+            TempDir,
+            serde_json::Map<String, serde_json::Value>,
+        ) {
+            let temp_dir = TempDir::new().unwrap();
+            let test_file = temp_dir.path().join(&self.filename);
+            fs::write(&test_file, &self.content).unwrap();
+
+            let tool = RuleCheckTool::new();
+            let context = if self.with_git {
+                GitTestHelper::init_repo_with_file(temp_dir.path(), &self.filename, &self.content)
+                    .unwrap();
+                create_git_context(temp_dir.path()).await
+            } else {
+                crate::test_utils::create_test_context().await
+            };
+
+            let rule_names: Vec<&str> = self.rule_names.iter().map(|s| s.as_str()).collect();
+            let mut arguments = TestArgsBuilder::new()
+                .with_rule_names(rule_names)
+                .with_file_paths(vec![test_file.to_string_lossy().to_string()])
+                .build();
+
+            arguments.extend(self.additional_args);
+            self.temp_dir = Some(temp_dir);
+
+            (tool, context, self.temp_dir.take().unwrap(), arguments)
+        }
+    }
+
+    /// Helper to execute a closure with a git repository setup
+    ///
+    /// Creates a temporary git repository, initializes it with a file,
+    /// creates a git operations context, and executes the provided closure.
+    ///
+    /// # Arguments
+    ///
+    /// * `filename` - Name of the file to create in the repo
+    /// * `content` - Content to write to the file
+    /// * `f` - Async closure to execute with the test context and repo path
+    ///
+    /// # Returns
+    ///
+    /// Result of the closure execution
+    async fn with_test_git_repo<F, Fut, T>(filename: &str, content: &str, f: F) -> T
+    where
+        F: FnOnce(ToolContext, &Path) -> Fut,
+        Fut: std::future::Future<Output = T>,
+    {
+        let temp_dir = TempDir::new().unwrap();
+        let repo_path = temp_dir.path();
+
+        GitTestHelper::init_repo_with_file(repo_path, filename, content).unwrap();
+        let context = create_git_context(repo_path).await;
+
+        f(context, repo_path).await
+    }
+
+    /// Asserts that a result contains expected patterns
+    ///
+    /// Helper function for asserting that tool results contain expected content.
+    ///
+    /// # Arguments
+    ///
+    /// * `result` - The result to check
+    /// * `expected_patterns` - Patterns to assert in the result
+    /// * `context_msg` - Context message for assertion failures
+    fn assert_result_contains(
+        result: Result<CallToolResult, McpError>,
+        expected_patterns: &[&str],
+        context_msg: &str,
+    ) {
+        let text = match result {
+            Ok(call_result) => format!("{:?}", call_result),
+            Err(e) => panic!("Tool execution failed: {}", e),
+        };
+
+        println!("Test result: {}", text);
+
+        let found = expected_patterns
+            .iter()
+            .any(|pattern| text.contains(pattern));
+        assert!(
+            found,
+            "{}\nExpected one of: {:?}\nGot: {}",
+            context_msg, expected_patterns, text
+        );
+    }
+
+    /// Comprehensive test helper that combines setup, execution, and assertion
+    ///
+    /// This eliminates duplication by providing a single fluent interface that handles
+    /// the complete test lifecycle: setup -> execute -> assert patterns.
+    /// Supports both regular and git-based tests.
     ///
     /// # Arguments
     ///
     /// * `test_code` - The Rust code to write to the test file
     /// * `rule_names` - List of rule names to check
     /// * `additional_args` - Optional additional arguments to include
-    ///
-    /// # Returns
-    ///
-    /// A tuple of (tool, context, temp_dir, arguments) ready for testing
-    async fn setup_rule_check_test(
+    /// * `expected_patterns` - Patterns to assert in the result
+    /// * `context_msg` - Context message for assertion failures
+    /// * `setup_git` - Whether to initialize a git repository
+    async fn setup_execute_and_assert(
         test_code: &str,
         rule_names: Vec<&str>,
         additional_args: Option<serde_json::Map<String, serde_json::Value>>,
-    ) -> (
-        RuleCheckTool,
-        ToolContext,
-        TempDir,
-        serde_json::Map<String, serde_json::Value>,
+        expected_patterns: &[&str],
+        context_msg: &str,
+        setup_git: bool,
     ) {
-        let temp_dir = TempDir::new().unwrap();
-        let test_file = temp_dir.path().join("test.rs");
-        fs::write(&test_file, test_code).unwrap();
+        // Build test harness with all configuration
+        let mut harness = TestHarness::new()
+            .with_file("test.rs", test_code)
+            .with_rules(rule_names);
 
-        let tool = RuleCheckTool::new();
-        let context = crate::test_utils::create_test_context().await;
-
-        let mut arguments = serde_json::Map::new();
-        arguments.insert("rule_names".to_string(), json!(rule_names));
-        arguments.insert(
-            "file_paths".to_string(),
-            json!([test_file.to_string_lossy().to_string()]),
-        );
-
-        if let Some(extra_args) = additional_args {
-            arguments.extend(extra_args);
+        if setup_git {
+            harness = harness.with_git();
         }
 
-        (tool, context, temp_dir, arguments)
-    }
+        if let Some(args) = additional_args {
+            harness = harness.with_args(args);
+        }
 
-    /// Helper function to initialize a git repository with a file
-    ///
-    /// Creates a git repo, configures user, adds and commits a file.
-    ///
-    /// # Arguments
-    ///
-    /// * `repo_path` - Path to initialize the git repository
-    /// * `filename` - Name of the file to create
-    /// * `content` - Content to write to the file
-    ///
-    /// # Returns
-    ///
-    /// Result indicating success or IO error
-    fn init_git_repo_with_file(
-        repo_path: &Path,
-        filename: &str,
-        content: &str,
-    ) -> std::io::Result<()> {
-        use std::process::Command;
+        // Execute the test
+        let (tool, context, _temp_dir, arguments) = harness.build().await;
+        let result = tool.execute(arguments, &context).await;
 
-        Command::new("git")
-            .args(["init"])
-            .current_dir(repo_path)
-            .output()?;
-        Command::new("git")
-            .args(["config", "user.email", "test@example.com"])
-            .current_dir(repo_path)
-            .output()?;
-        Command::new("git")
-            .args(["config", "user.name", "Test User"])
-            .current_dir(repo_path)
-            .output()?;
-
-        let file_path = repo_path.join(filename);
-        std::fs::write(&file_path, content)?;
-
-        Command::new("git")
-            .args(["add", "."])
-            .current_dir(repo_path)
-            .output()?;
-        Command::new("git")
-            .args(["commit", "-m", "Initial commit"])
-            .current_dir(repo_path)
-            .output()?;
-
-        Ok(())
+        // Assert expected patterns in result using the shared helper
+        assert_result_contains(result, expected_patterns, context_msg);
     }
 
     /// Verifies that the tool reports its correct name for MCP registration
@@ -944,78 +1270,60 @@ mod tests {
         assert_eq!(result1.is_ok(), result2.is_ok());
     }
 
-    /// Integration test that verifies the full execute path works end-to-end
-    /// This test creates a temporary file, runs a real rule check via the MCP tool,
-    /// and verifies that rules are loaded and checked properly.
+    /// Table-driven test configuration for rule checks
+    ///
+    /// Eliminates duplication by defining test cases as data rather than separate functions.
+    struct RuleCheckTestCase {
+        name: &'static str,
+        test_code: &'static str,
+        rule_names: Vec<&'static str>,
+        expected_patterns: Vec<&'static str>,
+        context_msg: &'static str,
+    }
+
+    /// Executes a table of rule check test cases
+    ///
+    /// This function provides a declarative way to run multiple test cases,
+    /// eliminating the need for manual iteration and logging in each test function.
+    ///
+    /// # Arguments
+    ///
+    /// * `test_cases` - Slice of test case configurations to execute
+    async fn run_rule_check_test_cases(test_cases: &[RuleCheckTestCase]) {
+        for test_case in test_cases {
+            println!("Running test case: {}", test_case.name);
+            setup_execute_and_assert(
+                test_case.test_code,
+                test_case.rule_names.clone(),
+                None,
+                &test_case.expected_patterns,
+                test_case.context_msg,
+                false,
+            )
+            .await;
+        }
+    }
+
+    /// Test basic integration - rule checking completes without errors
     #[tokio::test]
     async fn test_rule_check_tool_execute_integration() {
-        let test_code = r#"
+        let test_cases = vec![
+            RuleCheckTestCase {
+                name: "no-commented-code rule",
+                test_code: r#"
 fn example() {
     let x = vec![1, 2, 3];
     let first = x.first().unwrap(); // This should trigger no-unwrap if that rule exists
     println!("first: {}", first);
 }
-"#;
-
-        let (tool, context, _temp_dir, arguments) =
-            setup_rule_check_test(test_code, vec!["code-quality/no-commented-code"], None).await;
-
-        let result = tool.execute(arguments, &context).await;
-        let text = extract_result_text(result).expect("Should extract result text");
-
-        println!("Integration test result: {}", text);
-
-        assert_contains_pattern(
-            &text,
-            &["No rule violations found", "violation"],
-            "Result should show check completed",
-        );
-    }
-
-    /// Helper function to extract text from a CallToolResult
-    ///
-    /// Extracts the text content from a CallToolResult for assertion purposes.
-    ///
-    /// # Arguments
-    ///
-    /// * `result` - The result to extract text from
-    ///
-    /// # Returns
-    ///
-    /// The extracted text as a String
-    fn extract_result_text(result: Result<CallToolResult, McpError>) -> Result<String, String> {
-        match result {
-            Ok(call_result) => {
-                let text = format!("{:?}", call_result);
-                Ok(text)
-            }
-            Err(e) => Err(format!("Tool execution failed: {}", e)),
-        }
-    }
-
-    /// Helper function to assert that result text contains expected patterns
-    ///
-    /// Checks that the result text contains at least one of the expected patterns.
-    ///
-    /// # Arguments
-    ///
-    /// * `text` - The text to check
-    /// * `patterns` - List of patterns to look for (at least one must match)
-    /// * `context_msg` - Context message for the assertion failure
-    fn assert_contains_pattern(text: &str, patterns: &[&str], context_msg: &str) {
-        let found = patterns.iter().any(|pattern| text.contains(pattern));
-        assert!(
-            found,
-            "{}\nExpected one of: {:?}\nGot: {}",
-            context_msg, patterns, text
-        );
-    }
-
-    /// Test that rule name filtering works correctly
-    /// This reproduces the issue where calling with specific rule names returns 0 rules
-    #[tokio::test]
-    async fn test_rule_check_tool_with_rule_name_filter() {
-        let test_code = r#"
+"#,
+                rule_names: vec!["code-quality/no-commented-code"],
+                expected_patterns: vec!["No rule violations found", "violation"],
+                context_msg: "Result should show check completed",
+            },
+            RuleCheckTestCase {
+                name: "cognitive-complexity rule",
+                test_code: r#"
 fn complex_function() {
     if condition1 {
         if condition2 {
@@ -1028,29 +1336,14 @@ fn complex_function() {
         }
     }
 }
-"#;
+"#,
+                rule_names: vec!["code-quality/cognitive-complexity"],
+                expected_patterns: vec!["No rule violations found", "violation"],
+                context_msg: "Should have checked the cognitive-complexity rule",
+            },
+        ];
 
-        let (tool, context, _temp_dir, arguments) =
-            setup_rule_check_test(test_code, vec!["code-quality/cognitive-complexity"], None).await;
-
-        let result = tool.execute(arguments, &context).await;
-        let text = extract_result_text(result).expect("Should extract result text");
-
-        println!("Rule filter test result: {}", text);
-
-        // The key assertion: we should NOT get "0 rules against 0 files"
-        if text.contains("Checked 0 rules against 0 files") {
-            panic!(
-                "Rule name filtering failed! Expected to find 'code-quality/cognitive-complexity' rule but got 0 rules.\nFull output: {}",
-                text
-            );
-        }
-
-        assert_contains_pattern(
-            &text,
-            &["No rule violations found", "violation"],
-            "Should have checked the cognitive-complexity rule",
-        );
+        run_rule_check_test_cases(&test_cases).await;
     }
 
     /// Test rule checking against an actual repo file
@@ -1068,72 +1361,104 @@ fn complex_function() {
         let tool = RuleCheckTool::new();
         let context = crate::test_utils::create_test_context().await;
 
-        let mut arguments = serde_json::Map::new();
-        arguments.insert(
-            "rule_names".to_string(),
-            json!(["code-quality/no-commented-code"]),
-        );
-        arguments.insert(
-            "file_paths".to_string(),
-            json!([cargo_toml.to_string_lossy().to_string()]),
-        );
+        let arguments = TestArgsBuilder::new()
+            .with_rule_names(vec!["code-quality/no-commented-code"])
+            .with_file_paths(vec![cargo_toml.to_string_lossy().to_string()])
+            .build();
 
         let result = tool.execute(arguments, &context).await;
-        let text = extract_result_text(result).expect("Should extract result text");
-
-        println!("Cargo.toml check result: {}", text);
-
-        assert_contains_pattern(
-            &text,
+        assert_result_contains(
+            result,
             &["No rule violations found", "violation"],
             "Should have loaded 'code-quality/no-commented-code' rule and checked Cargo.toml",
         );
     }
 
-    /// Test that changed parameter is properly parsed
-    #[tokio::test]
-    async fn test_rule_check_request_with_changed() {
-        let args = json!({
+    /// Generic test helper for optional fields
+    ///
+    /// Tests that a field correctly parses to Some(value) when present
+    /// and None when absent, eliminating duplication in field testing.
+    /// Supports any type that implements PartialEq and Debug.
+    ///
+    /// # Arguments
+    ///
+    /// * `field_name` - Name of the field to test
+    /// * `test_value` - The test value to set in the field (will be JSON serialized)
+    /// * `accessor` - Function to extract the field value from a request
+    fn test_optional_field<T, F>(field_name: &str, test_value: serde_json::Value, accessor: F)
+    where
+        T: PartialEq + std::fmt::Debug,
+        F: Fn(&RuleCheckRequest) -> Option<T>,
+    {
+        // Test with field present
+        let args_with = json!({
             "rule_names": ["test-rule"],
-            "changed": true
+            field_name: test_value
         });
+        let request_with: RuleCheckRequest = serde_json::from_value(args_with).unwrap();
+        assert!(
+            accessor(&request_with).is_some(),
+            "Field '{}' should parse to Some(_)",
+            field_name
+        );
 
-        let request: RuleCheckRequest = serde_json::from_value(args).unwrap();
-        assert_eq!(request.changed, Some(true));
-    }
-
-    /// Test that changed parameter defaults to None when not provided
-    #[tokio::test]
-    async fn test_rule_check_request_changed_default() {
-        let args = json!({
+        // Test without field (should default to None)
+        let args_without = json!({
             "rule_names": ["test-rule"]
         });
-
-        let request: RuleCheckRequest = serde_json::from_value(args).unwrap();
-        assert_eq!(request.changed, None);
+        let request_without: RuleCheckRequest = serde_json::from_value(args_without).unwrap();
+        assert_eq!(
+            accessor(&request_without),
+            None,
+            "Field '{}' should default to None",
+            field_name
+        );
     }
 
-    /// Test that create_todo parameter is properly parsed
-    #[tokio::test]
-    async fn test_rule_check_request_with_create_todo() {
-        let args = json!({
-            "rule_names": ["test-rule"],
-            "create_todo": true
-        });
-
-        let request: RuleCheckRequest = serde_json::from_value(args).unwrap();
-        assert_eq!(request.create_todo, Some(true));
+    /// Generic test helper for optional boolean fields
+    ///
+    /// Tests that a boolean field correctly parses to Some(true) when present
+    /// and None when absent. This is a convenience wrapper around test_optional_field.
+    ///
+    /// # Arguments
+    ///
+    /// * `field_name` - Name of the field to test
+    /// * `accessor` - Function to extract the field value from a request
+    fn test_optional_bool_field<F>(field_name: &str, accessor: F)
+    where
+        F: Fn(&RuleCheckRequest) -> Option<bool>,
+    {
+        test_optional_field(field_name, json!(true), accessor);
     }
 
-    /// Test that create_todo parameter defaults to None when not provided
+    /// Parameterized test cases for optional boolean field validation
+    ///
+    /// Uses a data-driven approach with a generic test helper to eliminate
+    /// repetitive assertion patterns across multiple boolean fields.
     #[tokio::test]
-    async fn test_rule_check_request_create_todo_default() {
-        let args = json!({
-            "rule_names": ["test-rule"]
-        });
+    async fn test_rule_check_request_optional_bool_fields() {
+        test_optional_bool_field("changed", |r| r.changed);
+        test_optional_bool_field("create_todo", |r| r.create_todo);
+    }
 
-        let request: RuleCheckRequest = serde_json::from_value(args).unwrap();
-        assert_eq!(request.create_todo, None);
+    /// Test optional numeric fields using the generic helper
+    #[tokio::test]
+    async fn test_rule_check_request_optional_numeric_fields() {
+        test_optional_field("max_errors", json!(10), |r: &RuleCheckRequest| r.max_errors);
+        test_optional_field("max_concurrency", json!(8), |r: &RuleCheckRequest| {
+            r.max_concurrency
+        });
+    }
+
+    /// Test optional string and array fields using the generic helper
+    #[tokio::test]
+    async fn test_rule_check_request_optional_string_fields() {
+        test_optional_field("category", json!("safety"), |r: &RuleCheckRequest| {
+            r.category.clone()
+        });
+        test_optional_field("severity", json!("error"), |r: &RuleCheckRequest| {
+            r.severity
+        });
     }
 
     /// Test expand_glob_patterns helper function
@@ -1164,6 +1489,10 @@ fn complex_function() {
     #[tokio::test]
     async fn test_rule_check_with_create_todo() {
         let todo_dir = TempDir::new().unwrap();
+        let _guard = EnvVarGuard::set(
+            "SWISSARMYHAMMER_TODO_DIR",
+            todo_dir.path().to_string_lossy().to_string(),
+        );
 
         let test_code = r#"
 // TODO: This is a todo comment that should trigger a violation
@@ -1173,33 +1502,17 @@ fn example() {
 }
 "#;
 
-        let mut additional_args = serde_json::Map::new();
-        additional_args.insert("create_todo".to_string(), json!(true));
+        let additional_args = TestArgsBuilder::new().with_create_todo(true).build();
 
-        let (tool, context, _temp_dir, arguments) = setup_rule_check_test(
+        setup_execute_and_assert(
             test_code,
             vec!["code-quality/no-todo-comments"],
             Some(additional_args),
-        )
-        .await;
-
-        std::env::set_var(
-            "SWISSARMYHAMMER_TODO_DIR",
-            todo_dir.path().to_string_lossy().to_string(),
-        );
-
-        let result = tool.execute(arguments, &context).await;
-
-        std::env::remove_var("SAH_TODO_DIR");
-
-        let text = extract_result_text(result).expect("Should extract result text");
-        println!("Create todo test result: {}", text);
-
-        assert_contains_pattern(
-            &text,
             &["violation", "todos created"],
             "Should have found violations and mentioned todo creation",
-        );
+            false,
+        )
+        .await;
 
         let todo_file = todo_dir.path().join("todo.yaml");
         if todo_file.exists() {
@@ -1220,22 +1533,22 @@ fn example() {
     /// Test that changed files integration returns early when no changed files
     #[tokio::test]
     async fn test_rule_check_with_changed_no_files() {
-        let temp_dir = TempDir::new().unwrap();
-        let repo_path = temp_dir.path();
+        with_test_git_repo(
+            "test.rs",
+            "fn main() {}",
+            |context, _repo_path| async move {
+                let tool = RuleCheckTool::new();
 
-        init_git_repo_with_file(repo_path, "test.rs", "fn main() {}").unwrap();
+                let arguments = TestArgsBuilder::new().with_changed(true).build();
 
-        let tool = RuleCheckTool::new();
-        let git_ops = swissarmyhammer_git::GitOperations::with_work_dir(repo_path).unwrap();
-        let context = crate::test_utils::create_test_context().await;
-        *context.git_ops.lock().await = Some(git_ops);
-
-        let mut arguments = serde_json::Map::new();
-        arguments.insert("changed".to_string(), json!(true));
-
-        let result = tool.execute(arguments, &context).await;
-        let text = extract_result_text(result).expect("Should extract result text");
-
-        assert!(text.contains("No changed files"));
+                let result = tool.execute(arguments, &context).await;
+                assert_result_contains(
+                    result,
+                    &["No changed files"],
+                    "Should report no changed files",
+                );
+            },
+        )
+        .await;
     }
 }

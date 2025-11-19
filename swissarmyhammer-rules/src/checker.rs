@@ -69,7 +69,7 @@ pub struct RuleCheckRequest {
     pub force: bool,
     /// Maximum number of ERROR violations to return (None = unlimited)
     pub max_errors: Option<usize>,
-    /// Maximum number of concurrent rule checks (None = default of cores/2, minimum 1)
+    /// Maximum number of concurrent rule checks (None = default of 4)
     pub max_concurrency: Option<usize>,
 }
 
@@ -608,16 +608,9 @@ impl RuleChecker {
         let checker = Arc::new(self.clone_for_streaming());
         let check_mode = request.check_mode;
         let max_errors = request.max_errors;
+        let concurrency = request.max_concurrency.unwrap_or(4);
 
-        // Default concurrency: half of available CPU cores, minimum 1
-        let default_concurrency = (num_cpus::get() / 2).max(1);
-        let concurrency = request.max_concurrency.unwrap_or(default_concurrency);
-
-        tracing::debug!(
-            "Processing work queue with concurrency={} (available cores: {})",
-            concurrency,
-            num_cpus::get()
-        );
+        tracing::debug!("Processing work queue with concurrency={}", concurrency);
 
         // Process work queue in parallel using buffer_unordered
         let stream = stream::iter(work_items)

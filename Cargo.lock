@@ -6772,7 +6772,6 @@ dependencies = [
  "ignore",
  "include_dir",
  "liquid",
- "num_cpus",
  "regex",
  "serde",
  "serde_json",

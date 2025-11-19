@@ -30,40 +30,39 @@ pub struct WorkflowExecutor {
 }
 
 impl WorkflowExecutor {
-    /// Create a new workflow executor
-    pub fn new() -> Self {
+    /// Common initialization for all constructors
+    fn with_config(
+        working_dir: std::path::PathBuf,
+        test_storage: Option<Arc<crate::storage::WorkflowStorage>>,
+    ) -> Self {
         Self {
             execution_history: Vec::new(),
             max_history_size: DEFAULT_MAX_HISTORY_SIZE,
             metrics: WorkflowMetrics::new(),
-
-            test_storage: None,
-            working_dir: std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")),
+            test_storage,
+            working_dir,
         }
+    }
+
+    /// Create a new workflow executor
+    pub fn new() -> Self {
+        Self::with_config(
+            std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")),
+            None,
+        )
     }
 
     /// Create a new workflow executor with custom working directory
     pub fn with_working_dir<P: AsRef<std::path::Path>>(working_dir: P) -> Self {
-        Self {
-            execution_history: Vec::new(),
-            max_history_size: DEFAULT_MAX_HISTORY_SIZE,
-            metrics: WorkflowMetrics::new(),
-
-            test_storage: None,
-            working_dir: working_dir.as_ref().to_path_buf(),
-        }
+        Self::with_config(working_dir.as_ref().to_path_buf(), None)
     }
 
     /// Create a new workflow executor with test storage
     pub fn with_test_storage(storage: Arc<crate::storage::WorkflowStorage>) -> Self {
-        Self {
-            execution_history: Vec::new(),
-            max_history_size: DEFAULT_MAX_HISTORY_SIZE,
-            metrics: WorkflowMetrics::new(),
-
-            test_storage: Some(storage),
-            working_dir: std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")),
-        }
+        Self::with_config(
+            std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")),
+            Some(storage),
+        )
     }
 
     /// Get the workflow storage (test storage if available, otherwise create file system storage)
@@ -74,6 +73,37 @@ impl WorkflowExecutor {
             Ok(storage.clone())
         } else {
             Ok(Arc::new(crate::storage::WorkflowStorage::file_system()?))
+        }
+    }
+
+    /// Log state entry
+    fn log_state_entry(&mut self, state_id: &StateId, workflow_name: &crate::WorkflowName) {
+        let msg = format!(
+            "ENTERING state: {} for workflow {}",
+            state_id, workflow_name
+        );
+        tracing::info!("{}", msg);
+        self.log_event(ExecutionEventType::StateExecution, msg);
+    }
+
+    /// Log state exit
+    fn log_state_exit(
+        &mut self,
+        state_id: &StateId,
+        workflow_name: &crate::WorkflowName,
+        success: bool,
+    ) {
+        let status = if success { "success" } else { "error" };
+        let msg = format!(
+            "EXITING state: {} for workflow {} ({})",
+            state_id, workflow_name, status
+        );
+        if success {
+            tracing::info!("{}", msg);
+            self.log_event(ExecutionEventType::StateExecution, msg);
+        } else {
+            tracing::error!("{}", msg);
+            self.log_event(ExecutionEventType::Failed, msg);
         }
     }
 
@@ -97,19 +127,14 @@ impl WorkflowExecutor {
         Ok(run)
     }
 
-    /// Start and execute a new workflow run
-    pub async fn start_and_execute_workflow(
+    /// Execute workflow and complete metrics tracking
+    async fn execute_and_complete_metrics(
         &mut self,
-        workflow: Workflow,
+        run: &mut WorkflowRun,
+        transition_limit: usize,
     ) -> ExecutorResult<WorkflowRun> {
-        let mut run = self.start_workflow(workflow)?;
+        let result = self.execute_state_with_limit(run, transition_limit).await;
 
-        // Execute the initial state with transition limit
-        let result = self
-            .execute_state_with_limit(&mut run, MAX_TRANSITIONS)
-            .await;
-
-        // Complete metrics tracking
         match &result {
             Ok(_) => {
                 self.metrics.complete_run(&run.id, run.status, None);
@@ -120,7 +145,17 @@ impl WorkflowExecutor {
             }
         }
 
-        result.map(|_| run)
+        result.map(|_| run.clone())
+    }
+
+    /// Start and execute a new workflow run
+    pub async fn start_and_execute_workflow(
+        &mut self,
+        workflow: Workflow,
+    ) -> ExecutorResult<WorkflowRun> {
+        let mut run = self.start_workflow(workflow)?;
+        self.execute_and_complete_metrics(&mut run, MAX_TRANSITIONS)
+            .await
     }
 
     /// Start and execute a workflow with a custom transition limit (for testing)
@@ -131,24 +166,8 @@ impl WorkflowExecutor {
         transition_limit: usize,
     ) -> ExecutorResult<WorkflowRun> {
         let mut run = self.start_workflow(workflow)?;
-
-        // Execute the initial state with custom transition limit
-        let result = self
-            .execute_state_with_limit(&mut run, transition_limit)
-            .await;
-
-        // Complete metrics tracking
-        match &result {
-            Ok(_) => {
-                self.metrics.complete_run(&run.id, run.status, None);
-            }
-            Err(e) => {
-                self.metrics
-                    .complete_run(&run.id, WorkflowRunStatus::Failed, Some(e.to_string()));
-            }
-        }
-
-        result.map(|_| run)
+        self.execute_and_complete_metrics(&mut run, transition_limit)
+            .await
     }
 
     /// Check if workflow execution should stop
@@ -349,18 +368,7 @@ impl WorkflowExecutor {
         );
 
         // Log entry to state
-        tracing::info!(
-            "ENTERING state: {} for workflow {}",
-            current_state_id,
-            run.workflow.name
-        );
-        self.log_event(
-            ExecutionEventType::StateExecution,
-            format!(
-                "ENTERING state: {} for workflow {}",
-                current_state_id, run.workflow.name
-            ),
-        );
+        self.log_state_entry(&current_state_id, &run.workflow.name);
 
         // Record state execution timing
         let state_start_time = Instant::now();
@@ -375,34 +383,11 @@ impl WorkflowExecutor {
         let action_result = self.execute_state_action(run, &state_description).await;
         let action_executed = match action_result {
             Ok(executed) => {
-                tracing::info!(
-                    "EXITING state: {} for workflow {} (success)",
-                    current_state_id,
-                    run.workflow.name
-                );
-                self.log_event(
-                    ExecutionEventType::StateExecution,
-                    format!(
-                        "EXITING state: {} for workflow {} (success)",
-                        current_state_id, run.workflow.name
-                    ),
-                );
+                self.log_state_exit(&current_state_id, &run.workflow.name, true);
                 executed
             }
             Err(e) => {
-                tracing::error!(
-                    "ERROR in state: {} for workflow {} - {}",
-                    current_state_id,
-                    run.workflow.name,
-                    e
-                );
-                self.log_event(
-                    ExecutionEventType::Failed,
-                    format!(
-                        "ERROR in state: {} for workflow {} - {}",
-                        current_state_id, run.workflow.name, e
-                    ),
-                );
+                self.log_state_exit(&current_state_id, &run.workflow.name, false);
                 return Err(e);
             }
         };
@@ -639,6 +624,36 @@ impl WorkflowExecutor {
         action.execute(&mut run.context).await
     }
 
+    /// Set standard action result variables in context
+    fn set_action_result_vars(
+        &mut self,
+        run: &mut WorkflowRun,
+        success: bool,
+        result_value: Value,
+    ) {
+        run.context
+            .insert("success".to_string(), Value::Bool(success));
+        run.context
+            .insert("failure".to_string(), Value::Bool(!success));
+
+        if !success {
+            run.context
+                .insert("is_error".to_string(), Value::Bool(true));
+        } else if !run
+            .context
+            .get("is_error")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false)
+        {
+            run.context
+                .insert("is_error".to_string(), Value::Bool(false));
+        }
+
+        run.context.insert("result".to_string(), result_value);
+        run.context
+            .insert(LAST_ACTION_RESULT_KEY.to_string(), Value::Bool(success));
+    }
+
     /// Handle the result of action execution with optional Store As variable
     async fn handle_action_result_with_store_as(
         &mut self,
@@ -649,27 +664,7 @@ impl WorkflowExecutor {
         match result {
             Ok(result_value) => {
                 // Set standard variables that are available after every action
-                run.context.insert("success".to_string(), Value::Bool(true));
-                run.context
-                    .insert("failure".to_string(), Value::Bool(false));
-
-                // Only set is_error to false if it's not already true (preserve error state)
-                if !run
-                    .context
-                    .get("is_error")
-                    .and_then(|v| v.as_bool())
-                    .unwrap_or(false)
-                {
-                    run.context
-                        .insert("is_error".to_string(), Value::Bool(false));
-                }
-
-                run.context
-                    .insert("result".to_string(), result_value.clone());
-
-                // Also set the legacy last_action_result for backward compatibility
-                run.context
-                    .insert(LAST_ACTION_RESULT_KEY.to_string(), Value::Bool(true));
+                self.set_action_result_vars(run, true, result_value.clone());
 
                 // If Store As variable is specified, store the result there too
                 if let Some(store_var) = store_as_var {
@@ -701,19 +696,7 @@ impl WorkflowExecutor {
         // Note: Abort error handling removed - abort detection now file-based
 
         // Set standard variables that are available after every action
-        run.context
-            .insert("success".to_string(), Value::Bool(false));
-        run.context.insert("failure".to_string(), Value::Bool(true));
-        run.context
-            .insert("is_error".to_string(), Value::Bool(true));
-        run.context.insert(
-            "result".to_string(),
-            Value::String(action_error.to_string()),
-        );
-
-        // Also set the legacy last_action_result for backward compatibility
-        run.context
-            .insert(LAST_ACTION_RESULT_KEY.to_string(), Value::Bool(false));
+        self.set_action_result_vars(run, false, Value::String(action_error.to_string()));
 
         // Capture error context
         self.capture_error_context(run, &action_error);
@@ -932,9 +915,13 @@ impl Default for WorkflowExecutor {
 mod tests {
     use super::*;
 
+    fn setup_executor() -> WorkflowExecutor {
+        WorkflowExecutor::new()
+    }
+
     #[test]
     fn test_parse_state_description() {
-        let executor = WorkflowExecutor::new();
+        let executor = setup_executor();
 
         // Test state description with Action and Store As
         let description = r#"**Type**: action
@@ -949,7 +936,7 @@ mod tests {
 
     #[test]
     fn test_parse_state_description_no_store_as() {
-        let executor = WorkflowExecutor::new();
+        let executor = setup_executor();
 
         // Test state description with only Action
         let description = r#"**Type**: action
@@ -963,7 +950,7 @@ mod tests {
 
     #[test]
     fn test_parse_state_description_fallback() {
-        let executor = WorkflowExecutor::new();
+        let executor = setup_executor();
 
         // Test state description with no Action field
         let description = r#"set_variable step1="First step completed""#;

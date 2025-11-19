@@ -350,6 +350,29 @@ impl OutputBuffer {
     }
 
     /// Append data to stdout buffer with size limit enforcement
+    ///
+    /// This wrapper method provides explicit, type-safe access to the stdout buffer.
+    /// It delegates to the shared `append_to_buffer_impl` function which handles the
+    /// common logic for size limiting, binary detection, and truncation.
+    ///
+    /// # Design Rationale: Wrapper Methods vs Macros
+    ///
+    /// While a macro could generate both `append_stdout` and `append_stderr`, the explicit
+    /// wrapper approach is preferred for several reasons:
+    ///
+    /// - **Clarity**: Each method is explicitly visible in the source code, making the API
+    ///   surface clear and easy to understand without macro expansion
+    /// - **Documentation**: Each method can have its own dedicated documentation that appears
+    ///   in rustdoc and IDE tooltips
+    /// - **Type Safety**: The compiler can provide better error messages without macro indirection
+    /// - **IDE Support**: Better autocomplete, go-to-definition, and refactoring support
+    /// - **Explicit Control**: The public interface is explicitly defined rather than generated,
+    ///   making API changes more intentional and visible in code review
+    /// - **Debugging**: Stack traces and error messages reference the actual method names rather
+    ///   than macro expansion contexts
+    ///
+    /// The minimal code duplication (two short wrapper methods) is a worthwhile trade-off for
+    /// these benefits.
     pub fn append_stdout(&mut self, data: &[u8]) -> usize {
         let current_size = self.current_size();
         append_to_buffer_impl(
@@ -364,6 +387,13 @@ impl OutputBuffer {
     }
 
     /// Append data to stderr buffer with size limit enforcement
+    ///
+    /// This wrapper method provides explicit, type-safe access to the stderr buffer.
+    /// It delegates to the shared `append_to_buffer_impl` function which handles the
+    /// common logic for size limiting, binary detection, and truncation.
+    ///
+    /// See `append_stdout` documentation for the detailed rationale on why wrapper methods
+    /// are preferred over a macro-based approach for generating these methods.
     pub fn append_stderr(&mut self, data: &[u8]) -> usize {
         let current_size = self.current_size();
         append_to_buffer_impl(
@@ -828,15 +858,17 @@ fn process_stream_line_result(
     }
 }
 
-/// Helper function to read remaining output from a stream after process exit
+/// Helper function to read remaining output from any stream after process exit
 ///
-/// This eliminates duplication in the post-exit output reading loops by providing
-/// a common implementation for both stdout and stderr.
-async fn read_remaining_stream_output(
-    reader: &mut tokio::io::Lines<BufReader<tokio::process::ChildStdout>>,
+/// This generic function works with both stdout and stderr readers by accepting
+/// any type that implements AsyncRead + Unpin, eliminating code duplication.
+async fn read_remaining_stream_output<R>(
+    reader: &mut tokio::io::Lines<BufReader<R>>,
     ctx: &mut OutputLineContext<'_>,
     append_fn: impl Fn(&mut OutputBuffer, &[u8]) -> usize,
-) {
+) where
+    R: tokio::io::AsyncRead + Unpin,
+{
     while let Ok(Some(line)) = reader.next_line().await {
         if ctx.output_buffer.is_at_limit() {
             break;
@@ -845,21 +877,31 @@ async fn read_remaining_stream_output(
     }
 }
 
-/// Helper function to read remaining output from stderr after process exit
+/// Helper function to read remaining output from a stream with context creation
 ///
-/// This is a specialized version for stderr since Rust's type system requires
-/// different types for stdout and stderr readers.
-async fn read_remaining_stderr_output(
-    reader: &mut tokio::io::Lines<BufReader<tokio::process::ChildStderr>>,
-    ctx: &mut OutputLineContext<'_>,
+/// This wrapper eliminates duplication when creating OutputLineContext for reading
+/// remaining stream output after process exit.
+async fn read_remaining_with_context<R>(
+    reader: &mut tokio::io::Lines<BufReader<R>>,
+    line_count: &mut u32,
+    output_buffer: &mut OutputBuffer,
+    binary_notified: &mut bool,
+    progress_sender: Option<&ProgressSender>,
+    progress_token: &str,
     append_fn: impl Fn(&mut OutputBuffer, &[u8]) -> usize,
-) {
-    while let Ok(Some(line)) = reader.next_line().await {
-        if ctx.output_buffer.is_at_limit() {
-            break;
-        }
-        process_output_line(line, ctx, &append_fn);
-    }
+) where
+    R: tokio::io::AsyncRead + Unpin,
+{
+    const BATCH_SIZE: u32 = 10;
+    let mut ctx = OutputLineContext {
+        line_count,
+        output_buffer,
+        binary_notified,
+        progress_sender,
+        progress_token,
+        batch_size: BATCH_SIZE,
+    };
+    read_remaining_stream_output(reader, &mut ctx, append_fn).await;
 }
 
 /// Process child output streams with limits using async streaming
@@ -955,32 +997,24 @@ async fn process_child_output_with_limits(
                         // This is important for processes that exit quickly but have buffered output
 
                         // Read remaining stdout
-                        let mut ctx = OutputLineContext {
-                            line_count: &mut line_count,
-                            output_buffer: &mut output_buffer,
-                            binary_notified: &mut binary_notified,
+                        read_remaining_with_context(
+                            &mut stdout_reader,
+                            &mut line_count,
+                            &mut output_buffer,
+                            &mut binary_notified,
                             progress_sender,
                             progress_token,
-                            batch_size: BATCH_SIZE,
-                        };
-                        read_remaining_stream_output(
-                            &mut stdout_reader,
-                            &mut ctx,
                             |buf, data| buf.append_stdout(data),
                         ).await;
 
                         // Read remaining stderr
-                        let mut ctx = OutputLineContext {
-                            line_count: &mut line_count,
-                            output_buffer: &mut output_buffer,
-                            binary_notified: &mut binary_notified,
+                        read_remaining_with_context(
+                            &mut stderr_reader,
+                            &mut line_count,
+                            &mut output_buffer,
+                            &mut binary_notified,
                             progress_sender,
                             progress_token,
-                            batch_size: BATCH_SIZE,
-                        };
-                        read_remaining_stderr_output(
-                            &mut stderr_reader,
-                            &mut ctx,
                             |buf, data| buf.append_stderr(data),
                         ).await;
 
@@ -1492,41 +1526,64 @@ mod tests {
         )
     }
 
-    /// Helper function to assert that a list of commands are blocked by security validation
+    /// Generic helper function to assert that items are blocked by security validation
     ///
     /// This reduces duplication in security test cases by providing a common pattern
-    /// for testing that dangerous commands are properly rejected.
-    async fn assert_commands_blocked(
-        tool: &ShellExecuteTool,
-        context: &ToolContext,
-        commands: &[&str],
-    ) {
-        for cmd in commands {
-            let mut args = serde_json::Map::new();
-            args.insert(
-                "command".to_string(),
-                serde_json::Value::String(cmd.to_string()),
+    /// for testing that dangerous commands or paths are properly rejected.
+    ///
+    /// # Pattern
+    ///
+    /// This helper follows the "generic test assertion" pattern where:
+    /// 1. Test data (items to block) is provided as a slice
+    /// 2. A builder function constructs the specific test arguments
+    /// 3. The assertion logic is shared across all test cases
+    ///
+    /// This pattern is preferred over individual test functions because it:
+    /// - Eliminates duplication in error checking and assertion logic
+    /// - Ensures consistent validation across all security tests
+    /// - Makes it easy to add new test cases without duplicating code
+    async fn assert_blocked<F>(items: &[&str], item_type: &str, build_args: F)
+    where
+        F: Fn(&str) -> serde_json::Map<String, serde_json::Value>,
+    {
+        let (tool, context) = create_security_test_fixtures();
+        for item in items {
+            let args = build_args(item);
+            let result = tool.execute(args, &context).await;
+            assert!(
+                result.is_err(),
+                "{} '{}' should be blocked",
+                item_type,
+                item
             );
-
-            let result = tool.execute(args, context).await;
-            assert!(result.is_err(), "Command pattern '{cmd}' should be blocked");
 
             // Verify the error message contains security-related information
             if let Err(mcp_error) = result {
                 let error_str = mcp_error.to_string();
                 assert!(
-                    error_str.contains("security") || error_str.contains("unsafe"),
-                    "Error should mention security concern for command: {cmd}"
+                    error_str.contains("security")
+                        || error_str.contains("unsafe")
+                        || error_str.contains("directory"),
+                    "Error should mention security concern for {}: {}",
+                    item_type,
+                    item
                 );
             }
         }
     }
 
+    /// Creates a test tool and context for security validation tests
+    ///
+    /// This eliminates duplication in creating test fixtures for security tests.
+    fn create_security_test_fixtures() -> (ShellExecuteTool, ToolContext) {
+        (ShellExecuteTool::new(), create_test_context())
+    }
+
     /// Helper function to assert that a list of paths are blocked by security validation
     ///
     /// This reduces duplication in path traversal security tests.
-    async fn assert_paths_blocked(tool: &ShellExecuteTool, context: &ToolContext, paths: &[&str]) {
-        for path in paths {
+    async fn assert_paths_blocked(paths: &[&str]) {
+        assert_blocked(paths, "Path traversal attempt", |path| {
             let mut args = serde_json::Map::new();
             args.insert(
                 "command".to_string(),
@@ -1536,21 +1593,148 @@ mod tests {
                 "working_directory".to_string(),
                 serde_json::Value::String(path.to_string()),
             );
+            args
+        })
+        .await;
+    }
 
-            let result = tool.execute(args, context).await;
+    /// Helper function to assert that validator blocks commands with expected error type
+    ///
+    /// This reduces duplication in validator unit tests by providing a common pattern
+    /// for testing command validation logic.
+    fn assert_validator_blocks_commands(
+        validator: &swissarmyhammer_shell::ShellSecurityValidator,
+        commands: &[&str],
+        test_name: &str,
+    ) {
+        for command in commands {
+            let result = validator.validate_command(command);
             assert!(
                 result.is_err(),
-                "Path traversal attempt '{path}' should be blocked"
+                "{}: Command should be blocked: '{}'",
+                test_name,
+                command
             );
 
-            // Verify the error message mentions security
-            if let Err(mcp_error) = result {
-                let error_str = mcp_error.to_string();
-                assert!(
-                    error_str.contains("security") || error_str.contains("directory"),
-                    "Error should mention security/directory concern for path: {path}"
-                );
+            // Verify the error type is correct
+            match result.unwrap_err() {
+                swissarmyhammer_shell::ShellSecurityError::BlockedCommandPattern { .. } => (),
+                other_error => {
+                    panic!(
+                        "{}: Expected blocked pattern error for '{}', got: {:?}",
+                        test_name, command, other_error
+                    )
+                }
             }
+        }
+    }
+
+    /// Builder pattern for executing test commands with optional parameters
+    ///
+    /// This eliminates duplication across the multiple execute_test_command_* helper functions
+    /// by providing a flexible builder that can construct commands with any combination of
+    /// parameters.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// // Simple command
+    /// let result = TestCommandBuilder::new("echo test").execute().await?;
+    ///
+    /// // Command with working directory
+    /// let result = TestCommandBuilder::new("ls")
+    ///     .working_directory("/tmp")
+    ///     .execute()
+    ///     .await?;
+    ///
+    /// // Command with environment variables
+    /// let result = TestCommandBuilder::new("env")
+    ///     .environment("{\"VAR\":\"value\"}")
+    ///     .execute()
+    ///     .await?;
+    ///
+    /// // Command with multiple options
+    /// let result = TestCommandBuilder::new("printenv VAR")
+    ///     .working_directory("/tmp")
+    ///     .environment("{\"VAR\":\"test\"}")
+    ///     .execute()
+    ///     .await?;
+    /// ```
+    struct TestCommandBuilder {
+        command: String,
+        working_directory: Option<String>,
+        environment: Option<String>,
+        custom_args: Option<serde_json::Map<String, serde_json::Value>>,
+        custom_context: Option<ToolContext>,
+    }
+
+    impl TestCommandBuilder {
+        /// Create a new builder with the specified command
+        fn new(command: impl Into<String>) -> Self {
+            Self {
+                command: command.into(),
+                working_directory: None,
+                environment: None,
+                custom_args: None,
+                custom_context: None,
+            }
+        }
+
+        /// Set the working directory for the command
+        fn working_directory(mut self, dir: impl Into<String>) -> Self {
+            self.working_directory = Some(dir.into());
+            self
+        }
+
+        /// Set environment variables as JSON string
+        fn environment(mut self, env_json: impl Into<String>) -> Self {
+            self.environment = Some(env_json.into());
+            self
+        }
+
+        /// Use custom argument map (overrides all other settings)
+        fn with_custom_args(mut self, args: serde_json::Map<String, serde_json::Value>) -> Self {
+            self.custom_args = Some(args);
+            self
+        }
+
+        /// Use custom context (for testing with progress senders, etc.)
+        fn with_context(mut self, context: ToolContext) -> Self {
+            self.custom_context = Some(context);
+            self
+        }
+
+        /// Execute the command with the configured parameters
+        async fn execute(self) -> Result<CallToolResult, McpError> {
+            let tool = ShellExecuteTool::new();
+            let context = self.custom_context.unwrap_or_else(create_test_context);
+
+            // If custom args are provided, use them directly
+            let args = if let Some(custom) = self.custom_args {
+                custom
+            } else {
+                // Build args from the builder state
+                let mut args = serde_json::Map::new();
+                args.insert(
+                    "command".to_string(),
+                    serde_json::Value::String(self.command),
+                );
+
+                if let Some(dir) = self.working_directory {
+                    args.insert(
+                        "working_directory".to_string(),
+                        serde_json::Value::String(dir),
+                    );
+                }
+
+                if let Some(env) = self.environment {
+                    args.insert("environment".to_string(), serde_json::Value::String(env));
+                }
+
+                args
+            };
+
+            tool.execute(args, &context).await
         }
     }
 
@@ -1585,16 +1769,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_execute_basic_command() {
-        let tool = ShellExecuteTool::new();
-        let context = create_test_context();
-
-        let mut args = serde_json::Map::new();
-        args.insert(
-            "command".to_string(),
-            serde_json::Value::String("echo hello".to_string()),
-        );
-
-        let result = tool.execute(args, &context).await;
+        let result = TestCommandBuilder::new("echo hello").execute().await;
         assert!(result.is_ok());
 
         let call_result = result.unwrap();
@@ -1603,9 +1778,6 @@ mod tests {
 
     #[tokio::test]
     async fn test_execute_with_all_parameters() {
-        let tool = ShellExecuteTool::new();
-        let context = create_test_context();
-
         let env_json = r#"{"TEST_VAR":"test_value"}"#;
 
         let mut args = serde_json::Map::new();
@@ -1617,13 +1789,15 @@ mod tests {
             "working_directory".to_string(),
             serde_json::Value::String("/tmp".to_string()),
         );
-
         args.insert(
             "environment".to_string(),
             serde_json::Value::String(env_json.to_string()),
         );
 
-        let result = tool.execute(args, &context).await;
+        let result = TestCommandBuilder::new("")
+            .with_custom_args(args)
+            .execute()
+            .await;
         assert!(result.is_ok());
 
         let call_result = result.unwrap();
@@ -1632,93 +1806,213 @@ mod tests {
 
     #[tokio::test]
     async fn test_execute_empty_command() {
-        let tool = ShellExecuteTool::new();
-        let context = create_test_context();
-
         let mut args = serde_json::Map::new();
         args.insert(
             "command".to_string(),
             serde_json::Value::String("".to_string()),
         );
 
-        let result = tool.execute(args, &context).await;
+        let result = TestCommandBuilder::new("")
+            .with_custom_args(args)
+            .execute()
+            .await;
         assert!(result.is_err());
     }
 
     #[tokio::test]
     async fn test_execute_empty_working_directory() {
-        let tool = ShellExecuteTool::new();
-        let context = create_test_context();
-
-        let mut args = serde_json::Map::new();
-        args.insert(
-            "command".to_string(),
-            serde_json::Value::String("echo test".to_string()),
-        );
-        args.insert(
-            "working_directory".to_string(),
-            serde_json::Value::String("".to_string()),
-        );
-
-        let result = tool.execute(args, &context).await;
+        let result = TestCommandBuilder::new("echo test")
+            .working_directory("")
+            .execute()
+            .await;
         assert!(result.is_err());
+    }
+
+    /// Helper function to parse execution result from CallToolResult
+    ///
+    /// This eliminates duplication in JSON response parsing and validation logic.
+    fn parse_execution_result(call_result: &CallToolResult) -> serde_json::Value {
+        assert!(
+            !call_result.content.is_empty(),
+            "Content should not be empty"
+        );
+        let content_text = match &call_result.content[0].raw {
+            rmcp::model::RawContent::Text(text_content) => &text_content.text,
+            _ => panic!("Expected text content"),
+        };
+        serde_json::from_str(content_text).expect("Failed to parse JSON response")
+    }
+
+    /// Builder for declarative validation of shell execution results
+    ///
+    /// This provides a fluent API for asserting on JSON response fields,
+    /// reducing duplication across test functions.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// ResultValidator::new(&call_result)
+    ///     .assert_exit_code(0)
+    ///     .assert_stdout_contains("expected text")
+    ///     .assert_field_exists("execution_time_ms");
+    /// ```
+    struct ResultValidator {
+        json: serde_json::Value,
+    }
+
+    impl ResultValidator {
+        /// Create a new validator from a CallToolResult
+        fn new(call_result: &CallToolResult) -> Self {
+            let json = parse_execution_result(call_result);
+            assert!(
+                json.is_object(),
+                "Expected JSON object in result, got: {:?}",
+                json
+            );
+            Self { json }
+        }
+
+        /// Assert that a field exists in the result
+        fn assert_field_exists(self, field: &str) -> Self {
+            assert!(
+                self.json.get(field).is_some(),
+                "Field '{}' should exist in result",
+                field
+            );
+            self
+        }
+
+        /// Assert that the exit code matches the expected value
+        fn assert_exit_code(self, expected: i64) -> Self {
+            let exit_code = self
+                .json
+                .get("exit_code")
+                .and_then(|v| v.as_i64())
+                .expect("exit_code should be an integer");
+            assert_eq!(exit_code, expected, "Exit code mismatch");
+            self
+        }
+
+        /// Assert that exit code is non-zero
+        fn assert_exit_code_nonzero(self) -> Self {
+            let exit_code = self
+                .json
+                .get("exit_code")
+                .and_then(|v| v.as_i64())
+                .expect("exit_code should be an integer");
+            assert_ne!(exit_code, 0, "Exit code should be non-zero");
+            self
+        }
+
+        /// Assert that stdout contains the expected text
+        fn assert_stdout_contains(self, expected: &str) -> Self {
+            let stdout = self
+                .json
+                .get("stdout")
+                .and_then(|v| v.as_str())
+                .expect("stdout should be a string");
+            assert!(
+                stdout.contains(expected),
+                "stdout should contain '{}', got: {}",
+                expected,
+                stdout
+            );
+            self
+        }
+
+        /// Assert that stderr contains the expected text
+        fn assert_stderr_contains(self, expected: &str) -> Self {
+            let stderr = self
+                .json
+                .get("stderr")
+                .and_then(|v| v.as_str())
+                .expect("stderr should be a string");
+            assert!(
+                stderr.contains(expected),
+                "stderr should contain '{}', got: {}",
+                expected,
+                stderr
+            );
+            self
+        }
+
+        /// Assert that stderr is not empty
+        fn assert_stderr_not_empty(self) -> Self {
+            let stderr = self
+                .json
+                .get("stderr")
+                .and_then(|v| v.as_str())
+                .expect("stderr should be a string");
+            assert!(!stderr.is_empty(), "stderr should not be empty");
+            self
+        }
+
+        /// Assert that output_truncated field has the expected value
+        fn assert_output_truncated(self, expected: bool) -> Self {
+            let truncated = self
+                .json
+                .get("output_truncated")
+                .and_then(|v| v.as_bool())
+                .expect("output_truncated should be a boolean");
+            assert_eq!(truncated, expected, "output_truncated mismatch");
+            self
+        }
+
+        /// Assert that a boolean field has the expected value
+        fn assert_bool_field(self, field: &str, expected: bool) -> Self {
+            let value = self
+                .json
+                .get(field)
+                .and_then(|v| v.as_bool())
+                .unwrap_or_else(|| panic!("Field '{}' should be a boolean", field));
+            assert_eq!(value, expected, "Field '{}' mismatch", field);
+            self
+        }
+
+        /// Assert standard success fields for a successful command execution
+        ///
+        /// This validates that all expected fields exist, exit code is 0,
+        /// and output is not truncated or binary.
+        fn assert_success(self) -> Self {
+            self.assert_field_exists("stdout")
+                .assert_field_exists("stderr")
+                .assert_field_exists("exit_code")
+                .assert_field_exists("execution_time_ms")
+                .assert_exit_code(0)
+        }
+
+        /// Assert standard failure fields for a failed command execution
+        ///
+        /// This validates that required fields exist, exit code is non-zero,
+        /// and stderr contains error information.
+        fn assert_failure(self) -> Self {
+            self.assert_field_exists("stderr")
+                .assert_field_exists("exit_code")
+                .assert_exit_code_nonzero()
+                .assert_stderr_not_empty()
+        }
     }
 
     #[tokio::test]
     async fn test_execute_real_command_success() {
-        let tool = ShellExecuteTool::new();
-        let context = create_test_context();
-
-        let mut args = serde_json::Map::new();
-        args.insert(
-            "command".to_string(),
-            serde_json::Value::String("echo 'Hello World'".to_string()),
-        );
-
-        let result = tool.execute(args, &context).await;
+        let result = TestCommandBuilder::new("echo 'Hello World'")
+            .execute()
+            .await;
         assert!(result.is_ok(), "Command execution should succeed");
 
         let call_result = result.unwrap();
         assert_eq!(call_result.is_error, Some(false));
 
-        // The response should contain JSON with execution results
-        assert!(!call_result.content.is_empty());
-        let content_text = match &call_result.content[0].raw {
-            rmcp::model::RawContent::Text(text_content) => &text_content.text,
-            _ => panic!("Expected text content"),
-        };
-
-        // Parse the JSON response to check for expected fields
-        if let Ok(response_json) = serde_json::from_str::<serde_json::Value>(content_text) {
-            assert!(response_json.get("stdout").is_some());
-            assert!(response_json.get("stderr").is_some());
-            assert!(response_json.get("exit_code").is_some());
-            assert!(response_json.get("execution_time_ms").is_some());
-
-            // Check that stdout contains the expected output
-            if let Some(stdout) = response_json.get("stdout") {
-                assert!(stdout.as_str().unwrap().contains("Hello World"));
-            }
-
-            // Check that exit code is 0 for successful command
-            if let Some(exit_code) = response_json.get("exit_code") {
-                assert_eq!(exit_code.as_i64().unwrap(), 0);
-            }
-        }
+        ResultValidator::new(&call_result)
+            .assert_success()
+            .assert_stdout_contains("Hello World");
     }
 
     #[tokio::test]
     async fn test_execute_real_command_failure() {
-        let tool = ShellExecuteTool::new();
-        let context = create_test_context();
-
-        let mut args = serde_json::Map::new();
-        args.insert(
-            "command".to_string(),
-            serde_json::Value::String("ls /nonexistent_directory".to_string()),
-        );
-
-        let result = tool.execute(args, &context).await;
+        let result = TestCommandBuilder::new("ls /nonexistent_directory")
+            .execute()
+            .await;
         assert!(
             result.is_ok(),
             "Tool should return result even for failed commands"
@@ -1727,109 +2021,43 @@ mod tests {
         let call_result = result.unwrap();
         assert_eq!(call_result.is_error, Some(true));
 
-        // The response should contain JSON with execution results
-        assert!(!call_result.content.is_empty());
-        let content_text = match &call_result.content[0].raw {
-            rmcp::model::RawContent::Text(text_content) => &text_content.text,
-            _ => panic!("Expected text content"),
-        };
-
-        // Parse the JSON response to check for expected fields
-        if let Ok(response_json) = serde_json::from_str::<serde_json::Value>(content_text) {
-            assert!(response_json.get("stderr").is_some());
-            assert!(response_json.get("exit_code").is_some());
-
-            // Check that exit code is non-zero for failed command
-            if let Some(exit_code) = response_json.get("exit_code") {
-                assert_ne!(exit_code.as_i64().unwrap(), 0);
-            }
-
-            // Check that stderr contains error information
-            if let Some(stderr) = response_json.get("stderr") {
-                assert!(!stderr.as_str().unwrap().is_empty());
-            }
-        }
+        ResultValidator::new(&call_result).assert_failure();
     }
 
     #[tokio::test]
     async fn test_execute_with_working_directory() {
-        let tool = ShellExecuteTool::new();
-        let context = create_test_context();
-
-        let mut args = serde_json::Map::new();
-        args.insert(
-            "command".to_string(),
-            serde_json::Value::String("pwd".to_string()),
-        );
-        args.insert(
-            "working_directory".to_string(),
-            serde_json::Value::String("/tmp".to_string()),
-        );
-
-        let result = tool.execute(args, &context).await;
+        let result = TestCommandBuilder::new("pwd")
+            .working_directory("/tmp")
+            .execute()
+            .await;
         assert!(result.is_ok(), "Command execution should succeed");
 
         let call_result = result.unwrap();
         assert_eq!(call_result.is_error, Some(false));
 
-        // The response should contain JSON with execution results
-        assert!(!call_result.content.is_empty());
-        let content_text = match &call_result.content[0].raw {
-            rmcp::model::RawContent::Text(text_content) => &text_content.text,
-            _ => panic!("Expected text content"),
-        };
-
-        // Parse the JSON response to check working directory
-        if let Ok(response_json) = serde_json::from_str::<serde_json::Value>(content_text) {
-            if let Some(stdout) = response_json.get("stdout") {
-                assert!(stdout.as_str().unwrap().contains("/tmp"));
-            }
-        }
+        ResultValidator::new(&call_result).assert_stdout_contains("/tmp");
     }
 
     #[tokio::test]
     async fn test_execute_with_environment_variables() {
-        let tool = ShellExecuteTool::new();
-        let context = create_test_context();
-
         let env_json = r#"{"TEST_VAR":"test_value"}"#;
 
-        let mut args = serde_json::Map::new();
-        args.insert(
-            "command".to_string(),
-            serde_json::Value::String("echo $TEST_VAR".to_string()),
-        );
-        args.insert(
-            "environment".to_string(),
-            serde_json::Value::String(env_json.to_string()),
-        );
-
-        let result = tool.execute(args, &context).await;
+        let result = TestCommandBuilder::new("echo $TEST_VAR")
+            .environment(env_json)
+            .execute()
+            .await;
         assert!(result.is_ok(), "Command execution should succeed");
 
         let call_result = result.unwrap();
         assert_eq!(call_result.is_error, Some(false));
 
-        // The response should contain JSON with execution results
-        assert!(!call_result.content.is_empty());
-        let content_text = match &call_result.content[0].raw {
-            rmcp::model::RawContent::Text(text_content) => &text_content.text,
-            _ => panic!("Expected text content"),
-        };
-
-        // Parse the JSON response to check environment variable
-        if let Ok(response_json) = serde_json::from_str::<serde_json::Value>(content_text) {
-            if let Some(stdout) = response_json.get("stdout") {
-                assert!(stdout.as_str().unwrap().contains("test_value"));
-            }
-        }
+        ResultValidator::new(&call_result).assert_stdout_contains("test_value");
     }
 
     // Security validation tests for the new functionality
     #[tokio::test]
     async fn test_command_injection_security_validation() {
-        let tool = ShellExecuteTool::new();
-        let context = create_test_context();
+        use swissarmyhammer_shell::ShellSecurityPolicy;
 
         // Test command patterns that should be blocked by current security policy
         let dangerous_commands = [
@@ -1840,39 +2068,31 @@ mod tests {
             "eval 'echo dangerous'",  // Contains eval which is blocked
         ];
 
-        assert_commands_blocked(&tool, &context, &dangerous_commands).await;
+        test_blocked_commands_with_policy(
+            ShellSecurityPolicy::default(),
+            &dangerous_commands,
+            "command injection validation",
+        )
+        .await;
     }
 
     #[tokio::test]
     async fn test_working_directory_traversal_security_validation() {
-        let tool = ShellExecuteTool::new();
-        let context = create_test_context();
-
         // Test path traversal attempts that should be blocked
         let dangerous_paths = ["../parent", "path/../parent", "/absolute/../parent"];
 
-        assert_paths_blocked(&tool, &context, &dangerous_paths).await;
+        assert_paths_blocked(&dangerous_paths).await;
     }
 
     #[tokio::test]
     async fn test_environment_variable_security_validation() {
-        let tool = ShellExecuteTool::new();
-        let context = create_test_context();
-
         // Test invalid environment variable names that should be blocked
         let env_json = r#"{"123INVALID":"value"}"#; // starts with number
 
-        let mut args = serde_json::Map::new();
-        args.insert(
-            "command".to_string(),
-            serde_json::Value::String("echo test".to_string()),
-        );
-        args.insert(
-            "environment".to_string(),
-            serde_json::Value::String(env_json.to_string()),
-        );
-
-        let result = tool.execute(args, &context).await;
+        let result = TestCommandBuilder::new("echo test")
+            .environment(env_json)
+            .execute()
+            .await;
         assert!(
             result.is_err(),
             "Invalid environment variable name should be blocked"
@@ -1890,24 +2110,14 @@ mod tests {
 
     #[tokio::test]
     async fn test_environment_variable_value_too_long() {
-        let tool = ShellExecuteTool::new();
-        let context = create_test_context();
-
         // Test environment variable value that's too long
         let long_value = "x".repeat(2000);
         let env_json = format!(r#"{{"TEST_VAR":"{}"}}"#, long_value); // exceeds limit
 
-        let mut args = serde_json::Map::new();
-        args.insert(
-            "command".to_string(),
-            serde_json::Value::String("echo test".to_string()),
-        );
-        args.insert(
-            "environment".to_string(),
-            serde_json::Value::String(env_json),
-        );
-
-        let result = tool.execute(args, &context).await;
+        let result = TestCommandBuilder::new("echo test")
+            .environment(&env_json)
+            .execute()
+            .await;
         assert!(
             result.is_err(),
             "Environment variable value too long should be blocked"
@@ -1927,19 +2137,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_command_too_long_security_validation() {
-        let tool = ShellExecuteTool::new();
-        let context = create_test_context();
-
         // Test command that's too long
         let long_command = "echo ".to_string() + &"a".repeat(5000); // exceeds limit
 
-        let mut args = serde_json::Map::new();
-        args.insert(
-            "command".to_string(),
-            serde_json::Value::String(long_command),
-        );
-
-        let result = tool.execute(args, &context).await;
+        let result = TestCommandBuilder::new(&long_command).execute().await;
         assert!(result.is_err(), "Command that's too long should be blocked");
 
         // Verify error message mentions the issue
@@ -1956,20 +2157,11 @@ mod tests {
 
     #[tokio::test]
     async fn test_valid_commands_still_work() {
-        let tool = ShellExecuteTool::new();
-        let context = create_test_context();
-
         // Test that valid, safe commands still work after adding security validation
         let valid_commands = ["echo hello world", "ls -la", "pwd"];
 
         for cmd in &valid_commands {
-            let mut args = serde_json::Map::new();
-            args.insert(
-                "command".to_string(),
-                serde_json::Value::String(cmd.to_string()),
-            );
-
-            let result = tool.execute(args, &context).await;
+            let result = TestCommandBuilder::new(*cmd).execute().await;
             assert!(
                 result.is_ok(),
                 "Valid command '{cmd}' should not be blocked by security validation"
@@ -1987,75 +2179,38 @@ mod tests {
 
     #[tokio::test]
     async fn test_output_metadata_in_response() {
-        let tool = ShellExecuteTool::new();
-        let context = create_test_context();
-
-        let mut args = serde_json::Map::new();
-        args.insert(
-            "command".to_string(),
-            serde_json::Value::String("echo 'test output'".to_string()),
-        );
-
-        let result = tool.execute(args, &context).await;
+        let result = TestCommandBuilder::new("echo 'test output'")
+            .execute()
+            .await;
         assert!(result.is_ok());
 
         let call_result = result.unwrap();
         assert_eq!(call_result.is_error, Some(false));
 
-        // Parse the JSON response to check for new metadata fields
-        let content_text = match &call_result.content[0].raw {
-            rmcp::model::RawContent::Text(text_content) => &text_content.text,
-            _ => panic!("Expected text content"),
-        };
-
-        if let Ok(response_json) = serde_json::from_str::<serde_json::Value>(content_text) {
-            // Check for new output handling fields
-            assert!(response_json.get("output_truncated").is_some());
-            assert!(response_json.get("total_output_size").is_some());
-            assert!(response_json.get("binary_output_detected").is_some());
-
-            // Verify metadata values for a simple command
-            assert_eq!(response_json["output_truncated"], false);
-            assert_eq!(response_json["binary_output_detected"], false);
-
-            // Total output size should be reasonable for a simple echo command
-            let total_size = response_json["total_output_size"].as_u64().unwrap();
-            assert!(
-                total_size > 0 && total_size < 200,
-                "Output size should be reasonable: {total_size}"
-            );
-        }
+        ResultValidator::new(&call_result)
+            .assert_field_exists("output_truncated")
+            .assert_field_exists("total_output_size")
+            .assert_field_exists("binary_output_detected")
+            .assert_output_truncated(false)
+            .assert_bool_field("binary_output_detected", false);
     }
 
     #[tokio::test]
     async fn test_binary_content_detection() {
-        let tool = ShellExecuteTool::new();
-        let context = create_test_context();
-
         // Create a test that uses printf with control characters that will be captured as lines
         // This tests the detection within text that contains binary markers
         // Using printf instead of echo -e for cross-platform compatibility
-        let mut args = serde_json::Map::new();
-        args.insert(
-            "command".to_string(),
-            serde_json::Value::String(
-                "printf 'text\\x01with\\x02control\\x00chars\\n'".to_string(),
-            ),
-        );
-
-        let result = tool.execute(args, &context).await;
+        let result = TestCommandBuilder::new("printf 'text\\x01with\\x02control\\x00chars\\n'")
+            .execute()
+            .await;
         assert!(result.is_ok());
 
         let call_result = result.unwrap();
         // Command should succeed but detect binary content
         assert_eq!(call_result.is_error, Some(false));
 
-        let content_text = match &call_result.content[0].raw {
-            rmcp::model::RawContent::Text(text_content) => &text_content.text,
-            _ => panic!("Expected text content"),
-        };
-
-        if let Ok(response_json) = serde_json::from_str::<serde_json::Value>(content_text) {
+        let response_json = parse_execution_result(&call_result);
+        if let response_json @ serde_json::Value::Object(_) = response_json {
             let total_size = response_json["total_output_size"].as_u64().unwrap();
             println!(
                 "Binary test - total_size: {}, binary_detected: {}, stdout: '{}'",
@@ -2078,6 +2233,30 @@ mod tests {
         }
     }
 
+    /// Helper to verify buffer state after append operation
+    ///
+    /// This reduces duplication in OutputBuffer test assertions.
+    fn assert_buffer_state(
+        buffer: &OutputBuffer,
+        expected_written: usize,
+        actual_written: usize,
+        should_be_truncated: bool,
+        max_size: usize,
+    ) {
+        assert_eq!(actual_written, expected_written, "Written bytes mismatch");
+        assert_eq!(
+            buffer.is_truncated(),
+            should_be_truncated,
+            "Truncation state mismatch"
+        );
+        assert!(
+            buffer.current_size() <= max_size,
+            "Buffer size {} exceeds max {}",
+            buffer.current_size(),
+            max_size
+        );
+    }
+
     #[test]
     fn test_output_buffer_size_limits() {
         let mut buffer = OutputBuffer::new(100); // 100 byte limit
@@ -2085,16 +2264,14 @@ mod tests {
         // Add data that doesn't exceed limit
         let small_data = b"hello world\n";
         let written = buffer.append_stdout(small_data);
-        assert_eq!(written, small_data.len());
-        assert!(!buffer.is_truncated());
+        assert_buffer_state(&buffer, small_data.len(), written, false, 100);
         assert_eq!(buffer.current_size(), small_data.len());
 
         // Add data that would exceed limit
         let large_data = vec![b'x'; 200]; // 200 bytes
         let written = buffer.append_stdout(&large_data);
         assert!(written < large_data.len()); // Should be truncated
-        assert!(buffer.is_truncated());
-        assert!(buffer.current_size() <= 100);
+        assert_buffer_state(&buffer, written, written, true, 100);
     }
 
     #[test]
@@ -2104,16 +2281,14 @@ mod tests {
         // Test exact limit boundary
         let exact_data = vec![b'a'; 50];
         let written = buffer.append_stdout(&exact_data);
-        assert_eq!(written, 50);
-        assert!(!buffer.is_truncated()); // Should fit exactly
+        assert_buffer_state(&buffer, 50, written, false, 50);
         assert_eq!(buffer.current_size(), 50);
         assert!(buffer.is_at_limit());
 
         // Try to add one more byte - should be rejected
         let one_byte = b"x";
         let written = buffer.append_stdout(one_byte);
-        assert_eq!(written, 0); // Nothing should be written
-        assert!(buffer.is_truncated()); // Now marked as truncated
+        assert_buffer_state(&buffer, 0, written, true, 50);
         assert_eq!(buffer.current_size(), 50); // Size shouldn't change
     }
 
@@ -2128,10 +2303,9 @@ mod tests {
         let stdout_written = buffer.append_stdout(stdout_data);
         let stderr_written = buffer.append_stderr(stderr_data);
 
-        assert_eq!(stdout_written, stdout_data.len());
-        assert_eq!(stderr_written, stderr_data.len());
+        assert_buffer_state(&buffer, stdout_data.len(), stdout_written, false, 100);
+        assert_buffer_state(&buffer, stderr_data.len(), stderr_written, false, 100);
         assert_eq!(buffer.current_size(), stdout_data.len() + stderr_data.len());
-        assert!(!buffer.is_truncated());
 
         // Verify content is preserved correctly
         let stdout_result = buffer.get_stdout();
@@ -2155,8 +2329,7 @@ mod tests {
 
         // Should only write what fits (30 - 17 = 13 bytes)
         assert!(written <= 13);
-        assert!(buffer.is_truncated());
-        assert!(buffer.current_size() <= 30);
+        assert_buffer_state(&buffer, written, written, true, 30);
 
         // Verify both streams have content
         assert!(!buffer.get_stdout().is_empty());
@@ -2170,8 +2343,7 @@ mod tests {
         // Any data should be rejected immediately
         let data = b"hello";
         let written = buffer.append_stdout(data);
-        assert_eq!(written, 0);
-        assert!(buffer.is_truncated());
+        assert_buffer_state(&buffer, 0, written, true, 0);
         assert_eq!(buffer.current_size(), 0);
         assert!(buffer.is_at_limit());
     }
@@ -2187,7 +2359,7 @@ mod tests {
             let written = buffer.append_stdout(data_bytes);
 
             if buffer.current_size() + data_bytes.len() <= 50 {
-                assert_eq!(written, data_bytes.len());
+                assert_buffer_state(&buffer, data_bytes.len(), written, false, 50);
             } else {
                 // Should truncate or reject when limit is reached
                 assert!(written <= data_bytes.len());
@@ -2211,8 +2383,7 @@ mod tests {
         let written = buffer.append_stdout(large_utf8.as_bytes());
 
         assert!(written > 0);
-        assert!(written <= 20);
-        assert!(buffer.is_truncated());
+        assert_buffer_state(&buffer, written, written, true, 20);
 
         // Verify the output is still valid UTF-8 or handled gracefully
         let output = buffer.get_stdout();
@@ -2228,16 +2399,15 @@ mod tests {
         let data1 = b"first chunk of data\n"; // 20 bytes
         let data2 = b"second chunk that exceeds\n"; // 26 bytes
 
-        buffer.append_stdout(data1);
-        buffer.append_stdout(data2);
+        let written1 = buffer.append_stdout(data1);
+        let written2 = buffer.append_stdout(data2);
 
         // Total processed should include all attempted data
         let total = buffer.total_bytes_processed();
         assert_eq!(total, data1.len() + data2.len());
 
         // But current size should be limited
-        assert!(buffer.current_size() <= 20);
-        assert!(buffer.is_truncated());
+        assert_buffer_state(&buffer, written1 + written2, written1 + written2, true, 20);
     }
 
     #[test]
@@ -2336,8 +2506,8 @@ mod tests {
 
         // Fill buffer to capacity
         let data = vec![b'a'; 60];
-        let _written = buffer.append_stdout(&data);
-        assert!(buffer.is_truncated());
+        let written = buffer.append_stdout(&data);
+        assert_buffer_state(&buffer, written, written, true, 50);
 
         // Add truncation marker
         buffer.add_truncation_marker();
@@ -2352,7 +2522,8 @@ mod tests {
 
         // Add data with line boundaries
         let data = b"line1\nline2\nline3\n";
-        buffer.append_stdout(data);
+        let written = buffer.append_stdout(data);
+        assert_buffer_state(&buffer, written, written, data.len() > 20, 20);
 
         let output = buffer.get_stdout();
         // Should preserve line structure where possible
@@ -2369,32 +2540,21 @@ mod tests {
 
     #[tokio::test]
     async fn test_large_output_handling() {
-        let tool = ShellExecuteTool::new();
-        let context = create_test_context();
-
         // Generate a simpler command that produces moderate output
         // Use yes command with head to generate repeating output
-        let mut args = serde_json::Map::new();
-        args.insert(
-            "command".to_string(),
-            serde_json::Value::String(
-                "yes 'This is a test line that is reasonably long' | head -100".to_string(),
-            ),
-        );
-
-        let result = tool.execute(args, &context).await;
+        let result = TestCommandBuilder::new(
+            "yes 'This is a test line that is reasonably long' | head -100",
+        )
+        .execute()
+        .await;
 
         // Check if the command succeeded or if it failed due to security validation
         match result {
             Ok(call_result) => {
                 assert_eq!(call_result.is_error, Some(false));
 
-                let content_text = match &call_result.content[0].raw {
-                    rmcp::model::RawContent::Text(text_content) => &text_content.text,
-                    _ => panic!("Expected text content"),
-                };
-
-                if let Ok(response_json) = serde_json::from_str::<serde_json::Value>(content_text) {
+                let response_json = parse_execution_result(&call_result);
+                if let response_json @ serde_json::Value::Object(_) = response_json {
                     // Check that metadata is populated correctly
                     let total_size = response_json["total_output_size"].as_u64().unwrap();
                     assert!(total_size > 0);
@@ -2418,81 +2578,37 @@ mod tests {
 
     #[tokio::test]
     async fn test_stderr_output_handling() {
-        let tool = ShellExecuteTool::new();
-        let context = create_test_context();
-
         // Command that outputs to stderr
-        let mut args = serde_json::Map::new();
-        args.insert(
-            "command".to_string(),
-            serde_json::Value::String("echo 'error message' >&2".to_string()),
-        );
-
-        let result = tool.execute(args, &context).await;
+        let result = TestCommandBuilder::new("echo 'error message' >&2")
+            .execute()
+            .await;
         assert!(result.is_ok());
 
         let call_result = result.unwrap();
         // Command should succeed (exit 0) even though it writes to stderr
         assert_eq!(call_result.is_error, Some(false));
 
-        let content_text = match &call_result.content[0].raw {
-            rmcp::model::RawContent::Text(text_content) => &text_content.text,
-            _ => panic!("Expected text content"),
-        };
-
-        if let Ok(response_json) = serde_json::from_str::<serde_json::Value>(content_text) {
-            // Check that stderr contains the error message
-            let stderr = response_json["stderr"].as_str().unwrap();
-            assert!(stderr.contains("error message"));
-
-            // Check metadata
-            assert_eq!(response_json["binary_output_detected"], false);
-            assert_eq!(response_json["output_truncated"], false);
-
-            let total_size = response_json["total_output_size"].as_u64().unwrap();
-            assert!(total_size > 0);
-        }
+        ResultValidator::new(&call_result)
+            .assert_stderr_contains("error message")
+            .assert_bool_field("binary_output_detected", false)
+            .assert_output_truncated(false);
     }
 
     #[tokio::test]
     async fn test_mixed_stdout_stderr_output() {
         // This test verifies that our output handling correctly captures both stdout and stderr
         // We'll test this with a command that fails (goes to stderr) but might also produce stdout
-
-        let tool = ShellExecuteTool::new();
-        let context = create_test_context();
-
-        // Use a simple command that will produce stderr output
-        let mut args = serde_json::Map::new();
-        args.insert(
-            "command".to_string(),
-            serde_json::Value::String("ls /nonexistent_directory_12345".to_string()),
-        );
-
-        let result = tool.execute(args, &context).await;
+        let result = TestCommandBuilder::new("ls /nonexistent_directory_12345")
+            .execute()
+            .await;
         assert!(result.is_ok()); // Tool should succeed even if command fails
 
         let call_result = result.unwrap();
         assert_eq!(call_result.is_error, Some(true)); // Command should fail
 
-        let content_text = match &call_result.content[0].raw {
-            rmcp::model::RawContent::Text(text_content) => &text_content.text,
-            _ => panic!("Expected text content"),
-        };
-
-        if let Ok(response_json) = serde_json::from_str::<serde_json::Value>(content_text) {
-            let stderr = response_json["stderr"].as_str().unwrap();
-
-            // Should contain error message in stderr
-            assert!(!stderr.is_empty());
-
-            // Check that total size includes the error output
-            let total_size = response_json["total_output_size"].as_u64().unwrap();
-            assert!(total_size > 0);
-
-            // Should not be binary
-            assert_eq!(response_json["binary_output_detected"], false);
-        }
+        ResultValidator::new(&call_result)
+            .assert_stderr_not_empty()
+            .assert_bool_field("binary_output_detected", false);
     }
 
     #[test]
@@ -2711,13 +2827,25 @@ mod tests {
 
     // Security Testing Framework - Comprehensive security validation tests
 
+    /// Helper function to test that a list of commands are blocked by a validator
+    ///
+    /// This reduces duplication across security tests by providing a common pattern
+    /// for creating validators and testing blocked command lists.
+    async fn test_blocked_commands_with_policy(
+        policy: swissarmyhammer_shell::ShellSecurityPolicy,
+        blocked_commands: &[&str],
+        test_name: &str,
+    ) {
+        use swissarmyhammer_shell::ShellSecurityValidator;
+
+        let validator = ShellSecurityValidator::new(policy).expect("Failed to create validator");
+        assert_validator_blocks_commands(&validator, blocked_commands, test_name);
+    }
+
     #[tokio::test]
     async fn test_comprehensive_command_injection_prevention() {
         // Test comprehensive command injection patterns that should be blocked
-        use swissarmyhammer_shell::{ShellSecurityPolicy, ShellSecurityValidator};
-
-        let policy = ShellSecurityPolicy::default();
-        let validator = ShellSecurityValidator::new(policy).expect("Failed to create validator");
+        use swissarmyhammer_shell::ShellSecurityPolicy;
 
         // These are patterns that should actually be blocked by the current security policy
         let blocked_patterns = [
@@ -2751,21 +2879,12 @@ mod tests {
             "sed -i 's/foo/bar/g' file.txt",
         ];
 
-        for pattern in &blocked_patterns {
-            let result = validator.validate_command(pattern);
-            assert!(
-                result.is_err(),
-                "Blocked pattern should be blocked: '{pattern}'"
-            );
-
-            // Verify the error type is correct
-            match result.unwrap_err() {
-                swissarmyhammer_shell::ShellSecurityError::BlockedCommandPattern { .. } => (),
-                other_error => {
-                    panic!("Expected blocked pattern error for '{pattern}', got: {other_error:?}")
-                }
-            }
-        }
+        test_blocked_commands_with_policy(
+            ShellSecurityPolicy::default(),
+            &blocked_patterns,
+            "test_comprehensive_command_injection_prevention",
+        )
+        .await;
     }
 
     #[tokio::test]
@@ -2825,7 +2944,7 @@ mod tests {
     #[tokio::test]
     async fn test_blocked_command_patterns() {
         // Test configurable blocked command patterns
-        use swissarmyhammer_shell::{ShellSecurityPolicy, ShellSecurityValidator};
+        use swissarmyhammer_shell::ShellSecurityPolicy;
 
         let policy = ShellSecurityPolicy {
             blocked_commands: vec![
@@ -2841,13 +2960,11 @@ mod tests {
             ..ShellSecurityPolicy::default()
         };
 
-        let validator = ShellSecurityValidator::new(policy).expect("Failed to create validator");
-
         let blocked_commands = [
             "rm -rf /tmp",
             "rm -rf ~/important",
             "format C:",
-            "mkfs /dev/sdb1", // Fixed to match pattern
+            "mkfs /dev/sdb1",
             "dd if=/dev/zero of=/dev/sda",
             "sudo rm file.txt",
             "systemctl stop service",
@@ -2855,21 +2972,12 @@ mod tests {
             "grep root /etc/shadow",
         ];
 
-        for command in &blocked_commands {
-            let result = validator.validate_command(command);
-            assert!(
-                result.is_err(),
-                "Blocked command should fail validation: '{command}'"
-            );
-
-            // Verify the error type is correct
-            match result.unwrap_err() {
-                swissarmyhammer_shell::ShellSecurityError::BlockedCommandPattern { .. } => (),
-                other_error => {
-                    panic!("Expected blocked pattern error for '{command}', got: {other_error:?}")
-                }
-            }
-        }
+        test_blocked_commands_with_policy(
+            policy,
+            &blocked_commands,
+            "test_blocked_command_patterns",
+        )
+        .await;
     }
 
     #[tokio::test]
@@ -2945,9 +3053,133 @@ mod tests {
         }
     }
 
+    /// Helper function to test that environment variables fail validation with expected error type
+    ///
+    /// This reduces duplication in environment variable validation tests by providing a
+    /// common pattern for testing various invalid inputs.
+    fn assert_env_var_fails<F>(
+        validator: &swissarmyhammer_shell::ShellSecurityValidator,
+        name: &str,
+        value: &str,
+        test_description: &str,
+        error_checker: F,
+    ) where
+        F: FnOnce(swissarmyhammer_shell::ShellSecurityError),
+    {
+        use std::collections::HashMap;
+
+        let mut env = HashMap::new();
+        env.insert(name.to_string(), value.to_string());
+
+        let result = validator.validate_environment_variables(&env);
+        assert!(
+            result.is_err(),
+            "{test_description}: '{}' should fail",
+            name
+        );
+
+        if let Err(error) = result {
+            error_checker(error);
+        }
+    }
+
+    /// Test case for environment variable validation
+    struct EnvVarTestCase {
+        name: &'static str,
+        value: String,
+        description: &'static str,
+        expected_error: ExpectedEnvVarError,
+    }
+
+    /// Expected error type for environment variable validation
+    enum ExpectedEnvVarError {
+        InvalidName,
+        InvalidValue,
+        ValueTooLong { expected_name: &'static str },
+    }
+
+    impl EnvVarTestCase {
+        fn new_invalid_name(
+            name: &'static str,
+            value: impl Into<String>,
+            description: &'static str,
+        ) -> Self {
+            Self {
+                name,
+                value: value.into(),
+                description,
+                expected_error: ExpectedEnvVarError::InvalidName,
+            }
+        }
+
+        fn new_invalid_value(
+            name: &'static str,
+            value: impl Into<String>,
+            description: &'static str,
+        ) -> Self {
+            Self {
+                name,
+                value: value.into(),
+                description,
+                expected_error: ExpectedEnvVarError::InvalidValue,
+            }
+        }
+
+        fn new_value_too_long(
+            name: &'static str,
+            value: impl Into<String>,
+            description: &'static str,
+        ) -> Self {
+            Self {
+                name,
+                value: value.into(),
+                description,
+                expected_error: ExpectedEnvVarError::ValueTooLong {
+                    expected_name: name,
+                },
+            }
+        }
+
+        fn verify_error(&self, error: swissarmyhammer_shell::ShellSecurityError) {
+            match &self.expected_error {
+                ExpectedEnvVarError::InvalidName => match error {
+                    swissarmyhammer_shell::ShellSecurityError::InvalidEnvironmentVariable {
+                        ..
+                    } => (),
+                    other_error => {
+                        panic!(
+                            "Expected InvalidEnvironmentVariable for '{}', got: {:?}",
+                            self.name, other_error
+                        )
+                    }
+                },
+                ExpectedEnvVarError::InvalidValue => match error {
+                    swissarmyhammer_shell::ShellSecurityError::InvalidEnvironmentVariableValue {
+                        ..
+                    } => (),
+                    other_error => {
+                        panic!(
+                            "Expected InvalidEnvironmentVariableValue for '{}', got: {:?}",
+                            self.name, other_error
+                        )
+                    }
+                },
+                ExpectedEnvVarError::ValueTooLong { expected_name } => match error {
+                    swissarmyhammer_shell::ShellSecurityError::InvalidEnvironmentVariableValue {
+                        name,
+                        reason,
+                    } => {
+                        assert_eq!(name, *expected_name);
+                        assert!(reason.contains("exceeds maximum"));
+                    }
+                    other_error => panic!("Expected long value error, got: {:?}", other_error),
+                },
+            }
+        }
+    }
+
     #[tokio::test]
     async fn test_environment_variable_validation() {
-        // Test environment variable validation
         use std::collections::HashMap;
         use swissarmyhammer_shell::{ShellSecurityPolicy, ShellSecurityValidator};
 
@@ -2969,81 +3201,39 @@ mod tests {
         let result = validator.validate_environment_variables(&valid_env);
         assert!(result.is_ok(), "Valid environment variables should pass");
 
-        // Invalid variable names
-        let invalid_names = [
-            ("123INVALID", "value"),   // Starts with digit
-            ("", "value"),             // Empty name
-            ("INVALID-NAME", "value"), // Contains hyphen
-            ("INVALID NAME", "value"), // Contains space
-            ("INVALID.NAME", "value"), // Contains dot
+        // Define all invalid test cases declaratively
+        let test_cases = vec![
+            // Invalid names
+            EnvVarTestCase::new_invalid_name("123INVALID", "value", "Starts with digit"),
+            EnvVarTestCase::new_invalid_name("", "value", "Empty name"),
+            EnvVarTestCase::new_invalid_name("INVALID-NAME", "value", "Contains hyphen"),
+            EnvVarTestCase::new_invalid_name("INVALID NAME", "value", "Contains space"),
+            EnvVarTestCase::new_invalid_name("INVALID.NAME", "value", "Contains dot"),
+            // Invalid values
+            EnvVarTestCase::new_invalid_value(
+                "NULL_BYTE",
+                "value\0with_null",
+                "Contains null byte",
+            ),
+            EnvVarTestCase::new_invalid_value("NEWLINE", "value\nwith_newline", "Contains newline"),
+            EnvVarTestCase::new_invalid_value(
+                "CARRIAGE_RETURN",
+                "value\rwith_cr",
+                "Contains carriage return",
+            ),
+            // Value too long
+            EnvVarTestCase::new_value_too_long("LONG_VAR", "a".repeat(101), "Value too long"),
         ];
 
-        for (name, value) in &invalid_names {
-            let mut env = HashMap::new();
-            env.insert(name.to_string(), value.to_string());
-
-            let result = validator.validate_environment_variables(&env);
-            assert!(
-                result.is_err(),
-                "Invalid variable name '{name}' should fail"
+        // Execute all test cases in a single loop
+        for test_case in &test_cases {
+            assert_env_var_fails(
+                &validator,
+                test_case.name,
+                &test_case.value,
+                test_case.description,
+                |error| test_case.verify_error(error),
             );
-
-            match result.unwrap_err() {
-                swissarmyhammer_shell::ShellSecurityError::InvalidEnvironmentVariable {
-                    ..
-                } => (),
-                other_error => {
-                    panic!("Expected invalid env var error for '{name}', got: {other_error:?}")
-                }
-            }
-        }
-
-        // Value too long
-        let mut long_value_env = HashMap::new();
-        long_value_env.insert("LONG_VAR".to_string(), "a".repeat(101)); // Exceeds 100 char limit
-
-        let result = validator.validate_environment_variables(&long_value_env);
-        assert!(
-            result.is_err(),
-            "Long environment variable value should fail"
-        );
-
-        match result.unwrap_err() {
-            swissarmyhammer_shell::ShellSecurityError::InvalidEnvironmentVariableValue {
-                name,
-                reason,
-            } => {
-                assert_eq!(name, "LONG_VAR");
-                assert!(reason.contains("exceeds maximum"));
-            }
-            other_error => panic!("Expected long value error, got: {other_error:?}"),
-        }
-
-        // Invalid characters in values
-        let invalid_values = [
-            ("NULL_BYTE", "value\0with_null"),
-            ("NEWLINE", "value\nwith_newline"),
-            ("CARRIAGE_RETURN", "value\rwith_cr"),
-        ];
-
-        for (name, value) in &invalid_values {
-            let mut env = HashMap::new();
-            env.insert(name.to_string(), value.to_string());
-
-            let result = validator.validate_environment_variables(&env);
-            assert!(
-                result.is_err(),
-                "Invalid character in value for '{name}' should fail"
-            );
-
-            match result.unwrap_err() {
-                swissarmyhammer_shell::ShellSecurityError::InvalidEnvironmentVariableValue {
-                    ..
-                } => (),
-                other_error => {
-                    panic!("Expected invalid value error for '{name}', got: {other_error:?}")
-                }
-            }
         }
     }
 
@@ -3076,235 +3266,6 @@ mod tests {
         }
     }
 
-    // Note: Full integration tests would be added here but require additional dependencies
-
-    // Phase 4: Performance and Resource Testing - Comprehensive resource management tests
-    // Note: Performance tests would be implemented here with proper tooling and dependencies
-
-    /*
-
-
-
-
-    #[tokio::test]
-    async fn test_memory_usage_with_repeated_executions() {
-        // Test memory usage doesn't grow with repeated executions
-        let tool = ShellExecuteTool::new();
-        let context = create_test_context();
-
-        let iterations = 100;
-        let request = serde_json::json!({
-            "command": "echo 'Memory test iteration'"
-        });
-
-        let start = std::time::Instant::now();
-
-        for i in 0..iterations {
-            let result = tool.execute(
-                request.as_object().unwrap().clone(),
-                &context,
-            ).await;
-
-            assert!(result.is_ok(), "Iteration {} should succeed", i);
-
-            // Periodically check that we're not taking too long
-            if i % 20 == 0 && i > 0 {
-                let elapsed = start.elapsed();
-                let expected_max_time = Duration::from_millis(50 * i as u64); // 50ms per iteration max
-                assert!(elapsed < expected_max_time, "Memory test running too slow at iteration {}: {:?}", i, elapsed);
-            }
-        }
-
-        let total_elapsed = start.elapsed();
-        assert!(total_elapsed < Duration::from_secs(30), "Repeated executions should not slow down significantly");
-    }
-
-    #[tokio::test]
-    async fn test_process_cleanup_under_load() {
-        // Test that processes are cleaned up properly under load
-        let tool = ShellExecuteTool::new();
-        let context = create_test_context();
-
-        let concurrent_tasks = 20;
-        let tasks = (0..concurrent_tasks).map(|i| {
-            let tool_clone = tool.clone();
-            let context_clone = context.clone();
-            tokio::spawn(async move {
-                // Mix of quick and slightly longer commands
-                let command = if i % 2 == 0 {
-                    "echo 'quick task' && sleep 0.1".to_string()
-                } else {
-                    "echo 'longer task' && sleep 0.2".to_string()
-                };
-
-                let request = serde_json::json!({
-                    "command": command
-                });
-
-                tool_clone.execute(
-                    request.as_object().unwrap().clone(),
-                    &context_clone,
-                ).await
-            })
-        }).collect::<Vec<_>>();
-
-        let start = std::time::Instant::now();
-        let mut results = Vec::new();
-        for task in tasks {
-            results.push(task.await);
-        }
-        let elapsed = start.elapsed();
-
-        // Should complete all tasks efficiently
-        assert!(elapsed < Duration::from_secs(5), "Load test should complete efficiently");
-
-        // All tasks should succeed
-        for (i, result) in results.into_iter().enumerate() {
-            let exec_result = result.expect("Task should complete");
-            assert!(exec_result.is_ok(), "Load test task {} should succeed", i);
-        }
-
-        // Give some time for cleanup
-        tokio::time::sleep(Duration::from_millis(100)).await;
-
-        // Test is mainly to ensure no processes are left hanging
-        // This is verified by the process cleanup mechanisms in AsyncProcessGuard
-    }
-
-
-
-    #[tokio::test]
-    async fn test_resource_limits_under_stress() {
-        // Test behavior under resource stress
-        let tool = ShellExecuteTool::new();
-        let context = create_test_context();
-
-        // Create stress conditions with multiple resource-intensive operations
-        let stress_tasks = vec![
-            // Large output generation
-            serde_json::json!({
-                "command": "head -c 50000 /dev/zero | base64"
-            }),
-            // CPU intensive task
-            serde_json::json!({
-                "command": "echo 'CPU test' && sleep 0.5"
-            }),
-            // Multiple small commands
-            serde_json::json!({
-                "command": "for i in $(seq 1 10); do echo \"Item $i\"; done"
-            }),
-        ];
-
-        let concurrent_executions = 5;
-        let all_tasks = (0..concurrent_executions).flat_map(|_| {
-            stress_tasks.iter().enumerate().map(|(j, request)| {
-                let tool_clone = tool.clone();
-                let context_clone = context.clone();
-                let request_clone = request.clone();
-                tokio::spawn(async move {
-                    let start = std::time::Instant::now();
-                    let result = tool_clone.execute(
-                        request_clone.as_object().unwrap().clone(),
-                        &context_clone,
-                    ).await;
-                    let elapsed = start.elapsed();
-                    (j, result, elapsed)
-                })
-            })
-        }).collect::<Vec<_>>();
-
-        let start = std::time::Instant::now();
-        let mut results = Vec::new();
-        for task in all_tasks {
-            results.push(task.await);
-        }
-        let total_elapsed = start.elapsed();
-
-        // Should handle stress reasonably well
-        assert!(total_elapsed < Duration::from_secs(60), "Stress test should complete within reasonable time");
-
-        let mut success_count = 0;
-        let mut failure_count = 0;
-
-        for result in results {
-            let (task_type, exec_result, individual_elapsed) = result.expect("Task should complete");
-
-            // Individual tasks should complete within reasonable time
-            assert!(individual_elapsed < Duration::from_secs(45),
-                "Stress task {} should not hang: {:?}", task_type, individual_elapsed);
-
-            if exec_result.is_ok() {
-                success_count += 1;
-            } else {
-                failure_count += 1;
-            }
-        }
-
-        // At least some tasks should succeed under stress
-        assert!(success_count > 0, "Some stress tasks should succeed");
-
-        // If there are failures, they should be reasonable (e.g., timeouts, resource limits)
-        if failure_count > 0 {
-            println!("Stress test: {} successes, {} failures (failures are acceptable under stress)",
-                    success_count, failure_count);
-        }
-    }
-
-    #[tokio::test]
-    async fn test_memory_management_with_streaming() {
-        // Test that streaming doesn't accumulate excessive memory even with continuous output
-        use std::time::Duration;
-
-        let tool = ShellExecuteTool::new();
-        let context = create_test_context();
-
-        // Generate continuous output but not excessive (avoid security blocks)
-        let mut args = serde_json::Map::new();
-        args.insert(
-            "command".to_string(),
-            serde_json::Value::String(
-                "echo 'Testing continuous output with reasonable size'".to_string(),
-            ),
-        );
-
-        let start_time = std::time::Instant::now();
-        let result = tool.execute(args, &context).await;
-        let execution_time = start_time.elapsed();
-
-        assert!(result.is_ok());
-
-        let call_result = result.unwrap();
-        assert_eq!(call_result.is_error, Some(false));
-
-        // Verify execution completed quickly (not hanging on memory issues)
-        assert!(
-            execution_time < Duration::from_secs(5),
-            "Execution took too long: {:?}",
-            execution_time
-        );
-
-        // Parse response to verify output handling
-        let content_text = match &call_result.content[0].raw {
-            rmcp::model::RawContent::Text(text_content) => &text_content.text,
-            _ => panic!("Expected text content"),
-        };
-
-        if let Ok(response_json) = serde_json::from_str::<serde_json::Value>(content_text) {
-            let total_size = response_json["total_output_size"].as_u64().unwrap();
-            let truncated = response_json["output_truncated"].as_bool().unwrap();
-
-            println!(
-                "Memory streaming test: {} bytes, truncated: {}, time: {:?}",
-                total_size, truncated, execution_time
-            );
-
-            // Basic assertions
-            assert!(total_size > 0);
-            assert_eq!(response_json["binary_output_detected"], false);
-        }
-    }
-    */
-
     #[test]
     fn test_default_config_values() {
         // Test DefaultShellConfig methods use valid defaults
@@ -3314,8 +3275,16 @@ mod tests {
 
     // Progress notification tests
 
-    #[tokio::test]
-    async fn test_shell_execute_sends_progress_notifications() {
+    /// Helper function to execute command with progress capture
+    ///
+    /// This eliminates duplication in progress notification test setup and teardown.
+    /// Returns the execution result and collected notifications.
+    async fn execute_with_progress_capture(
+        command: &str,
+    ) -> (
+        Result<CallToolResult, McpError>,
+        Vec<crate::mcp::progress_notifications::ProgressNotification>,
+    ) {
         use crate::mcp::progress_notifications::ProgressSender;
         use tokio::sync::mpsc;
 
@@ -3325,21 +3294,25 @@ mod tests {
         let mut context = create_test_context();
         context.progress_sender = Some(progress_sender);
 
-        let tool = ShellExecuteTool::new();
-        let mut args = serde_json::Map::new();
-        args.insert(
-            "command".to_string(),
-            serde_json::Value::String("echo 'line1'; echo 'line2'".to_string()),
-        );
-
-        let result = tool.execute(args, &context).await;
-        assert!(result.is_ok());
+        let result = TestCommandBuilder::new(command)
+            .with_context(context)
+            .execute()
+            .await;
 
         // Collect all notifications
         let mut notifications = Vec::new();
         while let Ok(notif) = rx.try_recv() {
             notifications.push(notif);
         }
+
+        (result, notifications)
+    }
+
+    #[tokio::test]
+    async fn test_shell_execute_sends_progress_notifications() {
+        let (result, notifications) =
+            execute_with_progress_capture("echo 'line1'; echo 'line2'").await;
+        assert!(result.is_ok());
 
         // Should have at least: start notification and completion notification
         assert!(
@@ -3391,15 +3364,11 @@ mod tests {
         let mut context = create_test_context();
         context.progress_sender = Some(progress_sender);
 
-        let tool = ShellExecuteTool::new();
-        let mut args = serde_json::Map::new();
-        args.insert(
-            "command".to_string(),
-            serde_json::Value::String("echo 'test'".to_string()),
-        );
-
         // Should still succeed even though notifications fail
-        let result = tool.execute(args, &context).await;
+        let result = TestCommandBuilder::new("echo 'test'")
+            .with_context(context)
+            .execute()
+            .await;
         assert!(
             result.is_ok(),
             "Command should succeed even when notification channel is closed"
@@ -3414,15 +3383,11 @@ mod tests {
             "Default test context should not have progress sender"
         );
 
-        let tool = ShellExecuteTool::new();
-        let mut args = serde_json::Map::new();
-        args.insert(
-            "command".to_string(),
-            serde_json::Value::String("echo 'test'".to_string()),
-        );
-
         // Should work fine without progress sender
-        let result = tool.execute(args, &context).await;
+        let result = TestCommandBuilder::new("echo 'test'")
+            .with_context(context)
+            .execute()
+            .await;
         assert!(
             result.is_ok(),
             "Command should succeed without progress sender"
@@ -3431,30 +3396,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_shell_execute_completion_metadata() {
-        use crate::mcp::progress_notifications::ProgressSender;
-        use tokio::sync::mpsc;
-
-        let (tx, mut rx) = mpsc::unbounded_channel();
-        let progress_sender = ProgressSender::new(tx);
-
-        let mut context = create_test_context();
-        context.progress_sender = Some(progress_sender);
-
-        let tool = ShellExecuteTool::new();
-        let mut args = serde_json::Map::new();
-        args.insert(
-            "command".to_string(),
-            serde_json::Value::String("echo 'test'".to_string()),
-        );
-
-        let result = tool.execute(args, &context).await;
+        let (result, notifications) = execute_with_progress_capture("echo 'test'").await;
         assert!(result.is_ok());
-
-        // Collect all notifications
-        let mut notifications = Vec::new();
-        while let Ok(notif) = rx.try_recv() {
-            notifications.push(notif);
-        }
 
         // Find the completion notification
         let completion = notifications.last().unwrap();
@@ -3486,58 +3429,60 @@ mod tests {
         }
     }
 
+    /// Helper function to assert error severity
+    ///
+    /// This eliminates duplication in error severity test assertions.
+    fn assert_error_severity(error: ShellError, expected: ErrorSeverity, description: &str) {
+        assert_eq!(error.severity(), expected, "{}", description);
+    }
+
     #[test]
     fn test_shell_error_severity_critical() {
         // Test system-level failures are Critical
-        let spawn_error = ShellError::CommandSpawnError {
-            command: "test".to_string(),
-            source: std::io::Error::new(std::io::ErrorKind::NotFound, "command not found"),
-        };
-        assert_eq!(
-            spawn_error.severity(),
+        assert_error_severity(
+            ShellError::CommandSpawnError {
+                command: "test".to_string(),
+                source: std::io::Error::new(std::io::ErrorKind::NotFound, "command not found"),
+            },
             ErrorSeverity::Critical,
-            "CommandSpawnError should be Critical"
+            "CommandSpawnError should be Critical",
         );
 
-        let system_error = ShellError::SystemError {
-            message: "system failure".to_string(),
-        };
-        assert_eq!(
-            system_error.severity(),
+        assert_error_severity(
+            ShellError::SystemError {
+                message: "system failure".to_string(),
+            },
             ErrorSeverity::Critical,
-            "SystemError should be Critical"
+            "SystemError should be Critical",
         );
     }
 
     #[test]
     fn test_shell_error_severity_error() {
         // Test execution/validation failures are Error level
-        let execution_error = ShellError::ExecutionError {
-            command: "test".to_string(),
-            message: "execution failed".to_string(),
-        };
-        assert_eq!(
-            execution_error.severity(),
+        assert_error_severity(
+            ShellError::ExecutionError {
+                command: "test".to_string(),
+                message: "execution failed".to_string(),
+            },
             ErrorSeverity::Error,
-            "ExecutionError should be Error"
+            "ExecutionError should be Error",
         );
 
-        let invalid_command = ShellError::InvalidCommand {
-            message: "invalid syntax".to_string(),
-        };
-        assert_eq!(
-            invalid_command.severity(),
+        assert_error_severity(
+            ShellError::InvalidCommand {
+                message: "invalid syntax".to_string(),
+            },
             ErrorSeverity::Error,
-            "InvalidCommand should be Error"
+            "InvalidCommand should be Error",
         );
 
-        let working_dir_error = ShellError::WorkingDirectoryError {
-            message: "directory not found".to_string(),
-        };
-        assert_eq!(
-            working_dir_error.severity(),
+        assert_error_severity(
+            ShellError::WorkingDirectoryError {
+                message: "directory not found".to_string(),
+            },
             ErrorSeverity::Error,
-            "WorkingDirectoryError should be Error"
+            "WorkingDirectoryError should be Error",
         );
     }
 
@@ -3572,34 +3517,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_batched_progress_notifications() {
-        use crate::mcp::progress_notifications::ProgressSender;
-        use tokio::sync::mpsc;
-
-        let tool = ShellExecuteTool::new();
-        let (tx, mut rx) = mpsc::unbounded_channel();
-        let progress_sender = ProgressSender::new(tx);
-
-        let mut context = create_test_context();
-        context.progress_sender = Some(progress_sender);
-
-        let mut args = serde_json::Map::new();
         // Generate 25 lines of output to test batching (should get notifications at 0, 10, 20, and final)
-        args.insert(
-            "command".to_string(),
-            serde_json::Value::String("for i in $(seq 1 25); do echo line $i; done".to_string()),
-        );
-
-        let result = tool.execute(args, &context).await;
+        let (result, notifications) =
+            execute_with_progress_capture("for i in $(seq 1 25); do echo line $i; done").await;
         assert!(result.is_ok(), "Command should execute successfully");
 
         let call_result = result.unwrap();
         assert_eq!(call_result.is_error, Some(false));
-
-        // Collect all notifications
-        let mut notifications = Vec::new();
-        while let Ok(notif) = rx.try_recv() {
-            notifications.push(notif);
-        }
 
         // Should have at least: start (0), batched notifications, and completion
         assert!(
@@ -3660,33 +3584,12 @@ mod tests {
 
     #[tokio::test]
     async fn test_binary_detection_notification() {
-        use crate::mcp::progress_notifications::ProgressSender;
-        use tokio::sync::mpsc;
-
-        let tool = ShellExecuteTool::new();
-        let (tx, mut rx) = mpsc::unbounded_channel();
-        let progress_sender = ProgressSender::new(tx);
-
-        let mut context = create_test_context();
-        context.progress_sender = Some(progress_sender);
-
-        let mut args = serde_json::Map::new();
         // Use printf to output binary data (null bytes)
-        args.insert(
-            "command".to_string(),
-            serde_json::Value::String(
-                "printf '\\x00\\x01\\x02\\x03\\x04\\x05\\x06\\x07\\x08\\x09\\n'".to_string(),
-            ),
-        );
-
-        let result = tool.execute(args, &context).await;
+        let (result, notifications) = execute_with_progress_capture(
+            "printf '\\x00\\x01\\x02\\x03\\x04\\x05\\x06\\x07\\x08\\x09\\n'",
+        )
+        .await;
         assert!(result.is_ok(), "Command should execute successfully");
-
-        // Collect all notifications
-        let mut notifications = Vec::new();
-        while let Ok(notif) = rx.try_recv() {
-            notifications.push(notif);
-        }
 
         // Should have at least start and completion notifications
         assert!(
@@ -3718,17 +3621,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_progress_without_sender() {
-        let tool = ShellExecuteTool::new();
         let mut context = create_test_context();
         context.progress_sender = None;
 
-        let mut args = serde_json::Map::new();
-        args.insert(
-            "command".to_string(),
-            serde_json::Value::String("echo test".to_string()),
-        );
-
-        let result = tool.execute(args, &context).await;
+        let result = TestCommandBuilder::new("echo test")
+            .with_context(context)
+            .execute()
+            .await;
         assert!(
             result.is_ok(),
             "Command should execute successfully even without progress sender"

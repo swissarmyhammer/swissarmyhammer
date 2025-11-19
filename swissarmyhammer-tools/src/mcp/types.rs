@@ -138,7 +138,7 @@ impl<'de> Deserialize<'de> for WebFetchRequest {
         let helper = WebFetchRequestHelper::deserialize(deserializer)?;
 
         // Validate timeout range
-        const MIN_TIMEOUT_SECONDS: u32 = 5;
+        const MIN_TIMEOUT_SECONDS: u32 = 1;
         const MAX_TIMEOUT_SECONDS: u32 = 120;
 
         let timeout = helper.timeout.map(|timeout| {

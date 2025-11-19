@@ -89,6 +89,14 @@ impl Severity for ValidationError {
 pub struct SchemaValidator;
 
 /// Validation context for managing error collection strategy
+///
+/// This context supports two error handling modes:
+/// - Fail-fast mode (`collect_all = false`): Returns immediately on first error via `handle_error`
+/// - Collect-all mode (`collect_all = true`): Accumulates all errors for comprehensive reporting
+///
+/// The two methods work together as part of a coordinated error collection strategy:
+/// - `handle_error`: Processes each individual error as it occurs during validation
+/// - `into_single_result`: Finalizes validation by converting collected errors to result
 struct ValidationContext {
     collect_all: bool,
     errors: Vec<ValidationError>,
@@ -102,6 +110,10 @@ impl ValidationContext {
         }
     }
 
+    /// Handle a validation error according to the collection strategy
+    ///
+    /// In fail-fast mode, returns Err immediately to stop validation.
+    /// In collect-all mode, stores the error and returns Ok to continue validation.
     fn handle_error(&mut self, error: ValidationError) -> Result<(), ValidationError> {
         if self.collect_all {
             self.errors.push(error);
@@ -111,21 +123,16 @@ impl ValidationContext {
         }
     }
 
-    fn into_result(self) -> Result<Vec<ValidationError>, ValidationError> {
-        Ok(self.errors)
-    }
-}
-
-/// Convert internal validation results (Vec<ValidationError>) to public API results (single error)
-fn fail_fast_wrapper<F>(validator: F) -> Result<(), ValidationError>
-where
-    F: FnOnce() -> Result<Vec<ValidationError>, ValidationError>,
-{
-    let errors = validator()?;
-    if errors.is_empty() {
-        Ok(())
-    } else {
-        Err(errors.into_iter().next().unwrap())
+    /// Convert the collected errors to a single-error result for public API
+    ///
+    /// Returns the first error collected, or Ok if no errors occurred.
+    /// This provides a consistent Result interface for both error collection modes.
+    fn into_single_result(self) -> Result<(), ValidationError> {
+        if self.errors.is_empty() {
+            Ok(())
+        } else {
+            Err(self.errors.into_iter().next().unwrap())
+        }
     }
 }
 
@@ -163,93 +170,130 @@ impl SchemaValidator {
     /// assert!(SchemaValidator::validate_schema(&schema).is_ok());
     /// ```
     pub fn validate_schema(schema: &Value) -> Result<(), ValidationError> {
-        fail_fast_wrapper(|| Self::validate_schema_internal(schema, false))
+        Self::run_validation_with_context(|ctx| Self::validate_schema_with_context(schema, ctx))
     }
 
-    /// Internal schema validation with configurable error handling strategy
+    /// Internal schema validation with context
     ///
     /// # Arguments
     /// * `schema` - The JSON schema to validate
-    /// * `collect_all` - If true, collect all errors; if false, fail fast on first error
+    /// * `ctx` - Validation context for error collection
     ///
     /// # Returns
-    /// * `Ok(Vec<ValidationError>)` - List of errors found (empty if valid)
-    /// * `Err(ValidationError)` - Critical error that prevents further validation (fail-fast mode only)
-    fn validate_schema_internal(
+    /// * `Ok(())` - Validation completed (check ctx for errors)
+    /// * `Err(ValidationError)` - Critical error in fail-fast mode
+    fn validate_schema_with_context(
         schema: &Value,
-        collect_all: bool,
-    ) -> Result<Vec<ValidationError>, ValidationError> {
-        let mut ctx = ValidationContext::new(collect_all);
+        ctx: &mut ValidationContext,
+    ) -> Result<(), ValidationError> {
+        Self::collect_validation_error(ctx, || Self::validate_schema_structure(schema))?;
+        Self::validate_properties_section(schema, ctx)?;
+        Self::validate_required_section(schema, ctx)?;
+        Ok(())
+    }
 
-        // Validate basic schema structure (always fail-fast on structure errors)
-        if let Err(e) = Self::validate_schema_structure(schema) {
+    /// Validate the properties section if present
+    fn validate_properties_section(
+        schema: &Value,
+        ctx: &mut ValidationContext,
+    ) -> Result<(), ValidationError> {
+        let Some(properties) = schema.get("properties").and_then(|p| p.as_object()) else {
+            return Ok(());
+        };
+
+        Self::validate_properties_with_context(properties, ctx)?;
+        Self::collect_validation_error(ctx, || Self::validate_property_consistency(properties))?;
+        Ok(())
+    }
+
+    /// Validate the required section if present
+    fn validate_required_section(
+        schema: &Value,
+        ctx: &mut ValidationContext,
+    ) -> Result<(), ValidationError> {
+        let Some(required) = schema.get("required") else {
+            return Ok(());
+        };
+
+        Self::collect_validation_error(ctx, || Self::validate_required_fields(required, schema))
+    }
+
+    /// Generic helper to collect validation errors
+    ///
+    /// Executes a validation function and handles errors according to the context's collection strategy.
+    fn collect_validation_error<F>(
+        ctx: &mut ValidationContext,
+        validator: F,
+    ) -> Result<(), ValidationError>
+    where
+        F: FnOnce() -> Result<(), ValidationError>,
+    {
+        if let Err(e) = validator() {
             ctx.handle_error(e)?;
         }
+        Ok(())
+    }
 
-        // If structure validation failed in collect_all mode, return early
-        if !ctx.errors.is_empty() && collect_all {
-            return ctx.into_result();
-        }
-
-        // Extract and validate properties
-        if let Some(properties) = schema.get("properties").and_then(|p| p.as_object()) {
-            let prop_errors = Self::validate_properties_internal(properties, collect_all)?;
-            ctx.errors.extend(prop_errors);
-
-            if let Err(e) = Self::validate_property_consistency(properties) {
-                ctx.handle_error(e)?;
-            }
-        }
-
-        // Validate required fields if present
-        if let Some(required) = schema.get("required") {
-            if let Err(e) = Self::validate_required_fields(required, schema) {
-                ctx.handle_error(e)?;
-            }
-        }
-
-        ctx.into_result()
+    /// Helper to run validation with a fresh context and return single result
+    ///
+    /// Encapsulates the pattern of creating a ValidationContext, running validation, and converting to single result.
+    fn run_validation_with_context<F>(validator: F) -> Result<(), ValidationError>
+    where
+        F: FnOnce(&mut ValidationContext) -> Result<(), ValidationError>,
+    {
+        let mut ctx = ValidationContext::new(false);
+        validator(&mut ctx)?;
+        ctx.into_single_result()
     }
 
     /// Validate the basic structure of a JSON schema
     fn validate_schema_structure(schema: &Value) -> Result<(), ValidationError> {
-        if !schema.is_object() {
-            return Err(ValidationError::InvalidSchema {
+        let schema_obj = Self::ensure_schema_is_object(schema)?;
+        Self::validate_properties_field_exists(schema_obj)?;
+        Self::validate_root_type_field(schema_obj)?;
+        Ok(())
+    }
+
+    /// Ensure schema is a valid object
+    fn ensure_schema_is_object(schema: &Value) -> Result<&Map<String, Value>, ValidationError> {
+        schema
+            .as_object()
+            .ok_or_else(|| ValidationError::InvalidSchema {
                 message: "Schema must be a JSON object".to_string(),
-            });
-        }
+            })
+    }
 
-        let schema_obj = schema.as_object().unwrap();
-
-        // Check for properties field
+    /// Validate that properties field exists and is an object
+    fn validate_properties_field_exists(
+        schema_obj: &Map<String, Value>,
+    ) -> Result<(), ValidationError> {
         match schema_obj.get("properties") {
-            Some(properties) => {
-                if !properties.is_object() {
-                    return Err(ValidationError::InvalidSchema {
-                        message: "Schema 'properties' field must be an object".to_string(),
-                    });
-                }
-            }
-            None => {
-                return Err(ValidationError::MissingSchemaField {
-                    field: "properties".to_string(),
-                });
-            }
+            None => Err(ValidationError::MissingSchemaField {
+                field: "properties".to_string(),
+            }),
+            Some(properties) if !properties.is_object() => Err(ValidationError::InvalidSchema {
+                message: "Schema 'properties' field must be an object".to_string(),
+            }),
+            Some(_) => Ok(()),
         }
+    }
 
-        // Validate type field if present
-        if let Some(schema_type) = schema_obj.get("type") {
-            if let Some(type_str) = schema_type.as_str() {
-                if type_str != "object" {
-                    return Err(ValidationError::InvalidSchema {
-                        message: format!("Root schema type must be 'object', found '{}'", type_str),
-                    });
-                }
-            } else {
-                return Err(ValidationError::InvalidSchema {
-                    message: "Schema 'type' field must be a string".to_string(),
-                });
-            }
+    /// Validate the root type field
+    fn validate_root_type_field(schema_obj: &Map<String, Value>) -> Result<(), ValidationError> {
+        let Some(schema_type) = schema_obj.get("type") else {
+            return Ok(());
+        };
+
+        let Some(type_str) = schema_type.as_str() else {
+            return Err(ValidationError::InvalidSchema {
+                message: "Schema 'type' field must be a string".to_string(),
+            });
+        };
+
+        if type_str != "object" {
+            return Err(ValidationError::InvalidSchema {
+                message: format!("Root schema type must be 'object', found '{}'", type_str),
+            });
         }
 
         Ok(())
@@ -257,47 +301,64 @@ impl SchemaValidator {
 
     /// Validate individual property schemas
     pub fn validate_properties(properties: &Map<String, Value>) -> Result<(), ValidationError> {
-        fail_fast_wrapper(|| Self::validate_properties_internal(properties, false))
+        Self::run_validation_with_context(|ctx| {
+            Self::validate_properties_with_context(properties, ctx)
+        })
     }
 
-    /// Internal property validation with configurable error handling strategy
+    /// Internal property validation with context
     ///
     /// # Arguments
     /// * `properties` - The property map to validate
-    /// * `collect_all` - If true, collect all errors; if false, fail fast on first error
+    /// * `ctx` - Validation context for error collection
     ///
     /// # Returns
-    /// * `Ok(Vec<ValidationError>)` - List of errors found (empty if valid)
+    /// * `Ok(())` - Validation completed (check ctx for errors)
     /// * `Err(ValidationError)` - Critical error in fail-fast mode
-    fn validate_properties_internal(
+    fn validate_properties_with_context(
         properties: &Map<String, Value>,
-        collect_all: bool,
-    ) -> Result<Vec<ValidationError>, ValidationError> {
-        let mut ctx = ValidationContext::new(collect_all);
-
+        ctx: &mut ValidationContext,
+    ) -> Result<(), ValidationError> {
         for (prop_name, prop_schema) in properties {
-            if let Err(e) = Self::validate_parameter_name(prop_name) {
-                ctx.handle_error(e)?;
-            }
-
-            if let Err(e) = Self::validate_property_schema(prop_name, prop_schema) {
-                ctx.handle_error(e)?;
-            }
+            Self::validate_single_property_with_context(prop_name, prop_schema, ctx)?;
         }
+        Ok(())
+    }
 
-        ctx.into_result()
+    /// Validate a single property with error collection
+    fn validate_single_property_with_context(
+        prop_name: &str,
+        prop_schema: &Value,
+        ctx: &mut ValidationContext,
+    ) -> Result<(), ValidationError> {
+        Self::collect_validation_error(ctx, || Self::validate_parameter_name(prop_name))?;
+        Self::collect_validation_error(ctx, || {
+            Self::validate_property_schema(prop_name, prop_schema)
+        })?;
+        Ok(())
     }
 
     /// Validate a parameter name for CLI compatibility
     fn validate_parameter_name(name: &str) -> Result<(), ValidationError> {
+        Self::validate_parameter_not_empty(name)?;
+        Self::validate_parameter_characters(name)?;
+        Self::validate_parameter_not_reserved(name)?;
+        Ok(())
+    }
+
+    /// Validate parameter name is not empty
+    fn validate_parameter_not_empty(name: &str) -> Result<(), ValidationError> {
         if name.is_empty() {
             return Err(ValidationError::InvalidParameterName {
                 parameter: name.to_string(),
                 reason: "Parameter name cannot be empty".to_string(),
             });
         }
+        Ok(())
+    }
 
-        // Check for valid CLI parameter characters
+    /// Validate parameter name contains only valid characters
+    fn validate_parameter_characters(name: &str) -> Result<(), ValidationError> {
         let invalid_chars: Vec<char> = name
             .chars()
             .filter(|c| !c.is_alphanumeric() && *c != '-' && *c != '_')
@@ -312,8 +373,11 @@ impl SchemaValidator {
                 ),
             });
         }
+        Ok(())
+    }
 
-        // Check for reserved CLI names
+    /// Validate parameter name is not reserved
+    fn validate_parameter_not_reserved(name: &str) -> Result<(), ValidationError> {
         const RESERVED_NAMES: &[&str] = &["help", "version", "verbose", "quiet", "debug"];
         if RESERVED_NAMES.contains(&name) {
             return Err(ValidationError::InvalidParameterName {
@@ -321,7 +385,6 @@ impl SchemaValidator {
                 reason: format!("'{}' is a reserved parameter name", name),
             });
         }
-
         Ok(())
     }
 
@@ -330,91 +393,170 @@ impl SchemaValidator {
         prop_name: &str,
         prop_schema: &Value,
     ) -> Result<(), ValidationError> {
+        let prop_obj = Self::validate_property_structure(prop_name, prop_schema)?;
+        Self::validate_property_type_field(prop_name, prop_obj)?;
+        Self::validate_property_description_field(prop_name, prop_obj)?;
+        Self::validate_property_default_field(prop_name, prop_obj)?;
+        Ok(())
+    }
+
+    /// Generic helper to validate an optional property field
+    ///
+    /// This consolidates the common pattern of checking if a field exists
+    /// and validating it with a specific validator function.
+    fn validate_optional_property_field<F>(
+        prop_name: &str,
+        prop_obj: &Map<String, Value>,
+        field_name: &str,
+        validator: F,
+    ) -> Result<(), ValidationError>
+    where
+        F: FnOnce(&str, &Value) -> Result<(), ValidationError>,
+    {
+        if let Some(field_value) = prop_obj.get(field_name) {
+            validator(prop_name, field_value)?;
+        }
+        Ok(())
+    }
+
+    /// Validate the type field of a property if present
+    fn validate_property_type_field(
+        prop_name: &str,
+        prop_obj: &Map<String, Value>,
+    ) -> Result<(), ValidationError> {
+        Self::validate_optional_property_field(prop_name, prop_obj, "type", |name, value| {
+            Self::validate_property_type(name, value)
+        })
+    }
+
+    /// Validate the description field of a property if present
+    fn validate_property_description_field(
+        prop_name: &str,
+        prop_obj: &Map<String, Value>,
+    ) -> Result<(), ValidationError> {
+        Self::validate_optional_property_field(prop_name, prop_obj, "description", |name, value| {
+            if !value.is_string() {
+                return Err(ValidationError::InvalidProperty {
+                    property: name.to_string(),
+                    message: "Property description must be a string".to_string(),
+                });
+            }
+            Ok(())
+        })
+    }
+
+    /// Validate the default field of a property if present
+    fn validate_property_default_field(
+        prop_name: &str,
+        prop_obj: &Map<String, Value>,
+    ) -> Result<(), ValidationError> {
+        if let (Some(prop_type), Some(default)) = (prop_obj.get("type"), prop_obj.get("default")) {
+            Self::validate_default_value_type(prop_name, prop_type, default)?;
+        }
+        Ok(())
+    }
+
+    /// Validate property schema structure
+    fn validate_property_structure<'a>(
+        prop_name: &str,
+        prop_schema: &'a Value,
+    ) -> Result<&'a Map<String, Value>, ValidationError> {
         if !prop_schema.is_object() {
             return Err(ValidationError::InvalidProperty {
                 property: prop_name.to_string(),
                 message: "Property schema must be an object".to_string(),
             });
         }
-
-        let prop_obj = prop_schema.as_object().unwrap();
-
-        // Validate type field
-        if let Some(prop_type) = prop_obj.get("type") {
-            Self::validate_property_type(prop_name, prop_type)?;
-        }
-
-        // Validate description field if present
-        if let Some(description) = prop_obj.get("description") {
-            if !description.is_string() {
-                return Err(ValidationError::InvalidProperty {
-                    property: prop_name.to_string(),
-                    message: "Property description must be a string".to_string(),
-                });
-            }
-        }
-
-        // Validate default value type consistency if present
-        if let (Some(prop_type), Some(default)) = (prop_obj.get("type"), prop_obj.get("default")) {
-            Self::validate_default_value_type(prop_name, prop_type, default)?;
-        }
-
-        Ok(())
+        Ok(prop_schema.as_object().unwrap())
     }
 
     /// Validate a property type for CLI compatibility
     fn validate_property_type(prop_name: &str, prop_type: &Value) -> Result<(), ValidationError> {
-        if let Some(type_str) = prop_type.as_str() {
-            match type_str {
-                "string" | "integer" | "number" | "boolean" | "array" => Ok(()),
-                "object" => Err(ValidationError::UnsupportedSchemaType {
-                    schema_type: type_str.to_string(),
-                    parameter: prop_name.to_string(),
-                    suggestion: "Nested objects are not supported in CLI. Consider flattening the schema or using a string representation.".to_string(),
-                }),
-                "null" => Err(ValidationError::UnsupportedSchemaType {
-                    schema_type: type_str.to_string(),
-                    parameter: prop_name.to_string(),
-                    suggestion: "Null types are not meaningful for CLI parameters. Consider making the parameter optional or using a different type.".to_string(),
-                }),
-                unknown => Err(ValidationError::UnsupportedSchemaType {
-                    schema_type: unknown.to_string(),
-                    parameter: prop_name.to_string(),
-                    suggestion: format!("Unknown type '{}'. Supported types: string, boolean, integer, number, array.", unknown),
-                }),
-            }
-        } else if prop_type.is_array() {
-            // Handle union types (e.g., ["string", "null"])
-            if let Some(types) = prop_type.as_array() {
-                let type_strs: Vec<String> = types
-                    .iter()
-                    .filter_map(|t| t.as_str())
-                    .map(|s| s.to_string())
-                    .collect();
-
-                // Allow nullable types but warn about complexity
-                if type_strs.contains(&"null".to_string()) && type_strs.len() == 2 {
-                    // This is acceptable for optional parameters
-                    Ok(())
-                } else {
-                    Err(ValidationError::UnsupportedSchemaType {
-                        schema_type: format!("union {:?}", type_strs),
-                        parameter: prop_name.to_string(),
-                        suggestion: "Complex union types are not supported. Use a single type or make parameters optional.".to_string(),
-                    })
-                }
-            } else {
-                Err(ValidationError::InvalidProperty {
-                    property: prop_name.to_string(),
-                    message: "Type array must contain string type names".to_string(),
-                })
-            }
-        } else {
-            Err(ValidationError::InvalidProperty {
-                property: prop_name.to_string(),
-                message: "Property type must be a string or array of strings".to_string(),
-            })
+        if let Value::String(type_str) = prop_type {
+            Self::validate_simple_type(prop_name, type_str)?;
+            return Ok(());
         }
+
+        if prop_type.is_array() {
+            Self::validate_union_type(prop_name, prop_type)?;
+            return Ok(());
+        }
+
+        Err(ValidationError::InvalidProperty {
+            property: prop_name.to_string(),
+            message: "Property type must be a string or array of strings".to_string(),
+        })
+    }
+
+    /// Validate a simple type string
+    fn validate_simple_type(prop_name: &str, type_str: &str) -> Result<(), ValidationError> {
+        if Self::is_supported_type(type_str) {
+            return Ok(());
+        }
+
+        Err(Self::create_unsupported_type_error(prop_name, type_str))
+    }
+
+    /// Supported JSON schema types for CLI parameters
+    const SUPPORTED_TYPES: &[&str] = &["string", "integer", "number", "boolean", "array"];
+
+    /// Check if a type string is supported
+    fn is_supported_type(type_str: &str) -> bool {
+        Self::SUPPORTED_TYPES.contains(&type_str)
+    }
+
+    /// Create an appropriate error for an unsupported type
+    fn create_unsupported_type_error(prop_name: &str, type_str: &str) -> ValidationError {
+        let suggestion = match type_str {
+            "object" => "Nested objects are not supported in CLI. Consider flattening the schema or using a string representation.".to_string(),
+            "null" => "Null types are not meaningful for CLI parameters. Consider making the parameter optional or using a different type.".to_string(),
+            unknown => format!("Unknown type '{}'. Supported types: string, boolean, integer, number, array.", unknown),
+        };
+
+        ValidationError::UnsupportedSchemaType {
+            schema_type: type_str.to_string(),
+            parameter: prop_name.to_string(),
+            suggestion,
+        }
+    }
+
+    /// Validate a union type (array of types)
+    fn validate_union_type(prop_name: &str, prop_type: &Value) -> Result<(), ValidationError> {
+        let type_strs = Self::extract_union_type_strings(prop_name, prop_type)?;
+
+        if Self::is_nullable_union(&type_strs) {
+            return Ok(());
+        }
+
+        Err(ValidationError::UnsupportedSchemaType {
+            schema_type: format!("union {:?}", type_strs),
+            parameter: prop_name.to_string(),
+            suggestion: "Complex union types are not supported. Use a single type or make parameters optional.".to_string(),
+        })
+    }
+
+    /// Extract and convert union type array to strings
+    fn extract_union_type_strings(
+        prop_name: &str,
+        prop_type: &Value,
+    ) -> Result<Vec<String>, ValidationError> {
+        let types = prop_type
+            .as_array()
+            .ok_or_else(|| ValidationError::InvalidProperty {
+                property: prop_name.to_string(),
+                message: "Type array must contain string type names".to_string(),
+            })?;
+
+        Ok(types
+            .iter()
+            .filter_map(|t| t.as_str())
+            .map(|s| s.to_string())
+            .collect())
+    }
+
+    /// Check if a union type is a simple nullable type (type + null)
+    fn is_nullable_union(type_strs: &[String]) -> bool {
+        type_strs.contains(&"null".to_string()) && type_strs.len() == 2
     }
 
     /// Validate that a default value matches its declared type
@@ -423,57 +565,105 @@ impl SchemaValidator {
         prop_type: &Value,
         default: &Value,
     ) -> Result<(), ValidationError> {
-        if let Some(type_str) = prop_type.as_str() {
-            let type_matches = match type_str {
-                "string" => default.is_string(),
-                "integer" => default.is_i64() || default.is_u64(),
-                "number" => default.is_number(),
-                "boolean" => default.is_boolean(),
-                "array" => default.is_array(),
-                _ => true, // Skip validation for unsupported types (will be caught elsewhere)
-            };
+        let type_str = match prop_type.as_str() {
+            Some(s) => s,
+            None => return Ok(()),
+        };
 
-            if !type_matches {
-                return Err(ValidationError::InvalidProperty {
-                    property: prop_name.to_string(),
-                    message: format!(
-                        "Default value type {:?} does not match declared type '{}'",
-                        default, type_str
-                    ),
-                });
-            }
+        if Self::default_value_matches_type(type_str, default) {
+            return Ok(());
         }
 
-        Ok(())
+        Err(ValidationError::InvalidProperty {
+            property: prop_name.to_string(),
+            message: format!(
+                "Default value type {:?} does not match declared type '{}'",
+                default, type_str
+            ),
+        })
+    }
+
+    /// Check if a default value matches the expected type
+    fn default_value_matches_type(type_str: &str, value: &Value) -> bool {
+        if !Self::is_supported_type(type_str) {
+            return true; // Skip validation for unsupported types (will be caught elsewhere)
+        }
+
+        Self::value_matches_type_str(type_str, value)
+    }
+
+    /// Check if a value matches a specific type string
+    fn value_matches_type_str(type_str: &str, value: &Value) -> bool {
+        match (type_str, value) {
+            ("string", Value::String(_)) => true,
+            ("integer", Value::Number(n)) if n.is_i64() || n.is_u64() => true,
+            ("number", Value::Number(_)) => true,
+            ("boolean", Value::Bool(_)) => true,
+            ("array", Value::Array(_)) => true,
+            _ => false,
+        }
     }
 
     /// Validate required fields consistency
     fn validate_required_fields(required: &Value, schema: &Value) -> Result<(), ValidationError> {
-        if let Some(required_array) = required.as_array() {
-            if let Some(properties) = schema.get("properties").and_then(|p| p.as_object()) {
-                for required_item in required_array {
-                    if let Some(field_name) = required_item.as_str() {
-                        if !properties.contains_key(field_name) {
-                            return Err(ValidationError::ConflictingDefinitions {
-                                parameter: field_name.to_string(),
-                                conflict:
-                                    "Field is marked as required but not defined in properties"
-                                        .to_string(),
-                            });
-                        }
-                    } else {
-                        return Err(ValidationError::InvalidSchema {
-                            message: "Required field names must be strings".to_string(),
-                        });
-                    }
-                }
-            }
-        } else {
-            return Err(ValidationError::InvalidSchema {
+        let (required_array, properties) =
+            Self::extract_required_validation_context(required, schema)?;
+        Self::validate_all_required_fields_exist(required_array, properties)
+    }
+
+    /// Extract and validate both required array and properties map
+    fn extract_required_validation_context<'a>(
+        required: &'a Value,
+        schema: &'a Value,
+    ) -> Result<(&'a Vec<Value>, &'a Map<String, Value>), ValidationError> {
+        let required_array = required
+            .as_array()
+            .ok_or_else(|| ValidationError::InvalidSchema {
                 message: "Required field must be an array of strings".to_string(),
+            })?;
+
+        let properties = schema
+            .get("properties")
+            .and_then(|p| p.as_object())
+            .ok_or_else(|| ValidationError::InvalidSchema {
+                message: "Cannot validate required fields without properties".to_string(),
+            })?;
+
+        Ok((required_array, properties))
+    }
+
+    /// Validate that all required fields exist in properties
+    fn validate_all_required_fields_exist(
+        required_array: &[Value],
+        properties: &Map<String, Value>,
+    ) -> Result<(), ValidationError> {
+        for required_item in required_array {
+            let field_name = Self::extract_field_name(required_item)?;
+            Self::validate_required_field_exists(field_name, properties)?;
+        }
+        Ok(())
+    }
+
+    /// Extract field name from a required item
+    fn extract_field_name(required_item: &Value) -> Result<&str, ValidationError> {
+        required_item
+            .as_str()
+            .ok_or_else(|| ValidationError::InvalidSchema {
+                message: "Required field names must be strings".to_string(),
+            })
+    }
+
+    /// Validate that a required field exists in properties
+    fn validate_required_field_exists(
+        field_name: &str,
+        properties: &Map<String, Value>,
+    ) -> Result<(), ValidationError> {
+        if !properties.contains_key(field_name) {
+            return Err(ValidationError::ConflictingDefinitions {
+                parameter: field_name.to_string(),
+                conflict: "Field is marked as required but not defined in properties".to_string(),
             });
         }
-
         Ok(())
     }
 
@@ -516,8 +706,9 @@ impl SchemaValidator {
     /// This method collects all validation errors instead of stopping at the first one,
     /// providing comprehensive feedback about all issues in the schema.
     pub fn validate_schema_comprehensive(schema: &Value) -> Vec<ValidationError> {
-        match Self::validate_schema_internal(schema, true) {
-            Ok(errors) => errors,
+        let mut ctx = ValidationContext::new(true);
+        match Self::validate_schema_with_context(schema, &mut ctx) {
+            Ok(()) => ctx.errors,
             Err(e) => vec![e], // Shouldn't happen in collect_all mode, but handle defensively
         }
     }
@@ -547,42 +738,53 @@ mod tests {
     use super::*;
     use serde_json::json;
 
-    /// Test helper to assert that a schema with a specific property is invalid
-    fn assert_invalid_property<F>(prop_name: &str, prop_value: Value, expected_error_matcher: F)
+    /// Generic validation error assertion helper
+    ///
+    /// This helper validates that a result is an error and matches the expected pattern.
+    /// It can be used for both schema-level and property-level validation testing.
+    fn assert_validation_error<F>(result: Result<(), ValidationError>, context: &str, matcher: F)
     where
         F: FnOnce(ValidationError) -> bool,
     {
-        let schema = json!({
-            "type": "object",
-            "properties": {
-                prop_name: prop_value
-            }
-        });
-        let result = SchemaValidator::validate_schema(&schema);
         assert!(
             result.is_err(),
-            "Expected validation to fail for property '{}'",
-            prop_name
+            "Expected validation to fail for {}",
+            context
         );
-        let error = result.unwrap_err();
         assert!(
-            expected_error_matcher(error),
-            "Error did not match expected variant"
+            matcher(result.unwrap_err()),
+            "Error did not match expected variant for {}",
+            context
         );
     }
 
-    /// Test helper to assert that a schema is invalid and matches a specific error pattern
-    fn assert_schema_invalid<F>(schema: Value, expected_error_matcher: F)
-    where
-        F: FnOnce(ValidationError) -> bool,
-    {
-        let result = SchemaValidator::validate_schema(&schema);
-        assert!(result.is_err(), "Expected validation to fail");
-        let error = result.unwrap_err();
-        assert!(
-            expected_error_matcher(error),
-            "Error did not match expected variant"
-        );
+    type ValidationTestCase = (&'static str, Value, Box<dyn Fn(ValidationError) -> bool>);
+    type PropertyValidationTestCase = (
+        &'static str,
+        &'static str,
+        Box<dyn Fn(ValidationError) -> bool>,
+    );
+
+    /// Helper to run validation test cases with consistent structure
+    ///
+    /// This eliminates the duplicated pattern of looping through test cases
+    /// with (name, schema, matcher) tuples.
+    fn run_validation_test_cases(test_cases: Vec<ValidationTestCase>) {
+        for (name, schema, matcher) in test_cases {
+            assert_validation_error(SchemaValidator::validate_schema(&schema), name, matcher);
+        }
+    }
+
+    /// Helper to validate property test cases
+    ///
+    /// Validates properties directly without a full schema wrapper.
+    fn run_property_validation_test_cases(test_cases: Vec<PropertyValidationTestCase>) {
+        for (name, param_name, matcher) in test_cases {
+            let mut props = serde_json::Map::new();
+            props.insert(param_name.to_string(), json!({"type": "string"}));
+            let result = SchemaValidator::validate_properties(&props);
+            assert_validation_error(result, name, matcher);
+        }
     }
 
     #[test]
@@ -606,68 +808,238 @@ mod tests {
     }
 
     #[test]
-    fn test_missing_properties() {
-        let schema = json!({
-            "type": "object",
-            "required": ["title"]
-        });
-
-        let result = SchemaValidator::validate_schema(&schema);
-        assert!(result.is_err());
-        assert!(matches!(
-            result.unwrap_err(),
-            ValidationError::MissingSchemaField { .. }
-        ));
+    fn test_schema_structure_errors() {
+        run_validation_test_cases(vec![
+            (
+                "missing_properties",
+                json!({
+                    "type": "object",
+                    "required": ["title"]
+                }),
+                Box::new(|e| matches!(e, ValidationError::MissingSchemaField { .. })),
+            ),
+            (
+                "properties_not_object",
+                json!({
+                    "type": "object",
+                    "properties": "not-an-object"
+                }),
+                Box::new(|e| matches!(e, ValidationError::InvalidSchema { .. })),
+            ),
+            (
+                "schema_with_wrong_root_type",
+                json!({
+                    "type": "array",
+                    "properties": {
+                        "param": {"type": "string"}
+                    }
+                }),
+                Box::new(|e| matches!(e, ValidationError::InvalidSchema { .. })),
+            ),
+            (
+                "required_field_not_array",
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "param": {"type": "string"}
+                    },
+                    "required": "not-an-array"
+                }),
+                Box::new(|e| matches!(e, ValidationError::InvalidSchema { .. })),
+            ),
+            (
+                "required_field_with_non_string",
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "param": {"type": "string"}
+                    },
+                    "required": [123, "valid_field"]
+                }),
+                Box::new(|e| matches!(e, ValidationError::InvalidSchema { .. })),
+            ),
+            (
+                "required_field_not_in_properties",
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "existing_param": {"type": "string"}
+                    },
+                    "required": ["existing_param", "nonexistent_param"]
+                }),
+                Box::new(|e| matches!(e, ValidationError::ConflictingDefinitions { .. })),
+            ),
+        ]);
     }
 
     #[test]
-    fn test_unsupported_object_type() {
-        assert_invalid_property("nested", json!({"type": "object", "properties": {}}), |e| {
-            matches!(e, ValidationError::UnsupportedSchemaType { .. })
-        });
+    fn test_parameter_name_errors() {
+        run_validation_test_cases(vec![
+            (
+                "invalid_parameter_name",
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "param@with#symbols": {"type": "string"}
+                    }
+                }),
+                Box::new(|e| matches!(e, ValidationError::InvalidParameterName { .. })),
+            ),
+            (
+                "reserved_parameter_name",
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "help": {"type": "string"}
+                    }
+                }),
+                Box::new(|e| matches!(e, ValidationError::InvalidParameterName { .. })),
+            ),
+            (
+                "case_insensitive_parameter_conflict",
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "param": {"type": "string"},
+                        "PARAM": {"type": "string"}
+                    }
+                }),
+                Box::new(|e| matches!(e, ValidationError::ConflictingDefinitions { .. })),
+            ),
+        ]);
     }
 
     #[test]
-    fn test_invalid_parameter_name() {
-        assert_invalid_property("param@with#symbols", json!({"type": "string"}), |e| {
-            matches!(e, ValidationError::InvalidParameterName { .. })
-        });
+    fn test_type_validation_errors() {
+        run_validation_test_cases(vec![
+            (
+                "unsupported_object_type",
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "nested": {"type": "object", "properties": {}}
+                    }
+                }),
+                Box::new(|e| matches!(e, ValidationError::UnsupportedSchemaType { .. })),
+            ),
+            (
+                "deeply_nested_structure",
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "level1": {
+                            "type": "object",
+                            "properties": {
+                                "level2": {
+                                    "type": "object",
+                                    "properties": {
+                                        "level3": {"type": "string"}
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }),
+                Box::new(|e| matches!(e, ValidationError::UnsupportedSchemaType { .. })),
+            ),
+            (
+                "complex_union_type",
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "complex_union": {
+                            "type": ["string", "integer", "boolean"]
+                        }
+                    }
+                }),
+                Box::new(|e| matches!(e, ValidationError::UnsupportedSchemaType { .. })),
+            ),
+        ]);
     }
 
     #[test]
-    fn test_reserved_parameter_name() {
-        assert_invalid_property("help", json!({"type": "string"}), |e| {
-            matches!(e, ValidationError::InvalidParameterName { .. })
-        });
+    fn test_property_validation_errors() {
+        run_validation_test_cases(vec![
+            (
+                "property_schema_not_object",
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "param": "not-an-object"
+                    }
+                }),
+                Box::new(|e| matches!(e, ValidationError::InvalidProperty { .. })),
+            ),
+            (
+                "property_with_invalid_type",
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "param": {"type": 123}
+                    }
+                }),
+                Box::new(|e| matches!(e, ValidationError::InvalidProperty { .. })),
+            ),
+            (
+                "description_not_string",
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "param": {
+                            "type": "string",
+                            "description": 123
+                        }
+                    }
+                }),
+                Box::new(|e| matches!(e, ValidationError::InvalidProperty { .. })),
+            ),
+        ]);
     }
 
     #[test]
-    fn test_conflicting_required_field() {
-        let schema = json!({
-            "type": "object",
-            "properties": {
-                "title": {
-                    "type": "string"
-                }
-            },
-            "required": ["title", "nonexistent"]
-        });
-
-        let result = SchemaValidator::validate_schema(&schema);
-        assert!(result.is_err());
-        assert!(matches!(
-            result.unwrap_err(),
-            ValidationError::ConflictingDefinitions { .. }
-        ));
-    }
-
-    #[test]
-    fn test_invalid_default_value_type() {
-        assert_invalid_property(
-            "count",
-            json!({"type": "integer", "default": "not-a-number"}),
-            |e| matches!(e, ValidationError::InvalidProperty { .. }),
-        );
+    fn test_default_value_errors() {
+        run_validation_test_cases(vec![
+            (
+                "string_with_int_default",
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "param": {"type": "string", "default": 123}
+                    }
+                }),
+                Box::new(|e| matches!(e, ValidationError::InvalidProperty { .. })),
+            ),
+            (
+                "integer_with_string_default",
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "param": {"type": "integer", "default": "not-a-number"}
+                    }
+                }),
+                Box::new(|e| matches!(e, ValidationError::InvalidProperty { .. })),
+            ),
+            (
+                "boolean_with_string_default",
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "param": {"type": "boolean", "default": "not-a-boolean"}
+                    }
+                }),
+                Box::new(|e| matches!(e, ValidationError::InvalidProperty { .. })),
+            ),
+            (
+                "array_with_string_default",
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "param": {"type": "array", "default": "not-an-array"}
+                    }
+                }),
+                Box::new(|e| matches!(e, ValidationError::InvalidProperty { .. })),
+            ),
+        ]);
     }
 
     #[test]
@@ -723,24 +1095,6 @@ mod tests {
     }
 
     #[test]
-    fn test_case_insensitive_parameter_conflict() {
-        let schema = json!({
-            "type": "object",
-            "properties": {
-                "param": {"type": "string"},
-                "PARAM": {"type": "string"}
-            }
-        });
-
-        let result = SchemaValidator::validate_schema(&schema);
-        assert!(result.is_err());
-        assert!(matches!(
-            result.unwrap_err(),
-            ValidationError::ConflictingDefinitions { .. }
-        ));
-    }
-
-    #[test]
     fn test_validation_error_suggestions() {
         let error = ValidationError::UnsupportedSchemaType {
             schema_type: "object".to_string(),
@@ -775,13 +1129,11 @@ mod tests {
 
     #[test]
     fn test_empty_schema() {
-        let schema = json!({});
-        let result = SchemaValidator::validate_schema(&schema);
-        assert!(result.is_err());
-        assert!(matches!(
-            result.unwrap_err(),
-            ValidationError::MissingSchemaField { .. }
-        ));
+        assert_validation_error(
+            SchemaValidator::validate_schema(&json!({})),
+            "empty schema",
+            |e| matches!(e, ValidationError::MissingSchemaField { .. }),
+        );
     }
 
     #[test]
@@ -793,33 +1145,6 @@ mod tests {
         });
         // Should be valid - type field is optional at root level
         assert!(SchemaValidator::validate_schema(&schema).is_ok());
-    }
-
-    #[test]
-    fn test_schema_with_wrong_root_type() {
-        let schema = json!({
-            "type": "array",
-            "properties": {
-                "param": {"type": "string"}
-            }
-        });
-        let result = SchemaValidator::validate_schema(&schema);
-        assert!(result.is_err());
-        assert!(matches!(
-            result.unwrap_err(),
-            ValidationError::InvalidSchema { .. }
-        ));
-    }
-
-    #[test]
-    fn test_properties_not_object() {
-        assert_schema_invalid(
-            json!({
-                "type": "object",
-                "properties": "not-an-object"
-            }),
-            |e| matches!(e, ValidationError::InvalidSchema { .. }),
-        );
     }
 
     #[test]
@@ -876,29 +1201,19 @@ mod tests {
     #[test]
     fn test_all_reserved_parameter_names() {
         let reserved_names = ["help", "version", "verbose", "quiet", "debug"];
-
-        for reserved in &reserved_names {
-            let mut props = serde_json::Map::new();
-            props.insert(reserved.to_string(), json!({"type": "string"}));
-
-            let result = SchemaValidator::validate_properties(&props);
-            assert!(
-                result.is_err(),
-                "Reserved name '{}' should be invalid",
-                reserved
-            );
-            assert!(matches!(
-                result.unwrap_err(),
-                ValidationError::InvalidParameterName { .. }
-            ));
-        }
-    }
-
-    #[test]
-    fn test_property_schema_not_object() {
-        assert_invalid_property("param", json!("not-an-object"), |e| {
-            matches!(e, ValidationError::InvalidProperty { .. })
-        });
+        run_property_validation_test_cases(
+            reserved_names
+                .iter()
+                .map(|name| {
+                    (
+                        "reserved parameter name",
+                        *name,
+                        Box::new(|e| matches!(e, ValidationError::InvalidParameterName { .. }))
+                            as Box<dyn Fn(ValidationError) -> bool>,
+                    )
+                })
+                .collect(),
+        );
     }
 
     #[test]
@@ -917,79 +1232,16 @@ mod tests {
     }
 
     #[test]
-    fn test_property_with_invalid_type() {
-        assert_invalid_property("param", json!({"type": 123}), |e| {
-            matches!(e, ValidationError::InvalidProperty { .. })
-        });
-    }
-
-    #[test]
     fn test_union_type_with_null() {
-        let schema = json!({
+        assert!(SchemaValidator::validate_schema(&json!({
             "type": "object",
             "properties": {
                 "optional_string": {
                     "type": ["string", "null"]
                 }
             }
-        });
-
-        assert!(SchemaValidator::validate_schema(&schema).is_ok());
-    }
-
-    #[test]
-    fn test_complex_union_type() {
-        let schema = json!({
-            "type": "object",
-            "properties": {
-                "complex_union": {
-                    "type": ["string", "integer", "boolean"]
-                }
-            }
-        });
-
-        let result = SchemaValidator::validate_schema(&schema);
-        assert!(result.is_err());
-        assert!(matches!(
-            result.unwrap_err(),
-            ValidationError::UnsupportedSchemaType { .. }
-        ));
-    }
-
-    #[test]
-    fn test_invalid_default_value_types() {
-        let test_cases = vec![
-            (json!({"type": "string", "default": 123}), "string"),
-            (
-                json!({"type": "integer", "default": "not-a-number"}),
-                "integer",
-            ),
-            (
-                json!({"type": "boolean", "default": "not-a-boolean"}),
-                "boolean",
-            ),
-            (json!({"type": "array", "default": "not-an-array"}), "array"),
-        ];
-
-        for (prop_schema, expected_type) in test_cases {
-            let schema = json!({
-                "type": "object",
-                "properties": {
-                    "param": prop_schema
-                }
-            });
-
-            let result = SchemaValidator::validate_schema(&schema);
-            assert!(
-                result.is_err(),
-                "Should fail for invalid default type for {}",
-                expected_type
-            );
-            assert!(matches!(
-                result.unwrap_err(),
-                ValidationError::InvalidProperty { .. }
-            ));
-        }
+        }))
+        .is_ok());
     }
 
     #[test]
@@ -1005,107 +1257,6 @@ mod tests {
         });
 
         assert!(SchemaValidator::validate_schema(&schema).is_ok());
-    }
-
-    #[test]
-    fn test_required_field_not_array() {
-        let schema = json!({
-            "type": "object",
-            "properties": {
-                "param": {"type": "string"}
-            },
-            "required": "not-an-array"
-        });
-
-        let result = SchemaValidator::validate_schema(&schema);
-        assert!(result.is_err());
-        assert!(matches!(
-            result.unwrap_err(),
-            ValidationError::InvalidSchema { .. }
-        ));
-    }
-
-    #[test]
-    fn test_required_field_with_non_string() {
-        let schema = json!({
-            "type": "object",
-            "properties": {
-                "param": {"type": "string"}
-            },
-            "required": [123, "valid_field"]
-        });
-
-        let result = SchemaValidator::validate_schema(&schema);
-        assert!(result.is_err());
-        assert!(matches!(
-            result.unwrap_err(),
-            ValidationError::InvalidSchema { .. }
-        ));
-    }
-
-    #[test]
-    fn test_required_field_not_in_properties() {
-        let schema = json!({
-            "type": "object",
-            "properties": {
-                "existing_param": {"type": "string"}
-            },
-            "required": ["existing_param", "nonexistent_param"]
-        });
-
-        let result = SchemaValidator::validate_schema(&schema);
-        assert!(result.is_err());
-        assert!(matches!(
-            result.unwrap_err(),
-            ValidationError::ConflictingDefinitions { .. }
-        ));
-    }
-
-    #[test]
-    fn test_deeply_nested_structure() {
-        let schema = json!({
-            "type": "object",
-            "properties": {
-                "level1": {
-                    "type": "object",
-                    "properties": {
-                        "level2": {
-                            "type": "object",
-                            "properties": {
-                                "level3": {"type": "string"}
-                            }
-                        }
-                    }
-                }
-            }
-        });
-
-        let result = SchemaValidator::validate_schema(&schema);
-        assert!(result.is_err());
-        assert!(matches!(
-            result.unwrap_err(),
-            ValidationError::UnsupportedSchemaType { .. }
-        ));
-    }
-
-    #[test]
-    fn test_description_not_string() {
-        let schema = json!({
-            "type": "object",
-            "properties": {
-                "param": {
-                    "type": "string",
-                    "description": 123
-                }
-            }
-        });
-
-        let result = SchemaValidator::validate_schema(&schema);
-        assert!(result.is_err());
-        assert!(matches!(
-            result.unwrap_err(),
-            ValidationError::InvalidProperty { .. }
-        ));
     }
 
     #[test]
@@ -1153,17 +1304,17 @@ mod tests {
 
     #[test]
     fn test_malformed_json_schema() {
-        // Test with a schema that is valid JSON but invalid JSON Schema
-        let schema = json!({
-            "this_is_not": "a_valid_schema",
-            "missing": "required_fields",
-            "random": {
-                "structure": true
-            }
-        });
-
-        let result = SchemaValidator::validate_schema(&schema);
-        assert!(result.is_err());
+        assert_validation_error(
+            SchemaValidator::validate_schema(&json!({
+                "this_is_not": "a_valid_schema",
+                "missing": "required_fields",
+                "random": {
+                    "structure": true
+                }
+            })),
+            "malformed schema",
+            |_| true,
+        );
     }
 
     #[test]

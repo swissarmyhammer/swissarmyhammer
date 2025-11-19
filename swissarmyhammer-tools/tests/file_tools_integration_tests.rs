@@ -36,13 +36,11 @@ impl MemoryProfiler {
 
     #[cfg(target_os = "linux")]
     fn get_memory_usage() -> Option<usize> {
-        // Read from /proc/self/status on Linux
         if let Ok(file) = File::open("/proc/self/status") {
             let reader = BufReader::new(file);
             for line in reader.lines() {
                 if let Ok(line) = line {
                     if line.starts_with("VmRSS:") {
-                        // Extract memory in KB and convert to bytes
                         let parts: Vec<&str> = line.split_whitespace().collect();
                         if parts.len() >= 2 {
                             if let Ok(kb) = parts[1].parse::<usize>() {
@@ -56,22 +54,7 @@ impl MemoryProfiler {
         None
     }
 
-    #[cfg(target_os = "macos")]
-    fn get_memory_usage() -> Option<usize> {
-        // Use task_info on macOS - simplified version for testing
-        // In practice, this would require unsafe code and system calls
-        // For now, we'll simulate memory tracking
-        None
-    }
-
-    #[cfg(target_os = "windows")]
-    fn get_memory_usage() -> Option<usize> {
-        // Use Windows API - simplified version for testing
-        // For now, we'll simulate memory tracking
-        None
-    }
-
-    #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+    #[cfg(not(target_os = "linux"))]
     fn get_memory_usage() -> Option<usize> {
         None
     }
@@ -131,35 +114,294 @@ fn create_test_registry() -> ToolRegistry {
 }
 
 // ============================================================================
+// Test Helper Functions
+// ============================================================================
+
+/// Extract response text from CallToolResult to eliminate duplication across tests
+fn extract_response_text(call_result: &rmcp::model::CallToolResult) -> &str {
+    if let Some(content_item) = call_result.content.first() {
+        match &content_item.raw {
+            rmcp::model::RawContent::Text(text_content) => &text_content.text,
+            _ => panic!("Expected text content"),
+        }
+    } else {
+        panic!("Response should contain content")
+    }
+}
+
+/// Create a test file with given name and content, returning temp directory and file path
+fn create_test_file(name: &str, content: &str) -> (TempDir, std::path::PathBuf) {
+    let temp_dir = TempDir::new().unwrap();
+    let test_file = temp_dir.path().join(name);
+    fs::write(&test_file, content).unwrap();
+    (temp_dir, test_file)
+}
+
+/// Create a temporary directory with an initialized git repository
+fn create_test_dir_with_git() -> TempDir {
+    let temp_dir = TempDir::new().unwrap();
+    git2::Repository::init(temp_dir.path()).expect("Failed to initialize git repo");
+    temp_dir
+}
+
+/// Generic argument builder that accepts key-value pairs
+fn build_args(pairs: &[(&str, serde_json::Value)]) -> serde_json::Map<String, serde_json::Value> {
+    let mut arguments = serde_json::Map::new();
+    for (key, value) in pairs {
+        arguments.insert(key.to_string(), value.clone());
+    }
+    arguments
+}
+
+/// Check if error message contains any of the expected messages
+fn assert_error_contains_any(error_msg: &str, expected_messages: &[&str], context: &str) {
+    let contains_expected = expected_messages.iter().any(|msg| error_msg.contains(msg));
+    assert!(
+        contains_expected,
+        "{}: Expected error to contain one of {:?}, but got: {}",
+        context, expected_messages, error_msg
+    );
+}
+
+/// Builder helper for files_read arguments
+fn read_args(path: &str) -> serde_json::Map<String, serde_json::Value> {
+    build_args(&[("path", json!(path))])
+}
+
+/// Builder helper for files_write arguments
+fn write_args(file_path: &str, content: &str) -> serde_json::Map<String, serde_json::Value> {
+    build_args(&[("file_path", json!(file_path)), ("content", json!(content))])
+}
+
+/// Builder helper for files_edit arguments
+fn edit_args(
+    file_path: &str,
+    old_string: &str,
+    new_string: &str,
+) -> serde_json::Map<String, serde_json::Value> {
+    build_args(&[
+        ("file_path", json!(file_path)),
+        ("old_string", json!(old_string)),
+        ("new_string", json!(new_string)),
+    ])
+}
+
+/// Builder helper for files_glob arguments
+fn glob_args(pattern: &str) -> serde_json::Map<String, serde_json::Value> {
+    build_args(&[("pattern", json!(pattern))])
+}
+
+/// Builder helper for files_grep arguments
+fn grep_args(pattern: &str) -> serde_json::Map<String, serde_json::Value> {
+    build_args(&[("pattern", json!(pattern))])
+}
+
+/// Run concurrent operations and aggregate results
+async fn run_concurrent_test<F, Fut>(
+    registry: Arc<ToolRegistry>,
+    context: Arc<ToolContext>,
+    operation_count: usize,
+    operation: F,
+) -> (usize, usize)
+where
+    F: Fn(Arc<ToolRegistry>, Arc<ToolContext>, usize) -> Fut,
+    Fut: std::future::Future<Output = Result<(), &'static str>> + Send + 'static,
+{
+    let mut join_set = tokio::task::JoinSet::new();
+
+    for i in 0..operation_count {
+        let registry_clone = registry.clone();
+        let context_clone = context.clone();
+        join_set.spawn(operation(registry_clone, context_clone, i));
+    }
+
+    let mut success_count = 0;
+    let mut error_count = 0;
+
+    while let Some(result) = join_set.join_next().await {
+        match result.unwrap() {
+            Ok(_) => success_count += 1,
+            Err(_) => error_count += 1,
+        }
+    }
+
+    (success_count, error_count)
+}
+
+/// Profile memory usage of an operation and return the memory delta
+#[allow(dead_code)]
+async fn profile_memory<F, Fut, T>(operation: F) -> (T, Option<isize>)
+where
+    F: FnOnce() -> Fut,
+    Fut: std::future::Future<Output = T>,
+{
+    let profiler = MemoryProfiler::new();
+    let result = operation().await;
+    let delta = profiler.memory_delta();
+    (result, delta)
+}
+
+/// Test path security for a given tool
+async fn test_path_security_for_tool(
+    tool_name: &str,
+    registry: &ToolRegistry,
+    context: &ToolContext,
+    dangerous_paths: &[&str],
+) {
+    let tool = registry.get_tool(tool_name).unwrap();
+
+    for dangerous_path in dangerous_paths {
+        let arguments = match tool_name {
+            "files_read" => read_args(dangerous_path),
+            "files_write" => write_args(dangerous_path, "malicious content"),
+            "files_edit" => edit_args(dangerous_path, "old", "new"),
+            "files_glob" => {
+                let mut args = glob_args("*");
+                args.insert("path".to_string(), json!(dangerous_path));
+                args
+            }
+            "files_grep" => {
+                let mut args = grep_args("password");
+                args.insert("path".to_string(), json!(dangerous_path));
+                args
+            }
+            _ => panic!("Unsupported tool for security testing: {}", tool_name),
+        };
+
+        let result = tool.execute(arguments, context).await;
+
+        if let Err(error) = result {
+            let error_msg = format!("{:?}", error);
+            let expected_messages = &[
+                "blocked pattern",
+                "not found",
+                "absolute",
+                "No such file",
+                "does not exist",
+                "invalid",
+                "dangerous",
+                "traversal",
+            ];
+            let context_msg = format!(
+                "{} tool should block or safely handle path traversal: {}",
+                tool_name, dangerous_path
+            );
+            assert_error_contains_any(&error_msg, expected_messages, &context_msg);
+        }
+    }
+}
+
+/// Parameterized test helper for read tool with offset and limit
+async fn test_read_with_offset_limit(
+    offset: Option<usize>,
+    limit: Option<usize>,
+    expected_content: &str,
+) {
+    let registry = create_test_registry();
+    let context = create_test_context().await;
+    let tool = registry.get_tool("files_read").unwrap();
+
+    let test_content = "Line 1\nLine 2\nLine 3\nLine 4\nLine 5";
+    let (_temp_dir, test_file) = create_test_file("test_file.txt", test_content);
+
+    let mut arguments = read_args(&test_file.to_string_lossy());
+    if let Some(offset_val) = offset {
+        arguments.insert("offset".to_string(), json!(offset_val));
+    }
+    if let Some(limit_val) = limit {
+        arguments.insert("limit".to_string(), json!(limit_val));
+    }
+
+    let result = tool.execute(arguments, &context).await;
+    assert!(result.is_ok(), "Read operation should succeed");
+
+    let call_result = result.unwrap();
+    let response_text = extract_response_text(&call_result);
+
+    assert_eq!(response_text, expected_content);
+}
+
+/// Verify tool registration with expected properties
+fn verify_tool_registration(
+    registry: &ToolRegistry,
+    tool_name: &str,
+    description_keywords: &[&str],
+    required_properties: &[&str],
+    optional_properties: &[&str],
+) {
+    assert!(
+        registry.get_tool(tool_name).is_some(),
+        "Tool {} should be registered",
+        tool_name
+    );
+
+    let tool_names = registry.list_tool_names();
+    assert!(
+        tool_names.contains(&tool_name.to_string()),
+        "Tool {} should be in tool list",
+        tool_name
+    );
+
+    let tool = registry.get_tool(tool_name).unwrap();
+    assert_eq!(tool.name(), tool_name);
+    assert!(
+        !tool.description().is_empty(),
+        "Description should not be empty"
+    );
+
+    let description = tool.description().to_lowercase();
+    let contains_any_keyword = description_keywords
+        .iter()
+        .any(|keyword| description.contains(keyword));
+    assert!(
+        contains_any_keyword,
+        "Description should contain at least one of keywords: {:?}, but got: {}",
+        description_keywords, description
+    );
+
+    let schema = tool.schema();
+    assert!(schema.is_object(), "Schema should be an object");
+
+    let properties = schema["properties"].as_object().unwrap();
+    for prop in required_properties {
+        assert!(
+            properties.contains_key(*prop),
+            "Schema should contain required property: {}",
+            prop
+        );
+    }
+    for prop in optional_properties {
+        assert!(
+            properties.contains_key(*prop),
+            "Schema should contain optional property: {}",
+            prop
+        );
+    }
+
+    let required = schema["required"].as_array().unwrap();
+    for prop in required_properties {
+        assert!(
+            required.contains(&serde_json::Value::String(prop.to_string())),
+            "Property {} should be required",
+            prop
+        );
+    }
+}
+
+// ============================================================================
 // File Read Tool Tests
 // ============================================================================
 
 #[tokio::test]
 async fn test_read_tool_discovery_and_registration() {
     let registry = create_test_registry();
-
-    // Verify the read tool is registered and discoverable
-    assert!(registry.get_tool("files_read").is_some());
-
-    let tool_names = registry.list_tool_names();
-    assert!(tool_names.contains(&"files_read".to_string()));
-
-    // Verify tool metadata is accessible
-    let tool = registry.get_tool("files_read").unwrap();
-    assert_eq!(tool.name(), "files_read");
-    assert!(!tool.description().is_empty());
-    assert!(tool.description().contains("file"));
-
-    // Verify schema structure
-    let schema = tool.schema();
-    assert!(schema.is_object());
-    let properties = schema["properties"].as_object().unwrap();
-    assert!(properties.contains_key("path"));
-    assert!(properties.contains_key("offset"));
-    assert!(properties.contains_key("limit"));
-
-    let required = schema["required"].as_array().unwrap();
-    assert!(required.contains(&serde_json::Value::String("path".to_string())));
+    verify_tool_registration(
+        &registry,
+        "files_read",
+        &["file"],
+        &["path"],
+        &["offset", "limit"],
+    );
 }
 
 #[tokio::test]
@@ -169,14 +411,11 @@ async fn test_read_tool_execution_success_cases() {
     let tool = registry.get_tool("files_read").unwrap();
 
     // Create temporary file for testing
-    let temp_dir = TempDir::new().unwrap();
-    let test_file = temp_dir.path().join("test_file.txt");
     let test_content = "Line 1\nLine 2\nLine 3\nLine 4\nLine 5";
-    fs::write(&test_file, test_content).unwrap();
+    let (_temp_dir, test_file) = create_test_file("test_file.txt", test_content);
 
     // Test basic file reading
-    let mut arguments = serde_json::Map::new();
-    arguments.insert("path".to_string(), json!(test_file.to_string_lossy()));
+    let arguments = read_args(&test_file.to_string_lossy());
 
     let result = tool.execute(arguments, &context).await;
     assert!(result.is_ok(), "File read should succeed: {:?}", result);
@@ -186,121 +425,24 @@ async fn test_read_tool_execution_success_cases() {
     assert!(!call_result.content.is_empty());
 
     // Extract the content from the response
-    let response_text = if let Some(content_item) = call_result.content.first() {
-        match &content_item.raw {
-            rmcp::model::RawContent::Text(text_content) => &text_content.text,
-            _ => panic!("Expected text content"),
-        }
-    } else {
-        panic!("Response should contain content");
-    };
+    let response_text = extract_response_text(&call_result);
 
     assert_eq!(response_text, test_content);
 }
 
 #[tokio::test]
 async fn test_read_tool_offset_limit_functionality() {
-    let registry = create_test_registry();
-    let context = create_test_context().await;
-    let tool = registry.get_tool("files_read").unwrap();
-
-    // Create temporary file for testing
-    let temp_dir = TempDir::new().unwrap();
-    let test_file = temp_dir.path().join("test_file.txt");
-    let test_content = "Line 1\nLine 2\nLine 3\nLine 4\nLine 5";
-    fs::write(&test_file, test_content).unwrap();
-
-    // Test reading with offset and limit
-    let mut arguments = serde_json::Map::new();
-    arguments.insert("path".to_string(), json!(test_file.to_string_lossy()));
-    arguments.insert("offset".to_string(), json!(2)); // Start from line 2
-    arguments.insert("limit".to_string(), json!(2)); // Read 2 lines
-
-    let result = tool.execute(arguments, &context).await;
-    assert!(
-        result.is_ok(),
-        "File read with offset/limit should succeed: {:?}",
-        result
-    );
-
-    let call_result = result.unwrap();
-    assert_eq!(call_result.is_error, Some(false));
-
-    // Extract content and verify it contains lines 2 and 3
-    let response_text = if let Some(content_item) = call_result.content.first() {
-        match &content_item.raw {
-            rmcp::model::RawContent::Text(text_content) => &text_content.text,
-            _ => panic!("Expected text content"),
-        }
-    } else {
-        panic!("Response should contain content");
-    };
-
-    assert_eq!(response_text, "Line 2\nLine 3");
+    test_read_with_offset_limit(Some(2), Some(2), "Line 2\nLine 3").await;
 }
 
 #[tokio::test]
 async fn test_read_tool_offset_only() {
-    let registry = create_test_registry();
-    let context = create_test_context().await;
-    let tool = registry.get_tool("files_read").unwrap();
-
-    let temp_dir = TempDir::new().unwrap();
-    let test_file = temp_dir.path().join("test_file.txt");
-    let test_content = "Line 1\nLine 2\nLine 3\nLine 4\nLine 5";
-    fs::write(&test_file, test_content).unwrap();
-
-    // Test reading with offset only (should read from line 3 to end)
-    let mut arguments = serde_json::Map::new();
-    arguments.insert("path".to_string(), json!(test_file.to_string_lossy()));
-    arguments.insert("offset".to_string(), json!(3)); // Start from line 3
-
-    let result = tool.execute(arguments, &context).await;
-    assert!(result.is_ok());
-
-    let call_result = result.unwrap();
-    let response_text = if let Some(content_item) = call_result.content.first() {
-        match &content_item.raw {
-            rmcp::model::RawContent::Text(text_content) => &text_content.text,
-            _ => panic!("Expected text content"),
-        }
-    } else {
-        panic!("Response should contain content");
-    };
-
-    assert_eq!(response_text, "Line 3\nLine 4\nLine 5");
+    test_read_with_offset_limit(Some(3), None, "Line 3\nLine 4\nLine 5").await;
 }
 
 #[tokio::test]
 async fn test_read_tool_limit_only() {
-    let registry = create_test_registry();
-    let context = create_test_context().await;
-    let tool = registry.get_tool("files_read").unwrap();
-
-    let temp_dir = TempDir::new().unwrap();
-    let test_file = temp_dir.path().join("test_file.txt");
-    let test_content = "Line 1\nLine 2\nLine 3\nLine 4\nLine 5";
-    fs::write(&test_file, test_content).unwrap();
-
-    // Test reading with limit only (should read first 3 lines)
-    let mut arguments = serde_json::Map::new();
-    arguments.insert("path".to_string(), json!(test_file.to_string_lossy()));
-    arguments.insert("limit".to_string(), json!(3)); // Read first 3 lines
-
-    let result = tool.execute(arguments, &context).await;
-    assert!(result.is_ok());
-
-    let call_result = result.unwrap();
-    let response_text = if let Some(content_item) = call_result.content.first() {
-        match &content_item.raw {
-            rmcp::model::RawContent::Text(text_content) => &text_content.text,
-            _ => panic!("Expected text content"),
-        }
-    } else {
-        panic!("Response should contain content");
-    };
-
-    assert_eq!(response_text, "Line 1\nLine 2\nLine 3");
+    test_read_with_offset_limit(None, Some(3), "Line 1\nLine 2\nLine 3").await;
 }
 
 // ============================================================================
@@ -314,8 +456,7 @@ async fn test_read_tool_missing_file_error() {
     let tool = registry.get_tool("files_read").unwrap();
 
     // Test reading non-existent file
-    let mut arguments = serde_json::Map::new();
-    arguments.insert("path".to_string(), json!("/non/existent/file.txt"));
+    let arguments = read_args("/non/existent/file.txt");
 
     let result = tool.execute(arguments, &context).await;
     assert!(result.is_err(), "Reading non-existent file should fail");
@@ -337,8 +478,7 @@ async fn test_read_tool_relative_path_support() {
     let tool = registry.get_tool("files_read").unwrap();
 
     // Test reading with relative path - now just verify it doesn't reject due to being relative
-    let mut arguments = serde_json::Map::new();
-    arguments.insert("path".to_string(), json!("relative/path/file.txt"));
+    let arguments = read_args("relative/path/file.txt");
 
     let result = tool.execute(arguments, &context).await;
 
@@ -360,8 +500,7 @@ async fn test_read_tool_empty_path_error() {
     let tool = registry.get_tool("files_read").unwrap();
 
     // Test reading with empty path
-    let mut arguments = serde_json::Map::new();
-    arguments.insert("path".to_string(), json!(""));
+    let arguments = read_args("");
 
     let result = tool.execute(arguments, &context).await;
     assert!(result.is_err(), "Empty path should be rejected");
@@ -406,8 +545,7 @@ async fn test_read_tool_path_traversal_protection() {
     ];
 
     for dangerous_path in dangerous_paths {
-        let mut arguments = serde_json::Map::new();
-        arguments.insert("path".to_string(), json!(dangerous_path));
+        let arguments = read_args(dangerous_path);
 
         let result = tool.execute(arguments, &context).await;
 
@@ -445,8 +583,7 @@ async fn test_read_tool_handles_large_files_safely() {
     fs::write(&test_file, &large_content).unwrap();
 
     // Test reading large file with limit
-    let mut arguments = serde_json::Map::new();
-    arguments.insert("path".to_string(), json!(test_file.to_string_lossy()));
+    let mut arguments = read_args(&test_file.to_string_lossy());
     arguments.insert("limit".to_string(), json!(10)); // Only read first 10 lines
 
     let result = tool.execute(arguments, &context).await;
@@ -456,14 +593,7 @@ async fn test_read_tool_handles_large_files_safely() {
     );
 
     let call_result = result.unwrap();
-    let response_text = if let Some(content_item) = call_result.content.first() {
-        match &content_item.raw {
-            rmcp::model::RawContent::Text(text_content) => &text_content.text,
-            _ => panic!("Expected text content"),
-        }
-    } else {
-        panic!("Response should contain content");
-    };
+    let response_text = extract_response_text(&call_result);
 
     // Should only contain first 10 lines
     let line_count = response_text.lines().count();
@@ -484,25 +614,15 @@ async fn test_read_tool_empty_file() {
     let tool = registry.get_tool("files_read").unwrap();
 
     // Create empty file
-    let temp_dir = TempDir::new().unwrap();
-    let test_file = temp_dir.path().join("empty_file.txt");
-    fs::write(&test_file, "").unwrap();
+    let (_temp_dir, test_file) = create_test_file("empty_file.txt", "");
 
-    let mut arguments = serde_json::Map::new();
-    arguments.insert("path".to_string(), json!(test_file.to_string_lossy()));
+    let arguments = read_args(&test_file.to_string_lossy());
 
     let result = tool.execute(arguments, &context).await;
     assert!(result.is_ok(), "Reading empty file should succeed");
 
     let call_result = result.unwrap();
-    let response_text = if let Some(content_item) = call_result.content.first() {
-        match &content_item.raw {
-            rmcp::model::RawContent::Text(text_content) => &text_content.text,
-            _ => panic!("Expected text content"),
-        }
-    } else {
-        panic!("Response should contain content");
-    };
+    let response_text = extract_response_text(&call_result);
 
     assert_eq!(response_text, "");
 }
@@ -513,26 +633,16 @@ async fn test_read_tool_single_line_file() {
     let context = create_test_context().await;
     let tool = registry.get_tool("files_read").unwrap();
 
-    let temp_dir = TempDir::new().unwrap();
-    let test_file = temp_dir.path().join("single_line.txt");
     let test_content = "Single line without newline";
-    fs::write(&test_file, test_content).unwrap();
+    let (_temp_dir, test_file) = create_test_file("single_line.txt", test_content);
 
-    let mut arguments = serde_json::Map::new();
-    arguments.insert("path".to_string(), json!(test_file.to_string_lossy()));
+    let arguments = read_args(&test_file.to_string_lossy());
 
     let result = tool.execute(arguments, &context).await;
     assert!(result.is_ok());
 
     let call_result = result.unwrap();
-    let response_text = if let Some(content_item) = call_result.content.first() {
-        match &content_item.raw {
-            rmcp::model::RawContent::Text(text_content) => &text_content.text,
-            _ => panic!("Expected text content"),
-        }
-    } else {
-        panic!("Response should contain content");
-    };
+    let response_text = extract_response_text(&call_result);
 
     assert_eq!(response_text, test_content);
 }
@@ -543,26 +653,16 @@ async fn test_read_tool_with_unicode_content() {
     let context = create_test_context().await;
     let tool = registry.get_tool("files_read").unwrap();
 
-    let temp_dir = TempDir::new().unwrap();
-    let test_file = temp_dir.path().join("unicode_file.txt");
     let test_content = "Hello 🌍\n世界\nПривет мир\n";
-    fs::write(&test_file, test_content).unwrap();
+    let (_temp_dir, test_file) = create_test_file("unicode_file.txt", test_content);
 
-    let mut arguments = serde_json::Map::new();
-    arguments.insert("path".to_string(), json!(test_file.to_string_lossy()));
+    let arguments = read_args(&test_file.to_string_lossy());
 
     let result = tool.execute(arguments, &context).await;
     assert!(result.is_ok(), "Reading unicode file should succeed");
 
     let call_result = result.unwrap();
-    let response_text = if let Some(content_item) = call_result.content.first() {
-        match &content_item.raw {
-            rmcp::model::RawContent::Text(text_content) => &text_content.text,
-            _ => panic!("Expected text content"),
-        }
-    } else {
-        panic!("Response should contain content");
-    };
+    let response_text = extract_response_text(&call_result);
 
     assert_eq!(response_text, test_content);
 }
@@ -574,8 +674,7 @@ async fn test_read_tool_parameter_validation_errors() {
     let tool = registry.get_tool("files_read").unwrap();
 
     // Test invalid offset (too large)
-    let mut arguments = serde_json::Map::new();
-    arguments.insert("path".to_string(), json!("/tmp/test.txt"));
+    let mut arguments = read_args("/tmp/test.txt");
     arguments.insert("offset".to_string(), json!(2_000_000)); // Too large
 
     let result = tool.execute(arguments, &context).await;
@@ -586,8 +685,7 @@ async fn test_read_tool_parameter_validation_errors() {
     }
 
     // Test invalid limit (zero)
-    let mut arguments = serde_json::Map::new();
-    arguments.insert("path".to_string(), json!("/tmp/test.txt"));
+    let mut arguments = read_args("/tmp/test.txt");
     arguments.insert("limit".to_string(), json!(0)); // Zero limit
 
     let result = tool.execute(arguments, &context).await;
@@ -598,8 +696,7 @@ async fn test_read_tool_parameter_validation_errors() {
     }
 
     // Test invalid limit (too large)
-    let mut arguments = serde_json::Map::new();
-    arguments.insert("path".to_string(), json!("/tmp/test.txt"));
+    let mut arguments = read_args("/tmp/test.txt");
     arguments.insert("limit".to_string(), json!(200_000)); // Too large
 
     let result = tool.execute(arguments, &context).await;
@@ -610,8 +707,7 @@ async fn test_read_tool_parameter_validation_errors() {
     }
 
     // Test empty path
-    let mut arguments = serde_json::Map::new();
-    arguments.insert("path".to_string(), json!(""));
+    let arguments = read_args("");
 
     let result = tool.execute(arguments, &context).await;
     assert!(result.is_err(), "Should reject empty path");
@@ -628,11 +724,7 @@ async fn test_read_tool_file_not_found_error() {
     let tool = registry.get_tool("files_read").unwrap();
 
     // Test non-existent file
-    let mut arguments = serde_json::Map::new();
-    arguments.insert(
-        "path".to_string(),
-        json!("/tmp/definitely_does_not_exist_12345.txt"),
-    );
+    let arguments = read_args("/tmp/definitely_does_not_exist_12345.txt");
 
     let result = tool.execute(arguments, &context).await;
     assert!(result.is_err(), "Should fail for non-existent file");
@@ -645,9 +737,7 @@ async fn test_read_tool_permission_denied_scenarios() {
     let tool = registry.get_tool("files_read").unwrap();
 
     // Test unreadable file (if we can create one)
-    let temp_dir = TempDir::new().unwrap();
-    let test_file = temp_dir.path().join("unreadable.txt");
-    fs::write(&test_file, "secret content").unwrap();
+    let (_temp_dir, test_file) = create_test_file("unreadable.txt", "secret content");
 
     // Try to make it unreadable (may not work on all systems)
     #[cfg(unix)]
@@ -658,8 +748,7 @@ async fn test_read_tool_permission_denied_scenarios() {
         let _ = fs::set_permissions(&test_file, perms);
     }
 
-    let mut arguments = serde_json::Map::new();
-    arguments.insert("path".to_string(), json!(test_file.to_string_lossy()));
+    let arguments = read_args(&test_file.to_string_lossy());
 
     let result = tool.execute(arguments, &context).await;
     // Note: This test may pass on systems where we can't actually restrict permissions
@@ -686,8 +775,7 @@ async fn test_read_tool_large_file_handling() {
     fs::write(&test_file, &large_content).unwrap();
 
     // Test reading with limit to avoid reading the entire large file
-    let mut arguments = serde_json::Map::new();
-    arguments.insert("path".to_string(), json!(test_file.to_string_lossy()));
+    let mut arguments = read_args(&test_file.to_string_lossy());
     arguments.insert("limit".to_string(), json!(100)); // Read only 100 lines
 
     let start_time = std::time::Instant::now();
@@ -705,14 +793,7 @@ async fn test_read_tool_large_file_handling() {
     );
 
     let call_result = result.unwrap();
-    let response_text = if let Some(content_item) = call_result.content.first() {
-        match &content_item.raw {
-            rmcp::model::RawContent::Text(text_content) => &text_content.text,
-            _ => panic!("Expected text content"),
-        }
-    } else {
-        panic!("Response should contain content");
-    };
+    let response_text = extract_response_text(&call_result);
 
     // Should contain exactly 100 lines worth of content
     let line_count = response_text.lines().count();
@@ -730,8 +811,7 @@ async fn test_read_tool_edge_cases() {
     let empty_file = temp_dir.path().join("empty.txt");
     fs::write(&empty_file, "").unwrap();
 
-    let mut arguments = serde_json::Map::new();
-    arguments.insert("path".to_string(), json!(empty_file.to_string_lossy()));
+    let arguments = read_args(&empty_file.to_string_lossy());
 
     let result = tool.execute(arguments, &context).await;
     assert!(result.is_ok(), "Empty file read should succeed");
@@ -740,8 +820,7 @@ async fn test_read_tool_edge_cases() {
     let whitespace_file = temp_dir.path().join("whitespace.txt");
     fs::write(&whitespace_file, "   \n\t\n   \n").unwrap();
 
-    let mut arguments = serde_json::Map::new();
-    arguments.insert("path".to_string(), json!(whitespace_file.to_string_lossy()));
+    let arguments = read_args(&whitespace_file.to_string_lossy());
 
     let result = tool.execute(arguments, &context).await;
     assert!(result.is_ok(), "Whitespace file read should succeed");
@@ -750,11 +829,7 @@ async fn test_read_tool_edge_cases() {
     let mixed_endings_file = temp_dir.path().join("mixed_endings.txt");
     fs::write(&mixed_endings_file, "Line 1\nLine 2\r\nLine 3\rLine 4").unwrap();
 
-    let mut arguments = serde_json::Map::new();
-    arguments.insert(
-        "path".to_string(),
-        json!(mixed_endings_file.to_string_lossy()),
-    );
+    let arguments = read_args(&mixed_endings_file.to_string_lossy());
 
     let result = tool.execute(arguments, &context).await;
     assert!(
@@ -770,30 +845,13 @@ async fn test_read_tool_edge_cases() {
 #[tokio::test]
 async fn test_glob_tool_discovery_and_registration() {
     let registry = create_test_registry();
-
-    // Verify the glob tool is registered and discoverable
-    assert!(registry.get_tool("files_glob").is_some());
-
-    let tool_names = registry.list_tool_names();
-    assert!(tool_names.contains(&"files_glob".to_string()));
-
-    // Verify tool metadata is accessible
-    let tool = registry.get_tool("files_glob").unwrap();
-    assert_eq!(tool.name(), "files_glob");
-    assert!(!tool.description().is_empty());
-    assert!(tool.description().contains("pattern matching"));
-
-    // Verify schema structure
-    let schema = tool.schema();
-    assert!(schema.is_object());
-    let properties = schema["properties"].as_object().unwrap();
-    assert!(properties.contains_key("pattern"));
-    assert!(properties.contains_key("path"));
-    assert!(properties.contains_key("case_sensitive"));
-    assert!(properties.contains_key("respect_git_ignore"));
-
-    let required = schema["required"].as_array().unwrap();
-    assert!(required.contains(&serde_json::Value::String("pattern".to_string())));
+    verify_tool_registration(
+        &registry,
+        "files_glob",
+        &["pattern"],
+        &["pattern"],
+        &["path", "case_sensitive", "respect_git_ignore"],
+    );
 }
 
 #[tokio::test]
@@ -821,8 +879,7 @@ async fn test_glob_tool_basic_pattern_matching() {
     }
 
     // Test basic glob pattern
-    let mut arguments = serde_json::Map::new();
-    arguments.insert("pattern".to_string(), json!("*.txt"));
+    let mut arguments = glob_args("*.txt");
     arguments.insert("path".to_string(), json!(temp_dir.path().to_string_lossy()));
 
     let result = tool.execute(arguments, &context).await;
@@ -832,14 +889,7 @@ async fn test_glob_tool_basic_pattern_matching() {
     assert_eq!(call_result.is_error, Some(false));
 
     // Extract response text
-    let response_text = if let Some(content_item) = call_result.content.first() {
-        match &content_item.raw {
-            rmcp::model::RawContent::Text(text_content) => &text_content.text,
-            _ => panic!("Expected text content"),
-        }
-    } else {
-        panic!("Response should contain content");
-    };
+    let response_text = extract_response_text(&call_result);
 
     assert!(response_text.contains("test1.txt"));
     assert!(!response_text.contains("test2.js"));
@@ -853,13 +903,8 @@ async fn test_glob_tool_advanced_gitignore_integration() {
     let context = create_test_context().await;
     let tool = registry.get_tool("files_glob").unwrap();
 
-    // Create test directory with .gitignore
-    let temp_dir = TempDir::new().unwrap();
-
-    // Initialize a git repository (required for ignore crate to work properly)
-    use git2::Repository;
-
-    Repository::init(temp_dir.path()).expect("Failed to initialize git repo");
+    // Create test directory with .gitignore and git repo
+    let temp_dir = create_test_dir_with_git();
 
     // Write .gitignore file
     let gitignore_content = "*.log\n/build/\ntemp_*\n!important.log\n";
@@ -883,8 +928,7 @@ async fn test_glob_tool_advanced_gitignore_integration() {
     }
 
     // Test with advanced gitignore
-    let mut arguments = serde_json::Map::new();
-    arguments.insert("pattern".to_string(), json!("**/*"));
+    let mut arguments = glob_args("**/*");
     arguments.insert("path".to_string(), json!(temp_dir.path().to_string_lossy()));
     arguments.insert("respect_git_ignore".to_string(), json!(true));
 
@@ -892,14 +936,7 @@ async fn test_glob_tool_advanced_gitignore_integration() {
     assert!(result.is_ok(), "Advanced gitignore should succeed");
 
     let call_result = result.unwrap();
-    let response_text = if let Some(content_item) = call_result.content.first() {
-        match &content_item.raw {
-            rmcp::model::RawContent::Text(text_content) => &text_content.text,
-            _ => panic!("Expected text content"),
-        }
-    } else {
-        panic!("Response should contain content");
-    };
+    let response_text = extract_response_text(&call_result);
 
     // Should find files not ignored by .gitignore
     assert!(response_text.contains("main.rs"));
@@ -919,23 +956,20 @@ async fn test_glob_tool_pattern_validation() {
     let tool = registry.get_tool("files_glob").unwrap();
 
     // Test empty pattern
-    let mut arguments = serde_json::Map::new();
-    arguments.insert("pattern".to_string(), json!(""));
+    let arguments = glob_args("");
 
     let result = tool.execute(arguments, &context).await;
     assert!(result.is_err(), "Empty pattern should fail");
 
     // Test overly long pattern
     let long_pattern = "a".repeat(1001);
-    let mut arguments = serde_json::Map::new();
-    arguments.insert("pattern".to_string(), json!(long_pattern));
+    let arguments = glob_args(&long_pattern);
 
     let result = tool.execute(arguments, &context).await;
     assert!(result.is_err(), "Overly long pattern should fail");
 
     // Test invalid glob pattern
-    let mut arguments = serde_json::Map::new();
-    arguments.insert("pattern".to_string(), json!("[invalid[pattern"));
+    let arguments = glob_args("[invalid[pattern");
 
     let result = tool.execute(arguments, &context).await;
     assert!(result.is_err(), "Invalid glob pattern should fail");
@@ -948,11 +982,7 @@ async fn test_glob_tool_case_sensitivity() {
     let tool = registry.get_tool("files_glob").unwrap();
 
     // Create test files with mixed case
-    let temp_dir = TempDir::new().unwrap();
-
-    // Initialize git repo for ignore crate to work properly
-    use git2::Repository;
-    Repository::init(temp_dir.path()).expect("Failed to initialize git repo");
+    let temp_dir = create_test_dir_with_git();
 
     // Use different filenames to avoid filesystem case issues
     let test_files = vec!["Test.TXT", "other.txt", "README.md", "readme.MD"];
@@ -963,8 +993,7 @@ async fn test_glob_tool_case_sensitivity() {
     }
 
     // Test case insensitive (default) - use basic glob to avoid filesystem case issues
-    let mut arguments = serde_json::Map::new();
-    arguments.insert("pattern".to_string(), json!("*.txt"));
+    let mut arguments = glob_args("*.txt");
     arguments.insert("path".to_string(), json!(temp_dir.path().to_string_lossy()));
     arguments.insert("respect_git_ignore".to_string(), json!(false)); // Use fallback glob
 
@@ -972,22 +1001,14 @@ async fn test_glob_tool_case_sensitivity() {
     assert!(result.is_ok());
 
     let call_result = result.unwrap();
-    let response_text = if let Some(content_item) = call_result.content.first() {
-        match &content_item.raw {
-            rmcp::model::RawContent::Text(text_content) => &text_content.text,
-            _ => panic!("Expected text content"),
-        }
-    } else {
-        panic!("Response should contain content");
-    };
+    let response_text = extract_response_text(&call_result);
 
     // Should find both .TXT and .txt with case insensitive
     assert!(response_text.contains("Test.TXT"));
     assert!(response_text.contains("other.txt"));
 
     // Test case sensitive
-    let mut arguments = serde_json::Map::new();
-    arguments.insert("pattern".to_string(), json!("*.txt"));
+    let mut arguments = glob_args("*.txt");
     arguments.insert("path".to_string(), json!(temp_dir.path().to_string_lossy()));
     arguments.insert("case_sensitive".to_string(), json!(true));
     arguments.insert("respect_git_ignore".to_string(), json!(false)); // Use fallback glob
@@ -996,14 +1017,7 @@ async fn test_glob_tool_case_sensitivity() {
     assert!(result.is_ok());
 
     let call_result = result.unwrap();
-    let response_text = if let Some(content_item) = call_result.content.first() {
-        match &content_item.raw {
-            rmcp::model::RawContent::Text(text_content) => &text_content.text,
-            _ => panic!("Expected text content"),
-        }
-    } else {
-        panic!("Response should contain content");
-    };
+    let response_text = extract_response_text(&call_result);
 
     // Should only find .txt files, not .TXT
     assert!(!response_text.contains("Test.TXT"));
@@ -1017,11 +1031,7 @@ async fn test_glob_tool_modification_time_sorting() {
     let tool = registry.get_tool("files_glob").unwrap();
 
     // Create test files with different modification times
-    let temp_dir = TempDir::new().unwrap();
-
-    // Initialize git repo for ignore crate to work properly
-    use git2::Repository;
-    Repository::init(temp_dir.path()).expect("Failed to initialize git repo");
+    let temp_dir = create_test_dir_with_git();
 
     let file1 = temp_dir.path().join("old_file.txt");
     fs::write(&file1, "Old content").unwrap();
@@ -1033,22 +1043,14 @@ async fn test_glob_tool_modification_time_sorting() {
     fs::write(&file2, "New content").unwrap();
 
     // Test that files are sorted by modification time (recent first)
-    let mut arguments = serde_json::Map::new();
-    arguments.insert("pattern".to_string(), json!("*.txt"));
+    let mut arguments = glob_args("*.txt");
     arguments.insert("path".to_string(), json!(temp_dir.path().to_string_lossy()));
 
     let result = tool.execute(arguments, &context).await;
     assert!(result.is_ok());
 
     let call_result = result.unwrap();
-    let response_text = if let Some(content_item) = call_result.content.first() {
-        match &content_item.raw {
-            rmcp::model::RawContent::Text(text_content) => &text_content.text,
-            _ => panic!("Expected text content"),
-        }
-    } else {
-        panic!("Response should contain content");
-    };
+    let response_text = extract_response_text(&call_result);
 
     // Parse the response to check order - filter out only file paths, not header lines
     let lines: Vec<&str> = response_text
@@ -1077,31 +1079,19 @@ async fn test_glob_tool_no_matches() {
     let tool = registry.get_tool("files_glob").unwrap();
 
     // Create test directory with no matching files
-    let temp_dir = TempDir::new().unwrap();
-
-    // Initialize git repo for ignore crate to work properly
-    use git2::Repository;
-    Repository::init(temp_dir.path()).expect("Failed to initialize git repo");
+    let temp_dir = create_test_dir_with_git();
 
     fs::write(temp_dir.path().join("test.txt"), "content").unwrap();
 
     // Search for pattern that won't match
-    let mut arguments = serde_json::Map::new();
-    arguments.insert("pattern".to_string(), json!("*.nonexistent"));
+    let mut arguments = glob_args("*.nonexistent");
     arguments.insert("path".to_string(), json!(temp_dir.path().to_string_lossy()));
 
     let result = tool.execute(arguments, &context).await;
     assert!(result.is_ok(), "No matches should still succeed");
 
     let call_result = result.unwrap();
-    let response_text = if let Some(content_item) = call_result.content.first() {
-        match &content_item.raw {
-            rmcp::model::RawContent::Text(text_content) => &text_content.text,
-            _ => panic!("Expected text content"),
-        }
-    } else {
-        panic!("Response should contain content");
-    };
+    let response_text = extract_response_text(&call_result);
 
     assert!(response_text.contains("No files found matching pattern"));
 }
@@ -1132,22 +1122,14 @@ async fn test_glob_tool_recursive_patterns() {
     }
 
     // Test recursive Rust file search
-    let mut arguments = serde_json::Map::new();
-    arguments.insert("pattern".to_string(), json!("**/*.rs"));
+    let mut arguments = glob_args("**/*.rs");
     arguments.insert("path".to_string(), json!(temp_dir.path().to_string_lossy()));
 
     let result = tool.execute(arguments, &context).await;
     assert!(result.is_ok());
 
     let call_result = result.unwrap();
-    let response_text = if let Some(content_item) = call_result.content.first() {
-        match &content_item.raw {
-            rmcp::model::RawContent::Text(text_content) => &text_content.text,
-            _ => panic!("Expected text content"),
-        }
-    } else {
-        panic!("Response should contain content");
-    };
+    let response_text = extract_response_text(&call_result);
 
     // Should find all Rust files
     assert!(response_text.contains("root.rs"));
@@ -1167,33 +1149,20 @@ async fn test_glob_tool_recursive_patterns() {
 #[tokio::test]
 async fn test_grep_tool_discovery_and_registration() {
     let registry = create_test_registry();
-
-    // Verify the grep tool is registered and discoverable
-    assert!(registry.get_tool("files_grep").is_some());
-
-    let tool_names = registry.list_tool_names();
-    assert!(tool_names.contains(&"files_grep".to_string()));
-
-    // Verify tool metadata is accessible
-    let tool = registry.get_tool("files_grep").unwrap();
-    assert_eq!(tool.name(), "files_grep");
-    assert!(!tool.description().is_empty());
-    assert!(tool.description().contains("search") || tool.description().contains("grep"));
-
-    // Verify schema structure
-    let schema = tool.schema();
-    assert!(schema.is_object());
-    let properties = schema["properties"].as_object().unwrap();
-    assert!(properties.contains_key("pattern"));
-    assert!(properties.contains_key("path"));
-    assert!(properties.contains_key("glob"));
-    assert!(properties.contains_key("type"));
-    assert!(properties.contains_key("case_insensitive"));
-    assert!(properties.contains_key("context_lines"));
-    assert!(properties.contains_key("output_mode"));
-
-    let required = schema["required"].as_array().unwrap();
-    assert!(required.contains(&serde_json::Value::String("pattern".to_string())));
+    verify_tool_registration(
+        &registry,
+        "files_grep",
+        &["search", "grep"],
+        &["pattern"],
+        &[
+            "path",
+            "glob",
+            "type",
+            "case_insensitive",
+            "context_lines",
+            "output_mode",
+        ],
+    );
 }
 
 #[tokio::test]
@@ -1221,8 +1190,7 @@ async fn test_grep_tool_basic_pattern_matching() {
     }
 
     // Test basic search for "function"
-    let mut arguments = serde_json::Map::new();
-    arguments.insert("pattern".to_string(), json!("function"));
+    let mut arguments = glob_args("function");
     arguments.insert("path".to_string(), json!(temp_dir.path().to_string_lossy()));
 
     let result = tool.execute(arguments, &context).await;
@@ -1232,14 +1200,7 @@ async fn test_grep_tool_basic_pattern_matching() {
     assert_eq!(call_result.is_error, Some(false));
 
     // Extract response text
-    let response_text = if let Some(content_item) = call_result.content.first() {
-        match &content_item.raw {
-            rmcp::model::RawContent::Text(text_content) => &text_content.text,
-            _ => panic!("Expected text content"),
-        }
-    } else {
-        panic!("Response should contain content");
-    };
+    let response_text = extract_response_text(&call_result);
 
     // Should find "functions" in README.md and "Helper function" in lib.rs
     assert!(response_text.contains("functions") || response_text.contains("Helper function"));
@@ -1269,8 +1230,7 @@ async fn test_grep_tool_file_type_filtering() {
     }
 
     // Test filtering by Rust files only
-    let mut arguments = serde_json::Map::new();
-    arguments.insert("pattern".to_string(), json!("test"));
+    let mut arguments = glob_args("test");
     arguments.insert("path".to_string(), json!(temp_dir.path().to_string_lossy()));
     arguments.insert("type".to_string(), json!("rust"));
 
@@ -1282,14 +1242,7 @@ async fn test_grep_tool_file_type_filtering() {
     );
 
     let call_result = result.unwrap();
-    let response_text = if let Some(content_item) = call_result.content.first() {
-        match &content_item.raw {
-            rmcp::model::RawContent::Text(text_content) => &text_content.text,
-            _ => panic!("Expected text content"),
-        }
-    } else {
-        panic!("Response should contain content");
-    };
+    let response_text = extract_response_text(&call_result);
 
     // Should only find matches in Rust files
     assert!(response_text.contains("main.rs") || response_text.contains("1 matches"));
@@ -1323,8 +1276,7 @@ async fn test_grep_tool_glob_filtering() {
     }
 
     // Test filtering by glob pattern - use a simpler glob that should work
-    let mut arguments = serde_json::Map::new();
-    arguments.insert("pattern".to_string(), json!("VERSION"));
+    let mut arguments = glob_args("VERSION");
     arguments.insert("path".to_string(), json!(temp_dir.path().to_string_lossy()));
     arguments.insert("glob".to_string(), json!("*.rs")); // Simplified glob pattern
 
@@ -1336,14 +1288,7 @@ async fn test_grep_tool_glob_filtering() {
     );
 
     let call_result = result.unwrap();
-    let response_text = if let Some(content_item) = call_result.content.first() {
-        match &content_item.raw {
-            rmcp::model::RawContent::Text(text_content) => &text_content.text,
-            _ => panic!("Expected text content"),
-        }
-    } else {
-        panic!("Response should contain content");
-    };
+    let response_text = extract_response_text(&call_result);
 
     // Should find VERSION in Rust files (basic glob test)
     println!("Glob filtering response: {}", response_text);
@@ -1370,8 +1315,7 @@ async fn test_grep_tool_case_sensitivity() {
     fs::write(&test_file, content).unwrap();
 
     // Test case sensitive search
-    let mut arguments = serde_json::Map::new();
-    arguments.insert("pattern".to_string(), json!("Hello"));
+    let mut arguments = glob_args("Hello");
     arguments.insert("path".to_string(), json!(temp_dir.path().to_string_lossy()));
     arguments.insert("case_insensitive".to_string(), json!(false));
 
@@ -1379,21 +1323,13 @@ async fn test_grep_tool_case_sensitivity() {
     assert!(result.is_ok(), "Case sensitive search should succeed");
 
     let call_result = result.unwrap();
-    let response_text = if let Some(content_item) = call_result.content.first() {
-        match &content_item.raw {
-            rmcp::model::RawContent::Text(text_content) => &text_content.text,
-            _ => panic!("Expected text content"),
-        }
-    } else {
-        panic!("Response should contain content");
-    };
+    let response_text = extract_response_text(&call_result);
 
     // Should only match exact case
     assert!(response_text.contains("1 matches") || response_text.contains("Hello World"));
 
     // Test case insensitive search
-    let mut arguments = serde_json::Map::new();
-    arguments.insert("pattern".to_string(), json!("hello"));
+    let mut arguments = glob_args("hello");
     arguments.insert("path".to_string(), json!(temp_dir.path().to_string_lossy()));
     arguments.insert("case_insensitive".to_string(), json!(true));
 
@@ -1401,14 +1337,7 @@ async fn test_grep_tool_case_sensitivity() {
     assert!(result.is_ok(), "Case insensitive search should succeed");
 
     let call_result = result.unwrap();
-    let response_text = if let Some(content_item) = call_result.content.first() {
-        match &content_item.raw {
-            rmcp::model::RawContent::Text(text_content) => &text_content.text,
-            _ => panic!("Expected text content"),
-        }
-    } else {
-        panic!("Response should contain content");
-    };
+    let response_text = extract_response_text(&call_result);
 
     // Should match all case variations
     assert!(response_text.contains("3 matches") || response_text.contains("Hello World"));
@@ -1427,8 +1356,7 @@ async fn test_grep_tool_context_lines() {
     fs::write(&test_file, content).unwrap();
 
     // Test with context lines
-    let mut arguments = serde_json::Map::new();
-    arguments.insert("pattern".to_string(), json!("MATCH"));
+    let mut arguments = glob_args("MATCH");
     arguments.insert("path".to_string(), json!(temp_dir.path().to_string_lossy()));
     arguments.insert("context_lines".to_string(), json!(1));
     arguments.insert("output_mode".to_string(), json!("content"));
@@ -1437,14 +1365,7 @@ async fn test_grep_tool_context_lines() {
     assert!(result.is_ok(), "Context lines search should succeed");
 
     let call_result = result.unwrap();
-    let response_text = if let Some(content_item) = call_result.content.first() {
-        match &content_item.raw {
-            rmcp::model::RawContent::Text(text_content) => &text_content.text,
-            _ => panic!("Expected text content"),
-        }
-    } else {
-        panic!("Response should contain content");
-    };
+    let response_text = extract_response_text(&call_result);
 
     // When using fallback, context may not be perfectly formatted but should include matches
     assert!(response_text.contains("MATCH") || response_text.contains("2 matches"));
@@ -1474,8 +1395,7 @@ async fn test_grep_tool_output_modes() {
     }
 
     // Test files_with_matches mode
-    let mut arguments = serde_json::Map::new();
-    arguments.insert("pattern".to_string(), json!("target"));
+    let mut arguments = glob_args("target");
     arguments.insert("path".to_string(), json!(temp_dir.path().to_string_lossy()));
     arguments.insert("output_mode".to_string(), json!("files_with_matches"));
     arguments.insert("case_insensitive".to_string(), json!(true));
@@ -1484,14 +1404,7 @@ async fn test_grep_tool_output_modes() {
     assert!(result.is_ok(), "files_with_matches mode should succeed");
 
     let call_result = result.unwrap();
-    let response_text = if let Some(content_item) = call_result.content.first() {
-        match &content_item.raw {
-            rmcp::model::RawContent::Text(text_content) => &text_content.text,
-            _ => panic!("Expected text content"),
-        }
-    } else {
-        panic!("Response should contain content");
-    };
+    let response_text = extract_response_text(&call_result);
 
     // Should show files with matches (not individual line matches)
     assert!(
@@ -1502,8 +1415,7 @@ async fn test_grep_tool_output_modes() {
     );
 
     // Test count mode
-    let mut arguments = serde_json::Map::new();
-    arguments.insert("pattern".to_string(), json!("target"));
+    let mut arguments = glob_args("target");
     arguments.insert("path".to_string(), json!(temp_dir.path().to_string_lossy()));
     arguments.insert("output_mode".to_string(), json!("count"));
     arguments.insert("case_insensitive".to_string(), json!(true));
@@ -1512,14 +1424,7 @@ async fn test_grep_tool_output_modes() {
     assert!(result.is_ok(), "count mode should succeed");
 
     let call_result = result.unwrap();
-    let response_text = if let Some(content_item) = call_result.content.first() {
-        match &content_item.raw {
-            rmcp::model::RawContent::Text(text_content) => &text_content.text,
-            _ => panic!("Expected text content"),
-        }
-    } else {
-        panic!("Response should contain content");
-    };
+    let response_text = extract_response_text(&call_result);
 
     // Should show match count
     assert!(response_text.contains("matches"));
@@ -1539,8 +1444,7 @@ async fn test_grep_tool_error_handling() {
 
     // Test invalid regex pattern
     let temp_dir = TempDir::new().unwrap();
-    let mut arguments = serde_json::Map::new();
-    arguments.insert("pattern".to_string(), json!("[invalid"));
+    let mut arguments = glob_args("[invalid");
     arguments.insert("path".to_string(), json!(temp_dir.path().to_string_lossy()));
 
     let result = tool.execute(arguments, &context).await;
@@ -1559,8 +1463,7 @@ async fn test_grep_tool_error_handling() {
     );
 
     // Test non-existent directory
-    let mut arguments = serde_json::Map::new();
-    arguments.insert("pattern".to_string(), json!("test"));
+    let mut arguments = glob_args("test");
     arguments.insert("path".to_string(), json!("/non/existent/directory"));
 
     let result = tool.execute(arguments, &context).await;
@@ -1571,8 +1474,7 @@ async fn test_grep_tool_error_handling() {
     assert!(error_msg.contains("does not exist") || error_msg.contains("not found"));
 
     // Test invalid output mode
-    let mut arguments = serde_json::Map::new();
-    arguments.insert("pattern".to_string(), json!("test"));
+    let mut arguments = glob_args("test");
     arguments.insert("output_mode".to_string(), json!("invalid_mode"));
 
     let result = tool.execute(arguments, &context).await;
@@ -1602,22 +1504,14 @@ async fn test_grep_tool_binary_file_exclusion() {
     fs::write(&binary_file, binary_content).unwrap();
 
     // Test search - should find text file but skip binary
-    let mut arguments = serde_json::Map::new();
-    arguments.insert("pattern".to_string(), json!("searchable"));
+    let mut arguments = glob_args("searchable");
     arguments.insert("path".to_string(), json!(temp_dir.path().to_string_lossy()));
 
     let result = tool.execute(arguments, &context).await;
     assert!(result.is_ok(), "Binary exclusion search should succeed");
 
     let call_result = result.unwrap();
-    let response_text = if let Some(content_item) = call_result.content.first() {
-        match &content_item.raw {
-            rmcp::model::RawContent::Text(text_content) => &text_content.text,
-            _ => panic!("Expected text content"),
-        }
-    } else {
-        panic!("Response should contain content");
-    };
+    let response_text = extract_response_text(&call_result);
 
     // Should find text file content
     assert!(response_text.contains("searchable") || response_text.contains("1 matches"));
@@ -1632,13 +1526,10 @@ async fn test_grep_tool_no_matches() {
     let tool = registry.get_tool("files_grep").unwrap();
 
     // Create test file without target pattern
-    let temp_dir = TempDir::new().unwrap();
-    let test_file = temp_dir.path().join("test.txt");
-    fs::write(&test_file, "This file has no target content").unwrap();
+    let (temp_dir, _test_file) = create_test_file("test.txt", "This file has no target content");
 
     // Search for non-existent pattern
-    let mut arguments = serde_json::Map::new();
-    arguments.insert("pattern".to_string(), json!("nonexistent_pattern_12345"));
+    let mut arguments = grep_args("nonexistent_pattern_12345");
     arguments.insert("path".to_string(), json!(temp_dir.path().to_string_lossy()));
 
     let result = tool.execute(arguments, &context).await;
@@ -1647,14 +1538,7 @@ async fn test_grep_tool_no_matches() {
     let call_result = result.unwrap();
     assert_eq!(call_result.is_error, Some(false));
 
-    let response_text = if let Some(content_item) = call_result.content.first() {
-        match &content_item.raw {
-            rmcp::model::RawContent::Text(text_content) => &text_content.text,
-            _ => panic!("Expected text content"),
-        }
-    } else {
-        panic!("Response should contain content");
-    };
+    let response_text = extract_response_text(&call_result);
 
     // Should indicate no matches found
     assert!(response_text.contains("No matches found") || response_text.contains("0 matches"));
@@ -1667,27 +1551,17 @@ async fn test_grep_tool_ripgrep_fallback_behavior() {
     let tool = registry.get_tool("files_grep").unwrap();
 
     // Create test file
-    let temp_dir = TempDir::new().unwrap();
-    let test_file = temp_dir.path().join("test.txt");
-    fs::write(&test_file, "Test content for engine detection").unwrap();
+    let (temp_dir, _test_file) = create_test_file("test.txt", "Test content for engine detection");
 
     // Test basic search to see which engine is used
-    let mut arguments = serde_json::Map::new();
-    arguments.insert("pattern".to_string(), json!("content"));
+    let mut arguments = grep_args("content");
     arguments.insert("path".to_string(), json!(temp_dir.path().to_string_lossy()));
 
     let result = tool.execute(arguments, &context).await;
     assert!(result.is_ok(), "Engine detection test should succeed");
 
     let call_result = result.unwrap();
-    let response_text = if let Some(content_item) = call_result.content.first() {
-        match &content_item.raw {
-            rmcp::model::RawContent::Text(text_content) => &text_content.text,
-            _ => panic!("Expected text content"),
-        }
-    } else {
-        panic!("Response should contain content");
-    };
+    let response_text = extract_response_text(&call_result);
 
     // Should indicate which engine was used
     assert!(
@@ -1726,44 +1600,28 @@ async fn test_grep_tool_single_file_vs_directory() {
     }
 
     // Test searching entire directory
-    let mut arguments = serde_json::Map::new();
-    arguments.insert("pattern".to_string(), json!("target"));
+    let mut arguments = glob_args("target");
     arguments.insert("path".to_string(), json!(temp_dir.path().to_string_lossy()));
 
     let result = tool.execute(arguments, &context).await;
     assert!(result.is_ok(), "Directory search should succeed");
 
     let call_result = result.unwrap();
-    let response_text = if let Some(content_item) = call_result.content.first() {
-        match &content_item.raw {
-            rmcp::model::RawContent::Text(text_content) => &text_content.text,
-            _ => panic!("Expected text content"),
-        }
-    } else {
-        panic!("Response should contain content");
-    };
+    let response_text = extract_response_text(&call_result);
 
     // Should find matches in multiple files
     assert!(response_text.contains("2 matches") || response_text.contains("target"));
 
     // Test searching single file
     let single_file = temp_dir.path().join("target.txt");
-    let mut arguments = serde_json::Map::new();
-    arguments.insert("pattern".to_string(), json!("target"));
+    let mut arguments = glob_args("target");
     arguments.insert("path".to_string(), json!(single_file.to_string_lossy()));
 
     let result = tool.execute(arguments, &context).await;
     assert!(result.is_ok(), "Single file search should succeed");
 
     let call_result = result.unwrap();
-    let response_text = if let Some(content_item) = call_result.content.first() {
-        match &content_item.raw {
-            rmcp::model::RawContent::Text(text_content) => &text_content.text,
-            _ => panic!("Expected text content"),
-        }
-    } else {
-        panic!("Response should contain content");
-    };
+    let response_text = extract_response_text(&call_result);
 
     // Should find match in single file only
     assert!(response_text.contains("1 matches") || response_text.contains("target"));
@@ -1776,29 +1634,13 @@ async fn test_grep_tool_single_file_vs_directory() {
 #[tokio::test]
 async fn test_write_tool_discovery_and_registration() {
     let registry = create_test_registry();
-
-    // Verify the write tool is registered and discoverable
-    assert!(registry.get_tool("files_write").is_some());
-
-    let tool_names = registry.list_tool_names();
-    assert!(tool_names.contains(&"files_write".to_string()));
-
-    // Verify tool metadata is accessible
-    let tool = registry.get_tool("files_write").unwrap();
-    assert_eq!(tool.name(), "files_write");
-    assert!(!tool.description().is_empty());
-    assert!(tool.description().contains("file") || tool.description().contains("write"));
-
-    // Verify schema structure
-    let schema = tool.schema();
-    assert!(schema.is_object());
-    let properties = schema["properties"].as_object().unwrap();
-    assert!(properties.contains_key("file_path"));
-    assert!(properties.contains_key("content"));
-
-    let required = schema["required"].as_array().unwrap();
-    assert!(required.contains(&serde_json::Value::String("file_path".to_string())));
-    assert!(required.contains(&serde_json::Value::String("content".to_string())));
+    verify_tool_registration(
+        &registry,
+        "files_write",
+        &["file", "write"],
+        &["file_path", "content"],
+        &[],
+    );
 }
 
 #[tokio::test]
@@ -1952,17 +1794,13 @@ async fn test_write_tool_error_handling() {
     let tool = registry.get_tool("files_write").unwrap();
 
     // Test invalid file path (empty)
-    let mut arguments = serde_json::Map::new();
-    arguments.insert("file_path".to_string(), json!(""));
-    arguments.insert("content".to_string(), json!("test content"));
+    let arguments = write_args("", "test content");
 
     let result = tool.execute(arguments, &context).await;
     assert!(result.is_err(), "Empty file path should fail");
 
     // Test relative path (should be accepted but may fail due to parent directory)
-    let mut arguments = serde_json::Map::new();
-    arguments.insert("file_path".to_string(), json!("relative/path/file.txt"));
-    arguments.insert("content".to_string(), json!("test content"));
+    let arguments = write_args("relative/path/file.txt", "test content");
 
     let result = tool.execute(arguments, &context).await;
 
@@ -1995,32 +1833,13 @@ async fn test_write_tool_error_handling() {
 #[tokio::test]
 async fn test_edit_tool_discovery_and_registration() {
     let registry = create_test_registry();
-
-    // Verify the edit tool is registered and discoverable
-    assert!(registry.get_tool("files_edit").is_some());
-
-    let tool_names = registry.list_tool_names();
-    assert!(tool_names.contains(&"files_edit".to_string()));
-
-    // Verify tool metadata is accessible
-    let tool = registry.get_tool("files_edit").unwrap();
-    assert_eq!(tool.name(), "files_edit");
-    assert!(!tool.description().is_empty());
-    assert!(tool.description().contains("edit") || tool.description().contains("replace"));
-
-    // Verify schema structure
-    let schema = tool.schema();
-    assert!(schema.is_object());
-    let properties = schema["properties"].as_object().unwrap();
-    assert!(properties.contains_key("file_path"));
-    assert!(properties.contains_key("old_string"));
-    assert!(properties.contains_key("new_string"));
-    assert!(properties.contains_key("replace_all"));
-
-    let required = schema["required"].as_array().unwrap();
-    assert!(required.contains(&serde_json::Value::String("file_path".to_string())));
-    assert!(required.contains(&serde_json::Value::String("old_string".to_string())));
-    assert!(required.contains(&serde_json::Value::String("new_string".to_string())));
+    verify_tool_registration(
+        &registry,
+        "files_edit",
+        &["string", "replacement"],
+        &["file_path", "old_string", "new_string"],
+        &["replace_all"],
+    );
 }
 
 #[tokio::test]
@@ -2241,9 +2060,7 @@ async fn test_edit_tool_empty_parameters_error() {
     let context = create_test_context().await;
     let tool = registry.get_tool("files_edit").unwrap();
 
-    let temp_dir = TempDir::new().unwrap();
-    let test_file = temp_dir.path().join("test.txt");
-    fs::write(&test_file, "test content").unwrap();
+    let (_temp_dir, test_file) = create_test_file("test.txt", "test content");
 
     // Test empty old_string
     let mut arguments = serde_json::Map::new();
@@ -2296,15 +2113,7 @@ async fn test_write_then_read_workflow() {
     assert_eq!(read_call_result.is_error, Some(false));
 
     // Verify content matches
-    let response_text = if let Some(content_item) = read_call_result.content.first() {
-        match &content_item.raw {
-            rmcp::model::RawContent::Text(text_content) => &text_content.text,
-            _ => panic!("Expected text content"),
-        }
-    } else {
-        panic!("Response should contain content");
-    };
-
+    let response_text = extract_response_text(&read_call_result);
     assert_eq!(response_text, test_content);
 }
 
@@ -2320,18 +2129,13 @@ async fn test_write_then_edit_workflow() {
     let initial_content = "Original content that needs updating";
 
     // Step 1: Write initial file
-    let mut write_args = serde_json::Map::new();
-    write_args.insert("file_path".to_string(), json!(test_file.to_string_lossy()));
-    write_args.insert("content".to_string(), json!(initial_content));
+    let write_args = write_args(&test_file.to_string_lossy(), initial_content);
 
     let write_result = write_tool.execute(write_args, &context).await;
     assert!(write_result.is_ok(), "Write should succeed");
 
     // Step 2: Edit the file
-    let mut edit_args = serde_json::Map::new();
-    edit_args.insert("file_path".to_string(), json!(test_file.to_string_lossy()));
-    edit_args.insert("old_string".to_string(), json!("Original"));
-    edit_args.insert("new_string".to_string(), json!("Updated"));
+    let mut edit_args = edit_args(&test_file.to_string_lossy(), "Original", "Updated");
     edit_args.insert("replace_all".to_string(), json!(false));
 
     let edit_result = edit_tool.execute(edit_args, &context).await;
@@ -2358,30 +2162,19 @@ async fn test_read_then_edit_workflow() {
     fs::write(&test_file, initial_content).unwrap();
 
     // Step 1: Read the file to analyze content
-    let mut read_args = serde_json::Map::new();
-    read_args.insert("path".to_string(), json!(test_file.to_string_lossy()));
+    let read_args = read_args(&test_file.to_string_lossy());
 
     let read_result = read_tool.execute(read_args, &context).await;
     assert!(read_result.is_ok(), "Read should succeed");
 
     let read_call_result = read_result.unwrap();
-    let response_text = if let Some(content_item) = read_call_result.content.first() {
-        match &content_item.raw {
-            rmcp::model::RawContent::Text(text_content) => &text_content.text,
-            _ => panic!("Expected text content"),
-        }
-    } else {
-        panic!("Response should contain content");
-    };
+    let response_text = extract_response_text(&read_call_result);
 
     // Verify we can read the function name
     assert!(response_text.contains("calculate_sum"));
 
     // Step 2: Edit the function name based on what we read
-    let mut edit_args = serde_json::Map::new();
-    edit_args.insert("file_path".to_string(), json!(test_file.to_string_lossy()));
-    edit_args.insert("old_string".to_string(), json!("calculate_sum"));
-    edit_args.insert("new_string".to_string(), json!("add_numbers"));
+    let mut edit_args = edit_args(&test_file.to_string_lossy(), "calculate_sum", "add_numbers");
     edit_args.insert("replace_all".to_string(), json!(false));
 
     let edit_result = edit_tool.execute(edit_args, &context).await;
@@ -2403,11 +2196,7 @@ async fn test_glob_then_grep_workflow() {
     let grep_tool = registry.get_tool("files_grep").unwrap();
 
     // Create test directory structure with multiple files
-    let temp_dir = TempDir::new().unwrap();
-
-    // Initialize git repo for ignore crate to work properly
-    use git2::Repository;
-    Repository::init(temp_dir.path()).expect("Failed to initialize git repo");
+    let temp_dir = create_test_dir_with_git();
 
     let test_files = vec![
         ("src/main.rs", "fn main() {\n    println!(\"Hello, world!\");\n    let result = calculate();\n}"),
@@ -2425,8 +2214,7 @@ async fn test_glob_then_grep_workflow() {
     }
 
     // Step 1: Use glob to find all Rust files
-    let mut glob_args = serde_json::Map::new();
-    glob_args.insert("pattern".to_string(), json!("**/*.rs"));
+    let mut glob_args = glob_args("**/*.rs");
     glob_args.insert("path".to_string(), json!(temp_dir.path().to_string_lossy()));
 
     let glob_result = glob_tool.execute(glob_args, &context).await;
@@ -2435,14 +2223,7 @@ async fn test_glob_then_grep_workflow() {
     let glob_call_result = glob_result.unwrap();
     assert_eq!(glob_call_result.is_error, Some(false));
 
-    let glob_response = if let Some(content_item) = glob_call_result.content.first() {
-        match &content_item.raw {
-            rmcp::model::RawContent::Text(text_content) => &text_content.text,
-            _ => panic!("Expected text content"),
-        }
-    } else {
-        panic!("Response should contain content");
-    };
+    let glob_response = extract_response_text(&glob_call_result);
 
     // Verify glob found Rust files
     assert!(glob_response.contains("main.rs"));
@@ -2451,8 +2232,7 @@ async fn test_glob_then_grep_workflow() {
     assert!(!glob_response.contains("README.md")); // Should not find non-Rust files
 
     // Step 2: Use grep to search within the files found by glob
-    let mut grep_args = serde_json::Map::new();
-    grep_args.insert("pattern".to_string(), json!("calculate"));
+    let mut grep_args = grep_args("calculate");
     grep_args.insert("path".to_string(), json!(temp_dir.path().to_string_lossy()));
     grep_args.insert("glob".to_string(), json!("*.rs")); // Search within Rust files
 
@@ -2462,14 +2242,7 @@ async fn test_glob_then_grep_workflow() {
     let grep_call_result = grep_result.unwrap();
     assert_eq!(grep_call_result.is_error, Some(false));
 
-    let grep_response = if let Some(content_item) = grep_call_result.content.first() {
-        match &content_item.raw {
-            rmcp::model::RawContent::Text(text_content) => &text_content.text,
-            _ => panic!("Expected text content"),
-        }
-    } else {
-        panic!("Response should contain content");
-    };
+    let grep_response = extract_response_text(&grep_call_result);
 
     // Verify grep found "calculate" in Rust files
     assert!(grep_response.contains("calculate") || grep_response.contains("matches"));
@@ -2485,11 +2258,7 @@ async fn test_complex_file_workflow() {
     let edit_tool = registry.get_tool("files_edit").unwrap();
 
     // Create test project structure
-    let temp_dir = TempDir::new().unwrap();
-
-    // Initialize git repo
-    use git2::Repository;
-    Repository::init(temp_dir.path()).expect("Failed to initialize git repo");
+    let temp_dir = create_test_dir_with_git();
 
     let test_files = vec![
         (
@@ -2524,42 +2293,27 @@ async fn test_complex_file_workflow() {
 
     // Step 2: Read one of the config files
     let config_file = temp_dir.path().join("src/config.json");
-    let mut read_args = serde_json::Map::new();
-    read_args.insert("path".to_string(), json!(config_file.to_string_lossy()));
+    let initial_read_args = read_args(&config_file.to_string_lossy());
 
-    let read_result = read_tool.execute(read_args, &context).await;
+    let read_result = read_tool.execute(initial_read_args, &context).await;
     assert!(read_result.is_ok(), "Read should succeed");
 
     let read_call_result = read_result.unwrap();
-    let original_content = if let Some(content_item) = read_call_result.content.first() {
-        match &content_item.raw {
-            rmcp::model::RawContent::Text(text_content) => &text_content.text,
-            _ => panic!("Expected text content"),
-        }
-    } else {
-        panic!("Response should contain content");
-    };
+    let original_content = extract_response_text(&read_call_result);
 
     // Verify we can read the version
     assert!(original_content.contains("1.0.0"));
     assert!(original_content.contains("debug"));
 
     // Step 3: Update the version in the config file
-    let mut edit_args = serde_json::Map::new();
-    edit_args.insert(
-        "file_path".to_string(),
-        json!(config_file.to_string_lossy()),
-    );
-    edit_args.insert("old_string".to_string(), json!("1.0.0"));
-    edit_args.insert("new_string".to_string(), json!("1.1.0"));
+    let mut edit_args = edit_args(&config_file.to_string_lossy(), "1.0.0", "1.1.0");
     edit_args.insert("replace_all".to_string(), json!(false));
 
     let edit_result = edit_tool.execute(edit_args, &context).await;
     assert!(edit_result.is_ok(), "Edit should succeed");
 
     // Step 4: Read again to verify the change
-    let mut read_verify_args = serde_json::Map::new();
-    read_verify_args.insert("path".to_string(), json!(config_file.to_string_lossy()));
+    let read_verify_args = read_args(&config_file.to_string_lossy());
 
     let read_verify_result = read_tool.execute(read_verify_args, &context).await;
     assert!(
@@ -2568,14 +2322,7 @@ async fn test_complex_file_workflow() {
     );
 
     let verify_call_result = read_verify_result.unwrap();
-    let updated_content = if let Some(content_item) = verify_call_result.content.first() {
-        match &content_item.raw {
-            rmcp::model::RawContent::Text(text_content) => &text_content.text,
-            _ => panic!("Expected text content"),
-        }
-    } else {
-        panic!("Response should contain content");
-    };
+    let updated_content = extract_response_text(&verify_call_result);
 
     // Verify the version was updated
     assert!(updated_content.contains("1.1.0"));
@@ -2639,13 +2386,6 @@ async fn test_comprehensive_path_traversal_protection_all_tools() {
     let registry = create_test_registry();
     let context = create_test_context().await;
 
-    // Get all file tools
-    let read_tool = registry.get_tool("files_read").unwrap();
-    let write_tool = registry.get_tool("files_write").unwrap();
-    let edit_tool = registry.get_tool("files_edit").unwrap();
-    let glob_tool = registry.get_tool("files_glob").unwrap();
-    let grep_tool = registry.get_tool("files_grep").unwrap();
-
     // Define various path traversal attack vectors
     let dangerous_paths = vec![
         "/tmp/../../../etc/passwd",
@@ -2658,100 +2398,17 @@ async fn test_comprehensive_path_traversal_protection_all_tools() {
         "/tmp/../../../../../proc/version",
     ];
 
-    for dangerous_path in dangerous_paths {
-        // Test read tool
-        let mut read_args = serde_json::Map::new();
-        read_args.insert("path".to_string(), json!(dangerous_path));
+    // Test all file tools with dangerous paths
+    let tools = vec![
+        "files_read",
+        "files_write",
+        "files_edit",
+        "files_glob",
+        "files_grep",
+    ];
 
-        let read_result = read_tool.execute(read_args, &context).await;
-        // Should either fail due to validation or file not found
-        if let Err(error) = read_result {
-            let error_msg = format!("{:?}", error);
-            assert!(
-                error_msg.contains("blocked pattern")
-                    || error_msg.contains("not found")
-                    || error_msg.contains("absolute")
-                    || error_msg.contains("No such file"),
-                "Read tool should block or fail path traversal: {} (error: {})",
-                dangerous_path,
-                error_msg
-            );
-        }
-
-        // Test write tool
-        let mut write_args = serde_json::Map::new();
-        write_args.insert("file_path".to_string(), json!(dangerous_path));
-        write_args.insert("content".to_string(), json!("malicious content"));
-
-        let write_result = write_tool.execute(write_args, &context).await;
-        // Should fail due to path validation
-        assert!(
-            write_result.is_err(),
-            "Write tool should reject path traversal: {}",
-            dangerous_path
-        );
-
-        let write_error = format!("{:?}", write_result.unwrap_err());
-        assert!(
-            write_error.contains("absolute")
-                || write_error.contains("invalid")
-                || write_error.contains("dangerous")
-                || write_error.contains("traversal"),
-            "Write error should indicate path validation failure: {}",
-            write_error
-        );
-
-        // Test edit tool
-        let mut edit_args = serde_json::Map::new();
-        edit_args.insert("file_path".to_string(), json!(dangerous_path));
-        edit_args.insert("old_string".to_string(), json!("old"));
-        edit_args.insert("new_string".to_string(), json!("new"));
-
-        let edit_result = edit_tool.execute(edit_args, &context).await;
-        // Should fail due to path validation or file not found
-        assert!(
-            edit_result.is_err(),
-            "Edit tool should reject path traversal: {}",
-            dangerous_path
-        );
-
-        // Test glob tool with dangerous paths
-        let mut glob_args = serde_json::Map::new();
-        glob_args.insert("pattern".to_string(), json!("*"));
-        glob_args.insert("path".to_string(), json!(dangerous_path));
-
-        let glob_result = glob_tool.execute(glob_args, &context).await;
-        // Should either fail or be handled safely
-        if let Err(error) = glob_result {
-            let error_msg = format!("{:?}", error);
-            assert!(
-                error_msg.contains("does not exist")
-                    || error_msg.contains("invalid")
-                    || error_msg.contains("blocked")
-                    || error_msg.contains("dangerous"),
-                "Glob error should be handled safely: {}",
-                error_msg
-            );
-        }
-
-        // Test grep tool with dangerous paths
-        let mut grep_args = serde_json::Map::new();
-        grep_args.insert("pattern".to_string(), json!("password"));
-        grep_args.insert("path".to_string(), json!(dangerous_path));
-
-        let grep_result = grep_tool.execute(grep_args, &context).await;
-        // Should either fail or be handled safely
-        if let Err(error) = grep_result {
-            let error_msg = format!("{:?}", error);
-            assert!(
-                error_msg.contains("does not exist")
-                    || error_msg.contains("invalid")
-                    || error_msg.contains("blocked")
-                    || error_msg.contains("dangerous"),
-                "Grep error should be handled safely: {}",
-                error_msg
-            );
-        }
+    for tool_name in tools {
+        test_path_security_for_tool(tool_name, &registry, &context, &dangerous_paths).await;
     }
 }
 
@@ -3120,7 +2777,6 @@ async fn test_resource_exhaustion_protection() {
 #[tokio::test]
 async fn test_concurrent_file_operations_safety() {
     use std::sync::Arc;
-    use tokio::task::JoinSet;
 
     let registry = Arc::new(create_test_registry());
     let context = Arc::new(create_test_context().await);
@@ -3131,51 +2787,46 @@ async fn test_concurrent_file_operations_safety() {
     // Initialize the file
     fs::write(&*shared_file, "initial content").unwrap();
 
-    let mut join_set = JoinSet::new();
+    let file_for_write = shared_file.clone();
+    let file_for_read = shared_file.clone();
 
-    // Spawn concurrent operations on the same file
-    for i in 0..5 {
-        // Write operations
-        let registry_clone = registry.clone();
-        let context_clone = context.clone();
-        let file_clone = shared_file.clone();
-
-        join_set.spawn(async move {
-            let write_tool = registry_clone.get_tool("files_write").unwrap();
-            let mut write_args = serde_json::Map::new();
-            write_args.insert("file_path".to_string(), json!(file_clone.to_string_lossy()));
-            write_args.insert(
-                "content".to_string(),
-                json!(format!("content from task {}", i)),
+    // Run write operations
+    let write_op = |registry: Arc<ToolRegistry>, context: Arc<ToolContext>, i: usize| {
+        let file_clone = file_for_write.clone();
+        async move {
+            let write_tool = registry.get_tool("files_write").unwrap();
+            let write_args = write_args(
+                &file_clone.to_string_lossy(),
+                &format!("content from task {}", i / 2),
             );
-
-            write_tool.execute(write_args, &context_clone).await
-        });
-
-        // Read operations
-        let registry_clone = registry.clone();
-        let context_clone = context.clone();
-        let file_clone = shared_file.clone();
-
-        join_set.spawn(async move {
-            let read_tool = registry_clone.get_tool("files_read").unwrap();
-            let mut read_args = serde_json::Map::new();
-            read_args.insert("path".to_string(), json!(file_clone.to_string_lossy()));
-
-            read_tool.execute(read_args, &context_clone).await
-        });
-    }
-
-    // Wait for all operations to complete
-    let mut success_count = 0;
-    let mut error_count = 0;
-
-    while let Some(result) = join_set.join_next().await {
-        match result.unwrap() {
-            Ok(_) => success_count += 1,
-            Err(_) => error_count += 1,
+            write_tool
+                .execute(write_args, &context)
+                .await
+                .map(|_| ())
+                .map_err(|_| "Write failed")
         }
-    }
+    };
+
+    let read_op = |registry: Arc<ToolRegistry>, context: Arc<ToolContext>, _i: usize| {
+        let file_clone = file_for_read.clone();
+        async move {
+            let read_tool = registry.get_tool("files_read").unwrap();
+            let read_args = read_args(&file_clone.to_string_lossy());
+            read_tool
+                .execute(read_args, &context)
+                .await
+                .map(|_| ())
+                .map_err(|_| "Read failed")
+        }
+    };
+
+    // Run 5 write and 5 read operations
+    let (write_success, write_error) =
+        run_concurrent_test(registry.clone(), context.clone(), 5, write_op).await;
+    let (read_success, read_error) = run_concurrent_test(registry, context, 5, read_op).await;
+
+    let success_count = write_success + read_success;
+    let error_count = write_error + read_error;
 
     println!(
         "Concurrent operations: {} succeeded, {} failed",
@@ -3551,22 +3202,16 @@ async fn test_high_concurrency_stress_test() {
     let context = Arc::new(create_test_context().await);
 
     let temp_dir = TempDir::new().unwrap();
+    let temp_dir_arc = Arc::new(temp_dir.path().to_path_buf());
 
     println!("Running high concurrency stress test with 100 simultaneous operations...");
 
     let profiler = MemoryProfiler::new();
     let start_time = std::time::Instant::now();
 
-    // Create many more concurrent operations than the original 10
-    let mut join_set = tokio::task::JoinSet::new();
-
-    // Test with 100 concurrent operations
-    for i in 0..100 {
-        let registry_clone = registry.clone();
-        let context_clone = context.clone();
-        let temp_dir_path = temp_dir.path().to_path_buf();
-
-        join_set.spawn(async move {
+    let operation = |registry: Arc<ToolRegistry>, context: Arc<ToolContext>, i: usize| {
+        let temp_dir_path = temp_dir_arc.clone();
+        async move {
             let file_path = temp_dir_path.join(format!("stress_test_file_{}.txt", i));
 
             // Generate varied content sizes to stress different code paths
@@ -3574,59 +3219,39 @@ async fn test_high_concurrency_stress_test() {
             let content = format!("Stress test content for file {}\n", i).repeat(content_size);
 
             // Write file
-            let write_tool = registry_clone.get_tool("files_write").unwrap();
-            let mut write_args = serde_json::Map::new();
-            write_args.insert("file_path".to_string(), json!(file_path.to_string_lossy()));
-            write_args.insert("content".to_string(), json!(content));
-
-            let write_result = write_tool.execute(write_args, &context_clone).await;
-
-            if write_result.is_err() {
-                return Err("Write failed");
-            }
+            let write_tool = registry.get_tool("files_write").unwrap();
+            let write_args_map = write_args(&file_path.to_string_lossy(), &content);
+            write_tool
+                .execute(write_args_map, &context)
+                .await
+                .map_err(|_| "Write failed")?;
 
             // Read file back to verify
-            let read_tool = registry_clone.get_tool("files_read").unwrap();
-            let mut read_args = serde_json::Map::new();
-            read_args.insert("path".to_string(), json!(file_path.to_string_lossy()));
-
-            let read_result = read_tool.execute(read_args, &context_clone).await;
-
-            if read_result.is_err() {
-                return Err("Read failed");
-            }
+            let read_tool = registry.get_tool("files_read").unwrap();
+            let read_args_map = read_args(&file_path.to_string_lossy());
+            read_tool
+                .execute(read_args_map, &context)
+                .await
+                .map_err(|_| "Read failed")?;
 
             // Perform edit operation
-            let edit_tool = registry_clone.get_tool("files_edit").unwrap();
-            let mut edit_args = serde_json::Map::new();
-            edit_args.insert("file_path".to_string(), json!(file_path.to_string_lossy()));
-            edit_args.insert("old_string".to_string(), json!(format!("file {}", i)));
-            edit_args.insert(
-                "new_string".to_string(),
-                json!(format!("FILE {} (edited)", i)),
+            let edit_tool = registry.get_tool("files_edit").unwrap();
+            let mut edit_args_map = edit_args(
+                &file_path.to_string_lossy(),
+                &format!("file {}", i),
+                &format!("FILE {} (edited)", i),
             );
-            edit_args.insert("replace_all".to_string(), json!(true));
-
-            let edit_result = edit_tool.execute(edit_args, &context_clone).await;
-
-            if edit_result.is_err() {
-                return Err("Edit failed");
-            }
+            edit_args_map.insert("replace_all".to_string(), json!(true));
+            edit_tool
+                .execute(edit_args_map, &context)
+                .await
+                .map_err(|_| "Edit failed")?;
 
             Ok(())
-        });
-    }
-
-    // Wait for all operations to complete
-    let mut success_count = 0;
-    let mut error_count = 0;
-
-    while let Some(result) = join_set.join_next().await {
-        match result.unwrap() {
-            Ok(_) => success_count += 1,
-            Err(_) => error_count += 1,
         }
-    }
+    };
+
+    let (success_count, error_count) = run_concurrent_test(registry, context, 100, operation).await;
 
     let total_duration = start_time.elapsed();
 
