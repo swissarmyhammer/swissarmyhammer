@@ -11,75 +11,6 @@ use swissarmyhammer_cli::mcp_integration::CliToolContext;
 mod test_utils;
 use test_utils::create_semantic_test_guard;
 
-
-
-/// Test all memo-related MCP tools can be executed
-#[tokio::test]
-#[serial_test::serial]
-async fn test_all_memo_tools_execution() -> Result<()> {
-    let _env = IsolatedTestEnvironment::new().unwrap();
-    let temp_path = _env.temp_dir();
-    let context = CliToolContext::new_with_dir(&temp_path)
-        .await
-        .map_err(|e| anyhow::anyhow!("{}", e))?;
-
-    // Test memo_create
-    let create_args = context.create_arguments(vec![
-        ("title", json!("Comprehensive Test Memo")),
-        (
-            "content",
-            json!("# Test Memo\n\nThis tests all memo tools."),
-        ),
-    ]);
-    let result = context.execute_tool("memo_create", create_args).await;
-    assert!(result.is_ok(), "memo_create should succeed: {result:?}");
-
-    let call_result = result.unwrap();
-    assert_eq!(
-        call_result.is_error,
-        Some(false),
-        "memo_create should not report error"
-    );
-
-    // Extract memo ID from response for subsequent tests
-    let content = swissarmyhammer_cli::mcp_integration::response_formatting::extract_text_content(
-        &call_result,
-    );
-    let memo_id = extract_memo_id_from_response(&content.unwrap_or_default());
-
-    // Test memo_list
-    let list_args = context.create_arguments(vec![]);
-    let result = context.execute_tool("memo_list", list_args).await;
-    assert!(result.is_ok(), "memo_list should succeed: {result:?}");
-
-    // Test memo_get if we have an ID
-    if let Some(id) = memo_id {
-        let get_args = context.create_arguments(vec![("id", json!(id))]);
-        let result = context.execute_tool("memo_get", get_args).await;
-        assert!(result.is_ok(), "memo_get should succeed: {result:?}");
-    }
-
-    // Test memo_search is disabled - should fail with "Tool not found"
-    let search_args = context.create_arguments(vec![("query", json!("test"))]);
-    let result = context.execute_tool("memo_search", search_args).await;
-    assert!(
-        result.is_err(),
-        "memo_search should fail because it's disabled: {result:?}"
-    );
-
-    // Test memo_get_all_context
-    let context_args = context.create_arguments(vec![]);
-    let result = context
-        .execute_tool("memo_get_all_context", context_args)
-        .await;
-    assert!(
-        result.is_ok(),
-        "memo_get_all_context should succeed: {result:?}"
-    );
-
-    Ok(())
-}
-
 /// Test all search-related MCP tools can be executed
 #[tokio::test]
 // Fixed: Limited patterns to specific files to avoid DuckDB timeout
@@ -154,28 +85,29 @@ async fn test_mcp_error_propagation() -> Result<()> {
 
     // Test invalid arguments error
     let invalid_args = context.create_arguments(vec![("invalid_field", json!("invalid_value"))]);
-    let result = context.execute_tool("memo_create", invalid_args).await;
+    let result = context.execute_tool("todo_create", invalid_args).await;
     assert!(result.is_err(), "Invalid arguments should cause error");
 
     // Test missing required arguments error
     let empty_args = context.create_arguments(vec![]);
-    let result = context.execute_tool("memo_create", empty_args).await;
+    let result = context.execute_tool("todo_create", empty_args).await;
     assert!(
         result.is_err(),
         "Missing required arguments should cause error"
     );
 
-    // Test non-existent resource handling
-    let nonexistent_args = context.create_arguments(vec![("title", json!("NonExistentMemo"))]);
-    let result = context.execute_tool("memo_get", nonexistent_args).await;
+    // Test non-existent resource handling with todo_show
+    let nonexistent_args =
+        context.create_arguments(vec![("item", json!("01NONEXISTENT000000000000"))]);
+    let result = context.execute_tool("todo_show", nonexistent_args).await;
 
-    // The memo_get tool may return either success with "not found" message or error
+    // The todo_show tool may return either success with "not found" message or error
     // depending on the integration layer. Both behaviors are acceptable.
     match result {
         Ok(response) => {
             let text = response.content[0].as_text().unwrap().text.as_str();
             assert!(
-                text.contains("Memo not found with title:"),
+                text.contains("not found") || text.contains("No todo"),
                 "Should contain not found message, got: {}",
                 text
             );
@@ -213,10 +145,10 @@ pub fn test_function() -> String { "test".to_string() }"#,
 
     // Test correct argument types
     let valid_args = context.create_arguments(vec![
-        ("title", json!("String Title")),
-        ("content", json!("String content")),
+        ("task", json!("String Title")),
+        ("context", json!("String content")),
     ]);
-    let result = context.execute_tool("memo_create", valid_args).await;
+    let result = context.execute_tool("todo_create", valid_args).await;
     assert!(result.is_ok(), "Valid arguments should succeed");
 
     // Test boolean arguments with limited files to avoid DuckDB timeout
@@ -262,12 +194,12 @@ async fn test_response_formatting() -> Result<()> {
         .await
         .map_err(|e| anyhow::anyhow!("{}", e))?;
 
-    // Test successful response formatting
+    // Test successful response formatting with todo_create
     let args = context.create_arguments(vec![
-        ("title", json!("Format Test Memo")),
-        ("content", json!("Testing response formatting")),
+        ("task", json!("Format Test Task")),
+        ("context", json!("Testing response formatting")),
     ]);
-    let result = context.execute_tool("memo_create", args).await?;
+    let result = context.execute_tool("todo_create", args).await?;
 
     let success_response =
         swissarmyhammer_cli::mcp_integration::response_formatting::format_success_response(&result);
@@ -312,17 +244,17 @@ async fn test_concurrent_tool_execution() -> Result<()> {
     // Execute multiple tools concurrently
     let mut handles = vec![];
 
-    // Create multiple memos concurrently
+    // Create multiple todos concurrently
     for i in 0..3 {
         let context_clone = CliToolContext::new_with_dir(&temp_path)
             .await
             .map_err(|e| anyhow::anyhow!("{}", e))?;
         let handle = tokio::spawn(async move {
             let args = context_clone.create_arguments(vec![
-                ("title", json!(format!("Concurrent Test Memo {}", i))),
-                ("content", json!(format!("Content for memo {}", i))),
+                ("task", json!(format!("Concurrent Test Task {}", i))),
+                ("context", json!(format!("Context for task {}", i))),
             ]);
-            context_clone.execute_tool("memo_create", args).await
+            context_clone.execute_tool("todo_create", args).await
         });
         handles.push(handle);
     }
@@ -340,93 +272,6 @@ async fn test_concurrent_tool_execution() -> Result<()> {
     Ok(())
 }
 
-/// Test tool execution with complex data structures
-#[tokio::test]
-async fn test_complex_data_structures() -> Result<()> {
-    let _env = IsolatedTestEnvironment::new().unwrap();
-    let temp_path = _env.temp_dir();
-    let context = CliToolContext::new_with_dir(&temp_path)
-        .await
-        .map_err(|e| anyhow::anyhow!("{}", e))?;
-
-    // Test with complex content containing markdown, special characters, etc.
-    let complex_content = r#"# Complex Test Content
-
-## Features Tested
-- **Bold text** and *italic text*
-- `Code snippets`
-- Lists:
-  1. Numbered items
-  2. More items
-- Special characters: @#$%^&*()
-- Unicode: 日本語, émojis 🚀
-
-```rust
-fn example_code() {
-    println!("Testing code blocks");
-}
-```
-
-| Table | Headers |
-|-------|---------|
-| Data  | Values  |
-"#;
-
-    let args = context.create_arguments(vec![
-        ("title", json!("Complex Content Test")),
-        ("content", json!(complex_content)),
-    ]);
-
-    let result = context.execute_tool("memo_create", args).await;
-    assert!(
-        result.is_ok(),
-        "Complex content should be handled correctly: {result:?}"
-    );
-
-    Ok(())
-}
-
-/// Test tool execution edge cases
-#[tokio::test]
-async fn test_tool_execution_edge_cases() -> Result<()> {
-    let _env = IsolatedTestEnvironment::new().unwrap();
-    let temp_path = _env.temp_dir();
-    let context = CliToolContext::new_with_dir(&temp_path)
-        .await
-        .map_err(|e| anyhow::anyhow!("{}", e))?;
-
-    // Test empty string arguments
-    let empty_args = context.create_arguments(vec![
-        ("title", json!("Empty Content Test")),
-        ("content", json!("")),
-    ]);
-    let result = context.execute_tool("memo_create", empty_args).await;
-    assert!(result.is_ok(), "Empty content should be handled");
-
-    // Test very long content
-    let long_content = "A".repeat(10000);
-    let long_args = context.create_arguments(vec![
-        ("title", json!("Long Content Test")),
-        ("content", json!(long_content)),
-    ]);
-    let result = context.execute_tool("memo_create", long_args).await;
-    assert!(result.is_ok(), "Long content should be handled");
-
-    // Test null values (JSON null)
-    let null_args = context.create_arguments(vec![
-        ("title", json!("Null Test")),
-        ("content", json!(null)),
-    ]);
-    let result = context.execute_tool("memo_create", null_args).await;
-    // This should fail validation
-    assert!(
-        result.is_err(),
-        "Null content should cause validation error"
-    );
-
-    Ok(())
-}
-
 /// Test error message formatting and user-friendliness
 #[tokio::test]
 async fn test_error_message_formatting() -> Result<()> {
@@ -438,7 +283,7 @@ async fn test_error_message_formatting() -> Result<()> {
 
     // Test missing required field error
     let result = context
-        .execute_tool("memo_create", context.create_arguments(vec![]))
+        .execute_tool("todo_create", context.create_arguments(vec![]))
         .await;
     assert!(result.is_err(), "Should error on missing required fields");
 
@@ -447,7 +292,7 @@ async fn test_error_message_formatting() -> Result<()> {
     assert!(
         error_msg.contains("required")
             || error_msg.contains("missing")
-            || error_msg.contains("title"),
+            || error_msg.contains("task"),
         "Error message should be descriptive: {error_msg}"
     );
 
@@ -483,24 +328,22 @@ async fn test_tool_context_configurations() -> Result<()> {
 
     // Both should work independently
     let args1 = context1.create_arguments(vec![
-        ("title", json!("Context 1 Memo")),
-        ("content", json!("From context 1")),
+        ("task", json!("Context 1 Task")),
+        ("context", json!("From context 1")),
     ]);
     let args2 = context2.create_arguments(vec![
-        ("title", json!("Context 2 Memo")),
-        ("content", json!("From context 2")),
+        ("task", json!("Context 2 Task")),
+        ("context", json!("From context 2")),
     ]);
 
-    let result1 = context1.execute_tool("memo_create", args1).await;
-    let result2 = context2.execute_tool("memo_create", args2).await;
+    let result1 = context1.execute_tool("todo_create", args1).await;
+    let result2 = context2.execute_tool("todo_create", args2).await;
 
     assert!(result1.is_ok(), "Context 1 should work independently");
     assert!(result2.is_ok(), "Context 2 should work independently");
 
     Ok(())
 }
-
-
 
 /// Test MCP error boundaries and recovery
 #[tokio::test]
@@ -513,7 +356,7 @@ async fn test_mcp_error_boundaries() -> Result<()> {
 
     // Test malformed arguments (empty arguments when required fields are missing)
     let empty_args = serde_json::Map::new();
-    let result = context.execute_tool("memo_create", empty_args).await;
+    let result = context.execute_tool("todo_create", empty_args).await;
     assert!(
         result.is_err(),
         "Missing required arguments should be rejected"
@@ -521,26 +364,14 @@ async fn test_mcp_error_boundaries() -> Result<()> {
 
     // Test context recovery after error
     let valid_args = context.create_arguments(vec![
-        ("title", json!("Recovery Test")),
-        ("content", json!("Testing recovery after error")),
+        ("task", json!("Recovery Test")),
+        ("context", json!("Testing recovery after error")),
     ]);
-    let result = context.execute_tool("memo_create", valid_args).await;
+    let result = context.execute_tool("todo_create", valid_args).await;
     assert!(
         result.is_ok(),
         "Context should recover after error: {result:?}"
     );
 
     Ok(())
-}
-
-
-
-/// Helper function to extract memo ID from MCP response
-fn extract_memo_id_from_response(content: &str) -> Option<String> {
-    // Try to extract ULID pattern from response
-    // ULIDs are 26 characters long and use Crockford's Base32
-    use regex::Regex;
-
-    let ulid_pattern = Regex::new(r"[0-9A-HJKMNP-TV-Z]{26}").ok()?;
-    ulid_pattern.find(content).map(|m| m.as_str().to_string())
 }

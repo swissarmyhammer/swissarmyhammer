@@ -229,8 +229,6 @@ use std::sync::Arc;
 use swissarmyhammer_common::{ErrorSeverity, Severity};
 use swissarmyhammer_config::agent::AgentConfig;
 use swissarmyhammer_git::GitOperations;
-use swissarmyhammer_issues::IssueStorage;
-use swissarmyhammer_memoranda::MemoStorage;
 use tokio::sync::{Mutex, RwLock};
 
 /// Context shared by all tools during execution
@@ -249,21 +247,8 @@ use tokio::sync::{Mutex, RwLock};
 /// # Thread Safety
 ///
 /// All storage backends are wrapped in appropriate synchronization primitives:
-/// - `RwLock` for storage that supports concurrent reads
 /// - `Mutex` for exclusive access operations
 /// - `Arc` for shared ownership across async tasks
-///
-/// # Usage Patterns
-///
-/// New tools should prefer direct access to storage backends:
-///
-/// ```rust,ignore
-/// async fn execute(&self, args: Args, context: &ToolContext) -> Result<CallToolResult> {
-///     let memo_storage = context.memo_storage.write().await;
-///     let memo = memo_storage.create_memo(title, content).await?;
-///     // Process memo...
-/// }
-/// ```
 #[derive(Clone)]
 pub struct ToolContext {
     /// The tool handlers instance containing the business logic (for backward compatibility)
@@ -272,23 +257,11 @@ pub struct ToolContext {
     /// new registry pattern. New tools should prefer direct storage access.
     pub tool_handlers: Arc<ToolHandlers>,
 
-    /// Direct access to issue storage for new tool implementations
-    ///
-    /// Provides thread-safe access to issue storage operations. Use `read()` for
-    /// read operations and `write()` for write operations.
-    pub issue_storage: Arc<RwLock<Box<dyn IssueStorage>>>,
-
     /// Direct access to git operations for new tool implementations
     ///
     /// Git operations are wrapped in `Option` to handle cases where git is not
     /// available or not initialized. Always check for `None` before use.
     pub git_ops: Arc<Mutex<Option<GitOperations>>>,
-
-    /// Direct access to memo storage for new tool implementations
-    ///
-    /// Provides thread-safe access to memoranda storage operations. Use `read()` for
-    /// read operations and `write()` for write operations.
-    pub memo_storage: Arc<RwLock<Box<dyn MemoStorage>>>,
 
     /// Agent configuration for tool operations that require agent execution
     ///
@@ -370,16 +343,12 @@ impl ToolContext {
     /// Create a new tool context
     pub fn new(
         tool_handlers: Arc<ToolHandlers>,
-        issue_storage: Arc<RwLock<Box<dyn IssueStorage>>>,
         git_ops: Arc<Mutex<Option<GitOperations>>>,
-        memo_storage: Arc<RwLock<Box<dyn MemoStorage>>>,
         agent_config: Arc<AgentConfig>,
     ) -> Self {
         Self {
             tool_handlers,
-            issue_storage,
             git_ops,
-            memo_storage,
             agent_config,
             notification_sender: None,
             progress_sender: None,
@@ -394,9 +363,7 @@ impl ToolContext {
     /// # Arguments
     ///
     /// * `tool_handlers` - The tool handlers instance
-    /// * `issue_storage` - Issue storage backend
     /// * `git_ops` - Git operations
-    /// * `memo_storage` - Memo storage backend
     /// * `agent_config` - Agent configuration
     /// * `notification_sender` - Notification sender for workflow state transitions
     ///
@@ -405,19 +372,11 @@ impl ToolContext {
     /// A new `ToolContext` with workflow notification support enabled
     pub fn with_notifications(
         tool_handlers: Arc<ToolHandlers>,
-        issue_storage: Arc<RwLock<Box<dyn IssueStorage>>>,
         git_ops: Arc<Mutex<Option<GitOperations>>>,
-        memo_storage: Arc<RwLock<Box<dyn MemoStorage>>>,
         agent_config: Arc<AgentConfig>,
         notification_sender: NotificationSender,
     ) -> Self {
-        let mut context = Self::new(
-            tool_handlers,
-            issue_storage,
-            git_ops,
-            memo_storage,
-            agent_config,
-        );
+        let mut context = Self::new(tool_handlers, git_ops, agent_config);
         context.notification_sender = Some(notification_sender);
         context
     }
@@ -1529,12 +1488,6 @@ pub fn register_git_tools(registry: &mut ToolRegistry) {
     git::register_git_tools(registry);
 }
 
-/// Register all memo-related tools with the registry
-pub fn register_memo_tools(registry: &mut ToolRegistry) {
-    use super::tools::memoranda;
-    memoranda::register_memoranda_tools(registry);
-}
-
 /// Register all search-related tools with the registry
 pub fn register_search_tools(registry: &mut ToolRegistry) {
     use super::tools::search;
@@ -1600,7 +1553,6 @@ pub fn create_fully_registered_tool_registry() -> ToolRegistry {
     register_file_tools(&mut registry);
     register_flow_tools(&mut registry);
     register_git_tools(&mut registry);
-    register_memo_tools(&mut registry);
     register_outline_tools(&mut registry);
     register_questions_tools(&mut registry);
     register_rules_tools(&mut registry);
@@ -1728,33 +1680,16 @@ mod tests {
     #[tokio::test]
     async fn test_tool_execution() {
         use swissarmyhammer_git::GitOperations;
-        use swissarmyhammer_issues::IssueStorage;
-        use swissarmyhammer_memoranda::{MarkdownMemoStorage, MemoStorage};
-        use tokio::sync::{Mutex, RwLock};
+        use tokio::sync::Mutex;
 
         // Create temporary directory for test
         let _temp_dir = tempfile::tempdir().unwrap();
-        let test_issues_dir = _temp_dir.path().join("test_issues");
 
         // Create mock storage and handlers for context
-        let issue_storage: Arc<RwLock<Box<dyn IssueStorage>>> = Arc::new(RwLock::new(Box::new(
-            swissarmyhammer_issues::FileSystemIssueStorage::new(test_issues_dir).unwrap(),
-        )));
         let git_ops: Arc<Mutex<Option<GitOperations>>> = Arc::new(Mutex::new(None));
-        // Create memo storage using temporary directory
-        let memo_dir = _temp_dir.path().join("memos");
-        let memo_storage: Arc<RwLock<Box<dyn MemoStorage>>> =
-            Arc::new(RwLock::new(Box::new(MarkdownMemoStorage::new(memo_dir))));
-
-        let tool_handlers = Arc::new(ToolHandlers::new(memo_storage.clone()));
+        let tool_handlers = Arc::new(ToolHandlers::new());
         let agent_config = Arc::new(AgentConfig::default());
-        let context = ToolContext::new(
-            tool_handlers,
-            issue_storage,
-            git_ops,
-            memo_storage,
-            agent_config,
-        );
+        let context = ToolContext::new(tool_handlers, git_ops, agent_config);
 
         let tool = MockTool {
             name: "exec_test",
@@ -1887,11 +1822,6 @@ mod tests {
 
     // Test tools for CLI integration testing
     test_tool!(
-        MemoCreateTool,
-        "memo_create",
-        "Create a new memo with the given title and content"
-    );
-    test_tool!(
         TodoListTool,
         "todo_list",
         "List all available todo items with optional filtering"
@@ -1946,7 +1876,6 @@ mod tests {
     #[test]
     fn test_cli_category_extraction() {
         // Test known categories
-        assert_eq!(MemoCreateTool.cli_category(), Some("memo"));
         assert_eq!(FilesReadTool.cli_category(), Some("file"));
         assert_eq!(SearchQueryTool.cli_category(), Some("search"));
         assert_eq!(WebSearchTool.cli_category(), Some("web"));
@@ -1966,7 +1895,6 @@ mod tests {
     #[test]
     fn test_cli_name_extraction() {
         // Test action extraction
-        assert_eq!(MemoCreateTool.cli_name(), "create");
         assert_eq!(FilesReadTool.cli_name(), "read");
         assert_eq!(SearchQueryTool.cli_name(), "query");
         assert_eq!(WebSearchTool.cli_name(), "search");
@@ -1986,10 +1914,6 @@ mod tests {
     fn test_cli_about_extraction() {
         // Test first line extraction
         assert_eq!(
-            MemoCreateTool.cli_about(),
-            Some("Create a new memo with the given title and content")
-        );
-        assert_eq!(
             FilesReadTool.cli_about(),
             Some("Read and return file contents from the local filesystem")
         );
@@ -1999,7 +1923,6 @@ mod tests {
     #[test]
     fn test_hidden_from_cli_default() {
         // Test default implementation returns false
-        assert!(!MemoCreateTool.hidden_from_cli());
         assert!(!FilesReadTool.hidden_from_cli());
         assert!(!UnknownCategoryTool.hidden_from_cli());
         assert!(!NoUnderscoreTool.hidden_from_cli());
@@ -2007,16 +1930,6 @@ mod tests {
 
     #[test]
     fn test_cli_integration_comprehensive() {
-        // Test a tool that should be visible in CLI
-        let tool = MemoCreateTool;
-        assert_eq!(tool.cli_category(), Some("memo"));
-        assert_eq!(tool.cli_name(), "create");
-        assert_eq!(
-            tool.cli_about(),
-            Some("Create a new memo with the given title and content")
-        );
-        assert!(!tool.hidden_from_cli());
-
         // Test a tool that should not be visible in CLI (unknown category)
         let tool = UnknownCategoryTool;
         assert_eq!(tool.cli_category(), None);

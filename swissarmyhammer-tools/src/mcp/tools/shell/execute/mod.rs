@@ -1493,38 +1493,7 @@ impl McpTool for ShellExecuteTool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::mcp::tool_registry::ToolContext;
-
-    use std::sync::Arc;
-
-    fn create_test_context() -> ToolContext {
-        use crate::test_utils::TestIssueEnvironment;
-        use swissarmyhammer_git::GitOperations;
-        use swissarmyhammer_issues::IssueStorage;
-        use swissarmyhammer_memoranda::{MarkdownMemoStorage, MemoStorage};
-        use tokio::sync::{Mutex, RwLock};
-
-        let test_env = TestIssueEnvironment::new();
-        let issue_storage: Arc<RwLock<Box<dyn IssueStorage>>> =
-            Arc::new(RwLock::new(Box::new(test_env.storage())));
-        let git_ops: Arc<Mutex<Option<GitOperations>>> = Arc::new(Mutex::new(None));
-        // Create temporary directory for memo storage
-        let memo_storage: Arc<RwLock<Box<dyn MemoStorage>>> = Arc::new(RwLock::new(Box::new(
-            MarkdownMemoStorage::new(test_env.path().join("memos")),
-        )));
-
-        let tool_handlers = Arc::new(crate::mcp::tool_handlers::ToolHandlers::new(
-            memo_storage.clone(),
-        ));
-        let agent_config = Arc::new(swissarmyhammer_config::agent::AgentConfig::default());
-        ToolContext::new(
-            tool_handlers,
-            issue_storage,
-            git_ops,
-            memo_storage,
-            agent_config,
-        )
-    }
+    use crate::test_utils::create_test_context;
 
     /// Generic helper function to assert that items are blocked by security validation
     ///
@@ -1546,7 +1515,7 @@ mod tests {
     where
         F: Fn(&str) -> serde_json::Map<String, serde_json::Value>,
     {
-        let (tool, context) = create_security_test_fixtures();
+        let (tool, context) = create_security_test_fixtures().await;
         for item in items {
             let args = build_args(item);
             let result = tool.execute(args, &context).await;
@@ -1575,8 +1544,8 @@ mod tests {
     /// Creates a test tool and context for security validation tests
     ///
     /// This eliminates duplication in creating test fixtures for security tests.
-    fn create_security_test_fixtures() -> (ShellExecuteTool, ToolContext) {
-        (ShellExecuteTool::new(), create_test_context())
+    async fn create_security_test_fixtures() -> (ShellExecuteTool, ToolContext) {
+        (ShellExecuteTool::new(), create_test_context().await)
     }
 
     /// Helper function to assert that a list of paths are blocked by security validation
@@ -1707,7 +1676,11 @@ mod tests {
         /// Execute the command with the configured parameters
         async fn execute(self) -> Result<CallToolResult, McpError> {
             let tool = ShellExecuteTool::new();
-            let context = self.custom_context.unwrap_or_else(create_test_context);
+            let context = if let Some(ctx) = self.custom_context {
+                ctx
+            } else {
+                create_test_context().await
+            };
 
             // If custom args are provided, use them directly
             let args = if let Some(custom) = self.custom_args {
@@ -3291,7 +3264,7 @@ mod tests {
         let (tx, mut rx) = mpsc::unbounded_channel();
         let progress_sender = ProgressSender::new(tx);
 
-        let mut context = create_test_context();
+        let mut context = create_test_context().await;
         context.progress_sender = Some(progress_sender);
 
         let result = TestCommandBuilder::new(command)
@@ -3361,7 +3334,7 @@ mod tests {
         drop(rx); // Close channel to cause send errors
 
         let progress_sender = ProgressSender::new(tx);
-        let mut context = create_test_context();
+        let mut context = create_test_context().await;
         context.progress_sender = Some(progress_sender);
 
         // Should still succeed even though notifications fail
@@ -3377,7 +3350,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_shell_execute_without_progress_sender() {
-        let context = create_test_context();
+        let context = create_test_context().await;
         assert!(
             context.progress_sender.is_none(),
             "Default test context should not have progress sender"
@@ -3621,7 +3594,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_progress_without_sender() {
-        let mut context = create_test_context();
+        let mut context = create_test_context().await;
         context.progress_sender = None;
 
         let result = TestCommandBuilder::new("echo test")

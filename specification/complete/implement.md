@@ -1,4 +1,18 @@
-# Implement Command Specification
+# OBSOLETE: sah implement Command
+
+**Status**: This specification is obsolete. The `implement` workflow has been removed.
+
+**Replacement**: Use `sah do` to work through todos created by `sah plan`.
+
+**Migration**: The issue-based workflow system was replaced by the rules + todos system:
+- Issues → Todos (ephemeral tasks)
+- No separate tracking needed → Rules (permanent acceptance criteria)
+
+---
+
+# Original Specification
+
+_The content below describes the removed `sah implement` command for historical reference._
 
 ## Overview
 

@@ -63,7 +63,9 @@ async fn test_todo_commands_require_git_repository() {
         "Command should fail without git repository"
     );
     assert!(
-        output.stderr.contains("Todo operations require a Git repository")
+        output
+            .stderr
+            .contains("Todo operations require a Git repository")
             || output.stderr.contains("Git repository"),
         "Should show git repository error: {}",
         output.stderr
@@ -117,8 +119,8 @@ async fn test_commands_work_in_git_repository() {
 
     // Use explicit working directory instead of global directory change
 
-    // Test that memo list command now works (or at least doesn't fail with Git repository error)
-    let result = run_sah_command_in_process_with_dir(&["memo", "list"], temp_dir.path()).await;
+    // Test that todo list command now works (or at least doesn't fail with Git repository error)
+    let result = run_sah_command_in_process_with_dir(&["todo", "list"], temp_dir.path()).await;
 
     // Restore original directory
 
@@ -138,7 +140,7 @@ async fn test_git_repository_error_exit_codes() {
 
     // Use explicit working directory instead of global directory change
 
-    let result = run_sah_command_in_process_with_dir(&["memo", "list"], temp_dir.path()).await;
+    let result = run_sah_command_in_process_with_dir(&["todo", "list"], temp_dir.path()).await;
 
     // Restore original directory
 
@@ -155,10 +157,10 @@ async fn test_git_repository_error_exit_codes() {
         "DEBUG test_git_repository_error_exit_codes: exit_code: {}",
         output.exit_code
     );
-    // Memo commands now work gracefully without git repositories
-    assert_eq!(
+    // Todo commands require git repositories
+    assert_ne!(
         output.exit_code, 0,
-        "Memo commands should succeed without git repository"
+        "Todo commands should fail without git repository"
     );
 }
 

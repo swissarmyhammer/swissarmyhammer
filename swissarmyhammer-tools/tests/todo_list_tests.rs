@@ -10,8 +10,6 @@ use serde_json::json;
 use std::sync::Arc;
 use swissarmyhammer_config::agent::AgentConfig;
 use swissarmyhammer_git::GitOperations;
-use swissarmyhammer_issues::{FileSystemIssueStorage, IssueStorage};
-use swissarmyhammer_memoranda::{MarkdownMemoStorage, MemoStorage};
 use swissarmyhammer_tools::mcp::tool_handlers::ToolHandlers;
 use swissarmyhammer_tools::mcp::tool_registry::{McpTool, ToolContext};
 use swissarmyhammer_tools::mcp::tools::todo::create::CreateTodoTool;
@@ -24,26 +22,12 @@ fn create_test_context(temp_dir: &TempDir) -> ToolContext {
     // Set environment variable to override todo directory for isolation
     std::env::set_var("SWISSARMYHAMMER_TODO_DIR", temp_dir.path());
 
-    let issue_storage: Arc<tokio::sync::RwLock<Box<dyn IssueStorage>>> =
-        Arc::new(tokio::sync::RwLock::new(Box::new(
-            FileSystemIssueStorage::new(tempfile::tempdir().unwrap().path().to_path_buf()).unwrap(),
-        )));
     let git_ops: Arc<tokio::sync::Mutex<Option<GitOperations>>> =
         Arc::new(tokio::sync::Mutex::new(None));
-    let memo_temp_dir = tempfile::tempdir().unwrap().path().join("memos");
-    let memo_storage: Arc<tokio::sync::RwLock<Box<dyn MemoStorage>>> = Arc::new(
-        tokio::sync::RwLock::new(Box::new(MarkdownMemoStorage::new(memo_temp_dir))),
-    );
 
-    let tool_handlers = Arc::new(ToolHandlers::new(memo_storage.clone()));
+    let tool_handlers = Arc::new(ToolHandlers::new());
 
-    ToolContext::new(
-        tool_handlers,
-        issue_storage,
-        git_ops,
-        memo_storage,
-        Arc::new(AgentConfig::default()),
-    )
+    ToolContext::new(tool_handlers, git_ops, Arc::new(AgentConfig::default()))
 }
 
 /// Helper to extract text content from CallToolResult

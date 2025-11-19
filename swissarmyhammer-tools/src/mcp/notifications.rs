@@ -17,9 +17,9 @@ use tokio::sync::mpsc;
 /// ```ignore
 /// let notification = FlowNotification::flow_start(
 ///     "run_12345",
-///     "implement",
-///     serde_json::json!({"issue": "bug-123"}),
-///     "parse_issue"
+///     "plan",
+///     serde_json::json!({"plan_filename": "spec.md"}),
+///     "parse_spec"
 /// );
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -292,7 +292,7 @@ impl Severity for SendError {
 /// let (tx, rx) = mpsc::unbounded_channel();
 /// let sender = NotificationSender::new(tx);
 ///
-/// sender.send_flow_start("run_123", "implement", json!({}), "start").await?;
+/// sender.send_flow_start("run_123", "plan", json!({}), "start").await?;
 /// ```
 #[derive(Clone)]
 pub struct NotificationSender {
@@ -473,14 +473,14 @@ mod tests {
     fn test_flow_notification_flow_start() {
         let notification = FlowNotification::flow_start(
             "run_123",
-            "implement",
-            json!({"issue": "bug-456"}),
-            "parse_issue",
+            "plan",
+            json!({"plan_filename": "spec.md"}),
+            "parse_spec",
         );
 
         assert_eq!(notification.token, "run_123");
         assert_eq!(notification.progress, Some(0));
-        assert_eq!(notification.message, "Starting workflow: implement");
+        assert_eq!(notification.message, "Starting workflow: plan");
 
         match notification.metadata {
             FlowNotificationMetadata::FlowStart {
@@ -488,9 +488,9 @@ mod tests {
                 parameters,
                 initial_state,
             } => {
-                assert_eq!(flow_name, "implement");
-                assert_eq!(parameters, json!({"issue": "bug-456"}));
-                assert_eq!(initial_state, "parse_issue");
+                assert_eq!(flow_name, "plan");
+                assert_eq!(parameters, json!({"plan_filename": "spec.md"}));
+                assert_eq!(initial_state, "parse_spec");
             }
             _ => panic!("Expected FlowStart metadata"),
         }
@@ -500,15 +500,15 @@ mod tests {
     fn test_flow_notification_state_start() {
         let notification = FlowNotification::state_start(
             "run_123",
-            "implement",
-            "parse_issue",
-            "Parse the issue specification",
+            "plan",
+            "parse_spec",
+            "Parse the specification file",
             25,
         );
 
         assert_eq!(notification.token, "run_123");
         assert_eq!(notification.progress, Some(25));
-        assert_eq!(notification.message, "Entering state: parse_issue");
+        assert_eq!(notification.message, "Entering state: parse_spec");
 
         match notification.metadata {
             FlowNotificationMetadata::StateStart {
@@ -516,9 +516,9 @@ mod tests {
                 state_id,
                 state_description,
             } => {
-                assert_eq!(flow_name, "implement");
-                assert_eq!(state_id, "parse_issue");
-                assert_eq!(state_description, "Parse the issue specification");
+                assert_eq!(flow_name, "plan");
+                assert_eq!(state_id, "parse_spec");
+                assert_eq!(state_description, "Parse the specification file");
             }
             _ => panic!("Expected StateStart metadata"),
         }
@@ -528,15 +528,15 @@ mod tests {
     fn test_flow_notification_state_complete() {
         let notification = FlowNotification::state_complete(
             "run_123",
-            "implement",
-            "parse_issue",
-            Some("generate_code"),
+            "plan",
+            "parse_spec",
+            Some("create_rules"),
             50,
         );
 
         assert_eq!(notification.token, "run_123");
         assert_eq!(notification.progress, Some(50));
-        assert_eq!(notification.message, "Completed state: parse_issue");
+        assert_eq!(notification.message, "Completed state: parse_spec");
 
         match notification.metadata {
             FlowNotificationMetadata::StateComplete {
@@ -544,9 +544,9 @@ mod tests {
                 state_id,
                 next_state,
             } => {
-                assert_eq!(flow_name, "implement");
-                assert_eq!(state_id, "parse_issue");
-                assert_eq!(next_state, Some("generate_code".to_string()));
+                assert_eq!(flow_name, "plan");
+                assert_eq!(state_id, "parse_spec");
+                assert_eq!(next_state, Some("create_rules".to_string()));
             }
             _ => panic!("Expected StateComplete metadata"),
         }
@@ -555,7 +555,7 @@ mod tests {
     #[test]
     fn test_flow_notification_state_complete_no_next() {
         let notification =
-            FlowNotification::state_complete("run_123", "implement", "final_state", None, 100);
+            FlowNotification::state_complete("run_123", "plan", "final_state", None, 100);
 
         match notification.metadata {
             FlowNotificationMetadata::StateComplete { next_state, .. } => {
@@ -567,12 +567,11 @@ mod tests {
 
     #[test]
     fn test_flow_notification_flow_complete() {
-        let notification =
-            FlowNotification::flow_complete("run_123", "implement", "completed", "done");
+        let notification = FlowNotification::flow_complete("run_123", "plan", "completed", "done");
 
         assert_eq!(notification.token, "run_123");
         assert_eq!(notification.progress, Some(100));
-        assert_eq!(notification.message, "Completed workflow: implement");
+        assert_eq!(notification.message, "Completed workflow: plan");
 
         match notification.metadata {
             FlowNotificationMetadata::FlowComplete {
@@ -580,7 +579,7 @@ mod tests {
                 status,
                 final_state,
             } => {
-                assert_eq!(flow_name, "implement");
+                assert_eq!(flow_name, "plan");
                 assert_eq!(status, "completed");
                 assert_eq!(final_state, "done");
             }
@@ -592,15 +591,15 @@ mod tests {
     fn test_flow_notification_flow_error() {
         let notification = FlowNotification::flow_error(
             "run_123",
-            "implement",
+            "plan",
             "failed",
-            "generate_code",
-            "Compilation failed",
+            "create_rules",
+            "Rule creation failed",
         );
 
         assert_eq!(notification.token, "run_123");
         assert_eq!(notification.progress, None);
-        assert_eq!(notification.message, "Workflow failed: implement");
+        assert_eq!(notification.message, "Workflow failed: plan");
 
         match notification.metadata {
             FlowNotificationMetadata::FlowError {
@@ -609,10 +608,10 @@ mod tests {
                 error_state,
                 error,
             } => {
-                assert_eq!(flow_name, "implement");
+                assert_eq!(flow_name, "plan");
                 assert_eq!(status, "failed");
-                assert_eq!(error_state, "generate_code");
-                assert_eq!(error, "Compilation failed");
+                assert_eq!(error_state, "create_rules");
+                assert_eq!(error, "Rule creation failed");
             }
             _ => panic!("Expected FlowError metadata"),
         }
@@ -621,7 +620,7 @@ mod tests {
     #[test]
     fn test_flow_notification_serialization() {
         let notification =
-            FlowNotification::flow_start("run_123", "implement", json!({"test": "value"}), "start");
+            FlowNotification::flow_start("run_123", "plan", json!({"test": "value"}), "start");
 
         let json = serde_json::to_string(&notification).unwrap();
         let deserialized: FlowNotification = serde_json::from_str(&json).unwrap();

@@ -10,7 +10,7 @@ use serde_json::Value as JsonValue;
 /// Execute a workflow:
 /// ```ignore
 /// FlowToolRequest {
-///     flow_name: "implement".to_string(),
+///     flow_name: "plan".to_string(),
 ///     parameters: Default::default(),
 ///     format: None,
 ///     verbose: false,
@@ -160,8 +160,8 @@ impl FlowToolRequest {
 /// WorkflowListResponse {
 ///     workflows: vec![
 ///         WorkflowMetadata {
-///             name: "implement".to_string(),
-///             description: "Execute the implement workflow".to_string(),
+///             name: "plan".to_string(),
+///             description: "Execute the plan workflow".to_string(),
 ///             source: "builtin".to_string(),
 ///             parameters: vec![],
 ///         }
@@ -306,8 +306,8 @@ impl WorkflowParameter {
 ///
 /// ```ignore
 /// let schema = generate_flow_tool_schema(vec![
-///     "implement".to_string(),
 ///     "plan".to_string(),
+///     "review".to_string(),
 /// ]);
 /// ```
 pub fn generate_flow_tool_schema(workflow_names: Vec<String>) -> JsonValue {
@@ -370,8 +370,8 @@ mod tests {
 
     #[test]
     fn test_flow_tool_request_new() {
-        let request = FlowToolRequest::new("implement");
-        assert_eq!(request.flow_name, "implement");
+        let request = FlowToolRequest::new("plan");
+        assert_eq!(request.flow_name, "plan");
         assert!(request.parameters.is_empty());
         assert_eq!(request.format, None);
         assert!(!request.verbose);
@@ -411,13 +411,13 @@ mod tests {
         let list_request = FlowToolRequest::list();
         assert!(list_request.is_list());
 
-        let exec_request = FlowToolRequest::new("implement");
+        let exec_request = FlowToolRequest::new("plan");
         assert!(!exec_request.is_list());
     }
 
     #[test]
     fn test_flow_tool_request_validation_success() {
-        let request = FlowToolRequest::new("implement");
+        let request = FlowToolRequest::new("plan");
         assert!(request.validate().is_ok());
 
         let list_request = FlowToolRequest::list().with_format("yaml");
@@ -440,7 +440,7 @@ mod tests {
 
     #[test]
     fn test_flow_tool_request_serialization_minimal() {
-        let request = FlowToolRequest::new("implement");
+        let request = FlowToolRequest::new("plan");
         let json = serde_json::to_string(&request).unwrap();
         let deserialized: FlowToolRequest = serde_json::from_str(&json).unwrap();
 
@@ -475,10 +475,10 @@ mod tests {
 
     #[test]
     fn test_flow_tool_request_deserialization_with_defaults() {
-        let json = r#"{"flow_name": "implement"}"#;
+        let json = r#"{"flow_name": "plan"}"#;
         let deserialized: FlowToolRequest = serde_json::from_str(json).unwrap();
 
-        assert_eq!(deserialized.flow_name, "implement");
+        assert_eq!(deserialized.flow_name, "plan");
         assert!(deserialized.parameters.is_empty());
         assert_eq!(deserialized.format, None);
         assert!(!deserialized.verbose);
@@ -501,18 +501,14 @@ mod tests {
 
     #[test]
     fn test_workflow_list_response_serialization() {
-        let workflows = vec![WorkflowMetadata::new(
-            "implement",
-            "Execute implement",
-            "builtin",
-        )];
+        let workflows = vec![WorkflowMetadata::new("plan", "Execute plan", "builtin")];
         let response = WorkflowListResponse::new(workflows);
 
         let json = serde_json::to_string(&response).unwrap();
         let deserialized: WorkflowListResponse = serde_json::from_str(&json).unwrap();
 
         assert_eq!(deserialized.workflows.len(), 1);
-        assert_eq!(deserialized.workflows[0].name, "implement");
+        assert_eq!(deserialized.workflows[0].name, "plan");
     }
 
     // ============================================================================
@@ -552,19 +548,16 @@ mod tests {
 
     #[test]
     fn test_workflow_metadata_serialization() {
-        let metadata = WorkflowMetadata::new("implement", "Implementation workflow", "builtin")
-            .with_parameter(WorkflowParameter::new(
-                "param",
-                "string",
-                "A parameter",
-                true,
-            ));
+        let metadata =
+            WorkflowMetadata::new("plan", "Planning workflow", "builtin").with_parameter(
+                WorkflowParameter::new("param", "string", "A parameter", true),
+            );
 
         let json = serde_json::to_string(&metadata).unwrap();
         let deserialized: WorkflowMetadata = serde_json::from_str(&json).unwrap();
 
-        assert_eq!(deserialized.name, "implement");
-        assert_eq!(deserialized.description, "Implementation workflow");
+        assert_eq!(deserialized.name, "plan");
+        assert_eq!(deserialized.description, "Planning workflow");
         assert_eq!(deserialized.source, "builtin");
         assert_eq!(deserialized.parameters.len(), 1);
     }
@@ -625,7 +618,7 @@ mod tests {
 
     #[test]
     fn test_generate_flow_tool_schema_with_workflows() {
-        let workflows = vec!["implement".to_string(), "plan".to_string()];
+        let workflows = vec!["plan".to_string(), "review".to_string()];
         let schema = generate_flow_tool_schema(workflows);
 
         let flow_name_enum = schema["properties"]["flow_name"]["enum"]
@@ -633,8 +626,8 @@ mod tests {
             .unwrap();
         assert_eq!(flow_name_enum.len(), 3);
         assert_eq!(flow_name_enum[0], "list"); // list is always first
-        assert_eq!(flow_name_enum[1], "implement");
-        assert_eq!(flow_name_enum[2], "plan");
+        assert_eq!(flow_name_enum[1], "plan");
+        assert_eq!(flow_name_enum[2], "review");
     }
 
     #[test]

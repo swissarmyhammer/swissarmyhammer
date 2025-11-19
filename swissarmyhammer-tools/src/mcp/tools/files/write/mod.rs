@@ -198,42 +198,8 @@ impl McpTool for WriteFileTool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::mcp::tool_handlers::ToolHandlers;
-    use crate::mcp::tool_registry::ToolContext;
     use std::fs;
-
-    use std::sync::Arc;
-
-    use swissarmyhammer_git::GitOperations;
-    use swissarmyhammer_issues::FileSystemIssueStorage;
-    use swissarmyhammer_memoranda::{MarkdownMemoStorage, MemoStorage};
     use tempfile::TempDir;
-    use tokio::sync::{Mutex, RwLock};
-
-    /// Create a test context for tool execution
-    fn create_test_context() -> ToolContext {
-        // Create temporary directory for issue storage
-        let issues_temp_dir = tempfile::tempdir().unwrap();
-        let issue_storage = Arc::new(RwLock::new(Box::new(
-            FileSystemIssueStorage::new(issues_temp_dir.path().to_path_buf()).unwrap(),
-        )
-            as Box<dyn swissarmyhammer_issues::IssueStorage>));
-        let git_ops = Arc::new(Mutex::new(None::<GitOperations>));
-        // Create temporary directory for memo storage
-        let memo_temp_dir = tempfile::tempdir().unwrap();
-        let memo_storage = Arc::new(RwLock::new(Box::new(MarkdownMemoStorage::new(
-            memo_temp_dir.path().join("memos"),
-        )) as Box<dyn MemoStorage>));
-        let tool_handlers = Arc::new(ToolHandlers::new(memo_storage.clone()));
-        let agent_config = Arc::new(swissarmyhammer_config::agent::AgentConfig::default());
-        ToolContext::new(
-            tool_handlers,
-            issue_storage,
-            git_ops,
-            memo_storage,
-            agent_config,
-        )
-    }
 
     /// Create test arguments for the write tool
     fn create_test_arguments(
@@ -290,7 +256,7 @@ mod tests {
         let test_content = "Hello, World!\nThis is a test file.";
 
         let tool = WriteFileTool::new();
-        let context = create_test_context();
+        let context = crate::test_utils::create_test_context().await;
         let args = create_test_arguments(&test_file.to_string_lossy(), test_content);
 
         let result = tool.execute(args, &context).await;
@@ -318,7 +284,7 @@ mod tests {
         // Overwrite with new content
         let new_content = "New content that replaces the old";
         let tool = WriteFileTool::new();
-        let context = create_test_context();
+        let context = crate::test_utils::create_test_context().await;
         let args = create_test_arguments(&test_file.to_string_lossy(), new_content);
 
         let result = tool.execute(args, &context).await;
@@ -344,7 +310,7 @@ mod tests {
         assert!(!nested_file.parent().unwrap().exists());
 
         let tool = WriteFileTool::new();
-        let context = create_test_context();
+        let context = crate::test_utils::create_test_context().await;
         let args = create_test_arguments(&nested_file.to_string_lossy(), test_content);
 
         let result = tool.execute(args, &context).await;
@@ -361,7 +327,7 @@ mod tests {
     #[tokio::test]
     async fn test_write_empty_file_path() {
         let tool = WriteFileTool::new();
-        let context = create_test_context();
+        let context = crate::test_utils::create_test_context().await;
         let args = create_test_arguments("", "test content");
 
         let result = tool.execute(args, &context).await;
@@ -374,7 +340,7 @@ mod tests {
     #[tokio::test]
     async fn test_write_whitespace_file_path() {
         let tool = WriteFileTool::new();
-        let context = create_test_context();
+        let context = crate::test_utils::create_test_context().await;
         let args = create_test_arguments("   ", "test content");
 
         let result = tool.execute(args, &context).await;
@@ -390,7 +356,7 @@ mod tests {
         std::env::set_current_dir(temp_dir.path()).unwrap();
 
         let tool = WriteFileTool::new();
-        let context = create_test_context();
+        let context = crate::test_utils::create_test_context().await;
         let args = create_test_arguments("relative_file.txt", "test content");
 
         let result = tool.execute(args, &context).await;
@@ -413,7 +379,7 @@ mod tests {
         let large_content = "x".repeat(10_000_001);
 
         let tool = WriteFileTool::new();
-        let context = create_test_context();
+        let context = crate::test_utils::create_test_context().await;
         let args = create_test_arguments(&test_file.to_string_lossy(), &large_content);
 
         let result = tool.execute(args, &context).await;
@@ -430,7 +396,7 @@ mod tests {
         let unicode_content = "Hello 🦀 Rust!\n你好世界\nПривет мир\n🚀✨🎉";
 
         let tool = WriteFileTool::new();
-        let context = create_test_context();
+        let context = crate::test_utils::create_test_context().await;
         let args = create_test_arguments(&test_file.to_string_lossy(), unicode_content);
 
         let result = tool.execute(args, &context).await;
@@ -448,7 +414,7 @@ mod tests {
         let empty_content = "";
 
         let tool = WriteFileTool::new();
-        let context = create_test_context();
+        let context = crate::test_utils::create_test_context().await;
         let args = create_test_arguments(&test_file.to_string_lossy(), empty_content);
 
         let result = tool.execute(args, &context).await;
@@ -520,7 +486,7 @@ mod tests {
             "Line 1\nLine 2\r\nTab\tcharacter\nNull: \0 (null byte)\nBackslash: \\ forward: /";
 
         let tool = WriteFileTool::new();
-        let context = create_test_context();
+        let context = crate::test_utils::create_test_context().await;
         let args = create_test_arguments(&test_file.to_string_lossy(), special_content);
 
         let result = tool.execute(args, &context).await;
@@ -534,7 +500,7 @@ mod tests {
     #[tokio::test]
     async fn test_write_json_argument_parsing_error() {
         let tool = WriteFileTool::new();
-        let context = create_test_context();
+        let context = crate::test_utils::create_test_context().await;
 
         // Create invalid arguments (missing required field)
         let mut args = serde_json::Map::new();
@@ -558,7 +524,7 @@ mod tests {
         let test_content = "Testing response format";
 
         let tool = WriteFileTool::new();
-        let context = create_test_context();
+        let context = crate::test_utils::create_test_context().await;
         let args = create_test_arguments(&test_file.to_string_lossy(), test_content);
 
         let result = tool.execute(args, &context).await;

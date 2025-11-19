@@ -19,9 +19,7 @@ categories = ["command-line-utilities", "development-tools"]
 swissarmyhammer-common = { path = "../swissarmyhammer-common" }
 swissarmyhammer-prompts = { path = "../swissarmyhammer-prompts" }
 swissarmyhammer-config = { path = "../swissarmyhammer-config" }
-swissarmyhammer-issues = { path = "../swissarmyhammer-issues" }
 swissarmyhammer-git = { path = "../swissarmyhammer-git" }
-swissarmyhammer-memoranda = { path = "../swissarmyhammer-memoranda" }
 swissarmyhammer-todo = { path = "../swissarmyhammer-todo" }
 swissarmyhammer-search = { path = "../swissarmyhammer-search" }
 swissarmyhammer-shell = { path = "../swissarmyhammer-shell" }

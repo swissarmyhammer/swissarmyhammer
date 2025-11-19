@@ -1,4 +1,14 @@
-# Issue Work Cleanup Plan
+# OBSOLETE: Issue Work Cleanup Plan
+
+**Status**: This specification is obsolete. The entire issue system has been removed.
+
+**Replacement**: Work directly with git commands and the todos system. No specialized branch management tools are provided.
+
+---
+
+# Original Specification
+
+_The content below describes a cleanup plan that was superseded by complete removal of the issue system._
 
 ## Overview
 

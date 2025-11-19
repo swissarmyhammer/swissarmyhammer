@@ -35,11 +35,11 @@ SwissArmyHammer is the **full-featured coding assistant** that works while you s
 SwissArmyHammer **IS** an MCP server with 25+ professional-grade tools:
 - **File Operations** - Read, write, edit, search across any codebase
 - **Git Integration** - Branch management, commit workflows, PR automation
-- **Issue Tracking** - Built-in project management with markdown files
+- **Rules & Todos** - Built-in quality checks and task management
 - **Semantic Search** - Vector-powered code understanding and navigation
 - **Web Integration** - Fetch docs, search APIs, gather requirements
 - **Shell Execution** - Safe, controlled system interaction
-- **Memory System** - Persistent context and note-taking
+- **Questions & Context** - Elicitation-based Q&A system for capturing decisions
 
 ### 🧠 **Agentic Intelligence**
 - **Multi-hour autonomous execution** without human intervention
@@ -51,7 +51,7 @@ SwissArmyHammer **IS** an MCP server with 25+ professional-grade tools:
 ### 📝 **Markdown-Driven Everything**
 - **Prompts** are markdown files with Liquid templating
 - **Workflows** are state machines defined in markdown
-- **Issues** are tracked as markdown files in your repo
+- **Rules** define code quality standards as markdown files
 - **Specs** are simple markdown documents
 - **No databases, no cloud, no lock-in** - just files
 
@@ -112,13 +112,13 @@ Include basic tests and a README with usage examples.
 # Plan the implementation from your spec
 sah plan spec.md
 
-# Let SwissArmyHammer implement everything autonomously
-sah implement
+# Let SwissArmyHammer work through all todos autonomously
+sah do
 ```
 
 ### 5. Watch the Magic ✨
 SwissArmyHammer will autonomously:
-- Break down your spec into focused development issues
+- Break down your spec into rules and todos
 - Initialize a Rust CLI project with proper structure
 - Implement HTTP client for OpenWeatherMap API
 - Add command-line argument parsing with clap
@@ -126,7 +126,7 @@ SwissArmyHammer will autonomously:
 - Write comprehensive error handling
 - Create unit and integration tests
 - Generate documentation and usage examples
-- Work through each issue systematically until complete
+- Work through each todo systematically until complete
 
 **No chatting. No hand-holding. No babysitting. Just working software.**
 
@@ -157,7 +157,7 @@ SwissArmyHammer pioneered comprehensive MCP server implementation:
 Everything is a markdown file you can read, edit, and version control:
 - **Prompts** with Liquid templating and variables
 - **Workflows** as state machines with visual diagrams
-- **Issues** tracked in your repository
+- **Rules** for code quality standards in your repository
 - **Specs** that become working software
 
 ### **Built for Scale**
@@ -195,7 +195,7 @@ Research the cryptocurrency {{symbol}}:
 
 3. Analyze the collected data and create a comprehensive research summary
 
-4. Use memo_create to save your research with title "{{symbol}} Research Data" so it can be used for the final report
+4. Use files_write to save your research to ".swissarmyhammer/{{symbol}}-research.md" so it can be used for the final report
 
 Include: current price, 24h change, market cap, recent news highlights, and key developments.
 EOF
@@ -215,7 +215,7 @@ arguments:
 
 Create a beautiful daily crypto report for {{symbol}}:
 
-1. Use memo_get to retrieve the research data for "{{symbol}} Research Data"
+1. Use files_read to retrieve the research data from ".swissarmyhammer/{{symbol}}-research.md"
 
 2. Transform the research into a professional daily report with:
    - 📊 Executive summary
@@ -226,7 +226,7 @@ Create a beautiful daily crypto report for {{symbol}}:
 
 3. Use professional formatting with emojis and clear sections
 
-4. Save the final report using file_write as "daily-{{symbol}}-report.md"
+4. Save the final report using files_write as "daily-{{symbol}}-report.md"
 EOF
 ```
 
@@ -307,7 +307,7 @@ sah plan ideas/feature.md
 sah flow plan ideas/feature.md
 
 # Execute with options
-sah implement --quiet
+sah do --quiet
 sah plan spec.md --interactive --dry-run
 ```
 
@@ -321,9 +321,9 @@ sah plan spec.md --interactive --dry-run
 
 ### Built-in Workflows
 
-**Implement**: Autonomous issue resolution
+**Do**: Autonomous todo execution
 ```bash
-sah implement --quiet
+sah do --quiet
 ```
 
 **Plan**: Generate implementation plans from specs

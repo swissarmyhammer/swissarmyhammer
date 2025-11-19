@@ -46,7 +46,6 @@ ulid.workspace = true
 
 # Internal dependencies
 swissarmyhammer-common = { path = "../swissarmyhammer-common" }
-swissarmyhammer-memoranda = { path = "../swissarmyhammer-memoranda" }
 
 [dev-dependencies]
 tempfile.workspace = true

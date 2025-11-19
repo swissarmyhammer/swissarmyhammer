@@ -10,15 +10,11 @@ use std::sync::Arc;
 
 use swissarmyhammer_git::GitOperations;
 use swissarmyhammer_tools::{
-    register_file_tools, register_memo_tools, register_rules_tools,
-    register_search_tools, register_shell_tools, register_todo_tools, register_web_fetch_tools,
-    register_web_search_tools,
+    register_file_tools, register_rules_tools, register_search_tools, register_shell_tools,
+    register_todo_tools, register_web_fetch_tools, register_web_search_tools,
 };
 use swissarmyhammer_tools::{ToolContext, ToolRegistry};
 use tokio::sync::{Mutex, RwLock};
-
-/// Type alias for issue storage to reduce complexity
-type IssueStorageArc = Arc<RwLock<Box<dyn swissarmyhammer_issues::IssueStorage>>>;
 
 /// CLI-specific tool context that can create and execute MCP tools
 pub struct CliToolContext {
@@ -37,20 +33,12 @@ impl CliToolContext {
     pub async fn new_with_dir(
         working_dir: &std::path::Path,
     ) -> Result<Self, Box<dyn std::error::Error>> {
-        let issue_storage = Self::create_issue_storage(working_dir)?;
         let git_ops = Self::create_git_operations(working_dir);
-        let memo_storage = Self::create_memo_storage(working_dir);
-        let tool_handlers = Self::create_tool_handlers(memo_storage.clone());
+        let tool_handlers = Self::create_tool_handlers();
         let agent_config =
             std::sync::Arc::new(swissarmyhammer_config::agent::AgentConfig::default());
 
-        let tool_context = ToolContext::new(
-            tool_handlers,
-            issue_storage,
-            git_ops,
-            memo_storage,
-            agent_config,
-        );
+        let tool_context = ToolContext::new(tool_handlers, git_ops, agent_config);
 
         let tool_registry = Self::create_tool_registry();
         let tool_registry_arc = Arc::new(RwLock::new(tool_registry));
@@ -64,17 +52,6 @@ impl CliToolContext {
         })
     }
 
-    /// Create issue storage backend
-    fn create_issue_storage(
-        working_dir: &std::path::Path,
-    ) -> Result<IssueStorageArc, Box<dyn std::error::Error>> {
-        // Create storage with working directory - no global directory changes needed
-        // This avoids race conditions in parallel test execution
-        let storage = swissarmyhammer_issues::FileSystemIssueStorage::new_default_in(working_dir)?;
-
-        Ok(Arc::new(RwLock::new(Box::new(storage))))
-    }
-
     /// Create git operations handler
     fn create_git_operations(working_dir: &std::path::Path) -> Arc<Mutex<Option<GitOperations>>> {
         Arc::new(Mutex::new(
@@ -82,43 +59,15 @@ impl CliToolContext {
         ))
     }
 
-    /// Create memo storage backend
-    fn create_memo_storage(
-        current_dir: &std::path::Path,
-    ) -> Arc<RwLock<Box<dyn swissarmyhammer_memoranda::MemoStorage>>> {
-        // First check if SWISSARMYHAMMER_MEMOS_DIR environment variable is set
-        let storage = if let Ok(custom_path) = std::env::var("SWISSARMYHAMMER_MEMOS_DIR") {
-            swissarmyhammer_memoranda::MarkdownMemoStorage::new(std::path::PathBuf::from(
-                custom_path,
-            ))
-        } else {
-            // For tests and custom working directories, create .swissarmyhammer/memos in the working dir
-            let memos_dir = current_dir.join(".swissarmyhammer").join("memos");
-            // Try to create directory, but don't fail if it already exists or can't be created
-            if let Err(e) = std::fs::create_dir_all(&memos_dir) {
-                eprintln!(
-                    "Warning: Failed to create memos directory {}: {}",
-                    memos_dir.display(),
-                    e
-                );
-            }
-            swissarmyhammer_memoranda::MarkdownMemoStorage::new(memos_dir)
-        };
-        Arc::new(RwLock::new(Box::new(storage)))
-    }
-
     /// Create tool handlers for backward compatibility
-    fn create_tool_handlers(
-        memo_storage: Arc<RwLock<Box<dyn swissarmyhammer_memoranda::MemoStorage>>>,
-    ) -> Arc<swissarmyhammer_tools::mcp::tool_handlers::ToolHandlers> {
-        Arc::new(swissarmyhammer_tools::mcp::tool_handlers::ToolHandlers::new(memo_storage))
+    fn create_tool_handlers() -> Arc<swissarmyhammer_tools::mcp::tool_handlers::ToolHandlers> {
+        Arc::new(swissarmyhammer_tools::mcp::tool_handlers::ToolHandlers::new())
     }
 
     /// Create and populate tool registry
     fn create_tool_registry() -> ToolRegistry {
         let mut tool_registry = ToolRegistry::new();
         register_file_tools(&mut tool_registry);
-        register_memo_tools(&mut tool_registry);
         register_rules_tools(&mut tool_registry);
         register_search_tools(&mut tool_registry);
         register_shell_tools(&mut tool_registry);
@@ -261,10 +210,11 @@ mod tests {
         // Test that the rate limiter allows normal operations
         // by checking that we can execute a tool (this will use the rate limiter internally)
         let mut args = Map::new();
-        args.insert("content".to_string(), json!("Test memo"));
+        args.insert("task".to_string(), json!("Test task"));
+        args.insert("context".to_string(), json!("Test context"));
 
         // This should succeed if rate limiter is working properly
-        let result = context.execute_tool("memo_create", args).await;
+        let result = context.execute_tool("todo_create", args).await;
 
         // We expect this to either succeed or fail with a normal error (not a rate limit error)
         // Rate limit errors would be specific MCP errors about rate limiting
@@ -285,37 +235,11 @@ mod tests {
 
     // Helper function for tests
     async fn create_mock_tool_context() -> ToolContext {
-        use std::path::PathBuf;
-
-        let issue_storage: IssueStorageArc = Arc::new(RwLock::new(Box::new(
-            swissarmyhammer_issues::FileSystemIssueStorage::new(PathBuf::from("./test_issues"))
-                .unwrap(),
-        )));
-
         let git_ops: Arc<Mutex<Option<GitOperations>>> = Arc::new(Mutex::new(None));
-
-        let memo_storage: Arc<RwLock<Box<dyn swissarmyhammer_memoranda::MemoStorage>>> =
-            Arc::new(RwLock::new(Box::new(
-                swissarmyhammer_memoranda::MarkdownMemoStorage::new_default()
-                    .await
-                    .unwrap_or_else(|_| {
-                        swissarmyhammer_memoranda::MarkdownMemoStorage::new(PathBuf::from(
-                            "./test_issues",
-                        ))
-                    }),
-            )));
-
-        let tool_handlers = Arc::new(
-            swissarmyhammer_tools::mcp::tool_handlers::ToolHandlers::new(memo_storage.clone()),
-        );
+        let tool_handlers =
+            Arc::new(swissarmyhammer_tools::mcp::tool_handlers::ToolHandlers::new());
         let agent_config = Arc::new(swissarmyhammer_config::agent::AgentConfig::default());
 
-        ToolContext::new(
-            tool_handlers,
-            issue_storage,
-            git_ops,
-            memo_storage,
-            agent_config,
-        )
+        ToolContext::new(tool_handlers, git_ops, agent_config)
     }
 }

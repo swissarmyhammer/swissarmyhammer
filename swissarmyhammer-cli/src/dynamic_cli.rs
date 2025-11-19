@@ -413,14 +413,14 @@ SwissArmyHammer - The only coding assistant you'll ever need
 
 Commands are organized into three types:
 - Static commands (serve, doctor, validate, agent, prompt, rule, flow)
-- Workflow shortcuts (implement, plan, etc.) - use 'sah flow list' to see all
+- Workflow shortcuts (do, plan, review, etc.) - use 'sah flow list' to see all
 - Tool commands (file, issue, memo, search, shell, web-search)
 
 Examples:
   sah serve                    Run as MCP server
   sah doctor                   Diagnose configuration
   sah flow list                List all workflows
-  sah implement                Execute implement workflow (shortcut)
+  sah do                       Execute do workflow (shortcut)
   sah plan spec.md             Execute plan workflow (shortcut)
   sah file read path.txt       Read a file via MCP tool
 ",
@@ -1288,7 +1288,7 @@ All other names execute the named workflow.
 
 Examples:
   sah flow list --verbose
-  sah flow implement
+  sah flow do
   sah flow plan spec.md
 ",
         })

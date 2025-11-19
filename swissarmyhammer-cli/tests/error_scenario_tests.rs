@@ -138,13 +138,14 @@ async fn test_storage_backend_permissions() -> Result<()> {
     }
 
     // Test operations that require write access to .swissarmyhammer
-    let result = run_sah_command_in_process_with_dir(&["todo", "create", "--task", "test"], &temp_path)
-        .await
-        .unwrap_or_else(|e| CapturedOutput {
-            stdout: String::new(),
-            stderr: format!("Function error: {}", e),
-            exit_code: 1,
-        });
+    let result =
+        run_sah_command_in_process_with_dir(&["todo", "create", "--task", "test"], &temp_path)
+            .await
+            .unwrap_or_else(|e| CapturedOutput {
+                stdout: String::new(),
+                stderr: format!("Function error: {}", e),
+                exit_code: 1,
+            });
 
     // Restore permissions for cleanup before assertions (to avoid test cleanup issues)
     std::fs::set_permissions(&swissarmyhammer_dir, Permissions::from_mode(0o755))?;
@@ -175,15 +176,15 @@ async fn test_commands_require_git() -> Result<()> {
 
     // Test that todo commands require git repository
     // Use explicit working directory instead of global directory change to avoid race conditions
-    let result =
-        run_sah_command_in_process_with_dir(&["todo", "list"], &temp_path)
-            .await?;
+    let result = run_sah_command_in_process_with_dir(&["todo", "list"], &temp_path).await?;
     assert_ne!(
         result.exit_code, 0,
         "Todo commands should fail without git repository"
     );
     assert!(
-        result.stderr.contains("Todo operations require a Git repository")
+        result
+            .stderr
+            .contains("Todo operations require a Git repository")
             || result.stderr.contains("Git repository"),
         "Should show git repository error: {}",
         result.stderr
@@ -200,12 +201,7 @@ async fn test_resource_exhaustion() -> Result<()> {
     let large_content = "A".repeat(1_000_000); // 1MB of content
                                                // Use explicit working directory instead of global directory change to avoid race conditions
     let result = run_sah_command_in_process_with_dir(
-        &[
-            "todo",
-            "create",
-            "--task",
-            &large_content,
-        ],
+        &["todo", "create", "--task", &large_content],
         &temp_path,
     )
     .await?;

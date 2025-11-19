@@ -20,10 +20,6 @@ fn setup_test_environment() -> TempDir {
     let issues_dir = swissarmyhammer_dir.join("issues");
     std::fs::create_dir_all(&issues_dir).expect("Failed to create issues directory");
 
-    // Create memos directory for memo storage
-    let memos_dir = swissarmyhammer_dir.join("memos");
-    std::fs::create_dir_all(&memos_dir).expect("Failed to create memos directory");
-
     // Initialize git repository in temp directory to avoid branch conflicts
     use git2::{Repository, Signature};
 
@@ -93,26 +89,26 @@ async fn test_cli_can_call_mcp_tools() {
 
 #[tokio::test]
 #[serial_test::serial]
-async fn test_memo_create_tool_integration() {
+async fn test_todo_create_tool_integration() {
     let temp_dir = setup_test_environment();
 
     let context = CliToolContext::new_with_dir(temp_dir.path())
         .await
         .expect("Failed to create CliToolContext");
 
-    // Test calling memo_create tool
+    // Test calling todo_create tool
     let args = context.create_arguments(vec![
-        ("title", json!("Test Memo")),
+        ("task", json!("Test todo item")),
         (
-            "content",
-            json!("# Test Memo\n\nThis is a test memo for integration testing."),
+            "context",
+            json!("This is a test todo for integration testing."),
         ),
     ]);
 
-    let result = context.execute_tool("memo_create", args).await;
+    let result = context.execute_tool("todo_create", args).await;
     assert!(
         result.is_ok(),
-        "Failed to execute memo_create tool: {:?}",
+        "Failed to execute todo_create tool: {:?}",
         result.err()
     );
 
@@ -158,10 +154,10 @@ async fn test_invalid_arguments_error() {
         .await
         .expect("Failed to create CliToolContext");
 
-    // Test calling memo_create with invalid arguments (missing required fields)
+    // Test calling todo_create with invalid arguments (missing required fields)
     let args = context.create_arguments(vec![("invalid_field", json!("invalid_value"))]);
 
-    let result = context.execute_tool("memo_create", args).await;
+    let result = context.execute_tool("todo_create", args).await;
     assert!(result.is_err(), "Should return error for invalid arguments");
 }
 

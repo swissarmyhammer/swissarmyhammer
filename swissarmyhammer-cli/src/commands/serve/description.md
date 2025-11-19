@@ -8,7 +8,7 @@ SwissArmyHammer into an AI-accessible development platform.
 
 The serve command starts an MCP server that exposes SwissArmyHammer's complete
 toolset to AI applications. This enables Claude Code and other MCP-compatible
-AI tools to directly access file operations, semantic search, issue management,
+AI tools to directly access file operations, semantic search, todo management,
 workflows, and more.
 
 ```bash
@@ -20,7 +20,7 @@ sah serve
 Complete Tool Ecosystem:
 • File Operations - Read, write, edit, glob pattern matching
 • Semantic Search - AI-powered code search and indexing
-• Issue Management - Track, create, update development tasks
+• Todo Management - Track, create, update development tasks
 • Memoranda - Persistent knowledge and context storage
 • Shell Integration - Execute commands and scripts
 • Web Capabilities - Fetch content and search the web
@@ -45,13 +45,13 @@ Direct AI Access:
 Enhanced AI Capabilities:
 • AI can read and write files without user intervention
 • Semantic search finds relevant code instantly
-• Issue tracking integrates with AI planning and implementation
+• Todo tracking integrates with AI planning and execution
 • Workflows enable complex multi-step AI operations
 • Web access for documentation and reference lookup
 
 Development Efficiency:
 • AI-assisted coding with full project context
-• Automated issue resolution and implementation
+• Automated todo execution and implementation
 • Intelligent code search and navigation
 • Context-aware planning and refactoring
 
@@ -121,10 +121,9 @@ Search and Navigation:
 • outline_generate - Extract code structure
 
 Development Workflow:
-• issue_create, issue_show, issue_list - Issue tracking
-• issue_mark_complete, issue_update - Issue management
-• todo_create, todo_show - Task tracking
-• memo_create, memo_get - Knowledge management
+• todo_create, todo_show, todo_list - Todo tracking
+• todo_mark_complete - Todo completion
+• rules_create, rules_check - Code quality and standards
 
 Execution:
 • shell_execute - Run shell commands
@@ -165,14 +164,14 @@ sah serve
 # Terminal 2: Use Claude Code with SwissArmyHammer tools
 ```
 
-Automated issue resolution:
+Automated todo execution:
 ```bash
 # Claude Code uses MCP to:
-# 1. List issues with issue_list
-# 2. Read issue details with issue_show
+# 1. List todos with todo_list
+# 2. Read todo details with todo_show
 # 3. Edit code with files_edit
 # 4. Run tests with shell_execute
-# 5. Mark complete with issue_mark_complete
+# 5. Mark complete with todo_mark_complete
 ```
 
 AI-powered code search:

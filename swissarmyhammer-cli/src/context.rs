@@ -31,14 +31,6 @@ pub struct CliContext {
     #[allow(dead_code)]
     pub prompt_library: Arc<PromptLibrary>,
 
-    /// Memo storage for memoranda
-    #[allow(dead_code)]
-    pub memo_storage: Arc<swissarmyhammer_memoranda::MarkdownMemoStorage>,
-
-    /// Issue storage for issue tracking
-    #[allow(dead_code)]
-    pub issue_storage: Arc<swissarmyhammer_issues::FileSystemIssueStorage>,
-
     /// Git operations (optional - None if not in a git repository)
     #[allow(dead_code)]
     pub git_operations: Option<Rc<GitOperations>>,
@@ -225,22 +217,6 @@ impl CliContextBuilder {
         .await
     }
 
-    /// Initialize memo storage with error context
-    async fn initialize_memo_storage() -> Result<swissarmyhammer_memoranda::MarkdownMemoStorage> {
-        Self::initialize_storage("memo storage", || {
-            swissarmyhammer_memoranda::MarkdownMemoStorage::new_default()
-        })
-        .await
-    }
-
-    /// Initialize issue storage with error context
-    async fn initialize_issue_storage() -> Result<swissarmyhammer_issues::FileSystemIssueStorage> {
-        Self::initialize_storage("issue storage", || async {
-            swissarmyhammer_issues::FileSystemIssueStorage::new_default()
-        })
-        .await
-    }
-
     /// Build the CliContext with async initialization of storage components
     pub async fn build_async(self) -> Result<CliContext> {
         let workflow_storage = Arc::new(Self::initialize_workflow_storage().await?);
@@ -261,9 +237,6 @@ impl CliContextBuilder {
             }
         }
 
-        let memo_storage = Arc::new(Self::initialize_memo_storage().await?);
-        let issue_storage = Arc::new(Self::initialize_issue_storage().await?);
-
         // Initialize git operations - make it optional when not in a git repository
         let git_operations = match GitOperations::new() {
             Ok(ops) => {
@@ -279,8 +252,6 @@ impl CliContextBuilder {
         Ok(CliContext {
             workflow_storage,
             prompt_library: Arc::new(prompt_library),
-            memo_storage,
-            issue_storage,
             git_operations,
             template_context: Self::require_field(self.template_context, "template_context")?,
             format: self.format.unwrap_or(OutputFormat::Table),

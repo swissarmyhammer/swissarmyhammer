@@ -101,13 +101,11 @@ mod tests {
     #[test]
     fn test_get_tool_description() {
         // Test that we can get descriptions for known tools
-        assert!(get_tool_description("memoranda", "create").is_some());
         assert!(get_tool_description("todo", "create").is_some());
     }
 
     #[test]
     fn test_has_tool_description() {
-        assert!(has_tool_description("memoranda", "create"));
         assert!(has_tool_description("todo", "create"));
         assert!(!has_tool_description("nonexistent", "tool"));
     }
@@ -115,7 +113,6 @@ mod tests {
     #[test]
     fn test_get_descriptions_by_noun() {
         let grouped = get_descriptions_by_noun();
-        assert!(grouped.contains_key("memoranda"));
         assert!(grouped.contains_key("todo"));
 
         // Check that todo has expected verbs

@@ -39,7 +39,6 @@ pub mod abort;
 pub mod files;
 pub mod flow;
 pub mod git;
-pub mod memoranda;
 pub mod outline;
 pub mod questions;
 pub mod rules;

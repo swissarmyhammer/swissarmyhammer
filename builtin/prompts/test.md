@@ -37,7 +37,6 @@ The goal is to have:
 - if there is an existing `.swissarmyhammer/tmp/TEST_FAILURES.md`, read it, think, and append to it -- more work to do!
 - fix broken tests one at a time, focus and don't get distracted
 - DO NOT commit to git
-- DO NOT mark the issue complete with the issue_mark_complete tool
 {% render "todo", todo_file: ".swissarmyhammer/tmp/TEST_FAILURES.md" %}
 
 ## Reporting

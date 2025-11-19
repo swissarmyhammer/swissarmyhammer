@@ -50,9 +50,9 @@ Clear precedence rules across three locations:
 - Built-in error handling and recovery mechanisms
 
 **Development Integration**
-- Git-integrated issue tracking with automatic branch management
 - Semantic search using vector embeddings and TreeSitter parsing
-- Note-taking system with full-text search capabilities
+- Code quality rules with LLM-based validation
+- Ephemeral task management with rich context
 
 **Built-in Resources**
 - 20+ production-ready prompts for common development tasks
@@ -89,14 +89,16 @@ initial_state: plan
 
 ### plan
 Plan the feature implementation
-**Next**: implement
+**Next**: do
 
-### implement  
-Write the feature code
+### do
+Execute the implementation plan
+**Description**: Work through all todos autonomously
 **Next**: review
 
 ### review
-Review the implementation
+Check code against rules
+**Description**: Verify code meets all acceptance criteria
 **Next**: complete
 ```
 

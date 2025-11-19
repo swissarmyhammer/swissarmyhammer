@@ -558,35 +558,15 @@ mod tests {
     #[tokio::test]
     async fn test_tool_execution_invalid_empty_patterns() {
         use crate::mcp::tool_handlers::ToolHandlers;
-
         use std::sync::Arc;
         use swissarmyhammer_git::GitOperations;
-        use swissarmyhammer_issues::IssueStorage;
-        use swissarmyhammer_memoranda::{MarkdownMemoStorage, MemoStorage};
-        use tokio::sync::{Mutex, RwLock};
+        use tokio::sync::Mutex;
 
         // Create mock context
-        let issue_storage: Arc<RwLock<Box<dyn IssueStorage>>> = Arc::new(RwLock::new(Box::new(
-            swissarmyhammer_issues::FileSystemIssueStorage::new(
-                tempfile::tempdir().unwrap().path().to_path_buf(),
-            )
-            .unwrap(),
-        )));
         let git_ops: Arc<Mutex<Option<GitOperations>>> = Arc::new(Mutex::new(None));
-        // Create temporary directory for memo storage
-        let temp_dir = tempfile::tempdir().unwrap();
-        let memo_storage: Arc<RwLock<Box<dyn MemoStorage>>> = Arc::new(RwLock::new(Box::new(
-            MarkdownMemoStorage::new(temp_dir.path().join("memos")),
-        )));
-        let tool_handlers = Arc::new(ToolHandlers::new(memo_storage.clone()));
+        let tool_handlers = Arc::new(ToolHandlers::new());
         let agent_config = Arc::new(swissarmyhammer_config::agent::AgentConfig::default());
-        let context = ToolContext::new(
-            tool_handlers,
-            issue_storage,
-            git_ops,
-            memo_storage,
-            agent_config,
-        );
+        let context = ToolContext::new(tool_handlers, git_ops, agent_config);
 
         let tool = OutlineGenerateTool::new();
         let mut args = serde_json::Map::new();
@@ -603,35 +583,15 @@ mod tests {
     #[tokio::test]
     async fn test_tool_execution_valid_patterns() {
         use crate::mcp::tool_handlers::ToolHandlers;
-
         use std::sync::Arc;
         use swissarmyhammer_git::GitOperations;
-        use swissarmyhammer_issues::IssueStorage;
-        use swissarmyhammer_memoranda::{MarkdownMemoStorage, MemoStorage};
-        use tokio::sync::{Mutex, RwLock};
+        use tokio::sync::Mutex;
 
         // Create mock context
-        let issue_storage: Arc<RwLock<Box<dyn IssueStorage>>> = Arc::new(RwLock::new(Box::new(
-            swissarmyhammer_issues::FileSystemIssueStorage::new(
-                tempfile::tempdir().unwrap().path().to_path_buf(),
-            )
-            .unwrap(),
-        )));
         let git_ops: Arc<Mutex<Option<GitOperations>>> = Arc::new(Mutex::new(None));
-        // Create temporary directory for memo storage
-        let temp_dir2 = tempfile::tempdir().unwrap();
-        let memo_storage: Arc<RwLock<Box<dyn MemoStorage>>> = Arc::new(RwLock::new(Box::new(
-            MarkdownMemoStorage::new(temp_dir2.path().join("memos")),
-        )));
-        let tool_handlers = Arc::new(ToolHandlers::new(memo_storage.clone()));
+        let tool_handlers = Arc::new(ToolHandlers::new());
         let agent_config = Arc::new(swissarmyhammer_config::agent::AgentConfig::default());
-        let context = ToolContext::new(
-            tool_handlers,
-            issue_storage,
-            git_ops,
-            memo_storage,
-            agent_config,
-        );
+        let context = ToolContext::new(tool_handlers, git_ops, agent_config);
 
         let tool = OutlineGenerateTool::new();
         let mut args = serde_json::Map::new();
@@ -656,34 +616,16 @@ mod tests {
         use crate::mcp::tool_handlers::ToolHandlers;
         use std::sync::Arc;
         use swissarmyhammer_git::GitOperations;
-        use swissarmyhammer_issues::IssueStorage;
-        use swissarmyhammer_memoranda::{MarkdownMemoStorage, MemoStorage};
-        use tokio::sync::{mpsc, Mutex, RwLock};
+        use tokio::sync::{mpsc, Mutex};
 
         let (tx, mut rx) = mpsc::unbounded_channel();
         let progress_sender = ProgressSender::new(tx);
 
         // Create mock context with progress sender
-        let issue_storage: Arc<RwLock<Box<dyn IssueStorage>>> = Arc::new(RwLock::new(Box::new(
-            swissarmyhammer_issues::FileSystemIssueStorage::new(
-                tempfile::tempdir().unwrap().path().to_path_buf(),
-            )
-            .unwrap(),
-        )));
         let git_ops: Arc<Mutex<Option<GitOperations>>> = Arc::new(Mutex::new(None));
-        let temp_dir = tempfile::tempdir().unwrap();
-        let memo_storage: Arc<RwLock<Box<dyn MemoStorage>>> = Arc::new(RwLock::new(Box::new(
-            MarkdownMemoStorage::new(temp_dir.path().join("memos")),
-        )));
-        let tool_handlers = Arc::new(ToolHandlers::new(memo_storage.clone()));
+        let tool_handlers = Arc::new(ToolHandlers::new());
         let agent_config = Arc::new(swissarmyhammer_config::agent::AgentConfig::default());
-        let mut context = ToolContext::new(
-            tool_handlers,
-            issue_storage,
-            git_ops,
-            memo_storage,
-            agent_config,
-        );
+        let mut context = ToolContext::new(tool_handlers, git_ops, agent_config);
         context.progress_sender = Some(progress_sender);
 
         // Create temporary directory with multiple test files

@@ -28,8 +28,6 @@ swissarmyhammer-tools = { path = "../swissarmyhammer-tools" }
 swissarmyhammer-config = { path = "../swissarmyhammer-config" }
 swissarmyhammer-common = { path = "../swissarmyhammer-common" }
 swissarmyhammer-git = { path = "../swissarmyhammer-git" }
-swissarmyhammer-memoranda = { path = "../swissarmyhammer-memoranda" }
-swissarmyhammer-issues = { path = "../swissarmyhammer-issues" }
 swissarmyhammer-prompts = { path = "../swissarmyhammer-prompts" }
 swissarmyhammer-rules = { path = "../swissarmyhammer-rules" }
 swissarmyhammer-templating = { path = "../swissarmyhammer-templating" }

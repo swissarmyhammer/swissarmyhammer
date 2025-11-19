@@ -377,19 +377,20 @@ async fn test_mixed_workflow() -> Result<()> {
         // .await?;
         // assert_eq!(issue_result.exit_code, 0, "Issue creation should succeed");
 
-        let memo_result = run_sah_command_in_process_with_dir(
-            &[
-                "memo",
-                "create",
-                "--title",
-                "Mixed Test Memo",
-                "--content",
-                "# Mixed Test\nTesting memo creation",
-            ],
-            test_env.path(),
-        )
-        .await?;
-        assert_eq!(memo_result.exit_code, 0, "Memo creation should succeed");
+        // Memo CLI commands have been removed
+        // let memo_result = run_sah_command_in_process_with_dir(
+        //     &[
+        //         "memo",
+        //         "create",
+        //         "--title",
+        //         "Mixed Test Memo",
+        //         "--content",
+        //         "# Mixed Test\nTesting memo creation",
+        //     ],
+        //     test_env.path(),
+        // )
+        // .await?;
+        // assert_eq!(memo_result.exit_code, 0, "Memo creation should succeed");
 
         // Try search operations with mixed content
         let _indexed = try_search_index(test_env.path(), &["**/*.md"], false).await?;
@@ -519,14 +520,14 @@ async fn test_error_recovery_workflow_lightweight() -> Result<()> {
 
     let result = tokio::time::timeout(timeout_duration, async {
         // Test basic operations that don't require ML
-        // Test memo operations
-        let memo_list =
-            run_sah_command_in_process_with_dir(&["memo", "list"], test_env.path()).await?;
-        assert_eq!(memo_list.exit_code, 0, "Should be able to list memos");
-
         // Test help command as a basic functionality test
         let help_result = run_sah_command_in_process_with_dir(&["--help"], test_env.path()).await?;
         assert_eq!(help_result.exit_code, 0, "Help command should work");
+
+        // Test version command as another basic functionality test
+        let version_result =
+            run_sah_command_in_process_with_dir(&["--version"], test_env.path()).await?;
+        assert_eq!(version_result.exit_code, 0, "Version command should work");
 
         Ok(())
     })

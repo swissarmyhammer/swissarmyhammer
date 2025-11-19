@@ -1628,76 +1628,10 @@ impl ExecutionVisualizer {
         let file_path = Path::new("./swissarmyhammer/src/workflow/visualization.rs");
         let chunks = parser.parse_file(file_path, visualization_content).unwrap();
 
-        if chunks.is_empty() {
-            // Debug: Let's also check what language is detected
-            let _detected_language = parser.detect_language(file_path);
-
-            // Check if file is supported
-            let _is_supported = parser.is_supported_file(file_path);
-        }
-
-        // Test with memo.rs content
-        let memo_content = r#"use crate::cli::MemoCommands;
-use colored::*;
-use std::io::{self, Read};
-use swissarmyhammer_memoranda::{
-    AdvancedMemoSearchEngine, MarkdownMemoStorage, MemoId, MemoStorage, SearchOptions,
-};
-
-// Configurable preview length constants
-const DEFAULT_LIST_PREVIEW_LENGTH: usize = 100;
-const DEFAULT_SEARCH_PREVIEW_LENGTH: usize = 150;
-
-/// Format content preview with specified maximum length
-fn format_content_preview(content: &str, max_length: usize) -> String {
-    let preview = if content.len() > max_length {
-        format!("{}...", &content[..max_length])
-    } else {
-        content.to_string()
-    };
-    preview.replace('\n', " ")
-}
-
-pub async fn handle_memo_command(command: MemoCommands) -> SearchResult<(), Box<dyn std::error::Error>> {
-    let storage = MarkdownMemoStorage::new_default()?;
-
-    match command {
-        MemoCommands::Create { title, content } => {
-            create_memo(storage, title, content).await?;
-        }
-        MemoCommands::List => {
-            list_memos(storage).await?;
-        }
-        MemoCommands::Get { id } => {
-            get_memo(storage, &id).await?;
-        }
-        MemoCommands::Update { id, content } => {
-            update_memo(storage, &id, content).await?;
-        }
-        MemoCommands::Delete { id } => {
-            delete_memo(storage, &id).await?;
-        }
-        MemoCommands::Search { query } => {
-            search_memos(storage, &query).await?;
-        }
-        MemoCommands::Context => {
-            get_context(storage).await?;
-        }
-    }
-
-    Ok(())
-}
-"#;
-
-        let memo_file_path = Path::new("./swissarmyhammer-cli/src/memo.rs");
-        let memo_chunks = parser.parse_file(memo_file_path, memo_content).unwrap();
-
-        memo_chunks.is_empty();
-
-        // The test should pass if we extract chunks from either file
+        // The test should pass if we extract chunks from the test file
         assert!(
-            !chunks.is_empty() || !memo_chunks.is_empty(),
-            "Should extract chunks from at least one of the test files"
+            !chunks.is_empty(),
+            "Should extract chunks from the visualization.rs test file"
         );
     }
 }

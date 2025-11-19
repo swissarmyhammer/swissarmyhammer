@@ -14,10 +14,10 @@ Transform workflow execution from hardcoded CLI commands (`implement`, `plan`) i
 ### Hardcoded Command Wrappers
 
 ```rust
-// swissarmyhammer-cli/src/commands/implement/mod.rs
+// swissarmyhammer-cli/src/commands/do/mod.rs
 pub async fn handle_command(context: &CliContext) -> i32 {
     let subcommand = FlowSubcommand::Run {
-        workflow: "implement".to_string(),
+        workflow: "do".to_string(),
         vars: vec![],
         interactive: false,
         dry_run: false,
@@ -51,7 +51,7 @@ sah flow list --format json --verbose --source builtin
 1. **Hardcoded Wrappers**: Each workflow needs a custom command wrapper
 2. **Non-Standard Parameters**: Using `--var key=value` is unconventional
 3. **Discovery Gap**: MCP clients can't easily discover workflows
-4. **Inconsistent Patterns**: Some commands are hardcoded (`implement`), others require `flow run`
+4. **Inconsistent Patterns**: Some commands are hardcoded (`do`), others require `flow run`
 5. **Parameter Mismatch**: Workflow parameter definitions don't map to CLI naturally
 
 ## Proposed Solution
@@ -72,7 +72,7 @@ One `flow` tool handles both workflow execution and discovery.
       "flow_name": {
         "type": "string",
         "description": "Name of the workflow to execute, or 'list' to show all workflows",
-        "enum": ["list", "implement", "plan", "code_review"]
+        "enum": ["list", "plan", "do", "test", "review"]
       },
       "parameters": {
         "type": "object",
@@ -117,8 +117,8 @@ One `flow` tool handles both workflow execution and discovery.
 {
   "workflows": [
     {
-      "name": "implement",
-      "description": "Execute the implement workflow for autonomous issue resolution",
+      "name": "do",
+      "description": "Autonomously work through all pending todo items",
       "source": "builtin",
       "parameters": []
     },
@@ -177,7 +177,7 @@ sah flow list --format json --verbose
 sah flow run plan spec.md --interactive
 
 # Execute workflow with no required params
-sah flow run implement --quiet
+sah flow run do --quiet
 
 # Execute workflow with multiple required params
 sah flow run code-review main feature-x --param reviewer=bob
@@ -193,7 +193,7 @@ Each workflow gets a top-level command with the same parameter conventions:
 ```bash
 # Shortcut form (automatically generated)
 sah plan spec.md --interactive
-sah implement --quiet
+sah do --quiet
 sah code-review main feature-x --param reviewer=bob
 ```
 
@@ -228,19 +228,17 @@ sah _flow --param input=value
 
 **Old Way (Deprecated)**:
 ```bash
-sah implement
-sah plan spec.md
 sah flow run custom_workflow --var input=value
 ```
 
 **New Way**:
 ```bash
 # Shortcut (recommended)
-sah implement --quiet
+sah do --quiet
 sah plan --param plan_filename=spec.md
 
 # Full form (explicit)
-sah flow implement --quiet
+sah flow do --quiet
 sah flow plan --param plan_filename=spec.md
 ```
 
@@ -699,7 +697,7 @@ sah my-prompt --param input=value
 - [ ] Support `--var` with deprecation warning during transition
 - [ ] Remove old flow subcommands (resume, status, logs, test)
 - [ ] Update documentation
-- [ ] Add deprecation warnings to `implement` and `plan` wrapper commands
+- [ ] Add deprecation warnings to deprecated wrapper commands
 - [ ] Create integration tests for workflow execution
 - [ ] Create integration tests for MCP notifications during execution
 - [ ] Create integration tests for `flow_name="list"` special case

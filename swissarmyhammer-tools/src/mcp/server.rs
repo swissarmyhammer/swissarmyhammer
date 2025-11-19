@@ -16,13 +16,12 @@ use swissarmyhammer_prompts::{PromptLibrary, PromptResolver};
 
 use tokio::sync::{Mutex, RwLock};
 
-use super::storage_init;
 use super::tool_handlers::ToolHandlers;
 use super::tool_registry::{
     register_abort_tools, register_file_tools, register_flow_tools, register_git_tools,
-    register_memo_tools, register_outline_tools, register_questions_tools,
-    register_rules_tools, register_search_tools, register_shell_tools, register_todo_tools,
-    register_web_fetch_tools, register_web_search_tools, ToolContext, ToolRegistry,
+    register_outline_tools, register_questions_tools, register_rules_tools, register_search_tools,
+    register_shell_tools, register_todo_tools, register_web_fetch_tools, register_web_search_tools,
+    ToolContext, ToolRegistry,
 };
 
 /// Server instructions displayed to MCP clients
@@ -167,11 +166,6 @@ impl McpServer {
     /// # Errors
     ///
     pub async fn new_with_work_dir(library: PromptLibrary, work_dir: PathBuf) -> Result<Self> {
-        // Initialize storage using dedicated storage initialization module
-        // This keeps storage instantiation separate from the MCP server implementation
-        let issue_storage = storage_init::initialize_issue_storage(&work_dir)?;
-        let memo_storage = storage_init::initialize_memo_storage().await?;
-
         // Initialize git operations with work_dir - make it optional for tests
         let git_ops = match GitOperations::with_work_dir(work_dir.clone()) {
             Ok(ops) => Some(ops),
@@ -181,12 +175,10 @@ impl McpServer {
             }
         };
 
-        // Storage is already wrapped in Arc<RwLock<>> by the initialization functions
-        let memo_storage_arc = memo_storage;
         let git_ops_arc = Arc::new(Mutex::new(git_ops));
 
-        // Initialize tool handlers with memo storage
-        let tool_handlers = ToolHandlers::new(memo_storage_arc.clone());
+        // Initialize tool handlers
+        let tool_handlers = ToolHandlers::new();
 
         // Load agent configuration from sah.yaml
         let template_context = TemplateContext::load_for_cli().map_err(|e| {
@@ -201,9 +193,7 @@ impl McpServer {
         let mut tool_registry = ToolRegistry::new();
         let tool_context = Arc::new(ToolContext::new(
             Arc::new(tool_handlers.clone()),
-            issue_storage.clone(),
             git_ops_arc.clone(),
-            memo_storage_arc.clone(),
             agent_config,
         ));
 
@@ -212,7 +202,6 @@ impl McpServer {
         register_file_tools(&mut tool_registry);
         register_flow_tools(&mut tool_registry);
         register_git_tools(&mut tool_registry);
-        register_memo_tools(&mut tool_registry);
         register_outline_tools(&mut tool_registry);
         register_questions_tools(&mut tool_registry);
         register_rules_tools(&mut tool_registry);

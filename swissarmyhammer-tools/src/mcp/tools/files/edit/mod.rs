@@ -465,40 +465,8 @@ impl McpTool for EditFileTool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::mcp::tool_handlers::ToolHandlers;
-    use crate::mcp::tool_registry::ToolContext;
     use std::fs;
-    use std::sync::Arc;
-
-    use swissarmyhammer_git::GitOperations;
-    use swissarmyhammer_memoranda::{MarkdownMemoStorage, MemoStorage};
     use tempfile::TempDir;
-    use tokio::sync::{Mutex, RwLock};
-
-    /// Create a test context for tool execution
-    fn create_test_context() -> ToolContext {
-        use crate::test_utils::TestIssueEnvironment;
-
-        let test_env = TestIssueEnvironment::new();
-        let issue_storage = Arc::new(RwLock::new(
-            Box::new(test_env.storage()) as Box<dyn swissarmyhammer_issues::IssueStorage>
-        ));
-        let git_ops = Arc::new(Mutex::new(None::<GitOperations>));
-        // Create temporary directory for memo storage
-        let temp_dir = tempfile::tempdir().unwrap();
-        let memo_storage = Arc::new(RwLock::new(Box::new(MarkdownMemoStorage::new(
-            temp_dir.path().join("memos"),
-        )) as Box<dyn MemoStorage>));
-        let tool_handlers = Arc::new(ToolHandlers::new(memo_storage.clone()));
-        let agent_config = Arc::new(swissarmyhammer_config::agent::AgentConfig::default());
-        ToolContext::new(
-            tool_handlers,
-            issue_storage,
-            git_ops,
-            memo_storage,
-            agent_config,
-        )
-    }
 
     /// Create test arguments for the edit tool
     fn create_edit_arguments(
@@ -600,7 +568,7 @@ mod tests {
         fs::write(&test_file, initial_content).unwrap();
 
         let tool = EditFileTool::new();
-        let context = create_test_context();
+        let context = crate::test_utils::create_test_context().await;
         let args = create_edit_arguments(&test_file.to_string_lossy(), "world", "universe", None);
 
         let result = tool.execute(args, &context).await;
@@ -622,7 +590,7 @@ mod tests {
         fs::write(&test_file, initial_content).unwrap();
 
         let tool = EditFileTool::new();
-        let context = create_test_context();
+        let context = crate::test_utils::create_test_context().await;
         let args = create_edit_arguments(&test_file.to_string_lossy(), "test", "exam", Some(true));
 
         let result = tool.execute(args, &context).await;
@@ -641,7 +609,7 @@ mod tests {
         fs::write(&test_file, initial_content).unwrap();
 
         let tool = EditFileTool::new();
-        let context = create_test_context();
+        let context = crate::test_utils::create_test_context().await;
         let args = create_edit_arguments(
             &test_file.to_string_lossy(),
             "duplicate",
@@ -665,7 +633,7 @@ mod tests {
         fs::write(&test_file, initial_content).unwrap();
 
         let tool = EditFileTool::new();
-        let context = create_test_context();
+        let context = crate::test_utils::create_test_context().await;
         let args = create_edit_arguments(
             &test_file.to_string_lossy(),
             "nonexistent",
@@ -690,7 +658,7 @@ mod tests {
         let nonexistent_file = temp_dir.path().join("does_not_exist.txt");
 
         let tool = EditFileTool::new();
-        let context = create_test_context();
+        let context = crate::test_utils::create_test_context().await;
         let args = create_edit_arguments(&nonexistent_file.to_string_lossy(), "old", "new", None);
 
         let result = tool.execute(args, &context).await;
@@ -714,7 +682,7 @@ mod tests {
         fs::write(&test_file, "test content").unwrap();
 
         let tool = EditFileTool::new();
-        let context = create_test_context();
+        let context = crate::test_utils::create_test_context().await;
 
         // Test empty file path
         let args = create_edit_arguments("", "old", "new", None);
@@ -743,7 +711,7 @@ mod tests {
         fs::write(&test_file, unicode_content).unwrap();
 
         let tool = EditFileTool::new();
-        let context = create_test_context();
+        let context = crate::test_utils::create_test_context().await;
         let args = create_edit_arguments(&test_file.to_string_lossy(), "🌍", "🚀", None);
 
         let result = tool.execute(args, &context).await;
@@ -764,7 +732,7 @@ mod tests {
         fs::write(&windows_file, windows_content).unwrap();
 
         let tool = EditFileTool::new();
-        let context = create_test_context();
+        let context = crate::test_utils::create_test_context().await;
         let args = create_edit_arguments(
             &windows_file.to_string_lossy(),
             "old text",
@@ -874,7 +842,7 @@ mod tests {
         fs::write(&test_file, initial_content).unwrap();
 
         let tool = EditFileTool::new();
-        let context = create_test_context();
+        let context = crate::test_utils::create_test_context().await;
         let args = create_edit_arguments(&test_file.to_string_lossy(), "world", "universe", None);
 
         let result = tool.execute(args, &context).await;
@@ -940,7 +908,7 @@ mod tests {
     #[tokio::test]
     async fn test_edit_json_argument_parsing_error() {
         let tool = EditFileTool::new();
-        let context = create_test_context();
+        let context = crate::test_utils::create_test_context().await;
 
         // Create invalid arguments (missing required field)
         let mut args = serde_json::Map::new();
@@ -976,7 +944,7 @@ mod tests {
         fs::write(&test_file, &large_content).unwrap();
 
         let tool = EditFileTool::new();
-        let context = create_test_context();
+        let context = crate::test_utils::create_test_context().await;
         let args = create_edit_arguments(
             &test_file.to_string_lossy(),
             "test content",
@@ -1000,7 +968,7 @@ mod tests {
         fs::write(&test_file, "").unwrap();
 
         let tool = EditFileTool::new();
-        let context = create_test_context();
+        let context = crate::test_utils::create_test_context().await;
         let args = create_edit_arguments(
             &test_file.to_string_lossy(),
             "nonexistent",
