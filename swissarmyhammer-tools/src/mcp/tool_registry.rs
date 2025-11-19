@@ -99,7 +99,7 @@
 //! let stats = registry.get_validation_stats();
 //! if !stats.is_all_valid() {
 //!     tracing::warn!("Tool validation issues: {}", stats.summary());
-//!     
+//!
 //!     // Log warnings but continue operation
 //!     let warnings = registry.get_tool_validation_warnings();
 //!     for warning in warnings.iter().take(5) {
@@ -505,7 +505,7 @@ impl ToolContext {
     ///         "task": "Fix violation",
     ///         "context": "Details about the violation"
     ///     })).await?;
-    ///     
+    ///
     ///     // Extract data from result if needed
     ///     Ok(result)
     /// }
@@ -1951,6 +1951,7 @@ mod tests {
         assert_eq!(SearchQueryTool.cli_category(), Some("search"));
         assert_eq!(WebSearchTool.cli_category(), Some("web"));
         assert_eq!(ShellExecuteTool.cli_category(), Some("shell"));
+        assert_eq!(TodoListTool.cli_category(), Some("todo"));
         assert_eq!(TodoCreateTool.cli_category(), Some("todo"));
         assert_eq!(OutlineGenerateTool.cli_category(), Some("outline"));
         assert_eq!(AbortCreateTool.cli_category(), Some("abort"));

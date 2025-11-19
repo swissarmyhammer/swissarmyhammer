@@ -5,6 +5,7 @@
 ### Error Handling
 - Use `Result<T, E>` for recoverable errors
 - Use `anyhow::Result<T>` for application-level errors where specific error types aren't needed
+- Use `anyhow::Context` to add contextual information to errors
 - Use `thiserror` for library-level errors that need specific types
 - Always propagate errors with `?` operator when possible
 - Never use `unwrap()` or `expect()` in production code except for truly impossible cases
@@ -55,3 +56,31 @@
 - Use `tracing::info!`, `tracing::warn!`, etc. instead of `println!`
 - Add context with `tracing::instrument` on functions
 - Use `tracing::error!` for errors, not `eprintln!`
+
+## Validation Patterns
+
+### Input Validation
+- Validate at system boundaries (API endpoints, file parsing)
+- Use newtype patterns for validated data
+- Implement `TryFrom` for conversion with validation
+- Return descriptive validation errors
+
+### Business Rule Validation
+- Encode business rules in the type system when possible
+- Use builder patterns with validation steps
+- Validate complete objects, not individual fields
+- Separate syntax validation from semantic validation
+
+## Recovery Patterns
+
+### Transaction Safety
+- Use database transactions for multi-step operations
+- Implement compensation actions for distributed transactions
+- Store operation state for crash recovery
+- Use write-ahead logs for durability
+
+### Resource Cleanup
+- Always use RAII patterns with `Drop` trait
+- Implement cleanup in `Drop` even if explicit cleanup exists
+- Use `scopeguard` crate for complex cleanup scenarios
+- Never assume destructors will run (they might not in panics)
