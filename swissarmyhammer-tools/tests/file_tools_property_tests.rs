@@ -12,8 +12,6 @@ use std::sync::Arc;
 use swissarmyhammer_common::test_utils::IsolatedTestEnvironment;
 use swissarmyhammer_config::agent::AgentConfig;
 use swissarmyhammer_git::GitOperations;
-use swissarmyhammer_issues::{FileSystemIssueStorage, IssueStorage};
-use swissarmyhammer_memoranda::{MarkdownMemoStorage, MemoStorage};
 use swissarmyhammer_tools::mcp::tool_handlers::ToolHandlers;
 use swissarmyhammer_tools::mcp::tool_registry::{ToolContext, ToolRegistry};
 use swissarmyhammer_tools::mcp::tools::files;
@@ -21,28 +19,21 @@ use tempfile::TempDir;
 
 /// Create a test context for property testing
 async fn create_property_test_context() -> ToolContext {
-    let issue_storage: Arc<tokio::sync::RwLock<Box<dyn IssueStorage>>> =
-        Arc::new(tokio::sync::RwLock::new(Box::new(
-            FileSystemIssueStorage::new(tempfile::tempdir().unwrap().path().to_path_buf()).unwrap(),
-        )));
-    let git_ops: Arc<tokio::sync::Mutex<Option<GitOperations>>> =
-        Arc::new(tokio::sync::Mutex::new(None));
-    // Create temporary directory for memo storage in tests
-    let temp_dir = tempfile::tempdir().unwrap();
-    let memo_temp_dir = temp_dir.path().join("memos");
-    let memo_storage: Arc<tokio::sync::RwLock<Box<dyn MemoStorage>>> = Arc::new(
-        tokio::sync::RwLock::new(Box::new(MarkdownMemoStorage::new(memo_temp_dir))),
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    let _unique_id = format!(
+        "{}_{}",
+        std::process::id(),
+        COUNTER.fetch_add(1, Ordering::SeqCst)
     );
 
-    let tool_handlers = Arc::new(ToolHandlers::new(memo_storage.clone()));
+    let git_ops: Arc<tokio::sync::Mutex<Option<GitOperations>>> =
+        Arc::new(tokio::sync::Mutex::new(None));
 
-    ToolContext::new(
-        tool_handlers,
-        issue_storage,
-        git_ops,
-        memo_storage,
-        Arc::new(AgentConfig::default()),
-    )
+    let tool_handlers = Arc::new(ToolHandlers::new());
+    let agent_config = Arc::new(AgentConfig::default());
+
+    ToolContext::new(tool_handlers, git_ops, agent_config)
 }
 
 /// Create a test tool registry

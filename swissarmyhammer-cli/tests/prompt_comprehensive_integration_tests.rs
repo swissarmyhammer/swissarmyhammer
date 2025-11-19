@@ -5,6 +5,8 @@
 //! These tests ensure the prompt command works correctly end-to-end from CLI
 //! parsing through execution and output formatting.
 
+#![allow(deprecated)]
+
 use assert_cmd::Command;
 use predicates::prelude::*;
 

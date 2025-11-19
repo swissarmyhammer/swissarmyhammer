@@ -178,7 +178,8 @@ fn is_known_workflow(name: &str) -> bool {
         "plan",
         "document",
         "test",
-        "implement",
+        "review",
+        "do",
     ];
     TEST_CREATED_WORKFLOWS.contains(&name) || BUILTIN_WORKFLOWS.contains(&name)
 }
@@ -331,7 +332,7 @@ async fn run_sah_command_in_process_inner_with_dir(
         };
 
         // Use explicit working directory instead of global current directory
-        let mut cmd = tokio::process::Command::new(&binary_path);
+        let mut cmd = tokio::process::Command::new(binary_path);
         cmd.args(args)
             .current_dir(actual_working_dir) // Use correct working directory for prompt commands
             .kill_on_drop(true); // Ensure the process is killed if timeout occurs
@@ -365,7 +366,7 @@ async fn run_sah_command_in_process_inner_with_dir(
 
         // Debug output for failing commands
         if exit_code != 0 {
-            log_subprocess_failure(&binary_path, args, working_dir, exit_code, &stdout, &stderr);
+            log_subprocess_failure(binary_path, args, working_dir, exit_code, &stdout, &stderr);
         }
 
         Ok::<_, anyhow::Error>(CapturedOutput {
