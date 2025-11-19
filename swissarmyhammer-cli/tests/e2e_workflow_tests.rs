@@ -26,13 +26,6 @@ use in_process_test_utils::{run_sah_command_in_process, run_sah_command_in_proce
 use once_cell::sync::Lazy;
 use std::path::PathBuf;
 
-/// Check if we should run in fast mode (CI environment or explicit setting)
-fn should_run_fast() -> bool {
-    std::env::var("CI").is_ok()
-        || std::env::var("FAST_E2E_TESTS").is_ok()
-        || std::env::var("SKIP_SLOW_TESTS").is_ok()
-}
-
 /// Global persistent cache for search model downloads - shared across test runs for efficiency
 ///
 /// Cache Strategy:
@@ -175,120 +168,21 @@ async fn try_search_query(
     .await
 }
 
-/// Helper function to create and validate a new issue in the lifecycle test (optimized)
-async fn create_and_validate_issue(working_dir: &std::path::Path) -> Result<()> {
-    let create_result = run_sah_command_in_process_with_dir(
-        &[
-            "issue",
-            "create",
-            "--name",
-            "e2e_lifecycle_test",
-            "--content",
-            "# E2E Lifecycle Test\n\nThis issue tests the complete lifecycle workflow.",
-        ],
-        working_dir,
-    )
-    .await?;
-
-    // Reduce debug output in optimized version
-    if create_result.exit_code != 0 {
-        eprintln!(
-            "DEBUG: create_result.exit_code = {}",
-            create_result.exit_code
-        );
-        eprintln!("DEBUG: create_result.stderr = {}", create_result.stderr);
-    }
-
-    assert_eq!(create_result.exit_code, 0, "Issue creation should succeed");
-    assert!(
-        create_result
-            .stdout
-            .contains("Created issue: e2e_lifecycle_test")
-            || create_result
-                .stdout
-                .contains("created issue: e2e_lifecycle_test")
-            || create_result.stdout.contains("e2e_lifecycle_test"),
-        "Issue creation should show success message with issue name: {}",
-        create_result.stdout
-    );
-
-    // Skip separate list verification to reduce subprocess calls - creation success implies list will work
-    // Original verification: run_sah_command_in_process_with_dir(&["issue", "list"], working_dir)
-    // This saves ~0.5-1 second by avoiding unnecessary subprocess
-
-    Ok(())
-}
-
-/// Helper function to show, update, and re-validate issue details (optimized)
-async fn show_and_update_issue(working_dir: &std::path::Path) -> Result<()> {
-    // Show the issue details
-    let show_result = run_sah_command_in_process_with_dir(
-        &["issue", "show", "--name", "e2e_lifecycle_test"],
-        working_dir,
-    )
-    .await?;
-
-    // Reduce debug output in optimized version
-    if show_result.exit_code != 0 {
-        eprintln!("DEBUG: show_result.stderr = {}", show_result.stderr);
-    }
-
-    assert_eq!(show_result.exit_code, 0, "Issue show should succeed");
-    assert!(
-        show_result.stdout.contains("E2E Lifecycle Test")
-            && show_result.stdout.contains("complete lifecycle workflow"),
-        "Issue details should contain both title and description: {}",
-        show_result.stdout
-    );
-
-    // Update the issue
-    let update_result = run_sah_command_in_process_with_dir(
-        &[
-            "issue",
-            "update",
-            "--name",
-            "e2e_lifecycle_test",
-            "--content",
-            "Updated content for e2e testing",
-            "--append",
-        ],
-        working_dir,
-    )
-    .await?;
-    assert_eq!(update_result.exit_code, 0, "Issue update should succeed");
-
-    // Skip separate verification show to reduce subprocess calls
-    // The update success implies the content was updated correctly
-    // Original verification: run_sah_command_in_process_with_dir(&["issue", "show", "--name", "e2e_lifecycle_test"], working_dir)
-    // This saves another ~0.5-1 second by trusting the update operation
-
-    Ok(())
-}
-
-/// Helper function to complete issue and validate final state (optimized)
-async fn complete_issue(working_dir: &std::path::Path) -> Result<()> {
-    // Complete the issue
-    let complete_result = run_sah_command_in_process_with_dir(
-        &["issue", "complete", "--name", "e2e_lifecycle_test"],
-        working_dir,
-    )
-    .await?;
-    assert_eq!(
-        complete_result.exit_code, 0,
-        "Issue complete should succeed"
-    );
-
-    // Note: issue_merge requires being on an issue branch, which the removed issue_work tool would have created.
-    // Since we're testing the lifecycle without automatic branch management, we skip the merge step.
-    // Users who want branch-based workflows can manually create and manage branches.
-
-    // Skip final verification list to reduce subprocess calls
-    // The complete success implies the workflow completed correctly
-    // Original verification: run_sah_command_in_process_with_dir(&["issue", "list", "--show_completed"], working_dir)
-    // This saves the final ~0.5-1 second subprocess call
-
-    Ok(())
-}
+// Commented out: Issue CLI commands have been removed
+// /// Helper function to create and validate a new issue in the lifecycle test (optimized)
+// async fn create_and_validate_issue(working_dir: &std::path::Path) -> Result<()> {
+//     ...
+// }
+//
+// /// Helper function to show, update, and re-validate issue details (optimized)
+// async fn show_and_update_issue(working_dir: &std::path::Path) -> Result<()> {
+//     ...
+// }
+//
+// /// Helper function to complete issue and validate final state (optimized)
+// async fn complete_issue(working_dir: &std::path::Path) -> Result<()> {
+//     ...
+// }
 
 /// RAII helper for E2E tests that isolates working directory and environment
 struct E2ETestEnvironment {
@@ -309,9 +203,6 @@ impl E2ETestEnvironment {
         let temp_path = temp_dir.path().to_path_buf();
 
         // Create only essential directory structure
-        let issues_dir = temp_path.join("issues");
-        std::fs::create_dir_all(&issues_dir)?;
-
         let swissarmyhammer_dir = temp_path.join(".swissarmyhammer");
         std::fs::create_dir_all(&swissarmyhammer_dir)?;
 
@@ -338,24 +229,12 @@ impl Drop for E2ETestEnvironment {
     }
 }
 
-/// Test complete issue lifecycle workflow (optimized)
-#[tokio::test]
-async fn test_complete_issue_lifecycle() -> Result<()> {
-    if should_run_fast() {
-        // In fast mode, skip expensive operations
-        return Ok(());
-    }
-
-    let test_env = E2ETestEnvironment::new()?;
-
-    // Execute lifecycle steps using helper functions with explicit working directory
-    create_and_validate_issue(test_env.path()).await?;
-    show_and_update_issue(test_env.path()).await?;
-    // Note: issue_work tool has been removed - users now manually manage branches if needed
-    complete_issue(test_env.path()).await?;
-
-    Ok(())
-}
+// Commented out: Test uses removed issue CLI commands
+// /// Test complete issue lifecycle workflow (optimized)
+// #[tokio::test]
+// async fn test_complete_issue_lifecycle() -> Result<()> {
+//     ...
+// }
 
 /// Test complete search workflow with real small models.
 ///
@@ -483,19 +362,20 @@ async fn test_mixed_workflow() -> Result<()> {
 
     let result = tokio::time::timeout(timeout_duration, async {
         // Create test content
-        let issue_result = run_sah_command_in_process_with_dir(
-            &[
-                "issue",
-                "create",
-                "--name",
-                "mixed_test_issue",
-                "--content",
-                "# Mixed Workflow Test\nTesting integration",
-            ],
-            test_env.path(),
-        )
-        .await?;
-        assert_eq!(issue_result.exit_code, 0, "Issue creation should succeed");
+        // Issue CLI commands have been removed
+        // let issue_result = run_sah_command_in_process_with_dir(
+        //     &[
+        //         "issue",
+        //         "create",
+        //         "--name",
+        //         "mixed_test_issue",
+        //         "--content",
+        //         "# Mixed Workflow Test\nTesting integration",
+        //     ],
+        //     test_env.path(),
+        // )
+        // .await?;
+        // assert_eq!(issue_result.exit_code, 0, "Issue creation should succeed");
 
         let memo_result = run_sah_command_in_process_with_dir(
             &[
@@ -606,13 +486,6 @@ async fn test_error_recovery_workflow() -> Result<()> {
         // Test recovery after potential errors
         let _indexed = try_search_index(test_env.path(), &["**/*.md"], false).await?;
 
-        // Verify system state is consistent after operations
-        let issue_list = run_sah_command_in_process(&["issue", "list"]).await?;
-        assert_eq!(
-            issue_list.exit_code, 0,
-            "Should be able to list issues after errors"
-        );
-
         Ok(())
     })
     .await;
@@ -646,10 +519,6 @@ async fn test_error_recovery_workflow_lightweight() -> Result<()> {
 
     let result = tokio::time::timeout(timeout_duration, async {
         // Test basic operations that don't require ML
-        let issue_list =
-            run_sah_command_in_process_with_dir(&["issue", "list"], test_env.path()).await?;
-        assert_eq!(issue_list.exit_code, 0, "Should be able to list issues");
-
         // Test memo operations
         let memo_list =
             run_sah_command_in_process_with_dir(&["memo", "list"], test_env.path()).await?;

@@ -227,7 +227,7 @@ async fn run_sah_command_in_process_inner_with_dir(
     let is_dynamic_command = !args.is_empty()
         && matches!(
             args[0],
-            "issue" | "memo" | "shell" | "file" | "search" | "web-search"
+            "todo" | "memo" | "shell" | "file" | "search" | "web-search" | "rule"
         );
 
     // For non-dynamic commands, try to parse and run in-process

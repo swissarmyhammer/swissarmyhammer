@@ -4,7 +4,7 @@
 
 use swissarmyhammer_tools::mcp::tool_registry::ToolRegistry;
 use swissarmyhammer_tools::mcp::tool_registry::{
-    register_abort_tools, register_file_tools, register_issue_tools, register_memo_tools,
+    register_abort_tools, register_file_tools, register_memo_tools,
     register_outline_tools, register_search_tools, register_shell_tools, register_todo_tools,
     register_web_fetch_tools, register_web_search_tools,
 };
@@ -17,7 +17,6 @@ fn test_mcp_tools_are_registered() {
     // This mirrors exactly what McpServer does in its constructor
     register_abort_tools(&mut registry);
     register_file_tools(&mut registry);
-    register_issue_tools(&mut registry);
     register_memo_tools(&mut registry);
     register_outline_tools(&mut registry);
     register_search_tools(&mut registry);
@@ -29,12 +28,12 @@ fn test_mcp_tools_are_registered() {
     let tool_count = registry.len();
     println!("📊 Registered {} MCP tools", tool_count);
 
-    // We should have a significant number of tools. The threshold of 20 is based on the
-    // minimum set of core tools across all categories (files, shell, issues, memos, search,
+    // We should have a significant number of tools. The threshold of 15 is based on the
+    // minimum set of core tools across all categories (files, shell, memos, search,
     // todos, web, etc.). This acts as a smoke test to catch missing tool registrations.
     assert!(
-        tool_count > 20,
-        "Expected more than 20 tools, got {}. This suggests tools are not being registered properly.",
+        tool_count >= 15,
+        "Expected at least 15 tools, got {}. This suggests tools are not being registered properly.",
         tool_count
     );
 
@@ -46,9 +45,6 @@ fn test_mcp_tools_are_registered() {
         "files_edit",
         "files_glob",
         "files_grep",
-        "issue_create",
-        "issue_list",
-        "issue_show",
         "memo_create",
         "memo_list",
         "memo_get",
@@ -138,7 +134,6 @@ fn test_cli_categories_are_available() {
     // Register all tools
     register_abort_tools(&mut registry);
     register_file_tools(&mut registry);
-    register_issue_tools(&mut registry);
     register_memo_tools(&mut registry);
     register_outline_tools(&mut registry);
     register_search_tools(&mut registry);
@@ -153,7 +148,6 @@ fn test_cli_categories_are_available() {
     // These categories should be available (excluding hidden tools like abort and notify)
     let expected_categories = [
         "file",
-        "issue",
         "memo",
         "outline",
         "search",

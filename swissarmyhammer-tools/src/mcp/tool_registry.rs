@@ -558,7 +558,7 @@ impl ToolContext {
 /// # Implementation Guidelines
 ///
 /// ## Tool Names
-/// Tool names should follow the pattern `{domain}_{action}` (e.g., `memo_create`, `issue_list`).
+/// Tool names should follow the pattern `{domain}_{action}` (e.g., `memo_create`, `todo_list`).
 /// Names must be unique within the registry and should be stable across versions.
 ///
 /// ## Descriptions
@@ -598,7 +598,7 @@ pub trait McpTool: Send + Sync {
     /// Get the tool's unique identifier name
     ///
     /// The name must be unique within the registry and should follow the
-    /// `{domain}_{action}` pattern (e.g., `memo_create`, `issue_list`).
+    /// `{domain}_{action}` pattern (e.g., `memo_create`, `todo_list`).
     /// Names should be stable across versions.
     fn name(&self) -> &'static str;
 
@@ -674,7 +674,7 @@ pub trait McpTool: Send + Sync {
     /// # Examples
     ///
     /// * `memo_create` → Some("memo")
-    /// * `issue_list` → Some("issue")
+    /// * `todo_list` → Some("todo")
     /// * `files_read` → Some("file")
     fn cli_category(&self) -> Option<&'static str> {
         // Extract category from tool name by taking prefix before first underscore
@@ -682,7 +682,6 @@ pub trait McpTool: Send + Sync {
         if let Some(underscore_pos) = name.find('_') {
             match &name[..underscore_pos] {
                 "memo" => Some("memo"),
-                "issue" => Some("issue"),
                 "file" | "files" => Some("file"),
                 "search" => Some("search"),
                 "web" => Some("web"),
@@ -708,7 +707,7 @@ pub trait McpTool: Send + Sync {
     /// # Examples
     ///
     /// * `memo_create` → "create"
-    /// * `issue_list` → "list"
+    /// * `todo_list` → "list"
     /// * `files_read` → "read"
     fn cli_name(&self) -> &'static str {
         // Extract action from tool name by taking suffix after first underscore
@@ -1530,12 +1529,6 @@ pub fn register_git_tools(registry: &mut ToolRegistry) {
     git::register_git_tools(registry);
 }
 
-/// Register all issue-related tools with the registry
-pub fn register_issue_tools(registry: &mut ToolRegistry) {
-    use super::tools::issues;
-    issues::register_issue_tools(registry);
-}
-
 /// Register all memo-related tools with the registry
 pub fn register_memo_tools(registry: &mut ToolRegistry) {
     use super::tools::memoranda;
@@ -1607,7 +1600,6 @@ pub fn create_fully_registered_tool_registry() -> ToolRegistry {
     register_file_tools(&mut registry);
     register_flow_tools(&mut registry);
     register_git_tools(&mut registry);
-    register_issue_tools(&mut registry);
     register_memo_tools(&mut registry);
     register_outline_tools(&mut registry);
     register_questions_tools(&mut registry);
@@ -1900,9 +1892,9 @@ mod tests {
         "Create a new memo with the given title and content"
     );
     test_tool!(
-        IssueListTool,
-        "issue_list",
-        "List all available issues with their status"
+        TodoListTool,
+        "todo_list",
+        "List all available todo items with optional filtering"
     );
     test_tool!(
         FilesReadTool,
@@ -1955,7 +1947,6 @@ mod tests {
     fn test_cli_category_extraction() {
         // Test known categories
         assert_eq!(MemoCreateTool.cli_category(), Some("memo"));
-        assert_eq!(IssueListTool.cli_category(), Some("issue"));
         assert_eq!(FilesReadTool.cli_category(), Some("file"));
         assert_eq!(SearchQueryTool.cli_category(), Some("search"));
         assert_eq!(WebSearchTool.cli_category(), Some("web"));
@@ -1975,7 +1966,6 @@ mod tests {
     fn test_cli_name_extraction() {
         // Test action extraction
         assert_eq!(MemoCreateTool.cli_name(), "create");
-        assert_eq!(IssueListTool.cli_name(), "list");
         assert_eq!(FilesReadTool.cli_name(), "read");
         assert_eq!(SearchQueryTool.cli_name(), "query");
         assert_eq!(WebSearchTool.cli_name(), "search");
@@ -1999,10 +1989,6 @@ mod tests {
             Some("Create a new memo with the given title and content")
         );
         assert_eq!(
-            IssueListTool.cli_about(),
-            Some("List all available issues with their status")
-        );
-        assert_eq!(
             FilesReadTool.cli_about(),
             Some("Read and return file contents from the local filesystem")
         );
@@ -2013,7 +1999,6 @@ mod tests {
     fn test_hidden_from_cli_default() {
         // Test default implementation returns false
         assert!(!MemoCreateTool.hidden_from_cli());
-        assert!(!IssueListTool.hidden_from_cli());
         assert!(!FilesReadTool.hidden_from_cli());
         assert!(!UnknownCategoryTool.hidden_from_cli());
         assert!(!NoUnderscoreTool.hidden_from_cli());

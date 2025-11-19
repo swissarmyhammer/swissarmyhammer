@@ -13,8 +13,6 @@ const EXPECTED_CORE_TOOLS: &[&str] = &[
     "files_read",
     "files_write",
     "files_edit",
-    "issue_create",
-    "issue_list",
     "memo_create",
     "search_query",
     "shell_execute",

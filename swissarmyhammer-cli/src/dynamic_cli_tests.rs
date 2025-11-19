@@ -112,7 +112,7 @@ fn assert_contains_all<S: AsRef<str>>(text: &str, items: &[S], context: &str) {
 
 /// Helper to check if text contains string when option is present
 fn contains_if_present(text: &str, item: Option<&str>) -> bool {
-    item.map_or(false, |s| text.contains(s))
+    item.is_some_and(|s| text.contains(s))
 }
 
 /// Generic helper to assert a property matches an optional expected value

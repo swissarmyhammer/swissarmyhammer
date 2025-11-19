@@ -10,7 +10,7 @@ use std::sync::Arc;
 
 use swissarmyhammer_git::GitOperations;
 use swissarmyhammer_tools::{
-    register_file_tools, register_issue_tools, register_memo_tools, register_rules_tools,
+    register_file_tools, register_memo_tools, register_rules_tools,
     register_search_tools, register_shell_tools, register_todo_tools, register_web_fetch_tools,
     register_web_search_tools,
 };
@@ -118,7 +118,6 @@ impl CliToolContext {
     fn create_tool_registry() -> ToolRegistry {
         let mut tool_registry = ToolRegistry::new();
         register_file_tools(&mut tool_registry);
-        register_issue_tools(&mut tool_registry);
         register_memo_tools(&mut tool_registry);
         register_rules_tools(&mut tool_registry);
         register_search_tools(&mut tool_registry);

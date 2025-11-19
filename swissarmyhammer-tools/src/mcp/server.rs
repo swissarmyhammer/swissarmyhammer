@@ -20,7 +20,7 @@ use super::storage_init;
 use super::tool_handlers::ToolHandlers;
 use super::tool_registry::{
     register_abort_tools, register_file_tools, register_flow_tools, register_git_tools,
-    register_issue_tools, register_memo_tools, register_outline_tools, register_questions_tools,
+    register_memo_tools, register_outline_tools, register_questions_tools,
     register_rules_tools, register_search_tools, register_shell_tools, register_todo_tools,
     register_web_fetch_tools, register_web_search_tools, ToolContext, ToolRegistry,
 };
@@ -212,7 +212,6 @@ impl McpServer {
         register_file_tools(&mut tool_registry);
         register_flow_tools(&mut tool_registry);
         register_git_tools(&mut tool_registry);
-        register_issue_tools(&mut tool_registry);
         register_memo_tools(&mut tool_registry);
         register_outline_tools(&mut tool_registry);
         register_questions_tools(&mut tool_registry);

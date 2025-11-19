@@ -14,8 +14,8 @@ Turn specification(s) into rules and todos.
 Process the specific plan file: {{ plan_filename }}
 
 Generate:
-1. **Rules** - Acceptance criteria defining what success looks like (permanent, executable specifications)
-2. **Todos** - Implementation steps with rich markdown context (ephemeral task tracking)
+1. **Rules** - Permanent criteria defining what correct code looks like
+2. **Todos** - Implementation steps with rich markdown context
 
 Use the rule_create tool for acceptance criteria and the todo_create tool for implementation steps.
 
@@ -37,7 +37,8 @@ Use the rule_create tool for acceptance criteria and the todo_create tool for im
 
 ### Creating Rules
 
-For each major requirement or acceptance criterion from the specification:
+Look for rules that need to be created from the specification.
+It is best to think of these rules in a similar way to linting or static analysis rules that can be checked automatically. 
 - Use the `rule_create` tool with parameters:
   - `name`: Path like "project-name/requirement-name" (will create `.swissarmyhammer/rules/project-name/requirement-name.md`)
   - `content`: The acceptance criteria in markdown - what must be true for this to be considered complete
@@ -80,10 +81,9 @@ For each implementation step:
    - Write this out to a temp file `.swissarmyhammer/tmp/DRAFT_PLAN.md`
    - Refer to this draft plan to refresh your memory as you work
 
-4. **Create rules for acceptance criteria**:
-   - Identify the major requirements and acceptance criteria from the specification
+4. **Create rules**:
+   - Identify new rules implied by the specification
    - For each criterion, use `rule_create` tool to create a permanent, executable rule
-   - Rules should define WHAT success looks like, not HOW to implement it
    - Use a consistent naming scheme like "spec-name/requirement-name"
 
 5. **Create todos for implementation steps**:
@@ -94,7 +94,3 @@ For each implementation step:
      - `context`: Rich markdown with diagrams, examples, references to {{ plan_filename }}
    - Ensure todos build incrementally on each other
    - Include the phrase "Refer to {{ plan_filename }}" in each todo's context
-
-6. **Final output**:
-   - Multiple rules created with `rule_create` tool (acceptance criteria)
-   - Multiple todos created with `todo_create` tool (implementation steps)
