@@ -23,7 +23,7 @@ stateDiagram-v2
 
 - start: log "Running code review with rules"
 - are_rules_passing: execute prompt "are_rules_passing"
-- fix: run workflow "do_todos"
+- fix: run workflow "do"
 - test: run workflow "test"
 - done: log "All rules passing!"
 
@@ -44,7 +44,7 @@ The workflow uses the `are_rules_passing` prompt to check rule status by:
 2. Creating todo items for each rule violation found
 3. Returning "NO" if violations exist, "YES" if all rules pass
 
-The `do_todos` workflow then:
+The `do` workflow then:
 1. Works through all todo items created for rule violations
 2. Completes each todo by fixing the specific violation
 3. Marks each todo complete after the fix is verified
