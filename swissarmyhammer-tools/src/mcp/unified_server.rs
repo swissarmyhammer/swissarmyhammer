@@ -110,7 +110,7 @@ static MCP_LOGGING_INIT: Once = Once::new();
 /// even if multiple MCP servers are started.
 ///
 /// # Arguments
-/// * `log_filter` - Optional log filter string (defaults to "ort=warn,rmcp=warn,debug")
+/// * `log_filter` - Optional log filter string (defaults to "rmcp=warn,debug")
 ///
 /// # Behavior
 /// - Creates `.swissarmyhammer/` directory if it doesn't exist
@@ -127,7 +127,7 @@ pub fn configure_mcp_logging(log_filter: Option<&str>) {
     use tracing_subscriber::{fmt, prelude::*, registry, EnvFilter};
 
     MCP_LOGGING_INIT.call_once(|| {
-        let filter_str = log_filter.unwrap_or("ort=warn,rmcp=warn,debug");
+        let filter_str = log_filter.unwrap_or("rmcp=warn,debug");
         let filter = EnvFilter::new(filter_str);
 
         // Create .swissarmyhammer directory for logs

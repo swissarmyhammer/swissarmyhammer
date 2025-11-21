@@ -273,6 +273,7 @@ impl IsolatedTestEnvironment {
         }
 
         // NOTE: We do NOT change the current working directory to allow parallel test execution
+        // Tests should pass temp_dir() to CliToolContext::new_with_dir() for proper isolation
 
         Ok(Self {
             _home_guard: home_guard,
@@ -303,6 +304,13 @@ impl IsolatedTestEnvironment {
     /// Get the path to the completed issues directory in the isolated home
     pub fn complete_dir(&self) -> PathBuf {
         self.issues_dir().join("complete")
+    }
+}
+
+impl Drop for IsolatedTestEnvironment {
+    fn drop(&mut self) {
+        // Cleanup is handled by the guards (_home_guard and _temp_dir)
+        // which automatically restore state and delete temporary directories
     }
 }
 

@@ -135,6 +135,12 @@ impl CliValidationStats {
     }
 }
 
+/// Type of iteration to perform over the tool registry
+enum RegistryIterType {
+    AllTools,
+    ToolsInCategory(String),
+}
+
 /// Dynamic CLI builder that generates commands from MCP tool registry
 pub struct CliBuilder {
     tool_registry: Arc<RwLock<ToolRegistry>>,
@@ -162,21 +168,35 @@ impl CliBuilder {
         }
     }
 
-    /// Iterate through all tools in the registry, applying a function to each
+    /// Generic iteration helper over the tool registry
     ///
-    /// This is a helper to eliminate the repeated pattern of iterating categories
-    /// and then tools within each category.
-    fn iter_all_tools<F>(registry: &ToolRegistry, mut f: F)
+    /// Consolidates all iteration patterns into a single helper function
+    fn iter_registry<F>(registry: &ToolRegistry, iter_type: RegistryIterType, mut f: F)
     where
         F: FnMut(&dyn McpTool),
     {
-        let categories = registry.get_cli_categories();
-        for category in categories {
-            let tools = registry.get_tools_for_category(&category);
-            for tool in tools {
-                f(tool);
+        match iter_type {
+            RegistryIterType::AllTools => {
+                for category in registry.get_cli_categories() {
+                    for tool in registry.get_tools_for_category(&category) {
+                        f(tool);
+                    }
+                }
+            }
+            RegistryIterType::ToolsInCategory(category) => {
+                for tool in registry.get_tools_for_category(&category) {
+                    f(tool);
+                }
             }
         }
+    }
+
+    /// Iterate through all tools in the registry, applying a function to each
+    fn iter_all_tools<F>(registry: &ToolRegistry, f: F)
+    where
+        F: FnMut(&dyn McpTool),
+    {
+        Self::iter_registry(registry, RegistryIterType::AllTools, f)
     }
 
     /// Pre-compute category command data
@@ -206,8 +226,7 @@ impl CliBuilder {
     where
         F: FnMut(&str),
     {
-        let categories = registry.get_cli_categories();
-        for category in categories {
+        for category in registry.get_cli_categories() {
             f(&category);
         }
     }
@@ -228,14 +247,15 @@ impl CliBuilder {
     }
 
     /// Iterate through tools in a category, applying a function to each
-    fn iter_tools_in_category<F>(registry: &ToolRegistry, category: &str, mut f: F)
+    fn iter_tools_in_category<F>(registry: &ToolRegistry, category: &str, f: F)
     where
         F: FnMut(&dyn McpTool),
     {
-        let tools = registry.get_tools_for_category(category);
-        for tool in tools {
-            f(tool);
-        }
+        Self::iter_registry(
+            registry,
+            RegistryIterType::ToolsInCategory(category.to_string()),
+            f,
+        )
     }
 
     /// Pre-compute tool commands for a specific category
@@ -312,28 +332,17 @@ impl CliBuilder {
             .unwrap_or_default()
     }
 
-    /// Extract a field from a JSON schema and transform it
-    fn extract_schema_field<T, F>(schema: &Value, field: &str, transform: F) -> Option<T>
-    where
-        F: FnOnce(&Value) -> Option<T>,
-    {
-        schema.get(field).and_then(transform)
-    }
-
     /// Extract a string field from a JSON schema
     fn extract_schema_string(schema: &Value, field: &str) -> Option<String> {
-        Self::extract_schema_field(schema, field, |v| v.as_str().map(|s| s.to_string()))
+        schema.get(field).and_then(|v| v.as_str()).map(String::from)
     }
 
     /// Extract enum values from a JSON schema
     fn extract_enum_values(schema: &Value) -> Option<Vec<String>> {
-        Self::extract_schema_field(schema, "enum", |v| {
-            v.as_array().map(|arr| {
-                arr.iter()
-                    .filter_map(|v| v.as_str())
-                    .map(|s| s.to_string())
-                    .collect()
-            })
+        schema.get("enum").and_then(|v| v.as_array()).map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect()
         })
     }
 

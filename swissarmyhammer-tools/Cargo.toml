@@ -21,7 +21,6 @@ swissarmyhammer-prompts = { path = "../swissarmyhammer-prompts" }
 swissarmyhammer-config = { path = "../swissarmyhammer-config" }
 swissarmyhammer-git = { path = "../swissarmyhammer-git" }
 swissarmyhammer-todo = { path = "../swissarmyhammer-todo" }
-swissarmyhammer-search = { path = "../swissarmyhammer-search" }
 swissarmyhammer-shell = { path = "../swissarmyhammer-shell" }
 swissarmyhammer-outline = { path = "../swissarmyhammer-outline" }
 swissarmyhammer-rules = { path = "../swissarmyhammer-rules" }

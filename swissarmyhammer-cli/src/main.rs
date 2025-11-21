@@ -1066,7 +1066,7 @@ fn determine_log_level(
 /// An EnvFilter configured with the specified log level
 fn create_env_filter(log_level: tracing::Level) -> tracing_subscriber::EnvFilter {
     use tracing_subscriber::EnvFilter;
-    EnvFilter::new(format!("ort=warn,rmcp=warn,{log_level}"))
+    EnvFilter::new(format!("rmcp=warn,{log_level}"))
 }
 
 /// Setup MCP logging configuration with file output

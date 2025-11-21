@@ -10,8 +10,8 @@ use std::sync::Arc;
 
 use swissarmyhammer_git::GitOperations;
 use swissarmyhammer_tools::{
-    register_file_tools, register_rules_tools, register_search_tools, register_shell_tools,
-    register_todo_tools, register_web_fetch_tools, register_web_search_tools,
+    register_file_tools, register_rules_tools, register_shell_tools, register_todo_tools,
+    register_web_fetch_tools, register_web_search_tools,
 };
 use swissarmyhammer_tools::{ToolContext, ToolRegistry};
 use tokio::sync::{Mutex, RwLock};
@@ -38,12 +38,13 @@ impl CliToolContext {
         let agent_config =
             std::sync::Arc::new(swissarmyhammer_config::agent::AgentConfig::default());
 
-        let tool_context = ToolContext::new(tool_handlers, git_ops, agent_config);
+        let tool_context = ToolContext::new(tool_handlers, git_ops, agent_config)
+            .with_working_dir(working_dir.to_path_buf());
 
         let tool_registry = Self::create_tool_registry();
         let tool_registry_arc = Arc::new(RwLock::new(tool_registry));
 
-        // Add registry to context so tools can call other tools
+        // Add registry to context
         let tool_context = tool_context.with_tool_registry(tool_registry_arc.clone());
 
         Ok(Self {
@@ -69,7 +70,6 @@ impl CliToolContext {
         let mut tool_registry = ToolRegistry::new();
         register_file_tools(&mut tool_registry);
         register_rules_tools(&mut tool_registry);
-        register_search_tools(&mut tool_registry);
         register_shell_tools(&mut tool_registry);
         register_todo_tools(&mut tool_registry);
         register_web_fetch_tools(&mut tool_registry);

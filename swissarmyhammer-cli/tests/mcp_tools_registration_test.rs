@@ -4,8 +4,8 @@
 
 use swissarmyhammer_tools::mcp::tool_registry::ToolRegistry;
 use swissarmyhammer_tools::mcp::tool_registry::{
-    register_abort_tools, register_file_tools, register_outline_tools, register_search_tools,
-    register_shell_tools, register_todo_tools, register_web_fetch_tools, register_web_search_tools,
+    register_abort_tools, register_file_tools, register_outline_tools, register_shell_tools,
+    register_todo_tools, register_web_fetch_tools, register_web_search_tools,
 };
 
 /// Test that verifies all expected MCP tools are registered
@@ -17,7 +17,6 @@ fn test_mcp_tools_are_registered() {
     register_abort_tools(&mut registry);
     register_file_tools(&mut registry);
     register_outline_tools(&mut registry);
-    register_search_tools(&mut registry);
     register_shell_tools(&mut registry);
     register_todo_tools(&mut registry);
     register_web_fetch_tools(&mut registry);
@@ -26,12 +25,12 @@ fn test_mcp_tools_are_registered() {
     let tool_count = registry.len();
     println!("📊 Registered {} MCP tools", tool_count);
 
-    // We should have a significant number of tools. The threshold of 15 is based on the
-    // minimum set of core tools across all categories (files, shell, search,
-    // todos, web, etc.). This acts as a smoke test to catch missing tool registrations.
+    // We should have a significant number of tools. The threshold of 13 is based on the
+    // minimum set of core tools across all categories (files, shell, todos, web, etc.).
+    // This acts as a smoke test to catch missing tool registrations.
     assert!(
-        tool_count >= 15,
-        "Expected at least 15 tools, got {}. This suggests tools are not being registered properly.",
+        tool_count >= 13,
+        "Expected at least 13 tools, got {}. This suggests tools are not being registered properly.",
         tool_count
     );
 
@@ -44,8 +43,6 @@ fn test_mcp_tools_are_registered() {
         "files_glob",
         "files_grep",
         "outline_generate",
-        "search_index",
-        "search_query",
         "shell_execute",
         "todo_create",
         "todo_show",
@@ -130,7 +127,6 @@ fn test_cli_categories_are_available() {
     register_abort_tools(&mut registry);
     register_file_tools(&mut registry);
     register_outline_tools(&mut registry);
-    register_search_tools(&mut registry);
     register_shell_tools(&mut registry);
     register_todo_tools(&mut registry);
     register_web_fetch_tools(&mut registry);
@@ -140,7 +136,7 @@ fn test_cli_categories_are_available() {
     println!("📋 CLI Categories: {:?}", categories);
 
     // These categories should be available (excluding hidden tools like abort and notify)
-    let expected_categories = ["file", "outline", "search", "shell", "todo", "web-search"];
+    let expected_categories = ["file", "outline", "shell", "todo", "web-search"];
 
     for &expected_cat in &expected_categories {
         assert!(

@@ -286,21 +286,6 @@ sah memo list
 sah memo search "database"
 ```
 
-## Step 10: Set Up Semantic Search
-
-Index your codebase for AI-powered semantic search:
-
-```bash
-# Index Rust files
-sah search index "**/*.rs"
-
-# Search for specific concepts
-sah search query "error handling patterns"
-
-# Search for specific functionality
-sah search query "database connection management"
-```
-
 ## Common Patterns
 
 ### Project-Specific Prompts

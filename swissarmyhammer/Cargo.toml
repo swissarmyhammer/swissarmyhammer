@@ -101,9 +101,6 @@ swissarmyhammer-config = { path = "../swissarmyhammer-config" }
 
 
 
-# Search support
-swissarmyhammer-search = { path = "../swissarmyhammer-search" }
-
 # Syntax highlighting
 syntect = { workspace = true }
 

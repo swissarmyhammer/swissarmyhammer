@@ -19,8 +19,8 @@ use tempfile::TempDir;
 
 /// Create a test context for MCP tools
 fn create_test_context(temp_dir: &TempDir) -> ToolContext {
-    // Set environment variable to override todo directory for isolation
-    std::env::set_var("SWISSARMYHAMMER_TODO_DIR", temp_dir.path());
+    // Create a .git directory to make it a Git repository
+    std::fs::create_dir_all(temp_dir.path().join(".git")).unwrap();
 
     let git_ops: Arc<tokio::sync::Mutex<Option<GitOperations>>> =
         Arc::new(tokio::sync::Mutex::new(None));
@@ -28,6 +28,7 @@ fn create_test_context(temp_dir: &TempDir) -> ToolContext {
     let tool_handlers = Arc::new(ToolHandlers::new());
 
     ToolContext::new(tool_handlers, git_ops, Arc::new(AgentConfig::default()))
+        .with_working_dir(temp_dir.path().to_path_buf())
 }
 
 /// Helper to extract text content from CallToolResult

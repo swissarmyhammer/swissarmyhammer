@@ -42,7 +42,6 @@ pub mod git;
 pub mod outline;
 pub mod questions;
 pub mod rules;
-pub mod search;
 pub mod shell;
 pub mod todo;
 pub mod web_fetch;

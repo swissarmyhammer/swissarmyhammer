@@ -9,69 +9,17 @@ use swissarmyhammer::test_utils::IsolatedTestEnvironment;
 use swissarmyhammer_cli::mcp_integration::CliToolContext;
 
 mod test_utils;
-use test_utils::create_semantic_test_guard;
+use test_utils::{create_semantic_test_guard, setup_git_repo};
 
-/// Test all search-related MCP tools can be executed
-#[tokio::test]
-// Fixed: Limited patterns to specific files to avoid DuckDB timeout
-async fn test_all_search_tools_execution() -> Result<()> {
-    let _guard = create_semantic_test_guard();
-    let _env = IsolatedTestEnvironment::new().unwrap();
-    let temp_path = _env.temp_dir();
-
-    // Set unique database path to avoid lock conflicts between tests
-    let unique_db_path = temp_path.join("semantic.db");
-    std::env::set_var("SWISSARMYHAMMER_SEMANTIC_DB_PATH", &unique_db_path);
-
-    // Create source files for search testing
-    let src_dir = temp_path.join("src");
-    std::fs::create_dir_all(&src_dir)?;
-
-    std::fs::write(
-        src_dir.join("integration_test.rs"),
-        r#"
-// Comprehensive integration test source file
-use std::error::Error;
-
-/// Function for testing search functionality
-pub fn integration_test_function() -> Result<String, Box<dyn Error>> {
-    println!("Running integration test");
-    Ok("Integration test completed".to_string())
-}
-
-/// Error handling function for testing
-pub fn handle_integration_error(error: &str) -> Result<(), String> {
-    eprintln!("Integration error: {}", error);
-    Err("Integration error handled".to_string())
-}
-"#,
-    )?;
-
+/// Helper to create a test context with git repository
+async fn create_test_context_with_git() -> Result<(IsolatedTestEnvironment, CliToolContext)> {
+    let env = IsolatedTestEnvironment::new()?;
+    let temp_path = env.temp_dir();
+    setup_git_repo(&temp_path)?;
     let context = CliToolContext::new_with_dir(&temp_path)
         .await
         .map_err(|e| anyhow::anyhow!("{}", e))?;
-
-    // Test search_index with limited files to avoid DuckDB timeout
-    // Index only the specific test file created in setup (max 6 files as per issue requirement)
-    let index_args = context.create_arguments(vec![
-        ("patterns", json!(["src/integration_test.rs"])),
-        ("force", json!(false)),
-    ]);
-    let result = context.execute_tool("search_index", index_args).await;
-    assert!(result.is_ok(), "search_index should succeed: {result:?}");
-
-    // Test search_query
-    let query_args = context.create_arguments(vec![
-        ("query", json!("integration test")),
-        ("limit", json!(10)),
-    ]);
-    let result = context.execute_tool("search_query", query_args).await;
-    assert!(result.is_ok(), "search_query should succeed: {result:?}");
-
-    // Cleanup environment variable
-    std::env::remove_var("SWISSARMYHAMMER_SEMANTIC_DB_PATH");
-
-    Ok(())
+    Ok((env, context))
 }
 
 /// Test error propagation from MCP tools to CLI
@@ -126,7 +74,7 @@ async fn test_mcp_error_propagation() -> Result<()> {
 // Fixed: Limited patterns to specific files to avoid DuckDB timeout
 async fn test_argument_passing_and_validation() -> Result<()> {
     let _guard = create_semantic_test_guard();
-    let _env = IsolatedTestEnvironment::new().unwrap();
+    let (_env, _context) = create_test_context_with_git().await?;
     let temp_path = _env.temp_dir();
 
     // Create source files for search testing
@@ -151,48 +99,13 @@ pub fn test_function() -> String { "test".to_string() }"#,
     let result = context.execute_tool("todo_create", valid_args).await;
     assert!(result.is_ok(), "Valid arguments should succeed");
 
-    // Test boolean arguments with limited files to avoid DuckDB timeout
-    let boolean_args = context.create_arguments(vec![
-        ("patterns", json!(["src/integration_test.rs"])),
-        ("force", json!(true)),
-    ]);
-    let result = context.execute_tool("search_index", boolean_args).await;
-    assert!(
-        result.is_ok(),
-        "Boolean arguments should be handled correctly"
-    );
-
-    // Test array arguments with limited files to avoid DuckDB timeout
-    let array_args = context.create_arguments(vec![
-        ("patterns", json!(["src/integration_test.rs"])),
-        ("force", json!(false)),
-    ]);
-    let result = context.execute_tool("search_index", array_args).await;
-    assert!(
-        result.is_ok(),
-        "Array arguments should be handled correctly"
-    );
-
-    // Test numeric arguments
-    let numeric_args =
-        context.create_arguments(vec![("query", json!("test query")), ("limit", json!(5))]);
-    let result = context.execute_tool("search_query", numeric_args).await;
-    assert!(
-        result.is_ok(),
-        "Numeric arguments should be handled correctly"
-    );
-
     Ok(())
 }
 
 /// Test response formatting utilities
 #[tokio::test]
 async fn test_response_formatting() -> Result<()> {
-    let _env = IsolatedTestEnvironment::new().unwrap();
-    let temp_path = _env.temp_dir();
-    let context = CliToolContext::new_with_dir(&temp_path)
-        .await
-        .map_err(|e| anyhow::anyhow!("{}", e))?;
+    let (_env, context) = create_test_context_with_git().await?;
 
     // Test successful response formatting with todo_create
     let args = context.create_arguments(vec![
@@ -234,12 +147,8 @@ async fn test_response_formatting() -> Result<()> {
 /// Test concurrent tool execution
 #[tokio::test]
 async fn test_concurrent_tool_execution() -> Result<()> {
-    let _env = IsolatedTestEnvironment::new().unwrap();
+    let (_env, _context) = create_test_context_with_git().await?;
     let temp_path = _env.temp_dir();
-
-    let _context = CliToolContext::new_with_dir(&temp_path)
-        .await
-        .map_err(|e| anyhow::anyhow!("{}", e))?;
 
     // Execute multiple tools concurrently
     let mut handles = vec![];
@@ -315,13 +224,10 @@ async fn test_error_message_formatting() -> Result<()> {
 /// Test tool context initialization with different configurations
 #[tokio::test]
 async fn test_tool_context_configurations() -> Result<()> {
-    let _env = IsolatedTestEnvironment::new().unwrap();
+    let (_env, context1) = create_test_context_with_git().await?;
     let temp_path = _env.temp_dir();
 
-    // Test with different working directories
-    let context1 = CliToolContext::new_with_dir(&temp_path)
-        .await
-        .map_err(|e| anyhow::anyhow!("{}", e))?;
+    // Test with another context using the same directory
     let context2 = CliToolContext::new_with_dir(&temp_path)
         .await
         .map_err(|e| anyhow::anyhow!("{}", e))?;
@@ -348,11 +254,7 @@ async fn test_tool_context_configurations() -> Result<()> {
 /// Test MCP error boundaries and recovery
 #[tokio::test]
 async fn test_mcp_error_boundaries() -> Result<()> {
-    let _env = IsolatedTestEnvironment::new().unwrap();
-    let temp_path = _env.temp_dir();
-    let context = CliToolContext::new_with_dir(&temp_path)
-        .await
-        .map_err(|e| anyhow::anyhow!("{}", e))?;
+    let (_env, context) = create_test_context_with_git().await?;
 
     // Test malformed arguments (empty arguments when required fields are missing)
     let empty_args = serde_json::Map::new();

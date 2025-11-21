@@ -44,14 +44,14 @@
 //! ### Registering Tools
 //!
 //! ```rust
-//! use swissarmyhammer_tools::mcp::{ToolRegistry, register_file_tools, register_search_tools};
+//! use swissarmyhammer_tools::mcp::{ToolRegistry, register_file_tools, register_shell_tools};
 //!
 //! # fn example() {
 //! let mut registry = ToolRegistry::new();
 //!
 //! // Register tool categories
 //! register_file_tools(&mut registry);
-//! register_search_tools(&mut registry);
+//! register_shell_tools(&mut registry);
 //!
 //! println!("Registered {} tools", registry.list_tools().len());
 //! # }
@@ -84,7 +84,6 @@ pub mod notifications;
 pub mod notify_types;
 pub mod progress_notifications;
 pub mod responses;
-pub mod search_types;
 pub mod server;
 pub mod shared_utils;
 pub mod tool_descriptions;
@@ -111,8 +110,8 @@ pub use progress_notifications::{
 pub use server::McpServer;
 pub use tool_handlers::ToolHandlers;
 pub use tool_registry::{
-    register_abort_tools, register_file_tools, register_git_tools, register_outline_tools,
-    register_rules_tools, register_search_tools, register_shell_tools, register_todo_tools,
+    register_abort_tools, register_file_tools, register_git_tools,
+    register_rules_tools, register_shell_tools, register_todo_tools,
     register_web_fetch_tools, register_web_search_tools, ToolContext, ToolRegistry,
 };
 pub use types::{GetPromptRequest, ListPromptsRequest};

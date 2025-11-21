@@ -7,6 +7,29 @@ use rstest::rstest;
 use swissarmyhammer_config::TemplateContext;
 use swissarmyhammer_prompts::{PromptLibrary, PromptResolver};
 
+/// Helper function to set up a PromptLibrary with all builtin prompts loaded
+fn setup_prompt_library() -> PromptLibrary {
+    let mut library = PromptLibrary::new();
+    let mut resolver = PromptResolver::new();
+    resolver
+        .load_all_prompts(&mut library)
+        .expect("Failed to load builtin prompts");
+    library
+}
+
+/// Helper function to assert that a rendered prompt is valid
+fn assert_valid_render(rendered: &str) {
+    assert!(!rendered.is_empty(), "Rendered prompt should not be empty");
+    assert!(
+        !rendered.contains("Unknown partial-template"),
+        "Should not contain partial resolution errors"
+    );
+    assert!(
+        !rendered.contains("liquid:"),
+        "Should not contain liquid syntax errors"
+    );
+}
+
 /// Test cases for builtin prompts that should render successfully
 /// because it requires specific parameters
 #[rstest]
@@ -14,14 +37,7 @@ use swissarmyhammer_prompts::{PromptLibrary, PromptResolver};
 #[case("are_todos_done")]
 #[case("do_todo")]
 fn test_builtin_prompt_renders_successfully(#[case] prompt_name: &str) {
-    // Load all prompts using the full resolver pipeline
-    let mut library = PromptLibrary::new();
-    let mut resolver = PromptResolver::new();
-
-    // This should load all builtin prompts including partials
-    resolver
-        .load_all_prompts(&mut library)
-        .expect("Failed to load builtin prompts");
+    let library = setup_prompt_library();
 
     // Create a minimal template context
     let template_context = TemplateContext::new();
@@ -29,16 +45,7 @@ fn test_builtin_prompt_renders_successfully(#[case] prompt_name: &str) {
     // Attempt to render the prompt
     match library.render(prompt_name, &template_context) {
         Ok(rendered) => {
-            // Basic sanity checks
-            assert!(!rendered.is_empty(), "Rendered prompt should not be empty");
-            assert!(
-                !rendered.contains("Unknown partial-template"),
-                "Should not contain partial resolution errors"
-            );
-            assert!(
-                !rendered.contains("liquid:"),
-                "Should not contain liquid syntax errors"
-            );
+            assert_valid_render(&rendered);
 
             println!(
                 "✓ Successfully rendered {}: {} chars",
@@ -58,12 +65,7 @@ fn test_builtin_prompt_renders_successfully(#[case] prompt_name: &str) {
 #[test]
 fn test_partials_are_loaded_and_accessible() {
     // This test specifically verifies that partials are loaded correctly
-    let mut library = PromptLibrary::new();
-    let mut resolver = PromptResolver::new();
-
-    resolver
-        .load_all_prompts(&mut library)
-        .expect("Failed to load prompts");
+    let library = setup_prompt_library();
 
     // Check that key partials are accessible
     // These should be loaded with multiple name variants (base, .md, .liquid)
@@ -103,12 +105,7 @@ fn test_partials_are_loaded_and_accessible() {
 #[test]
 fn test_check_prompt_renders_with_parameters() {
     // Test the .check prompt with all required parameters
-    let mut library = PromptLibrary::new();
-    let mut resolver = PromptResolver::new();
-
-    resolver
-        .load_all_prompts(&mut library)
-        .expect("Failed to load builtin prompts");
+    let library = setup_prompt_library();
 
     // Create template context with required parameters for .check prompt
     let mut template_context = TemplateContext::new();

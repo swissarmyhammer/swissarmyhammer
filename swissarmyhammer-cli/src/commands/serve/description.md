@@ -8,7 +8,7 @@ SwissArmyHammer into an AI-accessible development platform.
 
 The serve command starts an MCP server that exposes SwissArmyHammer's complete
 toolset to AI applications. This enables Claude Code and other MCP-compatible
-AI tools to directly access file operations, semantic search, todo management,
+AI tools to directly access file operations, todo management,
 workflows, and more.
 
 ```bash
@@ -19,9 +19,7 @@ sah serve
 
 Complete Tool Ecosystem:
 • File Operations - Read, write, edit, glob pattern matching
-• Semantic Search - AI-powered code search and indexing
 • Todo Management - Track, create, update development tasks
-• Memoranda - Persistent knowledge and context storage
 • Shell Integration - Execute commands and scripts
 • Web Capabilities - Fetch content and search the web
 • Workflow Execution - Run automated development workflows
@@ -39,12 +37,11 @@ AI-Native Protocol:
 Direct AI Access:
 • Claude Code can directly manipulate your development environment
 • No manual file operations or copy-paste workflows
-• AI understands your project structure through semantic search
+• AI understands your project structure through code analysis
 • Seamless integration between AI reasoning and tool execution
 
 Enhanced AI Capabilities:
 • AI can read and write files without user intervention
-• Semantic search finds relevant code instantly
 • Todo tracking integrates with AI planning and execution
 • Workflows enable complex multi-step AI operations
 • Web access for documentation and reference lookup
@@ -52,7 +49,6 @@ Enhanced AI Capabilities:
 Development Efficiency:
 • AI-assisted coding with full project context
 • Automated todo execution and implementation
-• Intelligent code search and navigation
 • Context-aware planning and refactoring
 
 ## Server Operation
@@ -115,9 +111,7 @@ File System:
 • files_glob - Pattern-based file discovery
 • files_grep - Content search with ripgrep
 
-Search and Navigation:
-• search_index - Index codebase for semantic search
-• search_query - AI-powered code search
+Code Analysis:
 • outline_generate - Extract code structure
 
 Development Workflow:
@@ -172,15 +166,6 @@ Automated todo execution:
 # 3. Edit code with files_edit
 # 4. Run tests with shell_execute
 # 5. Mark complete with todo_mark_complete
-```
-
-AI-powered code search:
-```bash
-# Claude Code uses MCP to:
-# 1. Index codebase with search_index
-# 2. Search for relevant code with search_query
-# 3. Read matched files with files_read
-# 4. Understand and explain implementation
 ```
 
 ## Troubleshooting

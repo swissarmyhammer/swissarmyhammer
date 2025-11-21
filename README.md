@@ -36,7 +36,6 @@ SwissArmyHammer **IS** an MCP server with 25+ professional-grade tools:
 - **File Operations** - Read, write, edit, search across any codebase
 - **Git Integration** - Branch management, commit workflows, PR automation
 - **Rules & Todos** - Built-in quality checks and task management
-- **Semantic Search** - Vector-powered code understanding and navigation
 - **Web Integration** - Fetch docs, search APIs, gather requirements
 - **Shell Execution** - Safe, controlled system interaction
 - **Questions & Context** - Elicitation-based Q&A system for capturing decisions
@@ -149,7 +148,6 @@ Other AI coding tools make you supervise every step. SwissArmyHammer works like 
 ### **MCP Integration Leader**
 SwissArmyHammer pioneered comprehensive MCP server implementation:
 - **40+ professional tools** available to any MCP client
-- **Semantic code search** with vector embeddings
 - **Workflow orchestration** across tool boundaries
 - **Context preservation** spanning hours of work
 

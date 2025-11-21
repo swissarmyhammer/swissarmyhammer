@@ -58,9 +58,6 @@ swissarmyhammer-tools/*.test
 proptest-regressions/
 *.proptest-regressions
 
-# FastEmbed cache
-.fastembed_cache/
-
 swissarmyhammer/.swissarmyhammer
 swissarmyhammer-agent-executor/.swissarmyhammer
 swissarmyhammer-cli/.swissarmyhammer

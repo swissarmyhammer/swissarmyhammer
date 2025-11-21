@@ -59,8 +59,6 @@ const EXPECTED_SAMPLE_TOOLS: &[&str] = &[
     "files_glob",
     "files_grep",
     "outline_generate",
-    "search_index",
-    "search_query",
     "shell_execute",
     "todo_create",
     "todo_show",

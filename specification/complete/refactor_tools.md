@@ -69,12 +69,12 @@ Once each of the tools is isolated in a module, use it to then scan the entire r
 
 Refactor toward the tools
 
-## Missing tools
+## Removed tools
 
-These tools appear to be missing as tools, but are present in the CLI
+These tools have been removed from the system:
 
-search_index
-search_query
+search_index (removed - semantic search feature deprecated)
+search_query (removed - semantic search feature deprecated)
 
 ## tool_handlers
 

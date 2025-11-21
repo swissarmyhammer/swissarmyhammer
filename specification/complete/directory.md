@@ -129,7 +129,6 @@ project-root/               # Git repository root
 │   ├── memos/             # Memoranda storage
 │   ├── todo/              # Todo lists
 │   ├── runs/              # Workflow run storage
-│   ├── search.db          # Semantic search database
 │   └── workflows/         # Local workflows (optional)
 ├── issues/                 # Issue tracking (separate from .swissarmyhammer)
 └── src/                    # Project source code
@@ -158,12 +157,7 @@ project-root/               # Git repository root
 - **After**: Uses Git repository `.swissarmyhammer/todo` (repository root required)
 - **Impact**: Consistent behavior, no fallback to current directory
 
-#### 4. Search System (`search/types.rs`)
-- **Before**: Uses deepest directory from multiple search
-- **After**: Uses Git repository `.swissarmyhammer/search.db`
-- **Impact**: Single database per repository
-
-#### 5. Doctor Command (`doctor/`)
+#### 4. Doctor Command (`doctor/`)
 - **Before**: Checks home and current directory
 - **After**: Requires Git repository, checks only repository `.swissarmyhammer`
 - **Impact**: Focused validation, Git repository requirement enforced

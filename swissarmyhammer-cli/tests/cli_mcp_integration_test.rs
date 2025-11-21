@@ -4,83 +4,62 @@
 //! without going through the MCP protocol layer.
 
 use serde_json::json;
+use swissarmyhammer::test_utils::IsolatedTestEnvironment;
 use swissarmyhammer_cli::mcp_integration::CliToolContext;
-use tempfile::TempDir;
 
-/// Test helper to create a test environment
-fn setup_test_environment() -> TempDir {
-    let temp_dir = TempDir::new().expect("Failed to create temp directory");
+mod test_utils;
+use test_utils::setup_git_repo;
 
-    // Create SwissArmyHammer directory structure
-    let swissarmyhammer_dir = temp_dir.path().join(".swissarmyhammer");
-    std::fs::create_dir_all(&swissarmyhammer_dir)
-        .expect("Failed to create .swissarmyhammer directory");
+// Test helper functions to reduce code duplication
 
-    // Create issues directory within swissarmyhammer structure
-    let issues_dir = swissarmyhammer_dir.join("issues");
-    std::fs::create_dir_all(&issues_dir).expect("Failed to create issues directory");
+/// Creates a test context with an isolated environment.
+/// Returns the environment (which must be kept alive) and the context.
+async fn setup_test_context() -> (IsolatedTestEnvironment, CliToolContext) {
+    let env = IsolatedTestEnvironment::new().unwrap();
+    let temp_path = env.temp_dir();
 
-    // Initialize git repository in temp directory to avoid branch conflicts
-    use git2::{Repository, Signature};
+    // Set up git repository for tests that need it
+    setup_git_repo(&temp_path).expect("Failed to set up git repository");
 
-    let repo = Repository::init(temp_dir.path()).expect("Failed to init git repo");
+    let context = CliToolContext::new_with_dir(&temp_path)
+        .await
+        .expect("Failed to create CliToolContext");
+    (env, context)
+}
 
-    // Configure git for testing
-    let mut config = repo.config().expect("Failed to get git config");
+/// Creates a CallToolResult for testing purposes.
+#[cfg(test)]
+fn create_test_call_result(text: &str, is_error: bool) -> rmcp::model::CallToolResult {
+    use rmcp::model::{Annotated, CallToolResult, RawContent, RawTextContent};
 
-    config
-        .set_str("user.email", "test@example.com")
-        .expect("Failed to configure git email");
+    CallToolResult {
+        content: vec![Annotated::new(
+            RawContent::Text(RawTextContent {
+                text: text.to_string(),
+                meta: None,
+            }),
+            None,
+        )],
+        structured_content: None,
+        is_error: Some(is_error),
+        meta: None,
+    }
+}
 
-    config
-        .set_str("user.name", "Test User")
-        .expect("Failed to configure git name");
+/// Asserts that an MCP error converts correctly to a CLI error.
+#[cfg(test)]
+fn assert_cli_error_conversion(mcp_error: rmcp::ErrorData, expected_text: &str) {
+    use swissarmyhammer_cli::error::CliError;
 
-    // Create initial README file
-    let readme_path = temp_dir.path().join("README.md");
-    std::fs::write(
-        &readme_path,
-        "# Test Repository\n\nThis is a test repository.",
-    )
-    .expect("Failed to create README.md");
-
-    // Add and commit initial file to establish HEAD
-    let mut index = repo.index().expect("Failed to get index");
-
-    index
-        .add_path(std::path::Path::new("README.md"))
-        .expect("Failed to add README.md to index");
-
-    index.write().expect("Failed to write index");
-
-    let tree_id = index.write_tree().expect("Failed to write tree");
-
-    let tree = repo.find_tree(tree_id).expect("Failed to find tree");
-
-    let signature =
-        Signature::now("Test User", "test@example.com").expect("Failed to create signature");
-
-    repo.commit(
-        Some("HEAD"),
-        &signature,
-        &signature,
-        "Initial commit",
-        &tree,
-        &[],
-    )
-    .expect("Failed to create initial commit");
-
-    // No longer change global current directory to avoid test isolation issues
-    temp_dir
+    let cli_error: CliError = mcp_error.into();
+    assert!(cli_error.message.contains("MCP error"));
+    assert!(cli_error.message.contains(expected_text));
+    assert_eq!(cli_error.exit_code, 1);
 }
 
 #[tokio::test]
 async fn test_cli_can_call_mcp_tools() {
-    let temp_dir = setup_test_environment();
-
-    let _context = CliToolContext::new_with_dir(temp_dir.path())
-        .await
-        .expect("Failed to create CliToolContext");
+    let (_env, _context) = setup_test_context().await;
 
     // Context creation successful means the tool registry is working
     // We can't directly access the registry methods anymore, but
@@ -90,11 +69,7 @@ async fn test_cli_can_call_mcp_tools() {
 #[tokio::test]
 #[serial_test::serial]
 async fn test_todo_create_tool_integration() {
-    let temp_dir = setup_test_environment();
-
-    let context = CliToolContext::new_with_dir(temp_dir.path())
-        .await
-        .expect("Failed to create CliToolContext");
+    let (_env, context) = setup_test_context().await;
 
     // Test calling todo_create tool
     let args = context.create_arguments(vec![
@@ -126,11 +101,7 @@ async fn test_todo_create_tool_integration() {
 
 #[tokio::test]
 async fn test_nonexistent_tool_error() {
-    let temp_dir = setup_test_environment();
-
-    let context = CliToolContext::new_with_dir(temp_dir.path())
-        .await
-        .expect("Failed to create CliToolContext");
+    let (_env, context) = setup_test_context().await;
 
     // Test calling a nonexistent tool
     let args = context.create_arguments(vec![]);
@@ -148,11 +119,7 @@ async fn test_nonexistent_tool_error() {
 #[tokio::test]
 #[serial_test::serial]
 async fn test_invalid_arguments_error() {
-    let temp_dir = setup_test_environment();
-
-    let context = CliToolContext::new_with_dir(temp_dir.path())
-        .await
-        .expect("Failed to create CliToolContext");
+    let (_env, context) = setup_test_context().await;
 
     // Test calling todo_create with invalid arguments (missing required fields)
     let args = context.create_arguments(vec![("invalid_field", json!("invalid_value"))]);
@@ -163,40 +130,16 @@ async fn test_invalid_arguments_error() {
 
 #[test]
 fn test_response_formatting_utilities() {
-    use rmcp::model::{Annotated, CallToolResult, RawContent, RawTextContent};
-
     use swissarmyhammer_cli::mcp_integration::response_formatting;
 
     // Test success response formatting
-    let success_result = CallToolResult {
-        content: vec![Annotated::new(
-            RawContent::Text(RawTextContent {
-                text: "Operation completed successfully".to_string(),
-                meta: None,
-            }),
-            None,
-        )],
-        structured_content: None,
-        is_error: Some(false),
-        meta: None,
-    };
+    let success_result = create_test_call_result("Operation completed successfully", false);
 
     let formatted = response_formatting::format_success_response(&success_result);
     assert!(formatted.contains("Operation completed successfully"));
 
     // Test error response formatting
-    let error_result = CallToolResult {
-        content: vec![Annotated::new(
-            RawContent::Text(RawTextContent {
-                text: "Something went wrong".to_string(),
-                meta: None,
-            }),
-            None,
-        )],
-        structured_content: None,
-        is_error: Some(true),
-        meta: None,
-    };
+    let error_result = create_test_call_result("Something went wrong", true);
 
     let formatted_error = response_formatting::format_error_response(&error_result);
     assert!(formatted_error.contains("Something went wrong"));
@@ -208,31 +151,19 @@ fn test_response_formatting_utilities() {
 #[test]
 fn test_error_conversion() {
     use rmcp::ErrorData as McpError;
-    use swissarmyhammer_cli::error::CliError;
 
     // Test basic MCP error conversion
     let mcp_error = McpError::internal_error("test error".to_string(), None);
-    let cli_error: CliError = mcp_error.into();
-
-    assert!(cli_error.message.contains("MCP error"));
-    assert!(cli_error.message.contains("test error"));
-    assert_eq!(cli_error.exit_code, 1);
+    assert_cli_error_conversion(mcp_error, "test error");
 
     // Test error handling continues to work normally
     let general_error = McpError::internal_error("Cannot proceed".to_string(), None);
-    let cli_general_error: CliError = general_error.into();
-
-    assert!(cli_general_error.message.contains("MCP error"));
-    assert!(cli_general_error.message.contains("Cannot proceed"));
+    assert_cli_error_conversion(general_error, "Cannot proceed");
 }
 
 #[tokio::test]
 async fn test_create_arguments_helper() {
-    let temp_dir = setup_test_environment();
-
-    let context = CliToolContext::new_with_dir(temp_dir.path())
-        .await
-        .expect("Failed to create CliToolContext");
+    let (_env, context) = setup_test_context().await;
 
     // Test the create_arguments helper method
     let args = context.create_arguments(vec![

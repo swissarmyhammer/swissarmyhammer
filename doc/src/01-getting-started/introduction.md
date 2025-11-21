@@ -50,9 +50,9 @@ Clear precedence rules across three locations:
 - Built-in error handling and recovery mechanisms
 
 **Development Integration**
-- Semantic search using vector embeddings and TreeSitter parsing
 - Code quality rules with LLM-based validation
 - Ephemeral task management with rich context
+- File operations and code analysis tools
 
 **Built-in Resources**
 - 20+ production-ready prompts for common development tasks

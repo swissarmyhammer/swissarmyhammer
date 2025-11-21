@@ -34,6 +34,47 @@ impl TodoStorage {
         Ok(Self::new(base_dir))
     }
 
+    /// Create a new TodoStorage from an explicit working directory
+    ///
+    /// This creates a TodoStorage that will store todos in
+    /// `{working_dir}/.swissarmyhammer/todo/`. This approach avoids
+    /// reliance on environment variables or git root detection, making
+    /// it ideal for tests and explicit directory control.
+    ///
+    /// **Important**: This method still requires the working directory to be
+    /// within a Git repository. Todo operations are designed to work within
+    /// version-controlled projects.
+    ///
+    /// # Arguments
+    ///
+    /// * `working_dir` - The base working directory (must be in a git repository)
+    ///
+    /// # Returns
+    ///
+    /// A `TodoStorage` instance configured to use the specified directory
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - The working directory is not within a Git repository
+    /// - The todo directory cannot be created
+    pub fn new_with_working_dir(working_dir: PathBuf) -> Result<Self> {
+        // Verify we're in a git repository by checking if we can find a git root
+        use swissarmyhammer_common::utils::directory_utils::find_git_repository_root_from;
+
+        // Try to find the git root from the working directory
+        if find_git_repository_root_from(&working_dir).is_none() {
+            return Err(TodoError::other(
+                "Todo operations require a Git repository. Please run this command from within a Git repository.".to_string()
+            ));
+        }
+
+        let todo_dir = working_dir.join(".swissarmyhammer").join("todo");
+        fs::create_dir_all(&todo_dir)
+            .map_err(|e| TodoError::other(format!("Failed to create todo directory: {e}")))?;
+        Ok(Self::new(todo_dir))
+    }
+
     /// Create a new todo item
     ///
     /// Returns the created item and the number of completed items that were garbage collected

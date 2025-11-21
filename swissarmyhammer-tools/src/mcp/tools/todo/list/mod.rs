@@ -49,9 +49,13 @@ impl McpTool for ListTodoTool {
 
         tracing::debug!("Listing todos with filter: {:?}", request.completed);
 
-        // Create storage instance
-        let storage = TodoStorage::new_default()
-            .map_err(|e| McpErrorHandler::handle_todo_error(e, "create todo storage"))?;
+        // Create storage instance using working_dir if available, otherwise use default
+        let storage = if let Some(ref working_dir) = _context.working_dir {
+            TodoStorage::new_with_working_dir(working_dir.clone())
+        } else {
+            TodoStorage::new_default()
+        }
+        .map_err(|e| McpErrorHandler::handle_todo_error(e, "create todo storage"))?;
 
         // Get the todo list
         match storage.get_todo_list().await {

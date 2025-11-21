@@ -10,7 +10,6 @@ members = [
     "swissarmyhammer-config",
     "swissarmyhammer-common",
     "swissarmyhammer-git",
-    "swissarmyhammer-search",
     "swissarmyhammer-shell",
     "swissarmyhammer-todo",
     "swissarmyhammer-outline",
@@ -67,14 +66,7 @@ schemars = "0.8"
 governor = "0.7"
 nonzero_ext = "0.3"
 
-# Semantic Search Dependencies
-ort = "2.0.0-rc.10"
-tokenizers = "0.20"
-hf-hub = { version = "0.3", features = ["tokio"] }
-ndarray = "0.16"
-duckdb = { version = "1.4.0" }
-#duckdb = { version = "1.4.0", features = ["bundled"] }
-fastembed = "5.0.0"
+
 tree-sitter = "0.25.8"
 tree-sitter-rust = "0.24.0"
 tree-sitter-python = "0.23.6"

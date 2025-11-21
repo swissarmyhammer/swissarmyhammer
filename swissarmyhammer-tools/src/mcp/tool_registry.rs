@@ -224,6 +224,7 @@ use super::tool_handlers::ToolHandlers;
 use rmcp::model::{Annotated, CallToolResult, RawContent, RawTextContent, Tool};
 use rmcp::{ErrorData as McpError, Peer, RoleServer};
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use swissarmyhammer_common::{ErrorSeverity, Severity};
@@ -337,6 +338,19 @@ pub struct ToolContext {
     /// }
     /// ```
     pub tool_registry: Option<Arc<RwLock<ToolRegistry>>>,
+
+    /// Working directory for tool operations
+    ///
+    /// This is the base directory where tools should operate. For example:
+    /// - Todo storage will be in `{working_dir}/.swissarmyhammer/todo/`
+    /// - Rules will be in `{working_dir}/.swissarmyhammer/rules/`
+    ///
+    /// If None, tools should use `std::env::current_dir()` or git root detection
+    /// as a fallback. In tests, this should always be set to an isolated directory.
+    ///
+    /// This explicit approach avoids reliance on environment variables (global state)
+    /// and makes test isolation more reliable and explicit.
+    pub working_dir: Option<PathBuf>,
 }
 
 impl ToolContext {
@@ -355,6 +369,7 @@ impl ToolContext {
             mcp_server_port: Arc::new(RwLock::new(None)),
             peer: None,
             tool_registry: None,
+            working_dir: None,
         }
     }
 
@@ -429,6 +444,24 @@ impl ToolContext {
     /// A new `ToolContext` with the tool registry set
     pub fn with_tool_registry(mut self, registry: Arc<RwLock<ToolRegistry>>) -> Self {
         self.tool_registry = Some(registry);
+        self
+    }
+
+    /// Set the working directory for this context
+    ///
+    /// Creates a new context with the working directory set. This allows tools
+    /// to operate in an isolated directory, avoiding global state from environment
+    /// variables and making test isolation more reliable.
+    ///
+    /// # Arguments
+    ///
+    /// * `working_dir` - The base directory where tools should operate
+    ///
+    /// # Returns
+    ///
+    /// A new `ToolContext` with the working directory set
+    pub fn with_working_dir(mut self, working_dir: PathBuf) -> Self {
+        self.working_dir = Some(working_dir);
         self
     }
 
@@ -642,7 +675,6 @@ pub trait McpTool: Send + Sync {
             match &name[..underscore_pos] {
                 "memo" => Some("memo"),
                 "file" | "files" => Some("file"),
-                "search" => Some("search"),
                 "web" => Some("web"),
                 "shell" => Some("shell"),
                 "todo" => Some("todo"),
@@ -1488,17 +1520,7 @@ pub fn register_git_tools(registry: &mut ToolRegistry) {
     git::register_git_tools(registry);
 }
 
-/// Register all search-related tools with the registry
-pub fn register_search_tools(registry: &mut ToolRegistry) {
-    use super::tools::search;
-    search::register_search_tools(registry);
-}
 
-/// Register all outline-related tools with the registry
-pub fn register_outline_tools(registry: &mut ToolRegistry) {
-    use super::tools::outline;
-    outline::register_outline_tools(registry);
-}
 
 /// Register all question-related tools with the registry
 pub fn register_questions_tools(registry: &mut ToolRegistry) {
@@ -1553,10 +1575,8 @@ pub fn create_fully_registered_tool_registry() -> ToolRegistry {
     register_file_tools(&mut registry);
     register_flow_tools(&mut registry);
     register_git_tools(&mut registry);
-    register_outline_tools(&mut registry);
     register_questions_tools(&mut registry);
     register_rules_tools(&mut registry);
-    register_search_tools(&mut registry);
     register_shell_tools(&mut registry);
     register_todo_tools(&mut registry);
     register_web_fetch_tools(&mut registry);
@@ -1832,11 +1852,6 @@ mod tests {
         "Read and return file contents from the local filesystem"
     );
     test_tool!(
-        SearchQueryTool,
-        "search_query",
-        "Perform semantic search across indexed files"
-    );
-    test_tool!(
         WebSearchTool,
         "web_search",
         "Perform comprehensive web searches using DuckDuckGo"
@@ -1877,7 +1892,6 @@ mod tests {
     fn test_cli_category_extraction() {
         // Test known categories
         assert_eq!(FilesReadTool.cli_category(), Some("file"));
-        assert_eq!(SearchQueryTool.cli_category(), Some("search"));
         assert_eq!(WebSearchTool.cli_category(), Some("web"));
         assert_eq!(ShellExecuteTool.cli_category(), Some("shell"));
         assert_eq!(TodoListTool.cli_category(), Some("todo"));
@@ -1896,7 +1910,6 @@ mod tests {
     fn test_cli_name_extraction() {
         // Test action extraction
         assert_eq!(FilesReadTool.cli_name(), "read");
-        assert_eq!(SearchQueryTool.cli_name(), "query");
         assert_eq!(WebSearchTool.cli_name(), "search");
         assert_eq!(ShellExecuteTool.cli_name(), "execute");
         assert_eq!(TodoCreateTool.cli_name(), "create");

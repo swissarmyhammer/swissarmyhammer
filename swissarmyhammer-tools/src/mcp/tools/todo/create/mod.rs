@@ -63,9 +63,13 @@ impl McpTool for CreateTodoTool {
         McpValidation::validate_not_empty(&request.task, "task description")
             .map_err(|e| McpErrorHandler::handle_error(e, "validate task description"))?;
 
-        // Create storage instance
-        let storage = TodoStorage::new_default()
-            .map_err(|e| McpErrorHandler::handle_todo_error(e, "create todo storage"))?;
+        // Create storage instance using working_dir if available, otherwise use default
+        let storage = if let Some(ref working_dir) = context.working_dir {
+            TodoStorage::new_with_working_dir(working_dir.clone())
+        } else {
+            TodoStorage::new_default()
+        }
+        .map_err(|e| McpErrorHandler::handle_todo_error(e, "create todo storage"))?;
 
         // Create the todo item
         match storage
