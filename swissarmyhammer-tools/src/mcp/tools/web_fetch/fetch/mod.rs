@@ -534,16 +534,16 @@ mod tests {
         context.progress_sender = Some(progress_sender);
 
         let mut arguments = serde_json::Map::new();
-        // Use RFC 5737 TEST-NET-1 address that is reserved for documentation
-        // and should never be routable, causing immediate connection failure
+        // Use example.com with an invalid port to get immediate connection refused
+        // This is faster than DNS resolution failures
         arguments.insert(
             "url".to_string(),
-            serde_json::Value::String("http://192.0.2.1".to_string()),
+            serde_json::Value::String("http://example.com:1".to_string()),
         );
-        // Use very short timeout to speed up the test
+        // Use minimal timeout to speed up the test
         arguments.insert("timeout".to_string(), serde_json::Value::Number(1.into()));
 
-        // Execute the tool (should fail quickly with connection timeout)
+        // Execute the tool (should fail quickly with connection refused on invalid port)
         let _result = tool.execute(arguments, &context).await;
 
         // Give a small delay for async notifications to be sent

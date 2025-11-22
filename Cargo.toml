@@ -12,7 +12,6 @@ members = [
     "swissarmyhammer-git",
     "swissarmyhammer-shell",
     "swissarmyhammer-todo",
-    "swissarmyhammer-outline",
     "swissarmyhammer-templating",
     "swissarmyhammer-prompts",
     "swissarmyhammer-agent-executor",

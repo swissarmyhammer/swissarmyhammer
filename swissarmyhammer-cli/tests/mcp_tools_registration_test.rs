@@ -4,7 +4,7 @@
 
 use swissarmyhammer_tools::mcp::tool_registry::ToolRegistry;
 use swissarmyhammer_tools::mcp::tool_registry::{
-    register_abort_tools, register_file_tools, register_outline_tools, register_shell_tools,
+    register_abort_tools, register_file_tools, register_shell_tools,
     register_todo_tools, register_web_fetch_tools, register_web_search_tools,
 };
 
@@ -16,7 +16,6 @@ fn test_mcp_tools_are_registered() {
     // This mirrors exactly what McpServer does in its constructor
     register_abort_tools(&mut registry);
     register_file_tools(&mut registry);
-    register_outline_tools(&mut registry);
     register_shell_tools(&mut registry);
     register_todo_tools(&mut registry);
     register_web_fetch_tools(&mut registry);
@@ -42,7 +41,6 @@ fn test_mcp_tools_are_registered() {
         "files_edit",
         "files_glob",
         "files_grep",
-        "outline_generate",
         "shell_execute",
         "todo_create",
         "todo_show",
@@ -126,7 +124,6 @@ fn test_cli_categories_are_available() {
     // Register all tools
     register_abort_tools(&mut registry);
     register_file_tools(&mut registry);
-    register_outline_tools(&mut registry);
     register_shell_tools(&mut registry);
     register_todo_tools(&mut registry);
     register_web_fetch_tools(&mut registry);
@@ -136,7 +133,7 @@ fn test_cli_categories_are_available() {
     println!("📋 CLI Categories: {:?}", categories);
 
     // These categories should be available (excluding hidden tools like abort and notify)
-    let expected_categories = ["file", "outline", "shell", "todo", "web-search"];
+    let expected_categories = ["file", "shell", "todo", "web-search"];
 
     for &expected_cat in &expected_categories {
         assert!(

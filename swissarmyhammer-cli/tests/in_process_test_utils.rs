@@ -668,7 +668,9 @@ mod tests {
     /// Helper function to set up test environment
     fn setup_test() {
         // Clean up any stale abort files from previous tests
-        let _ = std::fs::remove_file(".swissarmyhammer/.abort");
+        use std::env;
+        let current_dir = env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+        let _ = swissarmyhammer_common::remove_abort_file(&current_dir);
     }
 
     #[tokio::test]

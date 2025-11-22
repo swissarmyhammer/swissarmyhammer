@@ -196,7 +196,7 @@ async fn test_mcp_tool_definitions_return_sufficient_tools() -> Result<()> {
         "MCP tool definitions return expected number of tools",
         "Both tool definitions have sufficient tools",
         |tools, context| {
-            assert_minimum_tool_count(tools, context, 20);
+            assert_minimum_tool_count(tools, context, 19);
         },
     )
 }

@@ -111,9 +111,6 @@ File System:
 • files_glob - Pattern-based file discovery
 • files_grep - Content search with ripgrep
 
-Code Analysis:
-• outline_generate - Extract code structure
-
 Development Workflow:
 • todo_create, todo_show, todo_list - Todo tracking
 • todo_mark_complete - Todo completion

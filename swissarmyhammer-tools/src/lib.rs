@@ -5,7 +5,6 @@
 //! This crate provides the MCP server functionality and tools that integrate with
 //! the SwissArmyHammer prompt management library. It includes tools for:
 //!
-//! - Code outline generation
 //! - File operations
 //! - Shell command execution
 //! - Todo list management
@@ -14,7 +13,6 @@
 //!
 //! - **MCP Server**: Full Model Context Protocol server implementation
 //! - **Tool Registry**: Extensible tool registration system
-//! - **Outline Tools**: Code structure analysis and extraction
 //!
 //! ## Usage
 //!
