@@ -283,13 +283,26 @@ impl RuleChecker {
         );
 
         // Read target file content
-        let target_content = std::fs::read_to_string(target_path).map_err(|e| {
-            RuleError::CheckError(format!(
-                "Failed to read file {}: {}",
-                target_path.display(),
-                e
-            ))
-        })?;
+        let target_content = match std::fs::read_to_string(target_path) {
+            Ok(content) => content,
+            Err(e) => {
+                // Skip binary files or files with invalid UTF-8
+                if e.kind() == std::io::ErrorKind::InvalidData {
+                    tracing::debug!(
+                        "Skipping binary or non-UTF-8 file: {}",
+                        target_path.display()
+                    );
+                    return Ok(None);
+                }
+                return Err(RuleError::CheckError(
+                    format!(
+                        "Failed to read file {}: {}",
+                        target_path.display(),
+                        e
+                    )
+                ).into());
+            }
+        };
 
         // Check for ignore directives in the file
         let ignore_patterns = crate::ignore::parse_ignore_directives(&target_content);
