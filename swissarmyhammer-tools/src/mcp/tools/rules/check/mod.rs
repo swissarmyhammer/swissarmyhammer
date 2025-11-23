@@ -111,47 +111,21 @@ pub struct RuleCheckRequest {
 ///
 /// A set of file paths that match the patterns
 async fn expand_glob_patterns(patterns: &[String]) -> Result<HashSet<String>, McpError> {
-    let mut files = HashSet::new();
+    // Use the common glob_utils which handles .git and .swissarmyhammer filtering
+    use swissarmyhammer_common::glob_utils::{
+        expand_glob_patterns as expand_common, GlobExpansionConfig,
+    };
 
-    for pattern in patterns {
-        let glob_pattern = if Path::new(pattern).is_absolute() {
-            pattern.clone()
-        } else {
-            // For relative patterns, use current directory
-            std::env::current_dir()
-                .map_err(|e| {
-                    McpError::internal_error(
-                        format!("Failed to get current directory: {}", e),
-                        None,
-                    )
-                })?
-                .join(pattern)
-                .to_string_lossy()
-                .to_string()
-        };
+    let config = GlobExpansionConfig::default();
+    let paths = expand_common(patterns, &config).map_err(|e| {
+        McpError::internal_error(format!("Failed to expand glob patterns: {}", e), None)
+    })?;
 
-        let mut glob_options = glob::MatchOptions::new();
-        glob_options.case_sensitive = true;
-        glob_options.require_literal_separator = false;
-        glob_options.require_literal_leading_dot = false;
-
-        let entries = glob::glob_with(&glob_pattern, glob_options).map_err(|e| {
-            McpError::invalid_params(format!("Invalid glob pattern '{}': {}", pattern, e), None)
-        })?;
-
-        for entry in entries {
-            match entry {
-                Ok(path) => {
-                    if path.is_file() {
-                        files.insert(path.to_string_lossy().to_string());
-                    }
-                }
-                Err(err) => {
-                    tracing::warn!("Error accessing file during glob expansion: {}", err);
-                }
-            }
-        }
-    }
+    // Convert Vec<PathBuf> to HashSet<String>
+    let files: HashSet<String> = paths
+        .into_iter()
+        .map(|p| p.to_string_lossy().to_string())
+        .collect();
 
     Ok(files)
 }
@@ -656,9 +630,6 @@ impl McpTool for RuleCheckTool {
             max_errors: request.max_errors,
             max_concurrency: request.max_concurrency,
         };
-
-        tracing::info!("Domain request patterns: {:?}", domain_request.patterns);
-        tracing::info!("Domain request rule_names: {:?}", domain_request.rule_names);
 
         // Execute the rule check via streaming library
         use futures_util::stream::StreamExt;

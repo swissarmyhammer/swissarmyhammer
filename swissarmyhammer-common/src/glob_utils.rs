@@ -71,7 +71,16 @@ pub fn expand_glob_patterns(
         // Check if this is a direct file or directory path
         let path = PathBuf::from(pattern);
         if path.is_file() {
-            target_files.push(path);
+            // Filter out .git and .swissarmyhammer files even for direct paths
+            let should_include = !path.components().any(|c| {
+                let name = c.as_os_str().to_string_lossy();
+                name == ".git" || name == ".swissarmyhammer"
+            });
+            if should_include {
+                target_files.push(path);
+            } else {
+                tracing::info!("Filtering out direct file path: {}", path.display());
+            }
             continue;
         } else if path.is_dir() {
             // Use WalkBuilder to respect gitignore when walking directories
@@ -193,6 +202,27 @@ pub fn expand_glob_patterns(
                 }
             }
         }
+    }
+
+    // Filter out .git and .swissarmyhammer directories from all results
+    let before_filter = target_files.len();
+    target_files.retain(|file_path| {
+        let should_keep = !file_path.components().any(|c| {
+            let name = c.as_os_str().to_string_lossy();
+            name == ".git" || name == ".swissarmyhammer"
+        });
+        if !should_keep {
+            tracing::debug!("Filtering out: {}", file_path.display());
+        }
+        should_keep
+    });
+    let filtered_count = before_filter - target_files.len();
+    if filtered_count > 0 {
+        tracing::info!(
+            "Filtered out {} .git/.swissarmyhammer files ({} files remaining)",
+            filtered_count,
+            target_files.len()
+        );
     }
 
     // Filter out excluded paths using canonicalized path comparison

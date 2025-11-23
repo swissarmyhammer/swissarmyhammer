@@ -570,15 +570,8 @@ impl RuleChecker {
         }
 
         // Phase 4: Expand glob patterns to get target files
-        // Exclude .swissarmyhammer directory from rule checking
-        let mut config = GlobExpansionConfig::default();
-        if let Ok(sah_dir) = swissarmyhammer_common::SwissarmyhammerDirectory::from_git_root() {
-            config.exclude_paths = vec![sah_dir.root().to_path_buf()];
-            tracing::debug!(
-                "Excluding .swissarmyhammer directory from rule checking: {}",
-                sah_dir.root().display()
-            );
-        }
+        // Note: .git and .swissarmyhammer directories are excluded by the WalkBuilder filter in glob_utils
+        let config = GlobExpansionConfig::default();
 
         let mut target_files = expand_glob_patterns(&request.patterns, &config)
             .map_err(|e| RuleError::CheckError(format!("Failed to expand glob patterns: {}", e)))?;
@@ -593,11 +586,31 @@ impl RuleChecker {
         }
 
         // Phase 5: Create flat work queue of (rule, file) pairs
+        // Filter by applies_to pattern if present
         let work_items: Vec<(Rule, PathBuf)> = rules
             .iter()
             .flat_map(|rule| {
                 target_files
                     .iter()
+                    .filter(move |file| {
+                        // If rule has applies_to pattern, check if file matches
+                        if let Some(ref pattern) = rule.applies_to {
+                            if let Ok(glob_pattern) = glob::Pattern::new(pattern) {
+                                glob_pattern.matches_path(file)
+                            } else {
+                                // Invalid pattern, skip this file for this rule
+                                tracing::warn!(
+                                    "Invalid applies_to pattern '{}' in rule '{}', skipping",
+                                    pattern,
+                                    rule.name
+                                );
+                                false
+                            }
+                        } else {
+                            // No applies_to pattern, include all files
+                            true
+                        }
+                    })
                     .map(move |file| (rule.clone(), file.clone()))
             })
             .collect();

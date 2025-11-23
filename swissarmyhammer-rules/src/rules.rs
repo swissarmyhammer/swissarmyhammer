@@ -63,6 +63,11 @@ pub struct Rule {
     /// Whether rule can auto-fix violations (future feature)
     #[serde(default)]
     pub auto_fix: bool,
+
+    /// Optional glob pattern to filter which files this rule applies to
+    /// If None, applies to all files
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub applies_to: Option<String>,
 }
 
 impl Rule {
@@ -96,6 +101,7 @@ impl Rule {
             metadata: HashMap::new(),
             severity,
             auto_fix: false,
+            applies_to: None,
         }
     }
 
@@ -184,6 +190,15 @@ impl Rule {
             }
         }
 
+        // Validate applies_to glob pattern if present
+        if let Some(ref pattern) = self.applies_to {
+            if let Err(e) = glob::Pattern::new(pattern) {
+                return Err(SwissArmyHammerError::Other {
+                    message: format!("Invalid glob pattern in applies_to field: {}", e),
+                });
+            }
+        }
+
         Ok(())
     }
 
@@ -199,6 +214,7 @@ impl Rule {
             source: None,
             metadata: HashMap::new(),
             auto_fix: false,
+            applies_to: None,
         }
     }
 }
@@ -236,6 +252,7 @@ pub struct RuleBuilder {
     source: Option<PathBuf>,
     metadata: HashMap<String, serde_json::Value>,
     auto_fix: bool,
+    applies_to: Option<String>,
 }
 
 impl RuleBuilder {
@@ -275,6 +292,12 @@ impl RuleBuilder {
         self
     }
 
+    /// Set applies_to glob pattern
+    pub fn applies_to(mut self, pattern: String) -> Self {
+        self.applies_to = Some(pattern);
+        self
+    }
+
     /// Build the rule
     pub fn build(self) -> Rule {
         Rule {
@@ -287,6 +310,7 @@ impl RuleBuilder {
             metadata: self.metadata,
             severity: self.severity,
             auto_fix: self.auto_fix,
+            applies_to: self.applies_to,
         }
     }
 }
