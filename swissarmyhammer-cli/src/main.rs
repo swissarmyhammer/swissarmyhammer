@@ -206,13 +206,22 @@ async fn display_verbose_validation_report(
 ///
 /// This function creates the .swissarmyhammer directory if it doesn't exist,
 /// providing a consistent way to handle directory creation across the CLI.
+/// It also ensures a .gitignore file is created to exclude temporary files.
 ///
 /// # Returns
 /// The path to the .swissarmyhammer directory or an error if creation fails
 fn ensure_swissarmyhammer_dir() -> Result<PathBuf, std::io::Error> {
-    let log_dir = PathBuf::from(".swissarmyhammer");
-    std::fs::create_dir_all(&log_dir)?;
-    Ok(log_dir)
+    use swissarmyhammer_common::SwissarmyhammerDirectory;
+
+    // Try to create from git root first, fall back to current directory
+    let sah_dir = SwissarmyhammerDirectory::from_git_root()
+        .or_else(|_| {
+            // If not in a git repo, create in current directory
+            SwissarmyhammerDirectory::from_custom_root(std::env::current_dir()?)
+        })
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
+
+    Ok(sah_dir.root().to_path_buf())
 }
 
 /// Report an error and return EXIT_ERROR code

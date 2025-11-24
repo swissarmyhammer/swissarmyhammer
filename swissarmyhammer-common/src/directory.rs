@@ -8,6 +8,41 @@ use crate::utils::directory_utils::find_git_repository_root;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+/// Content for .gitignore file in .swissarmyhammer directory
+///
+/// This ensures temporary files, logs, and runtime artifacts are not committed
+/// while allowing important project files like rules/ and docs/ to be tracked.
+const GITIGNORE_CONTENT: &str = r#"# SwissArmyHammer temporary files and logs
+# This file is automatically created by swissarmyhammer-common
+
+# Temporary files
+tmp/
+*.tmp
+
+# Todo tracking (ephemeral development session tracking)
+todo/
+
+# Abort signals (workflow control files)
+.abort
+
+# Logs
+*.log
+mcp.log
+
+# Workflow execution state
+workflow-runs/
+
+# Transcripts (conversation history)
+transcripts/
+
+# Question/Answer cache
+questions/
+
+# Keep these directories (they should be committed):
+# - rules/      Project-specific code quality rules
+# - docs/       Project documentation
+"#;
+
 /// Represents the type of root location for a SwissArmyHammer directory
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DirectoryRootType {
@@ -84,7 +119,45 @@ impl SwissarmyhammerDirectory {
             fs::create_dir_all(&root).map_err(SwissArmyHammerError::directory_creation)?;
         }
 
-        Ok(Self { root, root_type })
+        let instance = Self { root, root_type };
+
+        // Ensure .gitignore exists in the .swissarmyhammer directory
+        instance.write_gitignore_if_needed()?;
+
+        Ok(instance)
+    }
+
+    /// Write .gitignore file if it doesn't exist or needs updating
+    ///
+    /// This ensures the .swissarmyhammer directory has a .gitignore file that
+    /// excludes temporary files, logs, and runtime artifacts while allowing
+    /// important project files to be committed.
+    ///
+    /// # Errors
+    ///
+    /// * Returns error if .gitignore file cannot be written
+    fn write_gitignore_if_needed(&self) -> Result<()> {
+        let gitignore_path = self.root.join(".gitignore");
+
+        // Always write if doesn't exist
+        // If it exists, we let the user manage it (don't overwrite)
+        if !gitignore_path.exists() {
+            fs::write(&gitignore_path, GITIGNORE_CONTENT).map_err(|e| {
+                SwissArmyHammerError::Other {
+                    message: format!(
+                        "Failed to write .gitignore to {}: {}",
+                        gitignore_path.display(),
+                        e
+                    ),
+                }
+            })?;
+            tracing::debug!(
+                "Created .gitignore in .swissarmyhammer directory: {}",
+                gitignore_path.display()
+            );
+        }
+
+        Ok(())
     }
 
     /// Create from Git repository root (default for project operations)
@@ -427,5 +500,81 @@ mod tests {
         let custom = DirectoryRootType::Custom(PathBuf::from("/tmp/test"));
         assert!(custom.to_string().contains("custom path"));
         assert!(custom.to_string().contains("/tmp/test"));
+    }
+
+    #[test]
+    fn test_gitignore_created_on_init() {
+        let temp = TempDir::new().unwrap();
+        let sah_dir =
+            SwissarmyhammerDirectory::from_custom_root(temp.path().to_path_buf()).unwrap();
+
+        let gitignore_path = sah_dir.root().join(".gitignore");
+        assert!(gitignore_path.exists(), ".gitignore should be created");
+
+        let content = fs::read_to_string(&gitignore_path).unwrap();
+        assert!(
+            content.contains("tmp/"),
+            ".gitignore should contain tmp/"
+        );
+        assert!(
+            content.contains("todo/"),
+            ".gitignore should contain todo/"
+        );
+        assert!(
+            content.contains("*.log"),
+            ".gitignore should contain *.log"
+        );
+        assert!(
+            content.contains(".abort"),
+            ".gitignore should contain .abort"
+        );
+    }
+
+    #[test]
+    fn test_gitignore_not_overwritten() {
+        let temp = TempDir::new().unwrap();
+
+        // Create .swissarmyhammer directory manually with custom .gitignore
+        let sah_path = temp.path().join(".swissarmyhammer");
+        fs::create_dir_all(&sah_path).unwrap();
+
+        let custom_content = "# Custom gitignore\n*.custom\n";
+        let gitignore_path = sah_path.join(".gitignore");
+        fs::write(&gitignore_path, custom_content).unwrap();
+
+        // Now create SwissarmyhammerDirectory - should not overwrite
+        let _sah_dir =
+            SwissarmyhammerDirectory::from_custom_root(temp.path().to_path_buf()).unwrap();
+
+        let content = fs::read_to_string(&gitignore_path).unwrap();
+        assert_eq!(
+            content, custom_content,
+            ".gitignore should not be overwritten"
+        );
+    }
+
+    #[test]
+    fn test_gitignore_created_from_git_root() {
+        let temp = TempDir::new().unwrap();
+        fs::create_dir_all(temp.path().join(".git")).unwrap();
+
+        let original_dir = std::env::current_dir().unwrap();
+        std::env::set_current_dir(temp.path()).unwrap();
+
+        let sah_dir = SwissarmyhammerDirectory::from_git_root().unwrap();
+        let gitignore_path = sah_dir.root().join(".gitignore");
+
+        // Change back to original directory before assertions
+        // to ensure we can read the file
+        std::env::set_current_dir(&original_dir).unwrap();
+
+        assert!(
+            gitignore_path.exists(),
+            ".gitignore should be created in Git root at {}",
+            gitignore_path.display()
+        );
+
+        let content = fs::read_to_string(&gitignore_path).unwrap();
+        assert!(content.contains("SwissArmyHammer temporary files"));
     }
 }
