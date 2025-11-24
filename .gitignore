@@ -87,6 +87,10 @@ doc/book
 # Test workflow files (not part of the project source)
 builtin/workflows/*-test.md
 
+# Node.js (no package.json in this Rust project)
+package-lock.json
+node_modules/
+
 # Output scratch files
 output_*.txt
 
