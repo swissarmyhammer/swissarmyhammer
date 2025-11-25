@@ -1,4 +1,14 @@
-# Issue Directory Migration Specification
+# OBSOLETE: Issue Directory Migration Specification
+
+**Status**: This specification is obsolete. The issue system has been removed.
+
+**Note**: The `.swissarmyhammer/` directory pattern is still used for todos, rules, and other project metadata.
+
+---
+
+# Original Specification
+
+_The content below describes a planned migration that was never completed before the issue system was removed._
 
 ## Overview
 

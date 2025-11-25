@@ -109,6 +109,9 @@ impl RuleLoader {
             }
         }
 
+        // Sort rules by name for consistent ordering
+        rules.sort_by(|a, b| a.name.cmp(&b.name));
+
         Ok(rules)
     }
 
@@ -225,6 +228,10 @@ impl RuleLoader {
 
             if let Some(auto_fix) = metadata_value.get("auto_fix").and_then(|v| v.as_bool()) {
                 rule.auto_fix = auto_fix;
+            }
+
+            if let Some(applies_to) = metadata_value.get("applies_to").and_then(|v| v.as_str()) {
+                rule.applies_to = Some(applies_to.to_string());
             }
         }
 

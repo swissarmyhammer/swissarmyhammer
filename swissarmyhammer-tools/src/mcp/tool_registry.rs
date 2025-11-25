@@ -99,7 +99,7 @@
 //! let stats = registry.get_validation_stats();
 //! if !stats.is_all_valid() {
 //!     tracing::warn!("Tool validation issues: {}", stats.summary());
-//!     
+//!
 //!     // Log warnings but continue operation
 //!     let warnings = registry.get_tool_validation_warnings();
 //!     for warning in warnings.iter().take(5) {
@@ -224,13 +224,12 @@ use super::tool_handlers::ToolHandlers;
 use rmcp::model::{Annotated, CallToolResult, RawContent, RawTextContent, Tool};
 use rmcp::{ErrorData as McpError, Peer, RoleServer};
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use swissarmyhammer_common::{ErrorSeverity, Severity};
 use swissarmyhammer_config::agent::AgentConfig;
 use swissarmyhammer_git::GitOperations;
-use swissarmyhammer_issues::IssueStorage;
-use swissarmyhammer_memoranda::MemoStorage;
 use tokio::sync::{Mutex, RwLock};
 
 /// Context shared by all tools during execution
@@ -249,21 +248,8 @@ use tokio::sync::{Mutex, RwLock};
 /// # Thread Safety
 ///
 /// All storage backends are wrapped in appropriate synchronization primitives:
-/// - `RwLock` for storage that supports concurrent reads
 /// - `Mutex` for exclusive access operations
 /// - `Arc` for shared ownership across async tasks
-///
-/// # Usage Patterns
-///
-/// New tools should prefer direct access to storage backends:
-///
-/// ```rust,ignore
-/// async fn execute(&self, args: Args, context: &ToolContext) -> Result<CallToolResult> {
-///     let memo_storage = context.memo_storage.write().await;
-///     let memo = memo_storage.create_memo(title, content).await?;
-///     // Process memo...
-/// }
-/// ```
 #[derive(Clone)]
 pub struct ToolContext {
     /// The tool handlers instance containing the business logic (for backward compatibility)
@@ -272,23 +258,11 @@ pub struct ToolContext {
     /// new registry pattern. New tools should prefer direct storage access.
     pub tool_handlers: Arc<ToolHandlers>,
 
-    /// Direct access to issue storage for new tool implementations
-    ///
-    /// Provides thread-safe access to issue storage operations. Use `read()` for
-    /// read operations and `write()` for write operations.
-    pub issue_storage: Arc<RwLock<Box<dyn IssueStorage>>>,
-
     /// Direct access to git operations for new tool implementations
     ///
     /// Git operations are wrapped in `Option` to handle cases where git is not
     /// available or not initialized. Always check for `None` before use.
     pub git_ops: Arc<Mutex<Option<GitOperations>>>,
-
-    /// Direct access to memo storage for new tool implementations
-    ///
-    /// Provides thread-safe access to memoranda storage operations. Use `read()` for
-    /// read operations and `write()` for write operations.
-    pub memo_storage: Arc<RwLock<Box<dyn MemoStorage>>>,
 
     /// Agent configuration for tool operations that require agent execution
     ///
@@ -347,27 +321,55 @@ pub struct ToolContext {
     /// }
     /// ```
     pub peer: Option<Arc<Peer<RoleServer>>>,
+
+    /// Optional tool registry for tools that need to call other tools
+    ///
+    /// When present, tools can call other tools through their MCP interface.
+    /// This enables tool composition while maintaining proper layering.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// if let Some(registry) = &context.tool_registry {
+    ///     let result = context.call_tool("todo_create", json!({
+    ///         "task": "Fix issue",
+    ///         "context": "Details..."
+    ///     })).await?;
+    /// }
+    /// ```
+    pub tool_registry: Option<Arc<RwLock<ToolRegistry>>>,
+
+    /// Working directory for tool operations
+    ///
+    /// This is the base directory where tools should operate. For example:
+    /// - Todo storage will be in `{working_dir}/.swissarmyhammer/todo/`
+    /// - Rules will be in `{working_dir}/.swissarmyhammer/rules/`
+    ///
+    /// If None, tools should use `std::env::current_dir()` or git root detection
+    /// as a fallback. In tests, this should always be set to an isolated directory.
+    ///
+    /// This explicit approach avoids reliance on environment variables (global state)
+    /// and makes test isolation more reliable and explicit.
+    pub working_dir: Option<PathBuf>,
 }
 
 impl ToolContext {
     /// Create a new tool context
     pub fn new(
         tool_handlers: Arc<ToolHandlers>,
-        issue_storage: Arc<RwLock<Box<dyn IssueStorage>>>,
         git_ops: Arc<Mutex<Option<GitOperations>>>,
-        memo_storage: Arc<RwLock<Box<dyn MemoStorage>>>,
         agent_config: Arc<AgentConfig>,
     ) -> Self {
         Self {
             tool_handlers,
-            issue_storage,
             git_ops,
-            memo_storage,
             agent_config,
             notification_sender: None,
             progress_sender: None,
             mcp_server_port: Arc::new(RwLock::new(None)),
             peer: None,
+            tool_registry: None,
+            working_dir: None,
         }
     }
 
@@ -376,9 +378,7 @@ impl ToolContext {
     /// # Arguments
     ///
     /// * `tool_handlers` - The tool handlers instance
-    /// * `issue_storage` - Issue storage backend
     /// * `git_ops` - Git operations
-    /// * `memo_storage` - Memo storage backend
     /// * `agent_config` - Agent configuration
     /// * `notification_sender` - Notification sender for workflow state transitions
     ///
@@ -387,23 +387,13 @@ impl ToolContext {
     /// A new `ToolContext` with workflow notification support enabled
     pub fn with_notifications(
         tool_handlers: Arc<ToolHandlers>,
-        issue_storage: Arc<RwLock<Box<dyn IssueStorage>>>,
         git_ops: Arc<Mutex<Option<GitOperations>>>,
-        memo_storage: Arc<RwLock<Box<dyn MemoStorage>>>,
         agent_config: Arc<AgentConfig>,
         notification_sender: NotificationSender,
     ) -> Self {
-        Self {
-            tool_handlers,
-            issue_storage,
-            git_ops,
-            memo_storage,
-            agent_config,
-            notification_sender: Some(notification_sender),
-            progress_sender: None,
-            mcp_server_port: Arc::new(RwLock::new(None)),
-            peer: None,
-        }
+        let mut context = Self::new(tool_handlers, git_ops, agent_config);
+        context.notification_sender = Some(notification_sender);
+        context
     }
 
     /// Set the progress sender for this context
@@ -439,6 +429,109 @@ impl ToolContext {
         self.peer = Some(peer);
         self
     }
+
+    /// Set the tool registry for this context
+    ///
+    /// Creates a new context with the tool registry added. This allows tools to
+    /// call other tools through their MCP interface.
+    ///
+    /// # Arguments
+    ///
+    /// * `registry` - The tool registry to use
+    ///
+    /// # Returns
+    ///
+    /// A new `ToolContext` with the tool registry set
+    pub fn with_tool_registry(mut self, registry: Arc<RwLock<ToolRegistry>>) -> Self {
+        self.tool_registry = Some(registry);
+        self
+    }
+
+    /// Set the working directory for this context
+    ///
+    /// Creates a new context with the working directory set. This allows tools
+    /// to operate in an isolated directory, avoiding global state from environment
+    /// variables and making test isolation more reliable.
+    ///
+    /// # Arguments
+    ///
+    /// * `working_dir` - The base directory where tools should operate
+    ///
+    /// # Returns
+    ///
+    /// A new `ToolContext` with the working directory set
+    pub fn with_working_dir(mut self, working_dir: PathBuf) -> Self {
+        self.working_dir = Some(working_dir);
+        self
+    }
+
+    /// Call another MCP tool from within a tool
+    ///
+    /// This method allows tools to compose by calling other tools through their
+    /// MCP interface, maintaining proper architectural layering. Tools should use
+    /// this instead of directly accessing storage or implementation details.
+    ///
+    /// # Arguments
+    ///
+    /// * `name` - The name of the tool to call
+    /// * `params` - The parameters to pass to the tool (must be a JSON object)
+    ///
+    /// # Returns
+    ///
+    /// * `Result<CallToolResult, McpError>` - The result from the called tool
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - The tool registry is not available in this context
+    /// - The specified tool is not found
+    /// - The parameters are not a JSON object
+    /// - The tool execution fails
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// async fn execute(&self, args: Args, context: &ToolContext) -> Result<CallToolResult, McpError> {
+    ///     // Call todo_create tool instead of direct storage access
+    ///     let result = context.call_tool("todo_create", json!({
+    ///         "task": "Fix violation",
+    ///         "context": "Details about the violation"
+    ///     })).await?;
+    ///
+    ///     // Extract data from result if needed
+    ///     Ok(result)
+    /// }
+    /// ```
+    pub async fn call_tool(
+        &self,
+        name: &str,
+        params: serde_json::Value,
+    ) -> Result<CallToolResult, McpError> {
+        // Get the tool registry
+        let registry = self.tool_registry.as_ref().ok_or_else(|| {
+            McpError::internal_error("Tool registry not available in this context", None)
+        })?;
+
+        // Look up the tool
+        let registry_guard = registry.read().await;
+        let tool = registry_guard.get_tool(name).ok_or_else(|| {
+            McpError::internal_error(format!("Tool '{}' not found in registry", name), None)
+        })?;
+
+        // Convert params to a map
+        let params_map = match params {
+            serde_json::Value::Object(map) => map,
+            _ => {
+                return Err(McpError::invalid_params(
+                    format!("Tool parameters must be a JSON object, got: {:?}", params),
+                    None,
+                ));
+            }
+        };
+
+        // Execute the tool
+        tool.execute(params_map, self).await
+    }
 }
 
 /// Trait defining the interface for all MCP tools
@@ -457,7 +550,7 @@ impl ToolContext {
 /// # Implementation Guidelines
 ///
 /// ## Tool Names
-/// Tool names should follow the pattern `{domain}_{action}` (e.g., `memo_create`, `issue_list`).
+/// Tool names should follow the pattern `{domain}_{action}` (e.g., `memo_create`, `todo_list`).
 /// Names must be unique within the registry and should be stable across versions.
 ///
 /// ## Descriptions
@@ -497,7 +590,7 @@ pub trait McpTool: Send + Sync {
     /// Get the tool's unique identifier name
     ///
     /// The name must be unique within the registry and should follow the
-    /// `{domain}_{action}` pattern (e.g., `memo_create`, `issue_list`).
+    /// `{domain}_{action}` pattern (e.g., `memo_create`, `todo_list`).
     /// Names should be stable across versions.
     fn name(&self) -> &'static str;
 
@@ -573,7 +666,7 @@ pub trait McpTool: Send + Sync {
     /// # Examples
     ///
     /// * `memo_create` → Some("memo")
-    /// * `issue_list` → Some("issue")
+    /// * `todo_list` → Some("todo")
     /// * `files_read` → Some("file")
     fn cli_category(&self) -> Option<&'static str> {
         // Extract category from tool name by taking prefix before first underscore
@@ -581,15 +674,14 @@ pub trait McpTool: Send + Sync {
         if let Some(underscore_pos) = name.find('_') {
             match &name[..underscore_pos] {
                 "memo" => Some("memo"),
-                "issue" => Some("issue"),
                 "file" | "files" => Some("file"),
-                "search" => Some("search"),
                 "web" => Some("web"),
                 "shell" => Some("shell"),
                 "todo" => Some("todo"),
                 "outline" => Some("outline"),
                 "notify" => Some("notify"),
                 "abort" => Some("abort"),
+                "rules" => Some("rule"),
                 _ => None,
             }
         } else {
@@ -606,7 +698,7 @@ pub trait McpTool: Send + Sync {
     /// # Examples
     ///
     /// * `memo_create` → "create"
-    /// * `issue_list` → "list"
+    /// * `todo_list` → "list"
     /// * `files_read` → "read"
     fn cli_name(&self) -> &'static str {
         // Extract action from tool name by taking suffix after first underscore
@@ -812,6 +904,29 @@ impl ToolRegistry {
         categories.into_iter().collect()
     }
 
+    /// Filter CLI tools using a custom predicate
+    ///
+    /// Internal helper method that applies common CLI filtering logic
+    /// (excluding hidden tools) along with a custom predicate.
+    ///
+    /// # Arguments
+    ///
+    /// * `predicate` - Custom filter function to apply to each tool
+    ///
+    /// # Returns
+    ///
+    /// * `Vec<&dyn McpTool>` - Filtered tools matching the criteria
+    fn filter_cli_tools<F>(&self, predicate: F) -> Vec<&dyn McpTool>
+    where
+        F: Fn(&dyn McpTool) -> bool,
+    {
+        self.tools
+            .values()
+            .filter(|tool| !tool.hidden_from_cli() && predicate(tool.as_ref()))
+            .map(|tool| tool.as_ref())
+            .collect()
+    }
+
     /// Get all tools for a specific CLI category
     ///
     /// Returns references to all tools that belong to the specified category
@@ -825,11 +940,7 @@ impl ToolRegistry {
     ///
     /// * `Vec<&dyn McpTool>` - Tools in the specified category
     pub fn get_tools_for_category(&self, category: &str) -> Vec<&dyn McpTool> {
-        self.tools
-            .values()
-            .filter(|tool| !tool.hidden_from_cli() && (tool.cli_category() == Some(category)))
-            .map(|tool| tool.as_ref())
-            .collect()
+        self.filter_cli_tools(|tool| tool.cli_category() == Some(category))
     }
 
     /// Get all tools that should appear in CLI
@@ -841,11 +952,7 @@ impl ToolRegistry {
     ///
     /// * `Vec<&dyn McpTool>` - All CLI-visible tools
     pub fn get_cli_tools(&self) -> Vec<&dyn McpTool> {
-        self.tools
-            .values()
-            .filter(|tool| !tool.hidden_from_cli() && tool.cli_category().is_some())
-            .map(|tool| tool.as_ref())
-            .collect()
+        self.filter_cli_tools(|tool| tool.cli_category().is_some())
     }
 
     /// Validate all CLI tools for schema compatibility
@@ -1413,29 +1520,7 @@ pub fn register_git_tools(registry: &mut ToolRegistry) {
     git::register_git_tools(registry);
 }
 
-/// Register all issue-related tools with the registry
-pub fn register_issue_tools(registry: &mut ToolRegistry) {
-    use super::tools::issues;
-    issues::register_issue_tools(registry);
-}
 
-/// Register all memo-related tools with the registry
-pub fn register_memo_tools(registry: &mut ToolRegistry) {
-    use super::tools::memoranda;
-    memoranda::register_memoranda_tools(registry);
-}
-
-/// Register all search-related tools with the registry
-pub fn register_search_tools(registry: &mut ToolRegistry) {
-    use super::tools::search;
-    search::register_search_tools(registry);
-}
-
-/// Register all outline-related tools with the registry
-pub fn register_outline_tools(registry: &mut ToolRegistry) {
-    use super::tools::outline;
-    outline::register_outline_tools(registry);
-}
 
 /// Register all question-related tools with the registry
 pub fn register_questions_tools(registry: &mut ToolRegistry) {
@@ -1471,6 +1556,33 @@ pub fn register_web_fetch_tools(registry: &mut ToolRegistry) {
 pub fn register_web_search_tools(registry: &mut ToolRegistry) {
     use super::tools::web_search;
     web_search::register_web_search_tools(registry);
+}
+
+/// Create a fully registered tool registry with all available tools
+///
+/// This function creates a new ToolRegistry and registers all tool categories,
+/// providing a single source of truth for tool registration that can be used
+/// by both the MCP server implementation and tests.
+///
+/// # Returns
+///
+/// * `ToolRegistry` - A registry with all tools registered
+pub fn create_fully_registered_tool_registry() -> ToolRegistry {
+    let mut registry = ToolRegistry::new();
+
+    // Register all tools exactly like McpServer does
+    register_abort_tools(&mut registry);
+    register_file_tools(&mut registry);
+    register_flow_tools(&mut registry);
+    register_git_tools(&mut registry);
+    register_questions_tools(&mut registry);
+    register_rules_tools(&mut registry);
+    register_shell_tools(&mut registry);
+    register_todo_tools(&mut registry);
+    register_web_fetch_tools(&mut registry);
+    register_web_search_tools(&mut registry);
+
+    registry
 }
 
 #[cfg(test)]
@@ -1588,33 +1700,16 @@ mod tests {
     #[tokio::test]
     async fn test_tool_execution() {
         use swissarmyhammer_git::GitOperations;
-        use swissarmyhammer_issues::IssueStorage;
-        use swissarmyhammer_memoranda::{MarkdownMemoStorage, MemoStorage};
-        use tokio::sync::{Mutex, RwLock};
+        use tokio::sync::Mutex;
 
         // Create temporary directory for test
         let _temp_dir = tempfile::tempdir().unwrap();
-        let test_issues_dir = _temp_dir.path().join("test_issues");
 
         // Create mock storage and handlers for context
-        let issue_storage: Arc<RwLock<Box<dyn IssueStorage>>> = Arc::new(RwLock::new(Box::new(
-            swissarmyhammer_issues::FileSystemIssueStorage::new(test_issues_dir).unwrap(),
-        )));
         let git_ops: Arc<Mutex<Option<GitOperations>>> = Arc::new(Mutex::new(None));
-        // Create memo storage using temporary directory
-        let memo_dir = _temp_dir.path().join("memos");
-        let memo_storage: Arc<RwLock<Box<dyn MemoStorage>>> =
-            Arc::new(RwLock::new(Box::new(MarkdownMemoStorage::new(memo_dir))));
-
-        let tool_handlers = Arc::new(ToolHandlers::new(memo_storage.clone()));
+        let tool_handlers = Arc::new(ToolHandlers::new());
         let agent_config = Arc::new(AgentConfig::default());
-        let context = ToolContext::new(
-            tool_handlers,
-            issue_storage,
-            git_ops,
-            memo_storage,
-            agent_config,
-        );
+        let context = ToolContext::new(tool_handlers, git_ops, agent_config);
 
         let tool = MockTool {
             name: "exec_test",
@@ -1715,269 +1810,91 @@ mod tests {
         }
     }
 
-    /// Test tools for CLI integration testing
-    struct MemoCreateTool;
-    struct IssueListTool;
-    struct FilesReadTool;
-    struct SearchQueryTool;
-    struct WebSearchTool;
-    struct ShellExecuteTool;
-    struct TodoCreateTool;
-    struct OutlineGenerateTool;
-    struct AbortCreateTool;
-    struct UnknownCategoryTool;
-    struct NoUnderscoreTool;
-    struct MultiLineTool;
+    /// Macro to create test tools with minimal boilerplate
+    ///
+    /// This macro reduces code duplication by generating identical tool implementations
+    /// that differ only in their name and description.
+    macro_rules! test_tool {
+        ($name:ident, $tool_name:literal, $description:literal) => {
+            struct $name;
 
-    #[async_trait::async_trait]
-    impl McpTool for MemoCreateTool {
-        fn name(&self) -> &'static str {
-            "memo_create"
-        }
-        fn description(&self) -> &'static str {
-            "Create a new memo with the given title and content"
-        }
-        fn schema(&self) -> serde_json::Value {
-            serde_json::json!({})
-        }
-        async fn execute(
-            &self,
-            _args: serde_json::Map<String, serde_json::Value>,
-            _ctx: &ToolContext,
-        ) -> std::result::Result<CallToolResult, McpError> {
-            Ok(BaseToolImpl::create_success_response("Test"))
-        }
+            #[async_trait::async_trait]
+            impl McpTool for $name {
+                fn name(&self) -> &'static str {
+                    $tool_name
+                }
+                fn description(&self) -> &'static str {
+                    $description
+                }
+                fn schema(&self) -> serde_json::Value {
+                    serde_json::json!({})
+                }
+                async fn execute(
+                    &self,
+                    _args: serde_json::Map<String, serde_json::Value>,
+                    _ctx: &ToolContext,
+                ) -> std::result::Result<CallToolResult, McpError> {
+                    Ok(BaseToolImpl::create_success_response("Test"))
+                }
+            }
+        };
     }
 
-    #[async_trait::async_trait]
-    impl McpTool for IssueListTool {
-        fn name(&self) -> &'static str {
-            "issue_list"
-        }
-        fn description(&self) -> &'static str {
-            "List all available issues with their status"
-        }
-        fn schema(&self) -> serde_json::Value {
-            serde_json::json!({})
-        }
-        async fn execute(
-            &self,
-            _args: serde_json::Map<String, serde_json::Value>,
-            _ctx: &ToolContext,
-        ) -> std::result::Result<CallToolResult, McpError> {
-            Ok(BaseToolImpl::create_success_response("Test"))
-        }
-    }
-
-    #[async_trait::async_trait]
-    impl McpTool for FilesReadTool {
-        fn name(&self) -> &'static str {
-            "files_read"
-        }
-        fn description(&self) -> &'static str {
-            "Read and return file contents from the local filesystem"
-        }
-        fn schema(&self) -> serde_json::Value {
-            serde_json::json!({})
-        }
-        async fn execute(
-            &self,
-            _args: serde_json::Map<String, serde_json::Value>,
-            _ctx: &ToolContext,
-        ) -> std::result::Result<CallToolResult, McpError> {
-            Ok(BaseToolImpl::create_success_response("Test"))
-        }
-    }
-
-    #[async_trait::async_trait]
-    impl McpTool for SearchQueryTool {
-        fn name(&self) -> &'static str {
-            "search_query"
-        }
-        fn description(&self) -> &'static str {
-            "Perform semantic search across indexed files"
-        }
-        fn schema(&self) -> serde_json::Value {
-            serde_json::json!({})
-        }
-        async fn execute(
-            &self,
-            _args: serde_json::Map<String, serde_json::Value>,
-            _ctx: &ToolContext,
-        ) -> std::result::Result<CallToolResult, McpError> {
-            Ok(BaseToolImpl::create_success_response("Test"))
-        }
-    }
-
-    #[async_trait::async_trait]
-    impl McpTool for WebSearchTool {
-        fn name(&self) -> &'static str {
-            "web_search"
-        }
-        fn description(&self) -> &'static str {
-            "Perform comprehensive web searches using DuckDuckGo"
-        }
-        fn schema(&self) -> serde_json::Value {
-            serde_json::json!({})
-        }
-        async fn execute(
-            &self,
-            _args: serde_json::Map<String, serde_json::Value>,
-            _ctx: &ToolContext,
-        ) -> std::result::Result<CallToolResult, McpError> {
-            Ok(BaseToolImpl::create_success_response("Test"))
-        }
-    }
-
-    #[async_trait::async_trait]
-    impl McpTool for ShellExecuteTool {
-        fn name(&self) -> &'static str {
-            "shell_execute"
-        }
-        fn description(&self) -> &'static str {
-            "Execute shell commands with timeout controls"
-        }
-        fn schema(&self) -> serde_json::Value {
-            serde_json::json!({})
-        }
-        async fn execute(
-            &self,
-            _args: serde_json::Map<String, serde_json::Value>,
-            _ctx: &ToolContext,
-        ) -> std::result::Result<CallToolResult, McpError> {
-            Ok(BaseToolImpl::create_success_response("Test"))
-        }
-    }
-
-    #[async_trait::async_trait]
-    impl McpTool for TodoCreateTool {
-        fn name(&self) -> &'static str {
-            "todo_create"
-        }
-        fn description(&self) -> &'static str {
-            "Add a new item to a todo list"
-        }
-        fn schema(&self) -> serde_json::Value {
-            serde_json::json!({})
-        }
-        async fn execute(
-            &self,
-            _args: serde_json::Map<String, serde_json::Value>,
-            _ctx: &ToolContext,
-        ) -> std::result::Result<CallToolResult, McpError> {
-            Ok(BaseToolImpl::create_success_response("Test"))
-        }
-    }
-
-    #[async_trait::async_trait]
-    impl McpTool for OutlineGenerateTool {
-        fn name(&self) -> &'static str {
-            "outline_generate"
-        }
-        fn description(&self) -> &'static str {
-            "Generate structured code overviews using Tree-sitter parsing"
-        }
-        fn schema(&self) -> serde_json::Value {
-            serde_json::json!({})
-        }
-        async fn execute(
-            &self,
-            _args: serde_json::Map<String, serde_json::Value>,
-            _ctx: &ToolContext,
-        ) -> std::result::Result<CallToolResult, McpError> {
-            Ok(BaseToolImpl::create_success_response("Test"))
-        }
-    }
-
-    #[async_trait::async_trait]
-    impl McpTool for AbortCreateTool {
-        fn name(&self) -> &'static str {
-            "abort_create"
-        }
-        fn description(&self) -> &'static str {
-            "Create an abort file to signal workflow termination"
-        }
-        fn schema(&self) -> serde_json::Value {
-            serde_json::json!({})
-        }
-        async fn execute(
-            &self,
-            _args: serde_json::Map<String, serde_json::Value>,
-            _ctx: &ToolContext,
-        ) -> std::result::Result<CallToolResult, McpError> {
-            Ok(BaseToolImpl::create_success_response("Test"))
-        }
-    }
-
-    #[async_trait::async_trait]
-    impl McpTool for UnknownCategoryTool {
-        fn name(&self) -> &'static str {
-            "unknown_something"
-        }
-        fn description(&self) -> &'static str {
-            "A tool with an unknown category prefix"
-        }
-        fn schema(&self) -> serde_json::Value {
-            serde_json::json!({})
-        }
-        async fn execute(
-            &self,
-            _args: serde_json::Map<String, serde_json::Value>,
-            _ctx: &ToolContext,
-        ) -> std::result::Result<CallToolResult, McpError> {
-            Ok(BaseToolImpl::create_success_response("Test"))
-        }
-    }
-
-    #[async_trait::async_trait]
-    impl McpTool for NoUnderscoreTool {
-        fn name(&self) -> &'static str {
-            "noundercore"
-        }
-        fn description(&self) -> &'static str {
-            "A tool without underscore in name"
-        }
-        fn schema(&self) -> serde_json::Value {
-            serde_json::json!({})
-        }
-        async fn execute(
-            &self,
-            _args: serde_json::Map<String, serde_json::Value>,
-            _ctx: &ToolContext,
-        ) -> std::result::Result<CallToolResult, McpError> {
-            Ok(BaseToolImpl::create_success_response("Test"))
-        }
-    }
-
-    #[async_trait::async_trait]
-    impl McpTool for MultiLineTool {
-        fn name(&self) -> &'static str {
-            "multi_line"
-        }
-        fn description(&self) -> &'static str {
-            "First line of description\nSecond line should not appear\nThird line also should not appear"
-        }
-        fn schema(&self) -> serde_json::Value {
-            serde_json::json!({})
-        }
-        async fn execute(
-            &self,
-            _args: serde_json::Map<String, serde_json::Value>,
-            _ctx: &ToolContext,
-        ) -> std::result::Result<CallToolResult, McpError> {
-            Ok(BaseToolImpl::create_success_response("Test"))
-        }
-    }
+    // Test tools for CLI integration testing
+    test_tool!(
+        TodoListTool,
+        "todo_list",
+        "List all available todo items with optional filtering"
+    );
+    test_tool!(
+        FilesReadTool,
+        "files_read",
+        "Read and return file contents from the local filesystem"
+    );
+    test_tool!(
+        WebSearchTool,
+        "web_search",
+        "Perform comprehensive web searches using DuckDuckGo"
+    );
+    test_tool!(
+        ShellExecuteTool,
+        "shell_execute",
+        "Execute shell commands with timeout controls"
+    );
+    test_tool!(
+        TodoCreateTool,
+        "todo_create",
+        "Add a new item to a todo list"
+    );
+    test_tool!(
+        OutlineGenerateTool,
+        "outline_generate",
+        "Generate structured code overviews using Tree-sitter parsing"
+    );
+    test_tool!(
+        AbortCreateTool,
+        "abort_create",
+        "Create an abort file to signal workflow termination"
+    );
+    test_tool!(
+        UnknownCategoryTool,
+        "unknown_something",
+        "A tool with an unknown category prefix"
+    );
+    test_tool!(
+        NoUnderscoreTool,
+        "noundercore",
+        "A tool without underscore in name"
+    );
+    test_tool!(MultiLineTool, "multi_line", "First line of description\nSecond line should not appear\nThird line also should not appear");
 
     #[test]
     fn test_cli_category_extraction() {
         // Test known categories
-        assert_eq!(MemoCreateTool.cli_category(), Some("memo"));
-        assert_eq!(IssueListTool.cli_category(), Some("issue"));
         assert_eq!(FilesReadTool.cli_category(), Some("file"));
-        assert_eq!(SearchQueryTool.cli_category(), Some("search"));
         assert_eq!(WebSearchTool.cli_category(), Some("web"));
         assert_eq!(ShellExecuteTool.cli_category(), Some("shell"));
+        assert_eq!(TodoListTool.cli_category(), Some("todo"));
         assert_eq!(TodoCreateTool.cli_category(), Some("todo"));
         assert_eq!(OutlineGenerateTool.cli_category(), Some("outline"));
         assert_eq!(AbortCreateTool.cli_category(), Some("abort"));
@@ -1992,10 +1909,7 @@ mod tests {
     #[test]
     fn test_cli_name_extraction() {
         // Test action extraction
-        assert_eq!(MemoCreateTool.cli_name(), "create");
-        assert_eq!(IssueListTool.cli_name(), "list");
         assert_eq!(FilesReadTool.cli_name(), "read");
-        assert_eq!(SearchQueryTool.cli_name(), "query");
         assert_eq!(WebSearchTool.cli_name(), "search");
         assert_eq!(ShellExecuteTool.cli_name(), "execute");
         assert_eq!(TodoCreateTool.cli_name(), "create");
@@ -2013,14 +1927,6 @@ mod tests {
     fn test_cli_about_extraction() {
         // Test first line extraction
         assert_eq!(
-            MemoCreateTool.cli_about(),
-            Some("Create a new memo with the given title and content")
-        );
-        assert_eq!(
-            IssueListTool.cli_about(),
-            Some("List all available issues with their status")
-        );
-        assert_eq!(
             FilesReadTool.cli_about(),
             Some("Read and return file contents from the local filesystem")
         );
@@ -2030,8 +1936,6 @@ mod tests {
     #[test]
     fn test_hidden_from_cli_default() {
         // Test default implementation returns false
-        assert!(!MemoCreateTool.hidden_from_cli());
-        assert!(!IssueListTool.hidden_from_cli());
         assert!(!FilesReadTool.hidden_from_cli());
         assert!(!UnknownCategoryTool.hidden_from_cli());
         assert!(!NoUnderscoreTool.hidden_from_cli());
@@ -2039,16 +1943,6 @@ mod tests {
 
     #[test]
     fn test_cli_integration_comprehensive() {
-        // Test a tool that should be visible in CLI
-        let tool = MemoCreateTool;
-        assert_eq!(tool.cli_category(), Some("memo"));
-        assert_eq!(tool.cli_name(), "create");
-        assert_eq!(
-            tool.cli_about(),
-            Some("Create a new memo with the given title and content")
-        );
-        assert!(!tool.hidden_from_cli());
-
         // Test a tool that should not be visible in CLI (unknown category)
         let tool = UnknownCategoryTool;
         assert_eq!(tool.cli_category(), None);

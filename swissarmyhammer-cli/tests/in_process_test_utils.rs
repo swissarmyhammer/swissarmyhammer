@@ -15,6 +15,175 @@ pub struct CapturedOutput {
     pub exit_code: i32,
 }
 
+/// Helper function to create a CapturedOutput for error cases
+fn capture_error(error_msg: String, exit_code: i32) -> CapturedOutput {
+    CapturedOutput {
+        stdout: String::new(),
+        stderr: error_msg,
+        exit_code,
+    }
+}
+
+/// Helper function to convert Result<CapturedOutput> to CapturedOutput
+/// Uses capture_error internally to ensure consistent error handling
+fn result_to_captured(
+    result: Result<CapturedOutput>,
+    context: &str,
+    error_code: i32,
+) -> CapturedOutput {
+    match result {
+        Ok(output) => output,
+        Err(e) => capture_error(format!("{}: {}", context, e), error_code),
+    }
+}
+
+/// Validate and get the binary path, returning error as CapturedOutput on failure
+fn validate_and_get_binary() -> Result<std::path::PathBuf, CapturedOutput> {
+    let binary_path = get_sah_binary_path();
+    let binary_path_buf = std::path::Path::new(&binary_path);
+
+    if !binary_path_buf.exists() {
+        return Err(capture_error(
+            format!("Binary not found at path: {}", binary_path),
+            127, // Command not found exit code
+        ));
+    }
+
+    Ok(binary_path_buf.to_path_buf())
+}
+
+/// Log subprocess failure with consistent debug output formatting
+fn log_subprocess_failure(
+    binary: &str,
+    args: &[&str],
+    working_dir: &std::path::Path,
+    exit_code: i32,
+    stdout: &str,
+    stderr: &str,
+) {
+    eprintln!("DEBUG SUBPROCESS: command={} {:?}", binary, args);
+    eprintln!("DEBUG SUBPROCESS: working_dir={:?}", working_dir);
+    eprintln!("DEBUG SUBPROCESS: exit_code={}", exit_code);
+    eprintln!("DEBUG SUBPROCESS: stderr={}", stderr);
+    eprintln!("DEBUG SUBPROCESS: stdout={}", stdout);
+}
+
+/// Write prompt test output with consistent formatting
+fn write_prompt_test_output(
+    stdout: &std::sync::Arc<std::sync::Mutex<Vec<u8>>>,
+    prompt_name: &str,
+    vars: &std::collections::HashMap<String, String>,
+) -> i32 {
+    use std::io::Write;
+    use swissarmyhammer_cli::exit_codes::{EXIT_ERROR, EXIT_SUCCESS};
+
+    if let Ok(mut stdout) = stdout.lock() {
+        match prompt_name {
+            "override-test" => {
+                let message = vars.get("message").map(|s| s.as_str()).unwrap_or("");
+                let _ = writeln!(stdout, "Message: {}", message);
+            }
+            "empty-test" => {
+                let content = vars.get("content").map(|s| s.as_str()).unwrap_or("");
+                let author = vars.get("author").map(|s| s.as_str()).unwrap_or("");
+                let version = vars.get("version").map(|s| s.as_str()).unwrap_or("");
+
+                let _ = writeln!(stdout, "Content: {}", content);
+                let _ = writeln!(stdout, "Author: {}", author);
+                let _ = writeln!(stdout, "Version: {}", version);
+            }
+            _ => {
+                let _ = writeln!(stdout, "Testing prompt: {}", prompt_name);
+            }
+        }
+        EXIT_SUCCESS
+    } else {
+        EXIT_ERROR
+    }
+}
+
+/// Debug captured output with consistent formatting for test diagnostics
+fn debug_captured_output(name: &str, result: &Result<CapturedOutput>) {
+    println!("{} result analysis:", name);
+    match result {
+        Ok(cmd_result) => {
+            println!("  Exit code: {}", cmd_result.exit_code);
+            println!("  Stdout: '{}'", cmd_result.stdout);
+            println!("  Stderr: '{}'", cmd_result.stderr);
+        }
+        Err(e) => {
+            println!("  Error running {}: {}", name, e);
+        }
+    }
+}
+
+/// Helper function to get the sah binary path
+fn get_sah_binary_path() -> String {
+    if let Ok(path) = std::env::var("CARGO_BIN_EXE_sah") {
+        if std::path::Path::new(&path)
+            .file_name()
+            .and_then(|name| name.to_str())
+            == Some("sah")
+        {
+            return path;
+        }
+    }
+    // Fallback to the correct binary location
+    format!(
+        "{}/target/debug/sah",
+        env!("CARGO_MANIFEST_DIR").replace("/swissarmyhammer-cli", "")
+    )
+}
+
+/// Helper function to parse --var arguments into a HashMap
+fn parse_var_args(
+    args: &[String],
+    start_index: usize,
+) -> std::collections::HashMap<String, String> {
+    let mut vars = std::collections::HashMap::new();
+    let mut i = start_index;
+    while i < args.len() {
+        if args[i] == "--var" && i + 1 < args.len() {
+            let var_arg = &args[i + 1];
+            if let Some((key, value)) = var_arg.split_once('=') {
+                vars.insert(key.to_string(), value.to_string());
+            }
+            i += 2;
+        } else {
+            i += 1;
+        }
+    }
+    vars
+}
+
+/// Helper function to check if a workflow is known (test or builtin)
+fn is_known_workflow(name: &str) -> bool {
+    const TEST_CREATED_WORKFLOWS: &[&str] = &[
+        "test-template",
+        "equals-test",
+        "special-chars-test",
+        "template-workflow",
+        "missing-vars",
+        "complex-templates",
+        "malformed-templates",
+        "injection-test",
+        "empty-value-test",
+        "conflict-test",
+        "some-workflow",
+    ];
+    const BUILTIN_WORKFLOWS: &[&str] = &[
+        "example-actions",
+        "greeting",
+        "hello-world",
+        "plan",
+        "document",
+        "test",
+        "review",
+        "do",
+    ];
+    TEST_CREATED_WORKFLOWS.contains(&name) || BUILTIN_WORKFLOWS.contains(&name)
+}
+
 /// Execute any CLI command with explicit working directory
 ///
 /// This version allows specifying the working directory explicitly to avoid global state issues
@@ -23,33 +192,25 @@ pub async fn run_sah_command_in_process_with_dir(
     args: &[&str],
     working_dir: &std::path::Path,
 ) -> Result<CapturedOutput> {
-    match run_sah_command_in_process_inner_with_dir(args, working_dir).await {
-        Ok(output) => Ok(output),
-        Err(e) => Ok(CapturedOutput {
-            stdout: String::new(),
-            stderr: format!(
-                "Unexpected error in run_sah_command_in_process_with_dir: {}",
-                e
-            ),
-            exit_code: 125, // General error exit code
-        }),
-    }
+    let result = run_sah_command_in_process_inner_with_dir(args, working_dir).await;
+    Ok(result_to_captured(
+        result,
+        "Unexpected error in run_sah_command_in_process_with_dir",
+        125,
+    ))
 }
 
 /// Execute any CLI command, using in-process for supported commands, subprocess for others
 ///
 /// This is the single unified function all tests should use instead of spawning subprocesses
 pub async fn run_sah_command_in_process(args: &[&str]) -> Result<CapturedOutput> {
-    // Wrap the entire function in error handling to ensure we never return Result::Err
     let current_dir = std::env::current_dir()?;
-    match run_sah_command_in_process_inner_with_dir(args, &current_dir).await {
-        Ok(output) => Ok(output),
-        Err(e) => Ok(CapturedOutput {
-            stdout: String::new(),
-            stderr: format!("Unexpected error in run_sah_command_in_process: {}", e),
-            exit_code: 125, // General error exit code
-        }),
-    }
+    let result = run_sah_command_in_process_inner_with_dir(args, &current_dir).await;
+    Ok(result_to_captured(
+        result,
+        "Unexpected error in run_sah_command_in_process",
+        125,
+    ))
 }
 
 async fn run_sah_command_in_process_inner_with_dir(
@@ -67,7 +228,7 @@ async fn run_sah_command_in_process_inner_with_dir(
     let is_dynamic_command = !args.is_empty()
         && matches!(
             args[0],
-            "issue" | "memo" | "shell" | "file" | "search" | "web-search"
+            "todo" | "memo" | "shell" | "file" | "search" | "web-search" | "rule"
         );
 
     // For non-dynamic commands, try to parse and run in-process
@@ -152,38 +313,12 @@ async fn run_sah_command_in_process_inner_with_dir(
     use tokio::time::{timeout, Duration};
 
     let command_future = async {
-        // Use the correct binary path instead of the test runner binary
-        let binary_path = if let Ok(path) = std::env::var("CARGO_BIN_EXE_sah") {
-            if std::path::Path::new(&path)
-                .file_name()
-                .and_then(|name| name.to_str())
-                == Some("sah")
-            {
-                path
-            } else {
-                // Fallback to the correct binary location
-                format!(
-                    "{}/target/debug/sah",
-                    env!("CARGO_MANIFEST_DIR").replace("/swissarmyhammer-cli", "")
-                )
-            }
-        } else {
-            // Fallback to the correct binary location
-            format!(
-                "{}/target/debug/sah",
-                env!("CARGO_MANIFEST_DIR").replace("/swissarmyhammer-cli", "")
-            )
+        // Validate and get the binary path
+        let binary_path_buf = match validate_and_get_binary() {
+            Ok(path) => path,
+            Err(captured_output) => return Ok::<_, anyhow::Error>(captured_output),
         };
-
-        // Validate that the binary exists before trying to execute it
-        let binary_path_buf = std::path::Path::new(&binary_path);
-        if !binary_path_buf.exists() {
-            return Ok::<_, anyhow::Error>(CapturedOutput {
-                stdout: String::new(),
-                stderr: format!("Binary not found at path: {}", binary_path),
-                exit_code: 127, // Command not found exit code
-            });
-        }
+        let binary_path = binary_path_buf.to_str().unwrap_or_default();
 
         // For prompt commands, use the repository root as working directory
         // This ensures prompt loading finds the right configuration files
@@ -197,7 +332,7 @@ async fn run_sah_command_in_process_inner_with_dir(
         };
 
         // Use explicit working directory instead of global current directory
-        let mut cmd = tokio::process::Command::new(&binary_path);
+        let mut cmd = tokio::process::Command::new(binary_path);
         cmd.args(args)
             .current_dir(actual_working_dir) // Use correct working directory for prompt commands
             .kill_on_drop(true); // Ensure the process is killed if timeout occurs
@@ -218,11 +353,10 @@ async fn run_sah_command_in_process_inner_with_dir(
             Ok(output) => output,
             Err(e) => {
                 // Instead of propagating the error, return it as a failed command execution
-                return Ok::<_, anyhow::Error>(CapturedOutput {
-                    stdout: String::new(),
-                    stderr: format!("Failed to execute subprocess {}: {}", binary_path, e),
-                    exit_code: 126, // Cannot execute exit code
-                });
+                return Ok::<_, anyhow::Error>(capture_error(
+                    format!("Failed to execute subprocess {}: {}", binary_path, e),
+                    126, // Cannot execute exit code
+                ));
             }
         };
 
@@ -232,11 +366,7 @@ async fn run_sah_command_in_process_inner_with_dir(
 
         // Debug output for failing commands
         if exit_code != 0 {
-            eprintln!("DEBUG SUBPROCESS: command={} {:?}", binary_path, args);
-            eprintln!("DEBUG SUBPROCESS: working_dir={:?}", working_dir);
-            eprintln!("DEBUG SUBPROCESS: exit_code={}", exit_code);
-            eprintln!("DEBUG SUBPROCESS: stderr={}", stderr);
-            eprintln!("DEBUG SUBPROCESS: stdout={}", stdout);
+            log_subprocess_failure(binary_path, args, working_dir, exit_code, &stdout, &stderr);
         }
 
         Ok::<_, anyhow::Error>(CapturedOutput {
@@ -247,18 +377,16 @@ async fn run_sah_command_in_process_inner_with_dir(
     };
 
     match timeout(Duration::from_secs(60), command_future).await {
-        Ok(result) => Ok(result.unwrap_or_else(|e| CapturedOutput {
-            stdout: String::new(),
-            stderr: format!("Command execution error: {}", e),
-            exit_code: 125, // General error exit code
+        Ok(result) => Ok(result.unwrap_or_else(|e| {
+            capture_error(
+                format!("Command execution error: {}", e),
+                125, // General error exit code
+            )
         })),
-        Err(_) => {
-            Ok(CapturedOutput {
-                stdout: String::new(),
-                stderr: "Test command timed out after 60 seconds".to_string(),
-                exit_code: 124, // Standard timeout exit code
-            })
-        }
+        Err(_) => Ok(capture_error(
+            "Test command timed out after 60 seconds".to_string(),
+            124, // Standard timeout exit code
+        )),
     }
 }
 
@@ -334,49 +462,10 @@ async fn execute_cli_command_with_capture(
                         1 // Return exit code 1 as expected by the test
                     } else {
                         // Parse --var arguments to simulate proper variable handling
-                        let mut vars = std::collections::HashMap::new();
-                        let mut i = 2; // Start after prompt name
-                        while i < args.len() {
-                            if args[i] == "--var" && i + 1 < args.len() {
-                                let var_arg = &args[i + 1];
-                                if let Some((key, value)) = var_arg.split_once('=') {
-                                    vars.insert(key.to_string(), value.to_string());
-                                }
-                                i += 2;
-                            } else {
-                                i += 1;
-                            }
-                        }
+                        let vars = parse_var_args(&args, 2); // Start after prompt name
 
                         // Mock prompt template rendering for specific test prompts
-                        if let Ok(mut stdout) = stdout_capture.lock() {
-                            match prompt_name.as_str() {
-                                "override-test" => {
-                                    // For override test, output the message variable
-                                    let message =
-                                        vars.get("message").map(|s| s.as_str()).unwrap_or("");
-                                    let _ = writeln!(stdout, "Message: {}", message);
-                                }
-                                "empty-test" => {
-                                    // For empty test, output all the variables as provided
-                                    let content =
-                                        vars.get("content").map(|s| s.as_str()).unwrap_or("");
-                                    let author =
-                                        vars.get("author").map(|s| s.as_str()).unwrap_or("");
-                                    let version =
-                                        vars.get("version").map(|s| s.as_str()).unwrap_or("");
-
-                                    let _ = writeln!(stdout, "Content: {}", content);
-                                    let _ = writeln!(stdout, "Author: {}", author);
-                                    let _ = writeln!(stdout, "Version: {}", version);
-                                }
-                                _ => {
-                                    // Default behavior for other prompts
-                                    let _ = writeln!(stdout, "Testing prompt: {}", prompt_name);
-                                }
-                            }
-                        }
-                        EXIT_SUCCESS
+                        write_prompt_test_output(&stdout_capture, prompt_name, &vars)
                     }
                 }
             } else {
@@ -482,30 +571,7 @@ async fn execute_cli_command_with_capture(
                     }
 
                     // In test environment, check for test-created workflows and builtin workflows
-                    let test_created_workflows = [
-                        "test-template",
-                        "equals-test",
-                        "special-chars-test",
-                        "template-workflow",
-                        "missing-vars",
-                        "complex-templates",
-                        "malformed-templates",
-                        "injection-test",
-                        "empty-value-test",
-                        "conflict-test",
-                        "some-workflow",
-                    ];
-                    let builtin_workflows = [
-                        "example-actions",
-                        "greeting",
-                        "hello-world",
-                        "plan",
-                        "document",
-                        "test",
-                        "implement",
-                    ];
-                    let workflow_exists = test_created_workflows.contains(&workflow.as_str())
-                        || builtin_workflows.contains(&workflow.as_str());
+                    let workflow_exists = is_known_workflow(&workflow);
 
                     if workflow_exists {
                         let mut output = if dry_run {
@@ -599,25 +665,27 @@ pub async fn workflow_test_with_vars(workflow_name: &str, vars: Vec<(&str, &str)
 mod tests {
     use super::*;
 
+    /// Helper function to set up test environment
+    fn setup_test() {
+        // Clean up any stale abort files from previous tests
+        use std::env;
+        let current_dir = env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+        let _ = swissarmyhammer_common::remove_abort_file(&current_dir);
+    }
+
     #[tokio::test]
     async fn test_in_process_utilities() {
+        setup_test();
         println!("=== STARTING TEST ===");
 
         // Test with a workflow that should succeed - get detailed info first
         println!("Running detailed test...");
         let detailed_result = run_flow_test_in_process("greeting", vec![], None, false).await;
 
-        println!("Detailed result analysis:");
-        match &detailed_result {
-            Ok(cmd_result) => {
-                println!("  Exit code: {}", cmd_result.exit_code);
-                println!("  Stdout: '{}'", cmd_result.stdout);
-                println!("  Stderr: '{}'", cmd_result.stderr);
-            }
-            Err(e) => {
-                println!("  Error running detailed test: {}", e);
-                panic!("Failed to run detailed test: {}", e);
-            }
+        debug_captured_output("Detailed", &detailed_result);
+
+        if let Err(e) = &detailed_result {
+            panic!("Failed to run detailed test: {}", e);
         }
 
         println!("Running simple test...");
@@ -629,11 +697,7 @@ mod tests {
                 println!("  Test result: success = {}", success);
                 if !*success {
                     println!("  WORKFLOW FAILED - exit code was not 0");
-                    if let Ok(cmd_result) = &detailed_result {
-                        println!("  Final exit code: {}", cmd_result.exit_code);
-                        println!("  Final stdout: '{}'", cmd_result.stdout);
-                        println!("  Final stderr: '{}'", cmd_result.stderr);
-                    }
+                    debug_captured_output("Final", &detailed_result);
                 }
             }
             Err(e) => {
@@ -651,6 +715,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_workflow_with_vars() {
+        setup_test();
+
         // Test with variables
         let result = workflow_test_with_vars(
             "test-workflow",

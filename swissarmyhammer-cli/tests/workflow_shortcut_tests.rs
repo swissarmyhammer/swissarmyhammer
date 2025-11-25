@@ -3,18 +3,128 @@
 //! These tests verify that workflow shortcuts are correctly generated and can
 //! execute workflows without requiring the 'flow' prefix.
 
+use clap::Command;
 use std::sync::Arc;
 use swissarmyhammer_cli::dynamic_cli::CliBuilder;
 use swissarmyhammer_tools::mcp::tool_registry::ToolRegistry;
 use swissarmyhammer_workflow::WorkflowStorage;
 
+// Test constants
+const ERR_CREATE_STORAGE: &str = "Failed to create workflow storage";
+const ERR_LIST_WORKFLOWS: &str = "Failed to list workflows";
+
+// Test helper functions
+
+/// Creates test workflow storage and generates shortcuts
+fn create_test_shortcuts() -> (WorkflowStorage, Vec<Command>) {
+    let storage = WorkflowStorage::file_system().expect(ERR_CREATE_STORAGE);
+    let shortcuts = CliBuilder::build_workflow_shortcuts(&storage);
+    (storage, shortcuts)
+}
+
+/// Creates test CLI builder with tool registry
+fn create_test_cli_builder() -> (Arc<tokio::sync::RwLock<ToolRegistry>>, CliBuilder) {
+    let tool_registry = Arc::new(tokio::sync::RwLock::new(ToolRegistry::new()));
+    let cli_builder = CliBuilder::new(tool_registry.clone());
+    (tool_registry, cli_builder)
+}
+
+/// Asserts that a shortcut has a specific flag (long and optionally short form)
+fn assert_shortcut_has_flag(shortcut: &Command, flag_long: &str, flag_short: Option<char>) {
+    let args: Vec<_> = shortcut.get_arguments().collect();
+    assert_collection_contains(
+        &args,
+        |arg| {
+            arg.get_long() == Some(flag_long)
+                || (flag_short.is_some() && arg.get_short() == flag_short)
+        },
+        &format!(
+            "Shortcut '{}' should have --{} flag",
+            shortcut.get_name(),
+            flag_long
+        ),
+    );
+}
+
+/// Gets all subcommands from a CLI as a vector
+fn get_subcommands(cli: &Command) -> Vec<&Command> {
+    cli.get_subcommands().collect()
+}
+
+/// Asserts that a CLI has a specific command
+fn assert_has_command(cli: &Command, command_name: &str) {
+    let subcommands = get_subcommands(cli);
+    assert_collection_contains(
+        &subcommands,
+        |cmd| cmd.get_name() == command_name,
+        &format!("CLI should have '{}' command", command_name),
+    );
+    assert!(!subcommands.is_empty(), "CLI should have some commands");
+}
+
+/// Finds a shortcut for a workflow by name, handling underscore prefix for reserved names
+fn find_shortcut_for_workflow<'a>(
+    shortcuts: &'a [Command],
+    workflow_name: &str,
+) -> Option<&'a Command> {
+    shortcuts.iter().find(|cmd| {
+        let name = cmd.get_name();
+        name == workflow_name || name == format!("_{}", workflow_name)
+    })
+}
+
+/// Asserts that a shortcut has all standard workflow flags
+fn assert_has_standard_flags(shortcut: &Command) {
+    let expected_flags = [
+        ("interactive", Some('i')),
+        ("dry-run", None),
+        ("quiet", Some('q')),
+        ("param", Some('p')),
+    ];
+
+    for (flag_long, flag_short) in expected_flags {
+        assert_shortcut_has_flag(shortcut, flag_long, flag_short);
+    }
+}
+
+/// Verifies that CLI has the basic static commands
+fn verify_basic_commands(cli: &Command) {
+    assert_has_command(cli, "flow");
+    assert_has_command(cli, "serve");
+}
+
+/// Generic assertion helper for checking collection contents
+fn assert_collection_contains<T, F>(collection: &[T], predicate: F, error_msg: &str)
+where
+    F: Fn(&T) -> bool,
+{
+    assert!(collection.iter().any(predicate), "{}", error_msg);
+}
+
+/// Helper function to verify CLI build with optional storage
+fn verify_cli_build(with_storage: bool) {
+    let (_tool_registry, cli_builder) = create_test_cli_builder();
+    let storage = if with_storage {
+        Some(WorkflowStorage::file_system().expect(ERR_CREATE_STORAGE))
+    } else {
+        None
+    };
+
+    let cli = cli_builder.build_cli(storage.as_ref());
+    verify_basic_commands(&cli);
+
+    if with_storage {
+        let subcommands = get_subcommands(&cli);
+        assert!(
+            subcommands.len() > 10,
+            "CLI should have static commands plus workflow shortcuts"
+        );
+    }
+}
+
 #[test]
 fn test_shortcut_generation() {
-    // Create workflow storage
-    let storage = WorkflowStorage::file_system().expect("Failed to create workflow storage");
-
-    // Get shortcuts
-    let shortcuts = CliBuilder::build_workflow_shortcuts(&storage);
+    let (_storage, shortcuts) = create_test_shortcuts();
 
     // Should have generated shortcuts for available workflows
     assert!(
@@ -31,11 +141,7 @@ fn test_shortcut_generation() {
 
 #[test]
 fn test_name_conflict_resolution() {
-    // Create workflow storage
-    let storage = WorkflowStorage::file_system().expect("Failed to create workflow storage");
-
-    // Get shortcuts
-    let shortcuts = CliBuilder::build_workflow_shortcuts(&storage);
+    let (storage, shortcuts) = create_test_shortcuts();
 
     // Reserved names that should get underscore prefix
     // Note: plan and implement are no longer reserved since static commands were removed
@@ -44,17 +150,16 @@ fn test_name_conflict_resolution() {
     ];
 
     // Check if any workflow has a reserved name
-    let workflows = storage.list_workflows().expect("Failed to list workflows");
+    let workflows = storage.list_workflows().expect(ERR_LIST_WORKFLOWS);
     for workflow in &workflows {
         let workflow_name = workflow.name.to_string();
         if reserved.contains(&workflow_name.as_str()) {
             // Should find a shortcut with underscore prefix
-            let prefixed_name = format!("_{}", workflow_name);
-            let found = shortcuts.iter().any(|cmd| cmd.get_name() == prefixed_name);
+            let found = find_shortcut_for_workflow(&shortcuts, &workflow_name);
             assert!(
-                found,
-                "Reserved name '{}' should have underscore prefix '{}'",
-                workflow_name, prefixed_name
+                found.is_some(),
+                "Reserved name '{}' should have a shortcut (possibly with underscore prefix)",
+                workflow_name
             );
         }
     }
@@ -62,11 +167,7 @@ fn test_name_conflict_resolution() {
 
 #[test]
 fn test_shortcut_has_proper_about_text() {
-    // Create workflow storage
-    let storage = WorkflowStorage::file_system().expect("Failed to create workflow storage");
-
-    // Get shortcuts
-    let shortcuts = CliBuilder::build_workflow_shortcuts(&storage);
+    let (_storage, shortcuts) = create_test_shortcuts();
 
     // Each shortcut should have about text mentioning it's a shortcut
     for shortcut in shortcuts {
@@ -85,118 +186,30 @@ fn test_shortcut_has_proper_about_text() {
 
 #[test]
 fn test_shortcut_has_standard_flags() {
-    // Create workflow storage
-    let storage = WorkflowStorage::file_system().expect("Failed to create workflow storage");
-
-    // Get shortcuts
-    let shortcuts = CliBuilder::build_workflow_shortcuts(&storage);
+    let (_storage, shortcuts) = create_test_shortcuts();
 
     // Each shortcut should have standard workflow flags
     for shortcut in &shortcuts {
-        let args: Vec<_> = shortcut.get_arguments().collect();
-
-        // Check for --interactive/-i
-        let has_interactive = args
-            .iter()
-            .any(|arg| arg.get_long() == Some("interactive") || arg.get_short() == Some('i'));
-        assert!(
-            has_interactive,
-            "Shortcut '{}' should have --interactive flag",
-            shortcut.get_name()
-        );
-
-        // Check for --dry-run
-        let has_dry_run = args.iter().any(|arg| arg.get_long() == Some("dry-run"));
-        assert!(
-            has_dry_run,
-            "Shortcut '{}' should have --dry-run flag",
-            shortcut.get_name()
-        );
-
-        // Check for --quiet/-q
-        let has_quiet = args
-            .iter()
-            .any(|arg| arg.get_long() == Some("quiet") || arg.get_short() == Some('q'));
-        assert!(
-            has_quiet,
-            "Shortcut '{}' should have --quiet flag",
-            shortcut.get_name()
-        );
-
-        // Check for --param/-p
-        let has_param = args
-            .iter()
-            .any(|arg| arg.get_long() == Some("param") || arg.get_short() == Some('p'));
-        assert!(
-            has_param,
-            "Shortcut '{}' should have --param flag",
-            shortcut.get_name()
-        );
+        assert_has_standard_flags(shortcut);
     }
 }
 
 #[test]
 fn test_cli_builder_integration() {
-    // Create a tool registry and CLI builder
-    let tool_registry = Arc::new(ToolRegistry::new());
-    let cli_builder = CliBuilder::new(tool_registry);
-
-    // Create workflow storage
-    let storage = WorkflowStorage::file_system().expect("Failed to create workflow storage");
-
-    // Build CLI with shortcuts
-    let cli = cli_builder.build_cli(Some(&storage));
-
-    // Get all subcommands
-    let subcommands: Vec<_> = cli.get_subcommands().collect();
-
-    // Should have static commands
-    let has_flow = subcommands.iter().any(|cmd| cmd.get_name() == "flow");
-    assert!(has_flow, "CLI should have 'flow' command");
-
-    let has_serve = subcommands.iter().any(|cmd| cmd.get_name() == "serve");
-    assert!(has_serve, "CLI should have 'serve' command");
-
-    // Should have workflow shortcuts in addition to static commands
-    assert!(
-        subcommands.len() > 10,
-        "CLI should have static commands plus workflow shortcuts"
-    );
+    verify_cli_build(true);
 }
 
 #[test]
 fn test_cli_builder_without_workflow_storage() {
-    // Create a tool registry and CLI builder
-    let tool_registry = Arc::new(ToolRegistry::new());
-    let cli_builder = CliBuilder::new(tool_registry);
-
-    // Build CLI without shortcuts (workflow_storage = None)
-    let cli = cli_builder.build_cli(None);
-
-    // Get all subcommands
-    let subcommands: Vec<_> = cli.get_subcommands().collect();
-
-    // Should still have static commands
-    let has_flow = subcommands.iter().any(|cmd| cmd.get_name() == "flow");
-    assert!(has_flow, "CLI should have 'flow' command");
-
-    let has_serve = subcommands.iter().any(|cmd| cmd.get_name() == "serve");
-    assert!(has_serve, "CLI should have 'serve' command");
-
-    // Should work fine without workflow storage
-    assert!(!subcommands.is_empty(), "CLI should have some commands");
+    verify_cli_build(false);
 }
 
 #[test]
 fn test_shortcut_positional_args_for_required_params() {
-    // Create workflow storage
-    let storage = WorkflowStorage::file_system().expect("Failed to create workflow storage");
+    let (storage, shortcuts) = create_test_shortcuts();
 
     // Get workflows to check which have required parameters
-    let workflows = storage.list_workflows().expect("Failed to list workflows");
-
-    // Get shortcuts
-    let shortcuts = CliBuilder::build_workflow_shortcuts(&storage);
+    let workflows = storage.list_workflows().expect(ERR_LIST_WORKFLOWS);
 
     // For each workflow with required parameters, check positional args
     for workflow in workflows {
@@ -205,10 +218,7 @@ fn test_shortcut_positional_args_for_required_params() {
         if !required_params.is_empty() {
             // Find corresponding shortcut
             let workflow_name = workflow.name.to_string();
-            let shortcut = shortcuts.iter().find(|cmd| {
-                let name = cmd.get_name();
-                name == workflow_name || name == format!("_{}", workflow_name)
-            });
+            let shortcut = find_shortcut_for_workflow(&shortcuts, &workflow_name);
 
             if let Some(shortcut) = shortcut {
                 let args: Vec<_> = shortcut.get_arguments().collect();
@@ -228,21 +238,12 @@ fn test_shortcut_positional_args_for_required_params() {
 
 #[test]
 fn test_build_cli_with_warnings_accepts_workflow_storage() {
-    // Create a tool registry and CLI builder
-    let tool_registry = Arc::new(ToolRegistry::new());
-    let cli_builder = CliBuilder::new(tool_registry);
-
-    // Create workflow storage
-    let storage = WorkflowStorage::file_system().expect("Failed to create workflow storage");
+    let (_tool_registry, cli_builder) = create_test_cli_builder();
+    let storage = WorkflowStorage::file_system().expect(ERR_CREATE_STORAGE);
 
     // Build CLI with warnings and workflow storage
     let cli = cli_builder.build_cli_with_warnings(Some(&storage));
 
-    // Should have built successfully
-    let subcommands: Vec<_> = cli.get_subcommands().collect();
-    assert!(!subcommands.is_empty(), "CLI should have commands");
-
-    // Should have workflow shortcuts
-    let has_static_commands = subcommands.iter().any(|cmd| cmd.get_name() == "flow");
-    assert!(has_static_commands, "Should have static commands");
+    // Should have built successfully with workflow shortcuts and static commands
+    verify_basic_commands(&cli);
 }

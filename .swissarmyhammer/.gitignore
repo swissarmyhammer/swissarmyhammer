@@ -1,0 +1,29 @@
+# SwissArmyHammer temporary files and logs
+# This file is automatically created by swissarmyhammer-common
+
+# Temporary files
+tmp/
+*.tmp
+
+# Todo tracking (ephemeral development session tracking)
+todo/
+
+# Abort signals (workflow control files)
+.abort
+
+# Logs
+*.log
+mcp.log
+
+# Workflow execution state
+workflow-runs/
+
+# Transcripts (conversation history)
+transcripts/
+
+# Question/Answer cache
+questions/
+
+# Keep these directories (they should be committed):
+# - rules/      Project-specific code quality rules
+# - docs/       Project documentation

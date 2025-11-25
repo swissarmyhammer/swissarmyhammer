@@ -42,6 +42,10 @@ impl McpTool for MarkCompleteTodoTool {
         })
     }
 
+    fn cli_name(&self) -> &'static str {
+        "complete"
+    }
+
     async fn execute(
         &self,
         arguments: serde_json::Map<String, serde_json::Value>,
@@ -59,9 +63,13 @@ impl McpTool for MarkCompleteTodoTool {
         McpValidation::validate_not_empty(request.id.as_str(), "todo item ID")
             .map_err(|e| McpErrorHandler::handle_error(e, "validate todo item ID"))?;
 
-        // Create storage instance
-        let storage = TodoStorage::new_default()
-            .map_err(|e| McpErrorHandler::handle_todo_error(e, "create todo storage"))?;
+        // Create storage instance using working_dir if available, otherwise use default
+        let storage = if let Some(ref working_dir) = context.working_dir {
+            TodoStorage::new_with_working_dir(working_dir.clone())
+        } else {
+            TodoStorage::new_default()
+        }
+        .map_err(|e| McpErrorHandler::handle_todo_error(e, "create todo storage"))?;
 
         // The request.id is already a TodoId from the swissarmyhammer-todo crate
 

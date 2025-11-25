@@ -63,16 +63,20 @@ impl McpTool for CreateTodoTool {
         McpValidation::validate_not_empty(&request.task, "task description")
             .map_err(|e| McpErrorHandler::handle_error(e, "validate task description"))?;
 
-        // Create storage instance
-        let storage = TodoStorage::new_default()
-            .map_err(|e| McpErrorHandler::handle_todo_error(e, "create todo storage"))?;
+        // Create storage instance using working_dir if available, otherwise use default
+        let storage = if let Some(ref working_dir) = context.working_dir {
+            TodoStorage::new_with_working_dir(working_dir.clone())
+        } else {
+            TodoStorage::new_default()
+        }
+        .map_err(|e| McpErrorHandler::handle_todo_error(e, "create todo storage"))?;
 
         // Create the todo item
         match storage
             .create_todo_item(request.task.clone(), request.context.clone())
             .await
         {
-            Ok(item) => {
+            Ok((item, gc_count)) => {
                 tracing::info!("Created todo item {}", item.id);
 
                 // Send progress notification for todo creation
@@ -84,7 +88,8 @@ impl McpTool for CreateTodoTool {
                         json!({
                             "action": "todo_created",
                             "todo_id": item.id.as_str(),
-                            "task": item.task
+                            "task": item.task,
+                            "gc_count": gc_count
                         }),
                     ) {
                         tracing::warn!("Failed to send todo creation notification: {}", e);
@@ -98,8 +103,11 @@ impl McpTool for CreateTodoTool {
                             "id": item.id.as_str(),
                             "task": item.task,
                             "context": item.context,
-                            "done": item.done
-                        }
+                            "done": item.done,
+                            "created_at": item.created_at.to_rfc3339(),
+                            "updated_at": item.updated_at.to_rfc3339()
+                        },
+                        "gc_count": gc_count
                     })
                     .to_string(),
                 ))

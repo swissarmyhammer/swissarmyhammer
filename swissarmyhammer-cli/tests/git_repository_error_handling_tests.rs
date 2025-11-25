@@ -45,32 +45,29 @@ async fn _test_memo_commands_require_git_repository_disabled() {
     );
 }
 
-/// Test that issue commands require Git repository
+/// Test that todo commands require Git repository
 #[tokio::test]
-async fn test_issue_commands_require_git_repository() {
+async fn test_todo_commands_require_git_repository() {
     let temp_dir = TempDir::new().expect("Failed to create temp directory");
 
     // Use explicit working directory instead of global directory change
 
-    let result = run_sah_command_in_process_with_dir(&["issue", "list"], temp_dir.path()).await;
+    let result = run_sah_command_in_process_with_dir(&["todo", "list"], temp_dir.path()).await;
 
     // Restore original directory
 
     let output = result.unwrap();
-    // Issue commands now work gracefully without git repositories
-    assert_eq!(
+    // Todo commands require git repositories
+    assert_ne!(
         output.exit_code, 0,
-        "Command should succeed without git repository"
+        "Command should fail without git repository"
     );
     assert!(
-        output.stdout.contains("No issues found."),
-        "Should show no issues found: {}",
-        output.stdout
-    );
-    // The stderr contains git warnings but not failures
-    assert!(
-        output.stderr.contains("Git operations not available") || output.stderr.is_empty(),
-        "Should contain git warning or be empty: {}",
+        output
+            .stderr
+            .contains("Todo operations require a Git repository")
+            || output.stderr.contains("Git repository"),
+        "Should show git repository error: {}",
         output.stderr
     );
 }
@@ -122,8 +119,8 @@ async fn test_commands_work_in_git_repository() {
 
     // Use explicit working directory instead of global directory change
 
-    // Test that memo list command now works (or at least doesn't fail with Git repository error)
-    let result = run_sah_command_in_process_with_dir(&["memo", "list"], temp_dir.path()).await;
+    // Test that todo list command now works (or at least doesn't fail with Git repository error)
+    let result = run_sah_command_in_process_with_dir(&["todo", "list"], temp_dir.path()).await;
 
     // Restore original directory
 
@@ -143,7 +140,7 @@ async fn test_git_repository_error_exit_codes() {
 
     // Use explicit working directory instead of global directory change
 
-    let result = run_sah_command_in_process_with_dir(&["memo", "list"], temp_dir.path()).await;
+    let result = run_sah_command_in_process_with_dir(&["todo", "list"], temp_dir.path()).await;
 
     // Restore original directory
 
@@ -160,10 +157,10 @@ async fn test_git_repository_error_exit_codes() {
         "DEBUG test_git_repository_error_exit_codes: exit_code: {}",
         output.exit_code
     );
-    // Memo commands now work gracefully without git repositories
-    assert_eq!(
+    // Todo commands require git repositories
+    assert_ne!(
         output.exit_code, 0,
-        "Memo commands should succeed without git repository"
+        "Todo commands should fail without git repository"
     );
 }
 
@@ -194,22 +191,19 @@ async fn test_web_search_works_without_git() {
     );
 }
 
-/// Test error message actionability
+/// Test error message actionability with todo commands
 #[tokio::test]
 async fn test_error_messages_are_actionable() {
     let temp_dir = TempDir::new().expect("Failed to create temp directory");
 
+    // Initialize git repository
+    use git2::Repository;
+    Repository::init(temp_dir.path()).expect("Failed to initialize git repository");
+
     // Use explicit working directory instead of global directory change
 
     let result = run_sah_command_in_process_with_dir(
-        &[
-            "issue",
-            "create",
-            "--name",
-            "test",
-            "--content",
-            "Test issue content",
-        ],
+        &["todo", "create", "--task", "Test task"],
         temp_dir.path(),
     )
     .await;
@@ -230,26 +224,10 @@ async fn test_error_messages_are_actionable() {
         output.exit_code
     );
 
-    // Issue create commands now work gracefully without git repositories
+    // Todo create commands should succeed with git repository
     assert_eq!(
         output.exit_code, 0,
-        "Issue create should succeed without git repository"
-    );
-
-    let stdout = &output.stdout;
-    // The stdout should confirm issue creation
-    assert!(
-        stdout.contains("Created issue"),
-        "Should confirm issue creation: {}",
-        stdout
-    );
-
-    let stderr = &output.stderr;
-    // The stderr should contain git warning but not fail the operation
-    assert!(
-        stderr.contains("Git operations not available"),
-        "Should contain git operations warning: {}",
-        stderr
+        "Todo create should succeed with git repository"
     );
 }
 

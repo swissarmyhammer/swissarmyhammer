@@ -10,7 +10,7 @@ use crate::{
     detect_language, CachedResult, Result, Rule, RuleCache, RuleError, RuleViolation, Severity,
 };
 use futures_util::stream::{self, Stream, StreamExt};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use swissarmyhammer_agent_executor::{AgentExecutionContext, AgentExecutor};
 use swissarmyhammer_common::glob_utils::{expand_glob_patterns, GlobExpansionConfig};
@@ -50,6 +50,7 @@ pub enum CheckMode {
 ///     check_mode: CheckMode::FailFast,
 ///     force: false,
 ///     max_errors: None,
+///     max_concurrency: None,
 /// };
 /// ```
 #[derive(Debug, Clone)]
@@ -68,6 +69,8 @@ pub struct RuleCheckRequest {
     pub force: bool,
     /// Maximum number of ERROR violations to return (None = unlimited)
     pub max_errors: Option<usize>,
+    /// Maximum number of concurrent rule checks (None = default of 4)
+    pub max_concurrency: Option<usize>,
 }
 
 /// Core rule checker that performs two-stage rendering and executes checks via LLM agent
@@ -280,13 +283,26 @@ impl RuleChecker {
         );
 
         // Read target file content
-        let target_content = std::fs::read_to_string(target_path).map_err(|e| {
-            RuleError::CheckError(format!(
-                "Failed to read file {}: {}",
-                target_path.display(),
-                e
-            ))
-        })?;
+        let target_content = match std::fs::read_to_string(target_path) {
+            Ok(content) => content,
+            Err(e) => {
+                // Skip binary files or files with invalid UTF-8
+                if e.kind() == std::io::ErrorKind::InvalidData {
+                    tracing::debug!(
+                        "Skipping binary or non-UTF-8 file: {}",
+                        target_path.display()
+                    );
+                    return Ok(None);
+                }
+                return Err(RuleError::CheckError(
+                    format!(
+                        "Failed to read file {}: {}",
+                        target_path.display(),
+                        e
+                    )
+                ).into());
+            }
+        };
 
         // Check for ignore directives in the file
         let ignore_patterns = crate::ignore::parse_ignore_directives(&target_content);
@@ -305,34 +321,13 @@ impl RuleChecker {
 
         // Check cache before proceeding with LLM evaluation
         if let Some(cached_result) = self.cache.get(&cache_key)? {
-            tracing::trace!(
+            tracing::debug!(
                 "Cache hit for {} against rule {} - skipping LLM call",
                 target_path.display(),
                 rule.name
             );
 
-            // Return cached result
-            match cached_result {
-                CachedResult::Pass => {
-                    tracing::trace!(
-                        "Cached check passed for {} against rule {}",
-                        target_path.display(),
-                        rule.name
-                    );
-                    return Ok(None);
-                }
-                CachedResult::Violation { violation } => {
-                    // Log the violation with appropriate severity
-                    match violation.severity {
-                        Severity::Error => tracing::error!("{}", violation),
-                        Severity::Warning => tracing::warn!("{}", violation),
-                        Severity::Info => tracing::info!("{}", violation),
-                        Severity::Hint => tracing::debug!("{}", violation),
-                    }
-
-                    return Ok(Some(violation));
-                }
-            }
+            return self.handle_cached_result(cached_result, target_path, &rule.name);
         }
 
         tracing::trace!(
@@ -443,9 +438,7 @@ impl RuleChecker {
 
             // Cache the PASS result
             let cached_result = CachedResult::Pass;
-            if let Err(e) = self.cache.store(&cache_key, &cached_result) {
-                tracing::warn!("Failed to cache result: {}", e);
-            }
+            self.store_cached_result_with_logging(&cache_key, &cached_result);
 
             Ok(None)
         } else {
@@ -458,20 +451,13 @@ impl RuleChecker {
             );
 
             // Log the violation at appropriate level
-            match violation.severity {
-                Severity::Error => tracing::error!("{}", violation),
-                Severity::Warning => tracing::warn!("{}", violation),
-                Severity::Info => tracing::info!("{}", violation),
-                Severity::Hint => tracing::debug!("{}", violation),
-            }
+            Self::log_violation(&violation);
 
             // Cache the VIOLATION result
             let cached_result = CachedResult::Violation {
                 violation: violation.clone(),
             };
-            if let Err(e) = self.cache.store(&cache_key, &cached_result) {
-                tracing::warn!("Failed to cache result: {}", e);
-            }
+            self.store_cached_result_with_logging(&cache_key, &cached_result);
 
             Ok(Some(violation))
         }
@@ -597,9 +583,14 @@ impl RuleChecker {
         }
 
         // Phase 4: Expand glob patterns to get target files
+        // Note: .git and .swissarmyhammer directories are excluded by the WalkBuilder filter in glob_utils
         let config = GlobExpansionConfig::default();
-        let target_files = expand_glob_patterns(&request.patterns, &config)
+
+        let mut target_files = expand_glob_patterns(&request.patterns, &config)
             .map_err(|e| RuleError::CheckError(format!("Failed to expand glob patterns: {}", e)))?;
+
+        // Sort target files for consistent ordering
+        target_files.sort();
 
         if target_files.is_empty() {
             tracing::info!("No files matched the patterns");
@@ -607,23 +598,53 @@ impl RuleChecker {
             return Ok(stream::iter(vec![]).boxed());
         }
 
-        // Phase 5: Create stream that yields violations as they're discovered
-        // Wrap checker in Arc so it can be cloned for each stream element
+        // Phase 5: Create flat work queue of (rule, file) pairs
+        // Filter by applies_to pattern if present
+        let work_items: Vec<(Rule, PathBuf)> = rules
+            .iter()
+            .flat_map(|rule| {
+                target_files
+                    .iter()
+                    .filter(move |file| {
+                        // If rule has applies_to pattern, check if file matches
+                        if let Some(ref pattern) = rule.applies_to {
+                            if let Ok(glob_pattern) = glob::Pattern::new(pattern) {
+                                glob_pattern.matches_path(file)
+                            } else {
+                                // Invalid pattern, skip this file for this rule
+                                tracing::warn!(
+                                    "Invalid applies_to pattern '{}' in rule '{}', skipping",
+                                    pattern,
+                                    rule.name
+                                );
+                                false
+                            }
+                        } else {
+                            // No applies_to pattern, include all files
+                            true
+                        }
+                    })
+                    .map(move |file| (rule.clone(), file.clone()))
+            })
+            .collect();
+
+        tracing::info!("Created work queue with {} check items", work_items.len());
+
+        // Wrap checker in Arc so it can be cloned for parallel execution
         let checker = Arc::new(self.clone_for_streaming());
         let check_mode = request.check_mode;
         let max_errors = request.max_errors;
+        let concurrency = request.max_concurrency.unwrap_or(4);
 
-        // Create a stream that checks files lazily and yields violations immediately
-        let stream = stream::iter(rules)
-            .flat_map(move |rule| {
-                let targets = target_files.clone();
+        tracing::debug!("Processing work queue with concurrency={}", concurrency);
+
+        // Process work queue in parallel using buffer_unordered
+        let stream = stream::iter(work_items)
+            .map(move |(rule, target)| {
                 let checker = Arc::clone(&checker);
-                stream::iter(targets).then(move |target| {
-                    let rule = rule.clone();
-                    let checker = Arc::clone(&checker);
-                    async move { checker.check_file(&rule, &target).await }
-                })
+                async move { checker.check_file(&rule, &target).await }
             })
+            .buffer_unordered(concurrency)
             .filter_map(|result| async move {
                 match result {
                     Ok(Some(violation)) if violation.severity == Severity::Error => {
@@ -658,6 +679,46 @@ impl RuleChecker {
             prompt_library: Arc::clone(&self.prompt_library),
             rule_library: Arc::clone(&self.rule_library),
             cache: Arc::clone(&self.cache),
+        }
+    }
+
+    /// Log a violation at the appropriate level based on its severity
+    fn log_violation(violation: &RuleViolation) {
+        match violation.severity {
+            Severity::Error => tracing::error!("{}", violation),
+            Severity::Warning => tracing::warn!("{}", violation),
+            Severity::Info => tracing::info!("{}", violation),
+            Severity::Hint => tracing::debug!("{}", violation),
+        }
+    }
+
+    /// Store a cached result with error logging on failure
+    fn store_cached_result_with_logging(&self, cache_key: &str, result: &CachedResult) {
+        if let Err(e) = self.cache.store(cache_key, result) {
+            tracing::warn!("Failed to cache result: {}", e);
+        }
+    }
+
+    /// Handle a cached result by logging and returning the appropriate value
+    fn handle_cached_result(
+        &self,
+        cached_result: CachedResult,
+        target_path: &Path,
+        rule_name: &str,
+    ) -> Result<Option<RuleViolation>> {
+        match cached_result {
+            CachedResult::Pass => {
+                tracing::trace!(
+                    "Cached check passed for {} against rule {}",
+                    target_path.display(),
+                    rule_name
+                );
+                Ok(None)
+            }
+            CachedResult::Violation { violation } => {
+                Self::log_violation(&violation);
+                Ok(Some(violation))
+            }
         }
     }
 }
@@ -764,6 +825,7 @@ mod tests {
             check_mode: CheckMode::FailFast,
             force: false,
             max_errors: None,
+            max_concurrency: None,
         };
 
         let mut stream = checker
@@ -930,6 +992,7 @@ mod tests {
             check_mode: CheckMode::FailFast,
             force: false,
             max_errors: None,
+            max_concurrency: None,
         };
 
         let mut stream = checker.check(request).await.expect("Should create stream");
@@ -954,6 +1017,7 @@ mod tests {
             check_mode: CheckMode::FailFast,
             force: false,
             max_errors: None,
+            max_concurrency: None,
         };
 
         let mut stream = checker.check(request).await.expect("Should create stream");
@@ -977,6 +1041,7 @@ mod tests {
             check_mode: CheckMode::CollectAll,
             force: false,
             max_errors: None,
+            max_concurrency: None,
         };
 
         let mut stream = checker.check(request).await.expect("Should create stream");
@@ -1007,6 +1072,7 @@ mod tests {
             check_mode: CheckMode::CollectAll,
             force: false,
             max_errors: Some(2),
+            max_concurrency: None,
         };
 
         let mut stream = checker.check(request).await.expect("Should create stream");
@@ -1041,6 +1107,7 @@ mod tests {
             check_mode: CheckMode::CollectAll,
             force: false,
             max_errors: None,
+            max_concurrency: None,
         };
 
         let stream_result = checker.check(request).await;

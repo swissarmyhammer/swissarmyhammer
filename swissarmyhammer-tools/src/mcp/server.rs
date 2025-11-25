@@ -12,8 +12,6 @@ use std::sync::Arc;
 use swissarmyhammer_common::{Result, SwissArmyHammerError};
 use swissarmyhammer_config::TemplateContext;
 use swissarmyhammer_git::GitOperations;
-use swissarmyhammer_issues::{FileSystemIssueStorage, IssueStorage};
-use swissarmyhammer_memoranda::{MarkdownMemoStorage, MemoStorage};
 use swissarmyhammer_prompts::{PromptLibrary, PromptResolver};
 
 use tokio::sync::{Mutex, RwLock};
@@ -21,10 +19,19 @@ use tokio::sync::{Mutex, RwLock};
 use super::tool_handlers::ToolHandlers;
 use super::tool_registry::{
     register_abort_tools, register_file_tools, register_flow_tools, register_git_tools,
-    register_issue_tools, register_memo_tools, register_outline_tools, register_questions_tools,
-    register_rules_tools, register_search_tools, register_shell_tools, register_todo_tools,
+    register_questions_tools, register_rules_tools, register_shell_tools, register_todo_tools,
     register_web_fetch_tools, register_web_search_tools, ToolContext, ToolRegistry,
 };
+
+/// Server instructions displayed to MCP clients
+const SERVER_INSTRUCTIONS: &str =
+    "The only coding assistant you'll ever need. Write specs, not code.";
+
+/// Maximum retry attempts for operations with transient errors
+const MAX_RETRIES: u32 = 3;
+
+/// Initial backoff delay in milliseconds for retry operations
+const INITIAL_BACKOFF_MS: u64 = 100;
 
 /// MCP server for all SwissArmyHammer functionality.
 #[derive(Clone)]
@@ -32,8 +39,95 @@ pub struct McpServer {
     library: Arc<RwLock<PromptLibrary>>,
 
     file_watcher: Arc<Mutex<FileWatcher>>,
-    tool_registry: Arc<ToolRegistry>,
+    tool_registry: Arc<RwLock<ToolRegistry>>,
     pub tool_context: Arc<ToolContext>,
+}
+
+/// Retry an async operation with exponential backoff.
+///
+/// # Arguments
+///
+/// * `operation` - The async operation to retry
+/// * `is_retryable` - Function to determine if an error is retryable
+/// * `operation_name` - Name of the operation for logging
+///
+/// # Returns
+///
+/// * `Result<T>` - The result of the operation
+async fn retry_with_backoff<F, T, Fut>(
+    mut operation: F,
+    is_retryable: fn(&SwissArmyHammerError) -> bool,
+    operation_name: &str,
+) -> Result<T>
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = Result<T>>,
+{
+    let mut last_error = None;
+    let mut backoff_ms = INITIAL_BACKOFF_MS;
+
+    for attempt in 1..=MAX_RETRIES {
+        match operation().await {
+            Ok(result) => {
+                if attempt > 1 {
+                    tracing::info!("✅ {} succeeded on attempt {}", operation_name, attempt);
+                }
+                return Ok(result);
+            }
+            Err(e) => {
+                last_error = Some(e);
+
+                // Check if this is a retryable error
+                if attempt < MAX_RETRIES && last_error.as_ref().is_some_and(is_retryable) {
+                    tracing::warn!(
+                        "⚠️ {} attempt {} failed, retrying in {}ms: {}",
+                        operation_name,
+                        attempt,
+                        backoff_ms,
+                        last_error
+                            .as_ref()
+                            .map_or("Unknown error".to_string(), |e| e.to_string())
+                    );
+
+                    tokio::time::sleep(tokio::time::Duration::from_millis(backoff_ms)).await;
+                    backoff_ms *= 2; // Exponential backoff
+                } else {
+                    break;
+                }
+            }
+        }
+    }
+
+    Err(last_error.unwrap_or_else(|| SwissArmyHammerError::Other {
+        message: format!("{} failed", operation_name),
+    }))
+}
+
+/// Create ServerCapabilities for MCP protocol
+fn create_server_capabilities() -> ServerCapabilities {
+    ServerCapabilities {
+        prompts: Some(PromptsCapability {
+            list_changed: Some(true),
+        }),
+        tools: Some(ToolsCapability {
+            list_changed: Some(true),
+        }),
+        resources: None,
+        logging: None,
+        completions: None,
+        experimental: None,
+    }
+}
+
+/// Create Implementation information for the MCP server
+fn create_server_implementation() -> Implementation {
+    Implementation {
+        name: "SwissArmyHammer".into(),
+        version: crate::VERSION.into(),
+        icons: None,
+        title: Some("SwissArmyHammer MCP Server".into()),
+        website_url: Some("https://github.com/swissarmyhammer/swissarmyhammer".into()),
+    }
 }
 
 impl McpServer {
@@ -71,72 +165,6 @@ impl McpServer {
     /// # Errors
     ///
     pub async fn new_with_work_dir(library: PromptLibrary, work_dir: PathBuf) -> Result<Self> {
-        // Initialize issue storage using new storage defaults with working directory context
-        let issue_storage = {
-            let original_dir = std::env::current_dir().ok();
-            let needs_dir_change = original_dir.as_ref().map_or(true, |dir| work_dir != *dir);
-
-            // Set working directory context for storage creation if different from current
-            if needs_dir_change {
-                std::env::set_current_dir(&work_dir).map_err(|e| SwissArmyHammerError::Other {
-                    message: format!("Failed to set working directory: {e}"),
-                })?;
-            }
-
-            // Create storage
-            let storage = FileSystemIssueStorage::new_default().map_err(|e| {
-                tracing::error!("Failed to create issue storage: {}", e);
-                SwissArmyHammerError::Other {
-                    message: format!("Failed to create issue storage: {e}"),
-                }
-            })?;
-
-            // Always restore original working directory if we changed it and it still exists
-            if needs_dir_change {
-                if let Some(ref original_dir) = original_dir {
-                    if let Err(e) = std::env::set_current_dir(original_dir) {
-                        tracing::warn!("Failed to restore original working directory: {}", e);
-                    }
-                }
-            }
-
-            Box::new(storage) as Box<dyn IssueStorage>
-        };
-
-        // Initialize memo storage with environment variable support, then default location, fallback to temp dir for tests
-        let memo_storage = {
-            // First check if SWISSARMYHAMMER_MEMOS_DIR environment variable is set
-            if let Ok(custom_path) = std::env::var("SWISSARMYHAMMER_MEMOS_DIR") {
-                let custom_dir = std::path::PathBuf::from(custom_path);
-                // Try to create directory, but don't fail if it already exists or can't be created
-                if let Err(e) = std::fs::create_dir_all(&custom_dir) {
-                    tracing::warn!(
-                        "Failed to create custom memos directory {}: {}",
-                        custom_dir.display(),
-                        e
-                    );
-                }
-                Box::new(MarkdownMemoStorage::new(custom_dir)) as Box<dyn MemoStorage>
-            } else {
-                match MarkdownMemoStorage::new_default().await {
-                    Ok(storage) => Box::new(storage) as Box<dyn MemoStorage>,
-                    Err(e) => {
-                        tracing::warn!("Cannot create memo storage in Git repository ({}), using temporary directory for testing", e);
-                        // Fallback to temporary directory for tests
-                        let temp_dir = std::env::temp_dir().join("swissarmyhammer-mcp-test");
-                        std::fs::create_dir_all(&temp_dir).map_err(|err| {
-                            SwissArmyHammerError::Other {
-                                message: format!(
-                                    "Failed to create temporary memo directory: {err}"
-                                ),
-                            }
-                        })?;
-                        Box::new(MarkdownMemoStorage::new(temp_dir)) as Box<dyn MemoStorage>
-                    }
-                }
-            }
-        };
-
         // Initialize git operations with work_dir - make it optional for tests
         let git_ops = match GitOperations::with_work_dir(work_dir.clone()) {
             Ok(ops) => Some(ops),
@@ -146,13 +174,10 @@ impl McpServer {
             }
         };
 
-        // Create Arc wrappers for shared storage
-        let issue_storage = Arc::new(RwLock::new(issue_storage));
-        let memo_storage_arc = Arc::new(RwLock::new(memo_storage));
         let git_ops_arc = Arc::new(Mutex::new(git_ops));
 
-        // Initialize tool handlers with memo storage
-        let tool_handlers = ToolHandlers::new(memo_storage_arc.clone());
+        // Initialize tool handlers
+        let tool_handlers = ToolHandlers::new();
 
         // Load agent configuration from sah.yaml
         let template_context = TemplateContext::load_for_cli().map_err(|e| {
@@ -167,9 +192,7 @@ impl McpServer {
         let mut tool_registry = ToolRegistry::new();
         let tool_context = Arc::new(ToolContext::new(
             Arc::new(tool_handlers.clone()),
-            issue_storage.clone(),
             git_ops_arc.clone(),
-            memo_storage_arc.clone(),
             agent_config,
         ));
 
@@ -178,22 +201,26 @@ impl McpServer {
         register_file_tools(&mut tool_registry);
         register_flow_tools(&mut tool_registry);
         register_git_tools(&mut tool_registry);
-        register_issue_tools(&mut tool_registry);
-        register_memo_tools(&mut tool_registry);
-        register_outline_tools(&mut tool_registry);
         register_questions_tools(&mut tool_registry);
         register_rules_tools(&mut tool_registry);
-        register_search_tools(&mut tool_registry);
         register_shell_tools(&mut tool_registry);
         register_todo_tools(&mut tool_registry);
         register_web_fetch_tools(&mut tool_registry);
         register_web_search_tools(&mut tool_registry);
         tracing::debug!("Registered all tool handlers");
 
+        // Wrap registry in Arc<RwLock> and add to context
+        let tool_registry_arc = Arc::new(RwLock::new(tool_registry));
+        let tool_context = Arc::new(
+            Arc::try_unwrap(tool_context)
+                .unwrap_or_else(|arc| (*arc).clone())
+                .with_tool_registry(tool_registry_arc.clone()),
+        );
+
         Ok(Self {
             library: Arc::new(RwLock::new(library)),
             file_watcher: Arc::new(Mutex::new(FileWatcher::new())),
-            tool_registry: Arc::new(tool_registry),
+            tool_registry: tool_registry_arc,
             tool_context,
         })
     }
@@ -280,8 +307,8 @@ impl McpServer {
     /// # Returns
     ///
     /// * `Vec<rmcp::model::Tool>` - List of all registered tools
-    pub fn list_tools(&self) -> Vec<rmcp::model::Tool> {
-        self.tool_registry.list_tools()
+    pub async fn list_tools(&self) -> Vec<rmcp::model::Tool> {
+        self.tool_registry.read().await.list_tools()
     }
 
     /// Get a tool by name for execution.
@@ -292,9 +319,9 @@ impl McpServer {
     ///
     /// # Returns
     ///
-    /// * `Option<&dyn McpTool>` - The tool if found, None otherwise
-    pub fn get_tool(&self, name: &str) -> Option<&dyn crate::mcp::tool_registry::McpTool> {
-        self.tool_registry.get_tool(name)
+    /// * `bool` - True if the tool exists, false otherwise
+    pub async fn has_tool(&self, name: &str) -> bool {
+        self.tool_registry.read().await.get_tool(name).is_some()
     }
 
     /// Execute a tool by name with the given arguments.
@@ -312,7 +339,8 @@ impl McpServer {
         name: &str,
         arguments: serde_json::Value,
     ) -> std::result::Result<rmcp::model::CallToolResult, rmcp::ErrorData> {
-        if let Some(tool) = self.tool_registry.get_tool(name) {
+        let registry = self.tool_registry.read().await;
+        if let Some(tool) = registry.get_tool(name) {
             // Convert Value to Map<String, Value> for tool execution
             let arguments_map = match arguments {
                 serde_json::Value::Object(map) => map,
@@ -421,43 +449,12 @@ impl McpServer {
 
     /// Reload prompts with retry logic for transient file system errors
     async fn reload_prompts_with_retry(&self) -> Result<()> {
-        const MAX_RETRIES: u32 = 3;
-        const INITIAL_BACKOFF_MS: u64 = 100;
-
-        let mut last_error = None;
-        let mut backoff_ms = INITIAL_BACKOFF_MS;
-
-        for attempt in 1..=MAX_RETRIES {
-            match self.reload_prompts_internal().await {
-                Ok(()) => return Ok(()),
-                Err(e) => {
-                    last_error = Some(e);
-
-                    // Check if this is a retryable error
-                    if attempt < MAX_RETRIES
-                        && last_error.as_ref().is_some_and(Self::is_retryable_fs_error)
-                    {
-                        tracing::warn!(
-                            "⚠️ Reload attempt {} failed, retrying in {}ms: {}",
-                            attempt,
-                            backoff_ms,
-                            last_error
-                                .as_ref()
-                                .map_or("Unknown error".to_string(), |e| e.to_string())
-                        );
-
-                        tokio::time::sleep(tokio::time::Duration::from_millis(backoff_ms)).await;
-                        backoff_ms *= 2; // Exponential backoff
-                    } else {
-                        break;
-                    }
-                }
-            }
-        }
-
-        Err(last_error.unwrap_or_else(|| SwissArmyHammerError::Other {
-            message: "Prompt reload failed".to_string(),
-        }))
+        retry_with_backoff(
+            || self.reload_prompts_internal(),
+            Self::is_retryable_fs_error,
+            "Reload",
+        )
+        .await
     }
 
     /// Check if an error is a retryable file system error
@@ -528,57 +525,18 @@ impl McpServer {
     ///
     /// Returns an error if file watching cannot be initialized.
     pub async fn start_file_watching(&self, peer: rmcp::Peer<RoleServer>) -> Result<()> {
-        const MAX_RETRIES: u32 = 3;
-        const INITIAL_BACKOFF_MS: u64 = 100;
-
         // Create callback that handles file changes and notifications
         let callback = McpFileWatcherCallback::new(self.clone(), peer);
 
-        let mut last_error = None;
-        let mut backoff_ms = INITIAL_BACKOFF_MS;
-
-        for attempt in 1..=MAX_RETRIES {
-            // Start watching using the file watcher module
-            let result = {
+        retry_with_backoff(
+            || async {
                 let mut watcher = self.file_watcher.lock().await;
                 watcher.start_watching(callback.clone()).await
-            };
-
-            match result {
-                Ok(()) => {
-                    if attempt > 1 {
-                        tracing::info!(
-                            "✅ File watcher started successfully on attempt {}",
-                            attempt
-                        );
-                    }
-                    return Ok(());
-                }
-                Err(e) => {
-                    last_error = Some(e);
-
-                    if attempt < MAX_RETRIES
-                        && last_error.as_ref().is_some_and(Self::is_retryable_fs_error)
-                    {
-                        tracing::warn!(
-                            "⚠️ File watcher initialization attempt {} failed, retrying in {}ms: {}",
-                            attempt,
-                            backoff_ms,
-                            last_error.as_ref().map_or("Unknown error".to_string(), |e| e.to_string())
-                        );
-
-                        tokio::time::sleep(tokio::time::Duration::from_millis(backoff_ms)).await;
-                        backoff_ms *= 2; // Exponential backoff
-                    } else {
-                        break;
-                    }
-                }
-            }
-        }
-
-        Err(last_error.unwrap_or_else(|| SwissArmyHammerError::Other {
-            message: "File watcher initialization failed".to_string(),
-        }))
+            },
+            Self::is_retryable_fs_error,
+            "File watcher initialization",
+        )
+        .await
     }
 
     /// Stop watching prompt directories for file changes.
@@ -615,28 +573,9 @@ impl ServerHandler for McpServer {
 
         Ok(InitializeResult {
             protocol_version: ProtocolVersion::default(),
-            capabilities: ServerCapabilities {
-                prompts: Some(PromptsCapability {
-                    list_changed: Some(true),
-                }),
-                tools: Some(ToolsCapability {
-                    list_changed: Some(true),
-                }),
-                resources: None,
-                logging: None,
-                completions: None,
-                experimental: None,
-            },
-            instructions: Some(
-                "The only coding assistant you'll ever need. Write specs, not code.".into(),
-            ),
-            server_info: Implementation {
-                name: "SwissArmyHammer".into(),
-                version: crate::VERSION.into(),
-                icons: None,
-                title: Some("SwissArmyHammer MCP Server".into()),
-                website_url: Some("https://github.com/swissarmyhammer/swissarmyhammer".into()),
-            },
+            capabilities: create_server_capabilities(),
+            instructions: Some(SERVER_INSTRUCTIONS.into()),
+            server_info: create_server_implementation(),
         })
     }
 
@@ -768,7 +707,7 @@ impl ServerHandler for McpServer {
         _context: RequestContext<RoleServer>,
     ) -> std::result::Result<ListToolsResult, McpError> {
         Ok(ListToolsResult {
-            tools: self.tool_registry.list_tools(),
+            tools: self.tool_registry.read().await.list_tools(),
             next_cursor: None,
         })
     }
@@ -783,7 +722,9 @@ impl ServerHandler for McpServer {
             request.name,
             request.arguments
         );
-        if let Some(tool) = self.tool_registry.get_tool(&request.name) {
+
+        let registry = self.tool_registry.read().await;
+        if let Some(tool) = registry.get_tool(&request.name) {
             tracing::info!("🔧 Executing tool: {}", request.name);
 
             // Create a tool context with the peer for elicitation support
@@ -815,28 +756,9 @@ impl ServerHandler for McpServer {
     fn get_info(&self) -> ServerInfo {
         ServerInfo {
             protocol_version: ProtocolVersion::default(),
-            capabilities: ServerCapabilities {
-                prompts: Some(PromptsCapability {
-                    list_changed: Some(true),
-                }),
-                tools: Some(ToolsCapability {
-                    list_changed: Some(true),
-                }),
-                resources: None,
-                logging: None,
-                completions: None,
-                experimental: None,
-            },
-            server_info: Implementation {
-                name: "SwissArmyHammer".into(),
-                version: crate::VERSION.into(),
-                icons: None,
-                title: Some("SwissArmyHammer MCP Server".into()),
-                website_url: Some("https://github.com/swissarmyhammer/swissarmyhammer".into()),
-            },
-            instructions: Some(
-                "The only coding assistant you'll ever need. Write specs, not code.".into(),
-            ),
+            capabilities: create_server_capabilities(),
+            server_info: create_server_implementation(),
+            instructions: Some(SERVER_INSTRUCTIONS.into()),
         }
     }
 }

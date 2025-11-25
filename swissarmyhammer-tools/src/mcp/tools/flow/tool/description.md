@@ -21,8 +21,8 @@ Response:
 {
   "workflows": [
     {
-      "name": "implement",
-      "description": "Execute the implement workflow for autonomous issue resolution",
+      "name": "do",
+      "description": "Autonomously work through all pending todo items",
       "source": "builtin",
       "parameters": []
     },
@@ -90,7 +90,7 @@ When listing workflows, you can specify the output format:
 
 ```json
 {
-  "flow_name": "implement",
+  "flow_name": "do",
   "quiet": true
 }
 ```

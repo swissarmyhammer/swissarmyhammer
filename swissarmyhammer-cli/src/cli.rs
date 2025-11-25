@@ -1,5 +1,6 @@
 use crate::commands;
 use clap::{Parser, Subcommand, ValueEnum};
+use std::str::FromStr;
 
 #[derive(ValueEnum, Clone, Copy, Debug, PartialEq, Default)]
 pub enum OutputFormat {
@@ -7,6 +8,19 @@ pub enum OutputFormat {
     Table,
     Json,
     Yaml,
+}
+
+impl FromStr for OutputFormat {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "json" => Ok(OutputFormat::Json),
+            "yaml" => Ok(OutputFormat::Yaml),
+            "table" => Ok(OutputFormat::Table),
+            _ => Ok(OutputFormat::Table), // Default to Table for unknown formats
+        }
+    }
 }
 
 // Re-export PromptSource from the library
@@ -645,7 +659,7 @@ mod tests {
 
     #[test]
     fn test_flow_run_basic_workflow() {
-        let result = Cli::try_parse_from_args(["swissarmyhammer", "flow", "implement"]);
+        let result = Cli::try_parse_from_args(["swissarmyhammer", "flow", "plan"]);
         assert!(result.is_ok());
 
         let cli = result.unwrap();
@@ -662,7 +676,7 @@ mod tests {
                 quiet,
             } = subcommand
             {
-                assert_eq!(workflow, "implement");
+                assert_eq!(workflow, "plan");
                 assert!(positional_args.is_empty());
                 assert!(params.is_empty());
                 assert!(vars.is_empty());
@@ -924,8 +938,8 @@ mod tests {
 
     #[test]
     fn test_flow_direct_workflow_basic() {
-        // Test: sah flow implement (no "run")
-        let result = Cli::try_parse_from_args(["swissarmyhammer", "flow", "implement"]);
+        // Test: sah flow do (no "run")
+        let result = Cli::try_parse_from_args(["swissarmyhammer", "flow", "do"]);
         assert!(result.is_ok());
 
         let cli = result.unwrap();
@@ -939,7 +953,7 @@ mod tests {
                     params,
                     ..
                 } => {
-                    assert_eq!(workflow, "implement");
+                    assert_eq!(workflow, "do");
                     assert!(positional_args.is_empty());
                     assert!(params.is_empty());
                 }
@@ -1045,14 +1059,9 @@ mod tests {
 
     #[test]
     fn test_flow_direct_workflow_with_flags() {
-        // Test: sah flow implement --interactive --quiet (no "run")
-        let result = Cli::try_parse_from_args([
-            "swissarmyhammer",
-            "flow",
-            "implement",
-            "--interactive",
-            "--quiet",
-        ]);
+        // Test: sah flow do --interactive --quiet (no "run")
+        let result =
+            Cli::try_parse_from_args(["swissarmyhammer", "flow", "do", "--interactive", "--quiet"]);
         assert!(result.is_ok());
 
         let cli = result.unwrap();
@@ -1066,7 +1075,7 @@ mod tests {
                     quiet,
                     ..
                 } => {
-                    assert_eq!(workflow, "implement");
+                    assert_eq!(workflow, "do");
                     assert!(interactive);
                     assert!(quiet);
                 }

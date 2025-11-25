@@ -28,8 +28,6 @@ swissarmyhammer-tools = { path = "../swissarmyhammer-tools" }
 swissarmyhammer-config = { path = "../swissarmyhammer-config" }
 swissarmyhammer-common = { path = "../swissarmyhammer-common" }
 swissarmyhammer-git = { path = "../swissarmyhammer-git" }
-swissarmyhammer-memoranda = { path = "../swissarmyhammer-memoranda" }
-swissarmyhammer-issues = { path = "../swissarmyhammer-issues" }
 swissarmyhammer-prompts = { path = "../swissarmyhammer-prompts" }
 swissarmyhammer-rules = { path = "../swissarmyhammer-rules" }
 swissarmyhammer-templating = { path = "../swissarmyhammer-templating" }
@@ -92,4 +90,3 @@ serial_test = "3.1"
 reqwest = { workspace = true }
 
 nix = { version = "0.27", features = ["signal"] }
-criterion = { version = "0.5", features = ["html_reports"] }

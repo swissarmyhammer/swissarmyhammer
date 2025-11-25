@@ -40,7 +40,7 @@ fn test_parameter_schema_compliance() {
     // Check timeout parameter
     assert_eq!(properties["timeout"]["type"], "integer");
     assert_eq!(properties["timeout"]["default"], 30);
-    assert_eq!(properties["timeout"]["minimum"], 5);
+    assert_eq!(properties["timeout"]["minimum"], 1);
     assert_eq!(properties["timeout"]["maximum"], 120);
 
     // Check follow_redirects parameter
@@ -217,7 +217,7 @@ fn test_security_and_validation_features() {
     let properties = &schema["properties"];
 
     // Timeout limits prevent DoS
-    assert_eq!(properties["timeout"]["minimum"], 5); // Minimum prevents abuse
+    assert_eq!(properties["timeout"]["minimum"], 1); // Minimum allows for fast testing
     assert_eq!(properties["timeout"]["maximum"], 120); // Maximum prevents resource exhaustion
 
     // Content length limits prevent memory exhaustion

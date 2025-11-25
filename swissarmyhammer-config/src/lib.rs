@@ -382,7 +382,6 @@ pub const DEFAULT_TEST_LLM_MODEL_FILENAME: &str = "Qwen3-4B-Instruct-2507-Q4_K_M
 /// - Generates 384-dimensional embeddings (manageable size for tests)
 /// - Provides good semantic understanding for English text
 /// - Has fast inference speed suitable for test environments
-/// - Is well-supported by the fastembed library
 /// - Maintains consistent behavior across different platforms
 ///
 /// All embedding tests use this model to ensure consistent vector dimensions

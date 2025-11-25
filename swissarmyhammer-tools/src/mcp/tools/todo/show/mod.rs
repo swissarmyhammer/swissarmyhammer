@@ -44,7 +44,7 @@ impl McpTool for ShowTodoTool {
     async fn execute(
         &self,
         arguments: serde_json::Map<String, serde_json::Value>,
-        _context: &ToolContext,
+        context: &ToolContext,
     ) -> std::result::Result<CallToolResult, McpError> {
         // Parse arguments using base tool implementation
         let request: ShowTodoRequest = BaseToolImpl::parse_arguments(arguments)?;
@@ -55,9 +55,13 @@ impl McpTool for ShowTodoTool {
         McpValidation::validate_not_empty(&request.item, "item identifier")
             .map_err(|e| McpErrorHandler::handle_error(e, "validate item identifier"))?;
 
-        // Create storage instance
-        let storage = TodoStorage::new_default()
-            .map_err(|e| McpErrorHandler::handle_todo_error(e, "create todo storage"))?;
+        // Create storage instance using working_dir if available, otherwise use default
+        let storage = if let Some(ref working_dir) = context.working_dir {
+            TodoStorage::new_with_working_dir(working_dir.clone())
+        } else {
+            TodoStorage::new_default()
+        }
+        .map_err(|e| McpErrorHandler::handle_todo_error(e, "create todo storage"))?;
 
         // Get the requested todo item
         match storage.get_todo_item(&request.item).await {

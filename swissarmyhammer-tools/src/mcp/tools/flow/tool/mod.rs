@@ -697,36 +697,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_execute_workflow_nonexistent() {
-        use std::sync::Arc;
-        use swissarmyhammer_config::agent::AgentConfig;
-        use swissarmyhammer_issues::IssueStorage;
-        use swissarmyhammer_memoranda::{MarkdownMemoStorage, MemoStorage};
-        use tokio::sync::{Mutex, RwLock};
-
         let tool = FlowTool::new();
         let request = FlowToolRequest::new("nonexistent_workflow_xyz");
 
-        let _temp_dir = tempfile::tempdir().unwrap();
-        let test_issues_dir = _temp_dir.path().join("test_issues");
-        let issue_storage: Arc<RwLock<Box<dyn IssueStorage>>> = Arc::new(RwLock::new(Box::new(
-            swissarmyhammer_issues::FileSystemIssueStorage::new(test_issues_dir).unwrap(),
-        )));
-        let git_ops = Arc::new(Mutex::new(None));
-        let memo_dir = _temp_dir.path().join("memos");
-        let memo_storage: Arc<RwLock<Box<dyn MemoStorage>>> =
-            Arc::new(RwLock::new(Box::new(MarkdownMemoStorage::new(memo_dir))));
-        let tool_handlers = Arc::new(crate::mcp::tool_handlers::ToolHandlers::new(
-            memo_storage.clone(),
-        ));
-        let agent_config = Arc::new(AgentConfig::default());
-
-        let context = ToolContext::new(
-            tool_handlers,
-            issue_storage,
-            git_ops,
-            memo_storage,
-            agent_config,
-        );
+        let context = crate::test_utils::create_test_context().await;
 
         let result = tool.execute_workflow(&request, &context).await;
 
@@ -736,11 +710,6 @@ mod tests {
     #[tokio::test]
     async fn test_execute_workflow_missing_required_params() {
         use rmcp::model::ErrorCode;
-        use std::sync::Arc;
-        use swissarmyhammer_config::agent::AgentConfig;
-        use swissarmyhammer_issues::IssueStorage;
-        use swissarmyhammer_memoranda::{MarkdownMemoStorage, MemoStorage};
-        use tokio::sync::{Mutex, RwLock};
 
         let tool = FlowTool::new();
 
@@ -757,28 +726,7 @@ mod tests {
             // Create request without providing the required parameter
             let request = FlowToolRequest::new(workflow.name.to_string());
 
-            let _temp_dir = tempfile::tempdir().unwrap();
-            let test_issues_dir = _temp_dir.path().join("test_issues");
-            let issue_storage: Arc<RwLock<Box<dyn IssueStorage>>> =
-                Arc::new(RwLock::new(Box::new(
-                    swissarmyhammer_issues::FileSystemIssueStorage::new(test_issues_dir).unwrap(),
-                )));
-            let git_ops = Arc::new(Mutex::new(None));
-            let memo_dir = _temp_dir.path().join("memos");
-            let memo_storage: Arc<RwLock<Box<dyn MemoStorage>>> =
-                Arc::new(RwLock::new(Box::new(MarkdownMemoStorage::new(memo_dir))));
-            let tool_handlers = Arc::new(crate::mcp::tool_handlers::ToolHandlers::new(
-                memo_storage.clone(),
-            ));
-            let agent_config = Arc::new(AgentConfig::default());
-
-            let context = ToolContext::new(
-                tool_handlers,
-                issue_storage,
-                git_ops,
-                memo_storage,
-                agent_config,
-            );
+            let context = crate::test_utils::create_test_context().await;
 
             let result = tool.execute_workflow(&request, &context).await;
 
@@ -794,12 +742,6 @@ mod tests {
 
     #[tokio::test]
     async fn test_execute_workflow_json_output() {
-        use std::sync::Arc;
-        use swissarmyhammer_config::agent::AgentConfig;
-        use swissarmyhammer_issues::IssueStorage;
-        use swissarmyhammer_memoranda::{MarkdownMemoStorage, MemoStorage};
-        use tokio::sync::{Mutex, RwLock};
-
         let tool = FlowTool::new();
 
         let (storage, _resolver) = tool.load_workflows().expect("Failed to load workflows");
@@ -829,27 +771,7 @@ mod tests {
         let workflow = simple_workflow.unwrap();
         let request = FlowToolRequest::new(workflow.name.to_string());
 
-        let _temp_dir = tempfile::tempdir().unwrap();
-        let test_issues_dir = _temp_dir.path().join("test_issues");
-        let issue_storage: Arc<RwLock<Box<dyn IssueStorage>>> = Arc::new(RwLock::new(Box::new(
-            swissarmyhammer_issues::FileSystemIssueStorage::new(test_issues_dir).unwrap(),
-        )));
-        let git_ops = Arc::new(Mutex::new(None));
-        let memo_dir = _temp_dir.path().join("memos");
-        let memo_storage: Arc<RwLock<Box<dyn MemoStorage>>> =
-            Arc::new(RwLock::new(Box::new(MarkdownMemoStorage::new(memo_dir))));
-        let tool_handlers = Arc::new(crate::mcp::tool_handlers::ToolHandlers::new(
-            memo_storage.clone(),
-        ));
-        let agent_config = Arc::new(AgentConfig::default());
-
-        let context = ToolContext::new(
-            tool_handlers,
-            issue_storage,
-            git_ops,
-            memo_storage,
-            agent_config,
-        );
+        let context = crate::test_utils::create_test_context().await;
 
         let result = tool.execute_workflow(&request, &context).await;
 
@@ -895,37 +817,12 @@ mod tests {
     }
 
     /// Helper function to create a test context with notification support
-    fn create_test_context_with_notifications(
+    async fn create_test_context_with_notifications(
         notification_sender: crate::mcp::notifications::NotificationSender,
     ) -> ToolContext {
-        use std::sync::Arc;
-        use swissarmyhammer_config::agent::AgentConfig;
-        use swissarmyhammer_issues::IssueStorage;
-        use swissarmyhammer_memoranda::{MarkdownMemoStorage, MemoStorage};
-        use tokio::sync::{Mutex, RwLock};
-
-        let temp_dir = tempfile::tempdir().unwrap();
-        let test_issues_dir = temp_dir.path().join("test_issues");
-        let issue_storage: Arc<RwLock<Box<dyn IssueStorage>>> = Arc::new(RwLock::new(Box::new(
-            swissarmyhammer_issues::FileSystemIssueStorage::new(test_issues_dir).unwrap(),
-        )));
-        let git_ops = Arc::new(Mutex::new(None));
-        let memo_dir = temp_dir.path().join("memos");
-        let memo_storage: Arc<RwLock<Box<dyn MemoStorage>>> =
-            Arc::new(RwLock::new(Box::new(MarkdownMemoStorage::new(memo_dir))));
-        let tool_handlers = Arc::new(crate::mcp::tool_handlers::ToolHandlers::new(
-            memo_storage.clone(),
-        ));
-        let agent_config = Arc::new(AgentConfig::default());
-
-        ToolContext::with_notifications(
-            tool_handlers,
-            issue_storage,
-            git_ops,
-            memo_storage,
-            agent_config,
-            notification_sender,
-        )
+        let mut context = crate::test_utils::create_test_context().await;
+        context.notification_sender = Some(notification_sender);
+        context
     }
 
     #[tokio::test]
@@ -943,7 +840,7 @@ mod tests {
         let sender = NotificationSender::new(tx);
 
         // Create context with notification sender
-        let context = create_test_context_with_notifications(sender);
+        let context = create_test_context_with_notifications(sender).await;
 
         let tool = FlowTool::new();
         let request = FlowToolRequest::new(workflow.name.to_string());
@@ -976,7 +873,7 @@ mod tests {
         let sender = NotificationSender::new(tx);
 
         // Create context with notification sender
-        let context = create_test_context_with_notifications(sender);
+        let context = create_test_context_with_notifications(sender).await;
 
         let tool = FlowTool::new();
         let request = FlowToolRequest::new(workflow.name.to_string());
@@ -1027,7 +924,7 @@ mod tests {
         let sender = NotificationSender::new(tx);
 
         // Create context with notification sender
-        let context = create_test_context_with_notifications(sender);
+        let context = create_test_context_with_notifications(sender).await;
 
         let tool = FlowTool::new();
         let request = FlowToolRequest::new(workflow.name.to_string());
@@ -1068,7 +965,7 @@ mod tests {
         let sender = NotificationSender::new(tx);
 
         // Create context with notification sender
-        let context = create_test_context_with_notifications(sender);
+        let context = create_test_context_with_notifications(sender).await;
 
         let tool = FlowTool::new();
 
@@ -1144,7 +1041,7 @@ mod tests {
         let sender = NotificationSender::new(tx);
 
         // Create context with notification sender
-        let context = create_test_context_with_notifications(sender);
+        let context = create_test_context_with_notifications(sender).await;
 
         let tool = FlowTool::new();
         let request = FlowToolRequest::new(workflow.name.to_string());

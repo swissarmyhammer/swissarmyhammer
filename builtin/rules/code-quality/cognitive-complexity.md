@@ -2,7 +2,7 @@
 title: Cognitive Complexity
 description: Limit cognitive complexity of functions
 category: code-quality
-severity: warning
+severity: error
 tags: ["code-quality", "complexity"]
 ---
 

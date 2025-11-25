@@ -21,17 +21,17 @@
 //! // Create a new todo storage
 //! let storage = TodoStorage::new_default()?;
 //!
-//! // Create a new todo item
-//! let item = storage.create_todo_item(
+//! // Create a new todo item (returns the item and number of garbage collected items)
+//! let (item, gc_count) = storage.create_todo_item(
 //!     "Implement file read functionality".to_string(),
 //!     Some("Use existing codebase patterns for inspiration".to_string())
 //! ).await?;
-//! println!("Created todo item with ID: {}", item.id);
+//! println!("Created todo item with ID: {} (gc'd {} completed items)", item.id, gc_count);
 //!
 //! // Get the next incomplete item
 //! let next_item = storage.get_todo_item("next").await?;
-//! if let Some(item) = next_item {
-//!     println!("Next task: {}", item.task);
+//! if let Some(todo) = next_item {
+//!     println!("Next task: {}", todo.task);
 //! }
 //!
 //! // Mark item as complete
@@ -49,6 +49,7 @@ mod utils;
 pub use error::{Result, TodoError};
 pub use storage::TodoStorage;
 pub use types::{
-    CreateTodoRequest, MarkCompleteTodoRequest, ShowTodoRequest, TodoId, TodoItem, TodoList,
+    CreateTodoRequest, ListTodosRequest, MarkCompleteTodoRequest, ShowTodoRequest, TodoId,
+    TodoItem, TodoList,
 };
 pub use utils::{get_todo_directory, get_todo_list_path, validate_todo_list_name};

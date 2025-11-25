@@ -189,44 +189,6 @@ mod tests {
     }
 
     #[test]
-    fn test_debug_error_prompt_is_correctly_tracked_as_builtin() {
-        let mut resolver = PromptResolver::new();
-        let mut library = PromptLibrary::new();
-
-        // Load builtin prompts
-        resolver.load_all_prompts(&mut library).unwrap();
-
-        // The debug/error prompt should be loaded and tracked as builtin
-        // First check that it exists in the library
-        let prompts = library.list().unwrap();
-        let debug_error_prompt = prompts.iter().find(|p| p.name == "debug/error");
-
-        if let Some(_prompt) = debug_error_prompt {
-            // Check that it's tracked as a builtin
-            assert_eq!(
-                resolver.prompt_sources.get("debug/error"),
-                Some(&FileSource::Builtin),
-                "debug/error prompt should be tracked as Builtin, but was tracked as: {:?}",
-                resolver.prompt_sources.get("debug/error")
-            );
-        } else {
-            // If debug/error doesn't exist, check if debug-error exists instead
-            let debug_hyphen_error_prompt = prompts.iter().find(|p| p.name == "debug-error");
-            if let Some(_prompt) = debug_hyphen_error_prompt {
-                // This would indicate the bug where frontmatter name overrides build script name
-                panic!("Found prompt named 'debug-error' instead of 'debug/error'. This indicates the frontmatter is overriding the build script name.");
-            } else {
-                // Check what builtin prompts actually exist
-                let builtin_prompt_names: Vec<String> =
-                    prompts.iter().map(|p| p.name.clone()).collect();
-                panic!(
-                    "debug/error prompt not found. Available builtin prompts: {builtin_prompt_names:?}"
-                );
-            }
-        }
-    }
-
-    #[test]
     fn test_get_prompt_directories() {
         // Skip isolated test environment setup for now
         let resolver = PromptResolver::new();

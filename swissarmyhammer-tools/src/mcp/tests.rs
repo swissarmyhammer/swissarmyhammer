@@ -1,11 +1,6 @@
 //! Tests for MCP server functionality
 
 use super::server::McpServer;
-use super::types::{
-    AllCompleteRequest, CreateIssueRequest, MarkCompleteRequest, UpdateIssueRequest,
-};
-use super::utils::validate_issue_name;
-use crate::test_utils::TestIssueEnvironment;
 use rmcp::ServerHandler;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -22,13 +17,13 @@ impl Drop for DirGuard {
 
 #[tokio::test]
 async fn test_mcp_server_creation() {
-    let test_env = TestIssueEnvironment::new();
+    let test_dir = tempfile::tempdir().unwrap();
     let original_dir = std::env::current_dir().expect("Failed to get current dir");
-    std::env::set_current_dir(test_env.path()).expect("Failed to change dir");
+    std::env::set_current_dir(test_dir.path()).expect("Failed to change dir");
     let _guard = DirGuard(original_dir);
 
     let library = PromptLibrary::new();
-    let server = McpServer::new_with_work_dir(library, test_env.path().to_path_buf())
+    let server = McpServer::new_with_work_dir(library, test_dir.path().to_path_buf())
         .await
         .unwrap();
 
@@ -63,9 +58,9 @@ async fn test_mcp_server_exposes_shell_tools() {
 
 #[tokio::test]
 async fn test_mcp_server_list_prompts() {
-    let test_env = TestIssueEnvironment::new();
+    let test_dir = tempfile::tempdir().unwrap();
     let original_dir = std::env::current_dir().expect("Failed to get current dir");
-    std::env::set_current_dir(test_env.path()).expect("Failed to change dir");
+    std::env::set_current_dir(test_dir.path()).expect("Failed to change dir");
     let _guard = DirGuard(original_dir);
 
     let mut library = PromptLibrary::new();
@@ -73,7 +68,7 @@ async fn test_mcp_server_list_prompts() {
         .with_description("Test description".to_string());
     library.add(prompt).unwrap();
 
-    let server = McpServer::new_with_work_dir(library, test_env.path().to_path_buf())
+    let server = McpServer::new_with_work_dir(library, test_dir.path().to_path_buf())
         .await
         .unwrap();
     let prompts = server.list_prompts().await.unwrap();
@@ -84,9 +79,9 @@ async fn test_mcp_server_list_prompts() {
 
 #[tokio::test]
 async fn test_mcp_server_get_prompt() {
-    let test_env = TestIssueEnvironment::new();
+    let test_dir = tempfile::tempdir().unwrap();
     let original_dir = std::env::current_dir().expect("Failed to get current dir");
-    std::env::set_current_dir(test_env.path()).expect("Failed to change dir");
+    std::env::set_current_dir(test_dir.path()).expect("Failed to change dir");
     let _guard = DirGuard(original_dir);
 
     let mut library = PromptLibrary::new();
@@ -94,7 +89,7 @@ async fn test_mcp_server_get_prompt() {
         Prompt::new("test", "Hello {{ name }}!").with_description("Greeting prompt".to_string());
     library.add(prompt).unwrap();
 
-    let server = McpServer::new_with_work_dir(library, test_env.path().to_path_buf())
+    let server = McpServer::new_with_work_dir(library, test_dir.path().to_path_buf())
         .await
         .unwrap();
     let mut arguments = HashMap::new();
@@ -178,9 +173,9 @@ async fn test_mcp_server_file_watching_integration() {
 
 #[tokio::test]
 async fn test_mcp_server_uses_same_directory_discovery() {
-    let test_env = TestIssueEnvironment::new();
+    let test_dir = tempfile::tempdir().unwrap();
     let original_dir = std::env::current_dir().expect("Failed to get current dir");
-    std::env::set_current_dir(test_env.path()).expect("Failed to change dir");
+    std::env::set_current_dir(test_dir.path()).expect("Failed to change dir");
     let _guard = DirGuard(original_dir);
 
     // Verify that MCP server uses same directory discovery as PromptResolver
@@ -190,7 +185,7 @@ async fn test_mcp_server_uses_same_directory_discovery() {
     // The server should use the same directories for file watching
     // This test ensures the fix for hardcoded paths is working
     let library = PromptLibrary::new();
-    let _server = McpServer::new_with_work_dir(library, test_env.path().to_path_buf())
+    let _server = McpServer::new_with_work_dir(library, test_dir.path().to_path_buf())
         .await
         .unwrap();
 
@@ -263,9 +258,9 @@ async fn test_mcp_server_exposes_prompts_tools_capability() {
 
 #[tokio::test]
 async fn test_mcp_server_does_not_expose_partial_templates() {
-    let test_env = TestIssueEnvironment::new();
+    let test_dir = tempfile::tempdir().unwrap();
     let original_dir = std::env::current_dir().expect("Failed to get current dir");
-    std::env::set_current_dir(test_env.path()).expect("Failed to change dir");
+    std::env::set_current_dir(test_dir.path()).expect("Failed to change dir");
     let _guard = DirGuard(original_dir);
 
     // Create a test library with both regular and partial templates
@@ -289,7 +284,7 @@ async fn test_mcp_server_does_not_expose_partial_templates() {
     .with_description("Another partial template".to_string());
     library.add(partial_with_marker).unwrap();
 
-    let server = McpServer::new_with_work_dir(library, test_env.path().to_path_buf())
+    let server = McpServer::new_with_work_dir(library, test_dir.path().to_path_buf())
         .await
         .unwrap();
 
@@ -314,109 +309,4 @@ async fn test_mcp_server_does_not_expose_partial_templates() {
     assert!(result.is_err());
     let error_msg = result.unwrap_err().to_string();
     assert!(error_msg.contains("partial template"));
-}
-
-#[tokio::test]
-async fn test_mcp_server_tool_schemas_are_valid() {
-    // Test that all request schemas can be generated without error
-    let create_schema = serde_json::to_value(schemars::schema_for!(CreateIssueRequest));
-    assert!(
-        create_schema.is_ok(),
-        "CreateIssueRequest schema should be valid"
-    );
-
-    let mark_complete_schema = serde_json::to_value(schemars::schema_for!(MarkCompleteRequest));
-    assert!(
-        mark_complete_schema.is_ok(),
-        "MarkCompleteRequest schema should be valid"
-    );
-
-    let all_complete_schema = serde_json::to_value(schemars::schema_for!(AllCompleteRequest));
-    assert!(
-        all_complete_schema.is_ok(),
-        "AllCompleteRequest schema should be valid"
-    );
-
-    let update_schema = serde_json::to_value(schemars::schema_for!(UpdateIssueRequest));
-    assert!(
-        update_schema.is_ok(),
-        "UpdateIssueRequest schema should be valid"
-    );
-}
-
-#[test]
-fn test_validate_issue_name_success() {
-    // Test successful validation
-    let valid_names = vec![
-        "simple_name",
-        "name with spaces",
-        "name-with-dashes",
-        "name_with_underscores",
-        "123_numeric_start",
-        "UPPERCASE_NAME",
-        "MixedCase_Name",
-        "a", // Minimum length
-    ];
-
-    for name in valid_names {
-        let result = validate_issue_name(name);
-        assert!(result.is_ok(), "Valid name '{name}' should pass validation");
-        assert_eq!(result.unwrap(), name.trim());
-    }
-
-    // Test maximum length separately
-    let max_length_name = "a".repeat(100);
-    let result = validate_issue_name(&max_length_name);
-    assert!(result.is_ok(), "100 character name should pass validation");
-    assert_eq!(result.unwrap(), max_length_name.trim());
-}
-
-#[test]
-fn test_validate_issue_name_failure() {
-    // Test validation failures
-    let invalid_names = vec![
-        ("", "empty"),
-        ("   ", "whitespace only"),
-        ("name/with/slashes", "invalid characters"),
-        ("name\\with\\backslashes", "invalid characters"),
-        ("name:with:colons", "invalid characters"),
-        ("name*with*asterisks", "invalid characters"),
-        ("name?with?questions", "invalid characters"),
-        ("name\"with\"quotes", "invalid characters"),
-        ("name<with>brackets", "invalid characters"),
-        ("name|with|pipes", "invalid characters"),
-    ];
-
-    for (name, reason) in invalid_names {
-        let result = validate_issue_name(name);
-        assert!(
-            result.is_err(),
-            "Invalid name '{name}' should fail validation ({reason})"
-        );
-    }
-
-    // Test too long name separately
-    let too_long_name = "a".repeat(101);
-    let result = validate_issue_name(&too_long_name);
-    assert!(result.is_err(), "101 character name should fail validation");
-}
-
-#[test]
-fn test_validate_issue_name_trimming() {
-    // Test that names are properly trimmed
-    let names_with_whitespace = vec![
-        ("  test  ", "test"),
-        ("\ttest\t", "test"),
-        ("  test_name  ", "test_name"),
-        ("   multiple   spaces   ", "multiple   spaces"),
-    ];
-
-    for (input, expected) in names_with_whitespace {
-        let result = validate_issue_name(input);
-        assert!(
-            result.is_ok(),
-            "Name with whitespace '{input}' should be valid"
-        );
-        assert_eq!(result.unwrap(), expected);
-    }
 }

@@ -29,8 +29,8 @@
 //! {
 //!   "workflows": [
 //!     {
-//!       "name": "implement",
-//!       "description": "Execute the implement workflow",
+//!       "name": "plan",
+//!       "description": "Execute the plan workflow",
 //!       "source": "builtin",
 //!       "parameters": []
 //!     }

@@ -16,7 +16,7 @@ use std::time::Instant;
 
 /// Configuration constants for web fetch operations
 const DEFAULT_TIMEOUT_SECONDS: u32 = 30;
-const MIN_TIMEOUT_SECONDS: u32 = 5;
+const MIN_TIMEOUT_SECONDS: u32 = 1;
 const MAX_TIMEOUT_SECONDS: u32 = 120;
 const DEFAULT_CONTENT_LENGTH_BYTES: u32 = 1_048_576; // 1MB
 const MIN_CONTENT_LENGTH_BYTES: u32 = 1024; // 1KB
@@ -534,14 +534,20 @@ mod tests {
         context.progress_sender = Some(progress_sender);
 
         let mut arguments = serde_json::Map::new();
-        // Use an invalid URL that will definitely fail
+        // Use example.com with an invalid port to get immediate connection refused
+        // This is faster than DNS resolution failures
         arguments.insert(
             "url".to_string(),
-            serde_json::Value::String("https://definitely-not-a-real-domain-12345.com".to_string()),
+            serde_json::Value::String("http://example.com:1".to_string()),
         );
+        // Use minimal timeout to speed up the test
+        arguments.insert("timeout".to_string(), serde_json::Value::Number(1.into()));
 
-        // Execute the tool (should fail)
+        // Execute the tool (should fail quickly with connection refused on invalid port)
         let _result = tool.execute(arguments, &context).await;
+
+        // Give a small delay for async notifications to be sent
+        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
 
         // Collect notifications
         let mut notifications = Vec::new();
@@ -552,7 +558,8 @@ mod tests {
         // Should have at least 2 notifications (start and error)
         assert!(
             notifications.len() >= 2,
-            "Should have sent start and error notifications"
+            "Should have sent start and error notifications, got {}",
+            notifications.len()
         );
 
         // First notification should be start

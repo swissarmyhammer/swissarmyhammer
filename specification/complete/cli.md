@@ -38,8 +38,8 @@ pub enum Commands {
 ### MCP Tool Structure
 ```rust
 #[async_trait]
-impl McpTool for CreateMemoTool {
-    fn name(&self) -> &'static str { "memo_create" }
+impl McpTool for CreateTodoTool {
+    fn name(&self) -> &'static str { "todo_create" }
     fn schema(&self) -> serde_json::Value {
         serde_json::json!({
             "type": "object",

@@ -101,38 +101,35 @@ mod tests {
     #[test]
     fn test_get_tool_description() {
         // Test that we can get descriptions for known tools
-        assert!(get_tool_description("issues", "create").is_some());
-        assert!(get_tool_description("memoranda", "create").is_some());
+        assert!(get_tool_description("todo", "create").is_some());
     }
 
     #[test]
     fn test_has_tool_description() {
-        assert!(has_tool_description("issues", "create"));
-        assert!(has_tool_description("memoranda", "create"));
+        assert!(has_tool_description("todo", "create"));
         assert!(!has_tool_description("nonexistent", "tool"));
     }
 
     #[test]
     fn test_get_descriptions_by_noun() {
         let grouped = get_descriptions_by_noun();
-        assert!(grouped.contains_key("issues"));
-        assert!(grouped.contains_key("memoranda"));
+        assert!(grouped.contains_key("todo"));
 
-        // Check that issues has expected verbs
-        let issues = &grouped["issues"];
-        let verbs: Vec<&str> = issues.iter().map(|(v, _)| v.as_str()).collect();
+        // Check that todo has expected verbs
+        let todo = &grouped["todo"];
+        let verbs: Vec<&str> = todo.iter().map(|(v, _)| v.as_str()).collect();
         assert!(verbs.contains(&"create"));
     }
 
     #[test]
     fn test_description_content_quality() {
-        if let Some(create_issue_desc) = get_tool_description("issues", "create") {
+        if let Some(create_todo_desc) = get_tool_description("todo", "create") {
             assert!(
-                create_issue_desc.len() > 10,
+                create_todo_desc.len() > 10,
                 "Description should be substantial"
             );
             assert!(
-                !create_issue_desc.trim().is_empty(),
+                !create_todo_desc.trim().is_empty(),
                 "Description should not be empty"
             );
         }

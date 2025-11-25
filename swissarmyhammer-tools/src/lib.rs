@@ -5,19 +5,14 @@
 //! This crate provides the MCP server functionality and tools that integrate with
 //! the SwissArmyHammer prompt management library. It includes tools for:
 //!
-//! - Issue management and tracking
-//! - Memoranda (memo/note) management
-//! - Semantic search across codebases
-//! - Code outline generation
+//! - File operations
+//! - Shell command execution
+//! - Todo list management
 //!
 //! ## Features
 //!
 //! - **MCP Server**: Full Model Context Protocol server implementation
 //! - **Tool Registry**: Extensible tool registration system
-//! - **Issue Tools**: Create, manage, and track work items
-//! - **Memo Tools**: Note-taking and knowledge management
-//! - **Search Tools**: Semantic code search and indexing
-//! - **Outline Tools**: Code structure analysis and extraction
 //!
 //! ## Usage
 //!
@@ -53,8 +48,7 @@
 //!
 //! // Register individual tool categories
 //! swissarmyhammer_tools::register_file_tools(&mut registry);
-//! swissarmyhammer_tools::register_search_tools(&mut registry);
-//! swissarmyhammer_tools::register_issue_tools(&mut registry);
+//! swissarmyhammer_tools::register_shell_tools(&mut registry);
 //!
 //! // Access registered tools
 //! let tool_names: Vec<_> = registry.list_tools().iter()
@@ -74,9 +68,8 @@ pub mod test_utils;
 // Re-export key types for convenience
 pub use mcp::McpServer;
 pub use mcp::{
-    register_file_tools, register_git_tools, register_issue_tools, register_memo_tools,
-    register_rules_tools, register_search_tools, register_shell_tools, register_todo_tools,
-    register_web_fetch_tools, register_web_search_tools,
+    register_file_tools, register_git_tools, register_rules_tools,
+    register_shell_tools, register_todo_tools, register_web_fetch_tools, register_web_search_tools,
 };
 pub use mcp::{ToolContext, ToolRegistry};
 

@@ -483,10 +483,75 @@ impl ErrorMessageEnhancer {
         Self
     }
 
+    /// Create a ValidationFailedWithContext error with consistent structure
+    fn create_validation_context_error(
+        parameter: String,
+        value: String,
+        message: String,
+        explanation: String,
+        suggestions: Vec<String>,
+    ) -> ParameterError {
+        ParameterError::ValidationFailedWithContext {
+            parameter,
+            details: Box::new(ValidationFailedDetails {
+                value,
+                message,
+                explanation: Some(explanation),
+                examples: vec![],
+                suggestions,
+            }),
+            recoverable: true,
+        }
+    }
+
+    /// Create a string length validation error with consistent messaging
+    fn create_string_length_error(
+        name: String,
+        actual_length: usize,
+        constraint_type: &str,
+        constraint_value: usize,
+    ) -> ParameterError {
+        let (message, explanation, suggestion) = match constraint_type {
+            "min" => (
+                format!("Must be at least {constraint_value} characters long"),
+                format!(
+                    "Your input has {actual_length} characters, but {constraint_value} characters are required"
+                ),
+                format!(
+                    "Add {} more characters to meet the minimum requirement",
+                    constraint_value - actual_length
+                ),
+            ),
+            "max" => (
+                format!("Must be at most {constraint_value} characters long"),
+                format!(
+                    "Your input has {actual_length} characters, but only {constraint_value} characters are allowed"
+                ),
+                format!(
+                    "Remove {} characters to meet the maximum limit",
+                    actual_length - constraint_value
+                ),
+            ),
+            _ => unreachable!(),
+        };
+
+        Self::create_validation_context_error(
+            name,
+            format!("{actual_length} characters"),
+            message,
+            explanation,
+            vec![suggestion],
+        )
+    }
+
     /// Enhance a ParameterError with better user experience
     pub fn enhance_parameter_error(&self, error: &ParameterError) -> ParameterError {
         match error {
-            ParameterError::PatternMismatch { name, value, pattern } => {
+            ParameterError::PatternMismatch {
+                name,
+                value,
+                pattern,
+            } => {
                 let description = CommonPatterns::description_for_pattern(pattern);
                 let examples = CommonPatterns::examples_for_pattern(pattern);
                 ParameterError::PatternMismatchEnhanced {
@@ -501,7 +566,11 @@ impl ErrorMessageEnhancer {
                 }
             }
 
-            ParameterError::InvalidChoice { name, value, choices } => {
+            ParameterError::InvalidChoice {
+                name,
+                value,
+                choices,
+            } => {
                 let did_you_mean = self.suggest_closest_match(value, choices);
                 ParameterError::InvalidChoiceEnhanced {
                     parameter: name.clone(),
@@ -514,109 +583,89 @@ impl ErrorMessageEnhancer {
                 }
             }
 
-            ParameterError::StringTooShort { name, min_length, actual_length } => {
-                ParameterError::ValidationFailedWithContext {
-                    parameter: name.clone(),
-                    details: Box::new(ValidationFailedDetails {
-                        value: format!("{actual_length} characters"),
-                        message: format!("Must be at least {min_length} characters long"),
-                        explanation: Some(format!(
-                            "Your input has {actual_length} characters, but {min_length} characters are required"
-                        )),
-                        examples: vec![
-                            format!("Example with {min_length} characters: {}",
-                                   "a".repeat(*min_length))
-                        ],
-                        suggestions: vec![
-                            format!("Add {} more characters to meet the minimum requirement",
-                                   min_length - actual_length)
-                        ],
-                    }),
-                    recoverable: true,
-                }
-            }
+            ParameterError::StringTooShort {
+                name,
+                min_length,
+                actual_length,
+            } => Self::create_string_length_error(name.clone(), *actual_length, "min", *min_length),
 
-            ParameterError::StringTooLong { name, max_length, actual_length } => {
-                ParameterError::ValidationFailedWithContext {
-                    parameter: name.clone(),
-                    details: Box::new(ValidationFailedDetails {
-                        value: format!("{actual_length} characters"),
-                        message: format!("Must be at most {max_length} characters long"),
-                        explanation: Some(format!(
-                            "Your input has {actual_length} characters, but only {max_length} characters are allowed"
-                        )),
-                        examples: vec![],
-                        suggestions: vec![
-                            format!("Remove {} characters to meet the maximum limit",
-                                   actual_length - max_length)
-                        ],
-                    }),
-                    recoverable: true,
-                }
-            }
+            ParameterError::StringTooLong {
+                name,
+                max_length,
+                actual_length,
+            } => Self::create_string_length_error(name.clone(), *actual_length, "max", *max_length),
 
-            ParameterError::OutOfRange { name, value, min, max } => {
+            ParameterError::OutOfRange {
+                name,
+                value,
+                min,
+                max,
+            } => {
                 let mut suggestions = vec![];
-                let mut explanation = format!("Value {value} is outside the allowed range");
-                if let (Some(min_val), Some(max_val)) = (min, max) {
-                    explanation = format!("Value {value} must be between {min_val} and {max_val}");
+                let explanation = if let (Some(min_val), Some(max_val)) = (min, max) {
                     if *value < *min_val {
                         suggestions.push(format!("Try a value >= {min_val}"));
                     } else {
                         suggestions.push(format!("Try a value <= {max_val}"));
                     }
+                    format!("Value {value} must be between {min_val} and {max_val}")
                 } else if let Some(min_val) = min {
-                    explanation = format!("Value {value} must be at least {min_val}");
                     suggestions.push(format!("Try a value >= {min_val}"));
+                    format!("Value {value} must be at least {min_val}")
                 } else if let Some(max_val) = max {
-                    explanation = format!("Value {value} must be at most {max_val}");
                     suggestions.push(format!("Try a value <= {max_val}"));
-                }
+                    format!("Value {value} must be at most {max_val}")
+                } else {
+                    format!("Value {value} is outside the allowed range")
+                };
 
-                ParameterError::ValidationFailedWithContext {
-                    parameter: name.clone(),
-                    details: Box::new(ValidationFailedDetails {
-                        value: value.to_string(),
-                        message: explanation.clone(),
-                        explanation: Some(explanation),
-                        examples: vec![],
-                        suggestions,
-                    }),
-                    recoverable: true,
-                }
+                Self::create_validation_context_error(
+                    name.clone(),
+                    value.to_string(),
+                    explanation.clone(),
+                    explanation,
+                    suggestions,
+                )
             }
 
-            ParameterError::ConditionalParameterMissing { parameter, condition } => {
-                ParameterError::ValidationFailedWithContext {
-                    parameter: parameter.clone(),
-                    details: Box::new(ValidationFailedDetails {
-                        value: "missing".to_string(),
-                        message: "Parameter required for your current configuration".to_string(),
-                        explanation: Some(self.explain_condition(condition)),
-                        examples: vec![],
-                        suggestions: vec![
-                            format!("Provide --{}", parameter.replace('_', "-")),
-                            "Use --interactive mode for guided input".to_string(),
-                        ],
-                    }),
-                    recoverable: true,
-                }
-            }
+            ParameterError::ConditionalParameterMissing {
+                parameter,
+                condition,
+            } => Self::create_validation_context_error(
+                parameter.clone(),
+                "missing".to_string(),
+                "Parameter required for your current configuration".to_string(),
+                self.explain_condition(condition),
+                vec![
+                    format!("Provide --{}", parameter.replace('_', "-")),
+                    "Use --interactive mode for guided input".to_string(),
+                ],
+            ),
 
             _ => {
                 // Need to derive Clone for ParameterError or handle differently
                 match error {
-                    ParameterError::ValidationFailed { message } => ParameterError::ValidationFailed { message: message.clone() },
-                    ParameterError::MissingRequired { name } => ParameterError::MissingRequired { name: name.clone() },
-                    ParameterError::TypeMismatch { name, expected_type, actual_type } => ParameterError::TypeMismatch {
+                    ParameterError::ValidationFailed { message } => {
+                        ParameterError::ValidationFailed {
+                            message: message.clone(),
+                        }
+                    }
+                    ParameterError::MissingRequired { name } => {
+                        ParameterError::MissingRequired { name: name.clone() }
+                    }
+                    ParameterError::TypeMismatch {
+                        name,
+                        expected_type,
+                        actual_type,
+                    } => ParameterError::TypeMismatch {
                         name: name.clone(),
                         expected_type: expected_type.clone(),
-                        actual_type: actual_type.clone()
+                        actual_type: actual_type.clone(),
                     },
                     // Add other cases as needed for completeness, for now just return a generic error
                     _ => ParameterError::ValidationFailed {
-                        message: format!("Parameter validation failed: {error}")
-                    }
+                        message: format!("Parameter validation failed: {error}"),
+                    },
                 }
             }
         }
@@ -658,6 +707,11 @@ impl ErrorMessageEnhancer {
     }
 
     /// Calculate Levenshtein distance between two strings
+    ///
+    /// This is a standard dynamic programming implementation of the Levenshtein algorithm
+    /// for computing edit distance between two strings. The algorithm uses a matrix to
+    /// track the minimum number of single-character edits (insertions, deletions, or
+    /// substitutions) needed to transform one string into another.
     fn levenshtein_distance(&self, a: &str, b: &str) -> usize {
         let a_chars: Vec<char> = a.chars().collect();
         let b_chars: Vec<char> = b.chars().collect();
@@ -671,17 +725,22 @@ impl ErrorMessageEnhancer {
             return a_len;
         }
 
-        let mut matrix = vec![vec![0; b_len + 1]; a_len + 1];
+        // Initialize matrix with base values using iterators
+        let mut matrix: Vec<Vec<usize>> = (0..=a_len)
+            .map(|i| {
+                let mut row = vec![0; b_len + 1];
+                row[0] = i;
+                if i == 0 {
+                    // Initialize first row
+                    for (j, cell) in row.iter_mut().enumerate() {
+                        *cell = j;
+                    }
+                }
+                row
+            })
+            .collect();
 
-        // Initialize first row and column
-        for (i, row) in matrix.iter_mut().enumerate().take(a_len + 1) {
-            row[0] = i;
-        }
-        for j in 0..=b_len {
-            matrix[0][j] = j;
-        }
-
-        // Fill matrix
+        // Fill matrix using dynamic programming
         for i in 1..=a_len {
             for j in 1..=b_len {
                 let cost = if a_chars[i - 1] == b_chars[j - 1] {
@@ -1345,26 +1404,24 @@ impl ParameterValidator {
         array: &[serde_json::Value],
         validation: &ValidationRules,
     ) -> ParameterResult<()> {
-        let selection_count = array.len();
+        let count = array.len();
 
-        // Minimum selections validation
         if let Some(min_selections) = validation.min_selections {
-            if selection_count < min_selections {
+            if count < min_selections {
                 return Err(ParameterError::TooFewSelections {
                     name: param.name.clone(),
                     min_selections,
-                    actual_selections: selection_count,
+                    actual_selections: count,
                 });
             }
         }
 
-        // Maximum selections validation
         if let Some(max_selections) = validation.max_selections {
-            if selection_count > max_selections {
+            if count > max_selections {
                 return Err(ParameterError::TooManySelections {
                     name: param.name.clone(),
                     max_selections,
-                    actual_selections: selection_count,
+                    actual_selections: count,
                 });
             }
         }
@@ -1587,6 +1644,61 @@ mod enhanced_error_handling_tests {
 mod tests {
     use super::*;
 
+    #[cfg(test)]
+    mod test_helpers {
+        use super::*;
+
+        pub fn create_test_resolver() -> DefaultParameterResolver {
+            DefaultParameterResolver::new()
+        }
+
+        pub fn create_cli_args(pairs: Vec<(&str, &str)>) -> HashMap<String, String> {
+            pairs
+                .into_iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect()
+        }
+
+        pub fn test_pattern_validation_helper(
+            pattern: &str,
+            valid_inputs: Vec<&str>,
+            invalid_inputs: Vec<&str>,
+            param_name: &str,
+        ) {
+            let validator = ParameterValidator::new();
+            let param =
+                Parameter::new(param_name, param_name, ParameterType::String).with_pattern(pattern);
+
+            for input in valid_inputs {
+                let value = serde_json::Value::String(input.to_string());
+                assert!(
+                    validator.validate_parameter(&param, &value).is_ok(),
+                    "{} should be valid: {}",
+                    param_name,
+                    input
+                );
+            }
+
+            for input in invalid_inputs {
+                let value = serde_json::Value::String(input.to_string());
+                assert!(
+                    validator.validate_parameter(&param, &value).is_err(),
+                    "{} should be invalid: {}",
+                    param_name,
+                    input
+                );
+            }
+        }
+
+        pub fn create_string_param_with_length(
+            min: Option<usize>,
+            max: Option<usize>,
+        ) -> Parameter {
+            Parameter::new("text", "Text parameter", ParameterType::String)
+                .with_length_range(min, max)
+        }
+    }
+
     #[test]
     fn test_parameter_creation() {
         let param = Parameter::new("test_param", "A test parameter", ParameterType::String)
@@ -1759,12 +1871,13 @@ mod tests {
     fn test_default_parameter_resolver_parse_cli_args() {
         let resolver = DefaultParameterResolver::new();
 
-        let mut cli_args = HashMap::new();
-        cli_args.insert("string_param".to_string(), "hello".to_string());
-        cli_args.insert("bool_param".to_string(), "true".to_string());
-        cli_args.insert("number_param".to_string(), "42.5".to_string());
-        cli_args.insert("false_param".to_string(), "false".to_string());
-        cli_args.insert("text_param".to_string(), "not_a_number".to_string());
+        let cli_args = test_helpers::create_cli_args(vec![
+            ("string_param", "hello"),
+            ("bool_param", "true"),
+            ("number_param", "42.5"),
+            ("false_param", "false"),
+            ("text_param", "not_a_number"),
+        ]);
 
         let parsed = resolver.parse_cli_args(&cli_args);
 
@@ -1796,7 +1909,7 @@ mod tests {
             Parameter::new("test_param", "Test parameter", ParameterType::String).required(true);
         let parameters = vec![param];
 
-        let cli_args = HashMap::new(); // Empty CLI args
+        let cli_args = test_helpers::create_cli_args(vec![]);
 
         let result = resolver.resolve_parameters(&parameters, &cli_args, false);
         assert!(result.is_err());
@@ -1816,8 +1929,7 @@ mod tests {
             Parameter::new("test_param", "Test parameter", ParameterType::String).required(true);
         let parameters = vec![param];
 
-        let mut cli_args = HashMap::new();
-        cli_args.insert("test_param".to_string(), "provided_value".to_string());
+        let cli_args = test_helpers::create_cli_args(vec![("test_param", "provided_value")]);
 
         let result = resolver
             .resolve_parameters(&parameters, &cli_args, false)
@@ -1842,7 +1954,7 @@ mod tests {
         .with_default(serde_json::json!("default_value"));
         let parameters = vec![param];
 
-        let cli_args = HashMap::new(); // No CLI args provided
+        let cli_args = test_helpers::create_cli_args(vec![]);
 
         let result = resolver
             .resolve_parameters(&parameters, &cli_args, false)
@@ -1903,50 +2015,36 @@ mod tests {
 
     #[test]
     fn test_string_too_short_validation() {
+        let param = test_helpers::create_string_param_with_length(Some(5), None);
         let validator = ParameterValidator::new();
-        let param = Parameter::new("text", "Text parameter", ParameterType::String)
-            .with_length_range(Some(5), None);
-
-        let value = serde_json::Value::String("hi".to_string());
-        let result = validator.validate_parameter(&param, &value);
-
+        let val = serde_json::Value::String("hi".to_string());
+        let result = validator.validate_parameter(&param, &val);
         assert!(result.is_err());
-        if let Err(ParameterError::StringTooShort {
-            name,
-            min_length,
-            actual_length,
-        }) = result
-        {
-            assert_eq!(name, "text");
-            assert_eq!(min_length, 5);
-            assert_eq!(actual_length, 2);
-        } else {
-            panic!("Expected StringTooShort error");
-        }
+        assert!(matches!(
+            result.unwrap_err(),
+            ParameterError::StringTooShort {
+                name,
+                min_length,
+                actual_length,
+            } if name == "text" && min_length == 5 && actual_length == 2
+        ));
     }
 
     #[test]
     fn test_string_too_long_validation() {
+        let param = test_helpers::create_string_param_with_length(None, Some(5));
         let validator = ParameterValidator::new();
-        let param = Parameter::new("text", "Text parameter", ParameterType::String)
-            .with_length_range(None, Some(5));
-
-        let value = serde_json::Value::String("this is too long".to_string());
-        let result = validator.validate_parameter(&param, &value);
-
+        let val = serde_json::Value::String("this is too long".to_string());
+        let result = validator.validate_parameter(&param, &val);
         assert!(result.is_err());
-        if let Err(ParameterError::StringTooLong {
-            name,
-            max_length,
-            actual_length,
-        }) = result
-        {
-            assert_eq!(name, "text");
-            assert_eq!(max_length, 5);
-            assert_eq!(actual_length, 16);
-        } else {
-            panic!("Expected StringTooLong error");
-        }
+        assert!(matches!(
+            result.unwrap_err(),
+            ParameterError::StringTooLong {
+                name,
+                max_length,
+                actual_length,
+            } if name == "text" && max_length == 5 && actual_length == 16
+        ));
     }
 
     #[test]
@@ -2164,73 +2262,35 @@ mod tests {
 
     #[test]
     fn test_email_pattern_validation() {
-        let validator = ParameterValidator::new();
-        let param = Parameter::new("email", "Email", ParameterType::String)
-            .with_pattern(CommonPatterns::EMAIL);
-
-        // Valid emails
-        let valid_emails = vec![
-            "test@example.com",
-            "user.name@domain.org",
-            "user+tag@example.co.uk",
-        ];
-
-        for email in valid_emails {
-            let value = serde_json::Value::String(email.to_string());
-            assert!(
-                validator.validate_parameter(&param, &value).is_ok(),
-                "Email should be valid: {email}"
-            );
-        }
-
-        // Invalid emails
-        let invalid_emails = vec![
-            "not-an-email",
-            "@example.com",
-            "user@",
-            "user name@example.com", // space in local part
-        ];
-
-        for email in invalid_emails {
-            let value = serde_json::Value::String(email.to_string());
-            assert!(
-                validator.validate_parameter(&param, &value).is_err(),
-                "Email should be invalid: {email}"
-            );
-        }
+        test_helpers::test_pattern_validation_helper(
+            CommonPatterns::EMAIL,
+            vec![
+                "test@example.com",
+                "user.name@domain.org",
+                "user+tag@example.co.uk",
+            ],
+            vec![
+                "not-an-email",
+                "@example.com",
+                "user@",
+                "user name@example.com", // space in local part
+            ],
+            "email",
+        );
     }
 
     #[test]
     fn test_url_pattern_validation() {
-        let validator = ParameterValidator::new();
-        let param =
-            Parameter::new("url", "URL", ParameterType::String).with_pattern(CommonPatterns::URL);
-
-        // Valid URLs
-        let valid_urls = vec![
-            "https://example.com",
-            "http://test.org/path",
-            "https://api.example.com/v1/users",
-        ];
-
-        for url in valid_urls {
-            let value = serde_json::Value::String(url.to_string());
-            assert!(
-                validator.validate_parameter(&param, &value).is_ok(),
-                "URL should be valid: {url}"
-            );
-        }
-
-        // Invalid URLs
-        let invalid_urls = vec!["not-a-url", "ftp://example.com", "just-text"];
-
-        for url in invalid_urls {
-            let value = serde_json::Value::String(url.to_string());
-            assert!(
-                validator.validate_parameter(&param, &value).is_err(),
-                "URL should be invalid: {url}"
-            );
-        }
+        test_helpers::test_pattern_validation_helper(
+            CommonPatterns::URL,
+            vec![
+                "https://example.com",
+                "http://test.org/path",
+                "https://api.example.com/v1/users",
+            ],
+            vec!["not-a-url", "ftp://example.com", "just-text"],
+            "url",
+        );
     }
 
     #[test]
@@ -2326,8 +2386,7 @@ mod tests {
             .required(true);
         let parameters = vec![param];
 
-        let mut cli_args = HashMap::new();
-        cli_args.insert("normal_param".to_string(), "value".to_string());
+        let cli_args = test_helpers::create_cli_args(vec![("normal_param", "value")]);
 
         let result = resolver
             .resolve_parameters(&parameters, &cli_args, false)
@@ -2341,7 +2400,7 @@ mod tests {
 
     #[test]
     fn test_conditional_parameter_basic_scenario() {
-        let resolver = DefaultParameterResolver::new();
+        let resolver = test_helpers::create_test_resolver();
 
         // Base parameter that determines condition
         let deploy_env = Parameter::new(
@@ -2368,8 +2427,7 @@ mod tests {
         let parameters = vec![deploy_env, prod_confirmation];
 
         // Test 1: deploy_env = dev, should not require prod_confirmation
-        let mut cli_args = HashMap::new();
-        cli_args.insert("deploy_env".to_string(), "dev".to_string());
+        let cli_args = test_helpers::create_cli_args(vec![("deploy_env", "dev")]);
 
         let result = resolver
             .resolve_parameters(&parameters, &cli_args, false)
@@ -2379,8 +2437,7 @@ mod tests {
         assert!(!result.contains_key("prod_confirmation"));
 
         // Test 2: deploy_env = prod, should require prod_confirmation (but we don't provide it)
-        let mut cli_args = HashMap::new();
-        cli_args.insert("deploy_env".to_string(), "prod".to_string());
+        let cli_args = test_helpers::create_cli_args(vec![("deploy_env", "prod")]);
 
         let result = resolver.resolve_parameters(&parameters, &cli_args, false);
         assert!(result.is_err());
@@ -2397,9 +2454,10 @@ mod tests {
         }
 
         // Test 3: deploy_env = prod with prod_confirmation provided
-        let mut cli_args = HashMap::new();
-        cli_args.insert("deploy_env".to_string(), "prod".to_string());
-        cli_args.insert("prod_confirmation".to_string(), "true".to_string());
+        let cli_args = test_helpers::create_cli_args(vec![
+            ("deploy_env", "prod"),
+            ("prod_confirmation", "true"),
+        ]);
 
         let result = resolver
             .resolve_parameters(&parameters, &cli_args, false)
@@ -2417,7 +2475,7 @@ mod tests {
 
     #[test]
     fn test_conditional_parameter_with_defaults() {
-        let resolver = DefaultParameterResolver::new();
+        let resolver = test_helpers::create_test_resolver();
 
         let enable_ssl = Parameter::new("enable_ssl", "Enable SSL", ParameterType::Boolean)
             .with_default(serde_json::json!(false))
@@ -2431,7 +2489,7 @@ mod tests {
         let parameters = vec![enable_ssl, cert_path];
 
         // Test 1: No CLI args, should use defaults and not require cert_path
-        let cli_args = HashMap::new();
+        let cli_args = test_helpers::create_cli_args(vec![]);
         let result = resolver
             .resolve_parameters(&parameters, &cli_args, false)
             .unwrap();
@@ -2441,8 +2499,7 @@ mod tests {
         assert!(!result.contains_key("cert_path"));
 
         // Test 2: enable_ssl = true, should use cert_path default
-        let mut cli_args = HashMap::new();
-        cli_args.insert("enable_ssl".to_string(), "true".to_string());
+        let cli_args = test_helpers::create_cli_args(vec![("enable_ssl", "true")]);
 
         let result = resolver
             .resolve_parameters(&parameters, &cli_args, false)
@@ -2457,7 +2514,7 @@ mod tests {
 
     #[test]
     fn test_conditional_parameter_complex_logic() {
-        let resolver = DefaultParameterResolver::new();
+        let resolver = test_helpers::create_test_resolver();
 
         let env = Parameter::new("env", "Environment", ParameterType::String).required(true);
 
@@ -2473,8 +2530,7 @@ mod tests {
         let parameters = vec![env, urgent, approval_token];
 
         // Test 1: env = dev, urgent = false -> no approval_token needed
-        let mut cli_args = HashMap::new();
-        cli_args.insert("env".to_string(), "dev".to_string());
+        let cli_args = test_helpers::create_cli_args(vec![("env", "dev")]);
 
         let result = resolver
             .resolve_parameters(&parameters, &cli_args, false)
@@ -2483,16 +2539,13 @@ mod tests {
         assert!(!result.contains_key("approval_token"));
 
         // Test 2: env = dev, urgent = true -> approval_token needed
-        let mut cli_args = HashMap::new();
-        cli_args.insert("env".to_string(), "dev".to_string());
-        cli_args.insert("urgent".to_string(), "true".to_string());
+        let cli_args = test_helpers::create_cli_args(vec![("env", "dev"), ("urgent", "true")]);
 
         let result = resolver.resolve_parameters(&parameters, &cli_args, false);
         assert!(result.is_err()); // Should fail because approval_token is missing
 
         // Test 3: env = prod, urgent = false -> approval_token needed
-        let mut cli_args = HashMap::new();
-        cli_args.insert("env".to_string(), "prod".to_string());
+        let cli_args = test_helpers::create_cli_args(vec![("env", "prod")]);
 
         let result = resolver.resolve_parameters(&parameters, &cli_args, false);
         assert!(result.is_err()); // Should fail because approval_token is missing
@@ -2500,7 +2553,7 @@ mod tests {
 
     #[test]
     fn test_conditional_parameter_dependency_chain() {
-        let resolver = DefaultParameterResolver::new();
+        let resolver = test_helpers::create_test_resolver();
 
         // Chain: database_type -> requires_ssl -> cert_path
         let database_type = Parameter::new("database_type", "Database type", ParameterType::Choice)
@@ -2522,8 +2575,7 @@ mod tests {
         let parameters = vec![database_type, requires_ssl, cert_path];
 
         // Test 1: database_type = redis -> no SSL needed, no cert needed
-        let mut cli_args = HashMap::new();
-        cli_args.insert("database_type".to_string(), "redis".to_string());
+        let cli_args = test_helpers::create_cli_args(vec![("database_type", "redis")]);
 
         let result = resolver
             .resolve_parameters(&parameters, &cli_args, false)
@@ -2537,19 +2589,16 @@ mod tests {
         assert!(!result.contains_key("cert_path"));
 
         // Test 2: database_type = mysql -> SSL required by default -> cert needed
-        let mut cli_args = HashMap::new();
-        cli_args.insert("database_type".to_string(), "mysql".to_string());
+        let cli_args = test_helpers::create_cli_args(vec![("database_type", "mysql")]);
 
         let result = resolver.resolve_parameters(&parameters, &cli_args, false);
         assert!(result.is_err()); // Should fail because cert_path is missing
 
         // Test 3: database_type = mysql, cert_path provided -> should work
-        let mut cli_args = HashMap::new();
-        cli_args.insert("database_type".to_string(), "mysql".to_string());
-        cli_args.insert(
-            "cert_path".to_string(),
-            "/etc/mysql/ssl/cert.pem".to_string(),
-        );
+        let cli_args = test_helpers::create_cli_args(vec![
+            ("database_type", "mysql"),
+            ("cert_path", "/etc/mysql/ssl/cert.pem"),
+        ]);
 
         let result = resolver
             .resolve_parameters(&parameters, &cli_args, false)

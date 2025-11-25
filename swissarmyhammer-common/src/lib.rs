@@ -21,6 +21,7 @@
 
 pub mod abort_utils;
 pub mod constants;
+pub mod directory;
 pub mod env_loader;
 pub mod error;
 pub mod error_context;
@@ -53,10 +54,14 @@ pub use utils::{generate_monotonic_ulid, generate_monotonic_ulid_string};
 pub use file_loader::{FileEntry, FileSource, VirtualFileSystem};
 
 // Re-export commonly used directory functions for convenience
+#[allow(deprecated)]
 pub use utils::{
     find_git_repository_root_from, get_or_create_swissarmyhammer_directory,
     get_or_create_swissarmyhammer_directory_from,
 };
+
+// Re-export SwissarmyhammerDirectory for convenience
+pub use directory::{DirectoryRootType, SwissarmyhammerDirectory};
 
 // Re-export error types for convenience
 pub use error::{ErrorSeverity, Result, Severity, SwissArmyHammerError};

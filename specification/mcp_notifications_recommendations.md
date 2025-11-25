@@ -73,30 +73,14 @@ Based on MCP spec analysis:
 **Implementation Location**: `swissarmyhammer-tools/src/mcp/tools/shell/execute/mod.rs`
 **Priority**: HIGH - Shell commands are frequently long-running
 
-### 2. Search Indexing (`search_index`)
+### 2. Search Indexing (`search_index`) - REMOVED
 
-**Current Behavior**: Indexes files and returns summary at completion
-**Problem**: No feedback during indexing of large codebases (can take minutes)
+**Note**: This tool has been removed as the semantic search feature was deprecated.
 
-**Recommended Notifications**:
-- **Start notification**: Begin indexing
-- **File progress**: Notification per file or per N files
-  ```rust
-  {
-    "progressToken": "index_67890",
-    "progress": 45,  // (files_processed / total_files) * 100
-    "message": "Indexing: src/main.rs (234/520 files)",
-    "metadata": {
-      "current_file": "src/main.rs",
-      "files_processed": 234,
-      "total_files": 520,
-      "chunks_created": 1842
-    }
-  }
-  ```
-- **Completion notification**: Final statistics
+**Previous Behavior**: Indexed files and returned summary at completion
+**Previous Problem**: No feedback during indexing of large codebases (can take minutes)
 
-**Implementation Location**: `swissarmyhammer-tools/src/mcp/tools/search/index/mod.rs`
+This section is preserved for historical reference only.
 **Priority**: HIGH - Indexing large codebases is time-consuming
 
 ### 3. Web Search (`web_search`)
@@ -244,10 +228,7 @@ Based on MCP spec analysis:
    - Notification per output line (or buffered by time/size)
    - Notification on completion with exit code
 
-2. **search_index**: Add indexing progress
-   - Notification on start with file count estimate
-   - Notification every N files (or percentage)
-   - Notification on completion with statistics
+2. **search_index**: REMOVED (semantic search feature deprecated)
 
 ### Phase 3: Medium-Priority Tools (Week 3)
 
@@ -401,19 +382,21 @@ Notification 51 (completion):
 }
 ```
 
-### Search Indexing with Progress
+### Search Indexing with Progress - REMOVED
+
+Note: The search_index tool has been removed. This section is preserved for historical reference only.
 
 ```
-→ search_index(["**/*.rs"])
+→ search_index(["**/*.rs"]) - DEPRECATED
 
-Notification 1:
+Notification 1 (historical example):
 {
   "progressToken": "index_01K7...",
   "progress": 0,
   "message": "Starting indexing: found 520 files"
 }
 
-Notification 2-10 (periodic):
+Notification 2-10 (periodic, historical example):
 {
   "progressToken": "index_01K7...",
   "progress": 45,
@@ -425,7 +408,7 @@ Notification 2-10 (periodic):
   }
 }
 
-Notification 11 (completion):
+Notification 11 (completion, historical example):
 {
   "progressToken": "index_01K7...",
   "progress": 100,

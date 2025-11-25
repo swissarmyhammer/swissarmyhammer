@@ -37,19 +37,19 @@ EOF
 
 ### Step 3: Generate the Plan
 
-Run the planning workflow to analyze your specification and create implementation issues:
+Run the planning workflow to analyze your specification and create implementation rules and todos:
 
 ```bash
 sah plan specification/index.md
 ```
 
-This generates a set of issues in the `./issues` directory. Each issue represents a specific task.
+This generates rules and todos in the `.swissarmyhammer/` directory. Rules define acceptance criteria, and todos represent specific tasks.
 
 ### Step 4: Commit the Plan
 
 ```bash
-git add issues
-git commit -m "plan: add calculator implementation issues"
+git add .swissarmyhammer/rules .swissarmyhammer/todo.yaml
+git commit -m "plan: add calculator rules and todos"
 ```
 
 ### Step 5: Execute the Implementation
@@ -57,15 +57,15 @@ git commit -m "plan: add calculator implementation issues"
 Now let SwissArmyHammer implement your specification:
 
 ```bash
-sah flow run implement
+sah do
 ```
 
 This will:
-- Work through each issue automatically
+- Work through each todo automatically
 - Write the code
 - Run tests and fix any failures
 - Commit changes as it progresses
-- Continue until all issues are complete
+- Continue until all todos are complete
 
 The implementation typically takes a few hours, but it's faster than manual coding and produces high-quality, tested code.
 
@@ -91,11 +91,11 @@ sah doctor
 
 # Generate the plan
 sah plan specification/index.md
-git add issues
+git add .swissarmyhammer/rules .swissarmyhammer/todo.yaml
 git commit -am 'plan'
 
 # Let it build
-sah flow run implement
+sah do
 ```
 
 ## Manual Workflow Examples
@@ -284,21 +284,6 @@ sah memo list
 
 # Search memos
 sah memo search "database"
-```
-
-## Step 10: Set Up Semantic Search
-
-Index your codebase for AI-powered semantic search:
-
-```bash
-# Index Rust files
-sah search index "**/*.rs"
-
-# Search for specific concepts
-sah search query "error handling patterns"
-
-# Search for specific functionality
-sah search query "database connection management"
 ```
 
 ## Common Patterns

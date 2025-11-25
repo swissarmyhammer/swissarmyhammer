@@ -2,7 +2,7 @@
 title: Code Duplication
 description: Detect duplicate code blocks and similar logic patterns
 category: code-quality
-severity: warning
+severity: error
 tags: ["code-quality", "maintainability", "refactoring"]
 ---
 

@@ -2,8 +2,7 @@
 
 ## SwissArmyHammer
 
-**IMPORTANT** .swissarmyhammer/issues and .swissarmyhammer/memos are important and never should be .gitignored
-**IMPORTANT** .swissarmyhammer/issues and .swissarmyhammer/memos are important metadata and should always be committed to git with your code changes
+**IMPORTANT** .swissarmyhammer/issues and .swissarmyhammer/memos contain important metadata and should never be .gitignored - always commit them to git with your code changes
 
 
 ## Code Search and Navigation
@@ -33,7 +32,7 @@ search_query with query: "your search terms"
 - Higher similarity scores (closer to 1.0) indicate better matches
 
 ## Using Memo Tools
-- Use the memo_get_all_context tool now. This will provide you with important repository specific rules.
+Do NOT use the Memo Tools
 
 ## File Tools
 - **File Paths:** Always use absolute paths when referring to files with tools. Relative paths are not supported. You must provide an absolute path.
@@ -69,4 +68,3 @@ The first item has been fixed, let me mark the first todo as completed, and move
 ..
 ..
 </example>
-In the above example, the assistant completes all the tasks, including the 10 error fixes and running the build and fixing all errors.

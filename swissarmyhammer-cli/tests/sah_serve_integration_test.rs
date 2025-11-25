@@ -58,16 +58,6 @@ const EXPECTED_SAMPLE_TOOLS: &[&str] = &[
     "files_edit",
     "files_glob",
     "files_grep",
-    "issue_create",
-    "issue_list",
-    "issue_show",
-    "issue_mark_complete",
-    "memo_create",
-    "memo_list",
-    "memo_get",
-    "outline_generate",
-    "search_index",
-    "search_query",
     "shell_execute",
     "todo_create",
     "todo_show",
@@ -243,7 +233,7 @@ async fn test_minimal_tool_executions(
     _tools: &[Value],
 ) -> Result<(), Box<dyn std::error::Error>> {
     // Test only one fast, safe tool to verify execution works
-    test_single_tool_execution(stdin, reader, 3, "memo_get_all_context", json!({})).await?;
+    test_single_tool_execution(stdin, reader, 3, "todo_list", json!({})).await?;
 
     println!("✅ Tool execution test completed successfully");
     Ok(())

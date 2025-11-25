@@ -1,4 +1,14 @@
-# Remove issue_current and issue_next Tools
+# OBSOLETE: Remove issue_current and issue_next Tools
+
+**Status**: This specification is obsolete. The entire issue system has been removed.
+
+**Replacement**: Use the todos system via `mcp__sah__todo_show` with `item: "next"` for similar functionality.
+
+---
+
+# Original Specification
+
+_The content below describes tool consolidation that was planned but never implemented before the issue system was removed._
 
 ## Overview
 

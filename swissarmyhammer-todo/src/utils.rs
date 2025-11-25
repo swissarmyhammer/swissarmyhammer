@@ -1,16 +1,20 @@
 //! Utility functions for todo management
 
 use crate::error::{Result, TodoError};
-use std::fs;
 use std::path::PathBuf;
-use swissarmyhammer_common::get_or_create_swissarmyhammer_directory;
+use swissarmyhammer_common::SwissarmyhammerDirectory;
 
 /// Determine the correct todo directory path
 ///
 /// Returns `.swissarmyhammer/todo/` in the Git repository root.
 /// Requires being within a Git repository - no fallback to current directory.
+///
+/// # Note
+///
+/// For tests and programmatic usage, prefer using `TodoStorage::new_with_working_dir()`
+/// which accepts an explicit directory path instead of relying on git root detection.
 pub fn get_todo_directory() -> Result<PathBuf> {
-    let swissarmyhammer_dir = get_or_create_swissarmyhammer_directory()
+    let sah_dir = SwissarmyhammerDirectory::from_git_root()
         .map_err(|e| {
             TodoError::other(format!(
                 "Todo operations require a Git repository. Please run this command from within a Git repository: {}",
@@ -18,10 +22,8 @@ pub fn get_todo_directory() -> Result<PathBuf> {
             ))
         })?;
 
-    let todo_dir = swissarmyhammer_dir.join("todo");
-
-    // Ensure todo subdirectory exists
-    fs::create_dir_all(&todo_dir)
+    let todo_dir = sah_dir
+        .ensure_subdir("todo")
         .map_err(|e| TodoError::other(format!("Failed to create todo directory: {e}")))?;
 
     Ok(todo_dir)

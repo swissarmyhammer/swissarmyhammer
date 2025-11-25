@@ -1,4 +1,18 @@
-# Overview
+# OBSOLETE: Issue System
+
+**Status**: This specification is obsolete. The issue system has been removed.
+
+**Replacement**: Use the rules + todos system:
+- Issues → Todos (ephemeral tasks via `mcp__sah__todo_*` tools)
+- Issue tracking → Rules (permanent acceptance criteria via `mcp__sah__rules_*` tools)
+
+---
+
+# Original Specification
+
+_The content below describes the removed issue system for historical reference._
+
+## Overview
 
 Track issues directly in the repository, storing them in as files in git, with an MCP server.
 

@@ -38,17 +38,17 @@ This issue exists for error scenario testing.
     Ok((home_guard, temp_dir, work_dir))
 }
 
-/// Test invalid issue operations
+/// Test invalid todo operations
 #[tokio::test]
-async fn test_invalid_issue_operations() -> Result<()> {
+async fn test_invalid_todo_operations() -> Result<()> {
     let (_home_guard, _temp_dir, temp_path) = setup_error_test_environment()?;
 
-    // Test showing non-existent issue
+    // Test showing non-existent todo
     // Use explicit working directory instead of global directory change to avoid race conditions
     let result =
-        run_sah_command_in_process_with_dir(&["issue", "show", "nonexistent_issue"], &temp_path)
+        run_sah_command_in_process_with_dir(&["todo", "show", "nonexistent_id"], &temp_path)
             .await?;
-    assert_ne!(result.exit_code, 0, "Should fail for non-existent issue");
+    assert_ne!(result.exit_code, 0, "Should fail for non-existent todo");
     assert!(
         result.stderr.contains("Error")
             || result.stderr.contains("error")
@@ -57,62 +57,22 @@ async fn test_invalid_issue_operations() -> Result<()> {
         result.stderr
     );
 
-    // Test working on non-existent issue
-    let work_result =
-        run_sah_command_in_process_with_dir(&["issue", "work", "nonexistent_issue"], &temp_path)
-            .await?;
-    assert_ne!(
-        work_result.exit_code, 0,
-        "Should fail for non-existent issue work"
-    );
-    assert!(
-        work_result.stderr.contains("Error")
-            || work_result.stderr.contains("error")
-            || work_result.stderr.contains("not found"),
-        "Should show error for non-existent issue work: {}",
-        work_result.stderr
-    );
-
-    // Test completing non-existent issue
+    // Test marking non-existent todo complete
     let complete_result = run_sah_command_in_process_with_dir(
-        &["issue", "complete", "nonexistent_issue"],
+        &["todo", "mark-complete", "nonexistent_id"],
         &temp_path,
     )
     .await?;
     assert_ne!(
         complete_result.exit_code, 0,
-        "Should fail for non-existent issue complete"
+        "Should fail for non-existent todo complete"
     );
     assert!(
         complete_result.stderr.contains("Error")
             || complete_result.stderr.contains("error")
             || complete_result.stderr.contains("not found"),
-        "Should show error for non-existent issue completion: {}",
+        "Should show error for non-existent todo completion: {}",
         complete_result.stderr
-    );
-
-    // Test updating non-existent issue
-    let update_result = run_sah_command_in_process_with_dir(
-        &[
-            "issue",
-            "update",
-            "nonexistent_issue",
-            "--content",
-            "Updated content",
-        ],
-        &temp_path,
-    )
-    .await?;
-    assert_ne!(
-        update_result.exit_code, 0,
-        "Should fail for non-existent issue update"
-    );
-    assert!(
-        update_result.stderr.contains("Error")
-            || update_result.stderr.contains("error")
-            || update_result.stderr.contains("not found"),
-        "Should show error for non-existent issue update: {}",
-        update_result.stderr
     );
 
     Ok(())
@@ -133,39 +93,21 @@ async fn test_invalid_command_arguments() -> Result<()> {
         "Invalid command should return clap usage error code"
     );
 
-    // Test invalid subcommand
+    // Test invalid subcommand for todo
     let invalid_sub_result =
-        run_sah_command_in_process_with_dir(&["issue", "invalid_subcommand"], &temp_path).await?;
+        run_sah_command_in_process_with_dir(&["todo", "invalid_subcommand"], &temp_path).await?;
     assert_eq!(
         invalid_sub_result.exit_code, 2,
         "Invalid subcommand should return clap usage error code"
     );
 
-    // Test invalid flags
+    // Test invalid flags for todo list
     let invalid_flag_result =
-        run_sah_command_in_process_with_dir(&["issue", "list", "--invalid-flag"], &temp_path)
+        run_sah_command_in_process_with_dir(&["todo", "list", "--invalid-flag"], &temp_path)
             .await?;
     assert_eq!(
         invalid_flag_result.exit_code, 2,
         "Invalid flag should return clap usage error code"
-    );
-
-    // Test invalid format option - this should succeed since MCP doesn't validate format at CLI level
-    let invalid_format_result = run_sah_command_in_process_with_dir(
-        &["issue", "list", "--format", "invalid_format"],
-        &temp_path,
-    )
-    .await?;
-    assert_eq!(
-        invalid_format_result.exit_code, 2,
-        "Invalid format should return clap usage error code"
-    );
-    // Should show clap usage error for invalid enum value
-    assert!(
-        invalid_format_result.stderr.contains("invalid value")
-            || invalid_format_result.stderr.contains("possible values"),
-        "Should show enum validation error: {}",
-        invalid_format_result.stderr
     );
 
     Ok(())
@@ -189,20 +131,21 @@ async fn test_storage_backend_permissions() -> Result<()> {
         return Ok(());
     }
 
-    // Make the .swissarmyhammer directory read-only to prevent issues directory creation
+    // Make the .swissarmyhammer directory read-only to prevent todo directory creation
     if let Err(e) = std::fs::set_permissions(&swissarmyhammer_dir, Permissions::from_mode(0o555)) {
         println!("Failed to set permissions: {}", e);
         return Ok(());
     }
 
-    // Test operations that require issues directory
-    let result = run_sah_command_in_process_with_dir(&["issue", "list"], &temp_path)
-        .await
-        .unwrap_or_else(|e| CapturedOutput {
-            stdout: String::new(),
-            stderr: format!("Function error: {}", e),
-            exit_code: 1,
-        });
+    // Test operations that require write access to .swissarmyhammer
+    let result =
+        run_sah_command_in_process_with_dir(&["todo", "create", "--task", "test"], &temp_path)
+            .await
+            .unwrap_or_else(|e| CapturedOutput {
+                stdout: String::new(),
+                stderr: format!("Function error: {}", e),
+                exit_code: 1,
+            });
 
     // Restore permissions for cleanup before assertions (to avoid test cleanup issues)
     std::fs::set_permissions(&swissarmyhammer_dir, Permissions::from_mode(0o755))?;
@@ -210,7 +153,7 @@ async fn test_storage_backend_permissions() -> Result<()> {
     // Assert that the command failed with a permission error
     assert_ne!(
         result.exit_code, 0,
-        "Should fail when issues directory is not accessible. Exit code: {}, Stderr: {}",
+        "Should fail when .swissarmyhammer directory is not writable. Exit code: {}, Stderr: {}",
         result.exit_code, result.stderr
     );
     assert!(
@@ -224,37 +167,26 @@ async fn test_storage_backend_permissions() -> Result<()> {
     Ok(())
 }
 
-/// Test git-related errors
+/// Test git-related functionality - verify todo commands require git
 #[tokio::test]
-async fn test_git_related_errors() -> Result<()> {
+async fn test_commands_require_git() -> Result<()> {
     // Create a separate temporary directory without git for this test
     let temp_dir = tempfile::TempDir::new()?;
     let temp_path = temp_dir.path().to_path_buf();
 
-    // Create directory structure without git repository
-    let issues_dir = temp_path.join("issues");
-    std::fs::create_dir_all(&issues_dir)?;
-
-    std::fs::write(
-        issues_dir.join("GIT_001_test_issue.md"),
-        "# Test Issue\n\nFor git error testing.",
-    )?;
-
-    // Test operations that might require git without git repository
+    // Test that todo commands require git repository
     // Use explicit working directory instead of global directory change to avoid race conditions
-    let result =
-        run_sah_command_in_process_with_dir(&["issue", "work", "GIT_001_test_issue"], &temp_path)
-            .await?;
+    let result = run_sah_command_in_process_with_dir(&["todo", "list"], &temp_path).await?;
     assert_ne!(
         result.exit_code, 0,
-        "Should fail when git repository is not available"
+        "Todo commands should fail without git repository"
     );
     assert!(
-        result.stderr.contains("Error")
-            || result.stderr.contains("error")
-            || result.stderr.contains("git")
-            || result.stderr.contains("repository"),
-        "Should show git-related error: {}",
+        result
+            .stderr
+            .contains("Todo operations require a Git repository")
+            || result.stderr.contains("Git repository"),
+        "Should show git repository error: {}",
         result.stderr
     );
 
@@ -269,13 +201,7 @@ async fn test_resource_exhaustion() -> Result<()> {
     let large_content = "A".repeat(1_000_000); // 1MB of content
                                                // Use explicit working directory instead of global directory change to avoid race conditions
     let result = run_sah_command_in_process_with_dir(
-        &[
-            "issue",
-            "create",
-            "large_content_test",
-            "--content",
-            &large_content,
-        ],
+        &["todo", "create", "--task", &large_content],
         &temp_path,
     )
     .await?;
@@ -302,16 +228,16 @@ async fn test_exit_code_consistency() -> Result<()> {
 
     // Test that similar error conditions produce consistent exit codes
     let error_commands = vec![
-        vec!["issue", "show", "nonexistent1"],
-        vec!["issue", "show", "nonexistent2"],
-        vec!["issue", "show", "nonexistent3"],
+        vec!["todo", "show", "nonexistent1"],
+        vec!["todo", "show", "nonexistent2"],
+        vec!["todo", "show", "nonexistent3"],
     ];
 
     let mut exit_codes = vec![];
     for cmd in error_commands {
         // Use explicit working directory instead of global directory change to avoid race conditions
         let result = run_sah_command_in_process_with_dir(&cmd, &temp_path).await?;
-        assert_ne!(result.exit_code, 0, "Should fail for non-existent issue");
+        assert_ne!(result.exit_code, 0, "Should fail for non-existent todo");
         exit_codes.push(result.exit_code);
     }
 
@@ -335,11 +261,11 @@ async fn test_error_message_consistency() -> Result<()> {
     // Test that error messages are consistent and informative
     // Use explicit working directory instead of global directory change to avoid race conditions
     let result = run_sah_command_in_process_with_dir(
-        &["issue", "show", "definitely_nonexistent_issue"],
+        &["todo", "show", "definitely_nonexistent_todo"],
         &temp_path,
     )
     .await?;
-    assert_ne!(result.exit_code, 0, "Should fail for non-existent issue");
+    assert_ne!(result.exit_code, 0, "Should fail for non-existent todo");
 
     // Error messages should be:
     // 1. Informative (tell user what went wrong)
