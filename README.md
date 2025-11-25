@@ -54,13 +54,6 @@ SwissArmyHammer **IS** an MCP server with 25+ professional-grade tools:
 - **Specs** are simple markdown documents
 - **No databases, no cloud, no lock-in** - just files
 
-### ⚡ **Industrial Strength**
-Built for real software development, not toy examples:
-- **Rust-powered** performance and reliability
-- **Type-safe** tool integration
-- **Memory-efficient** for large codebases
-- **Battle-tested** on production systems
-
 ## 🏃‍♂️ Get Started in 5 Minutes
 
 **Build a weather CLI that fetches data from OpenWeatherMap - from idea to working code in minutes:**
