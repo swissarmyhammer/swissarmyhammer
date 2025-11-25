@@ -4,8 +4,8 @@
 
 use swissarmyhammer_tools::mcp::tool_registry::ToolRegistry;
 use swissarmyhammer_tools::mcp::tool_registry::{
-    register_abort_tools, register_file_tools, register_shell_tools,
-    register_todo_tools, register_web_fetch_tools, register_web_search_tools,
+    register_abort_tools, register_file_tools, register_shell_tools, register_todo_tools,
+    register_web_fetch_tools, register_web_search_tools,
 };
 
 /// Test that verifies all expected MCP tools are registered

@@ -131,7 +131,7 @@ impl CliContext {
     /// Display items using the configured output format
     pub fn display<T>(&self, items: Vec<T>) -> Result<()>
     where
-        T: serde::Serialize + tabled::Tabled,
+        T: serde::Serialize,
     {
         // Use explicit format option if provided, otherwise use default format
         let format = self.format_option.unwrap_or(self.format);
@@ -140,10 +140,78 @@ impl CliContext {
                 if items.is_empty() {
                     println!("No items to display");
                 } else {
-                    println!(
-                        "{}",
-                        tabled::Table::new(&items).with(tabled::settings::Style::modern())
-                    );
+                    // Convert items to JSON for dynamic table building
+                    let json_items = serde_json::to_value(&items)
+                        .map_err(map_error("Failed to convert to JSON"))?;
+
+                    if let Some(array) = json_items.as_array() {
+                        if let Some(first) = array.first() {
+                            if let Some(obj) = first.as_object() {
+                                use comfy_table::{presets::UTF8_FULL, Table};
+                                let mut table = Table::new();
+                                table.load_preset(UTF8_FULL);
+
+                                // Collect keys with preferred ordering for common patterns
+                                let mut keys: Vec<_> = obj.keys().collect();
+
+                                // Apply custom ordering for common patterns: name, description/title, source, etc.
+                                keys.sort_by_key(|k| {
+                                    match k.as_str() {
+                                        "name" => 0,
+                                        "description" => 1,
+                                        "title" => 1,
+                                        "source" => 2,
+                                        "status" => 3,
+                                        _ => 99, // Everything else comes after
+                                    }
+                                });
+
+                                // Add header row with capitalized names
+                                let headers: Vec<String> = keys
+                                    .iter()
+                                    .map(|k| {
+                                        // Capitalize first letter of header
+                                        let mut chars = k.chars();
+                                        match chars.next() {
+                                            None => String::new(),
+                                            Some(f) => {
+                                                f.to_uppercase().collect::<String>()
+                                                    + chars.as_str()
+                                            }
+                                        }
+                                    })
+                                    .collect();
+                                table.set_header(headers);
+
+                                // Add data rows using the same key order
+                                for item in array {
+                                    if let Some(obj) = item.as_object() {
+                                        let row: Vec<String> = keys
+                                            .iter()
+                                            .map(|k| {
+                                                obj.get(*k)
+                                                    .map(|v| match v {
+                                                        serde_json::Value::String(s) => s.clone(),
+                                                        serde_json::Value::Number(n) => {
+                                                            n.to_string()
+                                                        }
+                                                        serde_json::Value::Bool(b) => b.to_string(),
+                                                        serde_json::Value::Null => {
+                                                            "null".to_string()
+                                                        }
+                                                        _ => v.to_string(),
+                                                    })
+                                                    .unwrap_or_default()
+                                            })
+                                            .collect();
+                                        table.add_row(row);
+                                    }
+                                }
+
+                                println!("{table}");
+                            }
+                        }
+                    }
                 }
             }
             OutputFormat::Json => {
@@ -268,15 +336,11 @@ impl CliContextBuilder {
 #[cfg(test)]
 mod tests {
     use serde::Serialize;
-    use tabled::Tabled;
 
-    #[derive(Tabled, Serialize, Debug, Clone)]
+    #[derive(Serialize, Debug, Clone)]
     struct TestRow {
-        #[tabled(rename = "Status")]
         status: String,
-        #[tabled(rename = "Name")]
         name: String,
-        #[tabled(rename = "Message")]
         message: String,
     }
 
@@ -289,11 +353,18 @@ mod tests {
         }
     }
 
-    /// Helper function to render a table with modern style
+    /// Helper function to render a table with comfy-table
     fn render_table(test_rows: &[TestRow]) -> String {
-        tabled::Table::new(test_rows)
-            .with(tabled::settings::Style::modern())
-            .to_string()
+        use comfy_table::{presets::UTF8_FULL, Table};
+        let mut table = Table::new();
+        table.load_preset(UTF8_FULL);
+        table.set_header(vec!["Status", "Name", "Message"]);
+
+        for row in test_rows {
+            table.add_row(vec![&row.status, &row.name, &row.message]);
+        }
+
+        table.to_string()
     }
 
     /// Comprehensive table verification helper

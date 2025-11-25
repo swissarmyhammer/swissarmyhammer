@@ -4,46 +4,24 @@
 //! output formatting across table, JSON, and YAML formats.
 
 use serde::{Deserialize, Serialize};
-use tabled::Tabled;
-
 /// Basic server status information for serve command output
-#[derive(Tabled, Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct ServerStatus {
-    #[tabled(rename = "Type")]
     pub server_type: String,
-
-    #[tabled(rename = "Status")]
     pub status: String,
-
-    #[tabled(rename = "Address")]
     pub address: String,
-
-    #[tabled(rename = "Message")]
     pub message: String,
 }
 
 /// Detailed server status information for verbose serve command output
-#[derive(Tabled, Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct VerboseServerStatus {
-    #[tabled(rename = "Type")]
     pub server_type: String,
-
-    #[tabled(rename = "Status")]
     pub status: String,
-
-    #[tabled(rename = "Address")]
     pub address: String,
-
-    #[tabled(rename = "Port")]
     pub port: String,
-
-    #[tabled(rename = "Health URL")]
     pub health_url: String,
-
-    #[tabled(rename = "Prompts")]
     pub prompt_count: usize,
-
-    #[tabled(rename = "Message")]
     pub message: String,
 }
 

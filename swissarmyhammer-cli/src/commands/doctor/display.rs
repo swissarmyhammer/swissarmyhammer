@@ -1,41 +1,26 @@
 //! Display objects for doctor command output
 //!
-//! Provides clean display objects with `Tabled` and `Serialize` derives for consistent
+//! Provides clean display objects with `Serialize` derives for consistent
 //! output formatting across table, JSON, and YAML formats.
 
 use super::types::{Check, CheckStatus};
 use serde::{Deserialize, Serialize};
-use tabled::Tabled;
 
 /// Basic check information for standard doctor output
-#[derive(Tabled, Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct CheckResult {
-    #[tabled(rename = "Status")]
     pub status: String,
-
-    #[tabled(rename = "Check")]
     pub name: String,
-
-    #[tabled(rename = "Result")]
     pub message: String,
 }
 
 /// Detailed check information for verbose doctor output
-#[derive(Tabled, Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct VerboseCheckResult {
-    #[tabled(rename = "Status")]
     pub status: String,
-
-    #[tabled(rename = "Check")]
     pub name: String,
-
-    #[tabled(rename = "Result")]
     pub message: String,
-
-    #[tabled(rename = "Fix")]
     pub fix: String,
-
-    #[tabled(rename = "Category")]
     pub category: String,
 }
 
@@ -64,12 +49,13 @@ impl From<&Check> for VerboseCheckResult {
     }
 }
 
-/// Format check status as a symbol
+/// Format check status as a symbol (without color - color is applied in mod.rs)
 fn format_check_status(status: &CheckStatus) -> String {
     match status {
-        CheckStatus::Ok => "✅".to_string(),
-        CheckStatus::Warning => "⚠️".to_string(),
-        CheckStatus::Error => "❌".to_string(),
+        // Use simple symbols for consistent width
+        CheckStatus::Ok => "✓".to_string(),
+        CheckStatus::Warning => "⚠".to_string(),
+        CheckStatus::Error => "✗".to_string(),
     }
 }
 
@@ -133,7 +119,7 @@ mod tests {
     fn test_check_result_conversion() {
         let check = create_test_check();
         let result = CheckResult::from(&check);
-        assert_eq!(result.status, "✅");
+        assert_eq!(result.status, "✓");
         assert_eq!(result.name, "Test Check");
         assert_eq!(result.message, "Everything is working");
     }
@@ -142,7 +128,7 @@ mod tests {
     fn test_verbose_check_result_conversion() {
         let check = create_test_check();
         let result = VerboseCheckResult::from(&check);
-        assert_eq!(result.status, "✅");
+        assert_eq!(result.status, "✓");
         assert_eq!(result.name, "Test Check");
         assert_eq!(result.message, "Everything is working");
         assert_eq!(result.fix, "No fix needed");
@@ -151,9 +137,9 @@ mod tests {
 
     #[test]
     fn test_format_check_status() {
-        assert_eq!(format_check_status(&CheckStatus::Ok), "✅");
-        assert_eq!(format_check_status(&CheckStatus::Warning), "⚠️");
-        assert_eq!(format_check_status(&CheckStatus::Error), "❌");
+        assert_eq!(format_check_status(&CheckStatus::Ok), "✓");
+        assert_eq!(format_check_status(&CheckStatus::Warning), "⚠");
+        assert_eq!(format_check_status(&CheckStatus::Error), "✗");
     }
 
     #[test]

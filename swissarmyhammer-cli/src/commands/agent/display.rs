@@ -1,38 +1,25 @@
 //! Display objects for agent command output
 //!
-//! Provides clean display objects with `Tabled` and `Serialize` derives for consistent
+//! Provides clean display objects with `Serialize` derives for consistent
 //! output formatting across table, JSON, and YAML formats.
 
 use serde::{Deserialize, Serialize};
 use swissarmyhammer_config::agent::AgentInfo;
-use tabled::Tabled;
 
 /// Basic agent information for standard list output
-#[derive(Tabled, Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct AgentRow {
-    #[tabled(rename = "Name")]
     pub name: String,
-
-    #[tabled(rename = "Description")]
     pub description: String,
-
-    #[tabled(rename = "Source")]
     pub source: String,
 }
 
-/// Detailed agent information for verbose list output  
-#[derive(Tabled, Serialize, Deserialize, Debug, Clone)]
+/// Detailed agent information for verbose list output
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct VerboseAgentRow {
-    #[tabled(rename = "Name")]
     pub name: String,
-
-    #[tabled(rename = "Description")]
     pub description: String,
-
-    #[tabled(rename = "Source")]
     pub source: String,
-
-    #[tabled(rename = "Content Size")]
     pub content_size: String,
 }
 

@@ -294,13 +294,12 @@ impl RuleChecker {
                     );
                     return Ok(None);
                 }
-                return Err(RuleError::CheckError(
-                    format!(
-                        "Failed to read file {}: {}",
-                        target_path.display(),
-                        e
-                    )
-                ).into());
+                return Err(RuleError::CheckError(format!(
+                    "Failed to read file {}: {}",
+                    target_path.display(),
+                    e
+                ))
+                .into());
             }
         };
 

@@ -5,37 +5,21 @@
 
 use serde::{Deserialize, Serialize};
 use swissarmyhammer::validation::{ValidationIssue, ValidationLevel};
-use tabled::Tabled;
-
 /// Basic validation result for standard output
-#[derive(Tabled, Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct ValidationResult {
-    #[tabled(rename = "Status")]
     pub status: String,
-
-    #[tabled(rename = "File")]
     pub file: String,
-
-    #[tabled(rename = "Result")]
     pub result: String,
 }
 
 /// Detailed validation result for verbose output
-#[derive(Tabled, Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct VerboseValidationResult {
-    #[tabled(rename = "Status")]
     pub status: String,
-
-    #[tabled(rename = "File")]
     pub file: String,
-
-    #[tabled(rename = "Result")]
     pub result: String,
-
-    #[tabled(rename = "Fix")]
     pub fix: String,
-
-    #[tabled(rename = "Type")]
     pub file_type: String,
 }
 
@@ -64,12 +48,12 @@ impl From<&ValidationIssue> for VerboseValidationResult {
     }
 }
 
-/// Format validation status as a symbol
+/// Format validation status as a symbol (without color - color is applied when displaying)
 fn format_validation_status(level: &ValidationLevel) -> String {
     match level {
-        ValidationLevel::Info => "✅".to_string(),
-        ValidationLevel::Warning => "⚠️".to_string(),
-        ValidationLevel::Error => "❌".to_string(),
+        ValidationLevel::Info => "✓".to_string(),
+        ValidationLevel::Warning => "⚠".to_string(),
+        ValidationLevel::Error => "✗".to_string(),
     }
 }
 
@@ -130,7 +114,7 @@ mod tests {
         let issue = create_test_issue();
         let result = ValidationResult::from(&issue);
 
-        assert_eq!(result.status, "⚠️");
+        assert_eq!(result.status, "⚠");
         assert_eq!(result.file, "Test Prompt");
         assert_eq!(result.result, "Test warning message");
     }
@@ -140,7 +124,7 @@ mod tests {
         let issue = create_test_issue();
         let result = VerboseValidationResult::from(&issue);
 
-        assert_eq!(result.status, "⚠️");
+        assert_eq!(result.status, "⚠");
         assert_eq!(result.file, "Test Prompt");
         assert_eq!(result.result, "Test warning message");
         assert_eq!(result.fix, "Test fix suggestion");
@@ -149,9 +133,9 @@ mod tests {
 
     #[test]
     fn test_format_validation_status() {
-        assert_eq!(format_validation_status(&ValidationLevel::Info), "✅");
-        assert_eq!(format_validation_status(&ValidationLevel::Warning), "⚠️");
-        assert_eq!(format_validation_status(&ValidationLevel::Error), "❌");
+        assert_eq!(format_validation_status(&ValidationLevel::Info), "✓");
+        assert_eq!(format_validation_status(&ValidationLevel::Warning), "⚠");
+        assert_eq!(format_validation_status(&ValidationLevel::Error), "✗");
     }
 
     #[test]
@@ -229,19 +213,19 @@ mod tests {
     #[test]
     fn test_serialization() {
         let result = ValidationResult {
-            status: "✅".to_string(),
+            status: "✓".to_string(),
             file: "test.md".to_string(),
             result: "All good".to_string(),
         };
 
         let json = serde_json::to_string(&result).expect("Should serialize to JSON");
-        assert!(json.contains("✅"));
+        assert!(json.contains("✓"));
         assert!(json.contains("test.md"));
         assert!(json.contains("All good"));
 
         let deserialized: ValidationResult =
             serde_json::from_str(&json).expect("Should deserialize from JSON");
-        assert_eq!(deserialized.status, "✅");
+        assert_eq!(deserialized.status, "✓");
         assert_eq!(deserialized.file, "test.md");
         assert_eq!(deserialized.result, "All good");
     }

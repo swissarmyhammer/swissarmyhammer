@@ -4,37 +4,21 @@
 //! output formatting across table, JSON, and YAML formats.
 
 use serde::{Deserialize, Serialize};
-use tabled::Tabled;
-
 /// Basic prompt information for standard list output
-#[derive(Tabled, Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct PromptRow {
-    #[tabled(rename = "Name")]
     pub name: String,
-
-    #[tabled(rename = "Title")]
     pub title: String,
-
-    #[tabled(rename = "Source")]
     pub source: String,
 }
 
 /// Detailed prompt information for verbose list output  
-#[derive(Tabled, Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct VerbosePromptRow {
-    #[tabled(rename = "Name")]
     pub name: String,
-
-    #[tabled(rename = "Title")]
     pub title: String,
-
-    #[tabled(rename = "Description")]
     pub description: String,
-
-    #[tabled(rename = "Source")]
     pub source: String,
-
-    #[tabled(rename = "Category")]
     pub category: String,
 }
 

@@ -1,7 +1,5 @@
 use serde::Serialize;
 use swissarmyhammer::Workflow;
-use tabled::Tabled;
-
 /// Returns a default description when the provided description is empty
 fn get_description_or_default(description: &str) -> String {
     if description.is_empty() {
@@ -11,33 +9,19 @@ fn get_description_or_default(description: &str) -> String {
     }
 }
 
-#[derive(Tabled, Serialize)]
+#[derive(Serialize)]
 pub struct WorkflowInfo {
-    #[tabled(rename = "Workflow")]
     pub name: String,
-
-    #[tabled(rename = "Description")]
     pub description: String,
-
-    #[tabled(rename = "Source")]
     pub source: String,
 }
 
-#[derive(Tabled, Serialize)]
+#[derive(Serialize)]
 pub struct VerboseWorkflowInfo {
-    #[tabled(rename = "Workflow")]
     pub name: String,
-
-    #[tabled(rename = "Title")]
     pub title: String,
-
-    #[tabled(rename = "Description")]
     pub description: String,
-
-    #[tabled(rename = "Source")]
     pub source: String,
-
-    #[tabled(rename = "Actions")]
     pub action_count: String,
 }
 

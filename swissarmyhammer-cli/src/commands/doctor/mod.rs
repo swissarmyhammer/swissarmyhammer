@@ -188,7 +188,7 @@ impl Doctor {
         }
 
         // Check subdirectories
-        let subdirs = ["memos", "todo", "workflows", "prompts"];
+        let subdirs = ["todo", "workflows", "prompts"];
         for subdir in &subdirs {
             let subdir_path = swissarmyhammer_dir.join(subdir);
             if subdir_path.exists() {
@@ -222,46 +222,6 @@ impl Doctor {
                     fix: None,
                 });
             }
-        }
-
-        // Check important files
-        let semantic_db = swissarmyhammer_dir.join("semantic.db");
-        if semantic_db.exists() {
-            match std::fs::metadata(&semantic_db) {
-                Ok(metadata) => {
-                    let size = metadata.len();
-                    if size > 0 {
-                        self.checks.push(Check {
-                            name: "Semantic Database".to_string(),
-                            status: CheckStatus::Ok,
-                            message: format!("{} bytes", size),
-                            fix: None,
-                        });
-                    } else {
-                        self.checks.push(Check {
-                            name: "Semantic Database".to_string(),
-                            status: CheckStatus::Warning,
-                            message: "Empty file".to_string(),
-                            fix: Some("Run search index command to populate database".to_string()),
-                        });
-                    }
-                }
-                Err(_) => {
-                    self.checks.push(Check {
-                        name: "Semantic Database".to_string(),
-                        status: CheckStatus::Warning,
-                        message: "Cannot read metadata".to_string(),
-                        fix: Some("Check file permissions".to_string()),
-                    });
-                }
-            }
-        } else {
-            self.checks.push(Check {
-                name: "Semantic Database".to_string(),
-                status: CheckStatus::Warning,
-                message: "Will be created when needed".to_string(),
-                fix: None,
-            });
         }
 
         // Check for potential issues
@@ -337,22 +297,48 @@ async fn run_doctor_diagnostics(
     // Run all diagnostics without output
     let exit_code = doctor.run_diagnostics_without_output()?;
 
-    // Format and display results using CliContext
+    // Format and display results using comfy-table for better emoji handling
+    use comfy_table::{presets::UTF8_FULL, Cell, Color, Table};
+    let mut table = Table::new();
+    table.load_preset(UTF8_FULL);
+
     if cli_context.verbose {
-        let verbose_results: Vec<display::VerboseCheckResult> = doctor
-            .checks
-            .iter()
-            .map(display::VerboseCheckResult::from)
-            .collect();
-        cli_context.display(verbose_results)?;
+        table.set_header(vec!["Status", "Check", "Result", "Fix", "Category"]);
+        for check in &doctor.checks {
+            let result = display::VerboseCheckResult::from(check);
+            // Create colored cell for status using comfy-table's Cell API
+            let status_cell = match check.status {
+                CheckStatus::Ok => Cell::new("✓").fg(Color::Green),
+                CheckStatus::Warning => Cell::new("⚠").fg(Color::Yellow),
+                CheckStatus::Error => Cell::new("✗").fg(Color::Red),
+            };
+            table.add_row(vec![
+                status_cell,
+                Cell::new(&result.name),
+                Cell::new(&result.message),
+                Cell::new(&result.fix),
+                Cell::new(&result.category),
+            ]);
+        }
     } else {
-        let results: Vec<display::CheckResult> = doctor
-            .checks
-            .iter()
-            .map(display::CheckResult::from)
-            .collect();
-        cli_context.display(results)?;
+        table.set_header(vec!["Status", "Check", "Result"]);
+        for check in &doctor.checks {
+            let result = display::CheckResult::from(check);
+            // Create colored cell for status using comfy-table's Cell API
+            let status_cell = match check.status {
+                CheckStatus::Ok => Cell::new("✓").fg(Color::Green),
+                CheckStatus::Warning => Cell::new("⚠").fg(Color::Yellow),
+                CheckStatus::Error => Cell::new("✗").fg(Color::Red),
+            };
+            table.add_row(vec![
+                status_cell,
+                Cell::new(&result.name),
+                Cell::new(&result.message),
+            ]);
+        }
     }
+
+    println!("{table}");
 
     Ok(exit_code)
 }

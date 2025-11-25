@@ -512,18 +512,9 @@ mod tests {
         assert!(gitignore_path.exists(), ".gitignore should be created");
 
         let content = fs::read_to_string(&gitignore_path).unwrap();
-        assert!(
-            content.contains("tmp/"),
-            ".gitignore should contain tmp/"
-        );
-        assert!(
-            content.contains("todo/"),
-            ".gitignore should contain todo/"
-        );
-        assert!(
-            content.contains("*.log"),
-            ".gitignore should contain *.log"
-        );
+        assert!(content.contains("tmp/"), ".gitignore should contain tmp/");
+        assert!(content.contains("todo/"), ".gitignore should contain todo/");
+        assert!(content.contains("*.log"), ".gitignore should contain *.log");
         assert!(
             content.contains(".abort"),
             ".gitignore should contain .abort"

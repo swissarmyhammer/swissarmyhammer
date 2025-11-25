@@ -1520,8 +1520,6 @@ pub fn register_git_tools(registry: &mut ToolRegistry) {
     git::register_git_tools(registry);
 }
 
-
-
 /// Register all question-related tools with the registry
 pub fn register_questions_tools(registry: &mut ToolRegistry) {
     use super::tools::questions;

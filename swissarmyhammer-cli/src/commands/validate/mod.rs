@@ -38,22 +38,48 @@ async fn run_validate_with_context(
         validate::run_validate_command_structured(cli_context.quiet, workflow_dirs, validate_tools)
             .await?;
 
-    // Convert to display objects and output using CliContext
+    // Convert to display objects and output using comfy-table with colored status
+    use comfy_table::{presets::UTF8_FULL, Cell, Color, Table};
+    use swissarmyhammer::validation::ValidationLevel;
+
+    let mut table = Table::new();
+    table.load_preset(UTF8_FULL);
+
     if cli_context.verbose {
-        let verbose_results: Vec<display::VerboseValidationResult> = validation_result
-            .issues
-            .iter()
-            .map(display::VerboseValidationResult::from)
-            .collect();
-        cli_context.display(verbose_results)?;
+        table.set_header(vec!["Status", "File", "Result", "Fix", "File Type"]);
+        for issue in &validation_result.issues {
+            let result = display::VerboseValidationResult::from(issue);
+            let status_cell = match issue.level {
+                ValidationLevel::Info => Cell::new("✓").fg(Color::Green),
+                ValidationLevel::Warning => Cell::new("⚠").fg(Color::Yellow),
+                ValidationLevel::Error => Cell::new("✗").fg(Color::Red),
+            };
+            table.add_row(vec![
+                status_cell,
+                Cell::new(&result.file),
+                Cell::new(&result.result),
+                Cell::new(&result.fix),
+                Cell::new(&result.file_type),
+            ]);
+        }
     } else {
-        let results: Vec<display::ValidationResult> = validation_result
-            .issues
-            .iter()
-            .map(display::ValidationResult::from)
-            .collect();
-        cli_context.display(results)?;
+        table.set_header(vec!["Status", "File", "Result"]);
+        for issue in &validation_result.issues {
+            let result = display::ValidationResult::from(issue);
+            let status_cell = match issue.level {
+                ValidationLevel::Info => Cell::new("✓").fg(Color::Green),
+                ValidationLevel::Warning => Cell::new("⚠").fg(Color::Yellow),
+                ValidationLevel::Error => Cell::new("✗").fg(Color::Red),
+            };
+            table.add_row(vec![
+                status_cell,
+                Cell::new(&result.file),
+                Cell::new(&result.result),
+            ]);
+        }
     }
+
+    println!("{table}");
 
     Ok(exit_code)
 }
