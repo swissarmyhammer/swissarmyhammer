@@ -219,7 +219,6 @@ impl RuleChecker {
         // and will initialize the global agent on first execute_prompt call
         // No explicit initialization needed here
 
-        tracing::info!("RuleChecker ready (agent will initialize on first use via singleton)");
         Ok(())
     }
 
@@ -276,7 +275,9 @@ impl RuleChecker {
         rule: &Rule,
         target_path: &Path,
     ) -> Result<Option<RuleViolation>> {
-        tracing::debug!(
+        let check_start = std::time::Instant::now();
+
+        tracing::info!(
             "Checking file {} against rule {}",
             target_path.display(),
             rule.name
@@ -390,10 +391,9 @@ impl RuleChecker {
 
         tracing::debug!("Stage 2 complete: .check prompt rendered");
 
-        // Execute via agent (LLM) with optimization for rule checking
-        // Skip tool discovery since rule checking doesn't need MCP tools
+        // Execute via agent (LLM) with tools enabled
         let agent_config = swissarmyhammer_config::agent::AgentConfig::default();
-        let agent_context = AgentExecutionContext::for_rule_checking(&agent_config);
+        let agent_context = AgentExecutionContext::new(&agent_config);
 
         let response = self
             .agent
@@ -429,10 +429,12 @@ impl RuleChecker {
         tracing::debug!("Response parsing - ends_with_pass: {}", ends_with_pass);
 
         if normalized_text.starts_with("PASS") || ends_with_pass {
+            let duration = check_start.elapsed();
             tracing::info!(
-                "Check passed for {} against rule {}",
+                "Check passed for {} against rule {} in {:.2}s",
                 target_path.display(),
-                rule.name
+                rule.name,
+                duration.as_secs_f64()
             );
 
             // Cache the PASS result
@@ -441,6 +443,8 @@ impl RuleChecker {
 
             Ok(None)
         } else {
+            let duration = check_start.elapsed();
+
             // Violation found - create RuleViolation
             let violation = RuleViolation::new(
                 rule.name.clone(),
@@ -449,7 +453,16 @@ impl RuleChecker {
                 response.content,
             );
 
-            // Log the violation at appropriate level
+            // Log summary with timing at WARN level
+            tracing::warn!(
+                "Violation found in {} against rule {} ({:?}) in {:.2}s",
+                target_path.display(),
+                rule.name,
+                rule.severity,
+                duration.as_secs_f64()
+            );
+
+            // Log full violation details at appropriate severity level
             Self::log_violation(&violation);
 
             // Cache the VIOLATION result
@@ -496,7 +509,9 @@ impl RuleChecker {
     /// # use futures_util::stream::StreamExt;
     /// # use swissarmyhammer_agent_executor::{AgentExecutor, ClaudeCodeExecutor};
     /// # use std::sync::Arc;
-    /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+    /// # async fn example() -> Result<(), Box<dyn std
+    ///
+    /// ::error::Error>> {
     /// # let mut executor = ClaudeCodeExecutor::new();
     /// # executor.initialize().await?;
     /// # let agent: Arc<dyn AgentExecutor> = Arc::new(executor);
@@ -595,6 +610,8 @@ impl RuleChecker {
             tracing::info!("No files matched the patterns");
             // Return empty stream
             return Ok(stream::iter(vec![]).boxed());
+        } else {
+            tracing::info!("Expanded patterns to {} target files", target_files.len());
         }
 
         // Phase 5: Create flat work queue of (rule, file) pairs
@@ -733,7 +750,12 @@ mod tests {
 
     fn create_test_agent() -> Arc<dyn AgentExecutor> {
         let config = LlamaAgentConfig::for_testing();
-        Arc::new(LlamaAgentExecutorWrapper::new(config))
+        let mcp_server = agent_client_protocol::McpServer::Http {
+            name: "test".to_string(),
+            url: "http://localhost:8080/mcp".to_string(),
+            headers: Vec::new(),
+        };
+        Arc::new(LlamaAgentExecutorWrapper::new(config, mcp_server))
     }
 
     fn create_test_checker() -> RuleChecker {

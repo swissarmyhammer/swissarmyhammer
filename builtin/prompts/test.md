@@ -43,5 +43,5 @@ The goal is to have:
 
 Show overall test results as:
 
-✅ <number passed> / <total tests>, if all tests pass
+✓ <number passed> / <total tests>, if all tests pass
 🛑 <number passed> / <total tests>, if there are any failures

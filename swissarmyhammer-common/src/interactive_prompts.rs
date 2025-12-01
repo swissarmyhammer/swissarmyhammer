@@ -217,7 +217,7 @@ impl InteractivePrompts {
                 Ok(_) => return Ok(result),
                 Err(error) => {
                     if attempts >= self.max_attempts {
-                        println!("❌ Maximum attempts reached. Use --help for parameter details.");
+                        println!("✗ Maximum attempts reached. Use --help for parameter details.");
                         return Err(ParameterError::MaxAttemptsExceeded {
                             parameter: param.name.clone(),
                             attempts,
@@ -238,7 +238,7 @@ impl InteractivePrompts {
     fn display_enhanced_error(&self, error: &ParameterError) {
         match error {
             ParameterError::ValidationFailedWithContext { details, .. } => {
-                println!("❌ {}", details.message);
+                println!("✗ {}", details.message);
 
                 if let Some(explanation) = &details.explanation {
                     println!("   {explanation}");
@@ -257,7 +257,7 @@ impl InteractivePrompts {
                 parameter, details, ..
             } => {
                 println!(
-                    "❌ Parameter '{parameter}' format is invalid: '{}'",
+                    "✗ Parameter '{parameter}' format is invalid: '{}'",
                     details.value
                 );
                 println!("   {}", details.pattern_description);
@@ -273,7 +273,7 @@ impl InteractivePrompts {
                 parameter, details, ..
             } => {
                 println!(
-                    "❌ Parameter '{parameter}' has invalid value: '{}'",
+                    "✗ Parameter '{parameter}' has invalid value: '{}'",
                     details.value
                 );
 
@@ -288,7 +288,7 @@ impl InteractivePrompts {
 
             _ => {
                 // Fallback to basic error display
-                println!("❌ {error}");
+                println!("✗ {error}");
                 self.print_validation_hints_for_error(error);
             }
         }

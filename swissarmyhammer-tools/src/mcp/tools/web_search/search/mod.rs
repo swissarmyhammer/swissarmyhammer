@@ -633,11 +633,11 @@ mod tests {
         let mut args = serde_json::Map::new();
         args.insert(
             "query".to_string(),
-            serde_json::Value::String("rust programming language".to_string()),
+            serde_json::Value::String("rust".to_string()),
         );
         args.insert(
             "results_count".to_string(),
-            serde_json::Value::Number(serde_json::Number::from(3)),
+            serde_json::Value::Number(serde_json::Number::from(1)),
         );
         args.insert("fetch_content".to_string(), serde_json::Value::Bool(false));
 

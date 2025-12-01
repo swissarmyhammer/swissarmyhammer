@@ -6,9 +6,13 @@
 use rmcp::model::CallToolResult;
 use rmcp::ErrorData as McpError;
 use serde_json::{Map, Value};
+use std::collections::HashMap;
 use std::sync::Arc;
 
+use swissarmyhammer_config::agent::{parse_agent_config, AgentConfig, AgentManager};
+use swissarmyhammer_config::AgentUseCase;
 use swissarmyhammer_git::GitOperations;
+use swissarmyhammer_tools::mcp::unified_server::{start_mcp_server, McpServerMode};
 use swissarmyhammer_tools::{
     register_file_tools, register_rules_tools, register_shell_tools, register_todo_tools,
     register_web_fetch_tools, register_web_search_tools,
@@ -20,26 +24,87 @@ use tokio::sync::{Mutex, RwLock};
 pub struct CliToolContext {
     tool_registry: Arc<RwLock<ToolRegistry>>,
     tool_context: ToolContext,
+    /// MCP server handle (must be kept alive for LlamaAgent to work)
+    #[allow(dead_code)]
+    mcp_server_handle: Option<swissarmyhammer_tools::mcp::unified_server::McpServerHandle>,
 }
 
 impl CliToolContext {
     /// Create a new CLI tool context with all necessary storage backends
     pub async fn new() -> Result<Self, Box<dyn std::error::Error>> {
         let current_dir = std::env::current_dir()?;
-        Self::new_with_dir(&current_dir).await
+        Self::new_with_config(&current_dir, None).await
     }
 
     /// Create a new CLI tool context with a specific working directory
+    #[allow(dead_code)] // Used in tests
     pub async fn new_with_dir(
         working_dir: &std::path::Path,
     ) -> Result<Self, Box<dyn std::error::Error>> {
+        Self::new_with_config(working_dir, None).await
+    }
+
+    /// Create a new CLI tool context with optional agent override
+    ///
+    /// # Arguments
+    ///
+    /// * `working_dir` - The working directory for tool operations
+    /// * `agent_override` - Optional agent name to use for ALL use cases (runtime override)
+    ///
+    /// # Returns
+    ///
+    /// Result containing the initialized CliToolContext or an error
+    pub async fn new_with_config(
+        working_dir: &std::path::Path,
+        agent_override: Option<&str>,
+    ) -> Result<Self, Box<dyn std::error::Error>> {
+        // Start MCP HTTP server on random port
+        // Required for all agent executors to have deterministic tool access
+        tracing::info!("Starting MCP HTTP server for CLI tool context");
+
+        // Set SAH_CLI_MODE to prevent MCP server from configuring logging
+        std::env::set_var("SAH_CLI_MODE", "1");
+
+        let mcp_server_handle = start_mcp_server(
+            McpServerMode::Http { port: None },
+            None,
+            agent_override.map(|s| s.to_string()),
+        )
+        .await?;
+
+        let mcp_port = mcp_server_handle.info().port;
+        tracing::info!("MCP HTTP server ready on port {:?}", mcp_port);
+
         let git_ops = Self::create_git_operations(working_dir);
         let tool_handlers = Self::create_tool_handlers();
-        let agent_config =
-            std::sync::Arc::new(swissarmyhammer_config::agent::AgentConfig::default());
+        let agent_config = Arc::new(AgentConfig::default());
 
-        let tool_context = ToolContext::new(tool_handlers, git_ops, agent_config)
+        let mut tool_context = ToolContext::new(tool_handlers, git_ops, agent_config)
             .with_working_dir(working_dir.to_path_buf());
+
+        // Store MCP server port in context
+        *tool_context.mcp_server_port.write().await = mcp_port;
+
+        // Apply agent override if provided
+        if let Some(agent_name) = agent_override {
+            tracing::info!(
+                "Applying global agent override '{}' for all use cases",
+                agent_name
+            );
+
+            // Look up the agent by name
+            let agent_info = AgentManager::find_agent_by_name(agent_name)?;
+            let override_config = parse_agent_config(&agent_info.content)?;
+            let override_config_arc = Arc::new(override_config);
+
+            // Apply to all use cases
+            let mut use_case_agents = HashMap::new();
+            use_case_agents.insert(AgentUseCase::Root, override_config_arc.clone());
+            use_case_agents.insert(AgentUseCase::Rules, override_config_arc.clone());
+            use_case_agents.insert(AgentUseCase::Workflows, override_config_arc.clone());
+
+            tool_context.use_case_agents = Arc::new(use_case_agents);
+        }
 
         let tool_registry = Self::create_tool_registry();
         let tool_registry_arc = Arc::new(RwLock::new(tool_registry));
@@ -50,6 +115,7 @@ impl CliToolContext {
         Ok(Self {
             tool_registry: tool_registry_arc,
             tool_context,
+            mcp_server_handle: Some(mcp_server_handle),
         })
     }
 
@@ -167,6 +233,7 @@ mod tests {
         let _context = CliToolContext {
             tool_registry: Arc::new(RwLock::new(ToolRegistry::new())),
             tool_context: create_mock_tool_context().await,
+            mcp_server_handle: None,
         };
 
         let mut args = Map::new();

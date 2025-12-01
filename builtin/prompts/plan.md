@@ -64,6 +64,7 @@ For each implementation step:
   - **Multi-paragraph explanations** of the approach
   - **References** to the spec file and relevant rules
   - **Implementation notes** and considerations
+- Each tasks needs a reference to the spec file: "Refer to {{ plan_filename }}"
 - Break work into small, focused tasks that build incrementally
 - Each todo should be completable in a single focused session
 - Todos are ephemeral (auto-deleted after completion)
@@ -83,14 +84,10 @@ For each implementation step:
 
 4. **Create rules**:
    - Identify new rules implied by the specification
-   - For each criterion, use `rule_create` tool to create a permanent, executable rule
-   - Use a consistent naming scheme like "spec-name/requirement-name"
+   - For each criterion, use `rule_create` tool following the rules above
 
 5. **Create todos for implementation steps**:
    - Break the plan down into small, iterative chunks that build on each other incrementally
    - Review and make sure the steps are small enough to be implemented safely (< 250 lines each), but big enough to move the project forward
-   - For each step, use `todo_create` tool with:
-     - `task`: Brief description
-     - `context`: Rich markdown with diagrams, examples, references to {{ plan_filename }}
    - Ensure todos build incrementally on each other
-   - Include the phrase "Refer to {{ plan_filename }}" in each todo's context
+   - For each step, use `todo_create` tool following the rules above

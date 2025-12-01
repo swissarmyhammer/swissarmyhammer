@@ -4,6 +4,7 @@
 
 pub mod display;
 pub mod list;
+pub mod show;
 pub mod use_command;
 
 use crate::cli::AgentSubcommand;
@@ -14,11 +15,12 @@ use crate::exit_codes::{EXIT_ERROR, EXIT_SUCCESS};
 pub const DESCRIPTION: &str = include_str!("description.md");
 
 /// Handle the agent command - PURE ROUTING ONLY
-pub async fn handle_command(subcommand: AgentSubcommand, context: &CliContext) -> i32 {
+pub async fn handle_command(subcommand: Option<AgentSubcommand>, context: &CliContext) -> i32 {
     let result = match subcommand {
-        AgentSubcommand::List { format } => list::execute_list_command(format, context).await,
-        AgentSubcommand::Use { agent_name } => {
-            use_command::execute_use_command(agent_name, context).await
+        Some(AgentSubcommand::List { format }) => list::execute_list_command(format, context).await,
+        Some(AgentSubcommand::Show { .. }) | None => show::execute_show_command(context).await,
+        Some(AgentSubcommand::Use { first, second }) => {
+            use_command::execute_use_command(first, second, context).await
         }
     };
 
@@ -27,7 +29,7 @@ pub async fn handle_command(subcommand: AgentSubcommand, context: &CliContext) -
         Err(e) => {
             // Don't double-print errors that are already formatted by subcommands
             let error_msg = e.to_string();
-            if !error_msg.starts_with("❌") && !error_msg.contains("Failed to") {
+            if !error_msg.starts_with("✗") && !error_msg.contains("Failed to") {
                 tracing::error!("Agent operation failed: {}", e);
                 tracing::error!(
                     "Run 'sah agent list' to see available agents or 'sah agent --help' for usage."

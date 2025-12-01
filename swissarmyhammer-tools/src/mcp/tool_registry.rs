@@ -221,6 +221,7 @@
 use super::notifications::NotificationSender;
 use super::progress_notifications::ProgressSender;
 use super::tool_handlers::ToolHandlers;
+use owo_colors::OwoColorize;
 use rmcp::model::{Annotated, CallToolResult, RawContent, RawTextContent, Tool};
 use rmcp::{ErrorData as McpError, Peer, RoleServer};
 use std::collections::HashMap;
@@ -229,6 +230,7 @@ use std::sync::Arc;
 
 use swissarmyhammer_common::{ErrorSeverity, Severity};
 use swissarmyhammer_config::agent::AgentConfig;
+use swissarmyhammer_config::AgentUseCase;
 use swissarmyhammer_git::GitOperations;
 use tokio::sync::{Mutex, RwLock};
 
@@ -264,12 +266,19 @@ pub struct ToolContext {
     /// available or not initialized. Always check for `None` before use.
     pub git_ops: Arc<Mutex<Option<GitOperations>>>,
 
-    /// Agent configuration for tool operations that require agent execution
+    /// Agent configuration for tool operations (root/default agent)
     ///
     /// Provides access to the configured agent executor (ClaudeCode or LlamaAgent)
     /// and associated settings. Tools that need to execute agent operations should
     /// use this configuration to create appropriate executor instances.
     pub agent_config: Arc<AgentConfig>,
+
+    /// Agent configurations mapped by use case (Arc-wrapped for memory efficiency)
+    ///
+    /// Falls back to agent_config if use case not present. This allows different
+    /// operations to use different agents (e.g., a specialized agent for rule checking).
+    /// Agents are Arc-wrapped to avoid cloning the entire configuration.
+    pub use_case_agents: Arc<HashMap<AgentUseCase, Arc<AgentConfig>>>,
 
     /// Optional notification sender for long-running operations (workflow state transitions)
     ///
@@ -364,6 +373,7 @@ impl ToolContext {
             tool_handlers,
             git_ops,
             agent_config,
+            use_case_agents: Arc::new(HashMap::new()),
             notification_sender: None,
             progress_sender: None,
             mcp_server_port: Arc::new(RwLock::new(None)),
@@ -371,6 +381,26 @@ impl ToolContext {
             tool_registry: None,
             working_dir: None,
         }
+    }
+
+    /// Get agent configuration for a specific use case
+    ///
+    /// Resolution chain:
+    /// 1. Use case-specific agent (if configured in use_case_agents)
+    /// 2. Root agent (agent_config)
+    ///
+    /// # Arguments
+    ///
+    /// * `use_case` - The agent use case to resolve
+    ///
+    /// # Returns
+    ///
+    /// An Arc to the appropriate AgentConfig
+    pub fn get_agent_for_use_case(&self, use_case: AgentUseCase) -> Arc<AgentConfig> {
+        self.use_case_agents
+            .get(&use_case)
+            .cloned()
+            .unwrap_or_else(|| self.agent_config.clone())
     }
 
     /// Create a new tool context with workflow notification support
@@ -1366,11 +1396,15 @@ impl ToolValidationReport {
     /// Generate a summary string of the validation results
     pub fn summary(&self) -> String {
         if self.is_valid() {
-            format!("✅ All {} tools are valid", self.total_tools)
+            format!("{} All {} tools are valid", "✓".green(), self.total_tools)
         } else {
             format!(
-                "❌ {} of {} tools have validation errors ({} valid, {} invalid)",
-                self.invalid_tools, self.total_tools, self.valid_tools, self.invalid_tools
+                "{} {} of {} tools have validation errors ({} valid, {} invalid)",
+                "✗".red(),
+                self.invalid_tools,
+                self.total_tools,
+                self.valid_tools,
+                self.invalid_tools
             )
         }
     }
@@ -2113,7 +2147,7 @@ mod tests {
         assert!(!report.errors.is_empty());
 
         let summary = report.summary();
-        assert!(summary.contains("❌"));
+        assert!(summary.contains("✗"));
         assert!(summary.contains("2 of 3 tools"));
     }
 
@@ -2257,5 +2291,59 @@ mod tests {
             ErrorSeverity::Error,
             "Missing schema field should be Error"
         );
+    }
+
+    #[test]
+    fn test_get_agent_for_use_case_fallback() {
+        use swissarmyhammer_config::AgentUseCase;
+        use swissarmyhammer_git::GitOperations;
+        use tokio::sync::Mutex;
+
+        // Create context with only root agent
+        let git_ops: Arc<Mutex<Option<GitOperations>>> = Arc::new(Mutex::new(None));
+        let tool_handlers = Arc::new(ToolHandlers::new());
+        let agent_config = Arc::new(AgentConfig::default());
+        let context = ToolContext::new(tool_handlers, git_ops, agent_config.clone());
+
+        // Test that all use cases fall back to root agent when not configured
+        let rules_agent = context.get_agent_for_use_case(AgentUseCase::Rules);
+        let workflows_agent = context.get_agent_for_use_case(AgentUseCase::Workflows);
+        let root_agent = context.get_agent_for_use_case(AgentUseCase::Root);
+
+        // All should return the same agent config (root)
+        assert!(Arc::ptr_eq(&rules_agent, &agent_config));
+        assert!(Arc::ptr_eq(&workflows_agent, &agent_config));
+        assert!(Arc::ptr_eq(&root_agent, &agent_config));
+    }
+
+    #[test]
+    fn test_get_agent_for_use_case_specific() {
+        use swissarmyhammer_config::AgentUseCase;
+        use swissarmyhammer_git::GitOperations;
+        use tokio::sync::Mutex;
+
+        // Create context with use case specific agents
+        let git_ops: Arc<Mutex<Option<GitOperations>>> = Arc::new(Mutex::new(None));
+        let tool_handlers = Arc::new(ToolHandlers::new());
+        let root_agent = Arc::new(AgentConfig::default());
+
+        let mut use_case_agents = HashMap::new();
+        let rules_agent = Arc::new(AgentConfig::default());
+        use_case_agents.insert(AgentUseCase::Rules, rules_agent.clone());
+
+        let mut context = ToolContext::new(tool_handlers, git_ops, root_agent.clone());
+        context.use_case_agents = Arc::new(use_case_agents);
+
+        // Test that Rules use case gets its specific agent (Arc-wrapped, so we can check pointer equality)
+        let resolved_rules_agent = context.get_agent_for_use_case(AgentUseCase::Rules);
+        assert!(Arc::ptr_eq(&resolved_rules_agent, &rules_agent));
+
+        // Test that Workflows falls back to root agent
+        let resolved_workflows_agent = context.get_agent_for_use_case(AgentUseCase::Workflows);
+        assert!(Arc::ptr_eq(&resolved_workflows_agent, &root_agent));
+
+        // Test that Root falls back to root agent
+        let resolved_root_agent = context.get_agent_for_use_case(AgentUseCase::Root);
+        assert!(Arc::ptr_eq(&resolved_root_agent, &root_agent));
     }
 }

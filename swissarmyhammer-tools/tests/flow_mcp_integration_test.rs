@@ -30,7 +30,7 @@ struct TestEnvironment {
 impl TestEnvironment {
     /// Create a new test environment with server and client
     async fn new() -> Self {
-        let server = start_mcp_server(McpServerMode::Http { port: None }, None)
+        let server = start_mcp_server(McpServerMode::Http { port: None }, None, None)
             .await
             .expect("Failed to start MCP server");
         let client = create_test_client(server.url()).await;

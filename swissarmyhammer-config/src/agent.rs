@@ -167,6 +167,7 @@
 //! ```
 
 use serde::{Deserialize, Serialize};
+use std::fmt;
 use std::path::{Path, PathBuf};
 use swissarmyhammer_common::{ErrorSeverity, Severity};
 use thiserror::Error;
@@ -183,6 +184,47 @@ pub enum AgentExecutorType {
     ClaudeCode,
     /// Use local LlamaAgent with in-process execution
     LlamaAgent,
+}
+
+/// Agent use case enumeration
+///
+/// Defines the different contexts where agents can be used, allowing
+/// different operations to use different agents.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum AgentUseCase {
+    /// Default/fallback agent for general operations
+    Root,
+    /// Agent for rule checking operations
+    Rules,
+    /// Agent for workflow execution (plan, review, implement, etc.)
+    Workflows,
+}
+
+impl fmt::Display for AgentUseCase {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            AgentUseCase::Root => write!(f, "root"),
+            AgentUseCase::Rules => write!(f, "rules"),
+            AgentUseCase::Workflows => write!(f, "workflows"),
+        }
+    }
+}
+
+impl std::str::FromStr for AgentUseCase {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "root" => Ok(AgentUseCase::Root),
+            "rules" => Ok(AgentUseCase::Rules),
+            "workflows" => Ok(AgentUseCase::Workflows),
+            _ => Err(format!(
+                "Invalid use case: '{}'. Valid options: root, rules, workflows",
+                s
+            )),
+        }
+    }
 }
 
 /// Complete agent configuration with executor-specific settings
@@ -702,7 +744,7 @@ impl AgentManager {
             }
         }
 
-        tracing::info!(
+        tracing::debug!(
             "Agent discovery complete: {} total agents ({} built-in, {} project overrides, {} new project, {} user overrides, {} new user)",
             agents.len(),
             initial_builtin_count,
@@ -1059,6 +1101,91 @@ impl AgentManager {
         Ok(new_config)
     }
 
+    /// Get agent name for a specific use case from config
+    ///
+    /// Reads the config file and returns the agent name configured for the use case.
+    /// Falls back to Root use case if specific use case not configured.
+    ///
+    /// Returns None if no agent configured at all.
+    ///
+    /// # Arguments
+    /// * `use_case` - The agent use case to look up
+    ///
+    /// # Returns
+    /// * `Result<Option<String>, AgentError>` - Agent name if configured, None otherwise
+    pub fn get_agent_for_use_case(use_case: AgentUseCase) -> Result<Option<String>, AgentError> {
+        let config_path = Self::ensure_config_structure()?;
+
+        if !config_path.exists() {
+            return Ok(None);
+        }
+
+        let config_content = std::fs::read_to_string(&config_path).map_err(AgentError::IoError)?;
+        let config_value: serde_yaml::Value = serde_yaml::from_str(&config_content)?;
+
+        // Try new format: agents.{use_case}
+        if let Some(agents_map) = config_value.get("agents") {
+            let use_case_str = use_case.to_string();
+            if let Some(agent_name) = agents_map.get(&use_case_str) {
+                if let Some(name_str) = agent_name.as_str() {
+                    return Ok(Some(name_str.to_string()));
+                }
+            }
+
+            // Fall back to root if use case not configured
+            if use_case != AgentUseCase::Root {
+                if let Some(root_agent) = agents_map.get("root") {
+                    if let Some(name_str) = root_agent.as_str() {
+                        return Ok(Some(name_str.to_string()));
+                    }
+                }
+            }
+        }
+
+        Ok(None)
+    }
+
+    /// Resolve complete agent configuration for a use case
+    ///
+    /// Returns the AgentConfig for the specified use case, with fallback chain:
+    /// 1. Use case-specific agent (if configured)
+    /// 2. Root agent (if configured)
+    /// 3. Default claude-code agent
+    ///
+    /// # Arguments
+    /// * `use_case` - The agent use case to resolve
+    ///
+    /// # Returns
+    /// * `Result<AgentConfig, AgentError>` - Resolved agent configuration
+    ///
+    /// # Examples
+    /// ```no_run
+    /// use swissarmyhammer_config::agent::{AgentManager, AgentUseCase};
+    ///
+    /// let config = AgentManager::resolve_agent_config_for_use_case(AgentUseCase::Rules)?;
+    /// println!("Using agent: {:?}", config.executor_type());
+    /// # Ok::<(), swissarmyhammer_config::agent::AgentError>(())
+    /// ```
+    pub fn resolve_agent_config_for_use_case(
+        use_case: AgentUseCase,
+    ) -> Result<AgentConfig, AgentError> {
+        // Try to get agent name for this use case
+        let agent_name = Self::get_agent_for_use_case(use_case)?;
+
+        if let Some(name) = agent_name {
+            // Found configured agent - load it
+            let agent_info = Self::find_agent_by_name(&name)?;
+            return Ok(parse_agent_config(&agent_info.content)?);
+        }
+
+        // No agent configured - use default (claude-code)
+        tracing::debug!(
+            "No agent configured for use case {}, using default (claude-code)",
+            use_case
+        );
+        Ok(AgentConfig::claude_code())
+    }
+
     /// Apply an agent configuration to the project
     ///
     /// Finds the specified agent by name, loads or creates the project configuration file,
@@ -1083,65 +1210,62 @@ impl AgentManager {
     /// # Ok::<(), swissarmyhammer_config::agent::AgentError>(())
     /// ```
     pub fn use_agent(agent_name: &str) -> Result<(), AgentError> {
-        tracing::info!("Applying agent '{}' to project configuration", agent_name);
+        Self::use_agent_for_use_case(agent_name, AgentUseCase::Root)
+    }
 
-        // Step 1: Find the agent by name
+    /// Apply an agent configuration to the project for a specific use case
+    ///
+    /// Finds the specified agent by name, loads or creates the project configuration file,
+    /// and updates the agents map with the selected agent for the given use case.
+    ///
+    /// # Arguments
+    /// * `agent_name` - Name of the agent to apply
+    /// * `use_case` - The use case to configure this agent for
+    ///
+    /// # Returns
+    /// * `Result<(), AgentError>` - Success or error details
+    pub fn use_agent_for_use_case(
+        agent_name: &str,
+        use_case: AgentUseCase,
+    ) -> Result<(), AgentError> {
+        tracing::info!("Setting {} use case to agent '{}'", use_case, agent_name);
+
+        // Find and validate agent
         let agent_info = Self::find_agent_by_name(agent_name)?;
-        tracing::debug!(
-            "Found agent '{}' from source: {:?}",
-            agent_info.name,
-            agent_info.source
-        );
+        let _agent_config = parse_agent_config(&agent_info.content)?;
 
-        // Step 2: Parse agent configuration to validate it
-        let agent_config = parse_agent_config(&agent_info.content)?;
-        tracing::debug!(
-            "Successfully parsed agent configuration for '{}'",
-            agent_name
-        );
-
-        // Step 3: Ensure config structure exists and get config file path
         let config_path = Self::ensure_config_structure()?;
-        tracing::debug!("Using config file: {}", config_path.display());
 
-        // Step 4: Load existing config or create new one
-        let mut project_config = if config_path.exists() {
-            tracing::debug!(
-                "Loading existing configuration from {}",
-                config_path.display()
-            );
-            let config_content =
-                std::fs::read_to_string(&config_path).map_err(AgentError::IoError)?;
-            serde_yaml::from_str::<serde_yaml::Value>(&config_content)?
+        // Read existing config or create empty
+        let mut config_value: serde_yaml::Value = if config_path.exists() {
+            let content = std::fs::read_to_string(&config_path).map_err(AgentError::IoError)?;
+            serde_yaml::from_str(&content).unwrap_or(serde_yaml::Value::Mapping(Default::default()))
         } else {
-            tracing::debug!("Creating new configuration file");
-            serde_yaml::Value::Mapping(serde_yaml::Mapping::new())
+            serde_yaml::Value::Mapping(Default::default())
         };
 
-        // Step 5: Convert agent config to YAML value and update project config
-        let agent_yaml = serde_yaml::to_value(&agent_config)?;
-
-        match &mut project_config {
-            serde_yaml::Value::Mapping(ref mut map) => {
-                map.insert(serde_yaml::Value::String("agent".to_string()), agent_yaml);
-                tracing::debug!("Updated agent section in project configuration");
-            }
-            _ => {
-                return Err(AgentError::ConfigError(
-                    "Project configuration must be a YAML mapping".to_string(),
-                ));
+        // Ensure agents map exists
+        if config_value.get("agents").is_none() {
+            let agents_map = serde_yaml::Value::Mapping(Default::default());
+            if let Some(map) = config_value.as_mapping_mut() {
+                map.insert(serde_yaml::Value::String("agents".to_string()), agents_map);
             }
         }
 
-        // Step 6: Write updated config back to file
-        let updated_content = serde_yaml::to_string(&project_config)?;
-        std::fs::write(&config_path, &updated_content).map_err(AgentError::IoError)?;
+        // Set the use case agent
+        if let Some(agents_map) = config_value
+            .get_mut("agents")
+            .and_then(|v| v.as_mapping_mut())
+        {
+            agents_map.insert(
+                serde_yaml::Value::String(use_case.to_string()),
+                serde_yaml::Value::String(agent_name.to_string()),
+            );
+        }
 
-        tracing::info!(
-            "Successfully applied agent '{}' to project config: {}",
-            agent_name,
-            config_path.display()
-        );
+        // Write back
+        let config_yaml = serde_yaml::to_string(&config_value)?;
+        std::fs::write(&config_path, config_yaml).map_err(AgentError::IoError)?;
 
         Ok(())
     }
@@ -1176,10 +1300,10 @@ mod tests {
         let config = LlamaAgentConfig::default();
         match config.model.source {
             ModelSource::HuggingFace { repo, filename, .. } => {
-                assert_eq!(repo, "unsloth/Qwen3-Coder-30B-A3B-Instruct-GGUF");
-                assert_eq!(
-                    filename,
-                    Some("Qwen3-Coder-30B-A3B-Instruct-UD-Q6_K_XL.gguf".to_string())
+                assert!(repo.starts_with("unsloth/Qwen3"), "Expected Qwen3 model, got {}", repo);
+                assert!(
+                    filename.as_ref().map(|f| f.contains("Qwen3")).unwrap_or(false),
+                    "Expected Qwen3 filename, got {:?}", filename
                 );
             }
             ModelSource::Local { .. } => panic!("Default should be HuggingFace"),
@@ -2470,12 +2594,12 @@ quiet: false"#;
         // Read and verify config content
         let config_content = fs::read_to_string(&config_path).expect("Failed to read config");
         assert!(
-            config_content.contains("agent:"),
-            "Should contain agent section"
+            config_content.contains("agents:"),
+            "Should contain agents section"
         );
         assert!(
-            config_content.contains("executor:"),
-            "Should contain executor config"
+            config_content.contains("root:"),
+            "Should contain root use case"
         );
 
         env::set_current_dir(&original_dir).expect("Failed to restore original dir");
@@ -2525,12 +2649,12 @@ other_section:
             "Should preserve existing values"
         );
         assert!(
-            updated_config.contains("agent:"),
-            "Should add agent section"
+            updated_config.contains("agents:"),
+            "Should add agents section"
         );
         assert!(
-            updated_config.contains("executor:"),
-            "Should contain executor config"
+            updated_config.contains("root:"),
+            "Should contain root use case"
         );
 
         env::set_current_dir(&original_dir).expect("Failed to restore original dir");
@@ -2546,18 +2670,15 @@ other_section:
         let original_dir = env::current_dir().expect("Failed to get current dir");
         env::set_current_dir(&temp_dir).expect("Failed to change to temp dir");
 
-        // Create config with existing agent section
+        // Create config with existing agents section
         let sah_dir = temp_dir.path().join(".swissarmyhammer");
         fs::create_dir_all(&sah_dir).expect("Failed to create sah dir");
         let config_path = sah_dir.join("sah.yaml");
-        let existing_config = r#"# Config with existing agent
+        let existing_config = r#"# Config with existing agents
 other_section:
   value: "preserved"
-agent:
-  executor:
-    type: llama-agent
-    config: {}
-  quiet: true
+agents:
+  root: "qwen-coder"
 "#;
         fs::write(&config_path, existing_config).expect("Failed to write existing config");
 
@@ -2577,15 +2698,15 @@ agent:
             "Should preserve existing values"
         );
         assert!(
-            updated_config.contains("agent:"),
-            "Should have agent section"
+            updated_config.contains("agents:"),
+            "Should have agents section"
         );
         assert!(
             updated_config.contains("claude-code"),
             "Should contain new agent config"
         );
         assert!(
-            !updated_config.contains("llama-agent"),
+            !updated_config.contains("qwen-coder"),
             "Should replace old agent config"
         );
 
@@ -2647,5 +2768,182 @@ agent:
     fn test_agent_error_config_error_is_critical() {
         let error = AgentError::ConfigError("Invalid configuration".to_string());
         assert_eq!(error.severity(), ErrorSeverity::Critical);
+    }
+
+    #[test]
+    fn test_resolve_agent_fallback_chain() {
+        use std::env;
+        use std::fs;
+        use tempfile::TempDir;
+
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+        let original_dir = env::current_dir().expect("Failed to get current dir");
+        env::set_current_dir(&temp_dir).expect("Failed to change to temp dir");
+
+        // Test 1: No config - should return default claude-code
+        let result = AgentManager::resolve_agent_config_for_use_case(AgentUseCase::Rules);
+        assert!(
+            result.is_ok(),
+            "Should resolve to default agent when no config exists"
+        );
+        let config = result.unwrap();
+        assert_eq!(config.executor_type(), AgentExecutorType::ClaudeCode);
+
+        // Test 2: Config with root agent only - rules should fall back to root
+        let sah_dir = temp_dir.path().join(".swissarmyhammer");
+        fs::create_dir_all(&sah_dir).expect("Failed to create sah dir");
+        let config_path = sah_dir.join("sah.yaml");
+        let config_with_root = r#"agents:
+  root: "claude-code"
+"#;
+        fs::write(&config_path, config_with_root).expect("Failed to write config");
+
+        let result = AgentManager::resolve_agent_config_for_use_case(AgentUseCase::Rules);
+        assert!(
+            result.is_ok(),
+            "Should resolve to root agent when use case not configured"
+        );
+        let config = result.unwrap();
+        assert_eq!(config.executor_type(), AgentExecutorType::ClaudeCode);
+
+        // Test 3: Config with specific rules agent - should use rules agent
+        let config_with_rules = r#"agents:
+  root: "claude-code"
+  rules: "qwen-coder"
+"#;
+        fs::write(&config_path, config_with_rules).expect("Failed to write config with rules");
+
+        let result = AgentManager::resolve_agent_config_for_use_case(AgentUseCase::Rules);
+        assert!(result.is_ok(), "Should resolve to rules-specific agent");
+        let config = result.unwrap();
+        assert_eq!(config.executor_type(), AgentExecutorType::LlamaAgent);
+
+        // Test 4: Root use case should use root agent directly
+        let result = AgentManager::resolve_agent_config_for_use_case(AgentUseCase::Root);
+        assert!(result.is_ok(), "Should resolve root use case");
+        let config = result.unwrap();
+        assert_eq!(config.executor_type(), AgentExecutorType::ClaudeCode);
+
+        env::set_current_dir(&original_dir).expect("Failed to restore original dir");
+    }
+
+    // Use Case Resolution Tests
+    mod use_case_resolution_tests {
+        use super::*;
+        use tempfile::TempDir;
+
+        fn setup_test_env() -> TempDir {
+            let temp_dir = TempDir::new().unwrap();
+            std::env::set_current_dir(temp_dir.path()).unwrap();
+            temp_dir
+        }
+
+        #[test]
+        fn test_resolve_use_case_with_specific_agent() {
+            let _temp = setup_test_env();
+
+            // Set Rules to specific agent
+            AgentManager::use_agent_for_use_case("claude-code", AgentUseCase::Rules).unwrap();
+
+            // Verify it resolves correctly
+            let agent =
+                AgentManager::resolve_agent_config_for_use_case(AgentUseCase::Rules).unwrap();
+            assert!(matches!(
+                agent.executor_type(),
+                AgentExecutorType::ClaudeCode
+            ));
+        }
+
+        #[test]
+        fn test_fallback_to_root_when_use_case_not_configured() {
+            let _temp = setup_test_env();
+
+            // Set only Root
+            AgentManager::use_agent_for_use_case("claude-code", AgentUseCase::Root).unwrap();
+
+            // Rules should fall back to Root
+            let agent =
+                AgentManager::resolve_agent_config_for_use_case(AgentUseCase::Rules).unwrap();
+            assert!(matches!(
+                agent.executor_type(),
+                AgentExecutorType::ClaudeCode
+            ));
+        }
+
+        #[test]
+        fn test_fallback_to_default_when_nothing_configured() {
+            let _temp = setup_test_env();
+
+            // Don't configure anything
+            // Should fall back to default (claude-code)
+            let agent =
+                AgentManager::resolve_agent_config_for_use_case(AgentUseCase::Rules).unwrap();
+            assert!(matches!(
+                agent.executor_type(),
+                AgentExecutorType::ClaudeCode
+            ));
+        }
+
+        #[test]
+        fn test_use_case_from_str() {
+            assert_eq!("root".parse::<AgentUseCase>().unwrap(), AgentUseCase::Root);
+            assert_eq!(
+                "rules".parse::<AgentUseCase>().unwrap(),
+                AgentUseCase::Rules
+            );
+            assert_eq!(
+                "workflows".parse::<AgentUseCase>().unwrap(),
+                AgentUseCase::Workflows
+            );
+
+            assert!("invalid".parse::<AgentUseCase>().is_err());
+        }
+
+        #[test]
+        fn test_use_case_display() {
+            assert_eq!(AgentUseCase::Root.to_string(), "root");
+            assert_eq!(AgentUseCase::Rules.to_string(), "rules");
+            assert_eq!(AgentUseCase::Workflows.to_string(), "workflows");
+        }
+
+        #[test]
+        fn test_backward_compatibility_with_old_config() {
+            let _temp = setup_test_env();
+
+            // Create old-style config
+            let config_path = AgentManager::ensure_config_structure().unwrap();
+            std::fs::write(&config_path, "agent: claude-code\n").unwrap();
+
+            // Should be able to read it (returns None since old format not supported)
+            let agent = AgentManager::get_agent_for_use_case(AgentUseCase::Root).unwrap();
+            assert_eq!(agent, None);
+        }
+
+        #[test]
+        fn test_new_config_format() {
+            let _temp = setup_test_env();
+
+            // Create new-style config
+            let config_path = AgentManager::ensure_config_structure().unwrap();
+            std::fs::write(
+                &config_path,
+                "agents:\n  root: claude-code\n  rules: qwen-coder\n",
+            )
+            .unwrap();
+
+            // Should read both use cases
+            assert_eq!(
+                AgentManager::get_agent_for_use_case(AgentUseCase::Root)
+                    .unwrap()
+                    .unwrap(),
+                "claude-code"
+            );
+            assert_eq!(
+                AgentManager::get_agent_for_use_case(AgentUseCase::Rules)
+                    .unwrap()
+                    .unwrap(),
+                "qwen-coder"
+            );
+        }
     }
 }

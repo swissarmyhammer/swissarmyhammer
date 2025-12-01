@@ -79,7 +79,7 @@ pub fn expand_glob_patterns(
             if should_include {
                 target_files.push(path);
             } else {
-                tracing::info!("Filtering out direct file path: {}", path.display());
+                tracing::debug!("Filtering out direct file path: {}", path.display());
             }
             continue;
         } else if path.is_dir() {

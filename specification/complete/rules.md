@@ -918,7 +918,7 @@ pub async fn execute_check_command(
     match checker.check_all(rules, target_files).await {
         Ok(()) => {
             if !cli_context.quiet {
-                println!("✅ All checks passed");
+                println!("✓ All checks passed");
             }
             Ok(())
         }
@@ -954,7 +954,7 @@ Checking 15 rules against 42 files...
    
    Suggestion: Break into smaller functions
 
-✅ 40 files passed all checks
+✓ 40 files passed all checks
 ❌ 2 files had violations
 ```
 

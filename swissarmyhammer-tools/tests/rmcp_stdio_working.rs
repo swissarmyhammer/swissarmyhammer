@@ -18,7 +18,7 @@ use swissarmyhammer_tools::mcp::{
 #[tokio::test]
 async fn test_rmcp_client_lists_tools_and_prompts() {
     // Start in-process HTTP MCP server
-    let mut server = start_mcp_server(McpServerMode::Http { port: None }, None)
+    let mut server = start_mcp_server(McpServerMode::Http { port: None }, None, None)
         .await
         .expect("Failed to start in-process MCP server");
 

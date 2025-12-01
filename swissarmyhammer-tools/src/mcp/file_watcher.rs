@@ -160,7 +160,7 @@ impl FileWatcher {
 
                             // Notify callback about the change
                             if let Err(e) = callback.on_file_changed(relevant_paths).await {
-                                tracing::error!("❌ File watcher callback failed: {}", e);
+                                tracing::error!("✗ File watcher callback failed: {}", e);
                                 callback.on_error(format!("Callback failed: {e}")).await;
                             }
                         } else {
@@ -169,7 +169,7 @@ impl FileWatcher {
                     }
                     Err(errors) => {
                         for error in errors {
-                            tracing::error!("❌ File watcher error: {}", error);
+                            tracing::error!("✗ File watcher error: {}", error);
                             callback
                                 .on_error(format!("File watcher error: {error}"))
                                 .await;
@@ -239,10 +239,10 @@ impl FileWatcherCallback for McpFileWatcherCallback {
 
         // Reload the library
         if let Err(e) = self.server.reload_prompts().await {
-            tracing::error!("❌ Failed to reload prompts: {}", e);
+            tracing::error!("✗ Failed to reload prompts: {}", e);
             return Err(e);
         }
-        tracing::info!("✅ Prompts reloaded successfully");
+        tracing::info!("✓ Prompts reloaded successfully");
 
         // Send notification to client about prompt list change
         let peer_clone = self.peer.clone();
@@ -252,7 +252,7 @@ impl FileWatcherCallback for McpFileWatcherCallback {
                     tracing::info!("📢 Sent prompts/listChanged notification to client");
                 }
                 Err(e) => {
-                    tracing::error!("❌ Failed to send notification: {}", e);
+                    tracing::error!("✗ Failed to send notification: {}", e);
                 }
             }
         });
@@ -261,7 +261,7 @@ impl FileWatcherCallback for McpFileWatcherCallback {
     }
 
     async fn on_error(&self, error: String) {
-        tracing::error!("❌ File watcher error: {}", error);
+        tracing::error!("✗ File watcher error: {}", error);
     }
 }
 
@@ -318,7 +318,7 @@ impl McpFileWatcher {
                 Ok(()) => {
                     if attempt > 1 {
                         tracing::info!(
-                            "✅ File watcher started successfully on attempt {}",
+                            "✓ File watcher started successfully on attempt {}",
                             attempt
                         );
                     }

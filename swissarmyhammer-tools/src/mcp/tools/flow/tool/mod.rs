@@ -9,6 +9,7 @@ use async_trait::async_trait;
 use rmcp::model::CallToolResult;
 use rmcp::ErrorData as McpError;
 use swissarmyhammer_common::generate_monotonic_ulid_string;
+use swissarmyhammer_config::AgentUseCase;
 use swissarmyhammer_workflow::{MemoryWorkflowStorage, WorkflowResolver, WorkflowStorageBackend};
 
 /// Validate that all required parameters are provided
@@ -165,8 +166,24 @@ impl FlowTool {
             );
         }
 
-        // Create workflow executor
-        let mut executor = swissarmyhammer_workflow::WorkflowExecutor::new();
+        // Get agent for Workflows use case
+        let workflows_agent = context.get_agent_for_use_case(AgentUseCase::Workflows);
+        tracing::debug!(
+            "Using agent for Workflows use case: {:?}",
+            workflows_agent.executor_type()
+        );
+
+        // Get working directory (fallback to current directory if not set in context)
+        let working_dir = context
+            .working_dir
+            .as_deref()
+            .unwrap_or_else(|| std::path::Path::new("."));
+
+        // Create workflow executor with agent
+        let mut executor = swissarmyhammer_workflow::WorkflowExecutor::with_working_dir_and_agent(
+            working_dir,
+            workflows_agent,
+        );
 
         // Start the workflow
         let mut run = executor.start_workflow(workflow).map_err(|e| {

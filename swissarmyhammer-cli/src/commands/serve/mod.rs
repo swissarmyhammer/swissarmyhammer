@@ -40,12 +40,20 @@ pub const DESCRIPTION: &str = include_str!("description.md");
 /// - 1: Server encountered warnings or stopped unexpectedly
 /// - 2: Server failed to start or encountered critical errors
 pub async fn handle_command(matches: &clap::ArgMatches, cli_context: &CliContext) -> i32 {
+    // Extract global --agent flag from root matches
+    let agent_override = cli_context
+        .matches
+        .get_one::<String>("agent")
+        .map(|s| s.to_string());
+
     // Check for HTTP subcommand
     match matches.subcommand() {
-        Some(("http", http_matches)) => handle_http_serve(http_matches, cli_context).await,
+        Some(("http", http_matches)) => {
+            handle_http_serve(http_matches, cli_context, agent_override).await
+        }
         None => {
             // Default to stdio mode (existing behavior)
-            handle_stdio_serve(cli_context).await
+            handle_stdio_serve(cli_context, agent_override).await
         }
         Some((unknown, _)) => {
             eprintln!("Unknown serve subcommand: {}", unknown);
@@ -55,7 +63,11 @@ pub async fn handle_command(matches: &clap::ArgMatches, cli_context: &CliContext
 }
 
 /// Handle HTTP serve mode
-async fn handle_http_serve(matches: &clap::ArgMatches, cli_context: &CliContext) -> i32 {
+async fn handle_http_serve(
+    matches: &clap::ArgMatches,
+    cli_context: &CliContext,
+    agent_override: Option<String>,
+) -> i32 {
     use crate::signal_handler::wait_for_shutdown;
     use swissarmyhammer_tools::mcp::{start_mcp_server, McpServerMode};
 
@@ -97,14 +109,14 @@ async fn handle_http_serve(matches: &clap::ArgMatches, cli_context: &CliContext)
         }
     );
 
-    let mut server_handle = match start_mcp_server(mode, None).await {
+    let mut server_handle = match start_mcp_server(mode, None, agent_override).await {
         Ok(handle) => {
             let actual_port = handle.port().unwrap_or(port);
             let running_message = if port == 0 {
-                format!("✅ MCP HTTP server running on {} (bound to random port: {}). 💡 Use Ctrl+C to stop.", handle.url(), actual_port)
+                format!("✓ MCP HTTP server running on {} (bound to random port: {}). 💡 Use Ctrl+C to stop.", handle.url(), actual_port)
             } else {
                 format!(
-                    "✅ MCP HTTP server running on {}. 💡 Use Ctrl+C to stop.",
+                    "✓ MCP HTTP server running on {}. 💡 Use Ctrl+C to stop.",
                     handle.url()
                 )
             };
@@ -184,14 +196,14 @@ async fn handle_http_serve(matches: &clap::ArgMatches, cli_context: &CliContext)
         "-",
         None,
         0,
-        "✅ Server stopped",
+        "✓ Server stopped",
     );
 
     EXIT_SUCCESS
 }
 
 /// Handle stdio serve mode (existing behavior)
-async fn handle_stdio_serve(cli_context: &CliContext) -> i32 {
+async fn handle_stdio_serve(cli_context: &CliContext, agent_override: Option<String>) -> i32 {
     use swissarmyhammer_tools::mcp::{start_mcp_server, McpServerMode};
 
     tracing::debug!("Starting unified MCP server in stdio mode");
@@ -231,7 +243,7 @@ async fn handle_stdio_serve(cli_context: &CliContext) -> i32 {
     }
 
     let mode = McpServerMode::Stdio;
-    let mut server_handle = match start_mcp_server(mode, Some(library)).await {
+    let mut server_handle = match start_mcp_server(mode, Some(library), agent_override).await {
         Ok(handle) => handle,
         Err(e) => {
             tracing::error!("Failed to start unified stdio MCP server: {}", e);

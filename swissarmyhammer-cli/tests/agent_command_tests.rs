@@ -254,8 +254,9 @@ async fn test_agent_use_builtin_agent() -> Result<()> {
     } else {
         let stdout = String::from_utf8_lossy(&output.stdout);
         assert!(
-            stdout.contains("Successfully switched to agent"),
-            "Should show success message"
+            stdout.contains("Successfully set") && stdout.contains("use case to agent"),
+            "Should show success message. Actual: {}",
+            stdout
         );
         assert!(
             stdout.contains("claude-code"),
@@ -593,12 +594,14 @@ async fn test_agent_use_creates_config_file() -> Result<()> {
 
         let config_content = fs::read_to_string(&config_path)?;
         assert!(
-            config_content.contains("agent:"),
-            "Config should contain agent section"
+            config_content.contains("agents:"),
+            "Config should contain agents section. Actual: {}",
+            config_content
         );
         assert!(
-            config_content.contains("executor:"),
-            "Config should contain executor config"
+            config_content.contains("root:") || config_content.contains("claude-code"),
+            "Config should contain agent assignment. Actual: {}",
+            config_content
         );
     }
     // If it fails, that's acceptable for this test - we're testing successful case
@@ -640,14 +643,16 @@ existing_agent:
             "Should preserve existing values"
         );
 
-        // Should add/update agent section
+        // Should add/update agents section
         assert!(
-            updated_config.contains("agent:"),
-            "Should have agent section"
+            updated_config.contains("agents:"),
+            "Should have agents section. Actual: {}",
+            updated_config
         );
         assert!(
-            updated_config.contains("executor:"),
-            "Should have executor config"
+            updated_config.contains("root:") || updated_config.contains("claude-code"),
+            "Should have agent assignment. Actual: {}",
+            updated_config
         );
     }
 
@@ -683,8 +688,9 @@ async fn test_complete_agent_workflow() -> Result<()> {
     if use_output.status.success() {
         let use_stdout = String::from_utf8_lossy(&use_output.stdout);
         assert!(
-            use_stdout.contains("Successfully switched"),
-            "Should show success"
+            use_stdout.contains("Successfully set") && use_stdout.contains("use case to agent"),
+            "Should show success. Actual: {}",
+            use_stdout
         );
 
         // Step 3: Verify config was created
@@ -788,8 +794,9 @@ async fn test_agent_use_help() -> Result<()> {
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
-        stdout.contains("AGENT_NAME"),
-        "Help should show agent name parameter"
+        stdout.contains("FIRST") || stdout.contains("AGENT_NAME"),
+        "Help should show agent name parameter. Actual: {}",
+        stdout
     );
 
     Ok(())

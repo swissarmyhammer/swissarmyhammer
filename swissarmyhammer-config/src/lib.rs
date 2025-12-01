@@ -197,8 +197,8 @@ pub mod template_context;
 // Re-export main types for easier access
 pub use agent::{
     parse_agent_description, AgentConfig, AgentError, AgentExecutorConfig, AgentExecutorType,
-    AgentInfo, AgentSource, ClaudeCodeConfig, LlamaAgentConfig, McpServerConfig, ModelConfig,
-    ModelSource,
+    AgentInfo, AgentSource, AgentUseCase, ClaudeCodeConfig, LlamaAgentConfig, McpServerConfig,
+    ModelConfig, ModelSource,
 };
 pub use discovery::{ConfigurationDiscovery, DiscoveryPaths};
 pub use env_vars::EnvVarSubstitution;

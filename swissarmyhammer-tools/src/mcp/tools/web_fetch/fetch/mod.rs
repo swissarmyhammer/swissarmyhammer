@@ -534,20 +534,20 @@ mod tests {
         context.progress_sender = Some(progress_sender);
 
         let mut arguments = serde_json::Map::new();
-        // Use example.com with an invalid port to get immediate connection refused
-        // This is faster than DNS resolution failures
+        // Use example.com with a high port number (60000) that is unlikely to be open
+        // Combined with minimum timeout for fastest failure
         arguments.insert(
             "url".to_string(),
-            serde_json::Value::String("http://example.com:1".to_string()),
+            serde_json::Value::String("http://example.com:60000".to_string()),
         );
-        // Use minimal timeout to speed up the test
+        // Use minimal timeout to speed up the test (1 second is the minimum allowed)
         arguments.insert("timeout".to_string(), serde_json::Value::Number(1.into()));
 
-        // Execute the tool (should fail quickly with connection refused on invalid port)
+        // Execute the tool (should fail quickly with connection timeout/refused)
         let _result = tool.execute(arguments, &context).await;
 
         // Give a small delay for async notifications to be sent
-        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+        tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
 
         // Collect notifications
         let mut notifications = Vec::new();

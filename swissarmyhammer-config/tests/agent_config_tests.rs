@@ -270,12 +270,12 @@ fn test_agent_manager_config_file_operations() {
 
     let config_content = fs::read_to_string(&config_path).expect("Should read config file");
     assert!(
-        config_content.contains("agent:"),
-        "Should contain agent section"
+        config_content.contains("agents:"),
+        "Should contain agents section"
     );
     assert!(
-        config_content.contains("executor:"),
-        "Should contain executor config"
+        config_content.contains("root:"),
+        "Should contain root use case"
     );
     assert!(
         config_content.contains("claude-code"),
@@ -289,11 +289,11 @@ fn test_agent_manager_config_file_operations() {
 
     let updated_content = fs::read_to_string(&config_path).expect("Should read updated config");
     assert!(
-        updated_content.contains("agent:"),
-        "Should still contain agent section"
+        updated_content.contains("agents:"),
+        "Should still contain agents section"
     );
     assert!(
-        updated_content.contains("llama-agent") || updated_content.contains("qwen-coder"),
+        updated_content.contains("qwen-coder"),
         "Should contain new agent config"
     );
 
@@ -372,14 +372,14 @@ existing_agent:
         "Should preserve nested structure"
     );
 
-    // Should update agent section
+    // Should update agents section
     assert!(
-        updated_config.contains("agent:"),
-        "Should have agent section"
+        updated_config.contains("agents:"),
+        "Should have agents section"
     );
     assert!(
-        updated_config.contains("executor:"),
-        "Should have executor config"
+        updated_config.contains("root:"),
+        "Should have root use case"
     );
 
     env::set_current_dir(&original_dir).expect("Failed to restore dir");

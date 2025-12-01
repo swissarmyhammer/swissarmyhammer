@@ -13,7 +13,12 @@ use tempfile::TempDir;
 /// Create a test agent with default configuration
 fn create_test_agent() -> Arc<LlamaAgentExecutorWrapper> {
     let config = LlamaAgentConfig::for_testing();
-    Arc::new(LlamaAgentExecutorWrapper::new(config))
+    let mcp_server = agent_client_protocol::McpServer::Http {
+        name: "test".to_string(),
+        url: "http://localhost:8080/mcp".to_string(),
+        headers: Vec::new(),
+    };
+    Arc::new(LlamaAgentExecutorWrapper::new(config, mcp_server))
 }
 
 /// Check if an error is due to agent unavailability and skip test if so

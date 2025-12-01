@@ -1,30 +1,32 @@
 //! Claude Code CLI executor implementation
 
 use crate::{ActionError, ActionResult, AgentExecutionContext, AgentExecutor, AgentResponse};
+use agent_client_protocol::McpServer;
 use async_trait::async_trait;
 use swissarmyhammer_config::agent::AgentExecutorType;
 
 /// Executor that shells out to Claude Code CLI
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ClaudeCodeExecutor {
     claude_path: Option<std::path::PathBuf>,
     initialized: bool,
-}
-
-impl Default for ClaudeCodeExecutor {
-    fn default() -> Self {
-        Self::new()
-    }
+    #[allow(dead_code)] // Used for future MCP integration when Claude supports HTTP config
+    mcp_server: McpServer,
 }
 
 impl ClaudeCodeExecutor {
     /// Create a new ClaudeCodeExecutor instance
     ///
+    /// # Arguments
+    ///
+    /// * `mcp_server` - MCP server configuration using agent-client-protocol types
+    ///
     /// The executor starts uninitialized and must be initialized before use.
-    pub fn new() -> Self {
+    pub fn new(mcp_server: McpServer) -> Self {
         Self {
             claude_path: None,
             initialized: false,
+            mcp_server,
         }
     }
 
@@ -41,8 +43,9 @@ impl ClaudeCodeExecutor {
         claude_path: &std::path::PathBuf,
         prompt: String,
         system_prompt: Option<String>,
+        _context: &AgentExecutionContext<'_>,
     ) -> ActionResult<AgentResponse> {
-        use tokio::io::AsyncWriteExt;
+        
         use tokio::process::Command;
 
         tracing::debug!(
@@ -51,13 +54,46 @@ impl ClaudeCodeExecutor {
             prompt.len()
         );
 
-        // Build command with system prompt if provided
+        // Build command - flags first, then stdin marker at the end
         let mut cmd = Command::new(claude_path);
-        cmd.args([
-            "--dangerously-skip-permissions",
-            "--print",
-            "-", // Read from stdin
-        ]);
+        cmd.args(["--dangerously-skip-permissions", "--print"]);
+
+        // Disable built-in tools for deterministic behavior
+        cmd.args(["--tools", ""]);
+
+        // Extract URL from McpServer and create Claude-compatible JSON
+        let (server_name, server_url) = match &self.mcp_server {
+            McpServer::Http { name, url, .. } => (name, url),
+            McpServer::Sse { name, url, .. } => (name, url),
+            McpServer::Stdio {  .. } => {
+                return Err(ActionError::ClaudeError(
+                    "Claude executor requires HTTP MCP server, got Stdio".to_string()
+                ))
+            }
+        };
+
+        // Create MCP config with headers as object (not array) for Claude compatibility
+        let mcp_config_json = serde_json::json!({
+            "mcpServers": {
+                server_name: {
+                    "type": "http",
+                    "url": server_url,
+                    "headers": {}
+                }
+            }
+        });
+
+        let config_file = std::env::temp_dir().join(format!("sah-mcp-{}.json", std::process::id()));
+        std::fs::write(&config_file, serde_json::to_string_pretty(&mcp_config_json).unwrap()).map_err(|e| {
+            ActionError::ClaudeError(format!("Failed to write MCP config file: {}", e))
+        })?;
+
+        tracing::info!("Configuring Claude to use MCP server '{}' at {} (config: {:?})", server_name, server_url, config_file);
+        cmd.args(["--strict-mcp-config"]);
+        cmd.args(["--mcp-config", &config_file.to_string_lossy()]);
+
+        // Log the full command for debugging
+        tracing::info!("Claude command: {:?}", cmd.as_std());
 
         // Add system prompt parameter if provided
         if let Some(ref sys_prompt) = system_prompt {
@@ -69,25 +105,19 @@ impl ClaudeCodeExecutor {
             cmd.args(["--append-system-prompt", sys_prompt]);
         }
 
-        // Execute Claude Code with stdin input
-        let mut child = cmd
-            .stdin(std::process::Stdio::piped())
+        // Write prompt to temp file instead of stdin (workaround for Claude CLI --mcp-config bug)
+        let prompt_file = std::env::temp_dir().join(format!("sah-prompt-{}.txt", std::process::id()));
+        std::fs::write(&prompt_file, &prompt).map_err(|e| {
+            ActionError::ClaudeError(format!("Failed to write prompt file: {}", e))
+        })?;
+        cmd.arg(prompt_file.to_string_lossy().to_string());
+
+        // Execute Claude Code
+        let child = cmd
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
             .spawn()
             .map_err(|e| ActionError::ClaudeError(format!("Failed to execute Claude: {e}")))?;
-
-        // Write prompt to stdin
-        if let Some(stdin) = child.stdin.as_mut() {
-            stdin.write_all(prompt.as_bytes()).await.map_err(|e| {
-                ActionError::ClaudeError(format!("Failed to write to Claude stdin: {e}"))
-            })?;
-
-            // Close stdin to signal end of input
-            stdin.shutdown().await.map_err(|e| {
-                ActionError::ClaudeError(format!("Failed to close Claude stdin: {e}"))
-            })?;
-        }
 
         // Wait for command completion
         let output = child
@@ -136,7 +166,7 @@ impl AgentExecutor for ClaudeCodeExecutor {
         &self,
         system_prompt: String,
         rendered_prompt: String,
-        _context: &AgentExecutionContext<'_>,
+        context: &AgentExecutionContext<'_>,
     ) -> ActionResult<AgentResponse> {
         let claude_path = self.get_claude_path()?;
 
@@ -153,8 +183,13 @@ impl AgentExecutor for ClaudeCodeExecutor {
         };
 
         // Execute Claude command using the same approach as the original implementation
-        self.execute_claude_command(&claude_path_buf, rendered_prompt, system_prompt_opt)
-            .await
+        self.execute_claude_command(
+            &claude_path_buf,
+            rendered_prompt,
+            system_prompt_opt,
+            context,
+        )
+        .await
     }
 
     fn executor_type(&self) -> AgentExecutorType {

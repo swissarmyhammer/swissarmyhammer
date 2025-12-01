@@ -14,7 +14,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Instant;
 use swissarmyhammer_agent_executor::AgentExecutor;
-use swissarmyhammer_config::AgentConfig;
+use swissarmyhammer_config::{AgentConfig, AgentUseCase};
 use swissarmyhammer_rules::{
     RuleCheckRequest as DomainRuleCheckRequest, RuleChecker, RuleViolation, Severity,
 };
@@ -35,6 +35,7 @@ const PROGRESS_COMPLETE: u32 = 100;
 /// # Arguments
 ///
 /// * `config` - The agent configuration specifying which executor to use
+/// * `context` - The tool context containing MCP server port
 ///
 /// # Returns
 ///
@@ -45,15 +46,30 @@ const PROGRESS_COMPLETE: u32 = 100;
 /// Returns an error if agent initialization fails
 async fn create_agent_from_config(
     config: &AgentConfig,
+    context: &ToolContext,
 ) -> Result<Arc<dyn AgentExecutor>, McpError> {
     tracing::debug!(
         "Creating executor via centralized factory for {:?}",
         config.executor_type()
     );
 
+    // Get MCP server port from context
+    let port = *context.mcp_server_port.read().await;
+    let port = port.ok_or_else(|| {
+        McpError::internal_error("MCP server port not available in context".to_string(), None)
+    })?;
+
+    // Create McpServer configuration using agent-client-protocol types
+    let mcp_server = agent_client_protocol::McpServer::Http {
+        name: "swissarmyhammer".to_string(),
+        url: format!("http://127.0.0.1:{}/mcp", port),
+        headers: Vec::new(),
+    };
+
+    tracing::info!("Creating agent executor with MCP server on port {}", port);
+
     // Use the centralized factory from agent-executor crate
-    // MCP server is not needed for rule checking as it runs without tools
-    swissarmyhammer_agent_executor::AgentExecutorFactory::create_executor(config, None)
+    swissarmyhammer_agent_executor::AgentExecutorFactory::create_executor(config, mcp_server)
         .await
         .map(Arc::from)
         .map_err(|e| {
@@ -430,15 +446,19 @@ impl RuleCheckTool {
     ///
     /// Returns an error if agent creation or checker initialization fails
     async fn get_checker(&self, context: &ToolContext) -> Result<&RuleChecker, McpError> {
-        // Clone config for use in async closure
-        let agent_config = context.agent_config.clone();
+        // Get agent config for Rules use case (falls back to root if not configured)
+        let agent_config = context.get_agent_for_use_case(AgentUseCase::Rules);
 
         self.checker
             .get_or_try_init(|| async move {
-                tracing::debug!("Initializing RuleChecker for MCP tool with configured agent");
+                tracing::debug!("Initializing RuleChecker for MCP tool with Rules use case agent");
+                tracing::debug!(
+                    "Using agent for Rules use case: {:?}",
+                    agent_config.executor_type()
+                );
 
                 // Create agent executor from configuration
-                let agent = create_agent_from_config(&agent_config).await?;
+                let agent = create_agent_from_config(&agent_config, context).await?;
 
                 // Create rule checker
                 let mut checker = RuleChecker::new(agent).map_err(|e| {
@@ -582,7 +602,7 @@ impl McpTool for RuleCheckTool {
             if changed_files.is_empty() {
                 tracing::info!("No changed files found");
                 // Return early with no violations if no files have changed
-                let result_text = "✅ No changed files to check".to_string();
+                let result_text = "✓ No changed files to check".to_string();
                 return Ok(BaseToolImpl::create_success_response(&result_text));
             }
 
@@ -599,8 +619,7 @@ impl McpTool for RuleCheckTool {
 
                 if intersection.is_empty() {
                     tracing::info!("No files match both changed files and patterns");
-                    let result_text =
-                        "✅ No changed files match the specified patterns".to_string();
+                    let result_text = "✓ No changed files match the specified patterns".to_string();
                     return Ok(BaseToolImpl::create_success_response(&result_text));
                 }
 
@@ -624,7 +643,7 @@ impl McpTool for RuleCheckTool {
             severity: request.severity,
             category: request.category.clone(),
             patterns,
-            check_mode: swissarmyhammer_rules::CheckMode::FailFast,
+            check_mode: swissarmyhammer_rules::CheckMode::CollectAll, // Collect all violations
             force: false, // MCP tool doesn't expose force flag yet
             max_errors: request.max_errors,
             max_concurrency: request.max_concurrency,
@@ -754,13 +773,13 @@ impl McpTool for RuleCheckTool {
 
         // Format the response
         let result_text = if violations.is_empty() {
-            "✅ No rule violations found".to_string()
+            "✓ No rule violations found".to_string()
         } else {
             let violations_text = violations
                 .iter()
                 .map(|v| {
                     format!(
-                        "❌ {} [{}] in {}\n   {}",
+                        "✗ {} [{}] in {}\n   {}",
                         v.rule_name,
                         v.severity,
                         v.file_path.display(),

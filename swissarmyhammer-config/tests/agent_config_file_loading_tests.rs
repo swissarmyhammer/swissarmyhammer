@@ -88,7 +88,7 @@ agent:
         model:
           source:
             HuggingFace:
-              repo: "unsloth/Qwen3-Coder-30B-A3B-Instruct-GGUF"
+              repo: "unsloth/Qwen3-30B-A3B-Instruct-2507-GGUF"
               folder: "UD-Q6_K_XL"
         mcp_server:
           port: 0

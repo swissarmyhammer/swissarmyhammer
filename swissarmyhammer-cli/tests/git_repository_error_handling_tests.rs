@@ -92,7 +92,7 @@ async fn _test_error_message_format_consistency_disabled() {
     let stderr = &output.stderr;
 
     // Check for consistent error format elements
-    assert!(stderr.contains("❌"), "Error should start with ❌ icon");
+    assert!(stderr.contains("✗"), "Error should start with ✗ icon");
     assert!(
         stderr.contains("Solutions:"),
         "Error should include Solutions section"

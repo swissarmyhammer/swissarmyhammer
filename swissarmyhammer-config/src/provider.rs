@@ -55,6 +55,32 @@ impl ConfigurationProvider for FileProvider {
                 figment.merge(Toml::file(&self.path))
             }
             Some("yaml") | Some("yml") => {
+                // Check if YAML file contains only null before attempting to merge
+                let content = fs::read_to_string(&self.path).map_err(|e| {
+                    ConfigurationError::load(
+                        self.path.clone(),
+                        figment::Error::from(format!("Failed to read YAML file: {}", e)),
+                    )
+                })?;
+
+                // Parse YAML to check if it's null
+                let yaml_value: serde_yaml::Value =
+                    serde_yaml::from_str(&content).map_err(|e| {
+                        ConfigurationError::load(
+                            self.path.clone(),
+                            figment::Error::from(format!("Failed to parse YAML: {}", e)),
+                        )
+                    })?;
+
+                if yaml_value.is_null() {
+                    // Skip null/empty YAML files
+                    debug!(
+                        "Skipping null/empty YAML configuration file: {}",
+                        self.path.display()
+                    );
+                    return Ok(figment);
+                }
+
                 // Validate YAML parsing by attempting to merge and extract immediately
                 let test_figment = Figment::new().merge(Yaml::file(&self.path));
                 let _: Value = test_figment

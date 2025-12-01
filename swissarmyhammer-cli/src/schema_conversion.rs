@@ -10,6 +10,7 @@
 
 use crate::schema_validation::{SchemaValidator, ValidationError};
 use clap::ArgMatches;
+use owo_colors::OwoColorize;
 use serde_json::{Map, Value};
 use swissarmyhammer_common::{ErrorSeverity, Severity};
 use thiserror::Error;
@@ -281,8 +282,8 @@ impl SchemaConverter {
         match error {
             ConversionError::MissingRequired { field } => {
                 format!(
-                    "❌ Missing required argument '--{}' for tool '{}'.\n\n💡 Use '--help' to see all required arguments.\n🔄 To fix this interactively, run: sah <command> --interactive",
-                    field, tool_name
+                    "{} Missing required argument '--{}' for tool '{}'.\n\n💡 Use '--help' to see all required arguments.\n🔄 To fix this interactively, run: sah <command> --interactive",
+                    "✗".red(), field, tool_name
                 )
             }
             ConversionError::InvalidType {
@@ -291,8 +292,8 @@ impl SchemaConverter {
                 actual,
             } => {
                 format!(
-                    "❌ Invalid type for argument '--{}' in tool '{}': expected {}, got {}.\n\n💡 Please check the argument format and try again.\n📖 Use '--help' to see expected argument types.",
-                    name, tool_name, expected, actual
+                    "{} Invalid type for argument '--{}' in tool '{}': expected {}, got {}.\n\n💡 Please check the argument format and try again.\n📖 Use '--help' to see expected argument types.",
+                    "✗".red(), name, tool_name, expected, actual
                 )
             }
             ConversionError::ParseError {
@@ -307,14 +308,14 @@ impl SchemaConverter {
                 };
 
                 format!(
-                    "❌ Failed to parse '--{}' as {} for tool '{}': {}.\n\n💡 {}\n📖 Use '--help' to see expected argument formats.",
-                    field, data_type, tool_name, message, suggestion
+                    "{} Failed to parse '--{}' as {} for tool '{}': {}.\n\n💡 {}\n📖 Use '--help' to see expected argument formats.",
+                    "✗".red(), field, data_type, tool_name, message, suggestion
                 )
             }
             ConversionError::SchemaValidation { message } => {
                 format!(
-                    "❌ Schema validation failed for tool '{}': {}.\n\n💡 This is likely an internal tool configuration error. Please report this issue.\n🔧 Tool developers should verify their schema follows JSON Schema specification.",
-                    tool_name, message
+                    "{} Schema validation failed for tool '{}': {}.\n\n💡 This is likely an internal tool configuration error. Please report this issue.\n🔧 Tool developers should verify their schema follows JSON Schema specification.",
+                    "✗".red(), tool_name, message
                 )
             }
             ConversionError::UnsupportedSchemaType {
@@ -323,13 +324,14 @@ impl SchemaConverter {
             } => {
                 let suggestion = Self::provide_conversion_suggestions(schema_type);
                 format!(
-                    "❌ Tool '{}' uses unsupported argument type '{}' for parameter '{}'.\n\n💡 {}\n🔧 This tool may not be compatible with CLI execution.",
-                    tool_name, schema_type, parameter, suggestion
+                    "{} Tool '{}' uses unsupported argument type '{}' for parameter '{}'.\n\n💡 {}\n🔧 This tool may not be compatible with CLI execution.",
+                    "✗".red(), tool_name, schema_type, parameter, suggestion
                 )
             }
             ConversionError::ValidationError(validation_err) => {
                 format!(
-                    "❌ Schema validation error in tool '{}': {}\n\n💡 {}\n🔧 Tool developers should fix this schema definition.",
+                    "{} Schema validation error in tool '{}': {}\n\n💡 {}\n🔧 Tool developers should fix this schema definition.",
+                    "✗".red(),
                     tool_name,
                     validation_err,
                     validation_err.suggestion().unwrap_or_default()

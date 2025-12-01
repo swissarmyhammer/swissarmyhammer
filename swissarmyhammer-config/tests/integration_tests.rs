@@ -409,8 +409,8 @@ audit = true
 - **Deployed At**: {{deployment.timestamp}}
 
 ## Security Configuration
-- **SSL Required**: {% if security.ssl_required %}✅ Enabled{% else %}❌ Disabled{% endif %}
-- **Rate Limiting**: {% if security.rate_limiting %}✅ Enabled{% else %}❌ Disabled{% endif %}
+- **SSL Required**: {% if security.ssl_required %}✓ Enabled{% else %}✗ Disabled{% endif %}
+- **Rate Limiting**: {% if security.rate_limiting %}✓ Enabled{% else %}✗ Disabled{% endif %}
 - **Session Timeout**: {{security.session_timeout}}s
 - **SSL Certificate**: {{ssl.cert.path}}
 
@@ -418,7 +418,7 @@ audit = true
 - **Host**: {{database.host}}:{{database.port}}
 - **Pool Size**: {{database.pool_size}}
 - **SSL Mode**: {{database.ssl_mode}}
-- **Password**: {% if database.password %}✅ Set{% else %}❌ Not Set{% endif %}
+- **Password**: {% if database.password %}✓ Set{% else %}✗ Not Set{% endif %}
 
 ## Server Configuration
 - **Bind Address**: {{server.bind_address}}
@@ -427,26 +427,27 @@ audit = true
 - **Keepalive Timeout**: {{server.keepalive_timeout}}s
 
 ## Monitoring
-- **Enabled**: {% if monitoring.enabled %}✅ Yes{% else %}❌ No{% endif %}
+- **Enabled**: {% if monitoring.enabled %}✓ Yes{% else %}✗ No{% endif %}
 - **Metrics**: {{monitoring.metrics_endpoint}}
 - **Health Check**: {{monitoring.health_check_endpoint}}
-- **Datadog**: {% if monitoring.datadog_api_key %}✅ Configured{% else %}❌ Not Configured{% endif %}
-- **Sentry**: {% if monitoring.sentry_dsn %}✅ Configured{% else %}❌ Not Configured{% endif %}
+- **Datadog**: {% if monitoring.datadog_api_key %}✓ Configured{% else %}✗ Not Configured{% endif %}
+- **Sentry**: {% if monitoring.sentry_dsn %}✓ Configured{% else %}✗ Not Configured{% endif %}
 
 ## Logging
 - **Level**: {{logging.level}}
 - **Format**: {{logging.format}}
-- **Audit**: {% if logging.audit %}✅ Enabled{% else %}❌ Disabled{% endif %}
+- **Audit**: {% if logging.audit %}✓ Enabled{% else %}✗ Disabled{% endif %}
 
 ## Production Features
 {% for feature in features.production -%}
-✅ {{feature | capitalize}}
+✓ {{feature | capitalize}}
 {% endfor %}
 
 ---
 **⚠️ PRODUCTION ENVIRONMENT ⚠️**
 *Deployment verified at {{deployment.timestamp}}*
-"#.trim();
+"#
+    .trim();
 
     let liquid_context = context.to_liquid_context();
     let parser = ParserBuilder::with_stdlib()
@@ -464,14 +465,14 @@ audit = true
     assert!(rendered.contains("- **Name**: production-app"));
     assert!(rendered.contains("- **Version**: 2.1.0-build.789"));
     assert!(rendered.contains("- **Environment**: production"));
-    assert!(rendered.contains("- **SSL Required**: ✅ Enabled"));
-    assert!(rendered.contains("- **Rate Limiting**: ✅ Enabled"));
+    assert!(rendered.contains("- **SSL Required**: ✓ Enabled"));
+    assert!(rendered.contains("- **Rate Limiting**: ✓ Enabled"));
     assert!(rendered.contains("- **Port**: 443"));
-    assert!(rendered.contains("- **Password**: ✅ Set"));
-    assert!(rendered.contains("- **Datadog**: ✅ Configured"));
+    assert!(rendered.contains("- **Password**: ✓ Set"));
+    assert!(rendered.contains("- **Datadog**: ✓ Configured"));
     assert!(rendered.contains("- **Level**: error"));
-    assert!(rendered.contains("✅ Caching"));
-    assert!(rendered.contains("✅ Security"));
+    assert!(rendered.contains("✓ Caching"));
+    assert!(rendered.contains("✓ Security"));
     assert!(rendered.contains("**⚠️ PRODUCTION ENVIRONMENT ⚠️**"));
 
     println!("Production deployment template rendered successfully");
@@ -941,7 +942,7 @@ csrf_protection = true
 {% if app.debug -%}
 🔧 DEBUG MODE ACTIVE
 {% else -%}
-✅ PRODUCTION MODE
+✓ PRODUCTION MODE
 {% endif %}
 
 Server: {{server.workers}} workers on port {{server.port}}
@@ -950,14 +951,14 @@ Database: {{database.url}} (pool: {{database.pool_size}})
 {% if features -%}
 Features:
 {% for feature in features -%}
-- {{feature[0] | replace: "_", " " | capitalize}}: {% if feature[1] %}✅{% else %}❌{% endif %}
+- {{feature[0] | replace: "_", " " | capitalize}}: {% if feature[1] %}✓{% else %}✗{% endif %}
 {% endfor %}
 {% endif %}
 
 {% if security -%}
 Security:
 {% for setting in security -%}
-- {{setting[0] | replace: "_", " " | capitalize}}: {% if setting[1] %}✅{% else %}❌{% endif %}
+- {{setting[0] | replace: "_", " " | capitalize}}: {% if setting[1] %}✓{% else %}✗{% endif %}
 {% endfor %}
 {% endif %}
 "#
@@ -991,15 +992,15 @@ Security:
                 assert!(rendered.contains("🔧 DEBUG MODE ACTIVE"));
                 assert!(rendered.contains("Server: 4 workers on port 3000"));
                 assert!(rendered.contains("Database: postgresql://localhost/app_dev (pool: 10)"));
-                assert!(rendered.contains("- New feature: ✅"));
-                assert!(rendered.contains("- Experimental ui: ❌"));
+                assert!(rendered.contains("- New feature: ✓"));
+                assert!(rendered.contains("- Experimental ui: ✗"));
             }
             "v1.0.0" => {
-                assert!(rendered.contains("✅ PRODUCTION MODE"));
+                assert!(rendered.contains("✓ PRODUCTION MODE"));
                 assert!(rendered.contains("Server: 8 workers on port 80"));
                 assert!(rendered.contains("Database: postgresql://prod-db/app_prod (pool: 50)"));
-                assert!(rendered.contains("- Performance monitoring: ✅"));
-                assert!(rendered.contains("- Ssl required: ✅"));
+                assert!(rendered.contains("- Performance monitoring: ✓"));
+                assert!(rendered.contains("- Ssl required: ✓"));
             }
             _ => panic!("Unexpected version: {}", version_name),
         }

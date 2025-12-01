@@ -36,11 +36,11 @@ fn get_help_text(args: &[&str]) -> String {
 
 #[test]
 fn test_agent_command_basic_parsing() {
-    // Test agent command without subcommand should fail
+    // Test agent command without subcommand now succeeds (defaults to Show)
     let result = try_parse_cli(&["agent"]);
     assert!(
-        result.is_err(),
-        "Agent command without subcommand should fail"
+        result.is_ok(),
+        "Agent command without subcommand should succeed (defaults to Show)"
     );
 
     // Test valid agent list command
@@ -50,7 +50,7 @@ fn test_agent_command_basic_parsing() {
     if let Ok(cli) = result {
         match cli.command {
             Some(Commands::Agent { subcommand }) => match subcommand {
-                AgentSubcommand::List { format } => {
+                Some(AgentSubcommand::List { format }) => {
                     assert_eq!(
                         format,
                         OutputFormat::Table,
@@ -70,11 +70,9 @@ fn test_agent_command_basic_parsing() {
     if let Ok(cli) = result {
         match cli.command {
             Some(Commands::Agent { subcommand }) => match subcommand {
-                AgentSubcommand::Use { agent_name } => {
-                    assert_eq!(
-                        agent_name, "test-agent",
-                        "Should parse agent name correctly"
-                    );
+                Some(AgentSubcommand::Use { first, second }) => {
+                    assert_eq!(first, "test-agent", "Should parse agent name correctly");
+                    assert_eq!(second, None, "Second argument should be None");
                 }
                 _ => panic!("Should parse as Use subcommand"),
             },
@@ -92,7 +90,7 @@ fn test_agent_list_format_parsing() {
     if let Ok(cli) = result {
         match cli.command {
             Some(Commands::Agent { subcommand }) => match subcommand {
-                AgentSubcommand::List { format } => {
+                Some(AgentSubcommand::List { format }) => {
                     assert_eq!(format, OutputFormat::Table);
                 }
                 _ => panic!("Should parse as List subcommand"),
@@ -108,7 +106,7 @@ fn test_agent_list_format_parsing() {
     if let Ok(cli) = result {
         match cli.command {
             Some(Commands::Agent { subcommand }) => match subcommand {
-                AgentSubcommand::List { format } => {
+                Some(AgentSubcommand::List { format }) => {
                     assert_eq!(format, OutputFormat::Json);
                 }
                 _ => panic!("Should parse as List subcommand"),
@@ -124,7 +122,7 @@ fn test_agent_list_format_parsing() {
     if let Ok(cli) = result {
         match cli.command {
             Some(Commands::Agent { subcommand }) => match subcommand {
-                AgentSubcommand::List { format } => {
+                Some(AgentSubcommand::List { format }) => {
                     assert_eq!(format, OutputFormat::Yaml);
                 }
                 _ => panic!("Should parse as List subcommand"),
@@ -147,8 +145,9 @@ fn test_agent_use_argument_parsing() {
     if let Ok(cli) = result {
         match cli.command {
             Some(Commands::Agent { subcommand }) => match subcommand {
-                AgentSubcommand::Use { agent_name } => {
-                    assert_eq!(agent_name, "claude-code");
+                Some(AgentSubcommand::Use { first, second }) => {
+                    assert_eq!(first, "claude-code");
+                    assert_eq!(second, None);
                 }
                 _ => panic!("Should parse as Use subcommand"),
             },
@@ -171,12 +170,25 @@ fn test_agent_use_argument_parsing() {
     let result = try_parse_cli(&["agent", "use"]);
     assert!(result.is_err(), "Agent use without name should fail");
 
-    // Test with multiple arguments (should fail due to unexpected extra arguments)
+    // Test with two arguments (should succeed - first is use case or agent, second is agent name)
     let result = try_parse_cli(&["agent", "use", "first-agent", "second-agent"]);
     assert!(
-        result.is_err(),
-        "Multiple arguments should fail due to extra arguments"
+        result.is_ok(),
+        "Two arguments should succeed (use case + agent name pattern)"
     );
+
+    if let Ok(cli) = result {
+        match cli.command {
+            Some(Commands::Agent { subcommand }) => match subcommand {
+                Some(AgentSubcommand::Use { first, second }) => {
+                    assert_eq!(first, "first-agent");
+                    assert_eq!(second, Some("second-agent".to_string()));
+                }
+                _ => panic!("Should parse as Use subcommand"),
+            },
+            _ => panic!("Should parse as Agent command"),
+        }
+    }
 
     // Test with single valid agent name
     let result = try_parse_cli(&["agent", "use", "test-agent"]);
@@ -188,8 +200,9 @@ fn test_agent_use_argument_parsing() {
     if let Ok(cli) = result {
         match cli.command {
             Some(Commands::Agent { subcommand }) => match subcommand {
-                AgentSubcommand::Use { agent_name } => {
-                    assert_eq!(agent_name, "test-agent", "Should use provided agent name");
+                Some(AgentSubcommand::Use { first, second }) => {
+                    assert_eq!(first, "test-agent", "Should use provided agent name");
+                    assert_eq!(second, None);
                 }
                 _ => panic!("Should parse as Use subcommand"),
             },
@@ -275,13 +288,17 @@ fn test_agent_list_help_text_content() {
 fn test_agent_use_help_text_content() {
     let help_text = get_help_text(&["agent", "use", "--help"]);
 
-    // Should contain agent name parameter
+    // Should contain agent name parameter (now using FIRST and SECOND)
     assert!(
-        help_text.contains("AGENT_NAME")
+        help_text.contains("FIRST")
+            || help_text.contains("first")
+            || help_text.contains("<FIRST>")
+            || help_text.contains("AGENT_NAME")
             || help_text.contains("agent-name")
             || help_text.contains("<AGENT_NAME>")
             || help_text.contains("agent_name"),
-        "Help should show agent name parameter"
+        "Help should show agent name parameter: {}",
+        help_text
     );
 
     // Should contain usage information
@@ -355,15 +372,11 @@ fn test_help_text_formatting_quality() {
 
 #[test]
 fn test_argument_validation_error_messages() {
-    // Test missing subcommand
+    // Test missing subcommand - now succeeds with optional subcommand (defaults to Show)
     let result = try_parse_cli(&["agent"]);
-    assert!(result.is_err(), "Should fail without subcommand");
-
-    let error_msg = result.unwrap_err().to_string();
     assert!(
-        error_msg.contains("subcommand") || error_msg.contains("required"),
-        "Error should mention missing subcommand: {}",
-        error_msg
+        result.is_ok(),
+        "Should succeed without explicit subcommand (defaults to Show)"
     );
 
     // Test invalid subcommand
@@ -483,7 +496,7 @@ fn test_command_hierarchy_structure() {
         match cli.command {
             Some(Commands::Agent { subcommand }) => {
                 // This confirms the command hierarchy is correct
-                assert!(matches!(subcommand, AgentSubcommand::List { .. }));
+                assert!(matches!(subcommand, Some(AgentSubcommand::List { .. })));
             }
             _ => panic!("Should parse as Agent command with proper hierarchy"),
         }
@@ -496,7 +509,7 @@ fn test_command_hierarchy_structure() {
     if let Ok(cli) = result {
         match cli.command {
             Some(Commands::Agent { subcommand }) => {
-                assert!(matches!(subcommand, AgentSubcommand::Use { .. }));
+                assert!(matches!(subcommand, Some(AgentSubcommand::Use { .. })));
             }
             _ => panic!("Should parse as nested Agent Use command"),
         }
@@ -528,7 +541,7 @@ fn test_global_flags_with_agent_commands() {
         assert!(cli.debug, "Global debug flag should be parsed");
         match cli.command {
             Some(Commands::Agent { subcommand }) => match subcommand {
-                AgentSubcommand::List { format } => {
+                Some(AgentSubcommand::List { format }) => {
                     assert_eq!(format, OutputFormat::Json);
                 }
                 _ => panic!("Should maintain subcommand parsing with global flags"),
@@ -554,9 +567,9 @@ fn test_output_format_enum_completeness() {
         if let Ok(cli) = result {
             match cli.command {
                 Some(Commands::Agent { subcommand }) => match subcommand {
-                    AgentSubcommand::List {
+                    Some(AgentSubcommand::List {
                         format: parsed_format,
-                    } => match parsed_format {
+                    }) => match parsed_format {
                         OutputFormat::Table => assert_eq!(*format, "table"),
                         OutputFormat::Json => assert_eq!(*format, "json"),
                         OutputFormat::Yaml => assert_eq!(*format, "yaml"),
@@ -620,8 +633,9 @@ fn test_agent_name_edge_cases() {
         if let Ok(cli) = result {
             match cli.command {
                 Some(Commands::Agent { subcommand }) => match subcommand {
-                    AgentSubcommand::Use { agent_name } => {
-                        assert_eq!(agent_name, *name);
+                    Some(AgentSubcommand::Use { first, second }) => {
+                        assert_eq!(first, *name);
+                        assert_eq!(second, None);
                     }
                     _ => panic!("Should parse as Use command"),
                 },
@@ -650,8 +664,8 @@ fn test_argument_order_flexibility() {
                 Some(Commands::Agent { subcommand: sub2 }),
             ) => match (sub1, sub2) {
                 (
-                    AgentSubcommand::List { format: fmt1 },
-                    AgentSubcommand::List { format: fmt2 },
+                    Some(AgentSubcommand::List { format: fmt1 }),
+                    Some(AgentSubcommand::List { format: fmt2 }),
                 ) => {
                     assert_eq!(fmt1, fmt2, "Format should be parsed consistently");
                     assert_eq!(fmt1, OutputFormat::Json);

@@ -429,21 +429,21 @@ mod tests {
     #[test]
     fn test_table_alignment_with_emojis() {
         let test_rows = vec![
-            create_test_row("✅", "Check One", "Everything is working"),
+            create_test_row("✓", "Check One", "Everything is working"),
             create_test_row("⚠️", "Check Two", "Warning message"),
-            create_test_row("❌", "Check Three", "Error occurred"),
+            create_test_row("✗", "Check Three", "Error occurred"),
         ];
 
         let table = render_table(&test_rows);
 
-        verify_table_output(&table, &["✅", "⚠️", "❌"], Some(7), &[]);
+        verify_table_output(&table, &["✓", "⚠️", "✗"], Some(7), &[]);
     }
 
     /// Test that table rendering handles long text correctly
     #[test]
     fn test_table_with_long_content() {
         let test_rows = vec![
-            create_test_row("✅", "Short Name", "Short message"),
+            create_test_row("✓", "Short Name", "Short message"),
             create_test_row(
                 "⚠️",
                 "Very Long Name That Might Cause Issues",
@@ -455,7 +455,7 @@ mod tests {
 
         verify_table_output(
             &table,
-            &["✅", "⚠️"],
+            &["✓", "⚠️"],
             None,
             &["Very Long Name", "very long message"],
         );
@@ -474,12 +474,12 @@ mod tests {
     #[test]
     fn test_table_with_special_characters() {
         let test_rows = vec![
-            create_test_row("✅", "Test with → arrow", "Contains • bullet"),
+            create_test_row("✓", "Test with → arrow", "Contains • bullet"),
             create_test_row("⚠️", "Test with © symbol", "Contains ™ trademark"),
         ];
 
         let table = render_table(&test_rows);
 
-        verify_table_output(&table, &["✅", "⚠️"], None, &["→", "•", "©", "™"]);
+        verify_table_output(&table, &["✓", "⚠️"], None, &["→", "•", "©", "™"]);
     }
 }

@@ -71,17 +71,17 @@ impl AgentExecutorFactory {
     /// ```
     pub async fn create_executor(
         agent_config: &swissarmyhammer_config::agent::AgentConfig,
-        mcp_server: Option<crate::llama::McpServerHandle>,
+        mcp_server: agent_client_protocol::McpServer,
     ) -> ActionResult<Box<dyn AgentExecutor>> {
         match agent_config.executor_type() {
             AgentExecutorType::ClaudeCode => {
-                tracing::info!("Creating ClaudeCode executor");
-                let mut executor = crate::claude::ClaudeCodeExecutor::new();
+                tracing::info!("Creating ClaudeCode executor with MCP server");
+                let mut executor = crate::claude::ClaudeCodeExecutor::new(mcp_server);
                 executor.initialize().await?;
                 Ok(Box::new(executor))
             }
             AgentExecutorType::LlamaAgent => {
-                tracing::info!("Creating LlamaAgent executor");
+                tracing::info!("Creating LlamaAgent executor with MCP server");
 
                 // Extract LlamaAgent configuration from agent config
                 let llama_config = match &agent_config.executor {
@@ -96,7 +96,7 @@ impl AgentExecutorFactory {
                     }
                 };
 
-                // Create executor with optional MCP server handle
+                // Create executor with MCP server
                 let mut executor = crate::llama::LlamaAgentExecutor::new(llama_config, mcp_server);
                 executor.initialize().await?;
                 Ok(Box::new(executor))

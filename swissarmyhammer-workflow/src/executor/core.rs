@@ -13,6 +13,7 @@ use crate::{
 use serde_json::Value;
 use std::sync::Arc;
 use std::time::Instant;
+use swissarmyhammer_config::agent::AgentConfig;
 
 /// Workflow execution engine
 pub struct WorkflowExecutor {
@@ -27,6 +28,9 @@ pub struct WorkflowExecutor {
     test_storage: Option<Arc<crate::storage::WorkflowStorage>>,
     /// Working directory for file operations (including abort file)
     working_dir: std::path::PathBuf,
+
+    /// Optional agent configuration for workflow operations
+    _agent: Option<Arc<AgentConfig>>,
 }
 
 impl WorkflowExecutor {
@@ -34,6 +38,7 @@ impl WorkflowExecutor {
     fn with_config(
         working_dir: std::path::PathBuf,
         test_storage: Option<Arc<crate::storage::WorkflowStorage>>,
+        agent: Option<Arc<AgentConfig>>,
     ) -> Self {
         Self {
             execution_history: Vec::new(),
@@ -41,6 +46,7 @@ impl WorkflowExecutor {
             metrics: WorkflowMetrics::new(),
             test_storage,
             working_dir,
+            _agent: agent,
         }
     }
 
@@ -49,12 +55,13 @@ impl WorkflowExecutor {
         Self::with_config(
             std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")),
             None,
+            None,
         )
     }
 
     /// Create a new workflow executor with custom working directory
     pub fn with_working_dir<P: AsRef<std::path::Path>>(working_dir: P) -> Self {
-        Self::with_config(working_dir.as_ref().to_path_buf(), None)
+        Self::with_config(working_dir.as_ref().to_path_buf(), None, None)
     }
 
     /// Create a new workflow executor with test storage
@@ -62,7 +69,25 @@ impl WorkflowExecutor {
         Self::with_config(
             std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")),
             Some(storage),
+            None,
         )
+    }
+
+    /// Create a workflow executor with agent configuration
+    pub fn with_agent(agent: Arc<AgentConfig>) -> Self {
+        Self::with_config(
+            std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")),
+            None,
+            Some(agent),
+        )
+    }
+
+    /// Create a workflow executor with working directory and agent
+    pub fn with_working_dir_and_agent<P: AsRef<std::path::Path>>(
+        working_dir: P,
+        agent: Arc<AgentConfig>,
+    ) -> Self {
+        Self::with_config(working_dir.as_ref().to_path_buf(), None, Some(agent))
     }
 
     /// Get the workflow storage (test storage if available, otherwise create file system storage)

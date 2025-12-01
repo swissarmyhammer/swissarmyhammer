@@ -23,7 +23,7 @@ async fn test_mcp_server_creation() {
     let _guard = DirGuard(original_dir);
 
     let library = PromptLibrary::new();
-    let server = McpServer::new_with_work_dir(library, test_dir.path().to_path_buf())
+    let server = McpServer::new_with_work_dir(library, test_dir.path().to_path_buf(), None)
         .await
         .unwrap();
 
@@ -68,7 +68,7 @@ async fn test_mcp_server_list_prompts() {
         .with_description("Test description".to_string());
     library.add(prompt).unwrap();
 
-    let server = McpServer::new_with_work_dir(library, test_dir.path().to_path_buf())
+    let server = McpServer::new_with_work_dir(library, test_dir.path().to_path_buf(), None)
         .await
         .unwrap();
     let prompts = server.list_prompts().await.unwrap();
@@ -89,7 +89,7 @@ async fn test_mcp_server_get_prompt() {
         Prompt::new("test", "Hello {{ name }}!").with_description("Greeting prompt".to_string());
     library.add(prompt).unwrap();
 
-    let server = McpServer::new_with_work_dir(library, test_dir.path().to_path_buf())
+    let server = McpServer::new_with_work_dir(library, test_dir.path().to_path_buf(), None)
         .await
         .unwrap();
     let mut arguments = HashMap::new();
@@ -185,7 +185,7 @@ async fn test_mcp_server_uses_same_directory_discovery() {
     // The server should use the same directories for file watching
     // This test ensures the fix for hardcoded paths is working
     let library = PromptLibrary::new();
-    let _server = McpServer::new_with_work_dir(library, test_dir.path().to_path_buf())
+    let _server = McpServer::new_with_work_dir(library, test_dir.path().to_path_buf(), None)
         .await
         .unwrap();
 
@@ -284,7 +284,7 @@ async fn test_mcp_server_does_not_expose_partial_templates() {
     .with_description("Another partial template".to_string());
     library.add(partial_with_marker).unwrap();
 
-    let server = McpServer::new_with_work_dir(library, test_dir.path().to_path_buf())
+    let server = McpServer::new_with_work_dir(library, test_dir.path().to_path_buf(), None)
         .await
         .unwrap();
 

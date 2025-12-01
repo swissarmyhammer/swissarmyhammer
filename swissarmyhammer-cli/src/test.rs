@@ -161,7 +161,7 @@ impl TestRunner {
                 match input.interact_text() {
                     Ok(value) => {
                         if value.is_empty() && arg.required && arg.default.is_none() {
-                            println!("{}", "❌ This argument is required".red());
+                            println!("{}", "✗ This argument is required".red());
                             continue;
                         }
 

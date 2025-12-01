@@ -27,7 +27,12 @@ pub async fn create_test_context() -> ToolContext {
     let tool_handlers = Arc::new(ToolHandlers::new());
     let agent_config = Arc::new(AgentConfig::default());
 
-    ToolContext::new(tool_handlers, git_ops, agent_config)
+    let context = ToolContext::new(tool_handlers, git_ops, agent_config);
+
+    // Set a test MCP server port for tests that need it
+    *context.mcp_server_port.write().await = Some(8080);
+
+    context
 }
 
 /// Helper for testing tools that send progress notifications

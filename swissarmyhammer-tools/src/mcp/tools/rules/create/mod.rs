@@ -196,7 +196,7 @@ impl McpTool for CreateRuleTool {
 
         // Format the success response
         let result_text = format!(
-            "✅ Created rule '{}'\n\nFile: {}\nSeverity: {}{}",
+            "✓ Created rule '{}'\n\nFile: {}\nSeverity: {}{}",
             request.name,
             file_path.display(),
             request.severity,

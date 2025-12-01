@@ -273,9 +273,9 @@ fn validation_test(
     let mut summary_contains = vec![];
     if total > 0 {
         if expected_all_valid {
-            summary_contains.extend_from_slice(&["✅", "All"]);
+            summary_contains.extend_from_slice(&["✓", "All"]);
         } else {
-            summary_contains.extend_from_slice(&["⚠️"]);
+            summary_contains.extend_from_slice(&["⚠"]);
         }
     }
 
@@ -339,12 +339,12 @@ fn test_validation_stats() {
     let test_cases = vec![
         {
             let mut case = validation_test("all valid", 10, 10, 0, 0);
-            case.expected_summary_contains = vec!["✅", "All 10 CLI tools are valid"];
+            case.expected_summary_contains = vec!["✓", "All 10 CLI tools are valid"];
             case
         },
         {
             let mut case = validation_test("some invalid", 10, 7, 3, 5);
-            case.expected_summary_contains = vec!["⚠️", "7 of 10", "70.0%", "5 validation errors"];
+            case.expected_summary_contains = vec!["⚠", "7 of 10", "70.0%", "5 validation errors"];
             case
         },
         validation_test("zero tools", 0, 0, 0, 0),

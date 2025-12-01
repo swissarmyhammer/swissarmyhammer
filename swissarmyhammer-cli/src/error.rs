@@ -3,6 +3,7 @@
 //! This module provides a robust error handling approach that preserves
 //! error context while still providing appropriate exit codes for CLI applications.
 
+use owo_colors::OwoColorize;
 use std::error::Error;
 use std::fmt;
 
@@ -74,7 +75,7 @@ impl Error for CliError {
 /// Format a generic Git repository requirement error message
 fn format_git_repository_requirement_error() -> String {
     format!(
-        "❌ Git repository required\n\n\
+        "{} Git repository required\n\n\
         SwissArmyHammer operations require a Git repository context.\n\
         \n\
         Solutions:\n\
@@ -83,6 +84,7 @@ fn format_git_repository_requirement_error() -> String {
         • Clone an existing repository: git clone <url>\n\
         \n\
         Current directory: {}",
+        "✗".red(),
         std::env::current_dir()
             .map(|p| p.display().to_string())
             .unwrap_or_else(|_| "<unable to determine>".to_string())
@@ -92,7 +94,7 @@ fn format_git_repository_requirement_error() -> String {
 /// Format directory creation error message
 fn format_directory_creation_error(details: &str) -> String {
     format!(
-        "❌ Failed to create .swissarmyhammer directory\n\n\
+        "{} Failed to create .swissarmyhammer directory\n\n\
         Error: {details}\n\
         \n\
         SwissArmyHammer requires a .swissarmyhammer directory to store:\n\
@@ -104,14 +106,15 @@ fn format_directory_creation_error(details: &str) -> String {
         Solutions:\n\
         • Check directory permissions in current location\n\
         • Ensure you have write access to create directories\n\
-        • Try running from a different directory with write permissions"
+        • Try running from a different directory with write permissions",
+        "✗".red()
     )
 }
 
 /// Format directory access error message
 fn format_directory_access_error(details: &str) -> String {
     format!(
-        "❌ Git repository found but .swissarmyhammer directory is not accessible\n\n\
+        "{} Git repository found but .swissarmyhammer directory is not accessible\n\n\
         Error: {details}\n\
         \n\
         The .swissarmyhammer directory exists but cannot be accessed.\n\
@@ -120,7 +123,8 @@ fn format_directory_access_error(details: &str) -> String {
         • Check directory permissions: ls -la .swissarmyhammer/\n\
         • Ensure read/write access: chmod 755 .swissarmyhammer/\n\
         • Verify the directory is not corrupted or locked\n\
-        • Try running with appropriate permissions"
+        • Try running with appropriate permissions",
+        "✗".red()
     )
 }
 
@@ -128,7 +132,7 @@ fn format_directory_access_error(details: &str) -> String {
 #[allow(dead_code)]
 pub fn format_component_specific_git_error(component: &str, explanation: &str) -> String {
     format!(
-        "❌ {component} require a Git repository\n\n\
+        "{} {component} require a Git repository\n\n\
         {explanation}\n\
         \n\
         Solutions:\n\
@@ -137,6 +141,7 @@ pub fn format_component_specific_git_error(component: &str, explanation: &str) -
         • Clone an existing repository: git clone <url>\n\
         \n\
         Current directory: {}",
+        "✗".red(),
         std::env::current_dir()
             .map(|p| p.display().to_string())
             .unwrap_or_else(|_| "<unable to determine>".to_string())
@@ -168,7 +173,7 @@ fn format_enhanced_parameter_error(error: &swissarmyhammer_common::ParameterErro
             parameter, details, ..
         } => {
             let mut output = format!(
-                "❌ Parameter '{}' validation failed: {}",
+                "✗ Parameter '{}' validation failed: {}",
                 parameter, details.message
             );
 
@@ -194,7 +199,7 @@ fn format_enhanced_parameter_error(error: &swissarmyhammer_common::ParameterErro
             parameter, details, ..
         } => {
             let mut output = format!(
-                "❌ Parameter '{}' format is invalid: '{}'",
+                "✗ Parameter '{}' format is invalid: '{}'",
                 parameter, details.value
             );
             output.push_str(&format!("\n   {}", details.pattern_description));
@@ -218,7 +223,7 @@ fn format_enhanced_parameter_error(error: &swissarmyhammer_common::ParameterErro
             parameter, details, ..
         } => {
             let mut output = format!(
-                "❌ Parameter '{}' has invalid value: '{}'",
+                "✗ Parameter '{}' has invalid value: '{}'",
                 parameter, details.value
             );
 
@@ -243,11 +248,11 @@ fn format_enhanced_parameter_error(error: &swissarmyhammer_common::ParameterErro
             parameter,
             attempts,
         } => {
-            format!("❌ Maximum retry attempts exceeded for parameter '{parameter}' ({attempts} attempts)\n\n📖 Use --help to see parameter requirements\n🔄 Check your input format and try again")
+            format!("✗ Maximum retry attempts exceeded for parameter '{parameter}' ({attempts} attempts)\n\n📖 Use --help to see parameter requirements\n🔄 Check your input format and try again")
         }
 
         _ => {
-            format!("❌ Workflow parameter error: {error}\n\n📖 For parameter details, run: sah <command> --help\n🔄 To fix this interactively, run: sah <command> --interactive")
+            format!("✗ Workflow parameter error: {error}\n\n📖 For parameter details, run: sah <command> --help\n🔄 To fix this interactively, run: sah <command> --interactive")
         }
     }
 }
@@ -283,7 +288,7 @@ impl From<swissarmyhammer::SwissArmyHammerError> for CliError {
 /// Convert schema validation errors to CLI errors with appropriate exit codes
 impl From<crate::schema_validation::ValidationError> for CliError {
     fn from(error: crate::schema_validation::ValidationError) -> Self {
-        let mut message = format!("❌ Schema validation failed: {}", error);
+        let mut message = format!("✗ Schema validation failed: {}", error);
 
         if let Some(suggestion) = error.suggestion() {
             message.push_str(&format!("\n\n💡 {}", suggestion));

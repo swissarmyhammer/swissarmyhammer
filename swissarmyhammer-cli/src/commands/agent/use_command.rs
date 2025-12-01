@@ -3,32 +3,47 @@
 use crate::context::CliContext;
 use colored::Colorize;
 use swissarmyhammer_config::agent::{AgentError, AgentManager};
+use swissarmyhammer_config::AgentUseCase;
 
 /// Execute the agent use command
 pub async fn execute_use_command(
-    agent_name: String,
+    first: String,
+    second: Option<String>,
     _context: &CliContext,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    // Parse arguments to determine if this is use case + agent or just agent
+    let (use_case, agent_name) = if let Some(agent) = second {
+        // Two arguments: use_case agent_name
+        let use_case = first
+            .trim()
+            .parse::<AgentUseCase>()
+            .map_err(|e| format!("Invalid use case: {}", e))?;
+        (use_case, agent.trim().to_string())
+    } else {
+        // One argument: just agent name (root use case)
+        (AgentUseCase::Root, first.trim().to_string())
+    };
+
     // Input validation
-    let agent_name = agent_name.trim();
     if agent_name.is_empty() {
         return Err("Agent name cannot be empty".into());
     }
 
-    tracing::info!("Switching to agent: {}", agent_name);
+    tracing::info!("Setting {} use case to agent: {}", use_case, agent_name);
 
-    // Use AgentManager to apply the agent configuration
-    match AgentManager::use_agent(agent_name) {
+    // Use AgentManager with use case support
+    match AgentManager::use_agent_for_use_case(&agent_name, use_case) {
         Ok(()) => {
             // Success message with confirmation
             println!(
-                "{} Successfully switched to agent: {}",
-                "✅".green(),
+                "{} Successfully set {} use case to agent: {}",
+                "✓".green(),
+                use_case.to_string().cyan(),
                 agent_name.green().bold()
             );
 
             // Try to get agent info for additional context
-            if let Ok(agent_info) = AgentManager::find_agent_by_name(agent_name) {
+            if let Ok(agent_info) = AgentManager::find_agent_by_name(&agent_name) {
                 let source_display = match agent_info.source {
                     swissarmyhammer_config::agent::AgentSource::Builtin => "builtin".green(),
                     swissarmyhammer_config::agent::AgentSource::Project => "project".yellow(),
@@ -47,7 +62,7 @@ pub async fn execute_use_command(
             // Try to provide helpful suggestions
             match AgentManager::list_agents() {
                 Ok(available_agents) => {
-                    eprintln!("{} Agent '{}' not found", "❌".red(), name.red());
+                    eprintln!("{} Agent '{}' not found", "✗".red(), name.red());
 
                     // Simple suggestion logic - find agents with similar names
                     let suggestions: Vec<_> = available_agents
@@ -77,7 +92,7 @@ pub async fn execute_use_command(
                     }
                 }
                 Err(_) => {
-                    eprintln!("{} Agent '{}' not found", "❌".red(), name.red());
+                    eprintln!("{} Agent '{}' not found", "✗".red(), name.red());
                 }
             }
             Err(format!("Agent '{}' not found", name).into())
@@ -85,21 +100,21 @@ pub async fn execute_use_command(
         Err(AgentError::IoError(io_err)) => {
             eprintln!(
                 "{} Failed to update configuration: {}",
-                "❌".red(),
+                "✗".red(),
                 io_err.to_string().red()
             );
             eprintln!("Check that you have write permissions to the config file and directory.");
             Err(format!("Configuration update failed: {}", io_err).into())
         }
         Err(AgentError::ConfigError(config_err)) => {
-            eprintln!("{} Configuration error: {}", "❌".red(), config_err.red());
+            eprintln!("{} Configuration error: {}", "✗".red(), config_err.red());
             eprintln!("The agent configuration may be invalid or corrupted.");
             Err(format!("Configuration error: {}", config_err).into())
         }
         Err(AgentError::ParseError(serde_err)) => {
             eprintln!(
                 "{} Failed to process agent configuration: {}",
-                "❌".red(),
+                "✗".red(),
                 serde_err.to_string().red()
             );
             Err(format!("Configuration processing failed: {}", serde_err).into())
@@ -107,7 +122,7 @@ pub async fn execute_use_command(
         Err(AgentError::InvalidPath(path)) => {
             eprintln!(
                 "{} Invalid agent path: {}",
-                "❌".red(),
+                "✗".red(),
                 path.display().to_string().red()
             );
             eprintln!("The agent configuration file path is invalid or inaccessible.");
@@ -150,12 +165,12 @@ mod tests {
         let context = create_test_context().await;
 
         // Test empty string
-        let result = execute_use_command("".to_string(), &context).await;
+        let result = execute_use_command("".to_string(), None, &context).await;
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("cannot be empty"));
 
         // Test whitespace-only string
-        let result = execute_use_command("   ".to_string(), &context).await;
+        let result = execute_use_command("   ".to_string(), None, &context).await;
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("cannot be empty"));
     }
@@ -164,7 +179,7 @@ mod tests {
     async fn test_execute_use_command_nonexistent_agent() {
         let context = create_test_context().await;
 
-        let result = execute_use_command("nonexistent-agent-xyz".to_string(), &context).await;
+        let result = execute_use_command("nonexistent-agent-xyz".to_string(), None, &context).await;
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("not found"));
     }
@@ -174,7 +189,7 @@ mod tests {
         let context = create_test_context().await;
 
         // Test with a known builtin agent (claude-code should always exist)
-        let result = execute_use_command("claude-code".to_string(), &context).await;
+        let result = execute_use_command("claude-code".to_string(), None, &context).await;
         // This might fail if no config directory exists, but we test the logic
         match result {
             Ok(()) => {
@@ -197,7 +212,7 @@ mod tests {
         let context = create_test_context().await;
 
         // Test that agent names get properly trimmed
-        let result = execute_use_command("  claude-code  ".to_string(), &context).await;
+        let result = execute_use_command("  claude-code  ".to_string(), None, &context).await;
 
         match result {
             Ok(()) => {
@@ -227,7 +242,7 @@ mod tests {
         let context = create_test_context().await;
 
         // Test with claude-code which should exist as builtin
-        let result = execute_use_command("claude-code".to_string(), &context).await;
+        let result = execute_use_command("claude-code".to_string(), None, &context).await;
 
         // This should succeed or fail only due to permission/config issues
         match result {
@@ -282,11 +297,128 @@ mod tests {
 
         // Test that error messages are properly formatted
         let result =
-            execute_use_command("definitely-not-an-agent-12345".to_string(), &context).await;
+            execute_use_command("definitely-not-an-agent-12345".to_string(), None, &context).await;
         assert!(result.is_err());
 
         let error_msg = result.unwrap_err().to_string();
         assert!(error_msg.contains("not found"));
         assert!(error_msg.contains("definitely-not-an-agent-12345"));
+    }
+
+    // Test use case parsing
+    #[tokio::test]
+    async fn test_execute_use_command_with_use_case() {
+        let context = create_test_context().await;
+
+        // Test with rules use case
+        let result = execute_use_command(
+            "rules".to_string(),
+            Some("claude-code".to_string()),
+            &context,
+        )
+        .await;
+        match result {
+            Ok(()) => {
+                // Success case
+            }
+            Err(e) => {
+                // Should only fail due to config issues, not parsing
+                let error_msg = e.to_string();
+                assert!(
+                    !error_msg.contains("Invalid use case"),
+                    "Should not fail parsing valid use case, got: {}",
+                    error_msg
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_execute_use_command_invalid_use_case() {
+        let context = create_test_context().await;
+
+        // Test with invalid use case
+        let result = execute_use_command(
+            "invalid".to_string(),
+            Some("claude-code".to_string()),
+            &context,
+        )
+        .await;
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("Invalid use case"));
+    }
+
+    #[tokio::test]
+    async fn test_execute_use_command_root_explicit() {
+        let context = create_test_context().await;
+
+        // Test with explicit root use case
+        let result = execute_use_command(
+            "root".to_string(),
+            Some("claude-code".to_string()),
+            &context,
+        )
+        .await;
+        match result {
+            Ok(()) => {
+                // Success case
+            }
+            Err(e) => {
+                // Should only fail due to config issues, not parsing
+                let error_msg = e.to_string();
+                assert!(
+                    !error_msg.contains("Invalid use case"),
+                    "Should not fail parsing valid use case, got: {}",
+                    error_msg
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_execute_use_command_workflows_use_case() {
+        let context = create_test_context().await;
+
+        // Test with workflows use case
+        let result = execute_use_command(
+            "workflows".to_string(),
+            Some("claude-code".to_string()),
+            &context,
+        )
+        .await;
+        match result {
+            Ok(()) => {
+                // Success case
+            }
+            Err(e) => {
+                // Should only fail due to config issues, not parsing
+                let error_msg = e.to_string();
+                assert!(
+                    !error_msg.contains("Invalid use case"),
+                    "Should not fail parsing valid use case, got: {}",
+                    error_msg
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_use_nonexistent_agent_for_use_case() {
+        let context = create_test_context().await;
+
+        // Test setting a nonexistent agent for rules use case
+        let result = execute_use_command(
+            "rules".to_string(),
+            Some("nonexistent".to_string()),
+            &context,
+        )
+        .await;
+
+        assert!(result.is_err(), "Should fail for nonexistent agent");
+        let error_msg = result.unwrap_err().to_string();
+        assert!(
+            error_msg.contains("not found"),
+            "Error should indicate agent was not found"
+        );
     }
 }

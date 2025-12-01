@@ -50,7 +50,7 @@ pub async fn execute_workflow_with_progress(
                 )
             })?;
 
-            println!("✅ Step completed");
+            println!("✓ Step completed");
 
             if run.status != WorkflowRunStatus::Running {
                 break;

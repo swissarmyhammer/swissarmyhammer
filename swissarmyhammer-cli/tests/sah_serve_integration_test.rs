@@ -123,7 +123,7 @@ fn validate_server_capabilities(init_response: &Value) {
         "Server should support tools capability"
     );
 
-    println!("✅ Server capabilities validated");
+    println!("✓ Server capabilities validated");
 }
 
 /// Send initialized notification to complete the handshake
@@ -140,7 +140,7 @@ fn send_initialized_notification(
     // Give server time to process the notification
     std::thread::sleep(Duration::from_millis(100));
 
-    println!("✅ MCP handshake completed");
+    println!("✓ MCP handshake completed");
     Ok(())
 }
 
@@ -220,7 +220,7 @@ async fn list_and_validate_tools(
         );
     }
 
-    println!("✅ All expected tools are present and properly structured");
+    println!("✓ All expected tools are present and properly structured");
 
     Ok(tools.clone())
 }
@@ -235,7 +235,7 @@ async fn test_minimal_tool_executions(
     // Test only one fast, safe tool to verify execution works
     test_single_tool_execution(stdin, reader, 3, "todo_list", json!({})).await?;
 
-    println!("✅ Tool execution test completed successfully");
+    println!("✓ Tool execution test completed successfully");
     Ok(())
 }
 
@@ -293,7 +293,7 @@ async fn test_single_tool_execution(
             result["content"].is_array(),
             "Tool result should have content array"
         );
-        println!("✅ Tool {} executed successfully", tool_name);
+        println!("✓ Tool {} executed successfully", tool_name);
     } else {
         let error = &response["error"];
         // Some tools might fail due to missing dependencies or invalid arguments,

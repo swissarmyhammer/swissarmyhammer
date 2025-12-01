@@ -7,6 +7,7 @@
 use crate::schema_validation::{SchemaValidator, ValidationError};
 use clap::{Arg, ArgAction, Command};
 use once_cell::sync::Lazy;
+use owo_colors::OwoColorize;
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
@@ -122,10 +123,15 @@ impl CliValidationStats {
 
     pub fn summary(&self) -> String {
         if self.is_all_valid() {
-            format!("✅ All {} CLI tools are valid", self.total_tools)
+            format!(
+                "{} All {} CLI tools are valid",
+                "✓".green(),
+                self.total_tools
+            )
         } else {
             format!(
-                "⚠️  {} of {} CLI tools are valid ({:.1}% success rate, {} validation errors)",
+                "{} {} of {} CLI tools are valid ({:.1}% success rate, {} validation errors)",
+                "⚠".yellow(),
                 self.valid_tools,
                 self.total_tools,
                 self.success_rate(),
@@ -472,6 +478,13 @@ Examples:
                     .long("format")
                     .help("Global output format")
                     .value_parser(["table", "json", "yaml"]),
+            )
+            .arg(
+                Arg::new("agent")
+                    .long("agent")
+                    .help("Override agent for all use cases (runtime only, doesn't modify config)")
+                    .value_name("AGENT")
+                    .global(true),
             )
     }
 
@@ -1320,7 +1333,8 @@ Manage and interact with agents in the SwissArmyHammer system.
 Agents provide specialized functionality through dedicated workflows
 and tools for specific use cases.
 
-The agent system provides two main commands:
+The agent system provides three main commands:
+• show - Display current agent use case assignments (default)
 • list - Display all available agents from all sources
 • use - Apply or execute a specific agent
 
@@ -1331,6 +1345,8 @@ Use global arguments to control output:
   --quiet           Suppress output except errors
 
 Examples:
+  sah agent                                # Show use case assignments
+  sah agent show                           # Same as above
   sah agent list                           # List all agents
   sah --verbose agent list                 # Show detailed information
   sah --format=json agent list             # Output as JSON
@@ -1338,6 +1354,17 @@ Examples:
   sah --debug agent use planner            # Use agent with debug output
                 ",
         })
+        .subcommand(
+            Command::new("show")
+                .about("Show current agent use case assignments")
+                .arg(
+                    Arg::new("format")
+                        .long("format")
+                        .help("Output format")
+                        .value_parser(["table", "json", "yaml"])
+                        .default_value("table"),
+                ),
+        )
         .subcommand(
             Command::new("list").about("List available agents").arg(
                 Arg::new("format")
@@ -1348,12 +1375,39 @@ Examples:
             ),
         )
         .subcommand(
-            Command::new("use").about("Use a specific agent").arg(
-                Arg::new("agent_name")
-                    .help("Name of the agent to use")
-                    .value_name("AGENT_NAME")
-                    .required(true),
-            ),
+            Command::new("use")
+                .about("Use a specific agent for a use case")
+                .long_about(
+                    "
+Apply a specific agent configuration to the project for a use case.
+
+Usage patterns:
+  sah agent use <AGENT>              # Set root agent (backward compatible)
+  sah agent use <USE_CASE> <AGENT>   # Set agent for specific use case
+
+Use cases:
+  root      - Default agent for general operations
+  rules     - Agent for rule checking operations
+  workflows - Agent for workflow execution
+
+Examples:
+  sah agent use claude-code               # Set root agent
+  sah agent use rules qwen-coder          # Use Qwen for rules
+  sah agent use workflows claude-code     # Use Claude for workflows
+                ",
+                )
+                .arg(
+                    Arg::new("first")
+                        .help("Agent name OR use case (root, rules, workflows)")
+                        .value_name("FIRST")
+                        .required(true),
+                )
+                .arg(
+                    Arg::new("second")
+                        .help("Agent name (required when first argument is a use case)")
+                        .value_name("SECOND")
+                        .required(false),
+                ),
         )
     }
 

@@ -10,7 +10,8 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use swissarmyhammer_common::{Result, SwissArmyHammerError};
-use swissarmyhammer_config::TemplateContext;
+use swissarmyhammer_config::agent::{parse_agent_config, AgentManager};
+use swissarmyhammer_config::{AgentUseCase, TemplateContext};
 use swissarmyhammer_git::GitOperations;
 use swissarmyhammer_prompts::{PromptLibrary, PromptResolver};
 
@@ -70,7 +71,7 @@ where
         match operation().await {
             Ok(result) => {
                 if attempt > 1 {
-                    tracing::info!("✅ {} succeeded on attempt {}", operation_name, attempt);
+                    tracing::info!("✓ {} succeeded on attempt {}", operation_name, attempt);
                 }
                 return Ok(result);
             }
@@ -148,7 +149,7 @@ impl McpServer {
             // Fallback to a temporary directory if current directory is not accessible
             std::env::temp_dir()
         });
-        Self::new_with_work_dir(library, work_dir).await
+        Self::new_with_work_dir(library, work_dir, None).await
     }
 
     /// Create a new MCP server with the provided prompt library and working directory.
@@ -157,6 +158,7 @@ impl McpServer {
     ///
     /// * `library` - The prompt library to serve via MCP
     /// * `work_dir` - The working directory to use for issue storage and git operations
+    /// * `agent_override` - Optional agent name to override all use case agent assignments
     ///
     /// # Returns
     ///
@@ -164,7 +166,11 @@ impl McpServer {
     ///
     /// # Errors
     ///
-    pub async fn new_with_work_dir(library: PromptLibrary, work_dir: PathBuf) -> Result<Self> {
+    pub async fn new_with_work_dir(
+        library: PromptLibrary,
+        work_dir: PathBuf,
+        agent_override: Option<String>,
+    ) -> Result<Self> {
         // Initialize git operations with work_dir - make it optional for tests
         let git_ops = match GitOperations::with_work_dir(work_dir.clone()) {
             Ok(ops) => Some(ops),
@@ -188,13 +194,79 @@ impl McpServer {
         })?;
         let agent_config = Arc::new(template_context.get_agent_config(None));
 
+        // Load agent configs for each use case
+        let mut use_case_agents = HashMap::new();
+
+        if let Some(override_agent_name) = agent_override {
+            // Override mode: use same agent for all use cases
+            tracing::info!(
+                "Using global agent override '{}' for all use cases",
+                override_agent_name
+            );
+
+            let override_agent = match AgentManager::find_agent_by_name(&override_agent_name) {
+                Ok(info) => match parse_agent_config(&info.content) {
+                    Ok(config) => config,
+                    Err(e) => {
+                        return Err(SwissArmyHammerError::Other {
+                            message: format!(
+                                "Invalid agent override '{}': {}",
+                                override_agent_name, e
+                            ),
+                        });
+                    }
+                },
+                Err(e) => {
+                    return Err(SwissArmyHammerError::Other {
+                        message: format!("Invalid agent override '{}': {}", override_agent_name, e),
+                    });
+                }
+            };
+
+            // Set same agent for all use cases
+            for use_case in [
+                AgentUseCase::Root,
+                AgentUseCase::Rules,
+                AgentUseCase::Workflows,
+            ] {
+                use_case_agents.insert(use_case, Arc::new(override_agent.clone()));
+            }
+        } else {
+            // Normal mode: resolve each use case from config
+            for use_case in [
+                AgentUseCase::Root,
+                AgentUseCase::Rules,
+                AgentUseCase::Workflows,
+            ] {
+                match AgentManager::resolve_agent_config_for_use_case(use_case) {
+                    Ok(config) => {
+                        tracing::debug!(
+                            "Resolved {} use case to agent: {:?}",
+                            use_case,
+                            config.executor_type()
+                        );
+                        use_case_agents.insert(use_case, Arc::new(config));
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            "Failed to resolve agent for {} use case: {}, using root",
+                            use_case,
+                            e
+                        );
+                    }
+                }
+            }
+        }
+
         // Initialize tool registry and context
         let mut tool_registry = ToolRegistry::new();
-        let tool_context = Arc::new(ToolContext::new(
+        let mut tool_context = ToolContext::new(
             Arc::new(tool_handlers.clone()),
             git_ops_arc.clone(),
             agent_config,
-        ));
+        );
+        tool_context.use_case_agents = Arc::new(use_case_agents);
+        let tool_context = Arc::new(tool_context);
 
         // Register all available tools
         register_abort_tools(&mut tool_registry);
@@ -566,7 +638,7 @@ impl ServerHandler for McpServer {
                 tracing::info!("🔍 File watching started for MCP client");
             }
             Err(e) => {
-                tracing::error!("❌ Failed to start file watching for MCP client: {}", e);
+                tracing::error!("✗ Failed to start file watching for MCP client: {}", e);
                 // Continue initialization even if file watching fails
             }
         }

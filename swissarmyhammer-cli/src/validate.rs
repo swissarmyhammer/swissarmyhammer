@@ -412,7 +412,7 @@ impl Validator {
                 writeln!(
                     output,
                     "{} All {} files validated successfully!",
-                    "✅".green(),
+                    "✓".green(),
                     result.files_checked
                 )
                 .unwrap();
@@ -499,7 +499,7 @@ impl Validator {
             }
 
             if result.has_errors() {
-                writeln!(output, "\n{} Validation failed with errors.", "❌".red()).unwrap();
+                writeln!(output, "\n{} Validation failed with errors.", "✗".red()).unwrap();
             } else if result.has_warnings() {
                 writeln!(
                     output,
@@ -508,7 +508,7 @@ impl Validator {
                 )
                 .unwrap();
             } else {
-                writeln!(output, "\n{} Validation passed!", "✅".green()).unwrap();
+                writeln!(output, "\n{} Validation passed!", "✓".green()).unwrap();
             }
         } else {
             // In quiet mode, only show summary for errors
@@ -516,7 +516,7 @@ impl Validator {
                 writeln!(output, "\n{}", "Summary:".bold()).unwrap();
                 writeln!(output, "  Files checked: {}", result.files_checked).unwrap();
                 writeln!(output, "  Errors: {}", result.errors.to_string().red()).unwrap();
-                writeln!(output, "\n{} Validation failed with errors.", "❌".red()).unwrap();
+                writeln!(output, "\n{} Validation failed with errors.", "✗".red()).unwrap();
             }
         }
 

@@ -79,6 +79,7 @@ fs2 = "0.4"
 clap = { version = "4", features = ["derive"] }
 clap_complete = "4"
 colored = "2"
+owo-colors = "4"
 is-terminal = "0.4"
 which = "7.0"
 

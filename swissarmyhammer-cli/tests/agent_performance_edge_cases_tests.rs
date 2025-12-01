@@ -403,7 +403,7 @@ other_data:
             "Should preserve custom data"
         );
         assert!(
-            updated_config.contains("agent:"),
+            updated_config.contains("agents:"),
             "Should add agent section"
         );
 
@@ -630,8 +630,9 @@ other_section:
         let fixed_config = fs::read_to_string(&config_path)?;
         let parsed: serde_yaml::Value = serde_yaml::from_str(&fixed_config)?;
         assert!(
-            parsed.get("agent").is_some(),
-            "Should have valid agent section"
+            parsed.get("agents").is_some(),
+            "Should have valid agents section. Actual: {:?}",
+            parsed
         );
     }
 
@@ -908,7 +909,7 @@ entry_{:05}:
             "Should preserve all entries"
         );
         assert!(
-            updated_config.contains("agent:"),
+            updated_config.contains("agents:"),
             "Should add agent section"
         );
 

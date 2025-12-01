@@ -300,6 +300,11 @@ impl McpServerHandle {
         self.server_task.is_some()
     }
 
+    /// Get the MCP server instance
+    pub fn server(&self) -> Option<Arc<McpServer>> {
+        self.server.clone()
+    }
+
     /// Wait for the server task to complete (stdio mode only)
     ///
     /// This method should be called after shutdown to ensure the spawned
@@ -340,6 +345,7 @@ impl McpServerHandle {
 ///
 /// * `mode` - The transport mode (stdio or HTTP)
 /// * `library` - Optional prompt library (creates new if None)
+/// * `agent_override` - Optional agent name to override all use case assignments
 ///
 /// # Returns
 ///
@@ -347,6 +353,7 @@ impl McpServerHandle {
 pub async fn start_mcp_server(
     mode: McpServerMode,
     library: Option<PromptLibrary>,
+    agent_override: Option<String>,
 ) -> Result<McpServerHandle> {
     // Configure MCP logging to match sah serve behavior
     // NOTE: Skip logging configuration when called from CLI as main.rs already handles it
@@ -355,15 +362,19 @@ pub async fn start_mcp_server(
         configure_mcp_logging(None);
     }
     match mode {
-        McpServerMode::Stdio => start_stdio_server(library).await,
-        McpServerMode::Http { port } => start_http_server(port, library).await,
+        McpServerMode::Stdio => start_stdio_server(library, agent_override).await,
+        McpServerMode::Http { port } => start_http_server(port, library, agent_override).await,
     }
 }
 
 /// Start MCP server with stdio transport
-async fn start_stdio_server(library: Option<PromptLibrary>) -> Result<McpServerHandle> {
+async fn start_stdio_server(
+    library: Option<PromptLibrary>,
+    agent_override: Option<String>,
+) -> Result<McpServerHandle> {
     let library = library.unwrap_or_default();
-    let server = McpServer::new(library).await?;
+    let work_dir = std::env::current_dir().unwrap_or_else(|_| std::env::temp_dir());
+    let server = McpServer::new_with_work_dir(library, work_dir, agent_override).await?;
     server.initialize().await?;
 
     tracing::info!("Starting unified MCP server in stdio mode");
@@ -432,6 +443,7 @@ async fn start_stdio_server(library: Option<PromptLibrary>) -> Result<McpServerH
 async fn start_http_server(
     port: Option<u16>,
     library: Option<PromptLibrary>,
+    agent_override: Option<String>,
 ) -> Result<McpServerHandle> {
     tracing::debug!("start_http_server called with port: {:?}", port);
 
@@ -474,7 +486,8 @@ async fn start_http_server(
     // Create and initialize MCP server
     tracing::debug!("Creating MCP server");
     let library = library.unwrap_or_default();
-    let server = McpServer::new(library).await?;
+    let work_dir = std::env::current_dir().unwrap_or_else(|_| std::env::temp_dir());
+    let server = McpServer::new_with_work_dir(library, work_dir, agent_override).await?;
     tracing::debug!("Initializing MCP server");
     server.initialize().await?;
     tracing::debug!("MCP server initialized");
@@ -504,30 +517,45 @@ async fn start_http_server(
         })?;
 
     let connection_url = format!("http://127.0.0.1:{}/mcp", actual_port); // Full URL with /mcp
-    tracing::info!("Unified HTTP MCP server ready on {}", connection_url);
+    tracing::info!("Unified HTTP MCP server binding on {}", connection_url);
 
     // Create shutdown channel for graceful shutdown
     let (shutdown_tx, shutdown_rx) = oneshot::channel();
 
+    // Create readiness channel to signal when server is actually serving
+    let (ready_tx, ready_rx) = oneshot::channel();
+
     // Start the server with graceful shutdown
     let server_task = tokio::spawn(async move {
+        // Signal readiness before serving (listener is already bound)
+        let _ = ready_tx.send(());
+        tracing::info!("HTTP MCP server task started and ready to serve");
+
         let result = axum::serve(listener, router)
             .with_graceful_shutdown(async {
                 shutdown_rx.await.ok();
-                tracing::info!("HTTP server received shutdown signal");
+                tracing::debug!("HTTP server received shutdown signal");
             })
             .await;
 
         match result {
             Ok(_) => {
-                tracing::info!("HTTP server stopped successfully");
+                tracing::debug!("HTTP server stopped successfully");
             }
             Err(e) => {
                 tracing::error!("HTTP server error: {}", e);
             }
         }
-        tracing::info!("HTTP server task exiting");
+        tracing::debug!("HTTP server task exiting");
     });
+
+    // Wait for server to signal readiness
+    ready_rx
+        .await
+        .map_err(|_| swissarmyhammer_common::SwissArmyHammerError::Other {
+            message: "Server task failed to signal readiness".to_string(),
+        })?;
+    tracing::info!("HTTP MCP server confirmed ready on {}", connection_url);
 
     let info = McpServerInfo {
         mode: McpServerMode::Http {
@@ -553,7 +581,7 @@ mod tests {
     async fn test_http_server_creation_and_info() {
         tracing::info!("test_http_server_creation_and_info");
         let mode = McpServerMode::Http { port: Some(18080) }; // Fixed port to avoid random port issues
-        let mut server = start_mcp_server(mode, None).await.unwrap();
+        let mut server = start_mcp_server(mode, None, None).await.unwrap();
 
         // Verify we got a valid port and URL format
         assert_eq!(server.port().unwrap(), 18080);
@@ -567,7 +595,7 @@ mod tests {
     #[test_log::test]
     async fn test_server_info_structure() {
         let mode = McpServerMode::Http { port: Some(18081) };
-        let mut server = start_mcp_server(mode, None).await.unwrap();
+        let mut server = start_mcp_server(mode, None, None).await.unwrap();
 
         // Test info structure
         let info = server.info();
@@ -591,7 +619,9 @@ mod tests {
         let custom_library = PromptLibrary::default();
 
         let mode = McpServerMode::Http { port: None };
-        let mut server = start_mcp_server(mode, Some(custom_library)).await.unwrap();
+        let mut server = start_mcp_server(mode, Some(custom_library), None)
+            .await
+            .unwrap();
 
         // Server should start successfully with custom library
         assert!(server.port().unwrap() > 0);
@@ -603,14 +633,14 @@ mod tests {
     async fn test_http_server_port_in_use_error() {
         // First, start a server on a specific port
         let mode1 = McpServerMode::Http { port: Some(18082) };
-        let mut server1 = start_mcp_server(mode1, None).await.unwrap();
+        let mut server1 = start_mcp_server(mode1, None, None).await.unwrap();
 
         // Verify first server is running
         assert_eq!(server1.port().unwrap(), 18082);
 
         // Try to start another server on the same port - should fail
         let mode2 = McpServerMode::Http { port: Some(18082) };
-        let result = start_mcp_server(mode2, None).await;
+        let result = start_mcp_server(mode2, None, None).await;
 
         // Should get an error about port being in use
         assert!(
@@ -633,7 +663,7 @@ mod tests {
     async fn test_http_server_invalid_port() {
         // Test with invalid port (port 1 requires root privileges)
         let mode = McpServerMode::Http { port: Some(1) };
-        let result = start_mcp_server(mode, None).await;
+        let result = start_mcp_server(mode, None, None).await;
 
         // Should get an error about permission denied
         assert!(
@@ -655,7 +685,7 @@ mod tests {
     async fn test_server_shutdown_idempotency() {
         // Test that calling shutdown multiple times doesn't panic
         let mode = McpServerMode::Http { port: None };
-        let mut server = start_mcp_server(mode, None).await.unwrap();
+        let mut server = start_mcp_server(mode, None, None).await.unwrap();
 
         // First shutdown should work
         server.shutdown().await.unwrap();
@@ -670,7 +700,7 @@ mod tests {
     async fn test_server_info_consistency() {
         // Test that server info remains consistent
         let mode = McpServerMode::Http { port: Some(18083) };
-        let mut server = start_mcp_server(mode.clone(), None).await.unwrap();
+        let mut server = start_mcp_server(mode.clone(), None, None).await.unwrap();
 
         let info1 = server.info();
         let info2 = server.info();
@@ -699,7 +729,7 @@ mod tests {
     async fn test_stdio_server_task_completion() {
         // Test that stdio server task handle is stored and can be awaited
         let mode = McpServerMode::Stdio;
-        let mut server = start_mcp_server(mode, None).await.unwrap();
+        let mut server = start_mcp_server(mode, None, None).await.unwrap();
 
         // Server should have a task handle for stdio mode
         assert!(

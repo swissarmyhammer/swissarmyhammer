@@ -448,7 +448,7 @@ key_path = "/etc/ssl/private/server.key"
 
 ## Enabled Features
 {% for feature in features.enabled -%}
-✅ {{ feature | replace: "_", " " | capitalize }}
+✓ {{ feature | replace: "_", " " | capitalize }}
 {% endfor %}
 
 ## Experimental Features
@@ -484,9 +484,9 @@ key_path = "/etc/ssl/private/server.key"
     assert!(rendered.contains("- **Address**: localhost:8080"));
     assert!(rendered.contains("- **Workers**: 4"));
     assert!(rendered.contains("- **SSL**: Enabled"));
-    assert!(rendered.contains("✅ Templating"));
-    assert!(rendered.contains("✅ Workflows"));
-    assert!(rendered.contains("✅ Config management"));
+    assert!(rendered.contains("✓ Templating"));
+    assert!(rendered.contains("✓ Workflows"));
+    assert!(rendered.contains("✓ Config management"));
     assert!(rendered.contains("🧪 Ai integration"));
     assert!(rendered.contains("🧪 Advanced metrics"));
     assert!(rendered.contains("*Generated configuration for SwissArmyHammer v2.0.0*"));

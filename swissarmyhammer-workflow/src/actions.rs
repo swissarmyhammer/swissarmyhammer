@@ -702,7 +702,33 @@ impl PromptAction {
         match context.executor_type() {
             AgentExecutorType::ClaudeCode => {
                 tracing::info!("Using ClaudeCode");
-                let mut executor = crate::agents::ClaudeCodeExecutor::new();
+
+                // Get MCP server port from workflow context (started by CLI layer)
+                let mcp_port = context
+                    .workflow_context
+                    .get("_mcp_server_port")
+                    .and_then(|v| v.as_u64())
+                    .map(|p| p as u16);
+
+                let port = mcp_port.ok_or_else(|| {
+                    ActionError::ExecutionError(
+                        "Failed to initialize ClaudeCode: MCP server must be started before running workflows".to_string()
+                    )
+                })?;
+
+                tracing::info!(
+                    "Creating ClaudeCode executor with MCP server on port {}",
+                    port
+                );
+
+                // Create MCP server configuration using agent-client-protocol types
+                let mcp_server = agent_client_protocol::McpServer::Http {
+                    name: "swissarmyhammer".to_string(),
+                    url: format!("http://127.0.0.1:{}/mcp", port),
+                    headers: Vec::new(),
+                };
+
+                let mut executor = crate::agents::ClaudeCodeExecutor::new(mcp_server);
                 executor.initialize().await.map_err(|e| {
                     ActionError::ExecutionError(format!("Failed to initialize ClaudeCode: {}", e))
                 })?;
@@ -727,37 +753,28 @@ impl PromptAction {
                     .and_then(|v| v.as_u64())
                     .map(|p| p as u16);
 
-                if mcp_port.is_none() {
-                    return Err(ActionError::ExecutionError(
+                let port = mcp_port.ok_or_else(|| {
+                    ActionError::ExecutionError(
                         "Failed to initialize LlamaAgent: MCP server must be started before running workflows".to_string()
-                    ));
-                }
+                    )
+                })?;
 
-                let port = mcp_port.unwrap();
                 tracing::info!(
                     "Creating LlamaAgent executor with MCP server on port {}",
                     port
                 );
 
-                // Create MCP server handle for the executor
-                // Note: We create a dummy shutdown channel since the actual server lifecycle
-                // is managed by the CLI layer. The executor just needs the port to connect.
-                let (dummy_tx, _dummy_rx) = tokio::sync::oneshot::channel();
-                let mcp_handle = crate::agents::llama_agent_executor::McpServerHandle::new(
-                    port,
-                    "127.0.0.1".to_string(),
-                    dummy_tx,
-                );
+                // Create MCP server configuration using agent-client-protocol types
+                let mcp_server = agent_client_protocol::McpServer::Http {
+                    name: "swissarmyhammer".to_string(),
+                    url: format!("http://127.0.0.1:{}/mcp", port),
+                    headers: Vec::new(),
+                };
 
-                let mut executor = crate::agents::LlamaAgentExecutorWrapper::new_with_mcp(
-                    llama_config.clone(),
-                    Some(mcp_handle),
-                );
+                let mut executor =
+                    crate::agents::LlamaAgentExecutorWrapper::new(llama_config.clone(), mcp_server);
                 executor.initialize().await.map_err(|e| {
-                    ActionError::ExecutionError(format!(
-                        "Failed to initialize LlamaAgent with MCP server on port {}: {}",
-                        port, e
-                    ))
+                    ActionError::ExecutionError(format!("Failed to initialize LlamaAgent: {}", e))
                 })?;
 
                 Ok(Box::new(executor))
@@ -2124,7 +2141,12 @@ mod tests {
 
     #[tokio::test]
     async fn test_claude_executor_initialization() {
-        let mut executor = ClaudeCodeExecutor::new();
+        let mcp_server = agent_client_protocol::McpServer::Http {
+            name: "test".to_string(),
+            url: "http://localhost:8080/mcp".to_string(),
+            headers: Vec::new(),
+        };
+        let mut executor = ClaudeCodeExecutor::new(mcp_server);
 
         // Test initial state
         assert_eq!(executor.executor_type(), AgentExecutorType::ClaudeCode);
@@ -2166,7 +2188,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_executor_creation_claude() {
-        let mut context = WorkflowTemplateContext::with_vars_for_test(HashMap::new());
+        let mut vars = HashMap::new();
+        vars.insert("_mcp_server_port".to_string(), 8080_u64.into());
+        let mut context = WorkflowTemplateContext::with_vars_for_test(vars);
         context.set_agent_config(AgentConfig::default());
 
         let execution_context = AgentExecutionContext::new(&context);
@@ -3288,7 +3312,9 @@ mod tests {
     async fn test_agent_executor_creation_claude_code() {
         let _guard = IsolatedTestEnvironment::new();
 
-        let mut context = WorkflowTemplateContext::with_vars_for_test(HashMap::new());
+        let mut vars = HashMap::new();
+        vars.insert("_mcp_server_port".to_string(), 8080_u64.into());
+        let mut context = WorkflowTemplateContext::with_vars_for_test(vars);
         context.set_agent_config(swissarmyhammer_config::agent::AgentConfig::claude_code());
 
         let execution_context = AgentExecutionContext::new(&context);

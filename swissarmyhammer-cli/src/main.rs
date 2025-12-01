@@ -16,6 +16,7 @@ use dynamic_cli::CliBuilder;
 use exit_codes::{EXIT_ERROR, EXIT_SUCCESS, EXIT_WARNING};
 use logging::FileWriterGuard;
 use mcp_integration::CliToolContext;
+use owo_colors::OwoColorize;
 use std::path::PathBuf;
 use std::sync::Arc;
 use swissarmyhammer_config::TemplateContext;
@@ -282,12 +283,34 @@ fn handle_cwd_flag(args: &[String]) {
     }
 }
 
+/// Extract --agent flag from command-line arguments
+///
+/// This function checks for the --agent flag and extracts its value.
+/// Returns None if the flag is not present.
+fn extract_agent_flag(args: &[String]) -> Option<String> {
+    args.iter()
+        .position(|arg| arg == "--agent")
+        .and_then(|agent_index| {
+            args.get(agent_index + 1)
+                .map(|agent_name| agent_name.to_string())
+        })
+}
+
 /// Initialize tool context and registry
 ///
 /// This function initializes the tool context required for MCP tool execution.
-async fn initialize_tool_context() -> Arc<CliToolContext> {
+///
+/// # Arguments
+///
+/// * `agent_override` - Optional agent name to use for all use cases
+///
+/// # Returns
+///
+/// Arc to the initialized CliToolContext
+async fn initialize_tool_context(agent_override: Option<&str>) -> Arc<CliToolContext> {
+    let current_dir = unwrap_or_exit(std::env::current_dir(), "Failed to get current directory");
     let context = unwrap_or_exit(
-        CliToolContext::new().await,
+        CliToolContext::new_with_config(&current_dir, agent_override).await,
         "Failed to initialize tool context",
     );
     Arc::new(context)
@@ -340,17 +363,20 @@ fn build_and_parse_cli(
 
 #[tokio::main]
 async fn main() {
-    // Parse CLI early to check for --cwd flag BEFORE doing anything else
+    // Parse CLI early to check for --cwd and --agent flags BEFORE doing anything else
     let args: Vec<String> = std::env::args().collect();
 
     // Check for --cwd flag and change directory FIRST
     handle_cwd_flag(&args);
 
+    // Extract --agent flag for global override
+    let agent_override = extract_agent_flag(&args);
+
     // Load configuration early for CLI operations
     let template_context = load_cli_configuration();
 
-    // Initialize tool context and registry for dynamic CLI
-    let cli_tool_context = initialize_tool_context().await;
+    // Initialize tool context and registry for dynamic CLI with agent override
+    let cli_tool_context = initialize_tool_context(agent_override.as_deref()).await;
 
     let tool_registry = cli_tool_context.get_tool_registry_arc();
     let cli_builder = CliBuilder::new(tool_registry);
@@ -413,7 +439,7 @@ async fn display_validation_report(
 
     match details {
         ValidationDetails::Success { registry } => {
-            println!("✅ All tools passed validation!");
+            println!("{} All tools passed validation!", "✓".green());
 
             if verbose {
                 let registry_guard = registry.read().await;
@@ -432,7 +458,7 @@ async fn display_validation_report(
             errors,
             cli_builder,
         } => {
-            println!("❌ Validation Issues Found:");
+            println!("✗ Validation Issues Found:");
 
             if verbose {
                 for (i, error) in errors.iter().enumerate() {
@@ -1014,16 +1040,24 @@ async fn handle_agent_command(matches: &clap::ArgMatches, context: &CliContext) 
                 .map(|s| OutputFormat::from_str(s).unwrap_or(OutputFormat::Table))
                 .unwrap_or(OutputFormat::Table);
 
-            AgentSubcommand::List { format }
+            Some(AgentSubcommand::List { format })
+        }
+        Some(("show", sub_matches)) => {
+            let format = sub_matches
+                .get_one::<String>("format")
+                .map(|s| OutputFormat::from_str(s).unwrap_or(OutputFormat::Table))
+                .unwrap_or(OutputFormat::Table);
+
+            Some(AgentSubcommand::Show { format })
         }
         Some(("use", sub_matches)) => {
-            let agent_name = sub_matches
-                .get_one::<String>("agent_name")
-                .cloned()
-                .unwrap();
-            AgentSubcommand::Use { agent_name }
+            let first = sub_matches.get_one::<String>("first").cloned().unwrap();
+            let second = sub_matches.get_one::<String>("second").cloned();
+            Some(AgentSubcommand::Use { first, second })
         }
-        _ => return report_error_and_exit("No agent subcommand specified"),
+        // Default to show when no subcommand is provided
+        None => None,
+        _ => return report_error_and_exit("Unknown agent subcommand"),
     };
 
     commands::agent::handle_command(subcommand, context).await
