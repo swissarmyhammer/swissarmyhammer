@@ -1186,8 +1186,8 @@ async fn execute_shell_command(
     cmd.stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped());
 
-    tracing::debug!(
-        "Executing command: '{}' in directory: {}",
+    tracing::info!(
+        "Executing shell command: '{}' in directory: {}",
         command,
         work_dir.display()
     );
