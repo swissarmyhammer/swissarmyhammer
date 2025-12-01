@@ -54,13 +54,6 @@ impl ClaudeCodeExecutor {
             prompt.len()
         );
 
-        // Build command - flags first, then stdin marker at the end
-        let mut cmd = Command::new(claude_path);
-        cmd.args(["--dangerously-skip-permissions", "--print"]);
-
-        // Disable built-in tools for deterministic behavior
-        cmd.args(["--tools", ""]);
-
         // Extract URL from McpServer and create Claude-compatible JSON
         let (server_name, server_url) = match &self.mcp_server {
             McpServer::Http { name, url, .. } => (name, url),
@@ -83,17 +76,22 @@ impl ClaudeCodeExecutor {
             }
         });
 
-        let config_file = std::env::temp_dir().join(format!("sah-mcp-{}.json", std::process::id()));
-        std::fs::write(&config_file, serde_json::to_string_pretty(&mcp_config_json).unwrap()).map_err(|e| {
-            ActionError::ClaudeError(format!("Failed to write MCP config file: {}", e))
+        // Pass MCP config as JSON string directly to --mcp-config
+        let mcp_config_string = serde_json::to_string(&mcp_config_json).map_err(|e| {
+            ActionError::ClaudeError(format!("Failed to serialize MCP config: {}", e))
         })?;
 
-        tracing::info!("Configuring Claude to use MCP server '{}' at {} (config: {:?})", server_name, server_url, config_file);
-        cmd.args(["--strict-mcp-config"]);
-        cmd.args(["--mcp-config", &config_file.to_string_lossy()]);
+        tracing::info!("Configuring Claude to use MCP server '{}' at {}", server_name, server_url);
 
-        // Log the full command for debugging
-        tracing::info!("Claude command: {:?}", cmd.as_std());
+        // Build command - IMPORTANT: --mcp-config must come BEFORE --print for CLI parsing to work
+        let mut cmd = Command::new(claude_path);
+        cmd.args(["--dangerously-skip-permissions"]);
+        cmd.args(["--mcp-config", &mcp_config_string]);
+        cmd.args(["--strict-mcp-config"]);
+        cmd.args(["--print"]);
+
+        // Disable built-in tools for deterministic behavior
+        cmd.args(["--tools", ""]);
 
         // Add system prompt parameter if provided
         if let Some(ref sys_prompt) = system_prompt {
@@ -105,19 +103,23 @@ impl ClaudeCodeExecutor {
             cmd.args(["--append-system-prompt", sys_prompt]);
         }
 
-        // Write prompt to temp file instead of stdin (workaround for Claude CLI --mcp-config bug)
-        let prompt_file = std::env::temp_dir().join(format!("sah-prompt-{}.txt", std::process::id()));
-        std::fs::write(&prompt_file, &prompt).map_err(|e| {
-            ActionError::ClaudeError(format!("Failed to write prompt file: {}", e))
-        })?;
-        cmd.arg(prompt_file.to_string_lossy().to_string());
+        // Log the full command for debugging
+        tracing::info!("Claude command: {:?}", cmd.as_std());
 
-        // Execute Claude Code
-        let child = cmd
+        // Use stdin for prompt input (required when using --mcp-config before --print)
+        let mut child = cmd
+            .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
             .spawn()
             .map_err(|e| ActionError::ClaudeError(format!("Failed to execute Claude: {e}")))?;
+
+        // Write prompt to stdin
+        if let Some(stdin) = child.stdin.as_mut() {
+            use tokio::io::AsyncWriteExt;
+            stdin.write_all(prompt.as_bytes()).await
+                .map_err(|e| ActionError::ClaudeError(format!("Failed to write prompt to stdin: {e}")))?;
+        }
 
         // Wait for command completion
         let output = child
