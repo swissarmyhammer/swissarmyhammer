@@ -993,11 +993,14 @@ async fn process_child_output_with_limits(
                     Ok(status) => {
                         tracing::debug!("Process exited with status: {:?}", status);
 
-                        // Continue reading any remaining output after process exit
+                        // Continue reading any remaining output after process exit with a timeout
                         // This is important for processes that exit quickly but have buffered output
+                        // However, we need a timeout to handle background processes that keep pipes open
 
-                        // Read remaining stdout
-                        read_remaining_with_context(
+                        const REMAINING_OUTPUT_TIMEOUT: Duration = Duration::from_millis(500);
+
+                        // Read remaining stdout with timeout
+                        let stdout_future = read_remaining_with_context(
                             &mut stdout_reader,
                             &mut line_count,
                             &mut output_buffer,
@@ -1005,10 +1008,11 @@ async fn process_child_output_with_limits(
                             progress_sender,
                             progress_token,
                             |buf, data| buf.append_stdout(data),
-                        ).await;
+                        );
+                        let _ = tokio::time::timeout(REMAINING_OUTPUT_TIMEOUT, stdout_future).await;
 
-                        // Read remaining stderr
-                        read_remaining_with_context(
+                        // Read remaining stderr with timeout
+                        let stderr_future = read_remaining_with_context(
                             &mut stderr_reader,
                             &mut line_count,
                             &mut output_buffer,
@@ -1016,7 +1020,8 @@ async fn process_child_output_with_limits(
                             progress_sender,
                             progress_token,
                             |buf, data| buf.append_stderr(data),
-                        ).await;
+                        );
+                        let _ = tokio::time::timeout(REMAINING_OUTPUT_TIMEOUT, stderr_future).await;
 
                         // Add truncation marker if needed
                         output_buffer.add_truncation_marker();

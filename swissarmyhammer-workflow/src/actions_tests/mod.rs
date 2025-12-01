@@ -100,3 +100,6 @@ mod log_action_consolidated_tests;
 
 #[cfg(test)]
 mod error_handling_consolidated_tests;
+
+#[cfg(test)]
+mod shell_background_hang_test;
