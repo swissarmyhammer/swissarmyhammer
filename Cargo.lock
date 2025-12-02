@@ -5827,6 +5827,32 @@ dependencies = [
 ]
 
 [[package]]
+name = "swissarmyhammer-mcp-proxy"
+version = "0.2.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "axum 0.7.9",
+ "regex",
+ "reqwest 0.12.24",
+ "rmcp 0.8.5",
+ "serde",
+ "serde_json",
+ "swissarmyhammer-common",
+ "swissarmyhammer-prompts",
+ "swissarmyhammer-tools",
+ "tempfile",
+ "test-log",
+ "thiserror 1.0.69",
+ "tokio",
+ "tokio-util",
+ "tower",
+ "tower-http 0.5.2",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "swissarmyhammer-prompts"
 version = "0.2.0"
 dependencies = [

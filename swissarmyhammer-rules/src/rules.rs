@@ -202,6 +202,43 @@ impl Rule {
         Ok(())
     }
 
+    /// Get allowed tools regex patterns from metadata
+    ///
+    /// Returns the list of regex patterns for tools that are allowed during rule checking.
+    /// If not specified in metadata, returns None.
+    pub fn get_allowed_tools_regex(&self) -> Option<Vec<String>> {
+        self.metadata
+            .get("allowed_tools_regex")
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|v| v.as_str().map(String::from))
+                    .collect()
+            })
+    }
+
+    /// Get denied tools regex patterns from metadata
+    ///
+    /// Returns the list of regex patterns for tools that are denied during rule checking.
+    /// If not specified in metadata, returns None.
+    pub fn get_denied_tools_regex(&self) -> Option<Vec<String>> {
+        self.metadata
+            .get("denied_tools_regex")
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|v| v.as_str().map(String::from))
+                    .collect()
+            })
+    }
+
+    /// Check if this rule has tool filtering configuration
+    ///
+    /// Returns true if either allowed_tools_regex or denied_tools_regex is specified in metadata.
+    pub fn has_tool_filter(&self) -> bool {
+        self.get_allowed_tools_regex().is_some() || self.get_denied_tools_regex().is_some()
+    }
+
     /// Create a builder for constructing rules with optional fields
     pub fn builder(name: String, template: String, severity: Severity) -> RuleBuilder {
         RuleBuilder {

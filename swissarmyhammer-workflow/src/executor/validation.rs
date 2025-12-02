@@ -500,18 +500,16 @@ impl WorkflowExecutor {
                 ))
             })?;
 
-        // Add 'result' variable from the final response
-        let result_text = Self::extract_result_text_static(context);
-        cel_context
-            .add_variable(RESULT_VARIABLE_NAME, result_text)
-            .map_err(|e| {
-                ExecutorError::ExpressionError(format!(
-                    "CEL context error: Failed to add '{RESULT_VARIABLE_NAME}' variable ({e})"
-                ))
-            })?;
-
-        // Add other context variables
+        // Add all context variables (including 'result' as an object if it exists)
         for (key, value) in context {
+            // Debug log for result variable
+            if key == RESULT_VARIABLE_NAME {
+                tracing::debug!(
+                    "Adding 'result' variable to CEL context: {:?}",
+                    value
+                );
+            }
+
             Self::add_json_variable_to_cel_context_static(&mut cel_context, key, value).map_err(
                 |e| {
                     ExecutorError::ExpressionError(format!(
@@ -519,6 +517,22 @@ impl WorkflowExecutor {
                     ))
                 },
             )?;
+        }
+
+        // Add 'result' as text fallback only if not already added as an object
+        // This maintains backward compatibility for expressions that expect result as a string
+        if !context.contains_key(RESULT_VARIABLE_NAME) {
+            tracing::debug!("'result' not in context, adding text fallback");
+            let result_text = Self::extract_result_text_static(context);
+            cel_context
+                .add_variable(RESULT_VARIABLE_NAME, result_text)
+                .map_err(|e| {
+                    ExecutorError::ExpressionError(format!(
+                        "CEL context error: Failed to add '{RESULT_VARIABLE_NAME}' variable ({e})"
+                    ))
+                })?;
+        } else {
+            tracing::debug!("'result' found in context, using object version");
         }
 
         let context_duration = context_start.elapsed();
@@ -552,6 +566,17 @@ impl WorkflowExecutor {
         // Enhanced debug logging for CEL evaluation
         let result_text = Self::extract_result_text_static(context);
         let context_keys: Vec<String> = context.keys().cloned().collect();
+
+        // Debug log the actual result value structure
+        if let Some(result_value) = context.get("result") {
+            tracing::debug!(
+                "CEL Debug - 'result' variable in context: {:?}",
+                result_value
+            );
+        } else {
+            tracing::debug!("CEL Debug - 'result' variable NOT in context");
+        }
+
         tracing::debug!("CEL Debug - Expression: '{}' | Result text: '{}' | CEL result: {:?} | Boolean: {} | Context keys: {:?}", expression, result_text, result, boolean_result, context_keys);
 
         // Log comprehensive performance metrics after program execution is complete

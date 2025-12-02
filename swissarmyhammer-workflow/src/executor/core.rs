@@ -674,6 +674,11 @@ impl WorkflowExecutor {
                 .insert("is_error".to_string(), Value::Bool(false));
         }
 
+        tracing::debug!(
+            "Setting 'result' in workflow context. Is object: {}, Value: {:?}",
+            result_value.is_object(),
+            result_value
+        );
         run.context.insert("result".to_string(), result_value);
         run.context
             .insert(LAST_ACTION_RESULT_KEY.to_string(), Value::Bool(success));

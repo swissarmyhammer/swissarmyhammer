@@ -214,7 +214,9 @@ async fn test_error_message_formatting() -> Result<()> {
     let error = result.unwrap_err();
     let error_msg = error.to_string();
     assert!(
-        error_msg.contains("not found") || error_msg.contains("Tool not found"),
+        error_msg.contains("not found")
+            || error_msg.contains("Tool not found")
+            || error_msg.contains("Unknown tool"),
         "Error message should indicate tool not found: {error_msg}"
     );
 

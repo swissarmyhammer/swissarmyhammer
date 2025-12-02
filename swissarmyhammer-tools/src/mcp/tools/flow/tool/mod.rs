@@ -438,13 +438,13 @@ impl McpTool for FlowTool {
     }
 
     fn cli_category(&self) -> Option<&'static str> {
-        // Flow is a top-level dynamic command, not categorized
-        Some("flow")
+        // Flow command already exists as a static command
+        // Skip CLI generation to avoid duplicate
+        None
     }
 
     fn cli_name(&self) -> &'static str {
-        // Workflows are executed directly as: sah flow <workflow>
-        // The workflow name is dynamic and provided as the first argument
+        // Not exposed as CLI command (static flow command exists)
         ""
     }
 }
@@ -488,7 +488,7 @@ mod tests {
     #[test]
     fn test_flow_tool_cli_integration() {
         let tool = FlowTool::new();
-        assert_eq!(tool.cli_category(), Some("flow"));
+        assert_eq!(tool.cli_category(), None); // Changed to None to avoid duplicate command
         assert_eq!(tool.cli_name(), "");
     }
 

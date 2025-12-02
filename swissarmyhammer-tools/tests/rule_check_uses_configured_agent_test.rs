@@ -4,9 +4,7 @@ use serde_json::json;
 use std::collections::HashMap;
 use std::fs;
 use std::sync::Arc;
-use swissarmyhammer_config::agent::{
-    LlamaAgentConfig, McpServerConfig, ModelConfig, ModelSource,
-};
+use swissarmyhammer_config::agent::{LlamaAgentConfig, McpServerConfig, ModelConfig, ModelSource};
 use swissarmyhammer_config::{AgentConfig, AgentUseCase};
 use swissarmyhammer_git::GitOperations;
 use swissarmyhammer_tools::mcp::tool_handlers::ToolHandlers;

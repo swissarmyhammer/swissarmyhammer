@@ -539,7 +539,9 @@ async fn route_subcommand(context: &CliContext, cli_tool_context: Arc<CliToolCon
         Some(("prompt", sub_matches)) => handle_prompt_command(sub_matches, context).await,
         // "rule" command is now dynamically generated from MCP tools
         // Keeping this comment for now to track the migration
-        Some(("flow", sub_matches)) => handle_flow_command(sub_matches, context).await,
+        Some(("flow", sub_matches)) => {
+            handle_flow_command(sub_matches, context, cli_tool_context.clone()).await
+        }
         Some(("validate", sub_matches)) => handle_validate_command(sub_matches, context).await,
         Some(("agent", sub_matches)) => handle_agent_command(sub_matches, context).await,
         Some((category, sub_matches)) => {
@@ -598,7 +600,7 @@ async fn route_category_command(
         }
         None => {
             // Path 2: Workflow shortcut without subcommand (workflow_name -> args)
-            handle_workflow_shortcut(category, sub_matches, context).await
+            handle_workflow_shortcut(category, sub_matches, context, cli_tool_context).await
         }
     }
 }
@@ -929,6 +931,7 @@ async fn handle_workflow_shortcut(
     workflow_name: &str,
     matches: &clap::ArgMatches,
     context: &CliContext,
+    cli_tool_context: Arc<CliToolContext>,
 ) -> i32 {
     use crate::cli::FlowSubcommand;
 
@@ -962,7 +965,7 @@ async fn handle_workflow_shortcut(
     };
 
     // Delegate to flow command handler
-    commands::flow::handle_command(subcommand, context).await
+    commands::flow::handle_command(subcommand, context, cli_tool_context).await
 }
 
 /// Handle prompt command routing using the new CliContext-based architecture.
@@ -995,7 +998,11 @@ async fn handle_prompt_command(matches: &clap::ArgMatches, context: &CliContext)
 ///
 /// # Returns
 /// Exit code (0 for success, non-zero for error)
-async fn handle_flow_command(sub_matches: &clap::ArgMatches, context: &CliContext) -> i32 {
+async fn handle_flow_command(
+    sub_matches: &clap::ArgMatches,
+    context: &CliContext,
+    cli_tool_context: Arc<CliToolContext>,
+) -> i32 {
     // Get the args vector from the trailing_var_arg
     let args: Vec<String> = sub_matches
         .get_many::<String>("args")
@@ -1017,7 +1024,7 @@ async fn handle_flow_command(sub_matches: &clap::ArgMatches, context: &CliContex
         }
     };
 
-    commands::flow::handle_command(subcommand, context).await
+    commands::flow::handle_command(subcommand, context, cli_tool_context).await
 }
 
 async fn handle_validate_command(matches: &clap::ArgMatches, cli_context: &CliContext) -> i32 {

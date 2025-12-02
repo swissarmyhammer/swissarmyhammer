@@ -4,6 +4,8 @@ pub mod core;
 pub mod fork_join;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod result_cel_test;
 pub mod validation;
 
 use crate::{ActionError, StateId};

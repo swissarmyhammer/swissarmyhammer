@@ -14,8 +14,8 @@ use swissarmyhammer_config::AgentUseCase;
 use swissarmyhammer_git::GitOperations;
 use swissarmyhammer_tools::mcp::unified_server::{start_mcp_server, McpServerMode};
 use swissarmyhammer_tools::{
-    register_file_tools, register_rules_tools, register_shell_tools, register_todo_tools,
-    register_web_fetch_tools, register_web_search_tools,
+    register_file_tools, register_flow_tools, register_rules_tools, register_shell_tools,
+    register_todo_tools, register_web_fetch_tools, register_web_search_tools,
 };
 use swissarmyhammer_tools::{ToolContext, ToolRegistry};
 use tokio::sync::{Mutex, RwLock};
@@ -23,9 +23,7 @@ use tokio::sync::{Mutex, RwLock};
 /// CLI-specific tool context that can create and execute MCP tools
 pub struct CliToolContext {
     tool_registry: Arc<RwLock<ToolRegistry>>,
-    tool_context: ToolContext,
     /// MCP server handle (must be kept alive for LlamaAgent to work)
-    #[allow(dead_code)]
     mcp_server_handle: Option<swissarmyhammer_tools::mcp::unified_server::McpServerHandle>,
 }
 
@@ -109,12 +107,8 @@ impl CliToolContext {
         let tool_registry = Self::create_tool_registry();
         let tool_registry_arc = Arc::new(RwLock::new(tool_registry));
 
-        // Add registry to context
-        let tool_context = tool_context.with_tool_registry(tool_registry_arc.clone());
-
         Ok(Self {
             tool_registry: tool_registry_arc,
-            tool_context,
             mcp_server_handle: Some(mcp_server_handle),
         })
     }
@@ -135,6 +129,7 @@ impl CliToolContext {
     fn create_tool_registry() -> ToolRegistry {
         let mut tool_registry = ToolRegistry::new();
         register_file_tools(&mut tool_registry);
+        register_flow_tools(&mut tool_registry);
         register_rules_tools(&mut tool_registry);
         register_shell_tools(&mut tool_registry);
         register_todo_tools(&mut tool_registry);
@@ -149,15 +144,18 @@ impl CliToolContext {
         tool_name: &str,
         arguments: Map<String, serde_json::Value>,
     ) -> Result<CallToolResult, McpError> {
-        let registry = self.tool_registry.read().await;
-        if let Some(tool) = registry.get_tool(tool_name) {
-            tool.execute(arguments, &self.tool_context).await
-        } else {
-            Err(McpError::internal_error(
-                format!("Tool not found: {tool_name}"),
-                None,
-            ))
-        }
+        // Call tool through the MCP server instance to ensure consistent context
+        let server = self
+            .mcp_server_handle
+            .as_ref()
+            .and_then(|h| h.server())
+            .ok_or_else(|| {
+                McpError::internal_error("MCP server instance not available".to_string(), None)
+            })?;
+
+        server
+            .execute_tool(tool_name, serde_json::Value::Object(arguments))
+            .await
     }
 
     /// Helper to convert CLI arguments to MCP tool arguments
@@ -230,12 +228,6 @@ mod tests {
 
     #[tokio::test]
     async fn test_create_arguments() {
-        let _context = CliToolContext {
-            tool_registry: Arc::new(RwLock::new(ToolRegistry::new())),
-            tool_context: create_mock_tool_context().await,
-            mcp_server_handle: None,
-        };
-
         let mut args = Map::new();
         args.insert("name".to_string(), json!("test"));
         args.insert("count".to_string(), json!(42));
@@ -301,12 +293,4 @@ mod tests {
     }
 
     // Helper function for tests
-    async fn create_mock_tool_context() -> ToolContext {
-        let git_ops: Arc<Mutex<Option<GitOperations>>> = Arc::new(Mutex::new(None));
-        let tool_handlers =
-            Arc::new(swissarmyhammer_tools::mcp::tool_handlers::ToolHandlers::new());
-        let agent_config = Arc::new(swissarmyhammer_config::agent::AgentConfig::default());
-
-        ToolContext::new(tool_handlers, git_ops, agent_config)
-    }
 }

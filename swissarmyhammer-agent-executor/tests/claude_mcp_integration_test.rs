@@ -28,7 +28,6 @@ async fn test_claude_mcp_config_argument_order() {
     match init_result {
         Ok(_) => {
             // Claude CLI is available, test passed
-            assert!(true);
         }
         Err(e) => {
             // Should only fail if Claude CLI not in PATH
@@ -61,7 +60,10 @@ async fn test_claude_executor_can_use_mcp_tools() {
 
     // Create and initialize ClaudeCode executor
     let mut executor = ClaudeCodeExecutor::new(mcp_config);
-    executor.initialize().await.expect("Executor should initialize");
+    executor
+        .initialize()
+        .await
+        .expect("Executor should initialize");
 
     // Create execution context
     let agent_config = swissarmyhammer_config::agent::AgentConfig::claude_code();
@@ -69,7 +71,9 @@ async fn test_claude_executor_can_use_mcp_tools() {
 
     // Execute a prompt that requires Claude to use the Read tool
     let system_prompt = "You have access to MCP tools. Use them to complete the task.".to_string();
-    let prompt = "Read the file 'Cargo.toml' in the current directory and tell me the package name.".to_string();
+    let prompt =
+        "Read the file 'Cargo.toml' in the current directory and tell me the package name."
+            .to_string();
 
     let response = executor
         .execute_prompt(system_prompt, prompt, &context)
@@ -86,5 +90,8 @@ async fn test_claude_executor_can_use_mcp_tools() {
 
     // Cleanup
     executor.shutdown().await.expect("Shutdown should succeed");
-    mcp_server.shutdown().await.expect("MCP server shutdown should succeed");
+    mcp_server
+        .shutdown()
+        .await
+        .expect("MCP server shutdown should succeed");
 }

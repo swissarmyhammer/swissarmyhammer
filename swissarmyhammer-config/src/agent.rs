@@ -1300,10 +1300,18 @@ mod tests {
         let config = LlamaAgentConfig::default();
         match config.model.source {
             ModelSource::HuggingFace { repo, filename, .. } => {
-                assert!(repo.starts_with("unsloth/Qwen3"), "Expected Qwen3 model, got {}", repo);
                 assert!(
-                    filename.as_ref().map(|f| f.contains("Qwen3")).unwrap_or(false),
-                    "Expected Qwen3 filename, got {:?}", filename
+                    repo.starts_with("unsloth/Qwen3"),
+                    "Expected Qwen3 model, got {}",
+                    repo
+                );
+                assert!(
+                    filename
+                        .as_ref()
+                        .map(|f| f.contains("Qwen3"))
+                        .unwrap_or(false),
+                    "Expected Qwen3 filename, got {:?}",
+                    filename
                 );
             }
             ModelSource::Local { .. } => panic!("Default should be HuggingFace"),
