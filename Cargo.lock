@@ -6012,6 +6012,7 @@ dependencies = [
  "swissarmyhammer-common",
  "swissarmyhammer-config",
  "swissarmyhammer-git",
+ "swissarmyhammer-mcp-proxy",
  "swissarmyhammer-prompts",
  "swissarmyhammer-rules",
  "swissarmyhammer-shell",

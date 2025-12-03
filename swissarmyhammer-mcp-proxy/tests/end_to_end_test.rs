@@ -26,11 +26,23 @@ async fn test_proxy_filters_tool_discovery() {
         all_tool_count
     );
 
+    // Start HTTP server for the upstream MCP server
+    let upstream_handle = {
+        use swissarmyhammer_tools::mcp::unified_server::{start_mcp_server, McpServerMode};
+        start_mcp_server(McpServerMode::Http { port: None }, None, None)
+            .await
+            .unwrap()
+    };
+    let upstream_port = upstream_handle.info().port.unwrap();
+    let upstream_url = format!("http://127.0.0.1:{}/mcp", upstream_port);
+
+    println!("Upstream server started on port {}", upstream_port);
+
     // Create restrictive filter: only allow files_read, files_grep, files_glob
     let filter = ToolFilter::new(vec!["^files_(read|grep|glob)$".to_string()], vec![]).unwrap();
 
-    // Create proxy wrapping the server
-    let proxy = Arc::new(FilteringMcpProxy::new(Arc::new(server), filter));
+    // Create proxy pointing to upstream URL
+    let proxy = Arc::new(FilteringMcpProxy::new(upstream_url, filter));
 
     // Start HTTP server for the proxy
     let (port, handle) = start_proxy_server(proxy, None).await.unwrap();
@@ -52,4 +64,5 @@ async fn test_proxy_filters_tool_discovery() {
 
     // Cleanup
     handle.abort();
+    drop(upstream_handle);
 }

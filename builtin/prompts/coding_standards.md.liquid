@@ -22,8 +22,6 @@ Individual projects will have Project Coding Standards that specify additional r
   - NEVER create a 'dummy' to replace a library for testing
   - NEVER comment out or stub because of a failing test -- actually FIX the problem
   - NEVER hard code when you need to get real data
-- If a file has more than 500 lines of code, consider refactoring it into smaller files.
-    - Specifically look for files that have multiple classes, functions, or types that are all separatedly public -- roughly speaking each public class, function, or type should be in its own file.
 
 ### Data Structures
 
@@ -86,6 +84,7 @@ Focus on understanding the problem requirements and coding tests that prove the 
 - If not otherwise specified, use vite.
 - If not otherwise specified, use MUI.
     - Style via sx prop using MUI or styled API; avoid inline styles.
+- DO NOT use absolute positioning for layout.
 - Keep file ≤ 250 lines (excluding comments) and auto-format with Prettier.
 - Include JSDoc for the component and each prop.
   - Append a short usage example in the JSDoc for each Component.

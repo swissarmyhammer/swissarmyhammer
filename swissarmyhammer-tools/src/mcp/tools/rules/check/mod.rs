@@ -15,13 +15,11 @@ use std::sync::Arc;
 use std::time::Instant;
 use swissarmyhammer_agent_executor::AgentExecutor;
 use swissarmyhammer_config::{AgentConfig, AgentUseCase};
+use swissarmyhammer_mcp_proxy::{start_proxy_server, FilteringMcpProxy, ToolFilter};
 use swissarmyhammer_rules::{
     RuleCheckRequest as DomainRuleCheckRequest, RuleChecker, RuleViolation, Severity,
 };
 use swissarmyhammer_todo::TodoId;
-
-// NOTE: Tool filtering integration requires manual setup due to circular dependency.
-// See swissarmyhammer-rules/HOW_TO_USE_TOOL_FILTERING.md for implementation guide.
 
 // Progress notification milestones
 const PROGRESS_START: u32 = 0;
@@ -568,6 +566,8 @@ impl McpTool for RuleCheckTool {
         );
 
         // Create a fresh rule checker for this request
+        // Note: This checker will be used for rules WITHOUT tool filtering
+        // Rules WITH filtering will be handled separately with proxies
         let checker = self.create_checker(context).await?;
         tracing::info!("RuleChecker created successfully");
 

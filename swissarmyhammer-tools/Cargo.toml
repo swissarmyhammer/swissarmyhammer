@@ -25,6 +25,7 @@ swissarmyhammer-shell = { path = "../swissarmyhammer-shell" }
 swissarmyhammer-rules = { path = "../swissarmyhammer-rules" }
 swissarmyhammer-agent-executor = { path = "../swissarmyhammer-agent-executor" }
 swissarmyhammer-workflow = { path = "../swissarmyhammer-workflow" }
+swissarmyhammer-mcp-proxy = { path = "../swissarmyhammer-mcp-proxy" }
 
 
 # Async and JSON processing

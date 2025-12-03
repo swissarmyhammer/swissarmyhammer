@@ -25,9 +25,9 @@ use tokio::net::TcpListener;
 /// use std::sync::Arc;
 ///
 /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
-/// let server = Arc::new(todo!("create McpServer"));
+/// let upstream_url = "http://127.0.0.1:8080/mcp".to_string();
 /// let filter = ToolFilter::new(vec!["^files_.*".to_string()], vec![])?;
-/// let proxy = FilteringMcpProxy::new(server, filter);
+/// let proxy = FilteringMcpProxy::new(upstream_url, filter);
 ///
 /// let (port, handle) = start_proxy_server(Arc::new(proxy), None).await?;
 /// println!("Proxy server listening on port {}", port);
@@ -116,24 +116,22 @@ async fn health_check() -> &'static str {
 mod tests {
     use super::*;
     use crate::{FilteringMcpProxy, ToolFilter};
-    use swissarmyhammer_prompts::PromptLibrary;
-    use swissarmyhammer_tools::mcp::McpServer;
+    use swissarmyhammer_tools::mcp::unified_server::{start_mcp_server, McpServerMode};
 
     #[tokio::test]
     async fn test_start_proxy_server_with_random_port() {
-        // Create a test server
-        let library = PromptLibrary::default();
-        let work_dir = std::env::current_dir().unwrap();
-        let server = McpServer::new_with_work_dir(library, work_dir, None)
+        // Start upstream MCP server
+        let upstream_handle = start_mcp_server(McpServerMode::Http { port: None }, None, None)
             .await
             .unwrap();
-        server.initialize().await.unwrap();
+        let upstream_port = upstream_handle.info().port.unwrap();
+        let upstream_url = format!("http://127.0.0.1:{}/mcp", upstream_port);
 
         // Create filter allowing only files_read
         let filter = ToolFilter::new(vec!["^files_read$".to_string()], vec![]).unwrap();
 
-        // Create proxy
-        let proxy = Arc::new(FilteringMcpProxy::new(Arc::new(server), filter));
+        // Create proxy pointing to upstream URL
+        let proxy = Arc::new(FilteringMcpProxy::new(upstream_url, filter));
 
         // Start server with random port
         let (port, handle) = start_proxy_server(proxy, None).await.unwrap();
@@ -143,6 +141,7 @@ mod tests {
 
         // Cleanup
         handle.abort();
+        drop(upstream_handle);
     }
 
     #[tokio::test]
