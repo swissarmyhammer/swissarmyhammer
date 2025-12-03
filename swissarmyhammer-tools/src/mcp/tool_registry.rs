@@ -360,6 +360,22 @@ pub struct ToolContext {
     /// This explicit approach avoids reliance on environment variables (global state)
     /// and makes test isolation more reliable and explicit.
     pub working_dir: Option<PathBuf>,
+
+    /// Optional MCP server instance (for creating filtering proxies)
+    ///
+    /// When present, tools like rule checking can create FilteringMcpProxy instances
+    /// to restrict tool access during operations. This allows per-rule or per-operation
+    /// tool filtering for security and reliability.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// if let Some(server) = &context.mcp_server {
+    ///     let proxy = FilteringMcpProxy::new(server.clone(), filter);
+    ///     // Use proxy for restricted tool access
+    /// }
+    /// ```
+    pub mcp_server: Option<Arc<super::McpServer>>,
 }
 
 impl ToolContext {
@@ -380,6 +396,7 @@ impl ToolContext {
             peer: None,
             tool_registry: None,
             working_dir: None,
+            mcp_server: None,
         }
     }
 
@@ -492,6 +509,24 @@ impl ToolContext {
     /// A new `ToolContext` with the working directory set
     pub fn with_working_dir(mut self, working_dir: PathBuf) -> Self {
         self.working_dir = Some(working_dir);
+        self
+    }
+
+    /// Set the MCP server instance for this context
+    ///
+    /// Creates a new context with the MCP server added. This allows tools
+    /// (particularly rule checking) to create filtering proxies that wrap
+    /// the server for per-operation tool access control.
+    ///
+    /// # Arguments
+    ///
+    /// * `server` - The MCP server instance
+    ///
+    /// # Returns
+    ///
+    /// A new `ToolContext` with the MCP server set
+    pub fn with_mcp_server(mut self, server: Arc<super::McpServer>) -> Self {
+        self.mcp_server = Some(server);
         self
     }
 

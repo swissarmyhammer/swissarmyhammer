@@ -504,10 +504,7 @@ impl WorkflowExecutor {
         for (key, value) in context {
             // Debug log for result variable
             if key == RESULT_VARIABLE_NAME {
-                tracing::debug!(
-                    "Adding 'result' variable to CEL context: {:?}",
-                    value
-                );
+                tracing::debug!("Adding 'result' variable to CEL context: {:?}", value);
             }
 
             Self::add_json_variable_to_cel_context_static(&mut cel_context, key, value).map_err(

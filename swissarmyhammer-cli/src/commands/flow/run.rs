@@ -2,8 +2,8 @@
 
 use super::params::{map_positional_to_params, merge_params, parse_param_pairs};
 use crate::context::CliContext;
-use swissarmyhammer::{Result, SwissArmyHammerError, WorkflowName};
 use serde_json::json;
+use swissarmyhammer::{Result, SwissArmyHammerError, WorkflowName};
 
 /// Configuration for running a workflow command
 pub struct RunCommandConfig {

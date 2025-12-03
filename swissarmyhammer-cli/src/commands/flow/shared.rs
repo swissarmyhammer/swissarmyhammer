@@ -8,7 +8,6 @@ pub fn workflow_run_id_to_string(id: &WorkflowRunId) -> String {
     id.to_string()
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;

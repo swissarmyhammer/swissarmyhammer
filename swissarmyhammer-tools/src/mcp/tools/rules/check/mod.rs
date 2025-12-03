@@ -19,7 +19,9 @@ use swissarmyhammer_rules::{
     RuleCheckRequest as DomainRuleCheckRequest, RuleChecker, RuleViolation, Severity,
 };
 use swissarmyhammer_todo::TodoId;
-use tokio::sync::OnceCell;
+
+// NOTE: Tool filtering integration requires manual setup due to circular dependency.
+// See swissarmyhammer-rules/HOW_TO_USE_TOOL_FILTERING.md for implementation guide.
 
 // Progress notification milestones
 const PROGRESS_START: u32 = 0;
@@ -416,23 +418,17 @@ async fn get_changed_files(context: &ToolContext) -> Result<HashSet<String>, Mcp
 /// This tool uses the swissarmyhammer-rules library directly, avoiding subprocess
 /// overhead and providing better error handling and type safety.
 #[derive(Clone)]
-pub struct RuleCheckTool {
-    /// Lazily initialized rule checker (shared across requests)
-    checker: Arc<OnceCell<RuleChecker>>,
-}
+pub struct RuleCheckTool;
 
 impl RuleCheckTool {
     /// Creates a new instance of the RuleCheckTool
     pub fn new() -> Self {
-        Self {
-            checker: Arc::new(OnceCell::new()),
-        }
+        Self
     }
 
-    /// Get or initialize the rule checker using the provided context's agent configuration.
+    /// Create a rule checker using the provided context's agent configuration.
     ///
-    /// This method uses lazy initialization with `OnceCell` to ensure the RuleChecker
-    /// is created only once and reused across multiple rule check requests.
+    /// Creates a fresh RuleChecker for each invocation to support per-rule tool filtering.
     ///
     /// # Arguments
     ///
@@ -440,47 +436,39 @@ impl RuleCheckTool {
     ///
     /// # Returns
     ///
-    /// * `Result<&RuleChecker, McpError>` - Reference to the initialized checker
+    /// * `Result<RuleChecker, McpError>` - Initialized checker
     ///
     /// # Errors
     ///
     /// Returns an error if agent creation or checker initialization fails
-    async fn get_checker(&self, context: &ToolContext) -> Result<&RuleChecker, McpError> {
+    async fn create_checker(&self, context: &ToolContext) -> Result<RuleChecker, McpError> {
         // Get agent config for Rules use case (falls back to root if not configured)
         let agent_config = context.get_agent_for_use_case(AgentUseCase::Rules);
 
-        self.checker
-            .get_or_try_init(|| async move {
-                tracing::debug!("Initializing RuleChecker for MCP tool with Rules use case agent");
-                tracing::debug!(
-                    "Using agent for Rules use case: {:?}",
-                    agent_config.executor_type()
-                );
+        tracing::debug!("Creating RuleChecker for MCP tool with Rules use case agent");
+        tracing::debug!(
+            "Using agent for Rules use case: {:?}",
+            agent_config.executor_type()
+        );
 
-                // Create agent executor from configuration
-                let agent = create_agent_from_config(&agent_config, context).await?;
+        // Create agent executor from configuration
+        let agent = create_agent_from_config(&agent_config, context).await?;
 
-                // Create rule checker
-                let mut checker = RuleChecker::new(agent).map_err(|e| {
-                    McpError::internal_error(format!("Failed to create rule checker: {}", e), None)
-                })?;
+        // Create rule checker
+        let mut checker = RuleChecker::new(agent).map_err(|e| {
+            McpError::internal_error(format!("Failed to create rule checker: {}", e), None)
+        })?;
 
-                // Initialize the checker
-                checker.initialize().await.map_err(|e| {
-                    McpError::internal_error(
-                        format!("Failed to initialize rule checker: {}", e),
-                        None,
-                    )
-                })?;
+        // Initialize the checker
+        checker.initialize().await.map_err(|e| {
+            McpError::internal_error(format!("Failed to initialize rule checker: {}", e), None)
+        })?;
 
-                tracing::info!(
-                    "RuleChecker initialized successfully with {:?} executor",
-                    agent_config.executor_type()
-                );
-                Ok(checker)
-            })
-            .await
-            .map_err(|e: McpError| e)
+        tracing::info!(
+            "RuleChecker initialized successfully with {:?} executor",
+            agent_config.executor_type()
+        );
+        Ok(checker)
     }
 }
 
@@ -579,9 +567,9 @@ impl McpTool for RuleCheckTool {
             }),
         );
 
-        // Get or initialize the rule checker with context's agent configuration
-        let checker = self.get_checker(context).await?;
-        tracing::info!("RuleChecker initialized successfully");
+        // Create a fresh rule checker for this request
+        let checker = self.create_checker(context).await?;
+        tracing::info!("RuleChecker created successfully");
 
         // Send rules loaded notification
         send_progress(
@@ -1221,7 +1209,7 @@ mod tests {
         let context = crate::test_utils::create_test_context().await;
 
         // Get checker should initialize it
-        let checker_result = tool.get_checker(&context).await;
+        let checker_result = tool.create_checker(&context).await;
 
         // In test environment without actual model, initialization may fail
         // which is expected - we're just testing the initialization pattern
@@ -1236,26 +1224,19 @@ mod tests {
         }
     }
 
-    /// Verifies that the RuleCheckTool uses lazy initialization pattern and reuses
-    /// the same RuleChecker instance across multiple calls
+    /// Verifies that the RuleCheckTool creates fresh checkers (no caching)
     #[tokio::test]
-    async fn test_rule_check_tool_lazy_initialization() {
+    async fn test_rule_check_tool_creates_fresh_checker() {
         let tool = RuleCheckTool::new();
         let context = crate::test_utils::create_test_context().await;
 
-        // Checker should not be initialized yet
-        assert!(tool.checker.get().is_none());
+        // Create first checker
+        let result1 = tool.create_checker(&context).await;
 
-        // Calling get_checker should initialize it
-        let _ = tool.get_checker(&context).await;
+        // Create second checker - should be fresh instance (no caching)
+        let result2 = tool.create_checker(&context).await;
 
-        // Now it should be initialized (or have attempted initialization)
-        // We can't check the internal state directly, but a second call
-        // should return the same instance (testing the OnceCell behavior)
-        let result1 = tool.get_checker(&context).await;
-        let result2 = tool.get_checker(&context).await;
-
-        // Both results should have the same success/failure status
+        // Both should have the same success/failure status (both succeed or both fail)
         assert_eq!(result1.is_ok(), result2.is_ok());
     }
 

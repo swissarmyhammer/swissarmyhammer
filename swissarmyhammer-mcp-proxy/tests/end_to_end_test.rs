@@ -27,11 +27,7 @@ async fn test_proxy_filters_tool_discovery() {
     );
 
     // Create restrictive filter: only allow files_read, files_grep, files_glob
-    let filter = ToolFilter::new(
-        vec!["^files_(read|grep|glob)$".to_string()],
-        vec![],
-    )
-    .unwrap();
+    let filter = ToolFilter::new(vec!["^files_(read|grep|glob)$".to_string()], vec![]).unwrap();
 
     // Create proxy wrapping the server
     let proxy = Arc::new(FilteringMcpProxy::new(Arc::new(server), filter));
