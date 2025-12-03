@@ -38,7 +38,7 @@ async fn test_ignore_directive_single_rule() {
     .unwrap();
 
     // Check should pass because rule is ignored
-    let result = checker.check_file(&rule, &test_file).await;
+    let result = checker.check_file(&rule, &test_file, None).await;
     assert!(
         result.is_ok(),
         "Check should pass when rule is ignored via file directive"
@@ -72,13 +72,13 @@ async fn test_ignore_directive_glob_pattern() {
     .unwrap();
 
     // Both rules starting with "no-" should be ignored
-    let result1 = checker.check_file(&rule1, &test_file).await;
+    let result1 = checker.check_file(&rule1, &test_file, None).await;
     assert!(
         result1.is_ok(),
         "no-unwrap should be ignored by glob pattern no-*"
     );
 
-    let result2 = checker.check_file(&rule2, &test_file).await;
+    let result2 = checker.check_file(&rule2, &test_file, None).await;
     assert!(
         result2.is_ok(),
         "no-panic should be ignored by glob pattern no-*"
@@ -111,10 +111,10 @@ async fn test_ignore_directive_multiple_patterns() {
     .unwrap();
 
     // Both rules should be ignored
-    let result1 = checker.check_file(&rule1, &test_file).await;
+    let result1 = checker.check_file(&rule1, &test_file, None).await;
     assert!(result1.is_ok(), "no-unwrap should be ignored");
 
-    let result2 = checker.check_file(&rule2, &test_file).await;
+    let result2 = checker.check_file(&rule2, &test_file, None).await;
     assert!(result2.is_ok(), "complexity-check should be ignored");
 }
 
@@ -145,7 +145,7 @@ async fn test_ignore_directive_different_comment_styles() {
         let test_file = temp_dir.path().join(filename);
         std::fs::write(&test_file, content).unwrap();
 
-        let result = checker.check_file(&rule, &test_file).await;
+        let result = checker.check_file(&rule, &test_file, None).await;
         assert!(
             result.is_ok(),
             "Rule should be ignored in file {} with comment style",
@@ -175,7 +175,7 @@ async fn test_ignore_directive_not_applied_to_different_rule() {
     // Since we're using a test agent, we can't predict the outcome,
     // but we verify that the ignore doesn't apply to unmatched rules
     // The key is that this doesn't panic or error due to the ignore logic itself
-    let _result = checker.check_file(&rule, &test_file).await;
+    let _result = checker.check_file(&rule, &test_file, None).await;
     // Result can be Ok or Err depending on LLM, but shouldn't crash
 }
 
@@ -196,7 +196,7 @@ async fn test_ignore_directive_empty_file() {
     std::fs::write(&test_file, "").unwrap();
 
     // Should proceed to normal checking (no ignores found)
-    let _result = checker.check_file(&rule, &test_file).await;
+    let _result = checker.check_file(&rule, &test_file, None).await;
     // Result depends on LLM, but shouldn't crash
 }
 
@@ -217,7 +217,7 @@ async fn test_ignore_directive_suffix_glob() {
     std::fs::write(&test_file, "// sah rule ignore *-unwrap\nfn main() {}").unwrap();
 
     // Rule ending with "-unwrap" should be ignored
-    let result = checker.check_file(&rule, &test_file).await;
+    let result = checker.check_file(&rule, &test_file, None).await;
     assert!(
         result.is_ok(),
         "allow-unwrap should be ignored by glob pattern *-unwrap"
@@ -241,7 +241,7 @@ async fn test_ignore_directive_question_mark_glob() {
     std::fs::write(&test_file, "// sah rule ignore test-?-rule\nfn main() {}").unwrap();
 
     // Rule matching single character pattern should be ignored
-    let result = checker.check_file(&rule, &test_file).await;
+    let result = checker.check_file(&rule, &test_file, None).await;
     assert!(
         result.is_ok(),
         "test-a-rule should be ignored by glob pattern test-?-rule"
@@ -265,7 +265,7 @@ async fn test_ignore_directive_case_sensitive() {
     std::fs::write(&test_file, "// sah rule ignore No-Unwrap\nfn main() {}").unwrap();
 
     // Should NOT be ignored because rule names are case-sensitive
-    let _result = checker.check_file(&rule, &test_file).await;
+    let _result = checker.check_file(&rule, &test_file, None).await;
     // Will proceed to normal checking since ignore doesn't match
 }
 
@@ -293,7 +293,7 @@ async fn test_ignore_directive_whitespace_handling() {
         let test_file = temp_dir.path().join(format!("test_{}.rs", i));
         std::fs::write(&test_file, content).unwrap();
 
-        let result = checker.check_file(&rule, &test_file).await;
+        let result = checker.check_file(&rule, &test_file, None).await;
         assert!(
             result.is_ok(),
             "Rule should be ignored with whitespace variation {}",
@@ -326,7 +326,7 @@ async fn test_ignore_directive_position_in_file() {
         let test_file = temp_dir.path().join(format!("position_test_{}.rs", i));
         std::fs::write(&test_file, content).unwrap();
 
-        let result = checker.check_file(&rule, &test_file).await;
+        let result = checker.check_file(&rule, &test_file, None).await;
         assert!(
             result.is_ok(),
             "Rule should be ignored regardless of position in file (test case {})",
