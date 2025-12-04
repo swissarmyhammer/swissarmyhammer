@@ -235,14 +235,14 @@ impl RuleLoader {
             }
 
             // Parse tool filter configuration
-            if let Some(allowed_tools) = metadata_value.get("allowed_tools_regex") {
+            if let Some(allowed_tools) = metadata_value.get("allowed_tools") {
                 rule.metadata
-                    .insert("allowed_tools_regex".to_string(), allowed_tools.clone());
+                    .insert("allowed_tools".to_string(), allowed_tools.clone());
             }
 
-            if let Some(denied_tools) = metadata_value.get("denied_tools_regex") {
+            if let Some(denied_tools) = metadata_value.get("denied_tools") {
                 rule.metadata
-                    .insert("denied_tools_regex".to_string(), denied_tools.clone());
+                    .insert("denied_tools".to_string(), denied_tools.clone());
             }
         }
 

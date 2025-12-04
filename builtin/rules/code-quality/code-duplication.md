@@ -4,7 +4,7 @@ description: Detect duplicate code blocks and similar logic patterns
 category: code-quality
 severity: error
 tags: ["code-quality", "maintainability", "refactoring"]
-denied_tools_regex:
+denied_tools:
   - ".*"
 ---
 

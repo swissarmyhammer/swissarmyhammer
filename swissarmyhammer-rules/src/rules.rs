@@ -202,13 +202,13 @@ impl Rule {
         Ok(())
     }
 
-    /// Get allowed tools regex patterns from metadata
+    /// Get allowed tools patterns from metadata
     ///
     /// Returns the list of regex patterns for tools that are allowed during rule checking.
     /// If not specified in metadata, returns None.
-    pub fn get_allowed_tools_regex(&self) -> Option<Vec<String>> {
+    pub fn get_allowed_tools(&self) -> Option<Vec<String>> {
         self.metadata
-            .get("allowed_tools_regex")
+            .get("allowed_tools")
             .and_then(|v| v.as_array())
             .map(|arr| {
                 arr.iter()
@@ -217,13 +217,13 @@ impl Rule {
             })
     }
 
-    /// Get denied tools regex patterns from metadata
+    /// Get denied tools patterns from metadata
     ///
     /// Returns the list of regex patterns for tools that are denied during rule checking.
     /// If not specified in metadata, returns None.
-    pub fn get_denied_tools_regex(&self) -> Option<Vec<String>> {
+    pub fn get_denied_tools(&self) -> Option<Vec<String>> {
         self.metadata
-            .get("denied_tools_regex")
+            .get("denied_tools")
             .and_then(|v| v.as_array())
             .map(|arr| {
                 arr.iter()
@@ -234,9 +234,9 @@ impl Rule {
 
     /// Check if this rule has tool filtering configuration
     ///
-    /// Returns true if either allowed_tools_regex or denied_tools_regex is specified in metadata.
+    /// Returns true if either allowed_tools or denied_tools is specified in metadata.
     pub fn has_tool_filter(&self) -> bool {
-        self.get_allowed_tools_regex().is_some() || self.get_denied_tools_regex().is_some()
+        self.get_allowed_tools().is_some() || self.get_denied_tools().is_some()
     }
 
     /// Create a builder for constructing rules with optional fields

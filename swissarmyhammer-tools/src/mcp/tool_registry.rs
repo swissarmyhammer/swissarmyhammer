@@ -363,19 +363,19 @@ pub struct ToolContext {
 
     /// Optional MCP server instance (for creating filtering proxies)
     ///
-    /// When present, tools like rule checking can create FilteringMcpProxy instances
-    /// to restrict tool access during operations. This allows per-rule or per-operation
-    /// tool filtering for security and reliability.
+    /// Uses interior mutability to allow setting after context creation.
+    /// This is necessary because the server contains the context, creating a
+    /// circular reference that must be resolved after construction.
     ///
     /// # Examples
     ///
     /// ```rust,ignore
-    /// if let Some(server) = &context.mcp_server {
+    /// if let Some(server) = context.mcp_server.read().await.clone() {
     ///     let proxy = FilteringMcpProxy::new(server.clone(), filter);
     ///     // Use proxy for restricted tool access
     /// }
     /// ```
-    pub mcp_server: Option<Arc<super::McpServer>>,
+    pub mcp_server: Arc<RwLock<Option<Arc<super::McpServer>>>>,
 }
 
 impl ToolContext {
@@ -396,7 +396,7 @@ impl ToolContext {
             peer: None,
             tool_registry: None,
             working_dir: None,
-            mcp_server: None,
+            mcp_server: Arc::new(RwLock::new(None)),
         }
     }
 
@@ -514,20 +514,14 @@ impl ToolContext {
 
     /// Set the MCP server instance for this context
     ///
-    /// Creates a new context with the MCP server added. This allows tools
-    /// (particularly rule checking) to create filtering proxies that wrap
-    /// the server for per-operation tool access control.
+    /// Uses interior mutability to set the server reference after context creation.
+    /// This is necessary to avoid circular reference issues during server construction.
     ///
     /// # Arguments
     ///
     /// * `server` - The MCP server instance
-    ///
-    /// # Returns
-    ///
-    /// A new `ToolContext` with the MCP server set
-    pub fn with_mcp_server(mut self, server: Arc<super::McpServer>) -> Self {
-        self.mcp_server = Some(server);
-        self
+    pub async fn set_mcp_server(&self, server: Arc<super::McpServer>) {
+        *self.mcp_server.write().await = Some(server);
     }
 
     /// Call another MCP tool from within a tool

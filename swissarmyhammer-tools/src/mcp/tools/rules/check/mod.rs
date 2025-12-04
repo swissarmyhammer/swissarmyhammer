@@ -446,12 +446,15 @@ impl RuleCheckTool {
         let mut violations = Vec::new();
 
         // Verify MCP server is available in context
-        let _mcp_server = context.mcp_server.as_ref().ok_or_else(|| {
-            McpError::internal_error(
-                "MCP server not available in context - required for tool filtering".to_string(),
-                None,
-            )
-        })?;
+        {
+            let server_lock = context.mcp_server.read().await;
+            if server_lock.is_none() {
+                return Err(McpError::internal_error(
+                    "MCP server not available in context - required for tool filtering".to_string(),
+                    None,
+                ));
+            }
+        }
 
         let upstream_port =
             context.mcp_server_port.read().await.ok_or_else(|| {
@@ -465,8 +468,8 @@ impl RuleCheckTool {
 
             // Create filter from rule
             let filter = ToolFilter::new(
-                rule.get_allowed_tools_regex().unwrap_or_default(),
-                rule.get_denied_tools_regex().unwrap_or_default(),
+                rule.get_allowed_tools().unwrap_or_default(),
+                rule.get_denied_tools().unwrap_or_default(),
             )
             .map_err(|e| {
                 McpError::internal_error(
@@ -495,9 +498,15 @@ impl RuleCheckTool {
 
             // Create agent pointing to proxy
             let proxy_url_for_agent = format!("http://127.0.0.1:{}/mcp", proxy_port);
+            tracing::info!(
+                "Creating filtered agent for rule '{}' pointing to proxy at {}",
+                rule.name,
+                proxy_url_for_agent
+            );
+
             let proxy_server = agent_client_protocol::McpServer::Http {
                 name: format!("sah-filtered-{}", rule.name),
-                url: proxy_url_for_agent,
+                url: proxy_url_for_agent.clone(),
                 headers: vec![],
             };
 
@@ -517,6 +526,12 @@ impl RuleCheckTool {
                         None,
                     )
                 })?;
+
+            tracing::info!(
+                "Filtered agent created for rule '{}', should be using proxy at {}",
+                rule.name,
+                proxy_url_for_agent
+            );
 
             // Create checker with filtered agent (convert Box to Arc)
             let agent_arc: Arc<dyn AgentExecutor> = Arc::from(filtered_agent);

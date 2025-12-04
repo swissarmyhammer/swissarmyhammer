@@ -2,6 +2,7 @@ use crate::filter::ToolFilter;
 use rmcp::model::*;
 use rmcp::service::RequestContext;
 use rmcp::{ErrorData as McpError, RoleServer, ServerHandler};
+use std::sync::Arc;
 
 /// Filtering proxy that wraps an upstream MCP server via HTTP.
 ///
@@ -18,6 +19,8 @@ pub struct FilteringMcpProxy {
     upstream_url: String,
     /// Tool filter with allow/deny patterns
     tool_filter: ToolFilter,
+    /// Cached peer connection (with interior mutability)
+    cached_peer: Arc<tokio::sync::Mutex<Option<(rmcp::Peer<rmcp::RoleClient>, tokio::task::JoinHandle<()>)>>>,
 }
 
 impl FilteringMcpProxy {
@@ -26,11 +29,20 @@ impl FilteringMcpProxy {
         Self {
             upstream_url,
             tool_filter,
+            cached_peer: Arc::new(tokio::sync::Mutex::new(None)),
         }
     }
 
-    /// Get a connected Peer to the upstream MCP server
+    /// Get a connected Peer to the upstream MCP server (with caching)
     async fn get_peer(&self) -> Result<rmcp::Peer<rmcp::RoleClient>, McpError> {
+        let mut cache = self.cached_peer.lock().await;
+
+        // Return cached peer if available
+        if let Some((peer, _handle)) = cache.as_ref() {
+            return Ok(peer.clone());
+        }
+
+        // Create new connection
         use rmcp::service::serve_client;
         use rmcp::transport::StreamableHttpClientTransport;
 
@@ -55,8 +67,15 @@ impl FilteringMcpProxy {
             McpError::internal_error(format!("Failed to connect to upstream: {}", e), None)
         })?;
 
-        // Return the peer (RunningService derefs to Peer)
-        Ok(running.peer().clone())
+        let peer = running.peer().clone();
+        let handle = tokio::spawn(async move {
+            let _ = running.waiting().await;
+        });
+
+        // Cache the peer and handle
+        *cache = Some((peer.clone(), handle));
+
+        Ok(peer)
     }
 }
 
@@ -140,8 +159,8 @@ impl ServerHandler for FilteringMcpProxy {
         _request: Option<PaginatedRequestParam>,
         _context: RequestContext<RoleServer>,
     ) -> std::result::Result<ListToolsResult, McpError> {
-        tracing::debug!(
-            "FilteringMcpProxy: Filtering list_tools from {}",
+        tracing::warn!(
+            "🔍 PROXY list_tools called - filtering from {}",
             self.upstream_url
         );
 
@@ -192,9 +211,9 @@ impl ServerHandler for FilteringMcpProxy {
         request: CallToolRequestParam,
         _context: RequestContext<RoleServer>,
     ) -> std::result::Result<CallToolResult, McpError> {
-        tracing::debug!(
-            tool_name = %request.name,
-            "FilteringMcpProxy: Forwarding call_tool to {}",
+        tracing::warn!(
+            "⚠️ PROXY call_tool '{}' - forwarding to {} WITHOUT VALIDATION",
+            request.name,
             self.upstream_url
         );
 
