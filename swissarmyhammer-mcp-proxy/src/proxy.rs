@@ -20,7 +20,9 @@ pub struct FilteringMcpProxy {
     /// Tool filter with allow/deny patterns
     tool_filter: ToolFilter,
     /// Cached peer connection (with interior mutability)
-    cached_peer: Arc<tokio::sync::Mutex<Option<(rmcp::Peer<rmcp::RoleClient>, tokio::task::JoinHandle<()>)>>>,
+    cached_peer: Arc<
+        tokio::sync::Mutex<Option<(rmcp::Peer<rmcp::RoleClient>, tokio::task::JoinHandle<()>)>>,
+    >,
 }
 
 impl FilteringMcpProxy {
@@ -211,8 +213,8 @@ impl ServerHandler for FilteringMcpProxy {
         request: CallToolRequestParam,
         _context: RequestContext<RoleServer>,
     ) -> std::result::Result<CallToolResult, McpError> {
-        tracing::warn!(
-            "⚠️ PROXY call_tool '{}' - forwarding to {} WITHOUT VALIDATION",
+        tracing::info!(
+            "call_tool '{}' - forwarding to {}",
             request.name,
             self.upstream_url
         );
