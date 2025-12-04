@@ -45,7 +45,6 @@ impl ClaudeCodeExecutor {
         system_prompt: Option<String>,
         _context: &AgentExecutionContext<'_>,
     ) -> ActionResult<AgentResponse> {
-        
         use tokio::process::Command;
 
         tracing::debug!(
@@ -58,9 +57,9 @@ impl ClaudeCodeExecutor {
         let (server_name, server_url) = match &self.mcp_server {
             McpServer::Http { name, url, .. } => (name, url),
             McpServer::Sse { name, url, .. } => (name, url),
-            McpServer::Stdio {  .. } => {
+            McpServer::Stdio { .. } => {
                 return Err(ActionError::ClaudeError(
-                    "Claude executor requires HTTP MCP server, got Stdio".to_string()
+                    "Claude executor requires HTTP MCP server, got Stdio".to_string(),
                 ))
             }
         };
@@ -81,7 +80,11 @@ impl ClaudeCodeExecutor {
             ActionError::ClaudeError(format!("Failed to serialize MCP config: {}", e))
         })?;
 
-        tracing::info!("Configuring Claude to use MCP server '{}' at {}", server_name, server_url);
+        tracing::info!(
+            "Configuring Claude to use MCP server '{}' at {}",
+            server_name,
+            server_url
+        );
 
         // Build command - IMPORTANT: --mcp-config must come BEFORE --print for CLI parsing to work
         let mut cmd = Command::new(claude_path);
@@ -104,7 +107,7 @@ impl ClaudeCodeExecutor {
         }
 
         // Log the full command for debugging
-        tracing::info!("Claude command: {:?}", cmd.as_std());
+        tracing::debug!("Claude command: {:?}", cmd.as_std());
 
         // Use stdin for prompt input (required when using --mcp-config before --print)
         let mut child = cmd
@@ -117,8 +120,9 @@ impl ClaudeCodeExecutor {
         // Write prompt to stdin
         if let Some(stdin) = child.stdin.as_mut() {
             use tokio::io::AsyncWriteExt;
-            stdin.write_all(prompt.as_bytes()).await
-                .map_err(|e| ActionError::ClaudeError(format!("Failed to write prompt to stdin: {e}")))?;
+            stdin.write_all(prompt.as_bytes()).await.map_err(|e| {
+                ActionError::ClaudeError(format!("Failed to write prompt to stdin: {e}"))
+            })?;
         }
 
         // Wait for command completion

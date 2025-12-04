@@ -233,6 +233,17 @@ impl RuleLoader {
             if let Some(applies_to) = metadata_value.get("applies_to").and_then(|v| v.as_str()) {
                 rule.applies_to = Some(applies_to.to_string());
             }
+
+            // Parse tool filter configuration
+            if let Some(allowed_tools) = metadata_value.get("allowed_tools") {
+                rule.metadata
+                    .insert("allowed_tools".to_string(), allowed_tools.clone());
+            }
+
+            if let Some(denied_tools) = metadata_value.get("denied_tools") {
+                rule.metadata
+                    .insert("denied_tools".to_string(), denied_tools.clone());
+            }
         }
 
         // Set default description for partials

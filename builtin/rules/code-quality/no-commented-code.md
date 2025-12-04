@@ -4,6 +4,8 @@ description: Detect large blocks of commented-out code
 category: code-quality
 severity: error
 tags: ["code-quality", "cleanup"]
+denied_tools:
+  - ".*"
 ---
 
 Check for large blocks (> 5 lines) of commented-out code in {{ language }}.

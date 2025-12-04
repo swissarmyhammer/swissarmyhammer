@@ -40,12 +40,18 @@ fn test_builtin_agents_specific_content() {
         .get("qwen-coder")
         .expect("qwen-coder agent should exist");
     assert!(qwen_content.contains("type: llama-agent"));
-    assert!(qwen_content.contains("unsloth/Qwen3"), "Expected Qwen3 model in qwen-coder");
+    assert!(
+        qwen_content.contains("unsloth/Qwen3"),
+        "Expected Qwen3 model in qwen-coder"
+    );
 
     // Test qwen-coder-flash agent
     let qwen_flash_content = agents_map
         .get("qwen-coder-flash")
         .expect("qwen-coder-flash agent should exist");
     assert!(qwen_flash_content.contains("type: llama-agent"));
-    assert!(qwen_flash_content.contains("unsloth/Qwen3"), "Expected Qwen3 model in qwen-coder-flash");
+    assert!(
+        qwen_flash_content.contains("unsloth/Qwen3"),
+        "Expected Qwen3 model in qwen-coder-flash"
+    );
 }

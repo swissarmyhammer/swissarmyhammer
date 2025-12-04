@@ -86,7 +86,7 @@ If no issues found, respond with "PASS".
     std::fs::write(&test_file, "fn main() {}\n").unwrap();
 
     // Try to check the file with the rule that uses a partial
-    let result = checker.check_file(&rule, &test_file).await;
+    let result = checker.check_file(&rule, &test_file, None).await;
 
     // If this fails, check if it's because partials aren't working
     if result.is_err() {
@@ -137,7 +137,7 @@ async fn test_rule_with_builtin_partial() {
     std::fs::write(&test_file, "fn main() {}\n").unwrap();
 
     // Try to check with a rule that uses a builtin partial
-    let result = checker.check_file(&rule, &test_file).await;
+    let result = checker.check_file(&rule, &test_file, None).await;
 
     // Should not fail with "Partial does not exist"
     if result.is_err() {

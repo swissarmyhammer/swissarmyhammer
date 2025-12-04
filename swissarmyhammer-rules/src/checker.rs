@@ -106,7 +106,7 @@ pub struct RuleCheckRequest {
 ///     Severity::Warning,
 /// );
 /// let target = PathBuf::from("src/main.rs");
-/// checker.check_file(&rule, &target).await?;
+/// checker.check_file(&rule, &target, None).await?;
 /// # Ok(())
 /// # }
 /// ```
@@ -263,7 +263,7 @@ impl RuleChecker {
     ///     Severity::Error,
     /// );
     /// let target = PathBuf::from("src/main.rs");
-    /// match checker.check_file(&rule, &target).await? {
+    /// match checker.check_file(&rule, &target, None).await? {
     ///     None => println!("Check passed"),
     ///     Some(violation) => println!("Found violation: {}", violation),
     /// }
@@ -274,6 +274,7 @@ impl RuleChecker {
         &self,
         rule: &Rule,
         target_path: &Path,
+        override_agent: Option<&Arc<dyn AgentExecutor>>,
     ) -> Result<Option<RuleViolation>> {
         let check_start = std::time::Instant::now();
 
@@ -392,11 +393,13 @@ impl RuleChecker {
         tracing::debug!("Stage 2 complete: .check prompt rendered");
 
         // Execute via agent (LLM) with tools enabled
+        // Use override agent if provided (for per-rule tool filtering)
+        let agent = override_agent.unwrap_or(&self.agent);
+
         let agent_config = swissarmyhammer_config::agent::AgentConfig::default();
         let agent_context = AgentExecutionContext::new(&agent_config);
 
-        let response = self
-            .agent
+        let response = agent
             .execute_prompt(String::new(), check_prompt_text, &agent_context)
             .await
             .map_err(|e| RuleError::AgentError(format!("Agent execution failed: {}", e)))?;
@@ -658,7 +661,7 @@ impl RuleChecker {
         let stream = stream::iter(work_items)
             .map(move |(rule, target)| {
                 let checker = Arc::clone(&checker);
-                async move { checker.check_file(&rule, &target).await }
+                async move { checker.check_file(&rule, &target, None).await }
             })
             .buffer_unordered(concurrency)
             .filter_map(|result| async move {
@@ -826,7 +829,7 @@ mod tests {
         );
 
         let nonexistent = PathBuf::from("/nonexistent/file.rs");
-        let result = checker.check_file(&rule, &nonexistent).await;
+        let result = checker.check_file(&rule, &nonexistent, None).await;
 
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("Failed to read"));

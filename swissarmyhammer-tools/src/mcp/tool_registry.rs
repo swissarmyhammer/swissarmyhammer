@@ -360,6 +360,22 @@ pub struct ToolContext {
     /// This explicit approach avoids reliance on environment variables (global state)
     /// and makes test isolation more reliable and explicit.
     pub working_dir: Option<PathBuf>,
+
+    /// Optional MCP server instance (for creating filtering proxies)
+    ///
+    /// Uses interior mutability to allow setting after context creation.
+    /// This is necessary because the server contains the context, creating a
+    /// circular reference that must be resolved after construction.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// if let Some(server) = context.mcp_server.read().await.clone() {
+    ///     let proxy = FilteringMcpProxy::new(server.clone(), filter);
+    ///     // Use proxy for restricted tool access
+    /// }
+    /// ```
+    pub mcp_server: Arc<RwLock<Option<Arc<super::McpServer>>>>,
 }
 
 impl ToolContext {
@@ -380,6 +396,7 @@ impl ToolContext {
             peer: None,
             tool_registry: None,
             working_dir: None,
+            mcp_server: Arc::new(RwLock::new(None)),
         }
     }
 
@@ -493,6 +510,18 @@ impl ToolContext {
     pub fn with_working_dir(mut self, working_dir: PathBuf) -> Self {
         self.working_dir = Some(working_dir);
         self
+    }
+
+    /// Set the MCP server instance for this context
+    ///
+    /// Uses interior mutability to set the server reference after context creation.
+    /// This is necessary to avoid circular reference issues during server construction.
+    ///
+    /// # Arguments
+    ///
+    /// * `server` - The MCP server instance
+    pub async fn set_mcp_server(&self, server: Arc<super::McpServer>) {
+        *self.mcp_server.write().await = Some(server);
     }
 
     /// Call another MCP tool from within a tool

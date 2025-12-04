@@ -52,6 +52,14 @@ async fn run_builtin_workflow_in_process(
     std::env::set_current_dir(&repo_root)?;
 
     let cli_context = create_test_cli_context().await?;
+    // Create CliToolContext for the new signature
+    let work_dir = std::env::current_dir()?;
+    let cli_tool_context = std::sync::Arc::new(
+        swissarmyhammer_cli::mcp_integration::CliToolContext::new_with_config(&work_dir, None)
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to create CliToolContext: {}", e))?,
+    );
+
     let result = execute_run_command(
         RunCommandConfig {
             workflow: workflow_name.to_string(),
@@ -63,6 +71,7 @@ async fn run_builtin_workflow_in_process(
             quiet: true,
         },
         &cli_context,
+        cli_tool_context,
     )
     .await;
 

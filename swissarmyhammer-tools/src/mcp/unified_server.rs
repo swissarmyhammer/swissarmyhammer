@@ -387,6 +387,14 @@ async fn start_stdio_server(
 
     // Wrap server in Arc for sharing between handle and task
     let server_arc = Arc::new(server);
+
+    // Set self-reference in tool context (for per-rule tool filtering)
+    server_arc
+        .tool_context
+        .set_mcp_server(server_arc.clone())
+        .await;
+    tracing::debug!("Set MCP server self-reference in tool context (stdio)");
+
     let server_clone = server_arc.clone();
 
     // Spawn server task and store the handle to prevent orphaning
@@ -498,6 +506,14 @@ async fn start_http_server(
 
     // Wrap server in Arc for sharing between service and handle
     let server_arc = Arc::new(server);
+
+    // Set self-reference in tool context (for per-rule tool filtering)
+    server_arc
+        .tool_context
+        .set_mcp_server(server_arc.clone())
+        .await;
+    tracing::debug!("Set MCP server self-reference in tool context");
+
     let server_for_service = server_arc.clone();
 
     // Use StreamableHttpService for /mcp endpoint (matches client example)

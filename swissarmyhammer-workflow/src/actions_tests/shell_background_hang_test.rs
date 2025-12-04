@@ -16,10 +16,7 @@ async fn test_shell_background_process_doesnt_hang() {
 
     // This should complete quickly (within 5 seconds)
     // If it hangs, the test will timeout
-    let result = tokio::time::timeout(
-        Duration::from_secs(5),
-        action.execute(&mut context)
-    ).await;
+    let result = tokio::time::timeout(Duration::from_secs(5), action.execute(&mut context)).await;
 
     match result {
         Ok(exec_result) => {
@@ -27,7 +24,7 @@ async fn test_shell_background_process_doesnt_hang() {
             println!("Test passed - shell execution completed without hanging!");
             // Clean up background process
             let _ = std::process::Command::new("pkill")
-                .args(&["-f", "background.*date"])
+                .args(["-f", "background.*date"])
                 .output();
         }
         Err(_) => {

@@ -110,9 +110,11 @@ async fn test_nonexistent_tool_error() {
     assert!(result.is_err(), "Should return error for nonexistent tool");
 
     let error = result.err().unwrap();
+    let error_msg = error.to_string();
     assert!(
-        error.to_string().contains("Tool not found"),
-        "Error should mention tool not found"
+        error_msg.contains("Tool not found") || error_msg.contains("Unknown tool"),
+        "Error should mention tool not found, got: {}",
+        error_msg
     );
 }
 

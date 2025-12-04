@@ -12,6 +12,7 @@ use crate::cli::{FlowSubcommand, OutputFormat, PromptSourceArg};
 use crate::context::CliContext;
 use crate::exit_codes::{EXIT_ERROR, EXIT_SUCCESS};
 use anyhow::{anyhow, Result};
+use std::sync::Arc;
 
 /// Help text for the flow command
 pub const DESCRIPTION: &str = include_str!("description.md");
@@ -136,7 +137,11 @@ pub fn parse_flow_args(args: Vec<String>) -> Result<FlowSubcommand> {
 }
 
 /// Handle the flow command - PURE ROUTING ONLY
-pub async fn handle_command(subcommand: FlowSubcommand, context: &CliContext) -> i32 {
+pub async fn handle_command(
+    subcommand: FlowSubcommand,
+    context: &CliContext,
+    cli_tool_context: Arc<crate::mcp_integration::CliToolContext>,
+) -> i32 {
     let result = match subcommand {
         FlowSubcommand::Execute {
             workflow,
@@ -163,6 +168,7 @@ pub async fn handle_command(subcommand: FlowSubcommand, context: &CliContext) ->
                     quiet,
                 },
                 context,
+                cli_tool_context,
             )
             .await
         }

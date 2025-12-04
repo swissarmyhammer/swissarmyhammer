@@ -17,6 +17,7 @@ members = [
     "swissarmyhammer-agent-executor",
     "swissarmyhammer-rules",
     "swissarmyhammer-workflow",
+    "swissarmyhammer-mcp-proxy",
 ]
 resolver = "2"
 

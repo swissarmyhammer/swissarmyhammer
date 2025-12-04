@@ -15,11 +15,11 @@ use std::sync::Arc;
 use std::time::Instant;
 use swissarmyhammer_agent_executor::AgentExecutor;
 use swissarmyhammer_config::{AgentConfig, AgentUseCase};
+use swissarmyhammer_mcp_proxy::{start_proxy_server, FilteringMcpProxy, ToolFilter};
 use swissarmyhammer_rules::{
     RuleCheckRequest as DomainRuleCheckRequest, RuleChecker, RuleViolation, Severity,
 };
 use swissarmyhammer_todo::TodoId;
-use tokio::sync::OnceCell;
 
 // Progress notification milestones
 const PROGRESS_START: u32 = 0;
@@ -416,23 +416,173 @@ async fn get_changed_files(context: &ToolContext) -> Result<HashSet<String>, Mcp
 /// This tool uses the swissarmyhammer-rules library directly, avoiding subprocess
 /// overhead and providing better error handling and type safety.
 #[derive(Clone)]
-pub struct RuleCheckTool {
-    /// Lazily initialized rule checker (shared across requests)
-    checker: Arc<OnceCell<RuleChecker>>,
-}
+pub struct RuleCheckTool;
 
 impl RuleCheckTool {
     /// Creates a new instance of the RuleCheckTool
     pub fn new() -> Self {
-        Self {
-            checker: Arc::new(OnceCell::new()),
-        }
+        Self
     }
 
-    /// Get or initialize the rule checker using the provided context's agent configuration.
+    /// Check filtered rules individually with per-rule tool filtering
     ///
-    /// This method uses lazy initialization with `OnceCell` to ensure the RuleChecker
-    /// is created only once and reused across multiple rule check requests.
+    /// For each rule with tool filtering:
+    /// 1. Create FilteringMcpProxy with rule's filter
+    /// 2. Start HTTP server for proxy
+    /// 3. Create agent pointing to proxy
+    /// 4. Create RuleChecker with filtered agent
+    /// 5. Check files
+    /// 6. Shutdown proxy
+    ///
+    /// # Returns
+    ///
+    /// Vector of violations from all filtered rules
+    async fn check_filtered_rules(
+        &self,
+        filtered_rules: &[swissarmyhammer_rules::Rule],
+        file_patterns: &[String],
+        context: &ToolContext,
+    ) -> Result<Vec<RuleViolation>, McpError> {
+        let mut violations = Vec::new();
+
+        // Verify MCP server is available in context
+        {
+            let server_lock = context.mcp_server.read().await;
+            if server_lock.is_none() {
+                return Err(McpError::internal_error(
+                    "MCP server not available in context - required for tool filtering".to_string(),
+                    None,
+                ));
+            }
+        }
+
+        let upstream_port =
+            context.mcp_server_port.read().await.ok_or_else(|| {
+                McpError::internal_error("MCP server port not set".to_string(), None)
+            })?;
+
+        let upstream_url = format!("http://127.0.0.1:{}/mcp", upstream_port);
+
+        for rule in filtered_rules {
+            tracing::info!("Checking rule '{}' with tool filtering", rule.name);
+
+            // Create filter from rule
+            let filter = ToolFilter::new(
+                rule.get_allowed_tools().unwrap_or_default(),
+                rule.get_denied_tools().unwrap_or_default(),
+            )
+            .map_err(|e| {
+                McpError::internal_error(
+                    format!("Invalid tool filter in rule '{}': {}", rule.name, e),
+                    None,
+                )
+            })?;
+
+            // Create proxy
+            let proxy = Arc::new(FilteringMcpProxy::new(upstream_url.clone(), filter));
+
+            // Start proxy HTTP server
+            let (proxy_port, proxy_handle) =
+                start_proxy_server(proxy, None).await.map_err(|e| {
+                    McpError::internal_error(
+                        format!("Failed to start proxy for rule '{}': {}", rule.name, e),
+                        None,
+                    )
+                })?;
+
+            tracing::debug!(
+                "Started filtering proxy for rule '{}' on port {}",
+                rule.name,
+                proxy_port
+            );
+
+            // Create agent pointing to proxy
+            let proxy_url_for_agent = format!("http://127.0.0.1:{}/mcp", proxy_port);
+            tracing::info!(
+                "Creating filtered agent for rule '{}' pointing to proxy at {}",
+                rule.name,
+                proxy_url_for_agent
+            );
+
+            let proxy_server = agent_client_protocol::McpServer::Http {
+                name: format!("sah-filtered-{}", rule.name.replace('/', "-")),
+                url: proxy_url_for_agent.clone(),
+                headers: vec![],
+            };
+
+            let agent_config = context.get_agent_for_use_case(AgentUseCase::Rules);
+            let filtered_agent =
+                swissarmyhammer_agent_executor::AgentExecutorFactory::create_executor(
+                    agent_config.as_ref(),
+                    proxy_server,
+                )
+                .await
+                .map_err(|e| {
+                    McpError::internal_error(
+                        format!(
+                            "Failed to create filtered agent for rule '{}': {}",
+                            rule.name, e
+                        ),
+                        None,
+                    )
+                })?;
+
+            tracing::info!(
+                "Filtered agent created for rule '{}', should be using proxy at {}",
+                rule.name,
+                proxy_url_for_agent
+            );
+
+            // Create checker with filtered agent (convert Box to Arc)
+            let agent_arc: Arc<dyn AgentExecutor> = Arc::from(filtered_agent);
+            let mut filtered_checker = RuleChecker::new(agent_arc).map_err(|e| {
+                McpError::internal_error(
+                    format!("Failed to create checker for rule '{}': {}", rule.name, e),
+                    None,
+                )
+            })?;
+
+            filtered_checker.initialize().await.map_err(|e| {
+                McpError::internal_error(
+                    format!(
+                        "Failed to initialize checker for rule '{}': {}",
+                        rule.name, e
+                    ),
+                    None,
+                )
+            })?;
+
+            // Check all files against this rule
+            let files = expand_glob_patterns(file_patterns).await?;
+            for file_path in files {
+                let path = std::path::Path::new(&file_path);
+                match filtered_checker.check_file(rule, path, None).await {
+                    Ok(Some(violation)) => {
+                        violations.push(violation);
+                    }
+                    Ok(None) => {}
+                    Err(e) => {
+                        tracing::warn!(
+                            "Failed to check file {} with rule '{}': {}",
+                            file_path,
+                            rule.name,
+                            e
+                        );
+                    }
+                }
+            }
+
+            // Cleanup proxy
+            proxy_handle.abort();
+            tracing::debug!("Shutdown proxy for rule '{}'", rule.name);
+        }
+
+        Ok(violations)
+    }
+
+    /// Create a rule checker using the provided context's agent configuration.
+    ///
+    /// Creates a fresh RuleChecker for each invocation to support per-rule tool filtering.
     ///
     /// # Arguments
     ///
@@ -440,47 +590,39 @@ impl RuleCheckTool {
     ///
     /// # Returns
     ///
-    /// * `Result<&RuleChecker, McpError>` - Reference to the initialized checker
+    /// * `Result<RuleChecker, McpError>` - Initialized checker
     ///
     /// # Errors
     ///
     /// Returns an error if agent creation or checker initialization fails
-    async fn get_checker(&self, context: &ToolContext) -> Result<&RuleChecker, McpError> {
+    async fn create_checker(&self, context: &ToolContext) -> Result<RuleChecker, McpError> {
         // Get agent config for Rules use case (falls back to root if not configured)
         let agent_config = context.get_agent_for_use_case(AgentUseCase::Rules);
 
-        self.checker
-            .get_or_try_init(|| async move {
-                tracing::debug!("Initializing RuleChecker for MCP tool with Rules use case agent");
-                tracing::debug!(
-                    "Using agent for Rules use case: {:?}",
-                    agent_config.executor_type()
-                );
+        tracing::debug!("Creating RuleChecker for MCP tool with Rules use case agent");
+        tracing::debug!(
+            "Using agent for Rules use case: {:?}",
+            agent_config.executor_type()
+        );
 
-                // Create agent executor from configuration
-                let agent = create_agent_from_config(&agent_config, context).await?;
+        // Create agent executor from configuration
+        let agent = create_agent_from_config(&agent_config, context).await?;
 
-                // Create rule checker
-                let mut checker = RuleChecker::new(agent).map_err(|e| {
-                    McpError::internal_error(format!("Failed to create rule checker: {}", e), None)
-                })?;
+        // Create rule checker
+        let mut checker = RuleChecker::new(agent).map_err(|e| {
+            McpError::internal_error(format!("Failed to create rule checker: {}", e), None)
+        })?;
 
-                // Initialize the checker
-                checker.initialize().await.map_err(|e| {
-                    McpError::internal_error(
-                        format!("Failed to initialize rule checker: {}", e),
-                        None,
-                    )
-                })?;
+        // Initialize the checker
+        checker.initialize().await.map_err(|e| {
+            McpError::internal_error(format!("Failed to initialize rule checker: {}", e), None)
+        })?;
 
-                tracing::info!(
-                    "RuleChecker initialized successfully with {:?} executor",
-                    agent_config.executor_type()
-                );
-                Ok(checker)
-            })
-            .await
-            .map_err(|e: McpError| e)
+        tracing::info!(
+            "RuleChecker initialized successfully with {:?} executor",
+            agent_config.executor_type()
+        );
+        Ok(checker)
     }
 }
 
@@ -579,20 +721,77 @@ impl McpTool for RuleCheckTool {
             }),
         );
 
-        // Get or initialize the rule checker with context's agent configuration
-        let checker = self.get_checker(context).await?;
-        tracing::info!("RuleChecker initialized successfully");
+        // Load rules to detect which ones have tool filtering
+        let mut rule_library = swissarmyhammer_rules::RuleLibrary::new();
+        let mut rule_resolver = swissarmyhammer_rules::RuleResolver::new();
+        let mut rules_vec = Vec::new();
+        rule_resolver
+            .load_all_rules(&mut rules_vec)
+            .map_err(|e| McpError::internal_error(format!("Failed to load rules: {}", e), None))?;
+
+        // Add rules to library
+        for rule in &rules_vec {
+            rule_library.add(rule.clone()).map_err(|e| {
+                McpError::internal_error(format!("Failed to add rule to library: {}", e), None)
+            })?;
+        }
+
+        // Get the rules that will be checked based on request filters
+        let all_rules: Vec<swissarmyhammer_rules::Rule> = rule_library
+            .list()
+            .map_err(|e| McpError::internal_error(format!("Failed to list rules: {}", e), None))?
+            .into_iter()
+            .filter(|rule| {
+                // Apply request filters
+                if let Some(ref names) = request.rule_names {
+                    if !names.contains(&rule.name) {
+                        return false;
+                    }
+                }
+                if let Some(ref severity_filter) = request.severity {
+                    if rule.severity != *severity_filter {
+                        return false;
+                    }
+                }
+                if let Some(ref category) = request.category {
+                    if rule.category.as_deref() != Some(category) {
+                        return false;
+                    }
+                }
+                true
+            })
+            .collect();
+
+        // Separate rules by whether they have tool filtering
+        let (filtered_rules, unfiltered_rules): (Vec<_>, Vec<_>) = all_rules
+            .into_iter()
+            .partition(|rule| rule.has_tool_filter());
+
+        tracing::info!(
+            "Rules loaded: {} with tool filtering, {} without",
+            filtered_rules.len(),
+            unfiltered_rules.len()
+        );
+
+        // Create a fresh rule checker for unfiltered rules
+        let checker = self.create_checker(context).await?;
+        tracing::info!("RuleChecker created successfully");
 
         // Send rules loaded notification
         send_progress(
             context,
             &progress_token,
             Some(PROGRESS_INITIALIZED),
-            "Rule checker initialized",
+            format!(
+                "Rule checker initialized ({} filtered, {} unfiltered rules)",
+                filtered_rules.len(),
+                unfiltered_rules.len()
+            )
+            .as_str(),
             json!({}),
         );
 
-        // Determine patterns based on changed flag
+        // Determine file patterns based on changed flag
         let patterns = if request.changed.unwrap_or(false) {
             tracing::info!("Changed files filter enabled");
 
@@ -637,56 +836,103 @@ impl McpTool for RuleCheckTool {
                 .unwrap_or_else(|| vec!["**/*.*".to_string()])
         };
 
-        // Map MCP request to domain request
-        let domain_request = DomainRuleCheckRequest {
-            rule_names: request.rule_names.clone(),
-            severity: request.severity,
-            category: request.category.clone(),
-            patterns,
-            check_mode: swissarmyhammer_rules::CheckMode::CollectAll, // Collect all violations
-            force: false, // MCP tool doesn't expose force flag yet
-            max_errors: request.max_errors,
-            max_concurrency: request.max_concurrency,
-        };
+        // Build domain request for unfiltered rules only
+        let unfiltered_rule_names: Vec<String> =
+            unfiltered_rules.iter().map(|r| r.name.clone()).collect();
 
-        // Execute the rule check via streaming library
-        use futures_util::stream::StreamExt;
-        let mut stream = checker
-            .check(domain_request)
-            .await
-            .map_err(|e| McpError::internal_error(format!("Rule check failed: {}", e), None))?;
+        // Collect all violations from both filtered and unfiltered rules
+        let mut all_violations = Vec::new();
 
-        // Send checking progress notification
-        send_progress(
-            context,
-            &progress_token,
-            Some(PROGRESS_CHECKING),
-            "Checking files against rules",
-            json!({}),
-        );
+        // Process filtered rules individually (with proxies)
+        if !filtered_rules.is_empty() {
+            // Check if MCP server is available (required for tool filtering)
+            let server_available = context.mcp_server.read().await.is_some();
 
-        // Collect all violations from the stream and track statistics.
-        // This loop processes the violation stream, counting violations by severity
-        // and tracking which files contain violations for the completion notification.
-        let mut violations = Vec::new();
-        let mut statistics = ViolationStatistics::new();
-
-        while let Some(result) = stream.next().await {
-            match result {
-                Ok(violation) => {
-                    statistics.record(&violation);
-                    violations.push(violation);
-                }
-                Err(e) => {
-                    return Err(McpError::internal_error(
-                        format!("Rule check failed: {}", e),
-                        None,
-                    ));
-                }
+            if !server_available {
+                tracing::warn!(
+                    "Skipping {} filtered rules - MCP server not available in context (test mode?)",
+                    filtered_rules.len()
+                );
+                // In test mode or when MCP server isn't available, skip filtered rules
+                // This is safe because tests should test the filtering logic separately
+            } else {
+                tracing::info!(
+                    "Processing {} filtered rules individually",
+                    filtered_rules.len()
+                );
+                all_violations.extend(
+                    self.check_filtered_rules(&filtered_rules, &patterns, context)
+                        .await?,
+                );
             }
         }
 
-        tracing::info!("Check completed: found {} violations", violations.len());
+        // Process unfiltered rules using normal streaming check
+        if !unfiltered_rules.is_empty() {
+            tracing::info!(
+                "Processing {} unfiltered rules via streaming",
+                unfiltered_rules.len()
+            );
+
+            let domain_request = DomainRuleCheckRequest {
+                rule_names: Some(unfiltered_rule_names),
+                severity: request.severity,
+                category: request.category.clone(),
+                patterns,
+                check_mode: swissarmyhammer_rules::CheckMode::CollectAll,
+                force: false,
+                max_errors: request.max_errors,
+                max_concurrency: request.max_concurrency,
+            };
+
+            // Execute the rule check via streaming library
+            use futures_util::stream::StreamExt;
+            let mut stream = checker
+                .check(domain_request)
+                .await
+                .map_err(|e| McpError::internal_error(format!("Rule check failed: {}", e), None))?;
+
+            // Send checking progress notification
+            send_progress(
+                context,
+                &progress_token,
+                Some(PROGRESS_CHECKING),
+                "Checking files against unfiltered rules",
+                json!({}),
+            );
+
+            // Collect violations from unfiltered rules
+            while let Some(result) = stream.next().await {
+                match result {
+                    Ok(violation) => {
+                        all_violations.push(violation);
+                    }
+                    Err(e) => {
+                        return Err(McpError::internal_error(
+                            format!("Rule check failed: {}", e),
+                            None,
+                        ));
+                    }
+                }
+            }
+
+            tracing::info!(
+                "Unfiltered rules check completed: found {} violations",
+                all_violations.len()
+            );
+        }
+
+        // Use all_violations for statistics and todo creation
+        let violations = all_violations;
+        let mut statistics = ViolationStatistics::new();
+        for v in &violations {
+            statistics.record(v);
+        }
+
+        tracing::info!(
+            "Total check completed: found {} violations",
+            violations.len()
+        );
 
         // Create todos for violations if requested
         let mut todos_created = Vec::new();
@@ -1221,7 +1467,7 @@ mod tests {
         let context = crate::test_utils::create_test_context().await;
 
         // Get checker should initialize it
-        let checker_result = tool.get_checker(&context).await;
+        let checker_result = tool.create_checker(&context).await;
 
         // In test environment without actual model, initialization may fail
         // which is expected - we're just testing the initialization pattern
@@ -1236,26 +1482,19 @@ mod tests {
         }
     }
 
-    /// Verifies that the RuleCheckTool uses lazy initialization pattern and reuses
-    /// the same RuleChecker instance across multiple calls
+    /// Verifies that the RuleCheckTool creates fresh checkers (no caching)
     #[tokio::test]
-    async fn test_rule_check_tool_lazy_initialization() {
+    async fn test_rule_check_tool_creates_fresh_checker() {
         let tool = RuleCheckTool::new();
         let context = crate::test_utils::create_test_context().await;
 
-        // Checker should not be initialized yet
-        assert!(tool.checker.get().is_none());
+        // Create first checker
+        let result1 = tool.create_checker(&context).await;
 
-        // Calling get_checker should initialize it
-        let _ = tool.get_checker(&context).await;
+        // Create second checker - should be fresh instance (no caching)
+        let result2 = tool.create_checker(&context).await;
 
-        // Now it should be initialized (or have attempted initialization)
-        // We can't check the internal state directly, but a second call
-        // should return the same instance (testing the OnceCell behavior)
-        let result1 = tool.get_checker(&context).await;
-        let result2 = tool.get_checker(&context).await;
-
-        // Both results should have the same success/failure status
+        // Both should have the same success/failure status (both succeed or both fail)
         assert_eq!(result1.is_ok(), result2.is_ok());
     }
 

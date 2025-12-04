@@ -4,6 +4,8 @@ description: Functions should be less than 50 lines
 category: code-quality
 severity: error
 tags: ["code-quality", "maintainability"]
+denied_tools:
+  - ".*"
 ---
 
 Check {{ language }} code for functions longer than 50 lines.

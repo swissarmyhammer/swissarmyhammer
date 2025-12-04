@@ -289,13 +289,19 @@ impl McpServer {
                 .with_tool_registry(tool_registry_arc.clone()),
         );
 
-        Ok(Self {
+        let server = Self {
             library: Arc::new(RwLock::new(library)),
             file_watcher: Arc::new(Mutex::new(FileWatcher::new())),
             tool_registry: tool_registry_arc,
             tool_context,
-        })
+        };
+
+        // Note: tool_context.mcp_server will be set after server is wrapped in Arc
+        // See set_self_reference() method
+
+        Ok(server)
     }
+
 
     /// Get a reference to the underlying prompt library.
     ///
