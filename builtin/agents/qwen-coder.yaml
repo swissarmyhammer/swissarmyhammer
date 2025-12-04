@@ -1,8 +1,8 @@
 quiet: false
 executor:
-    type: llama-agent
-    config:
-        model:
-            source: !HuggingFace
-                repo: "unsloth/Qwen3-Coder-480B-A35B-Instruct-GGUF"
-                folder: "UD-Q2_K_XL"
+  type: llama-agent
+  config:
+    model:
+      source: !HuggingFace
+        repo: "unsloth/Qwen3-Coder-480B-A35B-Instruct-GGUF"
+        folder: "Q4_0"

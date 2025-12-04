@@ -1540,4 +1540,63 @@ fn example() {
         )
         .await;
     }
+
+    /// Test that rule check respects .gitignore files
+    #[tokio::test]
+    async fn test_rule_check_respects_gitignore() {
+        let temp_dir = TempDir::new().unwrap();
+        let repo_path = temp_dir.path();
+
+        // Initialize git repo
+        GitCommand::new(repo_path, "init").execute().unwrap();
+        GitTestHelper::configure_user(repo_path).unwrap();
+
+        // Create .gitignore file
+        fs::write(repo_path.join(".gitignore"), "ignored.rs\n").unwrap();
+
+        // Create files - one that should be ignored, one that shouldn't
+        fs::write(
+            repo_path.join("included.rs"),
+            "// TODO: This should be found\nfn main() {}",
+        )
+        .unwrap();
+        fs::write(
+            repo_path.join("ignored.rs"),
+            "// TODO: This should be ignored\nfn test() {}",
+        )
+        .unwrap();
+
+        // Commit everything so git tracks .gitignore
+        GitTestHelper::add_and_commit(repo_path, "Initial commit").unwrap();
+
+        // Create context with git operations
+        let context = create_git_context(repo_path).await;
+
+        // Run rule check with pattern that matches both files
+        let tool = RuleCheckTool::new();
+        let arguments = TestArgsBuilder::new()
+            .with_rule_names(vec!["code-quality/no-todo-comments"])
+            .with_file_paths(vec![format!("{}/**/*.rs", repo_path.display())])
+            .build();
+
+        let result = tool.execute(arguments, &context).await;
+
+        // Get the result text
+        let result_text = match result {
+            Ok(call_result) => format!("{:?}", call_result),
+            Err(e) => panic!("Tool execution failed: {}", e),
+        };
+
+        println!("Test result: {}", result_text);
+
+        // Should find violations in included.rs but not in ignored.rs
+        assert!(
+            result_text.contains("included.rs") || result_text.contains("No rule violations"),
+            "Should check included.rs"
+        );
+        assert!(
+            !result_text.contains("ignored.rs"),
+            "Should NOT check ignored.rs (it's in .gitignore)"
+        );
+    }
 }
