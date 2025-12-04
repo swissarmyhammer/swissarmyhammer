@@ -4,6 +4,8 @@ description: Limit cognitive complexity of functions
 category: code-quality
 severity: error
 tags: ["code-quality", "complexity"]
+denied_tools:
+  - ".*"
 ---
 
 Analyze {{ language }} code for high cognitive complexity (nested ifs, loops, etc).

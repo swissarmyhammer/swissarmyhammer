@@ -4,6 +4,8 @@ description: Detect unexplained numeric literals in code
 category: code-quality
 severity: error
 tags: ["code-quality", "maintainability"]
+denied_tools:
+  - ".*"
 ---
 
 This rule only applies to programming languages that use numeric literals.
