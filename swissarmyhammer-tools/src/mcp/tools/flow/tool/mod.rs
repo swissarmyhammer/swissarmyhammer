@@ -136,18 +136,28 @@ impl FlowTool {
         request: &FlowToolRequest,
         context: &ToolContext,
     ) -> std::result::Result<CallToolResult, McpError> {
+        tracing::info!("🎯 execute_workflow STARTED for '{}'", request.flow_name);
+
         let (storage, _resolver) = self
             .load_workflows()
-            .map_err(|e| McpError::internal_error(e, None))?;
+            .map_err(|e| {
+                tracing::error!("❌ Failed to load workflows: {}", e);
+                McpError::internal_error(e, None)
+            })?;
+
+        tracing::info!("📚 Workflows loaded successfully");
 
         // Get the workflow
         let workflow_name = swissarmyhammer_workflow::WorkflowName::new(request.flow_name.clone());
         let workflow = storage.get_workflow(&workflow_name).map_err(|e| {
+            tracing::error!("❌ Failed to get workflow '{}': {}", request.flow_name, e);
             McpError::internal_error(
                 format!("Failed to load workflow '{}': {}", request.flow_name, e),
                 None,
             )
         })?;
+
+        tracing::info!("✅ Workflow '{}' loaded", request.flow_name);
 
         // Validate required parameters
         validate_required_parameters(&workflow, &request.parameters)
@@ -419,21 +429,30 @@ impl McpTool for FlowTool {
         arguments: serde_json::Map<String, serde_json::Value>,
         context: &ToolContext,
     ) -> std::result::Result<CallToolResult, McpError> {
+        tracing::info!("🔧 FlowTool::execute called with arguments: {:?}", arguments);
+
         // Parse request
         let request: FlowToolRequest = BaseToolImpl::parse_arguments(arguments)?;
 
-        tracing::debug!("Flow tool request: flow_name={}", request.flow_name);
+        tracing::info!("📋 Flow tool request parsed: flow_name={}, parameters={:?}, is_list={}",
+            request.flow_name, request.parameters, request.is_list());
 
         // Validate the request
         request
             .validate()
             .map_err(|e| McpError::invalid_params(e, None))?;
 
+        tracing::info!("✅ Request validated successfully");
+
         // Handle list vs execute
         if request.is_list() {
+            tracing::info!("📜 Calling list_workflows");
             self.list_workflows(&request).await
         } else {
-            self.execute_workflow(&request, context).await
+            tracing::info!("🚀 Calling execute_workflow for '{}'", request.flow_name);
+            let result = self.execute_workflow(&request, context).await;
+            tracing::info!("✨ execute_workflow returned: {:?}", result.is_ok());
+            result
         }
     }
 
