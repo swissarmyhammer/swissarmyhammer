@@ -429,3 +429,14 @@ async fn test_flow_list_output_formats() {
         }
     }
 }
+
+// NOTE: Plan workflow test disabled - workflow hangs when called via MCP tool
+// This is a known issue documented in ideas/flow_tool_failure.md
+// The plan workflow works via CLI but hangs when called through MCP flow tool
+// TODO: Re-enable after workflow execution bug is fixed
+//
+// #[tokio::test]
+// async fn test_plan_workflow_executes_via_mcp() {
+//     // Test plan workflow execution via MCP
+//     // Currently hangs (times out after 60s)
+// }
