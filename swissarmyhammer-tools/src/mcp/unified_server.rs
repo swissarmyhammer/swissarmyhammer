@@ -368,6 +368,10 @@ pub async fn start_mcp_server(
 }
 
 /// Start MCP server with stdio transport
+///
+/// This function starts both:
+/// 1. Stdio transport for client communication (Claude Code)
+/// 2. HTTP server on random localhost port for workflows to execute Claude prompts
 async fn start_stdio_server(
     library: Option<PromptLibrary>,
     agent_override: Option<String>,
@@ -378,6 +382,28 @@ async fn start_stdio_server(
     server.initialize().await?;
 
     tracing::info!("Starting unified MCP server in stdio mode");
+
+    // Find available random port for HTTP server (for workflow support)
+    tracing::debug!("Finding available random port for HTTP server");
+    let temp_listener = TcpListener::bind("127.0.0.1:0").await.map_err(|e| {
+        swissarmyhammer_common::SwissArmyHammerError::Other {
+            message: format!("Failed to bind to random port: {}", e),
+        }
+    })?;
+
+    let http_port = temp_listener
+        .local_addr()
+        .map_err(|e| swissarmyhammer_common::SwissArmyHammerError::Other {
+            message: format!("Failed to get local address: {}", e),
+        })?
+        .port();
+
+    drop(temp_listener); // Release the port for HTTP server to use
+    tracing::info!("Will start HTTP server on port {} for workflow support", http_port);
+
+    // Set the server port in the tool context so workflows can access it
+    server.set_server_port(http_port).await;
+    tracing::info!("Set MCP server port {} in tool context for workflows", http_port);
 
     // Create shutdown channel for cleanup coordination
     let (shutdown_tx, mut shutdown_rx) = oneshot::channel();
@@ -396,8 +422,44 @@ async fn start_stdio_server(
     tracing::debug!("Set MCP server self-reference in tool context (stdio)");
 
     let server_clone = server_arc.clone();
+    let http_server_clone = server_arc.clone();
 
-    // Spawn server task and store the handle to prevent orphaning
+    // Start HTTP server for workflow support
+    let http_bind_addr = format!("127.0.0.1:{}", http_port);
+    let http_socket_addr: std::net::SocketAddr = http_bind_addr.parse().map_err(|e| {
+        swissarmyhammer_common::SwissArmyHammerError::Other {
+            message: format!("Failed to parse HTTP bind address {}: {}", http_bind_addr, e),
+        }
+    })?;
+
+    // Build HTTP service
+    let http_service = StreamableHttpService::new(
+        move || Ok((*http_server_clone).clone()),
+        LocalSessionManager::default().into(),
+        Default::default(),
+    );
+
+    let router = axum::Router::new()
+        .nest_service("/mcp", http_service)
+        .route("/health", axum::routing::get(health_check));
+
+    let http_listener = tokio::net::TcpListener::bind(http_socket_addr)
+        .await
+        .map_err(|e| swissarmyhammer_common::SwissArmyHammerError::Other {
+            message: format!("Failed to bind HTTP server to {}: {}", http_socket_addr, e),
+        })?;
+
+    tracing::info!("HTTP MCP server (for workflows) binding on http://127.0.0.1:{}/mcp", http_port);
+
+    // Spawn HTTP server task
+    let _http_task = tokio::spawn(async move {
+        if let Err(e) = axum::serve(http_listener, router).await {
+            tracing::error!("HTTP server error: {}", e);
+        }
+        tracing::info!("HTTP server task exiting");
+    });
+
+    // Spawn stdio server task
     let server_task = tokio::spawn(async move {
         match serve_server((*server_clone).clone(), stdio()).await {
             Ok(running_service) => {
@@ -434,8 +496,8 @@ async fn start_stdio_server(
 
     let info = McpServerInfo {
         mode: McpServerMode::Stdio,
-        connection_url: "stdio".to_string(),
-        port: None,
+        connection_url: format!("stdio (HTTP on port {} for workflows)", http_port),
+        port: Some(http_port),
     };
 
     Ok(McpServerHandle::new_with_task(McpServerHandleParams {

@@ -24,9 +24,9 @@ stateDiagram-v2
 
 ## Actions
 
-- Start: Initialize workflow
+- Start: Log "Starting hello-world workflow"
 - Greeting: Execute prompt "say-hello" with result="greeting_output"
-- Complete: Log "Workflow completed! Greeting result: ${greeting_output}"
+- Complete: Log "Workflow completed! Greeting was: ${greeting_output.content}"
 
 ## Description
 
