@@ -1,8 +1,8 @@
 quiet: false
 executor:
-    type: llama-agent
-    config:
-        model:
-            source: !HuggingFace
-                repo: "unsloth/GLM-4.6-GGUF"
-                folder: "UD-Q2_K_XL"
+  type: llama-agent
+  config:
+    model:
+      source: !HuggingFace
+        repo: "unsloth/GLM-4.6-GGUF"
+        folder: "IQ4_NL"

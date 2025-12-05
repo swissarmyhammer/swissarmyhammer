@@ -3205,7 +3205,7 @@ checksum = "11d3d7f243d5c5a8b9bb5d6dd2b1602c0cb0b9db1621bafc7ed66e35ff9fe092"
 [[package]]
 name = "llama-agent"
 version = "0.1.0"
-source = "git+https://github.com/swissarmyhammer/llama-agent#edee717b21a9a25ed914bb79c8c97a6ce4145a79"
+source = "git+https://github.com/swissarmyhammer/llama-agent#dea0f660c366076d5b081813cbe5bb4a8f96f089"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3240,7 +3240,7 @@ dependencies = [
 [[package]]
 name = "llama-common"
 version = "0.1.0"
-source = "git+https://github.com/swissarmyhammer/llama-agent#edee717b21a9a25ed914bb79c8c97a6ce4145a79"
+source = "git+https://github.com/swissarmyhammer/llama-agent#dea0f660c366076d5b081813cbe5bb4a8f96f089"
 dependencies = [
  "async-trait",
  "serde",
@@ -3278,7 +3278,7 @@ dependencies = [
 [[package]]
 name = "llama-loader"
 version = "0.1.0"
-source = "git+https://github.com/swissarmyhammer/llama-agent#edee717b21a9a25ed914bb79c8c97a6ce4145a79"
+source = "git+https://github.com/swissarmyhammer/llama-agent#dea0f660c366076d5b081813cbe5bb4a8f96f089"
 dependencies = [
  "dirs 6.0.0",
  "hf-hub",
@@ -3484,9 +3484,9 @@ dependencies = [
 
 [[package]]
 name = "mio"
-version = "1.1.0"
+version = "1.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "69d83b0086dc8ecf3ce9ae2874b2d1290252e2a30720bea58a5c6639b0092873"
+checksum = "a69bcab0ad47271a0234d9422b131806bf3968021e5dc9328caf2d4cd58557fc"
 dependencies = [
  "libc",
  "wasi",
@@ -6444,7 +6444,7 @@ checksum = "ff360e02eab121e0bc37a2d3b4d4dc622e6eda3a8e5253d5435ecf5bd4c68408"
 dependencies = [
  "bytes",
  "libc",
- "mio 1.1.0",
+ "mio 1.1.1",
  "parking_lot",
  "pin-project-lite",
  "signal-hook-registry",
