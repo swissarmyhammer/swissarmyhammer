@@ -937,6 +937,7 @@ mod tests {
             McpServerMode::Http { port: None },
             Some(PromptLibrary::default()),
             None,
+            None,
         )
         .await
         .expect("Failed to start test MCP server")

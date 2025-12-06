@@ -12,7 +12,7 @@ use swissarmyhammer_tools::mcp::unified_server::{start_mcp_server, McpServerMode
 async fn test_http_mcp_server_rmcp_client_final() {
     // Start HTTP MCP server
     let mode = McpServerMode::Http { port: None };
-    let mut server = start_mcp_server(mode, None, None).await.unwrap();
+    let mut server = start_mcp_server(mode, None, None, None).await.unwrap();
 
     let server_url = server.url();
 

@@ -88,7 +88,7 @@ impl AgentExecutor for LlamaAgentExecutor {
 ///
 /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
 /// // Start MCP server first (typically done by CLI)
-/// // let mcp_handle = start_mcp_server(...).await?;
+/// // let mcp_handle = start_mcp_server(..., None).await?;
 ///
 /// let config = LlamaAgentConfig::default();
 ///

@@ -45,7 +45,7 @@ async fn test_claude_mcp_config_argument_order() {
 #[ignore] // Only run when Claude CLI is available
 async fn test_claude_executor_can_use_mcp_tools() {
     // Start MCP server
-    let mut mcp_server = start_mcp_server(McpServerMode::Http { port: None }, None, None)
+    let mut mcp_server = start_mcp_server(McpServerMode::Http { port: None }, None, None, None)
         .await
         .expect("Failed to start MCP server");
 

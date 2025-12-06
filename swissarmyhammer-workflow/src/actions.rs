@@ -27,7 +27,7 @@
 //! # use swissarmyhammer_workflow::WorkflowExecutor;
 //! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
 //! // 1. Start MCP server (in CLI layer, not shown here)
-//! // let mcp_server = start_mcp_server(...).await?;
+//! // let mcp_server = start_mcp_server(..., None).await?;
 //!
 //! // 2. Create workflow with LlamaAgent configuration
 //! // let workflow = load_workflow(...)?;

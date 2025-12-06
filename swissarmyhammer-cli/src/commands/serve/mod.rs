@@ -121,7 +121,7 @@ async fn initialize_http_server(
     );
 
     let mode = McpServerMode::Http { port: Some(port) };
-    let server_handle = start_mcp_server(mode, None, model_override)
+    let server_handle = start_mcp_server(mode, None, model_override, None)
         .await
         .map_err(|e| {
             tracing::error!("Failed to start HTTP MCP server: {}", e);
@@ -299,7 +299,7 @@ async fn start_stdio_server(
     }
 
     let mode = McpServerMode::Stdio;
-    start_mcp_server(mode, Some(library), model_override)
+    start_mcp_server(mode, Some(library), model_override, None)
         .await
         .map_err(|e| {
             tracing::error!("Failed to start unified stdio MCP server: {}", e);

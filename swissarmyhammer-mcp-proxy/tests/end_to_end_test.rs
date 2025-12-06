@@ -29,7 +29,7 @@ async fn test_proxy_filters_tool_discovery() {
     // Start HTTP server for the upstream MCP server
     let upstream_handle = {
         use swissarmyhammer_tools::mcp::unified_server::{start_mcp_server, McpServerMode};
-        start_mcp_server(McpServerMode::Http { port: None }, None, None)
+        start_mcp_server(McpServerMode::Http { port: None }, None, None, None)
             .await
             .unwrap()
     };

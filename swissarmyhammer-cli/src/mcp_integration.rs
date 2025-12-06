@@ -58,7 +58,8 @@ impl CliToolContext {
         working_dir: &std::path::Path,
         model_override: Option<&str>,
     ) -> Result<Self, Box<dyn std::error::Error>> {
-        let mcp_server_handle = Self::initialize_mcp_server(model_override).await?;
+        let mcp_server_handle =
+            Self::initialize_mcp_server(model_override, Some(working_dir.to_path_buf())).await?;
         let mcp_port = mcp_server_handle.info().port;
 
         let mut tool_context = Self::setup_tool_context(working_dir, mcp_port).await;
@@ -79,6 +80,7 @@ impl CliToolContext {
     /// Initialize MCP HTTP server
     async fn initialize_mcp_server(
         model_override: Option<&str>,
+        working_dir: Option<std::path::PathBuf>,
     ) -> Result<
         swissarmyhammer_tools::mcp::unified_server::McpServerHandle,
         Box<dyn std::error::Error>,
@@ -91,6 +93,7 @@ impl CliToolContext {
             McpServerMode::Http { port: None },
             None,
             model_override.map(|s| s.to_string()),
+            working_dir,
         )
         .await?;
 
@@ -289,7 +292,11 @@ mod tests {
 
     #[tokio::test]
     async fn test_rate_limiter_integration() {
-        let context = CliToolContext::new().await.unwrap();
+        use swissarmyhammer_common::test_utils::IsolatedTestEnvironment;
+
+        let env = IsolatedTestEnvironment::new().unwrap();
+        let temp_path = env.temp_dir();
+        let context = CliToolContext::new_with_dir(&temp_path).await.unwrap();
 
         // Test that rate limiter is properly created and functional
         // We can verify this by checking that the CliToolContext was created successfully

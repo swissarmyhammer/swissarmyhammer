@@ -200,7 +200,7 @@ impl McpServer {
         work_dir: PathBuf,
         model_override: Option<String>,
     ) -> Result<Self> {
-        let git_ops_arc = Self::initialize_git_operations(work_dir);
+        let git_ops_arc = Self::initialize_git_operations(work_dir.clone());
         let tool_handlers = ToolHandlers::new();
         let agent_config = Self::load_template_context()?;
         let use_case_agents = Self::initialize_use_case_agents(model_override)?;
@@ -209,6 +209,7 @@ impl McpServer {
             git_ops_arc,
             agent_config,
             use_case_agents,
+            Some(work_dir),
         );
 
         let server = Self {
@@ -372,6 +373,7 @@ impl McpServer {
     /// * `git_ops_arc` - Git operations wrapped in Arc<Mutex>
     /// * `agent_config` - Agent configuration
     /// * `use_case_agents` - Use case to agent configuration map
+    /// * `working_dir` - Working directory for tool operations
     ///
     /// # Returns
     ///
@@ -381,12 +383,14 @@ impl McpServer {
         git_ops_arc: Arc<Mutex<Option<GitOperations>>>,
         agent_config: Arc<swissarmyhammer_config::model::ModelConfig>,
         use_case_agents: HashMap<ModelUseCase, Arc<swissarmyhammer_config::model::ModelConfig>>,
+        working_dir: Option<PathBuf>,
     ) -> (Arc<RwLock<ToolRegistry>>, Arc<ToolContext>) {
         let mut tool_registry = ToolRegistry::new();
         Self::register_all_tools(&mut tool_registry);
 
         let mut tool_context = ToolContext::new(Arc::new(tool_handlers), git_ops_arc, agent_config);
         tool_context.use_case_agents = Arc::new(use_case_agents);
+        tool_context.working_dir = working_dir;
 
         let tool_registry_arc = Arc::new(RwLock::new(tool_registry));
         let tool_context = Arc::new(tool_context.with_tool_registry(tool_registry_arc.clone()));
