@@ -278,7 +278,7 @@ impl RuleChecker {
     ) -> Result<Option<RuleViolation>> {
         let check_start = std::time::Instant::now();
 
-        tracing::info!(
+        tracing::trace!(
             "Checking file {} against rule {}",
             target_path.display(),
             rule.name
@@ -740,13 +740,45 @@ impl RuleChecker {
         let check_mode = request.check_mode;
         let max_errors = request.max_errors;
         let concurrency = request.max_concurrency.unwrap_or(4);
+        let total_items = work_items.len();
+        let start_time = std::time::Instant::now();
 
         tracing::debug!("Processing work queue with concurrency={}", concurrency);
+        tracing::info!("Total checks to perform: {}", total_items);
+
+        let completed_count = Arc::new(std::sync::atomic::AtomicUsize::new(0));
 
         let stream = stream::iter(work_items)
-            .map(move |(rule, target)| {
+            .enumerate()
+            .map(move |(_index, (rule, target))| {
                 let checker = Arc::clone(&checker);
-                async move { checker.check_file(&rule, &target, None).await }
+                let completed = Arc::clone(&completed_count);
+                let start = start_time;
+                async move {
+                    let completed_so_far = completed.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    let remaining = total_items.saturating_sub(completed_so_far + 1);
+
+                    // Calculate time estimate
+                    let elapsed = start.elapsed().as_secs_f64();
+                    let avg_time_per_check = if completed_so_far > 0 {
+                        elapsed / (completed_so_far as f64)
+                    } else {
+                        0.0
+                    };
+                    let estimated_remaining_secs = (remaining as f64) * avg_time_per_check;
+
+                    tracing::info!(
+                        "Checking {} against {} [{}/{}] - {} remaining, ETA: {:.1}s",
+                        target.display(),
+                        rule.name,
+                        completed_so_far + 1,
+                        total_items,
+                        remaining,
+                        estimated_remaining_secs
+                    );
+
+                    checker.check_file(&rule, &target, None).await
+                }
             })
             .buffer_unordered(concurrency)
             .filter_map(|result| async move {
