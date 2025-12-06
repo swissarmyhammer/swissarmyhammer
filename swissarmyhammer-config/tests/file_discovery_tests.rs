@@ -7,8 +7,8 @@ use serde_json::json;
 use std::env;
 use std::fs;
 use std::sync::Mutex;
+use swissarmyhammer_common::test_utils::IsolatedTestEnvironment;
 use swissarmyhammer_config::{ConfigurationDiscovery, TemplateContext};
-use tempfile::TempDir;
 
 /// Global mutex to serialize tests that modify global state (current directory, HOME environment variable)
 /// This prevents race conditions when multiple tests run in parallel
@@ -16,7 +16,7 @@ static GLOBAL_STATE_LOCK: Mutex<()> = Mutex::new(());
 
 /// Test helper for isolated file discovery testing
 struct IsolatedDiscoveryTest {
-    temp_dir: TempDir,
+    _env: IsolatedTestEnvironment,
     original_cwd: std::path::PathBuf,
     original_home: Option<String>,
     _lock_guard: std::sync::MutexGuard<'static, ()>,
@@ -31,18 +31,18 @@ impl IsolatedDiscoveryTest {
             poisoned.into_inner()
         });
 
-        let temp_dir = TempDir::new().expect("Failed to create temp dir");
-        let original_cwd = env::current_dir().expect("Failed to get current dir");
-        let original_home = env::var("HOME").ok();
+        let env = IsolatedTestEnvironment::new().expect("Failed to create test environment");
+        let original_cwd = std::env::current_dir().expect("Failed to get current dir");
+        let original_home = std::env::var("HOME").ok();
 
         // Set up isolated environment
-        let home_dir = temp_dir.path().join("home");
+        let home_dir = env.temp_dir().join("home");
         fs::create_dir(&home_dir).expect("Failed to create home dir");
-        env::set_var("HOME", &home_dir);
-        env::set_current_dir(temp_dir.path()).expect("Failed to set current dir");
+        std::env::set_var("HOME", &home_dir);
+        std::env::set_current_dir(&env.temp_dir()).expect("Failed to set current dir");
 
         Self {
-            temp_dir,
+            _env: env,
             original_cwd,
             original_home,
             _lock_guard: lock_guard,
@@ -50,9 +50,13 @@ impl IsolatedDiscoveryTest {
     }
 
     fn project_config_dir(&self) -> std::path::PathBuf {
-        let config_dir = self.temp_dir.path().join(".swissarmyhammer");
+        let config_dir = self._env.temp_dir().join(".swissarmyhammer");
         fs::create_dir_all(&config_dir).expect("Failed to create project config dir");
         config_dir
+    }
+
+    fn temp_dir(&self) -> std::path::PathBuf {
+        self._env.temp_dir()
     }
 
     fn home_config_dir(&self) -> std::path::PathBuf {
@@ -254,11 +258,11 @@ fn test_discovery_with_nested_project_structure() {
     let test = IsolatedDiscoveryTest::new();
 
     // Create nested directory structure
-    let nested_dir = test.temp_dir.path().join("workspace/project/subdir");
+    let nested_dir = test.temp_dir().join("workspace/project/subdir");
     fs::create_dir_all(&nested_dir).expect("Failed to create nested dirs");
 
     // Create config at the workspace level
-    let workspace_config_dir = test.temp_dir.path().join("workspace/.swissarmyhammer");
+    let workspace_config_dir = test.temp_dir().join("workspace/.swissarmyhammer");
     fs::create_dir_all(&workspace_config_dir).expect("Failed to create workspace config dir");
 
     let workspace_config = r#"
@@ -269,10 +273,7 @@ workspace_setting = true
     fs::write(&workspace_config_file, workspace_config).expect("Failed to write workspace config");
 
     // Create config at the project level
-    let project_config_dir = test
-        .temp_dir
-        .path()
-        .join("workspace/project/.swissarmyhammer");
+    let project_config_dir = test.temp_dir().join("workspace/project/.swissarmyhammer");
     fs::create_dir_all(&project_config_dir).expect("Failed to create project config dir");
 
     let project_config = r#"
@@ -428,7 +429,7 @@ fn test_nonexistent_config_directories() {
     let test = IsolatedDiscoveryTest::new();
 
     // Ensure config directories don't exist
-    let project_config_dir = test.temp_dir.path().join(".swissarmyhammer");
+    let project_config_dir = test.temp_dir().join(".swissarmyhammer");
     let home_path = env::var("HOME").expect("HOME not set");
     let home_config_dir = std::path::Path::new(&home_path).join(".swissarmyhammer");
 

@@ -8,74 +8,79 @@ use anyhow::Result;
 use std::collections::HashMap;
 use swissarmyhammer::test_utils::IsolatedTestEnvironment;
 use swissarmyhammer::{WorkflowExecutor, WorkflowStorage};
-use swissarmyhammer_config::agent::{AgentConfig, LlamaAgentConfig};
+use swissarmyhammer_config::model::{LlamaAgentConfig, ModelConfig};
 use swissarmyhammer_workflow::template_context::WorkflowTemplateContext;
 use swissarmyhammer_workflow::{MermaidParser, StateId, WorkflowRun};
 
-/// Test that MCP port is correctly set in workflow context for LlamaAgent
-#[tokio::test]
-async fn test_mcp_port_in_workflow_context() -> Result<()> {
-    let _guard = IsolatedTestEnvironment::new()?;
+// ============================================================================
+// Helper Functions
+// ============================================================================
 
-    // Create a simple workflow
-    let workflow_content = r#"---
-name: test-mcp-port
-title: Test MCP Port
-description: Tests that MCP port is set in context
----
-
-# Test MCP Port
-
-```mermaid
-stateDiagram-v2
-    [*] --> CheckPort
-    CheckPort --> [*]
-```
-
-## Actions
-
-- CheckPort: Log "MCP port: ${_mcp_server_port}"
-"#;
-
-    let workflow = MermaidParser::parse(workflow_content, "test-mcp-port")?;
-    let _executor = WorkflowExecutor::new();
-    let mut run = WorkflowRun::new(workflow);
-
-    // Set up LlamaAgent config with test model FIRST
-    let llama_config = LlamaAgentConfig::for_testing();
-    let agent_config = AgentConfig::llama_agent(llama_config);
-    run.context.set_agent_config(agent_config);
-
-    // Simulate MCP server port being set (as would happen in CLI)
-    let test_port = 12345u16;
-    run.context.update_mcp_port(test_port);
-
-    // Verify the port was set correctly in context
-    assert_eq!(
-        run.context.get("_mcp_server_port"),
-        Some(&serde_json::json!(test_port))
-    );
-
-    // Verify the agent config was updated with the port
-    let stored_agent_config = run.context.get_agent_config();
-    if let swissarmyhammer_config::agent::AgentConfig {
-        executor: swissarmyhammer_config::agent::AgentExecutorConfig::LlamaAgent(llama_config),
+/// Helper function to assert that a context has a LlamaAgent config with the expected port
+fn assert_llama_config_has_port(context: &WorkflowTemplateContext, expected_port: u16) {
+    let agent_config = context.get_agent_config();
+    if let swissarmyhammer_config::model::ModelConfig {
+        executor: swissarmyhammer_config::model::ModelExecutorConfig::LlamaAgent(llama_config),
         ..
-    } = stored_agent_config
+    } = agent_config
     {
-        assert_eq!(llama_config.mcp_server.port, test_port);
+        assert_eq!(
+            llama_config.mcp_server.port, expected_port,
+            "LlamaAgent port should be {}",
+            expected_port
+        );
     } else {
-        panic!("Expected LlamaAgent config");
+        panic!("Expected LlamaAgent config but got {:?}", agent_config);
     }
-
-    Ok(())
 }
 
-/// Test that MCP port propagates from parent to sub-workflow
-#[tokio::test]
-async fn test_mcp_port_propagation_to_sub_workflow() -> Result<()> {
-    let _guard = IsolatedTestEnvironment::new()?;
+/// Helper function to assert that MCP port is set in context
+fn assert_mcp_port_in_context(context: &WorkflowTemplateContext, expected_port: u16) {
+    assert_eq!(
+        context.get("_mcp_server_port"),
+        Some(&serde_json::json!(expected_port))
+    );
+}
 
+/// Helper function to create a context with LlamaAgent and MCP port
+fn create_context_with_llama_and_port(port: u16) -> WorkflowTemplateContext {
+    let mut context = WorkflowTemplateContext::with_vars(HashMap::new()).unwrap();
+    let llama_config = LlamaAgentConfig::for_testing();
+    let agent_config = ModelConfig::llama_agent(llama_config);
+    context.set_agent_config(agent_config);
+    context.update_mcp_port(port);
+    context
+}
+
+/// Helper function to verify that expected states were visited in a workflow run
+fn verify_states_visited(run: &WorkflowRun, expected_states: &[&str]) {
+    let visited_states: Vec<StateId> = run
+        .history
+        .iter()
+        .map(|(state_id, _)| state_id.clone())
+        .collect();
+
+    for state_name in expected_states {
+        assert!(visited_states.contains(&StateId::new(*state_name)));
+    }
+}
+
+/// Helper function to create an executor and workflow run with MCP port
+fn create_run_with_mcp_port(
+    workflow: swissarmyhammer_workflow::Workflow,
+    port: u16,
+) -> (WorkflowExecutor, WorkflowRun) {
+    let executor = WorkflowExecutor::new();
+    let mut run = WorkflowRun::new(workflow);
+    run.context.update_mcp_port(port);
+    (executor, run)
+}
+
+// ============================================================================
+// Workflow Setup Functions
+// ============================================================================
+
+fn setup_parent_child_workflows() -> (String, String) {
     let parent_workflow_content = r#"---
 name: parent-with-mcp
 title: Parent Workflow with MCP
@@ -120,106 +125,13 @@ stateDiagram-v2
 - Complete: Set output="${processed}"
 "#;
 
-    // Create memory storage and store both workflows
-    let mut storage = WorkflowStorage::memory();
-    let parent_workflow = MermaidParser::parse(parent_workflow_content, "parent-with-mcp")?;
-    let child_workflow = MermaidParser::parse(child_workflow_content, "child-with-mcp")?;
-
-    storage.store_workflow(parent_workflow.clone())?;
-    storage.store_workflow(child_workflow)?;
-
-    // Create executor and workflow run
-    let mut executor = WorkflowExecutor::new();
-    let mut run = WorkflowRun::new(parent_workflow);
-
-    // Set up LlamaAgent config with test model and MCP port
-    let test_port = 54321u16;
-    run.context.update_mcp_port(test_port);
-
-    // Execute the workflow
-    let result = executor.execute_state(&mut run).await;
-
-    // The workflow should execute successfully
-    // (Note: Sub-workflow execution may fail due to file system storage,
-    // but we can verify the parent context has the MCP port)
-    assert!(result.is_ok() || result.is_err()); // Either outcome is valid for this test
-
-    // Verify parent context still has MCP port
-    assert_eq!(
-        run.context.get("_mcp_server_port"),
-        Some(&serde_json::json!(test_port))
-    );
-
-    // Verify states were visited
-    let visited_states: Vec<StateId> = run
-        .history
-        .iter()
-        .map(|(state_id, _)| state_id.clone())
-        .collect();
-
-    assert!(visited_states.contains(&StateId::new("Setup")));
-    assert!(visited_states.contains(&StateId::new("CallSubWorkflow")));
-
-    Ok(())
+    (
+        parent_workflow_content.to_string(),
+        child_workflow_content.to_string(),
+    )
 }
 
-/// Test MCP port propagation with ClaudeCode executor (should be no-op)
-#[tokio::test]
-async fn test_mcp_port_with_claude_code_executor() -> Result<()> {
-    let _guard = IsolatedTestEnvironment::new()?;
-
-    let workflow_content = r#"---
-name: claude-code-test
-title: ClaudeCode Test
-description: Tests that MCP port setting works with ClaudeCode
----
-
-# ClaudeCode Test
-
-```mermaid
-stateDiagram-v2
-    [*] --> Process
-    Process --> [*]
-```
-
-## Actions
-
-- Process: Log "Using ClaudeCode executor"
-"#;
-
-    let workflow = MermaidParser::parse(workflow_content, "claude-code-test")?;
-    let _executor = WorkflowExecutor::new();
-    let mut run = WorkflowRun::new(workflow);
-
-    // Set up ClaudeCode config
-    let agent_config = AgentConfig::claude_code();
-    run.context.set_agent_config(agent_config);
-
-    // Set MCP port (should be a no-op for ClaudeCode)
-    let test_port = 9999u16;
-    run.context.update_mcp_port(test_port);
-
-    // Verify the port was set in context
-    assert_eq!(
-        run.context.get("_mcp_server_port"),
-        Some(&serde_json::json!(test_port))
-    );
-
-    // Verify the agent config is still ClaudeCode
-    let stored_agent_config = run.context.get_agent_config();
-    assert_eq!(
-        stored_agent_config.executor_type(),
-        swissarmyhammer_config::agent::AgentExecutorType::ClaudeCode
-    );
-
-    Ok(())
-}
-
-/// Test MCP port propagation through multiple nesting levels
-#[tokio::test]
-async fn test_mcp_port_deep_nesting() -> Result<()> {
-    let _guard = IsolatedTestEnvironment::new()?;
-
+fn setup_nested_workflows() -> (String, String, String) {
     let level1_workflow = r#"---
 name: level1-mcp
 title: Level 1 MCP Workflow
@@ -287,42 +199,165 @@ stateDiagram-v2
 - Complete: Set output="${processed}"
 "#;
 
-    // Create memory storage and store all workflows
+    (
+        level1_workflow.to_string(),
+        level2_workflow.to_string(),
+        level3_workflow.to_string(),
+    )
+}
+
+fn setup_nested_workflow_storage() -> Result<(WorkflowStorage, swissarmyhammer_workflow::Workflow)>
+{
+    let (level1, level2, level3) = setup_nested_workflows();
     let mut storage = WorkflowStorage::memory();
-    let workflow1 = MermaidParser::parse(level1_workflow, "level1-mcp")?;
-    let workflow2 = MermaidParser::parse(level2_workflow, "level2-mcp")?;
-    let workflow3 = MermaidParser::parse(level3_workflow, "level3-mcp")?;
+
+    let workflow1 = MermaidParser::parse(&level1, "level1-mcp")?;
+    let workflow2 = MermaidParser::parse(&level2, "level2-mcp")?;
+    let workflow3 = MermaidParser::parse(&level3, "level3-mcp")?;
 
     storage.store_workflow(workflow1.clone())?;
     storage.store_workflow(workflow2)?;
     storage.store_workflow(workflow3)?;
 
-    // Create executor and workflow run
-    let mut executor = WorkflowExecutor::new();
-    let mut run = WorkflowRun::new(workflow1);
+    Ok((storage, workflow1))
+}
 
-    // Set up LlamaAgent config with test model and MCP port
-    let test_port = 33333u16;
+// ============================================================================
+// Tests
+// ============================================================================
+
+/// Test that MCP port is correctly set in workflow context for LlamaAgent
+#[tokio::test]
+async fn test_mcp_port_in_workflow_context() -> Result<()> {
+    let _guard = IsolatedTestEnvironment::new()?;
+
+    // Create a simple workflow
+    let workflow_content = r#"---
+name: test-mcp-port
+title: Test MCP Port
+description: Tests that MCP port is set in context
+---
+
+# Test MCP Port
+
+```mermaid
+stateDiagram-v2
+    [*] --> CheckPort
+    CheckPort --> [*]
+```
+
+## Actions
+
+- CheckPort: Log "MCP port: ${_mcp_server_port}"
+"#;
+
+    let workflow = MermaidParser::parse(workflow_content, "test-mcp-port")?;
+    let _executor = WorkflowExecutor::new();
+    let mut run = WorkflowRun::new(workflow);
+
+    // Set up LlamaAgent config with test model FIRST
+    let llama_config = LlamaAgentConfig::for_testing();
+    let agent_config = ModelConfig::llama_agent(llama_config);
+    run.context.set_agent_config(agent_config);
+
+    // Simulate MCP server port being set (as would happen in CLI)
+    let test_port = 12345u16;
     run.context.update_mcp_port(test_port);
 
-    // Execute the workflow
-    let _result = executor.execute_state(&mut run).await;
+    // Verify the port was set correctly in context
+    assert_mcp_port_in_context(&run.context, test_port);
 
-    // Verify parent context still has MCP port after sub-workflow execution
+    // Verify the agent config was updated with the port
+    assert_llama_config_has_port(&run.context, test_port);
+
+    Ok(())
+}
+
+/// Test that MCP port propagates from parent to sub-workflow
+#[tokio::test]
+async fn test_mcp_port_propagation_to_sub_workflow() -> Result<()> {
+    let _guard = IsolatedTestEnvironment::new()?;
+    let (parent_workflow_content, child_workflow_content) = setup_parent_child_workflows();
+
+    let mut storage = WorkflowStorage::memory();
+    let parent_workflow = MermaidParser::parse(&parent_workflow_content, "parent-with-mcp")?;
+    let child_workflow = MermaidParser::parse(&child_workflow_content, "child-with-mcp")?;
+
+    storage.store_workflow(parent_workflow.clone())?;
+    storage.store_workflow(child_workflow)?;
+
+    let (mut executor, mut run) = create_run_with_mcp_port(parent_workflow, 54321);
+
+    let result = executor.execute_state(&mut run).await;
+    assert!(result.is_ok() || result.is_err());
+
+    assert_mcp_port_in_context(&run.context, 54321);
+    verify_states_visited(&run, &["Setup", "CallSubWorkflow"]);
+
+    Ok(())
+}
+
+/// Test MCP port propagation with ClaudeCode executor (should be no-op)
+#[tokio::test]
+async fn test_mcp_port_with_claude_code_executor() -> Result<()> {
+    let _guard = IsolatedTestEnvironment::new()?;
+
+    let workflow_content = r#"---
+name: claude-code-test
+title: ClaudeCode Test
+description: Tests that MCP port setting works with ClaudeCode
+---
+
+# ClaudeCode Test
+
+```mermaid
+stateDiagram-v2
+    [*] --> Process
+    Process --> [*]
+```
+
+## Actions
+
+- Process: Log "Using ClaudeCode executor"
+"#;
+
+    let workflow = MermaidParser::parse(workflow_content, "claude-code-test")?;
+    let _executor = WorkflowExecutor::new();
+    let mut run = WorkflowRun::new(workflow);
+
+    // Set up ClaudeCode config
+    let agent_config = ModelConfig::claude_code();
+    run.context.set_agent_config(agent_config);
+
+    // Set MCP port (should be a no-op for ClaudeCode)
+    let test_port = 9999u16;
+    run.context.update_mcp_port(test_port);
+
+    // Verify the port was set in context
+    assert_mcp_port_in_context(&run.context, test_port);
+
+    // Verify the agent config is still ClaudeCode
+    let stored_agent_config = run.context.get_agent_config();
     assert_eq!(
-        run.context.get("_mcp_server_port"),
-        Some(&serde_json::json!(test_port))
+        stored_agent_config.executor_type(),
+        swissarmyhammer_config::model::AgentExecutorType::ClaudeCode
     );
 
-    // Verify we attempted to execute the workflow chain
-    let visited_states: Vec<StateId> = run
-        .history
-        .iter()
-        .map(|(state_id, _)| state_id.clone())
-        .collect();
+    Ok(())
+}
 
-    assert!(visited_states.contains(&StateId::new("Start")));
-    assert!(visited_states.contains(&StateId::new("CallLevel2")));
+/// Test MCP port propagation through multiple nesting levels
+#[tokio::test]
+async fn test_mcp_port_deep_nesting() -> Result<()> {
+    let _guard = IsolatedTestEnvironment::new()?;
+    let (_storage, workflow1) = setup_nested_workflow_storage()?;
+
+    let (mut executor, mut run) = create_run_with_mcp_port(workflow1, 33333);
+
+    let _result = executor.execute_state(&mut run).await;
+
+    assert_mcp_port_in_context(&run.context, 33333);
+    verify_states_visited(&run, &["Start", "CallLevel2"]);
 
     Ok(())
 }
@@ -332,33 +367,13 @@ stateDiagram-v2
 async fn test_update_mcp_port_helper_method() -> Result<()> {
     let _guard = IsolatedTestEnvironment::new()?;
 
-    // Test with LlamaAgent config
-    let mut context = WorkflowTemplateContext::with_vars(HashMap::new())?;
-    let llama_config = LlamaAgentConfig::for_testing();
-    let agent_config = AgentConfig::llama_agent(llama_config);
-    context.set_agent_config(agent_config);
-
-    // Update MCP port
-    let test_port = 7777u16;
-    context.update_mcp_port(test_port);
+    let context = create_context_with_llama_and_port(7777);
 
     // Verify port was set in context
-    assert_eq!(
-        context.get("_mcp_server_port"),
-        Some(&serde_json::json!(test_port))
-    );
+    assert_mcp_port_in_context(&context, 7777);
 
     // Verify agent config was updated
-    let stored_agent_config = context.get_agent_config();
-    if let swissarmyhammer_config::agent::AgentConfig {
-        executor: swissarmyhammer_config::agent::AgentExecutorConfig::LlamaAgent(llama_config),
-        ..
-    } = stored_agent_config
-    {
-        assert_eq!(llama_config.mcp_server.port, test_port);
-    } else {
-        panic!("Expected LlamaAgent config");
-    }
+    assert_llama_config_has_port(&context, 7777);
 
     Ok(())
 }
@@ -369,7 +384,7 @@ async fn test_update_mcp_port_with_claude_code() -> Result<()> {
     let _guard = IsolatedTestEnvironment::new()?;
 
     let mut context = WorkflowTemplateContext::with_vars(HashMap::new())?;
-    let agent_config = AgentConfig::claude_code();
+    let agent_config = ModelConfig::claude_code();
     context.set_agent_config(agent_config);
 
     // Update MCP port (should be no-op for ClaudeCode but shouldn't panic)
@@ -377,16 +392,13 @@ async fn test_update_mcp_port_with_claude_code() -> Result<()> {
     context.update_mcp_port(test_port);
 
     // Verify port was still set in context
-    assert_eq!(
-        context.get("_mcp_server_port"),
-        Some(&serde_json::json!(test_port))
-    );
+    assert_mcp_port_in_context(&context, test_port);
 
     // Verify agent config is still ClaudeCode
     let stored_agent_config = context.get_agent_config();
     assert_eq!(
         stored_agent_config.executor_type(),
-        swissarmyhammer_config::agent::AgentExecutorType::ClaudeCode
+        swissarmyhammer_config::model::AgentExecutorType::ClaudeCode
     );
 
     Ok(())
@@ -397,33 +409,17 @@ async fn test_update_mcp_port_with_claude_code() -> Result<()> {
 async fn test_update_mcp_port_idempotent() -> Result<()> {
     let _guard = IsolatedTestEnvironment::new()?;
 
-    let mut context = WorkflowTemplateContext::with_vars(HashMap::new())?;
-    let llama_config = LlamaAgentConfig::for_testing();
-    let agent_config = AgentConfig::llama_agent(llama_config);
-    context.set_agent_config(agent_config);
+    let mut context = create_context_with_llama_and_port(1111);
 
     // Update MCP port multiple times
-    context.update_mcp_port(1111);
     context.update_mcp_port(2222);
     context.update_mcp_port(3333);
 
     // Verify final port is set correctly
-    assert_eq!(
-        context.get("_mcp_server_port"),
-        Some(&serde_json::json!(3333))
-    );
+    assert_mcp_port_in_context(&context, 3333);
 
     // Verify agent config has the final port
-    let stored_agent_config = context.get_agent_config();
-    if let swissarmyhammer_config::agent::AgentConfig {
-        executor: swissarmyhammer_config::agent::AgentExecutorConfig::LlamaAgent(llama_config),
-        ..
-    } = stored_agent_config
-    {
-        assert_eq!(llama_config.mcp_server.port, 3333);
-    } else {
-        panic!("Expected LlamaAgent config");
-    }
+    assert_llama_config_has_port(&context, 3333);
 
     Ok(())
 }
@@ -435,37 +431,16 @@ async fn test_mcp_port_with_different_llama_configs() -> Result<()> {
 
     // Test with default LlamaAgent config
     let mut context1 = WorkflowTemplateContext::with_vars(HashMap::new())?;
-    let default_config = AgentConfig::llama_agent(LlamaAgentConfig::default());
+    let default_config = ModelConfig::llama_agent(LlamaAgentConfig::default());
     context1.set_agent_config(default_config);
     context1.update_mcp_port(4444);
 
-    let agent_config1 = context1.get_agent_config();
-    if let swissarmyhammer_config::agent::AgentConfig {
-        executor: swissarmyhammer_config::agent::AgentExecutorConfig::LlamaAgent(llama_config),
-        ..
-    } = agent_config1
-    {
-        assert_eq!(llama_config.mcp_server.port, 4444);
-    } else {
-        panic!("Expected LlamaAgent config");
-    }
+    assert_llama_config_has_port(&context1, 4444);
 
     // Test with testing LlamaAgent config
-    let mut context2 = WorkflowTemplateContext::with_vars(HashMap::new())?;
-    let testing_config = AgentConfig::llama_agent(LlamaAgentConfig::for_testing());
-    context2.set_agent_config(testing_config);
-    context2.update_mcp_port(5555);
+    let context2 = create_context_with_llama_and_port(5555);
 
-    let agent_config2 = context2.get_agent_config();
-    if let swissarmyhammer_config::agent::AgentConfig {
-        executor: swissarmyhammer_config::agent::AgentExecutorConfig::LlamaAgent(llama_config),
-        ..
-    } = agent_config2
-    {
-        assert_eq!(llama_config.mcp_server.port, 5555);
-    } else {
-        panic!("Expected LlamaAgent config");
-    }
+    assert_llama_config_has_port(&context2, 5555);
 
     Ok(())
 }

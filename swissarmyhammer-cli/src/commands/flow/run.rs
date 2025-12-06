@@ -1,15 +1,10 @@
 //! Run a workflow command implementation
 
 use super::params::{map_positional_to_params, merge_params, parse_param_pairs};
-use super::shared::{execute_workflow_with_progress, workflow_run_id_to_string};
 use crate::context::CliContext;
-use swissarmyhammer::{
-    Result, SwissArmyHammerError, WorkflowExecutor, WorkflowName, WorkflowRunStatus,
-};
-use swissarmyhammer_common::{read_abort_file, remove_abort_file};
-use swissarmyhammer_config::agent::AgentExecutorType;
-use swissarmyhammer_tools::mcp::unified_server::{start_mcp_server, McpServerMode};
-use tokio::signal;
+use serde_json::json;
+use std::collections::HashMap;
+use swissarmyhammer::{Result, SwissArmyHammerError, Workflow, WorkflowName};
 
 /// Configuration for running a workflow command
 pub struct RunCommandConfig {
@@ -23,19 +18,92 @@ pub struct RunCommandConfig {
 }
 
 /// Execute the run workflow command
-pub async fn execute_run_command(config: RunCommandConfig, context: &CliContext) -> Result<()> {
-    run_workflow_command(config, context).await
+pub async fn execute_run_command(
+    config: RunCommandConfig,
+    context: &CliContext,
+    cli_tool_context: std::sync::Arc<crate::mcp_integration::CliToolContext>,
+) -> Result<()> {
+    run_workflow_command(config, context, cli_tool_context).await
+}
+
+/// Display dry run information for a workflow
+fn display_dry_run_info(workflow: &Workflow, variables: &HashMap<String, serde_json::Value>) {
+    println!("🔍 Dry run mode - showing execution plan:");
+    println!("📋 Workflow: {}", workflow.name);
+    println!("🏁 Initial state: {}", workflow.initial_state);
+    println!("🔧 Variables: {variables:?}");
+
+    println!("📊 States: {}", workflow.states.len());
+    println!("🔄 Transitions: {}", workflow.transitions.len());
+
+    // Show workflow structure
+    println!("\n📈 Workflow structure:");
+    for (state_id, state) in &workflow.states {
+        println!(
+            "  {} - {} {}",
+            state_id,
+            state.description,
+            if state.is_terminal { "(terminal)" } else { "" }
+        );
+    }
+}
+
+/// Execute workflow via MCP tool and handle results
+async fn execute_workflow_via_mcp(
+    workflow_name: &str,
+    variables: HashMap<String, serde_json::Value>,
+    config: &RunCommandConfig,
+    cli_tool_context: &std::sync::Arc<crate::mcp_integration::CliToolContext>,
+) -> Result<()> {
+    // Build arguments for MCP flow tool
+    let mut tool_arguments = serde_json::Map::new();
+    tool_arguments.insert("flow_name".to_string(), json!(workflow_name));
+    tool_arguments.insert("parameters".to_string(), json!(variables));
+    tool_arguments.insert("interactive".to_string(), json!(config.interactive));
+    tool_arguments.insert("dry_run".to_string(), json!(config.dry_run));
+    tool_arguments.insert("quiet".to_string(), json!(config.quiet));
+
+    // Call the MCP flow tool
+    let result = cli_tool_context
+        .execute_tool("flow", tool_arguments)
+        .await
+        .map_err(|e| SwissArmyHammerError::Other {
+            message: format!("Flow tool execution failed: {}", e),
+        })?;
+
+    // Check if execution resulted in error
+    if result.is_error.unwrap_or(false) {
+        let error_message =
+            crate::mcp_integration::response_formatting::format_error_response(&result);
+        eprintln!("{}", error_message);
+        return Err(SwissArmyHammerError::Other {
+            message: "Workflow execution failed".to_string(),
+        });
+    }
+
+    // Format and display the success result
+    let success_message =
+        crate::mcp_integration::response_formatting::format_success_response(&result);
+    if !config.quiet {
+        println!("{}", success_message);
+    }
+
+    Ok(())
 }
 
 /// Execute a workflow with given configuration
-pub async fn run_workflow_command(config: RunCommandConfig, context: &CliContext) -> Result<()> {
+pub async fn run_workflow_command(
+    config: RunCommandConfig,
+    context: &CliContext,
+    cli_tool_context: std::sync::Arc<crate::mcp_integration::CliToolContext>,
+) -> Result<()> {
     let workflow_name_typed = WorkflowName::new(&config.workflow);
     let workflow = context
         .workflow_storage
         .get_workflow(&workflow_name_typed)?;
 
     // Map positional arguments to required workflow parameters
-    let positional_params = map_positional_to_params(&workflow, config.positional_args)?;
+    let positional_params = map_positional_to_params(&workflow, config.positional_args.clone())?;
 
     // Parse --param key=value pairs
     let param_pairs = parse_param_pairs(&config.params)?;
@@ -47,157 +115,11 @@ pub async fn run_workflow_command(config: RunCommandConfig, context: &CliContext
     let variables = merge_params(positional_params, param_pairs, var_pairs);
 
     if config.dry_run {
-        println!("🔍 Dry run mode - showing execution plan:");
-        println!("📋 Workflow: {}", workflow.name);
-        println!("🏁 Initial state: {}", workflow.initial_state);
-        println!("🔧 Variables: {variables:?}");
-
-        println!("📊 States: {}", workflow.states.len());
-        println!("🔄 Transitions: {}", workflow.transitions.len());
-
-        // Show workflow structure
-        println!("\n📈 Workflow structure:");
-        for (state_id, state) in &workflow.states {
-            println!(
-                "  {} - {} {}",
-                state_id,
-                state.description,
-                if state.is_terminal { "(terminal)" } else { "" }
-            );
-        }
-
+        display_dry_run_info(&workflow, &variables);
         return Ok(());
     }
 
     tracing::info!("🚀 Starting workflow: {}", workflow.name);
 
-    // Check for abort file before starting workflow
-    let current_dir = std::env::current_dir().map_err(|e| SwissArmyHammerError::Other {
-        message: format!("Failed to get current directory: {}", e),
-    })?;
-    if let Some(abort_reason) =
-        read_abort_file(&current_dir).map_err(|e| SwissArmyHammerError::Other {
-            message: e.to_string(),
-        })?
-    {
-        // Clean up the abort file after detection
-        let _ = remove_abort_file(&current_dir).map_err(|e| SwissArmyHammerError::Other {
-            message: e.to_string(),
-        });
-        return Err(SwissArmyHammerError::from(
-            swissarmyhammer_workflow::ExecutorError::Abort(abort_reason),
-        ));
-    }
-
-    // Start MCP server if using LlamaAgent (before creating executor)
-    let agent_config = context.template_context.get_agent_config(None);
-    let mcp_server = if agent_config.executor_type() == AgentExecutorType::LlamaAgent {
-        tracing::info!("Starting MCP server for LlamaAgent");
-        let mode = McpServerMode::Http { port: None }; // Use random port
-        let server =
-            start_mcp_server(mode, None)
-                .await
-                .map_err(|e| SwissArmyHammerError::Other {
-                    message: format!("Failed to start MCP server for LlamaAgent: {}", e),
-                })?;
-        tracing::info!(
-            "MCP server started on port {}",
-            server.info.port.unwrap_or(0)
-        );
-        Some(server)
-    } else {
-        None
-    };
-
-    // Create executor
-    let mut executor = WorkflowExecutor::new();
-
-    // Create workflow run
-    let mut run =
-        executor
-            .start_workflow(workflow.clone())
-            .map_err(|e| SwissArmyHammerError::Other {
-                message: format!("Failed to start workflow '{}': {}", workflow.name, e),
-            })?;
-
-    // Set initial variables
-    run.context.set_workflow_vars(variables.clone());
-
-    // Update MCP server port in agent config if MCP server was started
-    // This uses the unified helper method to ensure consistency with sub-workflows
-    if let Some(server) = &mcp_server {
-        let port = server.info.port.unwrap_or(0);
-        run.context.update_mcp_port(port);
-    }
-
-    // Set quiet mode in context for actions to use
-    if config.quiet {
-        run.context
-            .insert("_quiet".to_string(), serde_json::Value::Bool(true));
-    }
-
-    // Setup signal handling for graceful shutdown
-    let (shutdown_tx, mut shutdown_rx) = tokio::sync::mpsc::channel(1);
-    let shutdown_tx_clone = shutdown_tx.clone();
-
-    tokio::spawn(async move {
-        signal::ctrl_c().await.expect("Failed to listen for Ctrl+C");
-        let _ = shutdown_tx_clone.send(()).await;
-    });
-
-    // Execute workflow with signal handling
-    let execution_result = tokio::select! {
-        result = execute_workflow_with_progress(&mut executor, &mut run, config.interactive) => result,
-        _ = shutdown_rx.recv() => {
-            tracing::info!("Workflow execution interrupted by user");
-            run.status = WorkflowRunStatus::Cancelled;
-            Ok(())
-        }
-    };
-
-    match execution_result {
-        Ok(_) => match run.status {
-            WorkflowRunStatus::Completed => {
-                tracing::info!("✅ Workflow completed successfully");
-                tracing::info!("🆔 Run ID: {}", workflow_run_id_to_string(&run.id));
-            }
-            WorkflowRunStatus::Failed => {
-                tracing::error!("❌ Workflow failed");
-                tracing::info!("🆔 Run ID: {}", workflow_run_id_to_string(&run.id));
-            }
-            WorkflowRunStatus::Cancelled => {
-                tracing::warn!("🚫 Workflow cancelled");
-                tracing::info!("🆔 Run ID: {}", workflow_run_id_to_string(&run.id));
-            }
-            _ => {
-                tracing::info!("⏸️  Workflow paused");
-                tracing::info!("🆔 Run ID: {}", workflow_run_id_to_string(&run.id));
-            }
-        },
-        Err(e) => {
-            tracing::error!("❌ Workflow execution failed: {}", e);
-            run.fail();
-
-            // Shutdown MCP server if it was started
-            if let Some(mut server) = mcp_server {
-                tracing::debug!("Shutting down MCP server after workflow failure");
-                let _ = server.shutdown().await;
-            }
-
-            return Err(e);
-        }
-    }
-
-    // Shutdown MCP server if it was started
-    if let Some(mut server) = mcp_server {
-        tracing::info!("Shutting down MCP server");
-        server
-            .shutdown()
-            .await
-            .map_err(|e| SwissArmyHammerError::Other {
-                message: format!("Failed to shutdown MCP server: {}", e),
-            })?;
-    }
-
-    Ok(())
+    execute_workflow_via_mcp(&config.workflow, variables, &config, &cli_tool_context).await
 }

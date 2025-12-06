@@ -4,6 +4,7 @@
 //! parsing frontmatter and creating Rule instances.
 
 use crate::{Result, Rule, Severity};
+use std::collections::HashSet;
 use std::path::Path;
 use swissarmyhammer_common::SwissArmyHammerError;
 use walkdir::WalkDir;
@@ -178,71 +179,129 @@ impl RuleLoader {
     /// ```
     pub fn load_from_string(&self, name: &str, content: &str) -> Result<Rule> {
         let (metadata, template) = Self::parse_front_matter(content)?;
-
-        // Check if this is a partial template
         let has_partial_marker = content.trim_start().starts_with("{% partial %}");
 
-        let mut rule = if let Some(ref metadata_value) = metadata {
-            // Parse severity from metadata
-            // Default to Warning when frontmatter exists but severity is not specified
-            // This assumes the author intentionally added frontmatter and would have
-            // specified Error if they wanted it, so Warning is a safer default
-            let severity = metadata_value
-                .get("severity")
-                .and_then(|v| v.as_str())
-                .and_then(|s| s.parse::<Severity>().ok())
-                .unwrap_or(Severity::Warning);
+        let severity = Self::parse_severity_from_metadata(&metadata);
+        let mut rule = Rule::new(name.to_string(), template.clone(), severity);
 
-            Rule::new(name.to_string(), template.clone(), severity)
-        } else {
-            // No frontmatter at all - default to Error severity
-            // Rules without frontmatter are considered more critical and should
-            // fail loudly to ensure they are properly configured with metadata
-            Rule::new(name.to_string(), template.clone(), Severity::Error)
-        };
+        Self::populate_rule_from_metadata(&mut rule, &metadata);
+        Self::set_partial_description(&mut rule, name, content, has_partial_marker);
 
-        // Parse metadata fields
-        if let Some(ref metadata_value) = metadata {
-            if let Some(title) = metadata_value.get("title").and_then(|v| v.as_str()) {
-                rule.metadata.insert(
-                    "title".to_string(),
-                    serde_json::Value::String(title.to_string()),
-                );
+        Ok(rule)
+    }
+
+    /// Parse severity from metadata with appropriate defaults
+    fn parse_severity_from_metadata(metadata: &Option<serde_json::Value>) -> Severity {
+        match metadata {
+            Some(metadata_value) => {
+                // Parse severity from metadata
+                // Default to Warning when frontmatter exists but severity is not specified
+                // This assumes the author intentionally added frontmatter and would have
+                // specified Error if they wanted it, so Warning is a safer default
+                metadata_value
+                    .get("severity")
+                    .and_then(|v| v.as_str())
+                    .and_then(|s| s.parse::<Severity>().ok())
+                    .unwrap_or(Severity::Warning)
             }
-
-            if let Some(desc) = metadata_value.get("description").and_then(|v| v.as_str()) {
-                rule.description = Some(desc.to_string());
-            }
-
-            if let Some(cat) = metadata_value.get("category").and_then(|v| v.as_str()) {
-                rule.category = Some(cat.to_string());
-            }
-
-            if let Some(tags) = metadata_value.get("tags").and_then(|v| v.as_array()) {
-                rule.tags = tags
-                    .iter()
-                    .filter_map(|v| v.as_str())
-                    .map(String::from)
-                    .collect();
-            }
-
-            if let Some(auto_fix) = metadata_value.get("auto_fix").and_then(|v| v.as_bool()) {
-                rule.auto_fix = auto_fix;
-            }
-
-            if let Some(applies_to) = metadata_value.get("applies_to").and_then(|v| v.as_str()) {
-                rule.applies_to = Some(applies_to.to_string());
+            None => {
+                // No frontmatter at all - default to Error severity
+                // Rules without frontmatter are considered more critical and should
+                // fail loudly to ensure they are properly configured with metadata
+                Severity::Error
             }
         }
+    }
 
-        // Set default description for partials
+    /// Populate rule fields from metadata
+    fn populate_rule_from_metadata(rule: &mut Rule, metadata: &Option<serde_json::Value>) {
+        let Some(metadata_value) = metadata else {
+            return;
+        };
+
+        Self::set_title_from_metadata(rule, metadata_value);
+        Self::set_description_from_metadata(rule, metadata_value);
+        Self::set_category_from_metadata(rule, metadata_value);
+        Self::set_tags_from_metadata(rule, metadata_value);
+        Self::set_auto_fix_from_metadata(rule, metadata_value);
+        Self::set_applies_to_from_metadata(rule, metadata_value);
+        Self::set_tool_filters_from_metadata(rule, metadata_value);
+    }
+
+    /// Set title field from metadata
+    fn set_title_from_metadata(rule: &mut Rule, metadata: &serde_json::Value) {
+        if let Some(title) = metadata.get("title").and_then(|v| v.as_str()) {
+            rule.metadata.insert(
+                "title".to_string(),
+                serde_json::Value::String(title.to_string()),
+            );
+        }
+    }
+
+    /// Set description field from metadata
+    fn set_description_from_metadata(rule: &mut Rule, metadata: &serde_json::Value) {
+        if let Some(desc) = metadata.get("description").and_then(|v| v.as_str()) {
+            rule.description = Some(desc.to_string());
+        }
+    }
+
+    /// Set category field from metadata
+    fn set_category_from_metadata(rule: &mut Rule, metadata: &serde_json::Value) {
+        if let Some(cat) = metadata.get("category").and_then(|v| v.as_str()) {
+            rule.category = Some(cat.to_string());
+        }
+    }
+
+    /// Set tags field from metadata
+    fn set_tags_from_metadata(rule: &mut Rule, metadata: &serde_json::Value) {
+        if let Some(tags) = metadata.get("tags").and_then(|v| v.as_array()) {
+            rule.tags = tags
+                .iter()
+                .filter_map(|v| v.as_str())
+                .map(String::from)
+                .collect();
+        }
+    }
+
+    /// Set auto_fix field from metadata
+    fn set_auto_fix_from_metadata(rule: &mut Rule, metadata: &serde_json::Value) {
+        if let Some(auto_fix) = metadata.get("auto_fix").and_then(|v| v.as_bool()) {
+            rule.auto_fix = auto_fix;
+        }
+    }
+
+    /// Set applies_to field from metadata
+    fn set_applies_to_from_metadata(rule: &mut Rule, metadata: &serde_json::Value) {
+        if let Some(applies_to) = metadata.get("applies_to").and_then(|v| v.as_str()) {
+            rule.applies_to = Some(applies_to.to_string());
+        }
+    }
+
+    /// Set tool filter configuration from metadata
+    fn set_tool_filters_from_metadata(rule: &mut Rule, metadata: &serde_json::Value) {
+        if let Some(allowed_tools) = metadata.get("allowed_tools") {
+            rule.metadata
+                .insert("allowed_tools".to_string(), allowed_tools.clone());
+        }
+
+        if let Some(denied_tools) = metadata.get("denied_tools") {
+            rule.metadata
+                .insert("denied_tools".to_string(), denied_tools.clone());
+        }
+    }
+
+    /// Set default description for partial templates
+    fn set_partial_description(
+        rule: &mut Rule,
+        name: &str,
+        content: &str,
+        has_partial_marker: bool,
+    ) {
         if rule.description.is_none()
             && (has_partial_marker || Self::is_likely_partial(name, content))
         {
             rule.description = Some("Partial template for reuse in other rules".to_string());
         }
-
-        Ok(rule)
     }
 
     /// Load a rule file with base path for relative naming
@@ -271,16 +330,12 @@ impl RuleLoader {
             .and_then(|s| s.to_str())
             .unwrap_or_default();
 
-        // Sort extensions by length descending to match longest first
-        let mut sorted_extensions = self.extensions.clone();
-        sorted_extensions.sort_by_key(|b| std::cmp::Reverse(b.len()));
+        // Create extension set for O(1) lookup
+        let extension_set: HashSet<&str> = self.extensions.iter().map(|s| s.as_str()).collect();
 
-        // Remove supported extensions, checking longest first
-        for ext in &sorted_extensions {
-            let extension = format!(".{ext}");
-            if filename.ends_with(&extension) {
-                return filename[..filename.len() - extension.len()].to_string();
-            }
+        // Try to find a matching extension by checking from the end
+        if let Some(name) = Self::strip_known_extension(filename, &extension_set) {
+            return name;
         }
 
         // Fallback to file_stem behavior
@@ -288,6 +343,22 @@ impl RuleLoader {
             .and_then(|s| s.to_str())
             .unwrap_or_default()
             .to_string()
+    }
+
+    /// Strip known extension from filename
+    fn strip_known_extension(filename: &str, extension_set: &HashSet<&str>) -> Option<String> {
+        // Sort extensions by length descending to match longest first
+        let mut sorted_extensions: Vec<&str> = extension_set.iter().copied().collect();
+        sorted_extensions.sort_by_key(|b| std::cmp::Reverse(b.len()));
+
+        for ext in sorted_extensions {
+            let extension = format!(".{ext}");
+            if filename.ends_with(&extension) {
+                return Some(filename[..filename.len() - extension.len()].to_string());
+            }
+        }
+
+        None
     }
 
     /// Extract rule name with relative path from base directory
@@ -319,21 +390,42 @@ impl RuleLoader {
 
     /// Determine if a rule is likely a partial template
     fn is_likely_partial(name: &str, content: &str) -> bool {
-        // Check if the name suggests it's a partial
+        if Self::has_partial_name_pattern(name) {
+            return true;
+        }
+
+        if Self::has_no_frontmatter(content) {
+            return true;
+        }
+
+        Self::is_short_without_headers(content)
+    }
+
+    /// Check if name suggests it's a partial
+    fn has_partial_name_pattern(name: &str) -> bool {
         let name_lower = name.to_lowercase();
-        if name_lower.contains("partial") || name_lower.starts_with('_') {
-            return true;
-        }
+        name_lower.contains("partial") || name_lower.starts_with('_')
+    }
 
-        // Check if it has no YAML front matter
-        let has_front_matter = content.starts_with("---\n");
-        if !has_front_matter {
-            return true;
-        }
+    /// Check if content has no YAML front matter
+    fn has_no_frontmatter(content: &str) -> bool {
+        !content.starts_with("---\n")
+    }
 
-        // Check for typical partial characteristics
+    /// Check if content is short without headers
+    fn is_short_without_headers(content: &str) -> bool {
+        let content_lines = Self::extract_content_lines(content);
+
+        // If it's very short and has no headers, it might be a partial
+        content_lines.len() <= 5 && !content_lines.iter().any(|line| line.starts_with('#'))
+    }
+
+    /// Extract content lines, skipping front matter if present
+    fn extract_content_lines(content: &str) -> Vec<&str> {
         let lines: Vec<&str> = content.lines().collect();
-        let content_lines: Vec<&str> = if has_front_matter {
+        let has_front_matter = content.starts_with("---\n");
+
+        if has_front_matter {
             // Skip YAML front matter
             lines
                 .iter()
@@ -345,14 +437,7 @@ impl RuleLoader {
                 .collect()
         } else {
             lines
-        };
-
-        // If it's very short and has no headers, it might be a partial
-        if content_lines.len() <= 5 && !content_lines.iter().any(|line| line.starts_with('#')) {
-            return true;
         }
-
-        false
     }
 }
 

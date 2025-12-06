@@ -18,8 +18,9 @@ The goal is to:
 
 ## Process
 
-- Use todo_show with `item: "next"` to get the next pending todo
-- Read the task description and context to understand what needs to be done
+- Use `todo_show` with `item: "next"` to get the next pending todo
+- Read the task description to understand what needs to be done
+- Use `git_changes` to see what has changed in the codebase
 - Perform the work described in the todo
 - Verify the work is complete and correct
 - Use todo_mark_complete with the todo's id to mark it as done

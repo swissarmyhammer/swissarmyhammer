@@ -30,7 +30,7 @@ struct TestEnvironment {
 impl TestEnvironment {
     /// Create a new test environment with server and client
     async fn new() -> Self {
-        let server = start_mcp_server(McpServerMode::Http { port: None }, None)
+        let server = start_mcp_server(McpServerMode::Http { port: None }, None, None, None)
             .await
             .expect("Failed to start MCP server");
         let client = create_test_client(server.url()).await;
@@ -68,15 +68,21 @@ async fn call_flow_list(
         .expect("Flow list should succeed")
 }
 
+/// Extract text content from tool result
+fn extract_text_content(tool_result: &rmcp::model::CallToolResult) -> Option<&str> {
+    tool_result.content.first().and_then(|content| {
+        if let rmcp::model::RawContent::Text(text_content) = &content.raw {
+            Some(text_content.text.as_str())
+        } else {
+            None
+        }
+    })
+}
+
 /// Parse tool result content as JSON
 fn parse_tool_result_as_json(tool_result: &rmcp::model::CallToolResult) -> serde_json::Value {
-    if let Some(content) = tool_result.content.first() {
-        if let rmcp::model::RawContent::Text(text_content) = &content.raw {
-            return serde_json::from_str(&text_content.text)
-                .expect("Response should be valid JSON");
-        }
-    }
-    panic!("Expected text content in tool result");
+    let text = extract_text_content(tool_result).expect("Expected text content in tool result");
+    serde_json::from_str(text).expect("Response should be valid JSON")
 }
 
 /// Find a workflow by applying a predicate function
@@ -87,16 +93,12 @@ fn find_workflow_by_predicate<F>(
 where
     F: Fn(&serde_json::Value) -> bool,
 {
-    if let Some(content) = list_result.content.first() {
-        if let rmcp::model::RawContent::Text(text_content) = &content.raw {
-            if let Ok(response) = serde_json::from_str::<serde_json::Value>(&text_content.text) {
-                if let Some(workflows) = response["workflows"].as_array() {
-                    return workflows.iter().find(|w| predicate(w)).cloned();
-                }
-            }
-        }
-    }
-    None
+    let response = parse_tool_result_as_json(list_result);
+    response["workflows"]
+        .as_array()?
+        .iter()
+        .find(|w| predicate(w))
+        .cloned()
 }
 
 /// Log a test skip message
@@ -118,45 +120,51 @@ async fn get_flow_tool(client: &RunningService<rmcp::RoleClient, ClientInfo>) ->
         .expect("Flow tool should exist")
 }
 
-/// Find a workflow without required parameters
-fn find_workflow_without_required_params(
+/// Find a workflow by required parameter condition
+fn find_workflow_by_required_params<F>(
     list_result: &rmcp::model::CallToolResult,
-) -> Option<String> {
+    required_condition: F,
+) -> Option<serde_json::Value>
+where
+    F: Fn(bool) -> bool,
+{
     find_workflow_by_predicate(list_result, |workflow| {
         if let Some(params) = workflow["parameters"].as_array() {
             let has_required = params
                 .iter()
                 .any(|p| p.get("required").and_then(|r| r.as_bool()) == Some(true));
-            !has_required
+            required_condition(has_required)
         } else {
             false
         }
     })
-    .and_then(|w| w["name"].as_str().map(|s| s.to_string()))
+}
+
+/// Find a workflow without required parameters
+fn find_workflow_without_required_params(
+    list_result: &rmcp::model::CallToolResult,
+) -> Option<String> {
+    find_workflow_by_required_params(list_result, |has_required| !has_required)
+        .and_then(|w| w["name"].as_str().map(|s| s.to_string()))
+}
+
+/// Extract workflow name and required parameter name from a workflow
+fn extract_workflow_and_required_param(workflow: &serde_json::Value) -> Option<(String, String)> {
+    let workflow_name = workflow["name"].as_str()?.to_string();
+    let params = workflow["parameters"].as_array()?;
+    let required_param = params
+        .iter()
+        .find(|p| p.get("required").and_then(|r| r.as_bool()) == Some(true))?;
+    let param_name = required_param["name"].as_str()?.to_string();
+    Some((workflow_name, param_name))
 }
 
 /// Find a workflow with required parameters and return both workflow name and a required parameter name
 fn find_workflow_with_required_params(
     list_result: &rmcp::model::CallToolResult,
 ) -> Option<(String, String)> {
-    find_workflow_by_predicate(list_result, |workflow| {
-        if let Some(params) = workflow["parameters"].as_array() {
-            params
-                .iter()
-                .any(|p| p.get("required").and_then(|r| r.as_bool()) == Some(true))
-        } else {
-            false
-        }
-    })
-    .and_then(|workflow| {
-        let workflow_name = workflow["name"].as_str()?.to_string();
-        let params = workflow["parameters"].as_array()?;
-        let required_param = params
-            .iter()
-            .find(|p| p.get("required").and_then(|r| r.as_bool()) == Some(true))?;
-        let param_name = required_param["name"].as_str()?.to_string();
-        Some((workflow_name, param_name))
-    })
+    let workflow = find_workflow_by_required_params(list_result, |has_required| has_required)?;
+    extract_workflow_and_required_param(&workflow)
 }
 
 /// Test that flow tool appears in MCP tool registry
@@ -233,64 +241,69 @@ async fn test_flow_discovery_via_mcp() {
     }
 }
 
+/// Try to execute a workflow with dry run and return result or error
+async fn try_execute_workflow(
+    client: &RunningService<rmcp::RoleClient, ClientInfo>,
+    workflow_name: &str,
+) -> Result<rmcp::model::CallToolResult, String> {
+    let exec_future = client.call_tool(CallToolRequestParam {
+        name: "flow".into(),
+        arguments: json!({
+            "flow_name": workflow_name,
+            "parameters": {},
+            "dry_run": true,
+            "quiet": true
+        })
+        .as_object()
+        .cloned(),
+    });
+
+    timeout(Duration::from_secs(2), exec_future)
+        .await
+        .map_err(|_| format!("Workflow '{}' exceeded 2s timeout", workflow_name))?
+        .map_err(|e| format!("Execution error: {:?}", e))
+}
+
 /// Test flow execution via MCP (dry run)
 #[tokio::test]
 async fn test_flow_execution_via_mcp() {
     let env = TestEnvironment::new().await;
-
-    // First, discover available workflows
     let list_result = call_flow_list(env.client(), "json", false).await;
-
-    // Find a workflow with no required parameters
-    let test_workflow = find_workflow_without_required_params(&list_result);
 
     // NOTE: This test dynamically discovers workflows from the actual .swissarmyhammer/workflows
     // directory. It's acceptable for this test to be skipped if no suitable workflows exist,
     // as the test environment may vary. The test validates execution when workflows are available.
-    if let Some(workflow_name) = test_workflow {
-        eprintln!("Testing execution with workflow: {}", workflow_name);
+    let Some(workflow_name) = find_workflow_without_required_params(&list_result) else {
+        log_test_skip("No workflows without required parameters found");
+        return;
+    };
 
-        // Wrap execution in timeout to prevent hanging on slow workflows
-        let exec_future = env.client().call_tool(CallToolRequestParam {
-            name: "flow".into(),
-            arguments: json!({
-                "flow_name": workflow_name,
-                "parameters": {},
-                "dry_run": true,
-                "quiet": true
-            })
-            .as_object()
-            .cloned(),
-        });
+    eprintln!("Testing execution with workflow: {}", workflow_name);
+    match try_execute_workflow(env.client(), &workflow_name).await {
+        Ok(result) => assert!(!result.content.is_empty()),
+        Err(e) => eprintln!("Expected error: {}", e),
+    }
+}
 
-        match timeout(Duration::from_secs(2), exec_future).await {
-            Ok(exec_result) => {
-                // Execution might succeed or fail depending on the workflow
-                // Just verify it doesn't panic and returns a proper response
-                match exec_result {
-                    Ok(result) => {
-                        assert!(
-                            !result.content.is_empty(),
-                            "Flow execution should return content"
-                        );
-                    }
-                    Err(e) => {
-                        eprintln!(
-                            "Workflow execution error (expected for some workflows): {:?}",
-                            e
-                        );
-                    }
-                }
-            }
-            Err(_) => {
-                log_test_skip(&format!(
-                    "Workflow '{}' exceeded 2s timeout in dry-run mode",
-                    workflow_name
-                ));
-            }
-        }
-    } else {
-        log_test_skip("No workflows without required parameters found - skipping execution test");
+/// Validate that an execution result contains a missing parameter error
+fn validate_missing_parameter_error(
+    exec_result: Result<rmcp::model::CallToolResult, rmcp::service::ServiceError>,
+    param_name: &str,
+) {
+    assert!(
+        exec_result.is_err(),
+        "Flow execution should fail when required parameter is missing"
+    );
+
+    if let Err(e) = exec_result {
+        let error_msg = format!("{:?}", e);
+        assert!(
+            error_msg.contains("Missing required parameter")
+                || error_msg.contains(param_name)
+                || error_msg.contains("invalid"),
+            "Error should mention missing required parameter. Got: {}",
+            error_msg
+        );
     }
 }
 
@@ -299,10 +312,7 @@ async fn test_flow_execution_via_mcp() {
 async fn test_flow_missing_required_parameter() {
     let env = TestEnvironment::new().await;
 
-    // First, discover workflows to find one with required parameters
     let list_result = call_flow_list(env.client(), "json", false).await;
-
-    // Find a workflow with required parameters
     let test_workflow = find_workflow_with_required_params(&list_result);
 
     // NOTE: This test dynamically discovers workflows from the actual .swissarmyhammer/workflows
@@ -315,36 +325,20 @@ async fn test_flow_missing_required_parameter() {
             workflow_name, param_name
         );
 
-        // Try to execute without providing the required parameter
         let exec_result = env
             .client()
             .call_tool(CallToolRequestParam {
                 name: "flow".into(),
                 arguments: json!({
                     "flow_name": workflow_name,
-                    "parameters": {} // Empty parameters - missing required parameter
+                    "parameters": {}
                 })
                 .as_object()
                 .cloned(),
             })
             .await;
 
-        // Should fail with invalid_params error
-        assert!(
-            exec_result.is_err(),
-            "Flow execution should fail when required parameter is missing"
-        );
-
-        if let Err(e) = exec_result {
-            let error_msg = format!("{:?}", e);
-            assert!(
-                error_msg.contains("Missing required parameter")
-                    || error_msg.contains(&param_name)
-                    || error_msg.contains("invalid"),
-                "Error should mention missing required parameter. Got: {}",
-                error_msg
-            );
-        }
+        validate_missing_parameter_error(exec_result, &param_name);
     } else {
         log_test_skip("No workflows with required parameters found - skipping error test");
     }
@@ -396,6 +390,20 @@ async fn test_flow_tool_schema_includes_workflows() {
     );
 }
 
+/// Assert that different formats produce different output
+fn assert_different_formats(
+    json_result: &rmcp::model::CallToolResult,
+    table_result: &rmcp::model::CallToolResult,
+) {
+    let json_text = extract_text_content(json_result).expect("JSON content");
+    let table_text = extract_text_content(table_result).expect("Table content");
+
+    assert_ne!(
+        json_text, table_text,
+        "Different formats should produce different output"
+    );
+}
+
 /// Test flow tool with different output formats
 #[tokio::test]
 async fn test_flow_list_output_formats() {
@@ -414,18 +422,16 @@ async fn test_flow_list_output_formats() {
     assert!(!table_result.content.is_empty());
 
     // Verify different formats produce different output
-    if let (Some(json_content), Some(table_content)) =
-        (json_result.content.first(), table_result.content.first())
-    {
-        if let (
-            rmcp::model::RawContent::Text(json_text),
-            rmcp::model::RawContent::Text(table_text),
-        ) = (&json_content.raw, &table_content.raw)
-        {
-            assert_ne!(
-                json_text.text, table_text.text,
-                "Different formats should produce different output"
-            );
-        }
-    }
+    assert_different_formats(&json_result, &table_result);
 }
+
+// NOTE: Plan workflow test disabled - workflow hangs when called via MCP tool
+// This is a known issue documented in ideas/flow_tool_failure.md
+// The plan workflow works via CLI but hangs when called through MCP flow tool
+// TODO: Re-enable after workflow execution bug is fixed
+//
+// #[tokio::test]
+// async fn test_plan_workflow_executes_via_mcp() {
+//     // Test plan workflow execution via MCP
+//     // Currently hangs (times out after 60s)
+// }

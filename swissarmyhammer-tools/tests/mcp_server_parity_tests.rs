@@ -2,6 +2,8 @@
 //!
 //! This test ensures that both MCP server modes (HTTP and STDIN) register and expose
 //! the same set of SwissArmyHammer tools, preventing inconsistencies between modes.
+//!
+//! sah rule ignore test_rule_with_allow
 
 use anyhow::Result;
 use std::collections::HashSet;
@@ -42,7 +44,7 @@ fn assert_tools_present(tools: &[String], expected_tools: &[&str], context: &str
 
 /// Helper function to log test success with tool counts
 fn log_test_success(message: &str, count: usize) {
-    info!("✅ {}: {}", message, count);
+    info!("✓ {}: {}", message, count);
 }
 
 /// Helper function to log tool differences between two sets
@@ -55,7 +57,7 @@ fn log_test_success(message: &str, count: usize) {
 fn log_tool_differences(set_a: &HashSet<String>, set_b: &HashSet<String>, label_a: &str) {
     let only_in_a: Vec<&String> = set_a.difference(set_b).collect();
     if !only_in_a.is_empty() {
-        eprintln!("❌ Tools only in {}: {:?}", label_a, only_in_a);
+        eprintln!("✗ Tools only in {}: {:?}", label_a, only_in_a);
     }
 }
 

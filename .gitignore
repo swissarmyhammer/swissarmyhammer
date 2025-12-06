@@ -102,3 +102,4 @@ test_validation
 cc.json
 .swissarmyhammer/workflow-runs
 .swissarmyhammer/workflow-runs/
+.llama-sessions

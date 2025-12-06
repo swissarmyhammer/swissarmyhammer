@@ -18,7 +18,7 @@ use swissarmyhammer_tools::mcp::{
 #[tokio::test]
 async fn test_rmcp_client_lists_tools_and_prompts() {
     // Start in-process HTTP MCP server
-    let mut server = start_mcp_server(McpServerMode::Http { port: None }, None)
+    let mut server = start_mcp_server(McpServerMode::Http { port: None }, None, None, None)
         .await
         .expect("Failed to start in-process MCP server");
 
@@ -40,8 +40,8 @@ async fn test_rmcp_client_lists_tools_and_prompts() {
         "Should have files_read tool"
     );
     assert!(
-        tool_names.contains(&"shell_execute".to_string()),
-        "Should have shell_execute tool"
+        tool_names.contains(&"files_grep".to_string()),
+        "Should have files_grep tool"
     );
 
     // List prompts
@@ -56,9 +56,9 @@ async fn test_rmcp_client_lists_tools_and_prompts() {
     // Test a tool call to verify full functionality
     let tool_result = client
         .call_tool(CallToolRequestParam {
-            name: "files_glob".into(),
+            name: "files_grep".into(),
             arguments: serde_json::json!({
-                "pattern": "*.md"
+                "pattern": "test"
             })
             .as_object()
             .cloned(),

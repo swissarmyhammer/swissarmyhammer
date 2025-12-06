@@ -68,22 +68,23 @@ async fn test_cli_can_call_mcp_tools() {
 
 #[tokio::test]
 #[serial_test::serial]
-async fn test_todo_create_tool_integration() {
-    let (_env, context) = setup_test_context().await;
+async fn test_files_read_tool_integration() {
+    let (env, context) = setup_test_context().await;
 
-    // Test calling todo_create tool
-    let args = context.create_arguments(vec![
-        ("task", json!("Test todo item")),
-        (
-            "context",
-            json!("This is a test todo for integration testing."),
-        ),
-    ]);
+    // Create a test file to read
+    let test_file = env.temp_dir().join("test_file.txt");
+    std::fs::write(&test_file, "Test content for files_read").unwrap();
 
-    let result = context.execute_tool("todo_create", args).await;
+    // Test calling files_read tool
+    let args = context.create_arguments(vec![(
+        "path",
+        json!(test_file.to_string_lossy().to_string()),
+    )]);
+
+    let result = context.execute_tool("files_read", args).await;
     assert!(
         result.is_ok(),
-        "Failed to execute todo_create tool: {:?}",
+        "Failed to execute files_read tool: {:?}",
         result.err()
     );
 
@@ -110,9 +111,11 @@ async fn test_nonexistent_tool_error() {
     assert!(result.is_err(), "Should return error for nonexistent tool");
 
     let error = result.err().unwrap();
+    let error_msg = error.to_string();
     assert!(
-        error.to_string().contains("Tool not found"),
-        "Error should mention tool not found"
+        error_msg.contains("Tool not found") || error_msg.contains("Unknown tool"),
+        "Error should mention tool not found, got: {}",
+        error_msg
     );
 }
 
@@ -121,10 +124,10 @@ async fn test_nonexistent_tool_error() {
 async fn test_invalid_arguments_error() {
     let (_env, context) = setup_test_context().await;
 
-    // Test calling todo_create with invalid arguments (missing required fields)
+    // Test calling files_read with invalid arguments (missing required fields)
     let args = context.create_arguments(vec![("invalid_field", json!("invalid_value"))]);
 
-    let result = context.execute_tool("todo_create", args).await;
+    let result = context.execute_tool("files_read", args).await;
     assert!(result.is_err(), "Should return error for invalid arguments");
 }
 

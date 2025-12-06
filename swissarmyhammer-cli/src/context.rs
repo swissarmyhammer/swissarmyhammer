@@ -20,6 +20,99 @@ fn map_error<E: std::fmt::Display>(
     }
 }
 
+/// Convert a JSON value to a string representation
+fn value_to_string(value: &serde_json::Value) -> String {
+    match value {
+        serde_json::Value::String(s) => s.clone(),
+        serde_json::Value::Number(n) => n.to_string(),
+        serde_json::Value::Bool(b) => b.to_string(),
+        serde_json::Value::Null => "null".to_string(),
+        _ => value.to_string(),
+    }
+}
+
+/// Get the sort order priority for a key name
+fn get_key_priority(key: &str) -> u8 {
+    match key {
+        "name" => 0,
+        "description" | "title" => 1,
+        "source" => 2,
+        "status" => 3,
+        _ => 99,
+    }
+}
+
+/// Capitalize the first letter of a string
+fn capitalize_first(s: &str) -> String {
+    let mut chars = s.chars();
+    match chars.next() {
+        None => String::new(),
+        Some(f) => f.to_uppercase().collect::<String>() + chars.as_str(),
+    }
+}
+
+/// Build a table from an array of JSON objects
+fn build_table_from_items(array: &[serde_json::Value]) -> Result<comfy_table::Table> {
+    use comfy_table::{presets::UTF8_FULL, Table};
+
+    let first =
+        array
+            .first()
+            .ok_or_else(|| swissarmyhammer_common::SwissArmyHammerError::Other {
+                message: "Array is empty".to_string(),
+            })?;
+
+    let obj =
+        first
+            .as_object()
+            .ok_or_else(|| swissarmyhammer_common::SwissArmyHammerError::Other {
+                message: "Expected object".to_string(),
+            })?;
+
+    let mut table = Table::new();
+    table.load_preset(UTF8_FULL);
+
+    let keys = get_sorted_keys(obj);
+    let headers = create_table_headers(&keys);
+    table.set_header(headers);
+
+    add_table_rows(&mut table, array, &keys);
+
+    Ok(table)
+}
+
+/// Get keys from an object sorted by priority
+fn get_sorted_keys(obj: &serde_json::Map<String, serde_json::Value>) -> Vec<String> {
+    let mut keys: Vec<_> = obj.keys().cloned().collect();
+    keys.sort_by_key(|k| get_key_priority(k));
+    keys
+}
+
+/// Create table headers from keys
+fn create_table_headers(keys: &[String]) -> Vec<String> {
+    keys.iter().map(|k| capitalize_first(k)).collect()
+}
+
+/// Add data rows to the table
+fn add_table_rows(table: &mut comfy_table::Table, array: &[serde_json::Value], keys: &[String]) {
+    for item in array {
+        if let Some(obj) = item.as_object() {
+            let row = create_table_row(obj, keys);
+            table.add_row(row);
+        }
+    }
+}
+
+/// Create a single table row from an object
+fn create_table_row(
+    obj: &serde_json::Map<String, serde_json::Value>,
+    keys: &[String],
+) -> Vec<String> {
+    keys.iter()
+        .map(|k| obj.get(k).map(value_to_string).unwrap_or_default())
+        .collect()
+}
+
 /// Shared CLI context containing all storage objects, configuration, and parsed arguments
 #[derive(derive_builder::Builder)]
 #[builder(pattern = "owned")]
@@ -133,98 +226,62 @@ impl CliContext {
     where
         T: serde::Serialize,
     {
-        // Use explicit format option if provided, otherwise use default format
         let format = self.format_option.unwrap_or(self.format);
         match format {
-            OutputFormat::Table => {
-                if items.is_empty() {
-                    println!("No items to display");
-                } else {
-                    // Convert items to JSON for dynamic table building
-                    let json_items = serde_json::to_value(&items)
-                        .map_err(map_error("Failed to convert to JSON"))?;
-
-                    if let Some(array) = json_items.as_array() {
-                        if let Some(first) = array.first() {
-                            if let Some(obj) = first.as_object() {
-                                use comfy_table::{presets::UTF8_FULL, Table};
-                                let mut table = Table::new();
-                                table.load_preset(UTF8_FULL);
-
-                                // Collect keys with preferred ordering for common patterns
-                                let mut keys: Vec<_> = obj.keys().collect();
-
-                                // Apply custom ordering for common patterns: name, description/title, source, etc.
-                                keys.sort_by_key(|k| {
-                                    match k.as_str() {
-                                        "name" => 0,
-                                        "description" => 1,
-                                        "title" => 1,
-                                        "source" => 2,
-                                        "status" => 3,
-                                        _ => 99, // Everything else comes after
-                                    }
-                                });
-
-                                // Add header row with capitalized names
-                                let headers: Vec<String> = keys
-                                    .iter()
-                                    .map(|k| {
-                                        // Capitalize first letter of header
-                                        let mut chars = k.chars();
-                                        match chars.next() {
-                                            None => String::new(),
-                                            Some(f) => {
-                                                f.to_uppercase().collect::<String>()
-                                                    + chars.as_str()
-                                            }
-                                        }
-                                    })
-                                    .collect();
-                                table.set_header(headers);
-
-                                // Add data rows using the same key order
-                                for item in array {
-                                    if let Some(obj) = item.as_object() {
-                                        let row: Vec<String> = keys
-                                            .iter()
-                                            .map(|k| {
-                                                obj.get(*k)
-                                                    .map(|v| match v {
-                                                        serde_json::Value::String(s) => s.clone(),
-                                                        serde_json::Value::Number(n) => {
-                                                            n.to_string()
-                                                        }
-                                                        serde_json::Value::Bool(b) => b.to_string(),
-                                                        serde_json::Value::Null => {
-                                                            "null".to_string()
-                                                        }
-                                                        _ => v.to_string(),
-                                                    })
-                                                    .unwrap_or_default()
-                                            })
-                                            .collect();
-                                        table.add_row(row);
-                                    }
-                                }
-
-                                println!("{table}");
-                            }
-                        }
-                    }
-                }
-            }
-            OutputFormat::Json => {
-                let json = serde_json::to_string_pretty(&items)
-                    .map_err(map_error("Failed to serialize to JSON"))?;
-                println!("{}", json);
-            }
-            OutputFormat::Yaml => {
-                let yaml = serde_yaml::to_string(&items)
-                    .map_err(map_error("Failed to serialize to YAML"))?;
-                println!("{}", yaml);
-            }
+            OutputFormat::Table => self.display_as_table(items),
+            OutputFormat::Json => self.display_as_json(items),
+            OutputFormat::Yaml => self.display_as_yaml(items),
         }
+    }
+
+    /// Display items as a table
+    fn display_as_table<T>(&self, items: Vec<T>) -> Result<()>
+    where
+        T: serde::Serialize,
+    {
+        if items.is_empty() {
+            println!("No items to display");
+            return Ok(());
+        }
+
+        let json_items =
+            serde_json::to_value(&items).map_err(map_error("Failed to convert to JSON"))?;
+
+        let array = json_items.as_array().ok_or_else(|| {
+            swissarmyhammer_common::SwissArmyHammerError::Other {
+                message: "Expected array".to_string(),
+            }
+        })?;
+
+        if array.is_empty() {
+            println!("No items to display");
+            return Ok(());
+        }
+
+        let table = build_table_from_items(array)?;
+        println!("{table}");
+        Ok(())
+    }
+
+    /// Display items as JSON
+    fn display_as_json<T>(&self, items: Vec<T>) -> Result<()>
+    where
+        T: serde::Serialize,
+    {
+        let json = serde_json::to_string_pretty(&items)
+            .map_err(map_error("Failed to serialize to JSON"))?;
+        println!("{}", json);
+        Ok(())
+    }
+
+    /// Display items as YAML
+    fn display_as_yaml<T>(&self, items: Vec<T>) -> Result<()>
+    where
+        T: serde::Serialize,
+    {
+        let yaml =
+            serde_yaml::to_string(&items).map_err(map_error("Failed to serialize to YAML"))?;
+        println!("{}", yaml);
         Ok(())
     }
 
@@ -429,21 +486,21 @@ mod tests {
     #[test]
     fn test_table_alignment_with_emojis() {
         let test_rows = vec![
-            create_test_row("✅", "Check One", "Everything is working"),
+            create_test_row("✓", "Check One", "Everything is working"),
             create_test_row("⚠️", "Check Two", "Warning message"),
-            create_test_row("❌", "Check Three", "Error occurred"),
+            create_test_row("✗", "Check Three", "Error occurred"),
         ];
 
         let table = render_table(&test_rows);
 
-        verify_table_output(&table, &["✅", "⚠️", "❌"], Some(7), &[]);
+        verify_table_output(&table, &["✓", "⚠️", "✗"], Some(7), &[]);
     }
 
     /// Test that table rendering handles long text correctly
     #[test]
     fn test_table_with_long_content() {
         let test_rows = vec![
-            create_test_row("✅", "Short Name", "Short message"),
+            create_test_row("✓", "Short Name", "Short message"),
             create_test_row(
                 "⚠️",
                 "Very Long Name That Might Cause Issues",
@@ -455,7 +512,7 @@ mod tests {
 
         verify_table_output(
             &table,
-            &["✅", "⚠️"],
+            &["✓", "⚠️"],
             None,
             &["Very Long Name", "very long message"],
         );
@@ -474,12 +531,12 @@ mod tests {
     #[test]
     fn test_table_with_special_characters() {
         let test_rows = vec![
-            create_test_row("✅", "Test with → arrow", "Contains • bullet"),
+            create_test_row("✓", "Test with → arrow", "Contains • bullet"),
             create_test_row("⚠️", "Test with © symbol", "Contains ™ trademark"),
         ];
 
         let table = render_table(&test_rows);
 
-        verify_table_output(&table, &["✅", "⚠️"], None, &["→", "•", "©", "™"]);
+        verify_table_output(&table, &["✓", "⚠️"], None, &["→", "•", "©", "™"]);
     }
 }

@@ -2,23 +2,6 @@
 
 Retrieve all persisted question/answer pairs as a YAML summary for agent context.
 
-## Description
-
-This tool reads all question/answer YAML files from `.swissarmyhammer/questions/` and merges them into a single YAML string. This allows agents to inject the full Q&A history into their context to understand previous user decisions and preferences.
-
-## Parameters
-
-### limit (optional)
-- **Type**: integer
-- **Description**: Maximum number of Q&A pairs to include (default: all)
-- **Behavior**: When specified, returns the most recent N entries
-
-## Response
-
-Returns a JSON object containing:
-- `summary`: YAML string with all Q&A entries
-- `count`: Total number of Q&A pairs included
-
 ## Summary Format
 
 The `summary` field contains YAML in this format:
@@ -41,18 +24,6 @@ entries:
     question: "Which database should we use?"
     answer: "PostgreSQL"
 ```
-
-## Sorting and Ordering
-
-- Entries are sorted by timestamp (oldest first)
-- This maintains chronological order of decisions
-- If `limit` is specified, the most recent N entries are returned (still sorted oldest to newest among those N)
-
-## Error Handling
-
-- **Empty Directory**: Returns empty entry list with count 0 (not an error)
-- **Corrupted Files**: Individual file parsing errors are logged but don't fail the entire operation
-- **Missing Directory**: Returns empty entry list with count 0 (not an error)
 
 ## Examples
 
@@ -85,14 +56,3 @@ Response:
   "count": 10
 }
 ```
-
-## Use Cases
-
-- **Multi-Session Context**: Access decisions made in previous sessions
-- **Agent Memory**: Let agents remember user preferences across interactions
-- **Decision Review**: Understand what choices have been made
-- **Context Injection**: Inject Q&A history into agent prompts
-
-## See Also
-
-- `question_ask`: Ask a user a question via elicitation and persist the answer

@@ -67,7 +67,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_client_list_tools() {
-        let mut server = start_mcp_server(McpServerMode::Http { port: None }, None)
+        let mut server = start_mcp_server(McpServerMode::Http { port: None }, None, None, None)
             .await
             .unwrap();
 
@@ -85,7 +85,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_client_list_prompts() {
-        let mut server = start_mcp_server(McpServerMode::Http { port: None }, None)
+        let mut server = start_mcp_server(McpServerMode::Http { port: None }, None, None, None)
             .await
             .unwrap();
 
@@ -99,7 +99,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_client_call_tool() {
-        let mut server = start_mcp_server(McpServerMode::Http { port: None }, None)
+        let mut server = start_mcp_server(McpServerMode::Http { port: None }, None, None, None)
             .await
             .unwrap();
 

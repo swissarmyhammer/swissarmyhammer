@@ -495,7 +495,7 @@ async fn test_branch1_liquid_template_rendering() -> Result<()> {
     let expected_message = "Branch 1 selected: Hello from workflow contains Hello";
     assert_eq!(result.as_str().unwrap(), expected_message);
 
-    println!("✅ Liquid template rendering test passed!");
+    println!("✓ Liquid template rendering test passed!");
     println!("Original: Branch 1 selected: {{{{branch_value}}}} contains Hello");
     println!("Rendered: {}", result.as_str().unwrap());
 

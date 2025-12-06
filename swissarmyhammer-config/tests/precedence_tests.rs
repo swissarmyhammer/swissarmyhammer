@@ -8,33 +8,27 @@ use serde_json::json;
 use serial_test::serial;
 use std::env;
 use std::fs;
+use swissarmyhammer_common::test_utils::IsolatedTestEnvironment;
 use swissarmyhammer_config::TemplateContext;
-use tempfile::TempDir;
 
 /// Test helper for isolated precedence testing
 struct IsolatedPrecedenceTest {
-    temp_dir: TempDir,
+    _env: IsolatedTestEnvironment,
     original_cwd: std::path::PathBuf,
-    original_home: Option<String>,
     env_vars_to_restore: Vec<(String, Option<String>)>,
 }
 
 impl IsolatedPrecedenceTest {
     fn new() -> Self {
-        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+        let env = IsolatedTestEnvironment::new().expect("Failed to create test environment");
         let original_cwd = env::current_dir().expect("Failed to get current dir");
-        let original_home = env::var("HOME").ok();
 
-        // Set up isolated environment
-        let home_dir = temp_dir.path().join("home");
-        fs::create_dir(&home_dir).expect("Failed to create home dir");
-        env::set_var("HOME", &home_dir);
-        env::set_current_dir(temp_dir.path()).expect("Failed to set current dir");
+        // Set current directory to temp dir for these tests
+        env::set_current_dir(env.temp_dir()).expect("Failed to set current dir");
 
         Self {
-            temp_dir,
+            _env: env,
             original_cwd,
-            original_home,
             env_vars_to_restore: Vec::new(),
         }
     }
@@ -48,14 +42,13 @@ impl IsolatedPrecedenceTest {
     }
 
     fn project_config_dir(&self) -> std::path::PathBuf {
-        let config_dir = self.temp_dir.path().join(".swissarmyhammer");
+        let config_dir = self._env.temp_dir().join(".swissarmyhammer");
         fs::create_dir_all(&config_dir).expect("Failed to create project config dir");
         config_dir
     }
 
     fn home_config_dir(&self) -> std::path::PathBuf {
-        let home_path = env::var("HOME").expect("HOME not set");
-        let config_dir = std::path::Path::new(&home_path).join(".swissarmyhammer");
+        let config_dir = self._env.swissarmyhammer_dir();
         fs::create_dir_all(&config_dir).expect("Failed to create home config dir");
         config_dir
     }
@@ -71,13 +64,8 @@ impl Drop for IsolatedPrecedenceTest {
             }
         }
 
-        // Restore original environment
+        // Restore original directory - IsolatedTestEnvironment handles HOME restoration
         let _ = env::set_current_dir(&self.original_cwd);
-        if let Some(home) = &self.original_home {
-            env::set_var("HOME", home);
-        } else {
-            env::remove_var("HOME");
-        }
     }
 }
 

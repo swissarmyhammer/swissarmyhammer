@@ -7,12 +7,12 @@ use serde_json::json;
 use std::env;
 use std::fs;
 use std::time::{SystemTime, UNIX_EPOCH};
+use swissarmyhammer_common::test_utils::IsolatedTestEnvironment;
 use swissarmyhammer_config::TemplateContext;
-use tempfile::TempDir;
 
 /// Test helper for isolated environment variable testing
 struct IsolatedEnvTest {
-    _temp_dir: TempDir,
+    _env: IsolatedTestEnvironment,
     original_cwd: std::path::PathBuf,
     original_home: Option<String>,
     env_vars_to_restore: Vec<(String, Option<String>)>,
@@ -21,7 +21,7 @@ struct IsolatedEnvTest {
 
 impl IsolatedEnvTest {
     fn new() -> Self {
-        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+        let env = IsolatedTestEnvironment::new().expect("Failed to create test environment");
         let original_cwd = env::current_dir().expect("Failed to get current dir");
         let original_home = env::var("HOME").ok();
 
@@ -33,13 +33,13 @@ impl IsolatedEnvTest {
             .to_string();
 
         // Set up isolated environment
-        let home_dir = temp_dir.path().join("home");
+        let home_dir = env.temp_dir().join("home");
         fs::create_dir(&home_dir).expect("Failed to create home dir");
         env::set_var("HOME", &home_dir);
-        env::set_current_dir(temp_dir.path()).expect("Failed to set current dir");
+        env::set_current_dir(&env.temp_dir()).expect("Failed to set current dir");
 
         Self {
-            _temp_dir: temp_dir,
+            _env: env,
             original_cwd,
             original_home,
             env_vars_to_restore: Vec::new(),

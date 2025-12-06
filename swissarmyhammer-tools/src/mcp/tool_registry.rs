@@ -221,6 +221,7 @@
 use super::notifications::NotificationSender;
 use super::progress_notifications::ProgressSender;
 use super::tool_handlers::ToolHandlers;
+use owo_colors::OwoColorize;
 use rmcp::model::{Annotated, CallToolResult, RawContent, RawTextContent, Tool};
 use rmcp::{ErrorData as McpError, Peer, RoleServer};
 use std::collections::HashMap;
@@ -228,7 +229,8 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use swissarmyhammer_common::{ErrorSeverity, Severity};
-use swissarmyhammer_config::agent::AgentConfig;
+use swissarmyhammer_config::model::ModelConfig;
+use swissarmyhammer_config::ModelUseCase;
 use swissarmyhammer_git::GitOperations;
 use tokio::sync::{Mutex, RwLock};
 
@@ -264,12 +266,19 @@ pub struct ToolContext {
     /// available or not initialized. Always check for `None` before use.
     pub git_ops: Arc<Mutex<Option<GitOperations>>>,
 
-    /// Agent configuration for tool operations that require agent execution
+    /// Agent configuration for tool operations (root/default agent)
     ///
     /// Provides access to the configured agent executor (ClaudeCode or LlamaAgent)
     /// and associated settings. Tools that need to execute agent operations should
     /// use this configuration to create appropriate executor instances.
-    pub agent_config: Arc<AgentConfig>,
+    pub agent_config: Arc<ModelConfig>,
+
+    /// Agent configurations mapped by use case (Arc-wrapped for memory efficiency)
+    ///
+    /// Falls back to agent_config if use case not present. This allows different
+    /// operations to use different agents (e.g., a specialized agent for rule checking).
+    /// Agents are Arc-wrapped to avoid cloning the entire configuration.
+    pub use_case_agents: Arc<HashMap<ModelUseCase, Arc<ModelConfig>>>,
 
     /// Optional notification sender for long-running operations (workflow state transitions)
     ///
@@ -351,6 +360,22 @@ pub struct ToolContext {
     /// This explicit approach avoids reliance on environment variables (global state)
     /// and makes test isolation more reliable and explicit.
     pub working_dir: Option<PathBuf>,
+
+    /// Optional MCP server instance (for creating filtering proxies)
+    ///
+    /// Uses interior mutability to allow setting after context creation.
+    /// This is necessary because the server contains the context, creating a
+    /// circular reference that must be resolved after construction.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// if let Some(server) = context.mcp_server.read().await.clone() {
+    ///     let proxy = FilteringMcpProxy::new(server.clone(), filter);
+    ///     // Use proxy for restricted tool access
+    /// }
+    /// ```
+    pub mcp_server: Arc<RwLock<Option<Arc<super::McpServer>>>>,
 }
 
 impl ToolContext {
@@ -358,19 +383,41 @@ impl ToolContext {
     pub fn new(
         tool_handlers: Arc<ToolHandlers>,
         git_ops: Arc<Mutex<Option<GitOperations>>>,
-        agent_config: Arc<AgentConfig>,
+        agent_config: Arc<ModelConfig>,
     ) -> Self {
         Self {
             tool_handlers,
             git_ops,
             agent_config,
+            use_case_agents: Arc::new(HashMap::new()),
             notification_sender: None,
             progress_sender: None,
             mcp_server_port: Arc::new(RwLock::new(None)),
             peer: None,
             tool_registry: None,
             working_dir: None,
+            mcp_server: Arc::new(RwLock::new(None)),
         }
+    }
+
+    /// Get agent configuration for a specific use case
+    ///
+    /// Resolution chain:
+    /// 1. Use case-specific agent (if configured in use_case_agents)
+    /// 2. Root agent (agent_config)
+    ///
+    /// # Arguments
+    ///
+    /// * `use_case` - The agent use case to resolve
+    ///
+    /// # Returns
+    ///
+    /// An Arc to the appropriate ModelConfig
+    pub fn get_agent_for_use_case(&self, use_case: ModelUseCase) -> Arc<ModelConfig> {
+        self.use_case_agents
+            .get(&use_case)
+            .cloned()
+            .unwrap_or_else(|| self.agent_config.clone())
     }
 
     /// Create a new tool context with workflow notification support
@@ -388,7 +435,7 @@ impl ToolContext {
     pub fn with_notifications(
         tool_handlers: Arc<ToolHandlers>,
         git_ops: Arc<Mutex<Option<GitOperations>>>,
-        agent_config: Arc<AgentConfig>,
+        agent_config: Arc<ModelConfig>,
         notification_sender: NotificationSender,
     ) -> Self {
         let mut context = Self::new(tool_handlers, git_ops, agent_config);
@@ -463,6 +510,18 @@ impl ToolContext {
     pub fn with_working_dir(mut self, working_dir: PathBuf) -> Self {
         self.working_dir = Some(working_dir);
         self
+    }
+
+    /// Set the MCP server instance for this context
+    ///
+    /// Uses interior mutability to set the server reference after context creation.
+    /// This is necessary to avoid circular reference issues during server construction.
+    ///
+    /// # Arguments
+    ///
+    /// * `server` - The MCP server instance
+    pub async fn set_mcp_server(&self, server: Arc<super::McpServer>) {
+        *self.mcp_server.write().await = Some(server);
     }
 
     /// Call another MCP tool from within a tool
@@ -671,21 +730,18 @@ pub trait McpTool: Send + Sync {
     fn cli_category(&self) -> Option<&'static str> {
         // Extract category from tool name by taking prefix before first underscore
         let name = self.name();
-        if let Some(underscore_pos) = name.find('_') {
-            match &name[..underscore_pos] {
-                "memo" => Some("memo"),
-                "file" | "files" => Some("file"),
-                "web" => Some("web"),
-                "shell" => Some("shell"),
-                "todo" => Some("todo"),
-                "outline" => Some("outline"),
-                "notify" => Some("notify"),
-                "abort" => Some("abort"),
-                "rules" => Some("rule"),
-                _ => None,
-            }
-        } else {
-            None
+        let prefix = name.split('_').next()?;
+        match prefix {
+            "memo" => Some("memo"),
+            "file" | "files" => Some("file"),
+            "web" => Some("web"),
+            "shell" => Some("shell"),
+            "todo" => Some("todo"),
+            "outline" => Some("outline"),
+            "notify" => Some("notify"),
+            "abort" => Some("abort"),
+            "rules" => Some("rule"),
+            _ => None,
         }
     }
 
@@ -815,6 +871,27 @@ impl ToolRegistry {
         self.tools.get(name).map(|tool| tool.as_ref())
     }
 
+    /// Check if a tool matches CLI criteria
+    ///
+    /// Helper method that checks if a tool matches the specified category and CLI name,
+    /// and is not hidden from CLI.
+    ///
+    /// # Arguments
+    ///
+    /// * `tool` - The tool to check
+    /// * `category` - The CLI category to match
+    /// * `cli_name` - The CLI command name to match
+    ///
+    /// # Returns
+    ///
+    /// * `true` - If the tool matches all criteria
+    /// * `false` - Otherwise
+    fn matches_cli_criteria(&self, tool: &dyn McpTool, category: &str, cli_name: &str) -> bool {
+        !tool.hidden_from_cli()
+            && tool.cli_category() == Some(category)
+            && tool.cli_name() == cli_name
+    }
+
     /// Get a tool by category and CLI name
     ///
     /// Finds a tool that belongs to the specified category and has the specified CLI name.
@@ -832,11 +909,7 @@ impl ToolRegistry {
     pub fn get_tool_by_cli_name(&self, category: &str, cli_name: &str) -> Option<&dyn McpTool> {
         self.tools
             .values()
-            .find(|tool| {
-                !tool.hidden_from_cli()
-                    && tool.cli_category() == Some(category)
-                    && tool.cli_name() == cli_name
-            })
+            .find(|tool| self.matches_cli_criteria(tool.as_ref(), category, cli_name))
             .map(|tool| tool.as_ref())
     }
 
@@ -978,6 +1051,18 @@ impl ToolRegistry {
     /// }
     /// ```
     pub fn validate_cli_tools(&self) -> Result<(), Vec<ToolValidationError>> {
+        let errors = self.collect_all_validation_errors();
+        self.report_validation_errors(errors)
+    }
+
+    /// Collect validation errors from all tools
+    ///
+    /// Validates all tools in the registry and collects any errors found.
+    ///
+    /// # Returns
+    ///
+    /// * `Vec<ToolValidationError>` - List of all validation errors found
+    fn collect_all_validation_errors(&self) -> Vec<ToolValidationError> {
         let mut errors = Vec::new();
 
         // Validate all tools, not just CLI tools, to catch missing category errors
@@ -987,6 +1072,25 @@ impl ToolRegistry {
             }
         }
 
+        errors
+    }
+
+    /// Report validation errors
+    ///
+    /// Converts a vector of validation errors into a Result.
+    ///
+    /// # Arguments
+    ///
+    /// * `errors` - Vector of validation errors
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(())` - If no errors were found
+    /// * `Err(Vec<ToolValidationError>)` - If errors were found
+    fn report_validation_errors(
+        &self,
+        errors: Vec<ToolValidationError>,
+    ) -> Result<(), Vec<ToolValidationError>> {
         if errors.is_empty() {
             Ok(())
         } else {
@@ -1012,62 +1116,72 @@ impl ToolRegistry {
     /// * `Err(Vec<ToolValidationError>)` - List of validation errors found
     pub fn validate_tool(&self, tool: &dyn McpTool) -> Result<(), Vec<ToolValidationError>> {
         let mut errors = Vec::new();
-        let tool_name = tool.name();
 
-        // Validate schema structure
-        if let Err(schema_errors) = self.validate_tool_schema(tool) {
-            errors.extend(schema_errors);
-        }
+        errors.extend(self.validate_schema(tool));
+        errors.extend(self.validate_cli_requirements_for_tool(tool));
 
-        // Validate CLI integration requirements
-        if !tool.hidden_from_cli() {
-            if tool.cli_category().is_none() {
-                errors.push(ToolValidationError::MissingCliCategory {
-                    tool_name: tool_name.to_string(),
-                });
-            }
-
-            // Validate CLI name is reasonable
-            let cli_name = tool.cli_name();
-            if cli_name.is_empty() {
-                errors.push(ToolValidationError::InvalidCliName {
-                    tool_name: tool_name.to_string(),
-                    cli_name: cli_name.to_string(),
-                    reason: "CLI name cannot be empty".to_string(),
-                });
-            }
-        }
-
-        if errors.is_empty() {
-            Ok(())
-        } else {
-            Err(errors)
-        }
+        self.report_validation_errors(errors)
     }
 
-    /// Validate the schema structure of a tool
-    fn validate_tool_schema(&self, tool: &dyn McpTool) -> Result<(), Vec<ToolValidationError>> {
-        let mut errors = Vec::new();
+    /// Validate schema structure for a tool
+    ///
+    /// Checks that the tool's schema is valid and compatible with CLI generation.
+    ///
+    /// # Arguments
+    ///
+    /// * `tool` - The tool to validate
+    ///
+    /// # Returns
+    ///
+    /// * `Vec<ToolValidationError>` - List of schema validation errors found (empty if valid)
+    fn validate_schema(&self, tool: &dyn McpTool) -> Vec<ToolValidationError> {
         let tool_name = tool.name();
         let schema = tool.schema();
 
-        // Use the local schema validator defined above
-
         match SchemaValidator::validate_schema(&schema) {
-            Ok(()) => {}
-            Err(validation_error) => {
-                errors.push(ToolValidationError::SchemaValidation {
-                    tool_name: tool_name.to_string(),
-                    error: validation_error,
-                });
-            }
+            Ok(()) => Vec::new(),
+            Err(validation_error) => vec![ToolValidationError::SchemaValidation {
+                tool_name: tool_name.to_string(),
+                error: validation_error,
+            }],
+        }
+    }
+
+    /// Validate CLI requirements for a tool
+    ///
+    /// Checks that the tool has proper CLI category and name configuration.
+    ///
+    /// # Arguments
+    ///
+    /// * `tool` - The tool to validate
+    ///
+    /// # Returns
+    ///
+    /// * `Vec<ToolValidationError>` - List of CLI validation errors found (empty if valid)
+    fn validate_cli_requirements_for_tool(&self, tool: &dyn McpTool) -> Vec<ToolValidationError> {
+        if tool.hidden_from_cli() {
+            return Vec::new();
         }
 
-        if errors.is_empty() {
-            Ok(())
-        } else {
-            Err(errors)
+        let mut errors = Vec::new();
+        let tool_name = tool.name();
+
+        if tool.cli_category().is_none() {
+            errors.push(ToolValidationError::MissingCliCategory {
+                tool_name: tool_name.to_string(),
+            });
         }
+
+        let cli_name = tool.cli_name();
+        if cli_name.is_empty() {
+            errors.push(ToolValidationError::InvalidCliName {
+                tool_name: tool_name.to_string(),
+                cli_name: cli_name.to_string(),
+                reason: "CLI name cannot be empty".to_string(),
+            });
+        }
+
+        errors
     }
 
     /// Validate all tools with comprehensive error reporting
@@ -1366,11 +1480,15 @@ impl ToolValidationReport {
     /// Generate a summary string of the validation results
     pub fn summary(&self) -> String {
         if self.is_valid() {
-            format!("✅ All {} tools are valid", self.total_tools)
+            format!("{} All {} tools are valid", "✓".green(), self.total_tools)
         } else {
             format!(
-                "❌ {} of {} tools have validation errors ({} valid, {} invalid)",
-                self.invalid_tools, self.total_tools, self.valid_tools, self.invalid_tools
+                "{} {} of {} tools have validation errors ({} valid, {} invalid)",
+                "✗".red(),
+                self.invalid_tools,
+                self.total_tools,
+                self.valid_tools,
+                self.invalid_tools
             )
         }
     }
@@ -1448,7 +1566,12 @@ struct SchemaValidator;
 
 impl SchemaValidator {
     fn validate_schema(schema: &Value) -> Result<(), ValidationError> {
-        // Basic validation - check that it's an object with properties
+        Self::validate_schema_structure(schema)?;
+        Self::validate_properties(schema)?;
+        Ok(())
+    }
+
+    fn validate_schema_structure(schema: &Value) -> Result<(), ValidationError> {
         if !schema.is_object() {
             return Err(ValidationError::InvalidSchema {
                 message: "Schema must be a JSON object".to_string(),
@@ -1456,105 +1579,114 @@ impl SchemaValidator {
         }
 
         let schema_obj = schema.as_object().unwrap();
-
-        // Check for properties field
         if !schema_obj.contains_key("properties") {
             return Err(ValidationError::MissingSchemaField {
                 field: "properties".to_string(),
             });
         }
 
-        // Basic type checking for properties
-        if let Some(properties) = schema_obj.get("properties").and_then(|p| p.as_object()) {
-            for (prop_name, prop_schema) in properties {
-                if let Some(prop_obj) = prop_schema.as_object() {
-                    if let Some(prop_type) = prop_obj.get("type").and_then(|t| t.as_str()) {
-                        match prop_type {
-                            "string" | "integer" | "number" | "boolean" | "array" => {
-                                // These are supported
-                            }
-                            "object" => {
-                                return Err(ValidationError::UnsupportedSchemaType {
-                                    schema_type: prop_type.to_string(),
-                                    parameter: prop_name.clone(),
-                                });
-                            }
-                            unknown => {
-                                return Err(ValidationError::UnsupportedSchemaType {
-                                    schema_type: unknown.to_string(),
-                                    parameter: prop_name.clone(),
-                                });
-                            }
-                        }
-                    }
-                }
-            }
+        Ok(())
+    }
+
+    fn validate_properties(schema: &Value) -> Result<(), ValidationError> {
+        let schema_obj = schema.as_object().unwrap();
+        let Some(properties) = schema_obj.get("properties").and_then(|p| p.as_object()) else {
+            return Ok(());
+        };
+
+        for (prop_name, prop_schema) in properties {
+            Self::validate_property_type(prop_name, prop_schema)?;
         }
 
         Ok(())
     }
+
+    fn validate_property_type(prop_name: &str, prop_schema: &Value) -> Result<(), ValidationError> {
+        let Some(prop_obj) = prop_schema.as_object() else {
+            return Ok(());
+        };
+        let Some(prop_type) = prop_obj.get("type").and_then(|t| t.as_str()) else {
+            return Ok(());
+        };
+
+        match prop_type {
+            "string" | "integer" | "number" | "boolean" | "array" => Ok(()),
+            "object" => Err(ValidationError::UnsupportedSchemaType {
+                schema_type: prop_type.to_string(),
+                parameter: prop_name.to_string(),
+            }),
+            unknown => Err(ValidationError::UnsupportedSchemaType {
+                schema_type: unknown.to_string(),
+                parameter: prop_name.to_string(),
+            }),
+        }
+    }
 }
 
 /// Tool registration functions for organizing tools by category
-/// Register all abort-related tools with the registry
-pub fn register_abort_tools(registry: &mut ToolRegistry) {
-    use super::tools::abort;
-    abort::register_abort_tools(registry);
+///
+/// This macro generates registration functions that follow a consistent pattern,
+/// eliminating code duplication while maintaining clear documentation and functionality.
+macro_rules! register_tool_category {
+    ($fn_name:ident, $module:ident, $doc:literal) => {
+        #[doc = $doc]
+        pub fn $fn_name(registry: &mut ToolRegistry) {
+            use super::tools::$module;
+            $module::$fn_name(registry);
+        }
+    };
 }
 
-/// Register all file-related tools with the registry
-pub fn register_file_tools(registry: &mut ToolRegistry) {
-    use super::tools::files;
-    files::register_file_tools(registry);
-}
-
-/// Register all flow-related tools with the registry
-pub fn register_flow_tools(registry: &mut ToolRegistry) {
-    use super::tools::flow;
-    flow::register_flow_tools(registry);
-}
-
-/// Register all git-related tools with the registry
-pub fn register_git_tools(registry: &mut ToolRegistry) {
-    use super::tools::git;
-    git::register_git_tools(registry);
-}
-
-/// Register all question-related tools with the registry
-pub fn register_questions_tools(registry: &mut ToolRegistry) {
-    use super::tools::questions;
-    questions::register_questions_tools(registry);
-}
-
-/// Register all rules-related tools with the registry
-pub fn register_rules_tools(registry: &mut ToolRegistry) {
-    use super::tools::rules;
-    rules::register_rules_tools(registry);
-}
-
-/// Register all shell-related tools with the registry
-pub fn register_shell_tools(registry: &mut ToolRegistry) {
-    use super::tools::shell;
-    shell::register_shell_tools(registry);
-}
-
-/// Register all todo-related tools with the registry
-pub fn register_todo_tools(registry: &mut ToolRegistry) {
-    use super::tools::todo;
-    todo::register_todo_tools(registry);
-}
-
-/// Register all web fetch-related tools with the registry
-pub fn register_web_fetch_tools(registry: &mut ToolRegistry) {
-    use super::tools::web_fetch;
-    web_fetch::register_web_fetch_tools(registry);
-}
-
-/// Register all web search-related tools with the registry
-pub fn register_web_search_tools(registry: &mut ToolRegistry) {
-    use super::tools::web_search;
-    web_search::register_web_search_tools(registry);
-}
+register_tool_category!(
+    register_abort_tools,
+    abort,
+    "Register all abort-related tools with the registry"
+);
+register_tool_category!(
+    register_file_tools,
+    files,
+    "Register all file-related tools with the registry"
+);
+register_tool_category!(
+    register_flow_tools,
+    flow,
+    "Register all flow-related tools with the registry"
+);
+register_tool_category!(
+    register_git_tools,
+    git,
+    "Register all git-related tools with the registry"
+);
+register_tool_category!(
+    register_questions_tools,
+    questions,
+    "Register all question-related tools with the registry"
+);
+register_tool_category!(
+    register_rules_tools,
+    rules,
+    "Register all rules-related tools with the registry"
+);
+register_tool_category!(
+    register_shell_tools,
+    shell,
+    "Register all shell-related tools with the registry"
+);
+register_tool_category!(
+    register_todo_tools,
+    todo,
+    "Register all todo-related tools with the registry"
+);
+register_tool_category!(
+    register_web_fetch_tools,
+    web_fetch,
+    "Register all web fetch-related tools with the registry"
+);
+register_tool_category!(
+    register_web_search_tools,
+    web_search,
+    "Register all web search-related tools with the registry"
+);
 
 /// Create a fully registered tool registry with all available tools
 ///
@@ -1706,7 +1838,7 @@ mod tests {
         // Create mock storage and handlers for context
         let git_ops: Arc<Mutex<Option<GitOperations>>> = Arc::new(Mutex::new(None));
         let tool_handlers = Arc::new(ToolHandlers::new());
-        let agent_config = Arc::new(AgentConfig::default());
+        let agent_config = Arc::new(ModelConfig::default());
         let context = ToolContext::new(tool_handlers, git_ops, agent_config);
 
         let tool = MockTool {
@@ -2113,7 +2245,7 @@ mod tests {
         assert!(!report.errors.is_empty());
 
         let summary = report.summary();
-        assert!(summary.contains("❌"));
+        assert!(summary.contains("✗"));
         assert!(summary.contains("2 of 3 tools"));
     }
 
@@ -2165,10 +2297,19 @@ mod tests {
         assert!(result.is_err());
     }
 
+    /// Helper function to assert error severity with descriptive message
+    fn assert_error_severity<E: Severity>(error: E, expected: ErrorSeverity, context: &str) {
+        assert_eq!(
+            error.severity(),
+            expected,
+            "{} should be {:?}",
+            context,
+            expected
+        );
+    }
+
     #[test]
     fn test_tool_validation_error_severity() {
-        use swissarmyhammer_common::Severity;
-
         // Test Critical severity for schema validation
         let schema_error = ToolValidationError::SchemaValidation {
             tool_name: "test".to_string(),
@@ -2176,20 +2317,16 @@ mod tests {
                 message: "test".to_string(),
             },
         };
-        assert_eq!(
-            schema_error.severity(),
-            ErrorSeverity::Critical,
-            "Schema validation should be Critical"
-        );
+        assert_error_severity(schema_error, ErrorSeverity::Critical, "Schema validation");
 
         // Test Error severity for configuration issues
         let missing_category = ToolValidationError::MissingCliCategory {
             tool_name: "test".to_string(),
         };
-        assert_eq!(
-            missing_category.severity(),
+        assert_error_severity(
+            missing_category,
             ErrorSeverity::Error,
-            "Missing CLI category should be Error"
+            "Missing CLI category",
         );
 
         let invalid_cli_name = ToolValidationError::InvalidCliName {
@@ -2197,65 +2334,113 @@ mod tests {
             cli_name: "123invalid".to_string(),
             reason: "starts with number".to_string(),
         };
-        assert_eq!(
-            invalid_cli_name.severity(),
-            ErrorSeverity::Error,
-            "Invalid CLI name should be Error"
-        );
+        assert_error_severity(invalid_cli_name, ErrorSeverity::Error, "Invalid CLI name");
 
         let invalid_description = ToolValidationError::InvalidDescription {
             tool_name: "test".to_string(),
             reason: "too short".to_string(),
         };
-        assert_eq!(
-            invalid_description.severity(),
+        assert_error_severity(
+            invalid_description,
             ErrorSeverity::Error,
-            "Invalid description should be Error"
+            "Invalid description",
         );
 
         let name_conflict = ToolValidationError::NameConflict {
             tool_name: "test".to_string(),
             conflicting_tool: "other".to_string(),
         };
-        assert_eq!(
-            name_conflict.severity(),
-            ErrorSeverity::Error,
-            "Name conflict should be Error"
-        );
+        assert_error_severity(name_conflict, ErrorSeverity::Error, "Name conflict");
     }
 
     #[test]
     fn test_validation_error_severity() {
-        use swissarmyhammer_common::Severity;
-
         // Test Critical severity for invalid schema
         let invalid_schema = ValidationError::InvalidSchema {
             message: "schema is malformed".to_string(),
         };
-        assert_eq!(
-            invalid_schema.severity(),
-            ErrorSeverity::Critical,
-            "Invalid schema should be Critical"
-        );
+        assert_error_severity(invalid_schema, ErrorSeverity::Critical, "Invalid schema");
 
         // Test Error severity for schema issues
         let unsupported_type = ValidationError::UnsupportedSchemaType {
             schema_type: "object".to_string(),
             parameter: "param".to_string(),
         };
-        assert_eq!(
-            unsupported_type.severity(),
+        assert_error_severity(
+            unsupported_type,
             ErrorSeverity::Error,
-            "Unsupported schema type should be Error"
+            "Unsupported schema type",
         );
 
         let missing_field = ValidationError::MissingSchemaField {
             field: "type".to_string(),
         };
-        assert_eq!(
-            missing_field.severity(),
-            ErrorSeverity::Error,
-            "Missing schema field should be Error"
-        );
+        assert_error_severity(missing_field, ErrorSeverity::Error, "Missing schema field");
+    }
+
+    /// Helper function to create a test context with basic setup
+    fn create_test_context() -> ToolContext {
+        use swissarmyhammer_git::GitOperations;
+        use tokio::sync::Mutex;
+
+        let git_ops: Arc<Mutex<Option<GitOperations>>> = Arc::new(Mutex::new(None));
+        let tool_handlers = Arc::new(ToolHandlers::new());
+        let agent_config = Arc::new(ModelConfig::default());
+        ToolContext::new(tool_handlers, git_ops, agent_config)
+    }
+
+    /// Helper function to create a test context with use case specific agents
+    fn create_test_context_with_use_case_agents(
+        use_case_agents: HashMap<ModelUseCase, Arc<ModelConfig>>,
+    ) -> ToolContext {
+        let mut context = create_test_context();
+        context.use_case_agents = Arc::new(use_case_agents);
+        context
+    }
+
+    #[test]
+    fn test_get_agent_for_use_case_fallback() {
+        use swissarmyhammer_config::ModelUseCase;
+
+        // Create context with only root agent
+        let context = create_test_context();
+        let agent_config = context.agent_config.clone();
+
+        // Test that all use cases fall back to root agent when not configured
+        let rules_agent = context.get_agent_for_use_case(ModelUseCase::Rules);
+        let workflows_agent = context.get_agent_for_use_case(ModelUseCase::Workflows);
+        let root_agent = context.get_agent_for_use_case(ModelUseCase::Root);
+
+        // All should return the same agent config (root)
+        assert!(Arc::ptr_eq(&rules_agent, &agent_config));
+        assert!(Arc::ptr_eq(&workflows_agent, &agent_config));
+        assert!(Arc::ptr_eq(&root_agent, &agent_config));
+    }
+
+    #[test]
+    fn test_get_agent_for_use_case_specific() {
+        use swissarmyhammer_config::ModelUseCase;
+
+        // Create context with use case specific agents
+        let root_agent = Arc::new(ModelConfig::default());
+        let rules_agent = Arc::new(ModelConfig::default());
+
+        let mut use_case_agents = HashMap::new();
+        use_case_agents.insert(ModelUseCase::Rules, rules_agent.clone());
+
+        let mut context = create_test_context_with_use_case_agents(use_case_agents);
+        context.agent_config = root_agent.clone();
+
+        // Test that Rules use case gets its specific agent (Arc-wrapped, so we can check pointer equality)
+        let resolved_rules_agent = context.get_agent_for_use_case(ModelUseCase::Rules);
+        assert!(Arc::ptr_eq(&resolved_rules_agent, &rules_agent));
+
+        // Test that Workflows falls back to root agent
+        let resolved_workflows_agent = context.get_agent_for_use_case(ModelUseCase::Workflows);
+        assert!(Arc::ptr_eq(&resolved_workflows_agent, &root_agent));
+
+        // Test that Root falls back to root agent
+        let resolved_root_agent = context.get_agent_for_use_case(ModelUseCase::Root);
+        assert!(Arc::ptr_eq(&resolved_root_agent, &root_agent));
     }
 }

@@ -4,7 +4,7 @@ use crate::mcp::tool_handlers::ToolHandlers;
 use crate::mcp::tool_registry::ToolContext;
 use std::sync::Arc;
 
-use swissarmyhammer_config::agent::AgentConfig;
+use swissarmyhammer_config::model::ModelConfig;
 use swissarmyhammer_git::GitOperations;
 use tokio::sync::Mutex as TokioMutex;
 
@@ -25,9 +25,14 @@ pub mod git_test_helpers;
 pub async fn create_test_context() -> ToolContext {
     let git_ops: Arc<TokioMutex<Option<GitOperations>>> = Arc::new(TokioMutex::new(None));
     let tool_handlers = Arc::new(ToolHandlers::new());
-    let agent_config = Arc::new(AgentConfig::default());
+    let agent_config = Arc::new(ModelConfig::default());
 
-    ToolContext::new(tool_handlers, git_ops, agent_config)
+    let context = ToolContext::new(tool_handlers, git_ops, agent_config);
+
+    // Set a test MCP server port for tests that need it
+    *context.mcp_server_port.write().await = Some(8080);
+
+    context
 }
 
 /// Helper for testing tools that send progress notifications

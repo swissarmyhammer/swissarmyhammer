@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 use std::time::Duration;
 use swissarmyhammer::test_utils::IsolatedTestEnvironment;
-use swissarmyhammer_config::agent::{AgentConfig, LlamaAgentConfig};
+use swissarmyhammer_config::model::{LlamaAgentConfig, ModelConfig};
 use swissarmyhammer_workflow::actions::AgentExecutionContext;
 use swissarmyhammer_workflow::template_context::WorkflowTemplateContext;
 use tokio::time::timeout;
@@ -14,10 +14,10 @@ async fn test_executor_compatibility() {
 
     // Test that both executor types can be created with identical interfaces
     for (executor_name, config) in [
-        ("Claude", AgentConfig::claude_code()),
+        ("Claude", ModelConfig::claude_code()),
         (
             "LlamaAgent",
-            AgentConfig::llama_agent(LlamaAgentConfig::for_testing()),
+            ModelConfig::llama_agent(LlamaAgentConfig::for_testing()),
         ),
     ] {
         println!("Testing executor compatibility: {}", executor_name);
@@ -40,10 +40,10 @@ async fn test_agent_execution_context() {
 
     // Test context creation with different configurations
     let configs = [
-        ("Claude", AgentConfig::claude_code()),
+        ("Claude", ModelConfig::claude_code()),
         (
             "LlamaAgent",
-            AgentConfig::llama_agent(LlamaAgentConfig::for_testing()),
+            ModelConfig::llama_agent(LlamaAgentConfig::for_testing()),
         ),
     ];
 
@@ -89,7 +89,7 @@ async fn test_executor_factory_patterns() {
 
         let context = WorkflowTemplateContext::with_vars(vars).expect("Failed to create context");
         let mut context_with_config = context;
-        let config = AgentConfig::claude_code();
+        let config = ModelConfig::claude_code();
         context_with_config.set_agent_config(config.clone());
         let execution_context = AgentExecutionContext::new(&context_with_config);
 
@@ -105,10 +105,10 @@ async fn test_configuration_serialization() {
 
     // Test that configurations can be properly serialized/deserialized
     let configs = [
-        ("Claude", AgentConfig::claude_code()),
+        ("Claude", ModelConfig::claude_code()),
         (
             "LlamaAgent",
-            AgentConfig::llama_agent(LlamaAgentConfig::for_testing()),
+            ModelConfig::llama_agent(LlamaAgentConfig::for_testing()),
         ),
     ];
 
@@ -129,7 +129,7 @@ async fn test_configuration_serialization() {
         );
 
         // Test JSON deserialization
-        let deserialized: Result<AgentConfig, _> = serde_json::from_str(&json_str);
+        let deserialized: Result<ModelConfig, _> = serde_json::from_str(&json_str);
         assert!(
             deserialized.is_ok(),
             "Failed to deserialize {} config from JSON",
@@ -151,7 +151,7 @@ async fn test_timeout_handling() {
     let context =
         WorkflowTemplateContext::with_vars(HashMap::new()).expect("Failed to create context");
     let mut context_with_config = context;
-    let config = AgentConfig::claude_code();
+    let config = ModelConfig::claude_code();
     context_with_config.set_agent_config(config.clone());
 
     // Test with a very short timeout - execution context creation should be very fast
@@ -252,7 +252,7 @@ async fn test_repetition_configuration_integration() {
     // this mainly verifies the configuration conversion doesn't panic.
 
     let small_model_config = LlamaAgentConfig::for_testing();
-    let agent_config = AgentConfig::llama_agent(small_model_config);
+    let agent_config = ModelConfig::llama_agent(small_model_config);
 
     let context =
         WorkflowTemplateContext::with_vars(HashMap::new()).expect("Failed to create context");

@@ -229,19 +229,19 @@ mod tests {
     #[test]
     fn test_serialization_check_result() {
         let result = CheckResult {
-            status: "✅".to_string(),
+            status: "✓".to_string(),
             name: "Test".to_string(),
             message: "Test message".to_string(),
         };
 
         let json = serde_json::to_string(&result).expect("Should serialize to JSON");
-        assert!(json.contains("✅"));
+        assert!(json.contains("✓"));
         assert!(json.contains("Test"));
         assert!(json.contains("Test message"));
 
         let deserialized: CheckResult =
             serde_json::from_str(&json).expect("Should deserialize from JSON");
-        assert_eq!(deserialized.status, "✅");
+        assert_eq!(deserialized.status, "✓");
         assert_eq!(deserialized.name, "Test");
         assert_eq!(deserialized.message, "Test message");
     }

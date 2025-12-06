@@ -7,7 +7,3 @@ Mark a todo item as completed in a todo list.
   "id": "01K1KQM85501ECE8XJGNZKNJQW"
 }
 ```
-
-## Returns
-
-Returns confirmation that item was marked complete. Automatically deletes the todo file when all tasks are complete.

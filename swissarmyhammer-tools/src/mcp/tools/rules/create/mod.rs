@@ -2,6 +2,8 @@
 //!
 //! This tool provides an MCP interface to create rule files in `.swissarmyhammer/rules/`
 //! with minimal YAML frontmatter containing only severity and optional tags.
+//!
+//! sah rule ignore test_rule_with_allow
 
 use crate::mcp::tool_registry::{BaseToolImpl, McpTool, ToolContext};
 use async_trait::async_trait;
@@ -196,7 +198,7 @@ impl McpTool for CreateRuleTool {
 
         // Format the success response
         let result_text = format!(
-            "✅ Created rule '{}'\n\nFile: {}\nSeverity: {}{}",
+            "✓ Created rule '{}'\n\nFile: {}\nSeverity: {}{}",
             request.name,
             file_path.display(),
             request.severity,

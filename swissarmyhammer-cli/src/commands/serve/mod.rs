@@ -16,6 +16,8 @@
 
 use crate::context::CliContext;
 use crate::exit_codes::{EXIT_ERROR, EXIT_SUCCESS, EXIT_WARNING};
+use swissarmyhammer_prompts::PromptLibrary;
+use swissarmyhammer_tools::mcp::unified_server::McpServerHandle;
 
 pub mod display;
 
@@ -40,12 +42,20 @@ pub const DESCRIPTION: &str = include_str!("description.md");
 /// - 1: Server encountered warnings or stopped unexpectedly
 /// - 2: Server failed to start or encountered critical errors
 pub async fn handle_command(matches: &clap::ArgMatches, cli_context: &CliContext) -> i32 {
+    // Extract global --agent flag from root matches
+    let model_override = cli_context
+        .matches
+        .get_one::<String>("agent")
+        .map(|s| s.to_string());
+
     // Check for HTTP subcommand
     match matches.subcommand() {
-        Some(("http", http_matches)) => handle_http_serve(http_matches, cli_context).await,
+        Some(("http", http_matches)) => {
+            handle_http_serve(http_matches, cli_context, model_override).await
+        }
         None => {
             // Default to stdio mode (existing behavior)
-            handle_stdio_serve(cli_context).await
+            handle_stdio_serve(cli_context, model_override).await
         }
         Some((unknown, _)) => {
             eprintln!("Unknown serve subcommand: {}", unknown);
@@ -55,11 +65,27 @@ pub async fn handle_command(matches: &clap::ArgMatches, cli_context: &CliContext
 }
 
 /// Handle HTTP serve mode
-async fn handle_http_serve(matches: &clap::ArgMatches, cli_context: &CliContext) -> i32 {
-    use crate::signal_handler::wait_for_shutdown;
+async fn handle_http_serve(
+    matches: &clap::ArgMatches,
+    cli_context: &CliContext,
+    model_override: Option<String>,
+) -> i32 {
+    let server_handle = match initialize_http_server(matches, cli_context, model_override).await {
+        Ok(handle) => handle,
+        Err(exit_code) => return exit_code,
+    };
+
+    manage_http_server_lifecycle(cli_context, server_handle).await
+}
+
+/// Initialize HTTP server and return handle or error exit code
+async fn initialize_http_server(
+    matches: &clap::ArgMatches,
+    cli_context: &CliContext,
+    model_override: Option<String>,
+) -> Result<McpServerHandle, i32> {
     use swissarmyhammer_tools::mcp::{start_mcp_server, McpServerMode};
 
-    // Parse port and host arguments from CLI
     let port: u16 = matches.get_one::<u16>("port").copied().unwrap_or(8000);
     let host = matches
         .get_one::<String>("host")
@@ -67,9 +93,7 @@ async fn handle_http_serve(matches: &clap::ArgMatches, cli_context: &CliContext)
         .unwrap_or("127.0.0.1");
 
     let bind_addr = format!("{}:{}", host, port);
-    let mode = McpServerMode::Http { port: Some(port) };
 
-    // Note: unified server currently only supports 127.0.0.1, host parameter ignored for now
     if host != "127.0.0.1" {
         eprintln!(
             "Warning: Custom host '{}' not yet supported by unified server, using 127.0.0.1",
@@ -77,7 +101,6 @@ async fn handle_http_serve(matches: &clap::ArgMatches, cli_context: &CliContext)
         );
     }
 
-    // Display starting status
     display_server_status(
         cli_context,
         "HTTP",
@@ -97,30 +120,10 @@ async fn handle_http_serve(matches: &clap::ArgMatches, cli_context: &CliContext)
         }
     );
 
-    let mut server_handle = match start_mcp_server(mode, None).await {
-        Ok(handle) => {
-            let actual_port = handle.port().unwrap_or(port);
-            let running_message = if port == 0 {
-                format!("✅ MCP HTTP server running on {} (bound to random port: {}). 💡 Use Ctrl+C to stop.", handle.url(), actual_port)
-            } else {
-                format!(
-                    "✅ MCP HTTP server running on {}. 💡 Use Ctrl+C to stop.",
-                    handle.url()
-                )
-            };
-
-            display_server_status(
-                cli_context,
-                "HTTP",
-                "Running",
-                handle.url(),
-                Some(actual_port),
-                0, // Will be updated when we use CliContext for prompt library
-                &running_message,
-            );
-            handle
-        }
-        Err(e) => {
+    let mode = McpServerMode::Http { port: Some(port) };
+    let server_handle = start_mcp_server(mode, None, model_override, None)
+        .await
+        .map_err(|e| {
             tracing::error!("Failed to start HTTP MCP server: {}", e);
             display_server_status(
                 cli_context,
@@ -131,11 +134,56 @@ async fn handle_http_serve(matches: &clap::ArgMatches, cli_context: &CliContext)
                 0,
                 &format!("Failed to start HTTP MCP server: {}", e),
             );
-            return EXIT_ERROR;
-        }
-    };
+            EXIT_ERROR
+        })?;
 
-    // Wait for shutdown signal
+    display_http_server_running_status(cli_context, &server_handle, port);
+    Ok(server_handle)
+}
+
+/// Display running status for HTTP server
+fn display_http_server_running_status(
+    cli_context: &CliContext,
+    handle: &McpServerHandle,
+    requested_port: u16,
+) {
+    let actual_port = handle.port().unwrap_or(requested_port);
+    let running_message =
+        format_http_server_running_message(handle.url(), requested_port, actual_port);
+
+    display_server_status(
+        cli_context,
+        "HTTP",
+        "Running",
+        handle.url(),
+        Some(actual_port),
+        0,
+        &running_message,
+    );
+}
+
+/// Format the running message for HTTP server
+fn format_http_server_running_message(url: &str, requested_port: u16, actual_port: u16) -> String {
+    if requested_port == 0 {
+        format!(
+            "✓ MCP HTTP server running on {} (bound to random port: {}). 💡 Use Ctrl+C to stop.",
+            url, actual_port
+        )
+    } else {
+        format!(
+            "✓ MCP HTTP server running on {}. 💡 Use Ctrl+C to stop.",
+            url
+        )
+    }
+}
+
+/// Manage HTTP server lifecycle including shutdown
+async fn manage_http_server_lifecycle(
+    cli_context: &CliContext,
+    mut server_handle: McpServerHandle,
+) -> i32 {
+    use crate::signal_handler::wait_for_shutdown;
+
     wait_for_shutdown().await;
 
     display_server_status(
@@ -162,7 +210,6 @@ async fn handle_http_serve(matches: &clap::ArgMatches, cli_context: &CliContext)
         return EXIT_WARNING;
     }
 
-    // Wait for server task to complete to prevent orphaned processes
     if let Err(e) = server_handle.wait_for_completion().await {
         tracing::error!("Error waiting for server task completion: {}", e);
         display_server_status(
@@ -184,40 +231,61 @@ async fn handle_http_serve(matches: &clap::ArgMatches, cli_context: &CliContext)
         "-",
         None,
         0,
-        "✅ Server stopped",
+        "✓ Server stopped",
     );
 
     EXIT_SUCCESS
 }
 
 /// Handle stdio serve mode (existing behavior)
-async fn handle_stdio_serve(cli_context: &CliContext) -> i32 {
-    use swissarmyhammer_tools::mcp::{start_mcp_server, McpServerMode};
+async fn handle_stdio_serve(cli_context: &CliContext, model_override: Option<String>) -> i32 {
+    let (library, prompt_count) = match initialize_prompt_library(cli_context) {
+        Ok(result) => result,
+        Err(exit_code) => return exit_code,
+    };
 
+    let server_handle =
+        match start_stdio_server(cli_context, library, prompt_count, model_override).await {
+            Ok(handle) => handle,
+            Err(exit_code) => return exit_code,
+        };
+
+    handle_stdio_server_shutdown(server_handle).await
+}
+
+/// Initialize prompt library for stdio mode
+fn initialize_prompt_library(cli_context: &CliContext) -> Result<(PromptLibrary, usize), i32> {
     tracing::debug!("Starting unified MCP server in stdio mode");
 
-    // Get prompt library from CliContext
-    let library = match cli_context.get_prompt_library() {
-        Ok(lib) => lib,
-        Err(e) => {
-            tracing::error!("Failed to load prompts: {}", e);
-            display_server_status(
-                cli_context,
-                "Stdio",
-                "Error",
-                "stdio",
-                None,
-                0,
-                &format!("Failed to load prompts: {}", e),
-            );
-            return EXIT_ERROR;
-        }
-    };
+    let library = cli_context.get_prompt_library().map_err(|e| {
+        tracing::error!("Failed to load prompts: {}", e);
+        display_server_status(
+            cli_context,
+            "Stdio",
+            "Error",
+            "stdio",
+            None,
+            0,
+            &format!("Failed to load prompts: {}", e),
+        );
+        EXIT_ERROR
+    })?;
 
     let prompt_count = library.list().map(|p| p.len()).unwrap_or(0);
     tracing::debug!("Loaded {} prompts for MCP server", prompt_count);
 
-    // Display starting status for stdio mode (only in verbose mode)
+    Ok((library, prompt_count))
+}
+
+/// Start stdio server and return handle or error exit code
+async fn start_stdio_server(
+    cli_context: &CliContext,
+    library: PromptLibrary,
+    prompt_count: usize,
+    model_override: Option<String>,
+) -> Result<McpServerHandle, i32> {
+    use swissarmyhammer_tools::mcp::{start_mcp_server, McpServerMode};
+
     if cli_context.verbose {
         display_server_status(
             cli_context,
@@ -231,52 +299,58 @@ async fn handle_stdio_serve(cli_context: &CliContext) -> i32 {
     }
 
     let mode = McpServerMode::Stdio;
-    let mut server_handle = match start_mcp_server(mode, Some(library)).await {
-        Ok(handle) => handle,
-        Err(e) => {
+    start_mcp_server(mode, Some(library), model_override, None)
+        .await
+        .map_err(|e| {
             tracing::error!("Failed to start unified stdio MCP server: {}", e);
             eprintln!("Failed to start unified stdio MCP server: {}", e);
-            return EXIT_ERROR;
-        }
-    };
+            EXIT_ERROR
+        })
+}
 
-    // Wait for either shutdown signal or natural server completion (EOF on stdin)
+/// Handle stdio server shutdown and completion
+async fn handle_stdio_server_shutdown(mut server_handle: McpServerHandle) -> i32 {
+    wait_for_stdio_server_termination(&mut server_handle).await;
+    finalize_stdio_server_shutdown(server_handle).await
+}
+
+/// Wait for server termination via signal or natural completion
+async fn wait_for_stdio_server_termination(server_handle: &mut McpServerHandle) {
     use crate::signal_handler::wait_for_shutdown;
 
-    // The server task will complete when:
-    // 1. EOF is received on stdin (natural exit) - signals via completion_rx
-    // 2. Shutdown signal is sent (via shutdown_tx) - triggered by SIGTERM/CTRL+C
-    //
-    // The tokio::select! macro will complete as soon as ONE of these branches resolves:
-    // - Signal branch: Triggered by SIGTERM/CTRL+C, sends shutdown to server task
-    // - Completion branch: Triggered by EOF on stdin, indicates server already exited
-    //
-    // This ensures the process exits cleanly in both scenarios without requiring
-    // both events to occur (avoiding the hang when EOF occurs but no signal arrives).
     let mut completion_rx = server_handle.take_completion_rx();
 
     tokio::select! {
         _ = wait_for_shutdown() => {
-            tracing::info!("Received shutdown signal (SIGTERM/CTRL+C)");
-            // Signal the server to shut down
-            if let Err(e) = server_handle.shutdown().await {
-                tracing::warn!("Error sending shutdown signal: {}", e);
-            }
+            handle_shutdown_signal(server_handle).await;
         }
-        _ = async {
-            if let Some(rx) = completion_rx.as_mut() {
-                let _ = rx.await;
-            } else {
-                // If no completion receiver, wait forever (shouldn't happen for stdio mode)
-                std::future::pending::<()>().await
-            }
-        } => {
+        _ = wait_for_natural_completion(completion_rx.as_mut()) => {
             tracing::info!("Server completed naturally (EOF on stdin)");
-            // No need to call shutdown() here - server already exited
         }
     }
+}
 
-    // Wait for server task to complete to prevent orphaned processes
+/// Handle shutdown signal for stdio server
+async fn handle_shutdown_signal(server_handle: &mut McpServerHandle) {
+    tracing::info!("Received shutdown signal (SIGTERM/CTRL+C)");
+    if let Err(e) = server_handle.shutdown().await {
+        tracing::warn!("Error sending shutdown signal: {}", e);
+    }
+}
+
+/// Wait for natural completion of server
+async fn wait_for_natural_completion(
+    completion_rx: Option<&mut tokio::sync::oneshot::Receiver<()>>,
+) {
+    if let Some(rx) = completion_rx {
+        let _ = rx.await;
+    } else {
+        std::future::pending::<()>().await
+    }
+}
+
+/// Finalize server shutdown and return exit code
+async fn finalize_stdio_server_shutdown(mut server_handle: McpServerHandle) -> i32 {
     if let Err(e) = server_handle.wait_for_completion().await {
         tracing::error!("Error waiting for server task completion: {}", e);
         return EXIT_ERROR;
@@ -296,39 +370,72 @@ fn display_server_status(
     prompt_count: usize,
     message: &str,
 ) {
-    if cli_context.verbose {
-        let health_url = port.map(|p| {
-            format!(
-                "http://{}:{}/health",
-                address.split(':').next().unwrap_or("127.0.0.1"),
-                p
-            )
-        });
+    if !cli_context.verbose {
+        display_basic_server_status(cli_context, server_type, status, address, message);
+        return;
+    }
 
-        let verbose_status = vec![display::VerboseServerStatus::new(
-            server_type.to_string(),
-            status.to_string(),
-            address.to_string(),
-            port,
-            health_url,
-            prompt_count,
-            message.to_string(),
-        )];
+    display_verbose_server_status(
+        cli_context,
+        server_type,
+        status,
+        address,
+        port,
+        prompt_count,
+        message,
+    );
+}
 
-        if let Err(e) = cli_context.display(verbose_status) {
-            eprintln!("Failed to display status: {}", e);
-        }
-    } else {
-        let basic_status = vec![display::ServerStatus::new(
-            server_type.to_string(),
-            status.to_string(),
-            address.to_string(),
-            message.to_string(),
-        )];
+/// Display basic server status
+fn display_basic_server_status(
+    cli_context: &CliContext,
+    server_type: &str,
+    status: &str,
+    address: &str,
+    message: &str,
+) {
+    let basic_status = vec![display::ServerStatus::new(
+        server_type.to_string(),
+        status.to_string(),
+        address.to_string(),
+        message.to_string(),
+    )];
 
-        if let Err(e) = cli_context.display(basic_status) {
-            eprintln!("Failed to display status: {}", e);
-        }
+    if let Err(e) = cli_context.display(basic_status) {
+        eprintln!("Failed to display status: {}", e);
+    }
+}
+
+/// Display verbose server status with additional details
+fn display_verbose_server_status(
+    cli_context: &CliContext,
+    server_type: &str,
+    status: &str,
+    address: &str,
+    port: Option<u16>,
+    prompt_count: usize,
+    message: &str,
+) {
+    let health_url = port.map(|p| {
+        format!(
+            "http://{}:{}/health",
+            address.split(':').next().unwrap_or("127.0.0.1"),
+            p
+        )
+    });
+
+    let verbose_status = vec![display::VerboseServerStatus::new(
+        server_type.to_string(),
+        status.to_string(),
+        address.to_string(),
+        port,
+        health_url,
+        prompt_count,
+        message.to_string(),
+    )];
+
+    if let Err(e) = cli_context.display(verbose_status) {
+        eprintln!("Failed to display status: {}", e);
     }
 }
 

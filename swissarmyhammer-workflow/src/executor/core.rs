@@ -1,4 +1,5 @@
 //! Core workflow execution logic
+//! sah rule ignore test_rule_with_allow
 
 use super::{
     ExecutionEvent, ExecutionEventType, ExecutorError, ExecutorResult, DEFAULT_MAX_HISTORY_SIZE,
@@ -13,6 +14,7 @@ use crate::{
 use serde_json::Value;
 use std::sync::Arc;
 use std::time::Instant;
+use swissarmyhammer_config::model::ModelConfig;
 
 /// Workflow execution engine
 pub struct WorkflowExecutor {
@@ -27,6 +29,9 @@ pub struct WorkflowExecutor {
     test_storage: Option<Arc<crate::storage::WorkflowStorage>>,
     /// Working directory for file operations (including abort file)
     working_dir: std::path::PathBuf,
+
+    /// Optional agent configuration for workflow operations
+    _agent: Option<Arc<ModelConfig>>,
 }
 
 impl WorkflowExecutor {
@@ -34,6 +39,7 @@ impl WorkflowExecutor {
     fn with_config(
         working_dir: std::path::PathBuf,
         test_storage: Option<Arc<crate::storage::WorkflowStorage>>,
+        agent: Option<Arc<ModelConfig>>,
     ) -> Self {
         Self {
             execution_history: Vec::new(),
@@ -41,6 +47,7 @@ impl WorkflowExecutor {
             metrics: WorkflowMetrics::new(),
             test_storage,
             working_dir,
+            _agent: agent,
         }
     }
 
@@ -49,12 +56,13 @@ impl WorkflowExecutor {
         Self::with_config(
             std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")),
             None,
+            None,
         )
     }
 
     /// Create a new workflow executor with custom working directory
     pub fn with_working_dir<P: AsRef<std::path::Path>>(working_dir: P) -> Self {
-        Self::with_config(working_dir.as_ref().to_path_buf(), None)
+        Self::with_config(working_dir.as_ref().to_path_buf(), None, None)
     }
 
     /// Create a new workflow executor with test storage
@@ -62,7 +70,25 @@ impl WorkflowExecutor {
         Self::with_config(
             std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")),
             Some(storage),
+            None,
         )
+    }
+
+    /// Create a workflow executor with agent configuration
+    pub fn with_agent(agent: Arc<ModelConfig>) -> Self {
+        Self::with_config(
+            std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")),
+            None,
+            Some(agent),
+        )
+    }
+
+    /// Create a workflow executor with working directory and agent
+    pub fn with_working_dir_and_agent<P: AsRef<std::path::Path>>(
+        working_dir: P,
+        agent: Arc<ModelConfig>,
+    ) -> Self {
+        Self::with_config(working_dir.as_ref().to_path_buf(), None, Some(agent))
     }
 
     /// Get the workflow storage (test storage if available, otherwise create file system storage)
@@ -175,14 +201,8 @@ impl WorkflowExecutor {
         run.status == WorkflowRunStatus::Completed || run.status == WorkflowRunStatus::Failed
     }
 
-    /// Execute a single execution cycle: state execution and potential transition
-    pub async fn execute_single_cycle(&mut self, run: &mut WorkflowRun) -> ExecutorResult<bool> {
-        tracing::debug!("Execute single cycle for state: {}", run.current_state);
-
-        // Execute the state and capture any errors
-        let state_error = self.execute_state_and_capture_errors(run).await?;
-
-        // Check if abort was requested via context variable (after state execution)
+    /// Check if workflow execution was aborted via context variable
+    fn check_for_abort(&self, run: &WorkflowRun) -> ExecutorResult<()> {
         if let Some(abort_reason_value) = run.context.get_workflow_var("__ABORT_REQUESTED__") {
             if let Some(abort_reason) = abort_reason_value.as_str() {
                 tracing::error!("***Workflow Aborted***: {}", abort_reason);
@@ -201,6 +221,18 @@ impl WorkflowExecutor {
                 return Err(ExecutorError::Abort(abort_reason.to_string()));
             }
         }
+        Ok(())
+    }
+
+    /// Execute a single execution cycle: state execution and potential transition
+    pub async fn execute_single_cycle(&mut self, run: &mut WorkflowRun) -> ExecutorResult<bool> {
+        tracing::debug!("Execute single cycle for state: {}", run.current_state);
+
+        // Execute the state and capture any errors
+        let state_error = self.execute_state_and_capture_errors(run).await?;
+
+        // Check if abort was requested via context variable (after state execution)
+        self.check_for_abort(run)?;
 
         // Check if workflow is complete after state execution
         if self.is_workflow_finished(run) {
@@ -238,22 +270,42 @@ impl WorkflowExecutor {
         run: &mut WorkflowRun,
         state_error: Option<ExecutorError>,
     ) -> ExecutorResult<bool> {
-        // Handle manual intervention case
+        // Early return for manual intervention case
         if let Some(ExecutorError::ManualInterventionRequired(_)) = state_error {
             return Ok(false);
         }
 
-        // Evaluate and perform transition
-        if let Some(next_state) = self.evaluate_transitions(run)? {
+        // Try to find and perform transition
+        let next_state = self.evaluate_transitions(run)?;
+
+        if let Some(next_state) = next_state {
             self.perform_transition(run, next_state)?;
-            Ok(true) // Transition performed
-        } else if let Some(error) = state_error {
-            // No valid transitions found and we had an error
-            Err(error)
-        } else {
-            // No valid transitions found, workflow is stuck
-            Ok(false)
+            return Ok(true); // Transition performed
         }
+
+        // No valid transitions found
+        if let Some(error) = state_error {
+            return Err(error); // Had an error, propagate it
+        }
+
+        Ok(false) // No transition, workflow is stuck
+    }
+
+    /// Check for abort file before each execution iteration
+    fn check_abort_file(&self) -> ExecutorResult<()> {
+        let abort_path = self.working_dir.join(".swissarmyhammer").join(".abort");
+        if abort_path.exists() {
+            let reason = std::fs::read_to_string(&abort_path)
+                .unwrap_or_else(|_| "Unknown abort reason".to_string());
+
+            // Clean up the abort file after detection
+            if let Err(e) = std::fs::remove_file(&abort_path) {
+                tracing::warn!("Failed to clean up abort file after detection: {}", e);
+            }
+
+            return Err(ExecutorError::Abort(reason));
+        }
+        Ok(())
     }
 
     /// Execute states with a maximum transition limit to prevent infinite loops
@@ -262,8 +314,6 @@ impl WorkflowExecutor {
         run: &mut WorkflowRun,
         transition_limit: usize,
     ) -> ExecutorResult<()> {
-        // Abort file checking happens at the flow command level before execution begins
-
         if transition_limit == 0 {
             return Err(ExecutorError::TransitionLimitExceeded {
                 limit: transition_limit,
@@ -274,18 +324,7 @@ impl WorkflowExecutor {
 
         loop {
             // Check for abort file before each iteration
-            let abort_path = self.working_dir.join(".swissarmyhammer").join(".abort");
-            if abort_path.exists() {
-                let reason = std::fs::read_to_string(&abort_path)
-                    .unwrap_or_else(|_| "Unknown abort reason".to_string());
-
-                // Clean up the abort file after detection
-                if let Err(e) = std::fs::remove_file(&abort_path) {
-                    tracing::warn!("Failed to clean up abort file after detection: {}", e);
-                }
-
-                return Err(ExecutorError::Abort(reason));
-            }
+            self.check_abort_file()?;
 
             tracing::debug!(
                 "Workflow execution loop - current state: {}",
@@ -319,27 +358,14 @@ impl WorkflowExecutor {
     pub async fn execute_single_state(&mut self, run: &mut WorkflowRun) -> ExecutorResult<()> {
         let current_state_id = run.current_state.clone();
 
-        // Skip execution for terminal states (they have no actions)
-        if current_state_id.as_str() == "[*]" {
-            tracing::debug!("Reached terminal state [*]");
-            run.complete();
-            // Don't log completion here - it's already been logged by the terminal state
+        // Early return for terminal state [*]
+        if self.handle_terminal_state(run, &current_state_id)? {
             return Ok(());
         }
 
-        // Check if this is a fork state
-        if self.is_fork_state(run, &current_state_id) {
-            return self.execute_fork_state(run).await;
-        }
-
-        // Check if this is a join state
-        if self.is_join_state(run, &current_state_id) {
-            return self.execute_join_state(run).await;
-        }
-
-        // Check if this is a choice state
-        if self.is_choice_state(run, &current_state_id) {
-            return self.execute_choice_state(run).await;
+        // Early return for special states (fork, join, choice)
+        if let Some(result) = self.execute_special_state(run, &current_state_id).await? {
+            return result;
         }
 
         // Get the current state
@@ -349,10 +375,10 @@ impl WorkflowExecutor {
             .get(&current_state_id)
             .ok_or_else(|| ExecutorError::StateNotFound(current_state_id.clone()))?;
 
-        // Extract values we need before the mutable borrow
         let state_description = current_state.description.clone();
         let is_terminal = current_state.is_terminal;
 
+        // Log state execution
         tracing::trace!(
             "Executing state: {} - {} for workflow {}",
             current_state.id,
@@ -367,72 +393,123 @@ impl WorkflowExecutor {
             ),
         );
 
-        // Log entry to state
         self.log_state_entry(&current_state_id, &run.workflow.name);
 
-        // Record state execution timing
-        let state_start_time = Instant::now();
+        // Execute the state action
+        let action_executed = self
+            .execute_and_time_state_action(run, &current_state_id, &state_description)
+            .await?;
 
-        // Execute state action if one can be parsed from the description
-        tracing::debug!(
-            "About to execute action for state {} with description: {}",
-            current_state_id,
-            state_description
-        );
+        // Early return if manual intervention required
+        self.check_manual_intervention(run, &current_state_id)?;
 
-        let action_result = self.execute_state_action(run, &state_description).await;
-        let action_executed = match action_result {
-            Ok(executed) => {
-                self.log_state_exit(&current_state_id, &run.workflow.name, true);
-                executed
-            }
-            Err(e) => {
-                self.log_state_exit(&current_state_id, &run.workflow.name, false);
-                return Err(e);
-            }
-        };
-
-        // Record state execution duration
-        let state_duration = state_start_time.elapsed();
-        self.metrics
-            .record_state_execution(&run.id, current_state_id.clone(), state_duration);
-
-        // Check if this state requires manual intervention
-        if self.requires_manual_intervention(run) {
-            self.log_event(
-                ExecutionEventType::StateExecution,
-                format!("State {current_state_id} requires manual intervention"),
-            );
-
-            // Check if manual approval has been provided
-            if !run
-                .context
-                .get("manual_approval")
-                .and_then(|v| v.as_bool())
-                .unwrap_or(false)
-            {
-                // Pause execution here - workflow will need to be resumed
-                // Mark workflow as paused by returning the proper error type
-                return Err(ExecutorError::ManualInterventionRequired(format!(
-                    "State {current_state_id} requires manual approval"
-                )));
-            }
-        }
-
-        // Check if this is a terminal state
+        // Handle terminal states
         if is_terminal {
             run.complete();
             tracing::debug!("Terminal state reached: {}", current_state_id);
-            // Only log generic completion if no action was executed
             if !action_executed {
                 self.log_event(
                     ExecutionEventType::Completed,
                     "Workflow completed".to_string(),
                 );
             }
-            return Ok(());
         }
 
+        Ok(())
+    }
+
+    /// Handle terminal state [*] execution
+    fn handle_terminal_state(
+        &mut self,
+        run: &mut WorkflowRun,
+        current_state_id: &StateId,
+    ) -> ExecutorResult<bool> {
+        if current_state_id.as_str() == "[*]" {
+            tracing::debug!("Reached terminal state [*]");
+            run.complete();
+            return Ok(true);
+        }
+        Ok(false)
+    }
+
+    /// Execute special states (fork, join, choice)
+    async fn execute_special_state(
+        &mut self,
+        run: &mut WorkflowRun,
+        current_state_id: &StateId,
+    ) -> ExecutorResult<Option<ExecutorResult<()>>> {
+        if self.is_fork_state(run, current_state_id) {
+            return Ok(Some(self.execute_fork_state(run).await));
+        }
+
+        if self.is_join_state(run, current_state_id) {
+            return Ok(Some(self.execute_join_state(run).await));
+        }
+
+        if self.is_choice_state(run, current_state_id) {
+            return Ok(Some(self.execute_choice_state(run).await));
+        }
+
+        Ok(None)
+    }
+
+    /// Execute state action with timing and logging
+    async fn execute_and_time_state_action(
+        &mut self,
+        run: &mut WorkflowRun,
+        current_state_id: &StateId,
+        state_description: &str,
+    ) -> ExecutorResult<bool> {
+        let state_start_time = Instant::now();
+
+        tracing::debug!(
+            "About to execute action for state {} with description: {}",
+            current_state_id,
+            state_description
+        );
+
+        let action_result = self.execute_state_action(run, state_description).await;
+        let action_executed = match action_result {
+            Ok(executed) => {
+                self.log_state_exit(current_state_id, &run.workflow.name, true);
+                executed
+            }
+            Err(e) => {
+                self.log_state_exit(current_state_id, &run.workflow.name, false);
+                return Err(e);
+            }
+        };
+
+        let state_duration = state_start_time.elapsed();
+        self.metrics
+            .record_state_execution(&run.id, current_state_id.clone(), state_duration);
+
+        Ok(action_executed)
+    }
+
+    /// Check if manual intervention is required
+    fn check_manual_intervention(
+        &mut self,
+        run: &WorkflowRun,
+        current_state_id: &StateId,
+    ) -> ExecutorResult<()> {
+        if self.requires_manual_intervention(run) {
+            self.log_event(
+                ExecutionEventType::StateExecution,
+                format!("State {current_state_id} requires manual intervention"),
+            );
+
+            if !run
+                .context
+                .get("manual_approval")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false)
+            {
+                return Err(ExecutorError::ManualInterventionRequired(format!(
+                    "State {current_state_id} requires manual approval"
+                )));
+            }
+        }
         Ok(())
     }
 
@@ -519,23 +596,30 @@ impl WorkflowExecutor {
         None
     }
 
+    /// Preprocess action text (convert set_variable to set format)
+    fn preprocess_action_text(&self, action_text: &str) -> String {
+        if action_text.starts_with("set_variable ") {
+            action_text.replace("set_variable ", "set ")
+        } else {
+            action_text.to_string()
+        }
+    }
+
     /// Execute action parsed from state description
     pub async fn execute_state_action(
         &mut self,
         run: &mut WorkflowRun,
         state_description: &str,
     ) -> ExecutorResult<bool> {
-        // First, render the state description with workflow variables (liquid templates)
+        // Render the state description with workflow variables (liquid templates)
         let rendered_description = run.context.render_template(state_description);
 
         // Parse rendered description to extract action and store-as field
         let context_hashmap = run.context.to_workflow_hashmap();
-        let (mut action_text, store_as_var) = self.parse_state_description(&rendered_description);
+        let (action_text, store_as_var) = self.parse_state_description(&rendered_description);
 
-        // Convert set_variable format to set format for compatibility with action parser
-        if action_text.starts_with("set_variable ") {
-            action_text = action_text.replace("set_variable ", "set ");
-        }
+        // Preprocess action text for compatibility
+        let action_text = self.preprocess_action_text(&action_text);
 
         tracing::debug!(
             "Rendered state description: '{}' -> '{}'",
@@ -548,9 +632,10 @@ impl WorkflowExecutor {
             store_as_var
         );
 
-        if let Some(action) =
-            parse_action_from_description_with_context(&action_text, &context_hashmap)?
-        {
+        // Try to parse action
+        let action = parse_action_from_description_with_context(&action_text, &context_hashmap)?;
+
+        if let Some(action) = action {
             self.log_event(
                 ExecutionEventType::StateExecution,
                 format!("Executing action: {}", action.description()),
@@ -558,15 +643,45 @@ impl WorkflowExecutor {
 
             // Execute the action and handle result
             let result = self.execute_action_direct(run, action).await;
-
-            // Handle the result and optionally store it in the Store As variable
             self.handle_action_result_with_store_as(run, result, store_as_var)
                 .await?;
-            Ok(true)
-        } else {
-            tracing::warn!("No action could be parsed from: '{}'", action_text);
-            Ok(false)
+            return Ok(true);
         }
+
+        tracing::warn!("No action could be parsed from: '{}'", action_text);
+        Ok(false)
+    }
+
+    /// Extract action text from a line if it matches the action pattern
+    fn extract_action_from_line(&self, line: &str) -> Option<String> {
+        if line.starts_with("**Action**:") || line.starts_with("**action**:") {
+            let action = line
+                .strip_prefix("**Action**:")
+                .or_else(|| line.strip_prefix("**action**:"))
+                .unwrap_or("")
+                .trim();
+            return Some(action.to_string());
+        }
+        None
+    }
+
+    /// Extract store-as variable from a line if it matches the pattern
+    fn extract_store_as_from_line(&self, line: &str) -> Option<String> {
+        if line.starts_with("**Store As**:")
+            || line.starts_with("**store as**:")
+            || line.starts_with("**Store as**:")
+        {
+            let store_var = line
+                .strip_prefix("**Store As**:")
+                .or_else(|| line.strip_prefix("**store as**:"))
+                .or_else(|| line.strip_prefix("**Store as**:"))
+                .unwrap_or("")
+                .trim();
+            if !store_var.is_empty() {
+                return Some(store_var.to_string());
+            }
+        }
+        None
     }
 
     /// Parse state description to extract action text and Store As variable
@@ -579,30 +694,14 @@ impl WorkflowExecutor {
         for line in state_description.lines() {
             let line = line.trim();
 
-            // Look for **Action**: pattern
-            if line.starts_with("**Action**:") || line.starts_with("**action**:") {
-                action_text = line
-                    .strip_prefix("**Action**:")
-                    .or_else(|| line.strip_prefix("**action**:"))
-                    .unwrap_or("")
-                    .trim()
-                    .to_string();
+            // Try to extract action text
+            if let Some(action) = self.extract_action_from_line(line) {
+                action_text = action;
             }
 
-            // Look for **Store As**: pattern
-            if line.starts_with("**Store As**:")
-                || line.starts_with("**store as**:")
-                || line.starts_with("**Store as**:")
-            {
-                let store_var = line
-                    .strip_prefix("**Store As**:")
-                    .or_else(|| line.strip_prefix("**store as**:"))
-                    .or_else(|| line.strip_prefix("**Store as**:"))
-                    .unwrap_or("")
-                    .trim();
-                if !store_var.is_empty() {
-                    store_as_var = Some(store_var.to_string());
-                }
+            // Try to extract store-as variable
+            if let Some(store_var) = self.extract_store_as_from_line(line) {
+                store_as_var = Some(store_var);
             }
         }
 
@@ -649,9 +748,32 @@ impl WorkflowExecutor {
                 .insert("is_error".to_string(), Value::Bool(false));
         }
 
+        tracing::debug!(
+            "Setting 'result' in workflow context. Is object: {}, Value: {:?}",
+            result_value.is_object(),
+            result_value
+        );
         run.context.insert("result".to_string(), result_value);
         run.context
             .insert(LAST_ACTION_RESULT_KEY.to_string(), Value::Bool(success));
+    }
+
+    /// Store action result in the optional Store As variable
+    fn store_action_result(
+        &mut self,
+        run: &mut WorkflowRun,
+        store_as_var: Option<String>,
+        result_value: &Value,
+    ) {
+        if let Some(store_var) = store_as_var {
+            run.context
+                .set_workflow_var(store_var.clone(), result_value.clone());
+            tracing::debug!(
+                "Stored action result in workflow variable '{}': {:?}",
+                store_var,
+                result_value
+            );
+        }
     }
 
     /// Handle the result of action execution with optional Store As variable
@@ -666,16 +788,8 @@ impl WorkflowExecutor {
                 // Set standard variables that are available after every action
                 self.set_action_result_vars(run, true, result_value.clone());
 
-                // If Store As variable is specified, store the result there too
-                if let Some(store_var) = store_as_var {
-                    run.context
-                        .set_workflow_var(store_var.clone(), result_value.clone());
-                    tracing::debug!(
-                        "Stored action result in workflow variable '{}': {:?}",
-                        store_var,
-                        result_value
-                    );
-                }
+                // Store result in the Store As variable if specified
+                self.store_action_result(run, store_as_var, &result_value);
 
                 self.log_event(
                     ExecutionEventType::StateExecution,
@@ -693,8 +807,6 @@ impl WorkflowExecutor {
         run: &mut WorkflowRun,
         action_error: ActionError,
     ) -> ExecutorResult<()> {
-        // Note: Abort error handling removed - abort detection now file-based
-
         // Set standard variables that are available after every action
         self.set_action_result_vars(run, false, Value::String(action_error.to_string()));
 
@@ -705,7 +817,7 @@ impl WorkflowExecutor {
         let error_details = self.format_action_error(&action_error);
         self.log_event(ExecutionEventType::Failed, error_details);
 
-        // Check for dead letter state configuration
+        // Guard clause: Check for dead letter state configuration first
         if let Some(dead_letter_state) = self.get_dead_letter_state(run) {
             return self
                 .handle_dead_letter_transition(run, dead_letter_state, &action_error)
@@ -720,7 +832,7 @@ impl WorkflowExecutor {
             );
         }
 
-        // Check if this state should be skipped on failure
+        // Guard clause: Check if this state should be skipped on failure
         if self.should_skip_on_failure(run) {
             self.log_event(
                 ExecutionEventType::StateExecution,
@@ -768,6 +880,14 @@ impl WorkflowExecutor {
         }
     }
 
+    /// Prepare context for dead letter transition
+    fn prepare_dead_letter_context(&mut self, run: &mut WorkflowRun, action_error: &ActionError) {
+        run.context.insert(
+            "dead_letter_reason".to_string(),
+            Value::String(format!("Max retries exhausted: {action_error}")),
+        );
+    }
+
     /// Handle transition to dead letter state
     async fn handle_dead_letter_transition(
         &mut self,
@@ -775,11 +895,8 @@ impl WorkflowExecutor {
         dead_letter_state: StateId,
         action_error: &ActionError,
     ) -> ExecutorResult<()> {
-        // Add dead letter reason to context
-        run.context.insert(
-            "dead_letter_reason".to_string(),
-            Value::String(format!("Max retries exhausted: {action_error}")),
-        );
+        // Prepare context with dead letter reason
+        self.prepare_dead_letter_context(run, action_error);
 
         // Transition to dead letter state
         self.log_event(
@@ -817,15 +934,9 @@ impl WorkflowExecutor {
         false
     }
 
-    /// Execute compensation states in reverse order
-    async fn execute_compensation(&mut self, run: &mut WorkflowRun) -> ExecutorResult<()> {
-        self.log_event(
-            ExecutionEventType::StateExecution,
-            "Starting compensation/rollback".to_string(),
-        );
-
-        // Find all compensation states stored in context
-        let mut compensation_states: Vec<(String, StateId)> = Vec::new();
+    /// Collect all compensation states from context
+    fn collect_compensation_states(&self, run: &WorkflowRun) -> Vec<(String, StateId)> {
+        let mut compensation_states = Vec::new();
 
         for (key, value) in run.context.iter() {
             if CompensationKey::is_compensation_key(key) {
@@ -835,7 +946,25 @@ impl WorkflowExecutor {
             }
         }
 
-        // Execute compensation states
+        compensation_states
+    }
+
+    /// Execute compensation states in reverse order
+    async fn execute_compensation(&mut self, run: &mut WorkflowRun) -> ExecutorResult<()> {
+        self.log_event(
+            ExecutionEventType::StateExecution,
+            "Starting compensation/rollback".to_string(),
+        );
+
+        // Collect all compensation states stored in context
+        let compensation_states = self.collect_compensation_states(run);
+
+        // Early return if no compensation states
+        if compensation_states.is_empty() {
+            return Ok(());
+        }
+
+        // Execute the first compensation state
         if let Some((key, comp_state)) = compensation_states.into_iter().next() {
             self.log_event(
                 ExecutionEventType::StateExecution,

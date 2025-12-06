@@ -1,39 +1,39 @@
-# Agent Management API and CLI Specification
+# Model Management API and CLI Specification
 
 ## Overview
 
-Add a new top-level `sah agent` command to manage built-in agent configurations. The command will discover agent configurations from embedded resources and allow users to easily switch between them.
+Add a new top-level `sah model` command to manage built-in model configurations. The command will discover model configurations from embedded resources and allow users to easily switch between them.
 
 ## Requirements
 
 ### CLI Interface
 
 ```bash
-# List all available built-in agents
-sah agent list
+# List all available built-in models
+sah model list
 
-# Use a specific agent configuration
-sah agent use <agent_name>
+# Use a specific model configuration
+sah model use <model_name>
 ```
 
-### Built-in Agent Compilation
+### Built-in Model Compilation
 
-Built-in agents need to be compiled into the binary as embedded resources, similar to prompts and workflows:
+Built-in models need to be compiled into the binary as embedded resources, similar to prompts and workflows:
 
 #### Build Script Integration
 
 Add to `swissarmyhammer-config/build.rs`:
 
 ```rust
-fn generate_builtin_agents(out_dir: &str) {
-    let dest_path = Path::new(&out_dir).join("builtin_agents.rs");
+fn generate_builtin_models(out_dir: &str) {
+    let dest_path = Path::new(&out_dir).join("builtin_models.rs");
     let manifest_dir = env::var("CARGO_MANIFEST_DIR").unwrap();
-    let builtin_dir = Path::new(&manifest_dir).join("../builtin/agents");
+    let builtin_dir = Path::new(&manifest_dir).join("../builtin/models");
 
     let mut code = String::new();
-    code.push_str("// Auto-generated builtin agents - do not edit manually\n");
-    code.push_str("/// Get all built-in agents as a vector of (name, content) tuples\n");
-    code.push_str("pub fn get_builtin_agents() -> Vec<(&'static str, &'static str)> {\n");
+    code.push_str("// Auto-generated builtin models - do not edit manually\n");
+    code.push_str("/// Get all built-in models as a vector of (name, content) tuples\n");
+    code.push_str("pub fn get_builtin_models() -> Vec<(&'static str, &'static str)> {\n");
     code.push_str("    vec![\n");
 
     if builtin_dir.exists() {
@@ -58,26 +58,26 @@ fn generate_builtin_agents(out_dir: &str) {
 }
 ```
 
-### Agent Discovery Hierarchy
+### Model Discovery Hierarchy
 
-Following the same pattern as prompts and workflows, agents are discovered in this order:
+Following the same pattern as prompts and workflows, models are discovered in this order:
 
-1. **User agents** (highest precedence) - `.swissarmyhammer/agents/`
-2. **Project agents** - `agents/` directory in project root
-3. **Built-in agents** (lowest precedence) - compiled into binary from `builtin/agents/`
+1. **User models** (highest precedence) - `.swissarmyhammer/models/`
+2. **Project models** - `models/` directory in project root
+3. **Built-in models** (lowest precedence) - compiled into binary from `builtin/models/`
 
-#### Built-in Agent Discovery
+#### Built-in Model Discovery
 
-- Agents compiled into binary from `builtin/agents/` directory at build time
-- Use file stem (filename without extension) as agent name
-- Example: `builtin/agents/qwen-coder.yaml` → agent name `qwen-coder`
-- Access via `include!(concat!(env!("OUT_DIR"), "/builtin_agents.rs"));`
+- Models compiled into binary from `builtin/models/` directory at build time
+- Use file stem (filename without extension) as model name
+- Example: `builtin/models/qwen-coder.yaml` → model name `qwen-coder`
+- Access via `include!(concat!(env!("OUT_DIR"), "/builtin_models.rs"));`
 
-#### User Agent Discovery
+#### User Model Discovery
 
-- Scan `.swissarmyhammer/agents/` for `.yaml` files
-- Allow users to override built-in agents with same name
-- Enable custom agent configurations without modifying project files
+- Scan `.swissarmyhammer/models/` for `.yaml` files
+- Allow users to override built-in models with same name
+- Enable custom model configurations without modifying project files
 
 ### Configuration Management
 
@@ -85,95 +85,97 @@ Following the same pattern as prompts and workflows, agents are discovered in th
   1. `.swissarmyhammer/sah.yaml`
   2. `.swissarmyhammer/sah.toml`
 - If neither exists, create `.swissarmyhammer/sah.yaml`
-- Replace the `agent:` section in the config file with the selected built-in agent configuration
+- Replace the `model:` section in the config file with the selected built-in model configuration
 
 ### API Design (swissarmyhammer-config)
 
 ```rust
-// Include generated builtin agents
-include!(concat!(env!("OUT_DIR"), "/builtin_agents.rs"));
+// Include generated builtin models
+include!(concat!(env!("OUT_DIR"), "/builtin_models.rs"));
 
-// Agent management operations
-pub struct AgentManager;
+// Model management operations
+pub struct ModelManager;
 
-impl AgentManager {
-    /// List all available agents from all sources
-    pub fn list_agents() -> Result<Vec<AgentInfo>, AgentError> {
-        let mut agents = Vec::new();
+impl ModelManager {
+    /// List all available models from all sources
+    pub fn list_models() -> Result<Vec<ModelInfo>, ModelError> {
+        let mut models = Vec::new();
         
-        // 1. Load built-in agents (lowest precedence)
-        for (name, content) in get_builtin_agents() {
-            let description = parse_agent_description(content);
-            agents.push(AgentInfo {
-                name: name.to_string(),
-                content: content.to_string(),
-                source: AgentSource::Builtin,
-                description,
-            });
+        // 1. Load built-in models (lowest precedence)
+        for (name, content) in get_builtin_models() {
+            let description = parse_model_description(content);
+            models.push(Self::create_model_info(name, content, ModelSource::Builtin, description));
         }
         
-        // 2. Load project agents (medium precedence)
-        if let Ok(project_agents) = load_project_agents() {
-            for agent in project_agents {
-                // Replace builtin agent if same name exists
-                if let Some(existing) = agents.iter_mut().find(|a| a.name == agent.name) {
-                    *existing = agent;
-                } else {
-                    agents.push(agent);
-                }
-            }
+        // 2. Load project models (medium precedence)
+        if let Ok(project_models) = load_project_models() {
+            Self::merge_models(&mut models, project_models);
         }
         
-        // 3. Load user agents (highest precedence)
-        if let Ok(user_agents) = load_user_agents() {
-            for agent in user_agents {
-                // Replace existing agent if same name exists
-                if let Some(existing) = agents.iter_mut().find(|a| a.name == agent.name) {
-                    *existing = agent;
-                } else {
-                    agents.push(agent);
-                }
-            }
+        // 3. Load user models (highest precedence)
+        if let Ok(user_models) = load_user_models() {
+            Self::merge_models(&mut models, user_models);
         }
         
-        Ok(agents)
+        Ok(models)
     }
     
-    /// Apply an agent configuration to the project config
-    pub fn use_agent(agent_name: &str) -> Result<(), AgentError> {
-        // Find the agent by name from all sources
-        let agents = Self::list_agents()?;
-        let agent = agents
+    /// Create a ModelInfo instance with consistent field mapping
+    fn create_model_info(name: &str, content: &str, source: ModelSource, description: Option<String>) -> ModelInfo {
+        ModelInfo {
+            name: name.to_string(),
+            content: content.to_string(),
+            source,
+            description,
+        }
+    }
+    
+    /// Merge new models into existing list, replacing by name if exists
+    fn merge_models(existing: &mut Vec<ModelInfo>, new_models: Vec<ModelInfo>) {
+        for model in new_models {
+            if let Some(existing_model) = existing.iter_mut().find(|a| a.name == model.name) {
+                *existing_model = model;
+            } else {
+                existing.push(model);
+            }
+        }
+    }
+    
+    /// Apply a model configuration to the project config
+    pub fn use_model(model_name: &str) -> Result<(), ModelError> {
+        // Find the model by name from all sources
+        let models = Self::list_models()?;
+        let model = models
             .iter()
-            .find(|a| a.name == agent_name)
-            .ok_or_else(|| AgentError::NotFound(agent_name.to_string()))?;
+            .find(|a| a.name == model_name)
+            .ok_or_else(|| ModelError::NotFound(model_name.to_string()))?;
         
-        // Parse the agent configuration
-        let agent_config: AgentConfig = serde_yaml::from_str(&agent.content)?;
+        // Parse the model configuration
+        let model_config: ModelConfig = serde_yaml::from_str(&model.content)?;
         
         // Find or create project config file
-        // Replace agent section
+        // Replace model section
         // Write back to disk
     }
     
-    /// Load agents from .swissarmyhammer/agents/
-    fn load_user_agents() -> Result<Vec<AgentInfo>, AgentError> {
-        let agents_dir = Path::new(".swissarmyhammer/agents");
-        Self::load_agents_from_dir(agents_dir, AgentSource::User)
+    /// Load models from .swissarmyhammer/models/
+    fn load_user_models() -> Result<Vec<ModelInfo>, ModelError> {
+        let models_dir = Path::new(".swissarmyhammer/models");
+        Self::load_models_from_dir(models_dir, ModelSource::User)
     }
     
-    /// Load agents from agents/ directory in project root
-    fn load_project_agents() -> Result<Vec<AgentInfo>, AgentError> {
-        let agents_dir = Path::new("agents");
-        Self::load_agents_from_dir(agents_dir, AgentSource::Project)
+    /// Load models from models/ directory in project root
+    fn load_project_models() -> Result<Vec<ModelInfo>, ModelError> {
+        let models_dir = Path::new("models");
+        Self::load_models_from_dir(models_dir, ModelSource::Project)
     }
     
-    /// Load agents from a specific directory
-    fn load_agents_from_dir(dir: &Path, source: AgentSource) -> Result<Vec<AgentInfo>, AgentError> {
-        let mut agents = Vec::new();
+    /// Load models from a specific directory
+    fn load_models_from_dir(dir: &Path, source: ModelSource) -> Result<Vec<ModelInfo>, ModelError> {
+        let mut models = Vec::new();
         
         if !dir.exists() {
-            return Ok(agents);
+            return Ok(models);
         }
         
         for entry in fs::read_dir(dir)? {
@@ -183,12 +185,12 @@ impl AgentManager {
             if path.extension().and_then(|s| s.to_str()) == Some("yaml") {
                 let name = path.file_stem()
                     .and_then(|s| s.to_str())
-                    .ok_or_else(|| AgentError::InvalidPath(path.clone()))?;
+                    .ok_or_else(|| ModelError::InvalidPath(path.clone()))?;
                 
                 let content = fs::read_to_string(&path)?;
-                let description = parse_agent_description(&content);
+                let description = parse_model_description(&content);
                 
-                agents.push(AgentInfo {
+                models.push(ModelInfo {
                     name: name.to_string(),
                     content,
                     source,
@@ -197,21 +199,21 @@ impl AgentManager {
             }
         }
         
-        Ok(agents)
+        Ok(models)
     }
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub enum AgentSource {
+pub enum ModelSource {
     Builtin,
     Project,
     User,
 }
 
-pub struct AgentInfo {
+pub struct ModelInfo {
     pub name: String,
     pub content: String,
-    pub source: AgentSource,
+    pub source: ModelSource,
     pub description: Option<String>,
 }
 ```
@@ -223,53 +225,62 @@ The CLI should be minimal, delegating all logic to the swissarmyhammer-config AP
 ```rust
 // In main CLI
 match args.command {
-    Command::Agent { subcommand } => match subcommand {
-        AgentSubcommand::List { format } => {
-            let agents = AgentManager::list_agents()?;
-            display_agents(&agents, format.unwrap_or(OutputFormat::Table))?;
+    Command::Model { subcommand } => match subcommand {
+        ModelSubcommand::List { format } => {
+            let models = ModelManager::list_models()?;
+            display_models(&models, format.unwrap_or(OutputFormat::Table))?;
         }
-        AgentSubcommand::Use { agent_name } => {
-            AgentManager::use_agent(&agent_name)?;
-            println!("Successfully switched to agent: {}", agent_name);
+        ModelSubcommand::Use { model_name } => {
+            ModelManager::use_model(&model_name)?;
+            println!("Successfully switched to model: {}", model_name);
         }
     }
 }
 
-/// Display agents using consistent formatting with other commands
-fn display_agents(agents: &[AgentInfo], format: OutputFormat) -> Result<()> {
+/// Display models using consistent formatting with other commands
+fn display_models(models: &[ModelInfo], format: OutputFormat) -> Result<()> {
     match format {
         OutputFormat::Json => {
-            let json = serde_json::to_string_pretty(agents)?;
+            let json = serde_json::to_string_pretty(models)?;
             println!("{json}");
         }
         OutputFormat::Yaml => {
-            let yaml = serde_yaml::to_string(agents)?;
+            let yaml = serde_yaml::to_string(models)?;
             print!("{yaml}");
         }
         OutputFormat::Table => {
-            display_agents_table(agents)?;
+            display_models_table(models)?;
         }
     }
     Ok(())
 }
 
-/// Display agents in table format following the same pattern as prompts
-fn display_agents_table(agents: &[AgentInfo]) -> Result<()> {
-    if agents.is_empty() {
-        println!("No agents found.");
+/// Get color pair for source type (name_color, description_color)
+fn get_source_color(source: &ModelSource) -> (Color, Color) {
+    match source {
+        ModelSource::Builtin => (Color::Green, Color::Green),
+        ModelSource::User => (Color::Blue, Color::Blue),
+        ModelSource::Project => (Color::Yellow, Color::Yellow),
+    }
+}
+
+/// Display models in table format following the same pattern as prompts
+fn display_models_table(models: &[ModelInfo]) -> Result<()> {
+    if models.is_empty() {
+        println!("No models found.");
         return Ok(());
     }
 
-    let builtin_agents: Vec<_> = agents.iter().filter(|a| matches!(a.source, AgentSource::Builtin)).collect();
-    let project_agents: Vec<_> = agents.iter().filter(|a| matches!(a.source, AgentSource::Project)).collect();
-    let user_agents: Vec<_> = agents.iter().filter(|a| matches!(a.source, AgentSource::User)).collect();
+    let builtin_models: Vec<_> = models.iter().filter(|a| matches!(a.source, ModelSource::Builtin)).collect();
+    let project_models: Vec<_> = models.iter().filter(|a| matches!(a.source, ModelSource::Project)).collect();
+    let user_models: Vec<_> = models.iter().filter(|a| matches!(a.source, ModelSource::User)).collect();
 
-    let total_agents = agents.len();
-    let builtin_count = builtin_agents.len();
-    let project_count = project_agents.len();
-    let user_count = user_agents.len();
+    let total_models = models.len();
+    let builtin_count = builtin_models.len();
+    let project_count = project_models.len();
+    let user_count = user_models.len();
 
-    println!("🤖 Agents: {total_agents} total");
+    println!("🤖 Models: {total_models} total");
     println!("📦 Built-in: {builtin_count}");
     if project_count > 0 {
         println!("📁 Project: {project_count}");
@@ -282,25 +293,14 @@ fn display_agents_table(agents: &[AgentInfo]) -> Result<()> {
     // Create a custom 2-line format like prompts
     let is_tty = atty::is(atty::Stream::Stdout);
     
-    for agent in agents {
-        let description = agent.description.as_deref().unwrap_or("");
+    for model in models {
+        let description = model.description.as_deref().unwrap_or("");
 
         // First line: Name | Description (colored by source)
         let first_line = if is_tty {
-            let (name_colored, desc_colored) = match &agent.source {
-                AgentSource::Builtin => (
-                    agent.name.green().bold().to_string(),
-                    description.green().to_string(),
-                ),
-                AgentSource::User => (
-                    agent.name.blue().bold().to_string(),
-                    description.blue().to_string(),
-                ),
-                AgentSource::Project => (
-                    agent.name.yellow().bold().to_string(),
-                    description.yellow().to_string(),
-                ),
-            };
+            let (name_color, desc_color) = get_source_color(&model.source);
+            let name_colored = model.name.color(name_color).bold().to_string();
+            let desc_colored = description.color(desc_color).to_string();
             if description.is_empty() {
                 name_colored
             } else {
@@ -308,14 +308,14 @@ fn display_agents_table(agents: &[AgentInfo]) -> Result<()> {
             }
         } else {
             if description.is_empty() {
-                agent.name.clone()
+                model.name.clone()
             } else {
-                format!("{} | {}", agent.name, description)
+                format!("{} | {}", model.name, description)
             }
         };
 
         // Second line: Source and executor info
-        let executor_info = format!("source: {:?}", agent.source).to_lowercase();
+        let executor_info = format!("source: {:?}", model.source).to_lowercase();
         let second_line = if is_tty {
             executor_info.dimmed().to_string()
         } else {
@@ -334,7 +334,7 @@ fn display_agents_table(agents: &[AgentInfo]) -> Result<()> {
 ## Implementation Notes
 
 1. **Error Handling**: Graceful handling of missing files, invalid configs, permission errors
-2. **Validation**: Validate built-in agent configs before applying
+2. **Validation**: Validate built-in model configs before applying
 3. **Backup**: Consider backing up existing config before replacement
 4. **Feedback**: Clear success/error messages for CLI users
 5. **Discovery**: Recursive scanning if nested directories are needed later
@@ -344,69 +344,69 @@ fn display_agents_table(agents: &[AgentInfo]) -> Result<()> {
 ### Additional CLI Commands
 
 ```bash
-# Display agent configuration details
-sah agent show <agent_name>
+# Display model configuration details
+sah model show <model_name>
 
-# Show currently active agent
-sah agent current
+# Show currently active model
+sah model current
 
-# Validate agent configuration
-sah agent validate <agent_name>
+# Validate model configuration
+sah model validate <model_name>
 ```
 
 ### Enhanced API Design
 
 ```rust
-impl AgentManager {
-    /// Show details of a specific built-in agent
-    pub fn show_agent(agent_name: &str) -> Result<AgentDetails, AgentError> {
-        let agent_content = get_builtin_agents()
+impl ModelManager {
+    /// Find a built-in model by name
+    fn find_builtin_model(model_name: &str) -> Result<&'static str, ModelError> {
+        get_builtin_models()
             .iter()
-            .find(|(name, _)| *name == agent_name)
+            .find(|(name, _)| *name == model_name)
             .map(|(_, content)| *content)
-            .ok_or_else(|| AgentError::NotFound(agent_name.to_string()))?;
+            .ok_or_else(|| ModelError::NotFound(model_name.to_string()))
+    }
+    
+    /// Show details of a specific built-in model
+    pub fn show_model(model_name: &str) -> Result<ModelDetails, ModelError> {
+        let model_content = Self::find_builtin_model(model_name)?;
+        let model_config: ModelConfig = serde_yaml::from_str(model_content)?;
         
-        let agent_config: AgentConfig = serde_yaml::from_str(agent_content)?;
-        
-        Ok(AgentDetails {
-            name: agent_name.to_string(),
-            content: agent_content.to_string(),
-            config: agent_config,
-            executor_type: agent_config.executor_type(),
-            description: parse_agent_description(agent_content),
+        Ok(ModelDetails {
+            name: model_name.to_string(),
+            content: model_content.to_string(),
+            config: model_config,
+            executor_type: model_config.executor_type(),
+            description: parse_model_description(model_content),
         })
     }
     
-    /// Get the currently active agent from project config
-    pub fn get_current_agent() -> Result<Option<CurrentAgent>, AgentError> {
+    /// Get the currently active model from project config
+    pub fn get_current_model() -> Result<Option<CurrentModel>, ModelError> {
         // Read project config file
-        // Parse agent section
-        // Return current agent info
+        // Parse model section
+        // Return current model info
     }
     
-    /// Validate a built-in agent configuration
-    pub fn validate_agent(agent_name: &str) -> Result<ValidationResult, AgentError> {
-        let agent_content = get_builtin_agents()
-            .iter()
-            .find(|(name, _)| *name == agent_name)
-            .map(|(_, content)| *content)
-            .ok_or_else(|| AgentError::NotFound(agent_name.to_string()))?;
+    /// Validate a built-in model configuration
+    pub fn validate_model(model_name: &str) -> Result<ValidationResult, ModelError> {
+        let model_content = Self::find_builtin_model(model_name)?;
         
         // Parse and validate configuration
-        let validation_result = validate_agent_config(agent_content)?;
+        let validation_result = validate_model_config(model_content)?;
         Ok(validation_result)
     }
 }
 
-pub struct AgentDetails {
+pub struct ModelDetails {
     pub name: String,
     pub content: String,
-    pub config: AgentConfig,
+    pub config: ModelConfig,
     pub executor_type: AgentExecutorType,
     pub description: Option<String>,
 }
 
-pub struct CurrentAgent {
+pub struct CurrentModel {
     pub name: Option<String>, // None if using custom config
     pub executor_type: AgentExecutorType,
     pub config_source: ConfigSource, // Builtin, Project, etc.
@@ -421,26 +421,26 @@ pub struct ValidationResult {
 
 ### Additional Features
 
-- Agent configuration validation and linting
-- Agent comparison functionality
-- Export current config as new agent template
-- Copy built-in agent to user directory for customization
+- Model configuration validation and linting
+- Model comparison functionality
+- Export current config as new model template
+- Copy built-in model to user directory for customization
 
-### CLI Examples with User Agents
+### CLI Examples with User Models
 
 ```bash
-# List all agents (builtin, project, user)
-sah agent list
+# List all models (builtin, project, user)
+sah model list
 
-# Use a user-defined agent
-sah agent use my-custom-agent
+# Use a user-defined model
+sah model use my-custom-model
 
-# Copy built-in agent to user directory for customization
-sah agent copy qwen-coder --to-user
+# Copy built-in model to user directory for customization
+sah model copy qwen-coder --to-user
 
-# Show agent with source information
-sah agent show qwen-coder
-# Output: Agent: qwen-coder (source: user, overrides builtin)
+# Show model with source information
+sah model show qwen-coder
+# Output: Model: qwen-coder (source: user, overrides builtin)
 ```
 
 ### Directory Structure
@@ -449,12 +449,12 @@ sah agent show qwen-coder
 project/
 ├── .swissarmyhammer/
 │   ├── sah.yaml                    # Project config
-│   └── agents/                     # User agents (highest precedence)
-│       ├── my-custom-agent.yaml
+│   └── models/                     # User models (highest precedence)
+│       ├── my-custom-model.yaml
 │       └── qwen-coder.yaml         # Overrides builtin qwen-coder
-├── agents/                         # Project agents (medium precedence)
-│   └── team-agent.yaml
-└── builtin/agents/                 # Built-in agents (compiled in, lowest precedence)
+├── models/                         # Project models (medium precedence)
+│   └── team-model.yaml
+└── builtin/models/                 # Built-in models (compiled in, lowest precedence)
     ├── claude-code.yaml
     ├── qwen-coder.yaml
     └── qwen-coder-flash.yaml

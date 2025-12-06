@@ -39,40 +39,34 @@ impl TestRunner {
     }
 
     pub async fn run(&mut self, config: TestConfig) -> Result<i32> {
-        // Load all prompts first
         self.load_prompts()?;
-
-        // Get the prompt to test
         let prompt = self.get_prompt(config.prompt_name.as_deref(), config.file.as_deref())?;
+        let args = self.collect_arguments(&config, &prompt)?;
 
-        // Collect arguments
-        let args = if config.arguments.is_empty() {
-            // Interactive mode - but only if we're in a terminal
-            if atty::is(atty::Stream::Stdin) {
-                self.collect_arguments_interactive(&prompt)?
-            } else {
-                // Non-interactive mode when not in terminal (CI/testing)
-                self.collect_arguments_non_interactive(&prompt)?
-            }
-        } else {
-            // Non-interactive mode
-            self.parse_arguments(&config.arguments)?
-        };
-
-        // All template variables are now passed through the regular --var mechanism
-
-        // Show debug information if requested
         if config.debug {
             self.show_debug_info(&prompt, &args)?;
         }
 
-        // Render the prompt with environment variables support
         let rendered = self.render_prompt_with_env(&prompt, &args)?;
-
-        // Output the result
         self.output_result(&rendered, config.raw, config.copy, config.save.as_deref())?;
 
         Ok(EXIT_SUCCESS)
+    }
+
+    fn collect_arguments(
+        &self,
+        config: &TestConfig,
+        prompt: &Prompt,
+    ) -> Result<HashMap<String, String>> {
+        if !config.arguments.is_empty() {
+            return self.parse_arguments(&config.arguments);
+        }
+
+        if atty::is(atty::Stream::Stdin) {
+            self.collect_arguments_interactive(prompt)
+        } else {
+            self.collect_arguments_non_interactive(prompt)
+        }
     }
 
     fn load_prompts(&mut self) -> Result<()> {
@@ -122,12 +116,9 @@ impl TestRunner {
     }
 
     fn collect_arguments_interactive(&self, prompt: &Prompt) -> Result<HashMap<String, String>> {
-        let mut args = HashMap::new();
-        let theme = ColorfulTheme::default();
-
         if prompt.parameters.is_empty() {
             println!("{}", "ℹ No arguments required for this prompt".blue());
-            return Ok(args);
+            return Ok(HashMap::new());
         }
 
         println!(
@@ -138,55 +129,92 @@ impl TestRunner {
         );
         println!();
 
+        let mut args = HashMap::new();
+        let theme = ColorfulTheme::default();
+
         for arg in &prompt.parameters {
-            let prompt_text = if arg.required {
-                format!("{} (required): {}", arg.name.bold(), &arg.description)
-            } else {
-                format!("{} (optional): {}", arg.name.bold(), &arg.description)
-            };
-
-            loop {
-                let mut input = Input::<String>::with_theme(&theme).with_prompt(&prompt_text);
-
-                if let Some(default) = &arg.default {
-                    let default_str = match default {
-                        serde_json::Value::String(s) => s.clone(),
-                        serde_json::Value::Number(n) => n.to_string(),
-                        serde_json::Value::Bool(b) => b.to_string(),
-                        _ => default.to_string(),
-                    };
-                    input = input.default(default_str).show_default(true);
-                }
-
-                match input.interact_text() {
-                    Ok(value) => {
-                        if value.is_empty() && arg.required && arg.default.is_none() {
-                            println!("{}", "❌ This argument is required".red());
-                            continue;
-                        }
-
-                        if !value.is_empty() {
-                            args.insert(arg.name.clone(), value);
-                        } else if let Some(default) = &arg.default {
-                            let default_str = match default {
-                                serde_json::Value::String(s) => s.clone(),
-                                serde_json::Value::Number(n) => n.to_string(),
-                                serde_json::Value::Bool(b) => b.to_string(),
-                                _ => default.to_string(),
-                            };
-                            args.insert(arg.name.clone(), default_str);
-                        }
-                        break;
-                    }
-                    Err(e) => {
-                        return Err(anyhow!("Failed to read input: {}", e));
-                    }
-                }
+            let value = self.prompt_for_argument(&theme, arg)?;
+            if let Some(v) = value {
+                args.insert(arg.name.clone(), v);
             }
         }
 
         println!();
         Ok(args)
+    }
+
+    fn prompt_for_argument(
+        &self,
+        theme: &ColorfulTheme,
+        arg: &swissarmyhammer::Parameter,
+    ) -> Result<Option<String>> {
+        let prompt_text = self.format_argument_prompt(arg);
+
+        loop {
+            let input = self.create_input_prompt(theme, &prompt_text, arg);
+            let value = input.interact_text()?;
+
+            if let Some(validated) = self.validate_and_process_input(&value, arg)? {
+                return Ok(Some(validated));
+            }
+
+            if !arg.required || arg.default.is_some() {
+                return Ok(None);
+            }
+
+            println!("{}", "✗ This argument is required".red());
+        }
+    }
+
+    fn format_argument_prompt(&self, arg: &swissarmyhammer::Parameter) -> String {
+        let requirement = if arg.required { "required" } else { "optional" };
+        format!(
+            "{} ({}): {}",
+            arg.name.bold(),
+            requirement,
+            &arg.description
+        )
+    }
+
+    fn create_input_prompt<'a>(
+        &self,
+        theme: &'a ColorfulTheme,
+        prompt_text: &str,
+        arg: &swissarmyhammer::Parameter,
+    ) -> Input<'a, String> {
+        let mut input = Input::<String>::with_theme(theme).with_prompt(prompt_text);
+
+        if let Some(default) = &arg.default {
+            let default_str = self.json_value_to_string(default);
+            input = input.default(default_str).show_default(true);
+        }
+
+        input
+    }
+
+    fn validate_and_process_input(
+        &self,
+        value: &str,
+        arg: &swissarmyhammer::Parameter,
+    ) -> Result<Option<String>> {
+        if !value.is_empty() {
+            return Ok(Some(value.to_string()));
+        }
+
+        if let Some(default) = &arg.default {
+            return Ok(Some(self.json_value_to_string(default)));
+        }
+
+        Ok(None)
+    }
+
+    fn json_value_to_string(&self, value: &serde_json::Value) -> String {
+        match value {
+            serde_json::Value::String(s) => s.clone(),
+            serde_json::Value::Number(n) => n.to_string(),
+            serde_json::Value::Bool(b) => b.to_string(),
+            _ => value.to_string(),
+        }
     }
 
     fn collect_arguments_non_interactive(
@@ -285,41 +313,47 @@ impl TestRunner {
         copy: bool,
         save_path: Option<&str>,
     ) -> Result<()> {
-        // Display the result
+        self.display_output(rendered, raw);
+
+        if copy {
+            self.copy_to_clipboard(rendered);
+        }
+
+        if let Some(path) = save_path {
+            self.save_to_file(rendered, path)?;
+        }
+
+        Ok(())
+    }
+
+    fn display_output(&self, rendered: &str, raw: bool) {
         if raw {
             print!("{rendered}");
-        } else {
-            println!("{}", "✨ Rendered Output:".bold().green());
-            println!("{}", "─".repeat(50));
-            println!("{rendered}");
-            println!("{}", "─".repeat(50));
+            return;
         }
 
-        // Note: ABORT ERROR string-based detection removed - abort handling now done via
-        // ExecutorError::Abort at the workflow execution level
+        println!("{}", "✨ Rendered Output:".bold().green());
+        println!("{}", "─".repeat(50));
+        println!("{rendered}");
+        println!("{}", "─".repeat(50));
+    }
 
-        // Copy to clipboard if requested
-        if copy {
-            match arboard::Clipboard::new() {
-                Ok(mut clipboard) => match clipboard.set_text(rendered) {
-                    Ok(_) => println!("{}", "📋 Copied to clipboard!".green()),
-                    Err(e) => println!(
-                        "{}",
-                        format!("⚠️  Failed to copy to clipboard: {e}").yellow()
-                    ),
-                },
-                Err(e) => {
-                    println!("{}", format!("⚠️  Clipboard not available: {e}").yellow());
-                }
-            }
+    fn copy_to_clipboard(&self, content: &str) {
+        let clipboard_result =
+            arboard::Clipboard::new().and_then(|mut clipboard| clipboard.set_text(content));
+
+        match clipboard_result {
+            Ok(_) => println!("{}", "📋 Copied to clipboard!".green()),
+            Err(e) => println!(
+                "{}",
+                format!("⚠️  Failed to copy to clipboard: {e}").yellow()
+            ),
         }
+    }
 
-        // Save to file if requested
-        if let Some(path) = save_path {
-            fs::write(path, rendered)?;
-            println!("{}", format!("💾 Saved to: {path}").green());
-        }
-
+    fn save_to_file(&self, content: &str, path: &str) -> Result<()> {
+        fs::write(path, content)?;
+        println!("{}", format!("💾 Saved to: {path}").green());
         Ok(())
     }
 }

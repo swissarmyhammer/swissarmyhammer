@@ -55,7 +55,7 @@ fn test_mcp_tools_are_registered() {
         if let Some(tool) = registry.get_tool(expected_tool) {
             found_tools.push(expected_tool);
             println!(
-                "✅ Found tool: {} - {}",
+                "✓ Found tool: {} - {}",
                 expected_tool,
                 tool.description()
                     .lines()
@@ -69,12 +69,12 @@ fn test_mcp_tools_are_registered() {
 
     if !missing_tools.is_empty() {
         let all_tool_names = registry.list_tool_names();
-        println!("❌ Missing expected tools: {:?}", missing_tools);
+        println!("✗ Missing expected tools: {:?}", missing_tools);
         println!("📋 All registered tools: {:?}", all_tool_names);
         panic!("Expected tools are missing from registry");
     }
 
-    println!("✅ All expected tools are registered");
+    println!("✓ All expected tools are registered");
     println!(
         "📊 Found {} out of {} expected core tools",
         found_tools.len(),
@@ -86,7 +86,7 @@ fn test_mcp_tools_are_registered() {
     assert!(!mcp_tools.is_empty(), "MCP tools list should not be empty");
 
     println!(
-        "✅ MCP tools list generation works ({} tools)",
+        "✓ MCP tools list generation works ({} tools)",
         mcp_tools.len()
     );
 
@@ -109,7 +109,7 @@ fn test_mcp_tools_are_registered() {
         );
     }
 
-    println!("✅ Tool structure validation passed");
+    println!("✓ Tool structure validation passed");
 
     println!("🎉 SUCCESS: MCP tools are properly registered and available");
     println!("   This disproves the issue that 'sah serve does not actually appear to serve any MCP tools'");
@@ -144,7 +144,7 @@ fn test_cli_categories_are_available() {
         );
     }
 
-    println!("✅ All expected CLI categories are available");
+    println!("✓ All expected CLI categories are available");
 
     // This proves the dynamic CLI generation works
     for category in &categories {

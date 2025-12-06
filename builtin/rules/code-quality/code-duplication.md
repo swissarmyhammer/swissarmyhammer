@@ -4,9 +4,12 @@ description: Detect duplicate code blocks and similar logic patterns
 category: code-quality
 severity: error
 tags: ["code-quality", "maintainability", "refactoring"]
+denied_tools:
+  - ".*"
 ---
 
 Check {{ language }} code for duplicated code blocks and similar logic patterns.
+Only look at this code, there is no need to load additional files.
 
 Look for:
 - Identical or near-identical code blocks (>5 lines)

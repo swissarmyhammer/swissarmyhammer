@@ -28,7 +28,7 @@ fn test_tool_registration_and_metadata() {
     assert_eq!(properties["url"]["type"], "string");
     assert_eq!(properties["url"]["format"], "uri");
 
-    println!("✅ Tool registration and metadata compliance verified");
+    println!("✓ Tool registration and metadata compliance verified");
 }
 
 #[test]
@@ -60,7 +60,7 @@ fn test_parameter_schema_compliance() {
         "SwissArmyHammer-Bot/1.0"
     );
 
-    println!("✅ Parameter schema compliance verified");
+    println!("✓ Parameter schema compliance verified");
 }
 
 #[test]
@@ -126,7 +126,7 @@ fn test_specification_use_case_parameters() {
             );
         }
 
-        println!("✅ {description} use case parameters validated");
+        println!("✓ {description} use case parameters validated");
     }
 }
 
@@ -199,7 +199,7 @@ fn test_response_format_specification_structure() {
     assert_eq!(expected_error_structure["is_error"], true);
     assert!(expected_error_structure["metadata"]["status_code"].is_null());
 
-    println!("✅ Response format structures match specification");
+    println!("✓ Response format structures match specification");
 }
 
 #[test]
@@ -227,7 +227,7 @@ fn test_security_and_validation_features() {
     // URL format validation enforced
     assert_eq!(properties["url"]["format"], "uri");
 
-    println!("✅ Security and validation features verified");
+    println!("✓ Security and validation features verified");
 }
 
 #[test]
@@ -242,5 +242,5 @@ fn test_mcp_protocol_integration() {
     // Verify the tool can be instantiated (basic integration test)
     let _default_tool = WebFetchTool::default();
 
-    println!("✅ MCP protocol integration verified");
+    println!("✓ MCP protocol integration verified");
 }

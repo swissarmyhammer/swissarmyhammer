@@ -71,6 +71,7 @@ Global arguments can be used with any command to control output and behavior:
   --format      Set output format (table, json, yaml) for commands that support it  
   --debug       Enable debug mode with comprehensive tracing
   --quiet       Suppress all output except errors
+  --model       Override model for all use cases (runtime only, doesn't modify config)
 
 Main commands:
   serve         Run as MCP server (default when invoked via stdio)
@@ -87,6 +88,7 @@ Example usage:
   swissarmyhammer --verbose prompt list          # List prompts with details
   swissarmyhammer --format=json prompt list      # List prompts as JSON
   swissarmyhammer --debug prompt test help       # Test prompt with debug info
+  swissarmyhammer --model qwen-coder rules check # Use qwen-coder for rule checking
   swissarmyhammer agent list                     # List available agents
   swissarmyhammer agent use claude-code          # Apply Claude Code agent to project
   swissarmyhammer flow run code-review           # Execute code review workflow
@@ -110,6 +112,10 @@ pub struct Cli {
     /// Global output format
     #[arg(long, value_enum)]
     pub format: Option<OutputFormat>,
+
+    /// Override model for all use cases (runtime only, doesn't modify config)
+    #[arg(long, global = true)]
+    pub model: Option<String>,
 }
 
 #[derive(Subcommand, Debug)]
@@ -216,11 +222,11 @@ Examples:
         validate_tools: bool,
     },
 
-    /// Manage and interact with agents
-    #[command(long_about = commands::agent::DESCRIPTION)]
-    Agent {
+    /// Manage and interact with models
+    #[command(long_about = commands::model::DESCRIPTION)]
+    Model {
         #[command(subcommand)]
-        subcommand: AgentSubcommand,
+        subcommand: Option<ModelSubcommand>,
     },
 }
 
@@ -298,68 +304,100 @@ pub enum FlowSubcommand {
 }
 
 #[derive(Subcommand, Debug)]
-pub enum AgentSubcommand {
-    /// List available agents
+pub enum ModelSubcommand {
+    /// List available models
     #[command(long_about = "
-List all available agents from built-in, project, and user sources.
+List all available models from built-in, project, and user sources.
 
-Agents are discovered with hierarchical precedence where user agents override
-project agents, which override built-in agents. This command shows all available
-agents with their sources and descriptions.
+Models are discovered with hierarchical precedence where user models override
+project models, which override built-in models. This command shows all available
+models with their sources and descriptions.
 
-Built-in agents are embedded in the binary and provide default configurations
-for common workflows. Project agents (./agents/*.yaml) allow customization for
-specific projects. User agents (~/.swissarmyhammer/agents/*.yaml) provide
+Built-in models are embedded in the binary and provide default configurations
+for common workflows. Project models (./models/*.yaml) allow customization for
+specific projects. User models (~/.swissarmyhammer/models/*.yaml) provide
 personal configurations that apply across all projects.
 
 Output includes:
-• Agent name and source (built-in, project, or user)
+• Model name and source (built-in, project, or user)
 • Description when available
-• Current agent status (if one is applied to the project)
+• Current model status (if one is applied to the project)
 
 Examples:
-  sah agent list                           # List all agents in table format
-  sah agent list --format json            # Output as JSON for processing
-  sah --verbose agent list                 # Include detailed descriptions
-  sah --quiet agent list                   # Only show agent names
+  sah model list                           # List all models in table format
+  sah model list --format json            # Output as JSON for processing
+  sah --verbose model list                 # Include detailed descriptions
+  sah --quiet model list                   # Only show model names
 ")]
     List {
         /// Output format
         #[arg(long, value_enum, default_value = "table")]
         format: OutputFormat,
     },
-    /// Use a specific agent
+    /// Show current model use case assignments
     #[command(long_about = "
-Apply a specific agent configuration to the current project.
+Display current model use case assignments showing which model is configured
+for each use case in the project.
 
-This command finds the specified agent by name and applies its configuration
-to the project by creating or updating .swissarmyhammer/sah.yaml. The agent
+SwissArmyHammer supports configuring different models for different use cases:
+• root      - Default model for general operations
+• rules     - Model for rule checking operations
+• workflows - Model for workflow execution (plan, review, implement, etc.)
+
+This command shows the current assignment for each use case, including whether
+the assignment comes from explicit configuration or falls back to the root model.
+
+Examples:
+  sah model show                           # Show use case assignments
+  sah model                               # Same as 'show' (default)
+")]
+    Show {
+        /// Output format
+        #[arg(long, value_enum, default_value = "table")]
+        format: OutputFormat,
+    },
+    /// Use a specific model
+    #[command(long_about = "
+Apply a specific model configuration to the current project or for a specific use case.
+
+This command finds the specified model by name and applies its configuration
+to the project by creating or updating .swissarmyhammer/sah.yaml. The model
 configuration determines how SwissArmyHammer executes AI workflows in your
 project, including which AI model to use and how to execute tools.
 
-Agent precedence (highest to lowest):
-• User agents: ~/.swissarmyhammer/agents/<name>.yaml
-• Project agents: ./agents/<name>.yaml  
-• Built-in agents: embedded in the binary
+SwissArmyHammer supports configuring different models for different use cases:
+• root      - Default model for general operations (default when use case not specified)
+• rules     - Model for rule checking operations
+• workflows - Model for workflow execution (plan, review, implement, etc.)
+
+Model precedence (highest to lowest):
+• User models: ~/.swissarmyhammer/models/<name>.yaml
+• Project models: ./models/<name>.yaml
+• Built-in models: embedded in the binary
 
 The command preserves any existing configuration sections while updating
-only the agent configuration. This allows you to maintain project-specific
-settings alongside agent configurations.
+only the model configuration. This allows you to maintain project-specific
+settings alongside model configurations.
 
-Common agent types:
+Common model types:
 • claude-code    - Uses Claude Code CLI for AI execution
 • qwen-coder     - Uses local Qwen3-Coder model with in-process execution
-• custom agents  - User-defined configurations for specialized workflows
+• custom models  - User-defined configurations for specialized workflows
 
 Examples:
-  sah agent use claude-code                # Apply Claude Code agent
-  sah agent use qwen-coder                 # Switch to local Qwen model
-  sah agent use my-custom-agent            # Apply user-defined agent
-  sah --debug agent use claude-code        # Apply with debug output
+  sah model use claude-code                # Apply Claude Code model to root use case
+  sah model use root claude-code           # Apply Claude Code model to root use case (explicit)
+  sah model use rules qwen-coder           # Apply Qwen model to rules use case
+  sah model use workflows claude-code      # Apply Claude Code to workflows use case
+  sah --debug model use claude-code        # Apply with debug output
 ")]
     Use {
-        /// Name of the agent to use
-        agent_name: String,
+        /// First argument: either model name (sets root) OR use case (root, rules, workflows)
+        #[arg(id = "first")]
+        first: String,
+        /// Second argument: model name (required when first argument is a use case)
+        #[arg(id = "second")]
+        second: Option<String>,
     },
 }
 

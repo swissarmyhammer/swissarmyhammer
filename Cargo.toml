@@ -17,6 +17,7 @@ members = [
     "swissarmyhammer-agent-executor",
     "swissarmyhammer-rules",
     "swissarmyhammer-workflow",
+    "swissarmyhammer-mcp-proxy",
 ]
 resolver = "2"
 
@@ -79,6 +80,7 @@ fs2 = "0.4"
 clap = { version = "4", features = ["derive"] }
 clap_complete = "4"
 colored = "2"
+owo-colors = "4"
 is-terminal = "0.4"
 which = "7.0"
 

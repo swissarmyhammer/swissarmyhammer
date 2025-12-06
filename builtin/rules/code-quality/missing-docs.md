@@ -4,6 +4,8 @@ description: Check that public functions and types have documentation comments
 category: code-quality
 severity: error
 tags: ["code-quality", "documentation"]
+denied_tools:
+  - ".*"
 ---
 
 Check {{ language }} code for public functions, methods, structs, and types that lack documentation comments.

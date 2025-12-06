@@ -4,7 +4,7 @@
 //! and delegates to the agent-executor crate's implementation.
 
 use async_trait::async_trait;
-use swissarmyhammer_config::agent::AgentExecutorType;
+use swissarmyhammer_config::model::AgentExecutorType;
 
 // Import types from agent-executor
 use swissarmyhammer_agent_executor::{
@@ -17,17 +17,15 @@ pub struct ClaudeCodeExecutor {
 }
 
 impl ClaudeCodeExecutor {
-    /// Create a new ClaudeCode executor
-    pub fn new() -> Self {
+    /// Create a new ClaudeCode executor with MCP server configuration
+    ///
+    /// # Arguments
+    ///
+    /// * `mcp_server` - MCP server configuration using agent-client-protocol types
+    pub fn new(mcp_server: agent_client_protocol::McpServer) -> Self {
         Self {
-            inner: AgentExecutorClaudeCodeExecutor::new(),
+            inner: AgentExecutorClaudeCodeExecutor::new(mcp_server),
         }
-    }
-}
-
-impl Default for ClaudeCodeExecutor {
-    fn default() -> Self {
-        Self::new()
     }
 }
 

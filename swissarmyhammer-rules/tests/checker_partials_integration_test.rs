@@ -6,14 +6,19 @@
 use std::sync::Arc;
 use swissarmyhammer_agent_executor::LlamaAgentExecutorWrapper;
 use swissarmyhammer_common::error::SwissArmyHammerError;
+use swissarmyhammer_common::test_utils::IsolatedTestEnvironment;
 use swissarmyhammer_config::LlamaAgentConfig;
 use swissarmyhammer_rules::{Rule, RuleChecker, Severity};
-use tempfile::TempDir;
 
 /// Create a test agent with default configuration
 fn create_test_agent() -> Arc<LlamaAgentExecutorWrapper> {
     let config = LlamaAgentConfig::for_testing();
-    Arc::new(LlamaAgentExecutorWrapper::new(config))
+    let mcp_server = agent_client_protocol::McpServer::Http {
+        name: "test".to_string(),
+        url: "http://localhost:8080/mcp".to_string(),
+        headers: Vec::new(),
+    };
+    Arc::new(LlamaAgentExecutorWrapper::new(config, mcp_server))
 }
 
 /// Check if an error is due to agent unavailability and skip test if so
@@ -40,8 +45,9 @@ async fn test_rule_checker_with_partial_includes() {
     }
 
     // Create a temp directory with partials and rules
-    let temp_dir = TempDir::new().unwrap();
-    let partials_dir = temp_dir.path().join("_partials");
+    let _env = IsolatedTestEnvironment::new().expect("Failed to create test environment");
+    let temp_dir = _env.temp_dir();
+    let partials_dir = temp_dir.join("_partials");
     std::fs::create_dir(&partials_dir).unwrap();
 
     // Create a partial template
@@ -53,7 +59,7 @@ async fn test_rule_checker_with_partial_includes() {
     .unwrap();
 
     // Create a rule that uses the partial
-    let rule_path = temp_dir.path().join("test-rule.md");
+    let rule_path = temp_dir.join("test-rule.md");
     std::fs::write(
         &rule_path,
         r#"---
@@ -77,11 +83,11 @@ If no issues found, respond with "PASS".
         .expect("Rule should be loaded");
 
     // Create a test file to check
-    let test_file = temp_dir.path().join("test.rs");
+    let test_file = temp_dir.join("test.rs");
     std::fs::write(&test_file, "fn main() {}\n").unwrap();
 
     // Try to check the file with the rule that uses a partial
-    let result = checker.check_file(&rule, &test_file).await;
+    let result = checker.check_file(&rule, &test_file, None).await;
 
     // If this fails, check if it's because partials aren't working
     if result.is_err() {
@@ -127,12 +133,13 @@ async fn test_rule_with_builtin_partial() {
     );
 
     // Create a test file
-    let temp_dir = TempDir::new().unwrap();
-    let test_file = temp_dir.path().join("test.rs");
+    let _env = IsolatedTestEnvironment::new().expect("Failed to create test environment");
+    let temp_dir = _env.temp_dir();
+    let test_file = temp_dir.join("test.rs");
     std::fs::write(&test_file, "fn main() {}\n").unwrap();
 
     // Try to check with a rule that uses a builtin partial
-    let result = checker.check_file(&rule, &test_file).await;
+    let result = checker.check_file(&rule, &test_file, None).await;
 
     // Should not fail with "Partial does not exist"
     if result.is_err() {

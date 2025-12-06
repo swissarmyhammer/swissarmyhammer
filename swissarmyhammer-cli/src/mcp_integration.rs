@@ -2,16 +2,22 @@
 //!
 //! This module provides utilities for CLI commands to call MCP tools directly,
 //! eliminating code duplication between CLI and MCP implementations.
+//!
+//! sah rule ignore test_rule_with_allow
 
 use rmcp::model::CallToolResult;
 use rmcp::ErrorData as McpError;
 use serde_json::{Map, Value};
+use std::collections::HashMap;
 use std::sync::Arc;
 
+use swissarmyhammer_config::model::{parse_model_config, ModelConfig, ModelManager};
+use swissarmyhammer_config::ModelUseCase;
 use swissarmyhammer_git::GitOperations;
+use swissarmyhammer_tools::mcp::unified_server::{start_mcp_server, McpServerMode};
 use swissarmyhammer_tools::{
-    register_file_tools, register_rules_tools, register_shell_tools, register_todo_tools,
-    register_web_fetch_tools, register_web_search_tools,
+    register_file_tools, register_flow_tools, register_rules_tools, register_shell_tools,
+    register_todo_tools, register_web_fetch_tools, register_web_search_tools,
 };
 use swissarmyhammer_tools::{ToolContext, ToolRegistry};
 use tokio::sync::{Mutex, RwLock};
@@ -19,38 +25,125 @@ use tokio::sync::{Mutex, RwLock};
 /// CLI-specific tool context that can create and execute MCP tools
 pub struct CliToolContext {
     tool_registry: Arc<RwLock<ToolRegistry>>,
-    tool_context: ToolContext,
+    /// MCP server handle (must be kept alive for LlamaAgent to work)
+    mcp_server_handle: Option<swissarmyhammer_tools::mcp::unified_server::McpServerHandle>,
 }
 
 impl CliToolContext {
     /// Create a new CLI tool context with all necessary storage backends
     pub async fn new() -> Result<Self, Box<dyn std::error::Error>> {
         let current_dir = std::env::current_dir()?;
-        Self::new_with_dir(&current_dir).await
+        Self::new_with_config(&current_dir, None).await
     }
 
     /// Create a new CLI tool context with a specific working directory
+    #[allow(dead_code)] // Used in tests
     pub async fn new_with_dir(
         working_dir: &std::path::Path,
     ) -> Result<Self, Box<dyn std::error::Error>> {
-        let git_ops = Self::create_git_operations(working_dir);
-        let tool_handlers = Self::create_tool_handlers();
-        let agent_config =
-            std::sync::Arc::new(swissarmyhammer_config::agent::AgentConfig::default());
+        Self::new_with_config(working_dir, None).await
+    }
 
-        let tool_context = ToolContext::new(tool_handlers, git_ops, agent_config)
-            .with_working_dir(working_dir.to_path_buf());
+    /// Create a new CLI tool context with optional model override
+    ///
+    /// # Arguments
+    ///
+    /// * `working_dir` - The working directory for tool operations
+    /// * `model_override` - Optional model name to use for ALL use cases (runtime override)
+    ///
+    /// # Returns
+    ///
+    /// Result containing the initialized CliToolContext or an error
+    pub async fn new_with_config(
+        working_dir: &std::path::Path,
+        model_override: Option<&str>,
+    ) -> Result<Self, Box<dyn std::error::Error>> {
+        let mcp_server_handle =
+            Self::initialize_mcp_server(model_override, Some(working_dir.to_path_buf())).await?;
+        let mcp_port = mcp_server_handle.info().port;
+
+        let mut tool_context = Self::setup_tool_context(working_dir, mcp_port).await;
+
+        if let Some(model_name) = model_override {
+            Self::apply_model_override(&mut tool_context, model_name)?;
+        }
 
         let tool_registry = Self::create_tool_registry();
         let tool_registry_arc = Arc::new(RwLock::new(tool_registry));
 
-        // Add registry to context
-        let tool_context = tool_context.with_tool_registry(tool_registry_arc.clone());
-
         Ok(Self {
             tool_registry: tool_registry_arc,
-            tool_context,
+            mcp_server_handle: Some(mcp_server_handle),
         })
+    }
+
+    /// Initialize MCP HTTP server
+    async fn initialize_mcp_server(
+        model_override: Option<&str>,
+        working_dir: Option<std::path::PathBuf>,
+    ) -> Result<
+        swissarmyhammer_tools::mcp::unified_server::McpServerHandle,
+        Box<dyn std::error::Error>,
+    > {
+        tracing::info!("Starting MCP HTTP server for CLI tool context");
+
+        std::env::set_var("SAH_CLI_MODE", "1");
+
+        let mcp_server_handle = start_mcp_server(
+            McpServerMode::Http { port: None },
+            None,
+            model_override.map(|s| s.to_string()),
+            working_dir,
+        )
+        .await?;
+
+        tracing::info!(
+            "MCP HTTP server ready on port {:?}",
+            mcp_server_handle.info().port
+        );
+
+        Ok(mcp_server_handle)
+    }
+
+    /// Setup tool context with working directory and MCP port
+    async fn setup_tool_context(
+        working_dir: &std::path::Path,
+        mcp_port: Option<u16>,
+    ) -> ToolContext {
+        let git_ops = Self::create_git_operations(working_dir);
+        let tool_handlers = Self::create_tool_handlers();
+        let agent_config = Arc::new(ModelConfig::default());
+
+        let tool_context = ToolContext::new(tool_handlers, git_ops, agent_config)
+            .with_working_dir(working_dir.to_path_buf());
+
+        *tool_context.mcp_server_port.write().await = mcp_port;
+
+        tool_context
+    }
+
+    /// Apply global model override for all use cases
+    fn apply_model_override(
+        tool_context: &mut ToolContext,
+        model_name: &str,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        tracing::info!(
+            "Applying global model override '{}' for all use cases",
+            model_name
+        );
+
+        let agent_info = ModelManager::find_agent_by_name(model_name)?;
+        let override_config = parse_model_config(&agent_info.content)?;
+        let override_config_arc = Arc::new(override_config);
+
+        let mut use_case_agents = HashMap::new();
+        use_case_agents.insert(ModelUseCase::Root, override_config_arc.clone());
+        use_case_agents.insert(ModelUseCase::Rules, override_config_arc.clone());
+        use_case_agents.insert(ModelUseCase::Workflows, override_config_arc.clone());
+
+        tool_context.use_case_agents = Arc::new(use_case_agents);
+
+        Ok(())
     }
 
     /// Create git operations handler
@@ -69,6 +162,7 @@ impl CliToolContext {
     fn create_tool_registry() -> ToolRegistry {
         let mut tool_registry = ToolRegistry::new();
         register_file_tools(&mut tool_registry);
+        register_flow_tools(&mut tool_registry);
         register_rules_tools(&mut tool_registry);
         register_shell_tools(&mut tool_registry);
         register_todo_tools(&mut tool_registry);
@@ -83,15 +177,18 @@ impl CliToolContext {
         tool_name: &str,
         arguments: Map<String, serde_json::Value>,
     ) -> Result<CallToolResult, McpError> {
-        let registry = self.tool_registry.read().await;
-        if let Some(tool) = registry.get_tool(tool_name) {
-            tool.execute(arguments, &self.tool_context).await
-        } else {
-            Err(McpError::internal_error(
-                format!("Tool not found: {tool_name}"),
-                None,
-            ))
-        }
+        // Call tool through the MCP server instance to ensure consistent context
+        let server = self
+            .mcp_server_handle
+            .as_ref()
+            .and_then(|h| h.server())
+            .ok_or_else(|| {
+                McpError::internal_error("MCP server instance not available".to_string(), None)
+            })?;
+
+        server
+            .execute_tool(tool_name, serde_json::Value::Object(arguments))
+            .await
     }
 
     /// Helper to convert CLI arguments to MCP tool arguments
@@ -164,11 +261,6 @@ mod tests {
 
     #[tokio::test]
     async fn test_create_arguments() {
-        let _context = CliToolContext {
-            tool_registry: Arc::new(RwLock::new(ToolRegistry::new())),
-            tool_context: create_mock_tool_context().await,
-        };
-
         let mut args = Map::new();
         args.insert("name".to_string(), json!("test"));
         args.insert("count".to_string(), json!(42));
@@ -200,7 +292,11 @@ mod tests {
 
     #[tokio::test]
     async fn test_rate_limiter_integration() {
-        let context = CliToolContext::new().await.unwrap();
+        use swissarmyhammer_common::test_utils::IsolatedTestEnvironment;
+
+        let env = IsolatedTestEnvironment::new().unwrap();
+        let temp_path = env.temp_dir();
+        let context = CliToolContext::new_with_dir(&temp_path).await.unwrap();
 
         // Test that rate limiter is properly created and functional
         // We can verify this by checking that the CliToolContext was created successfully
@@ -234,12 +330,4 @@ mod tests {
     }
 
     // Helper function for tests
-    async fn create_mock_tool_context() -> ToolContext {
-        let git_ops: Arc<Mutex<Option<GitOperations>>> = Arc::new(Mutex::new(None));
-        let tool_handlers =
-            Arc::new(swissarmyhammer_tools::mcp::tool_handlers::ToolHandlers::new());
-        let agent_config = Arc::new(swissarmyhammer_config::agent::AgentConfig::default());
-
-        ToolContext::new(tool_handlers, git_ops, agent_config)
-    }
 }

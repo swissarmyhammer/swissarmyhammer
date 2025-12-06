@@ -27,7 +27,7 @@
 //! # use swissarmyhammer_workflow::WorkflowExecutor;
 //! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
 //! // 1. Start MCP server (in CLI layer, not shown here)
-//! // let mcp_server = start_mcp_server(...).await?;
+//! // let mcp_server = start_mcp_server(..., None).await?;
 //!
 //! // 2. Create workflow with LlamaAgent configuration
 //! // let workflow = load_workflow(...)?;
@@ -60,7 +60,7 @@ use syntect::parsing::SyntaxSet;
 use syntect::util::as_24_bit_terminal_escaped;
 use thiserror::Error;
 
-use swissarmyhammer_config::agent::{AgentConfig, AgentExecutorConfig, AgentExecutorType};
+use swissarmyhammer_config::model::{AgentExecutorType, ModelConfig, ModelExecutorConfig};
 use swissarmyhammer_prompts::{PromptLibrary, PromptResolver};
 
 // Re-export types from agent-executor crate
@@ -174,7 +174,7 @@ impl<'a> AgentExecutionContext<'a> {
     }
 
     /// Get agent configuration from workflow context
-    pub fn agent_config(&self) -> AgentConfig {
+    pub fn agent_config(&self) -> ModelConfig {
         self.workflow_context.get_agent_config()
     }
 
@@ -596,66 +596,65 @@ impl PromptAction {
             context
         );
 
-        // Render both user and system prompts using the same library instance
-        let (user_prompt, system_prompt) = match self.render_prompts_directly(context) {
-            Ok(prompts) => prompts,
-            Err(e) => {
-                tracing::error!("Failed to render prompts: {:?}", e);
-                return Err(e);
-            }
-        };
-
-        // Log the actual prompt being sent to Claude
+        let (user_prompt, system_prompt) = self.render_prompts_directly(context)?;
         tracing::debug!("Piping prompt:\n{}", user_prompt);
 
-        // Check if quiet mode is enabled in the context
-        let quiet = self.quiet
+        let quiet = self.is_quiet_mode(context);
+        let response = self
+            .execute_prompt_with_executor(context, user_prompt, system_prompt)
+            .await?;
+
+        self.log_response_if_not_quiet(&response.content, quiet);
+        self.store_response_in_context(context, &response)?;
+
+        Ok(serde_json::to_value(&response)
+            .unwrap_or_else(|_| Value::String(response.content.clone())))
+    }
+
+    /// Check if quiet mode is enabled
+    fn is_quiet_mode(&self, context: &WorkflowTemplateContext) -> bool {
+        self.quiet
             || context
                 .get("_quiet")
                 .and_then(|v| v.as_bool())
-                .unwrap_or(false);
+                .unwrap_or(false)
+    }
 
-        // Execute the rendered prompt using the AgentExecutor trait
-
-        // Create execution context (LLM handles its own timeout)
+    /// Execute prompt with executor
+    async fn execute_prompt_with_executor(
+        &self,
+        context: &WorkflowTemplateContext,
+        user_prompt: String,
+        system_prompt: Option<String>,
+    ) -> ActionResult<AgentExecutorResponse> {
         let workflow_execution_context = AgentExecutionContext::new(context);
-
-        // Get executor based on configuration
         let executor = self.get_executor(&workflow_execution_context).await?;
 
-        // Convert workflow context to agent-executor context
         let agent_config = workflow_execution_context.agent_config();
         let agent_exec_context =
             swissarmyhammer_agent_executor::AgentExecutionContext::new(&agent_config);
 
-        // Execute prompt through trait
-        let response = executor
+        executor
             .execute_prompt(
                 system_prompt.unwrap_or_default(),
                 user_prompt,
                 &agent_exec_context,
             )
-            .await;
-
-        let response = match response {
-            Ok(resp) => resp,
-            Err(e) => {
+            .await
+            .map_err(|e| {
                 tracing::error!("Prompt execution failed: {:?}", e);
-                return Err(convert_agent_executor_error(e));
-            }
-        };
+                convert_agent_executor_error(e)
+            })
+    }
 
-        // Extract response text for logging
-        let response_text = response.content.clone();
-
-        // Log the response for debugging if not in quiet mode
+    /// Log response if not in quiet mode
+    fn log_response_if_not_quiet(&self, response_text: &str, quiet: bool) {
         if !quiet && !response_text.is_empty() {
             tracing::debug!(
                 "Agent response received: {} characters",
                 response_text.len()
             );
 
-            // Create YAML-formatted output for better readability
             let mut yaml_output = String::new();
             yaml_output.push_str("---\n");
             yaml_output.push_str(&format!("prompt: {}\n", self.prompt_name));
@@ -665,30 +664,28 @@ impl PromptAction {
             }
             yaml_output.push_str("---");
 
-            // Log YAML output
             tracing::info!("{}", yaml_output);
         }
+    }
 
-        // Store result in context if variable name specified
+    /// Store response in context
+    fn store_response_in_context(
+        &self,
+        context: &mut WorkflowTemplateContext,
+        response: &AgentExecutorResponse,
+    ) -> ActionResult<()> {
         if let Some(var_name) = &self.result_variable {
-            // Convert AgentResponse to JSON Value for context storage
-            let response_value = serde_json::to_value(&response).unwrap_or_default();
+            let response_value = serde_json::to_value(response).unwrap_or_default();
             context.insert(var_name.clone(), response_value);
         }
 
-        // Always store in special last_action_result key
         context.insert(LAST_ACTION_RESULT_KEY.to_string(), Value::Bool(true));
-        // Store the response content as a string for backward compatibility
         context.insert(
             CLAUDE_RESPONSE_KEY.to_string(),
             Value::String(response.content.clone()),
         );
 
-        // Convert AgentResponse back to Value for the Action trait compatibility
-        let response_value = serde_json::to_value(&response)
-            .unwrap_or_else(|_| Value::String(response.content.clone()));
-
-        Ok(response_value)
+        Ok(())
     }
 
     /// Get executor based on execution context (lazy initialization)
@@ -696,72 +693,100 @@ impl PromptAction {
         &self,
         context: &AgentExecutionContext<'_>,
     ) -> ActionResult<Box<dyn AgentExecutor>> {
-        // Only create executor when actually needed for prompt execution
         tracing::debug!("Creating executor on-demand for prompt execution");
 
         match context.executor_type() {
-            AgentExecutorType::ClaudeCode => {
-                tracing::info!("Using ClaudeCode");
-                let mut executor = crate::agents::ClaudeCodeExecutor::new();
-                executor.initialize().await.map_err(|e| {
-                    ActionError::ExecutionError(format!("Failed to initialize ClaudeCode: {}", e))
-                })?;
-                Ok(Box::new(executor))
+            AgentExecutorType::ClaudeCode => self.create_claude_executor(context).await,
+            AgentExecutorType::LlamaAgent => self.create_llama_executor(context).await,
+        }
+    }
+
+    /// Create ClaudeCode executor
+    async fn create_claude_executor(
+        &self,
+        context: &AgentExecutionContext<'_>,
+    ) -> ActionResult<Box<dyn AgentExecutor>> {
+        tracing::info!("Using ClaudeCode");
+
+        let mcp_server =
+            self.create_mcp_server_from_context(context.workflow_context, "ClaudeCode")?;
+
+        let mut executor = crate::agents::ClaudeCodeExecutor::new(mcp_server);
+        executor.initialize().await.map_err(|e| {
+            ActionError::ExecutionError(format!("Failed to initialize ClaudeCode: {}", e))
+        })?;
+
+        Ok(Box::new(executor))
+    }
+
+    /// Create LlamaAgent executor
+    async fn create_llama_executor(
+        &self,
+        context: &AgentExecutionContext<'_>,
+    ) -> ActionResult<Box<dyn AgentExecutor>> {
+        tracing::info!("Using LlamaAgent with singleton pattern");
+
+        let agent_config = context.agent_config();
+        let llama_config = match agent_config.executor {
+            ModelExecutorConfig::LlamaAgent(config) => config,
+            _ => {
+                return Err(ActionError::ExecutionError(
+                    "Expected LlamaAgent configuration".to_string(),
+                ))
             }
-            AgentExecutorType::LlamaAgent => {
-                tracing::info!("Using LlamaAgent with singleton pattern");
-                let agent_config = context.agent_config();
-                let llama_config = match agent_config.executor {
-                    AgentExecutorConfig::LlamaAgent(config) => config,
-                    _ => {
-                        return Err(ActionError::ExecutionError(
-                            "Expected LlamaAgent configuration".to_string(),
-                        ))
-                    }
-                };
+        };
 
-                // Get MCP server port from workflow context (started by CLI layer)
-                let mcp_port = context
-                    .workflow_context
-                    .get("_mcp_server_port")
-                    .and_then(|v| v.as_u64())
-                    .map(|p| p as u16);
+        let mcp_server =
+            self.create_mcp_server_from_context(context.workflow_context, "LlamaAgent")?;
 
-                if mcp_port.is_none() {
-                    return Err(ActionError::ExecutionError(
-                        "Failed to initialize LlamaAgent: MCP server must be started before running workflows".to_string()
-                    ));
-                }
+        let mut executor =
+            crate::agents::LlamaAgentExecutorWrapper::new(llama_config.clone(), mcp_server);
+        executor.initialize().await.map_err(|e| {
+            ActionError::ExecutionError(format!("Failed to initialize LlamaAgent: {}", e))
+        })?;
 
-                let port = mcp_port.unwrap();
-                tracing::info!(
-                    "Creating LlamaAgent executor with MCP server on port {}",
-                    port
-                );
+        Ok(Box::new(executor))
+    }
 
-                // Create MCP server handle for the executor
-                // Note: We create a dummy shutdown channel since the actual server lifecycle
-                // is managed by the CLI layer. The executor just needs the port to connect.
-                let (dummy_tx, _dummy_rx) = tokio::sync::oneshot::channel();
-                let mcp_handle = crate::agents::llama_agent_executor::McpServerHandle::new(
-                    port,
-                    "127.0.0.1".to_string(),
-                    dummy_tx,
-                );
+    /// Create MCP server configuration from workflow context
+    ///
+    /// This helper consolidates the duplicated logic of extracting the MCP port
+    /// from context and creating the McpServer configuration.
+    fn create_mcp_server_from_context(
+        &self,
+        context: &WorkflowTemplateContext,
+        executor_name: &str,
+    ) -> ActionResult<agent_client_protocol::McpServer> {
+        let port = self.get_mcp_port(context, executor_name)?;
+        Ok(self.create_mcp_server_config(port))
+    }
 
-                let mut executor = crate::agents::LlamaAgentExecutorWrapper::new_with_mcp(
-                    llama_config.clone(),
-                    Some(mcp_handle),
-                );
-                executor.initialize().await.map_err(|e| {
-                    ActionError::ExecutionError(format!(
-                        "Failed to initialize LlamaAgent with MCP server on port {}: {}",
-                        port, e
-                    ))
-                })?;
+    /// Get MCP server port from context
+    fn get_mcp_port(
+        &self,
+        context: &WorkflowTemplateContext,
+        executor_name: &str,
+    ) -> ActionResult<u16> {
+        context
+            .get("_mcp_server_port")
+            .and_then(|v| v.as_u64())
+            .map(|p| p as u16)
+            .ok_or_else(|| {
+                ActionError::ExecutionError(format!(
+                    "Failed to initialize {}: MCP server must be started before running workflows",
+                    executor_name
+                ))
+            })
+    }
 
-                Ok(Box::new(executor))
-            }
+    /// Create MCP server configuration
+    fn create_mcp_server_config(&self, port: u16) -> agent_client_protocol::McpServer {
+        tracing::info!("Creating executor with MCP server on port {}", port);
+
+        agent_client_protocol::McpServer::Http {
+            name: "swissarmyhammer".to_string(),
+            url: format!("http://127.0.0.1:{}/mcp", port),
+            headers: Vec::new(),
         }
     }
 }
@@ -1127,6 +1152,225 @@ impl SubWorkflowAction {
 
 impl VariableSubstitution for SubWorkflowAction {}
 
+impl SubWorkflowAction {
+    /// Check for circular workflow dependencies
+    fn check_circular_dependency(&self, context: &WorkflowTemplateContext) -> ActionResult<()> {
+        let workflow_stack = context
+            .get(WORKFLOW_STACK_KEY)
+            .and_then(|v| v.as_array())
+            .cloned()
+            .unwrap_or_default();
+
+        for stack_item in &workflow_stack {
+            if let Some(workflow_name) = stack_item.as_str() {
+                if workflow_name == self.workflow_name {
+                    return Err(ActionError::ExecutionError(format!(
+                        "Circular workflow dependency detected: workflow '{}' is already in the execution stack",
+                        self.workflow_name
+                    )));
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Validate input variable keys
+    fn validate_input_keys(&self, inputs: &HashMap<String, String>) -> ActionResult<()> {
+        for key in inputs.keys() {
+            if !is_valid_argument_key(key) {
+                return Err(ActionError::ParseError(
+                    format!("Invalid input variable key '{key}': must contain only alphanumeric characters, hyphens, and underscores")
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    /// Build workflow stack for tracking
+    fn build_workflow_stack(&self, context: &WorkflowTemplateContext) -> Vec<Value> {
+        let mut workflow_stack = context
+            .get(WORKFLOW_STACK_KEY)
+            .and_then(|v| v.as_array())
+            .cloned()
+            .unwrap_or_default();
+
+        workflow_stack.push(Value::String(self.workflow_name.clone()));
+        workflow_stack
+    }
+
+    /// Load and start the sub-workflow
+    async fn load_and_start_workflow(&self) -> ActionResult<crate::WorkflowRun> {
+        tracing::debug!("Executing sub-workflow '{}' in-process", self.workflow_name);
+
+        let storage = if let Some(test_storage) = get_test_storage() {
+            test_storage
+        } else {
+            Arc::new(WorkflowStorage::file_system().map_err(|e| {
+                ActionError::ExecutionError(format!("Failed to create workflow storage: {e}"))
+            })?)
+        };
+
+        let workflow_name_typed = WorkflowName::new(&self.workflow_name);
+        let workflow = storage.get_workflow(&workflow_name_typed).map_err(|e| {
+            ActionError::ExecutionError(format!(
+                "Failed to load sub-workflow '{}': {}",
+                self.workflow_name, e
+            ))
+        })?;
+
+        let mut executor = WorkflowExecutor::new();
+        executor.start_workflow(workflow).map_err(|e| {
+            ActionError::ExecutionError(format!(
+                "Failed to start sub-workflow '{}': {}",
+                self.workflow_name, e
+            ))
+        })
+    }
+
+    /// Prepare context for sub-workflow execution
+    fn prepare_sub_workflow_context(
+        &self,
+        sub_context: &mut WorkflowTemplateContext,
+        parent_context: &WorkflowTemplateContext,
+        inputs: &HashMap<String, String>,
+        workflow_stack: Vec<Value>,
+    ) -> ActionResult<()> {
+        tracing::debug!("Preparing sub-workflow context");
+
+        // Add input variables
+        for (key, value) in inputs {
+            sub_context.insert(key.clone(), Value::String(value.clone()));
+        }
+
+        // Add workflow stack
+        sub_context.insert(WORKFLOW_STACK_KEY.to_string(), Value::Array(workflow_stack));
+
+        // Copy special variables
+        self.copy_special_variables(sub_context, parent_context)?;
+        self.inherit_mcp_config(sub_context, parent_context)?;
+
+        Ok(())
+    }
+
+    /// Copy special variables from parent to sub-workflow
+    fn copy_special_variables(
+        &self,
+        sub_context: &mut WorkflowTemplateContext,
+        parent_context: &WorkflowTemplateContext,
+    ) -> ActionResult<()> {
+        if let Some(quiet) = parent_context.get("_quiet").and_then(|v| v.as_bool()) {
+            if quiet {
+                sub_context.insert("_quiet".to_string(), Value::Bool(true));
+            }
+        }
+
+        if let Some(timeout_secs) = parent_context.get("_timeout_secs").and_then(|v| v.as_u64()) {
+            sub_context.insert(
+                "_timeout_secs".to_string(),
+                Value::Number(serde_json::Number::from(timeout_secs)),
+            );
+        }
+
+        Ok(())
+    }
+
+    /// Inherit MCP configuration from parent context
+    fn inherit_mcp_config(
+        &self,
+        sub_context: &mut WorkflowTemplateContext,
+        parent_context: &WorkflowTemplateContext,
+    ) -> ActionResult<()> {
+        tracing::debug!(
+            "SubWorkflowAction - setting up agent config for sub-workflow '{}'",
+            self.workflow_name
+        );
+
+        if let Some(mcp_port) = parent_context
+            .get("_mcp_server_port")
+            .and_then(|v| v.as_u64())
+            .map(|p| p as u16)
+        {
+            tracing::debug!("Parent context has _mcp_server_port: {}", mcp_port);
+            sub_context.update_mcp_port(mcp_port);
+        } else {
+            tracing::warn!(
+                "No _mcp_server_port found in parent context for sub-workflow '{}'",
+                self.workflow_name
+            );
+            let agent_config = parent_context.get_agent_config();
+            sub_context.set_agent_config(agent_config);
+        }
+
+        Ok(())
+    }
+
+    /// Execute the workflow
+    async fn execute_workflow(&self, run: &mut crate::WorkflowRun) -> ActionResult<()> {
+        let mut executor = WorkflowExecutor::new();
+        executor.execute_state(run).await.map_err(|e| {
+            ActionError::ExecutionError(format!(
+                "Sub-workflow '{}' execution failed: {}",
+                self.workflow_name, e
+            ))
+        })?;
+
+        tracing::info!("Sub-workflow '{}' completed", self.workflow_name);
+        Ok(())
+    }
+
+    /// Handle workflow completion status
+    fn handle_workflow_completion(
+        &self,
+        run: &crate::WorkflowRun,
+        context: &mut WorkflowTemplateContext,
+    ) -> ActionResult<Value> {
+        match run.status {
+            WorkflowRunStatus::Completed => {
+                let result = self.extract_workflow_result(&run.context);
+                self.store_result_if_needed(context, &result);
+                context.insert(LAST_ACTION_RESULT_KEY.to_string(), Value::Bool(true));
+                Ok(result)
+            }
+            WorkflowRunStatus::Failed => Err(ActionError::ExecutionError(format!(
+                "Sub-workflow '{}' failed",
+                self.workflow_name
+            ))),
+            WorkflowRunStatus::Cancelled => Err(ActionError::ExecutionError(format!(
+                "Sub-workflow '{}' was cancelled",
+                self.workflow_name
+            ))),
+            _ => Err(ActionError::ExecutionError(format!(
+                "Sub-workflow '{}' ended in unexpected state: {:?}",
+                self.workflow_name, run.status
+            ))),
+        }
+    }
+
+    /// Extract result from workflow context
+    fn extract_workflow_result(&self, sub_context: &WorkflowTemplateContext) -> Value {
+        Value::Object(
+            sub_context
+                .iter()
+                .filter(|(k, _)| !k.starts_with('_'))
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect(),
+        )
+    }
+
+    /// Store result in context if variable name is specified
+    fn store_result_if_needed(&self, context: &mut WorkflowTemplateContext, result: &Value) {
+        if let Some(var_name) = &self.result_variable {
+            tracing::info!(
+                "Storing sub-workflow result in variable '{}': {:?}",
+                var_name,
+                result
+            );
+            context.insert(var_name.clone(), result.clone());
+        }
+    }
+}
+
 /// Shell action for executing shell commands in workflows
 #[derive(Debug, Clone)]
 pub struct ShellAction {
@@ -1300,6 +1544,76 @@ pub fn log_command_execution(
 
 impl VariableSubstitution for ShellAction {}
 
+/// Resolved shell execution parameters
+struct ResolvedShellParams {
+    command: String,
+    working_dir: Option<String>,
+    environment: HashMap<String, String>,
+    timeout_secs: Option<u32>,
+}
+
+impl ShellAction {
+    /// Resolve shell parameters with variable substitution
+    fn resolve_shell_parameters(
+        &self,
+        context: &WorkflowTemplateContext,
+    ) -> ActionResult<ResolvedShellParams> {
+        let resolved_command = self.substitute_string(&self.command, context);
+        let resolved_working_dir = self
+            .working_dir
+            .as_ref()
+            .map(|dir| self.substitute_string(dir, context));
+
+        let mut resolved_env = HashMap::new();
+        for (key, value) in &self.environment {
+            let resolved_key = self.substitute_string(key, context);
+            let resolved_value = self.substitute_string(value, context);
+            resolved_env.insert(resolved_key, resolved_value);
+        }
+
+        let timeout_secs = self.timeout.map(|d| d.as_secs() as u32);
+
+        Ok(ResolvedShellParams {
+            command: resolved_command,
+            working_dir: resolved_working_dir,
+            environment: resolved_env,
+            timeout_secs,
+        })
+    }
+
+    /// Validate shell execution parameters
+    fn validate_shell_execution(&self, params: &ResolvedShellParams) -> ActionResult<()> {
+        validate_command(&params.command)?;
+        validate_environment_variables_security(&params.environment)?;
+        self.validate_timeout()?;
+
+        if let Some(working_dir) = &params.working_dir {
+            validate_working_directory_security(working_dir)?;
+        }
+
+        Ok(())
+    }
+
+    /// Execute shell command using internal context
+    async fn execute_shell_command_internal(
+        &self,
+        params: &ResolvedShellParams,
+    ) -> ActionResult<Value> {
+        let shell_context = WorkflowShellContext::new().await.map_err(|e| {
+            ActionError::ExecutionError(format!("Enhanced shell initialization failed: {e}"))
+        })?;
+
+        shell_context
+            .execute_shell_command(
+                params.command.clone(),
+                params.working_dir.clone(),
+                params.environment.clone(),
+                params.timeout_secs,
+            )
+            .await
+    }
+}
+
 impl ShellAction {
     /// Process enhanced shell execution result and maintain backward compatibility with existing workflow behavior
     async fn process_enhanced_result(
@@ -1370,67 +1684,24 @@ impl ShellAction {
 #[async_trait::async_trait]
 impl Action for ShellAction {
     async fn execute(&self, context: &mut WorkflowTemplateContext) -> ActionResult<Value> {
-        // Substitute variables in command and other parameters
-        let resolved_command = self.substitute_string(&self.command, context);
-        let resolved_working_dir = self
-            .working_dir
-            .as_ref()
-            .map(|dir| self.substitute_string(dir, context));
+        let resolved_params = self.resolve_shell_parameters(context)?;
+        self.validate_shell_execution(&resolved_params)?;
 
-        // Security validation (maintain existing behavior)
-        validate_command(&resolved_command)?;
-
-        // Validate environment variables for security
-        validate_environment_variables_security(&self.environment)?;
-
-        // Validate timeout
-        let _validated_timeout = self.validate_timeout()?;
-
-        // Convert environment variables with substitution
-        let mut resolved_env = HashMap::new();
-        for (key, value) in &self.environment {
-            let resolved_key = self.substitute_string(key, context);
-            let resolved_value = self.substitute_string(value, context);
-            resolved_env.insert(resolved_key, resolved_value);
-        }
-
-        // Validate working directory for security if specified
-        if let Some(working_dir) = &resolved_working_dir {
-            validate_working_directory_security(working_dir)?;
-        }
-
-        // Log security-relevant execution
         log_command_execution(
-            &resolved_command,
-            resolved_working_dir.as_deref(),
-            &resolved_env,
+            &resolved_params.command,
+            resolved_params.working_dir.as_deref(),
+            &resolved_params.environment,
         );
-
-        // Convert timeout from Duration to seconds
-        let timeout_secs = self.timeout.map(|d| d.as_secs() as u32);
 
         tracing::info!(
             "Executing shell command via enhanced executor: {}",
-            resolved_command
+            resolved_params.command
         );
 
-        // Create enhanced shell context
-        let shell_context = WorkflowShellContext::new().await.map_err(|e| {
-            ActionError::ExecutionError(format!("Enhanced shell initialization failed: {e}"))
-        })?;
-
-        // Execute via enhanced shell context
-        let result = shell_context
-            .execute_shell_command(
-                resolved_command.clone(),
-                resolved_working_dir,
-                resolved_env,
-                timeout_secs,
-            )
+        let result = self
+            .execute_shell_command_internal(&resolved_params)
             .await?;
-
-        // Process enhanced shell result back to workflow format
-        self.process_enhanced_result(result, &resolved_command, context)
+        self.process_enhanced_result(result, &resolved_params.command, context)
             .await
     }
 
@@ -1448,187 +1719,23 @@ impl Action for ShellAction {
 #[async_trait::async_trait]
 impl Action for SubWorkflowAction {
     async fn execute(&self, context: &mut WorkflowTemplateContext) -> ActionResult<Value> {
-        // Check for circular dependencies
-        let workflow_stack = context
-            .get(WORKFLOW_STACK_KEY)
-            .and_then(|v| v.as_array())
-            .cloned()
-            .unwrap_or_default();
+        self.check_circular_dependency(context)?;
 
-        // Check if this workflow is already in the execution stack
-        for stack_item in &workflow_stack {
-            if let Some(workflow_name) = stack_item.as_str() {
-                if workflow_name == self.workflow_name {
-                    return Err(ActionError::ExecutionError(format!(
-                        "Circular workflow dependency detected: workflow '{}' is already in the execution stack",
-                        self.workflow_name
-                    )));
-                }
-            }
-        }
-
-        // Substitute variables in input
         let substituted_inputs = self.substitute_variables(context);
+        self.validate_input_keys(&substituted_inputs)?;
 
-        // Validate input keys early
-        for key in substituted_inputs.keys() {
-            if !is_valid_argument_key(key) {
-                return Err(ActionError::ParseError(
-                    format!("Invalid input variable key '{key}': must contain only alphanumeric characters, hyphens, and underscores")
-                ));
-            }
-        }
+        let new_stack = self.build_workflow_stack(context);
+        let mut run = self.load_and_start_workflow().await?;
 
-        // Add workflow stack to track circular dependencies
-        let mut new_stack = workflow_stack;
-        new_stack.push(Value::String(self.workflow_name.clone()));
+        self.prepare_sub_workflow_context(
+            &mut run.context,
+            context,
+            &substituted_inputs,
+            new_stack,
+        )?;
+        self.execute_workflow(&mut run).await?;
 
-        // Execute the sub-workflow in-process
-        tracing::debug!("Executing sub-workflow '{}' in-process", self.workflow_name);
-        tracing::debug!("Current context before sub-workflow: {:?}", context);
-
-        // Create storage and load the workflow
-        let storage = if let Some(test_storage) = get_test_storage() {
-            test_storage
-        } else {
-            Arc::new(WorkflowStorage::file_system().map_err(|e| {
-                ActionError::ExecutionError(format!("Failed to create workflow storage: {e}"))
-            })?)
-        };
-
-        let workflow_name_typed = WorkflowName::new(&self.workflow_name);
-        let workflow = storage.get_workflow(&workflow_name_typed).map_err(|e| {
-            ActionError::ExecutionError(format!(
-                "Failed to load sub-workflow '{}': {}",
-                self.workflow_name, e
-            ))
-        })?;
-
-        // Create executor
-        let mut executor = WorkflowExecutor::new();
-
-        // Start the workflow
-        let mut run = executor.start_workflow(workflow).map_err(|e| {
-            ActionError::ExecutionError(format!(
-                "Failed to start sub-workflow '{}': {}",
-                self.workflow_name, e
-            ))
-        })?;
-
-        // Set up the context for the sub-workflow
-        // Copy the current context variables that should be inherited
-        let quiet = context
-            .get("_quiet")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false);
-
-        let timeout_secs = context.get("_timeout_secs").and_then(|v| v.as_u64());
-
-        // Add input variables
-        for (key, value) in substituted_inputs {
-            run.context.insert(key, Value::String(value));
-        }
-
-        // Add workflow stack to the sub-workflow context
-        run.context
-            .insert(WORKFLOW_STACK_KEY.to_string(), Value::Array(new_stack));
-
-        // Copy special variables
-        if quiet {
-            run.context.insert("_quiet".to_string(), Value::Bool(true));
-        }
-
-        if let Some(timeout_secs) = timeout_secs {
-            run.context.insert(
-                "_timeout_secs".to_string(),
-                Value::Number(serde_json::Number::from(timeout_secs)),
-            );
-        }
-
-        // Inherit MCP server port from parent context
-        // This uses the unified helper method to ensure consistency with the CLI code path
-        tracing::debug!(
-            "SubWorkflowAction::execute - setting up agent config for sub-workflow '{}'",
-            self.workflow_name
-        );
-
-        if let Some(mcp_port) = context
-            .get("_mcp_server_port")
-            .and_then(|v| v.as_u64())
-            .map(|p| p as u16)
-        {
-            tracing::debug!("Parent context has _mcp_server_port: {}", mcp_port);
-            run.context.update_mcp_port(mcp_port);
-        } else {
-            tracing::warn!(
-                "No _mcp_server_port found in parent context for sub-workflow '{}'",
-                self.workflow_name
-            );
-            // Still copy agent config even if no MCP port
-            let agent_config = context.get_agent_config();
-            run.context.set_agent_config(agent_config);
-        }
-
-        // Execute the workflow
-        executor.execute_state(&mut run).await.map_err(|e| {
-            ActionError::ExecutionError(format!(
-                "Sub-workflow '{}' execution failed: {}",
-                self.workflow_name, e
-            ))
-        })?;
-
-        tracing::info!("Sub-workflow '{}' completed", self.workflow_name);
-
-        // Check the workflow status
-        match run.status {
-            WorkflowRunStatus::Completed => {
-                // Extract the context as the result
-                let result = Value::Object(
-                    run.context
-                        .iter()
-                        .filter(|(k, _)| !k.starts_with('_')) // Filter out internal variables
-                        .map(|(k, v)| (k.clone(), v.clone()))
-                        .collect(),
-                );
-
-                // Store result in context if variable name specified
-                if let Some(var_name) = &self.result_variable {
-                    tracing::info!(
-                        "Storing sub-workflow result in variable '{}': {:?}",
-                        var_name,
-                        result
-                    );
-                    context.insert(var_name.clone(), result.clone());
-                }
-
-                // Mark action as successful
-                context.insert(LAST_ACTION_RESULT_KEY.to_string(), Value::Bool(true));
-
-                Ok(result)
-            }
-            WorkflowRunStatus::Failed => {
-                // Check if the sub-workflow failed due to an abort error
-                // Look for abort error indication in the context
-                if let Some(result) = run.context.get("result") {
-                    if let Some(_result_str) = result.as_str() {
-                        // Note: String-based abort detection removed - abort handling now done via file-based mechanism
-                    }
-                }
-
-                Err(ActionError::ExecutionError(format!(
-                    "Sub-workflow '{}' failed",
-                    self.workflow_name
-                )))
-            }
-            WorkflowRunStatus::Cancelled => Err(ActionError::ExecutionError(format!(
-                "Sub-workflow '{}' was cancelled",
-                self.workflow_name
-            ))),
-            _ => Err(ActionError::ExecutionError(format!(
-                "Sub-workflow '{}' ended in unexpected state: {:?}",
-                self.workflow_name, run.status
-            ))),
-        }
+        self.handle_workflow_completion(&run, context)
     }
 
     fn description(&self) -> String {
@@ -1691,94 +1798,107 @@ fn format_as_yaml(value: &Value) -> String {
 /// Recursively format a JSON value as YAML with indentation
 #[allow(dead_code)]
 fn format_value_as_yaml(value: &Value, indent_level: usize) -> String {
-    let indent = "  ".repeat(indent_level);
-
     match value {
         Value::Null => "null".to_string(),
         Value::Bool(b) => b.to_string(),
         Value::Number(n) => n.to_string(),
-        Value::String(s) => {
-            if s.contains('\n') {
-                // Multiline string - check if it's source code
-                let content_to_format = if let Some(language) = detect_source_code_language(s) {
-                    // Apply syntax highlighting
-                    highlight_source_code(s, language)
-                } else {
-                    s.clone()
-                };
+        Value::String(s) => format_yaml_string(s, indent_level),
+        Value::Array(arr) => format_yaml_array(arr, indent_level),
+        Value::Object(map) => format_yaml_object(map, indent_level),
+    }
+}
 
-                // Use block scalar notation
-                let lines: Vec<&str> = content_to_format.lines().collect();
-                let mut result = "|-\n".to_string();
-                let content_indent = "  ".repeat(indent_level + 1);
-                for line in lines {
-                    result.push_str(&format!("{content_indent}{line}\n"));
-                }
-                result.trim_end().to_string()
-            } else {
-                // Single line string - escape if necessary
-                if needs_yaml_quotes(s) {
-                    format!("\"{}\"", s.replace('\"', "\\\""))
-                } else {
-                    s.clone()
-                }
-            }
+/// Format a YAML string value
+#[allow(dead_code)]
+fn format_yaml_string(s: &str, indent_level: usize) -> String {
+    if s.contains('\n') {
+        format_multiline_string(s, indent_level)
+    } else if needs_yaml_quotes(s) {
+        format!("\"{}\"", s.replace('\"', "\\\""))
+    } else {
+        s.to_string()
+    }
+}
+
+/// Format a multiline string in YAML
+#[allow(dead_code)]
+fn format_multiline_string(s: &str, indent_level: usize) -> String {
+    let content_to_format = if let Some(language) = detect_source_code_language(s) {
+        highlight_source_code(s, language)
+    } else {
+        s.to_string()
+    };
+
+    let lines: Vec<&str> = content_to_format.lines().collect();
+    let mut result = "|-\n".to_string();
+    let content_indent = "  ".repeat(indent_level + 1);
+    for line in lines {
+        result.push_str(&format!("{content_indent}{line}\n"));
+    }
+    result.trim_end().to_string()
+}
+
+/// Format a YAML array
+#[allow(dead_code)]
+fn format_yaml_array(arr: &[Value], indent_level: usize) -> String {
+    if arr.is_empty() {
+        return "[]".to_string();
+    }
+
+    let indent = "  ".repeat(indent_level);
+    let mut result = String::new();
+
+    for (i, item) in arr.iter().enumerate() {
+        if i > 0 {
+            result.push('\n');
+            result.push_str(&indent);
         }
-        Value::Array(arr) => {
-            if arr.is_empty() {
-                "[]".to_string()
-            } else {
-                let mut result = String::new();
-                for (i, item) in arr.iter().enumerate() {
-                    if i > 0 {
-                        result.push('\n');
-                        result.push_str(&indent);
-                    }
-                    result.push_str("- ");
-                    let item_str = format_value_as_yaml(item, indent_level + 1);
-                    if item_str.contains('\n') {
-                        // For multiline items, put on next line with proper indent
-                        result.push('\n');
-                        let item_indent = "  ".repeat(indent_level + 1);
-                        for line in item_str.lines() {
-                            result.push_str(&format!("{item_indent}{line}\n"));
-                        }
-                        result = result.trim_end().to_string();
-                    } else {
-                        result.push_str(&item_str);
-                    }
-                }
-                result
-            }
-        }
-        Value::Object(map) => {
-            let mut result = String::new();
-            let mut first = true;
-            for (key, value) in map {
-                if !first {
-                    result.push('\n');
-                    result.push_str(&indent);
-                }
-                first = false;
+        result.push_str("- ");
+        let item_str = format_value_as_yaml(item, indent_level + 1);
 
-                result.push_str(&format!("{key}: "));
-                let value_str = format_value_as_yaml(value, indent_level + 1);
-
-                if value_str.contains('\n') && !matches!(value, Value::String(_)) {
-                    // For nested objects/arrays, put on next line
-                    result.push('\n');
-                    let value_indent = "  ".repeat(indent_level + 1);
-                    for line in value_str.lines() {
-                        result.push_str(&format!("{value_indent}{line}\n"));
-                    }
-                    result = result.trim_end().to_string();
-                } else {
-                    result.push_str(&value_str);
-                }
+        if item_str.contains('\n') {
+            result.push('\n');
+            let item_indent = "  ".repeat(indent_level + 1);
+            for line in item_str.lines() {
+                result.push_str(&format!("{item_indent}{line}\n"));
             }
-            result
+            result = result.trim_end().to_string();
+        } else {
+            result.push_str(&item_str);
         }
     }
+    result
+}
+
+/// Format a YAML object
+#[allow(dead_code)]
+fn format_yaml_object(map: &serde_json::Map<String, Value>, indent_level: usize) -> String {
+    let indent = "  ".repeat(indent_level);
+    let mut result = String::new();
+    let mut first = true;
+
+    for (key, value) in map {
+        if !first {
+            result.push('\n');
+            result.push_str(&indent);
+        }
+        first = false;
+
+        result.push_str(&format!("{key}: "));
+        let value_str = format_value_as_yaml(value, indent_level + 1);
+
+        if value_str.contains('\n') && !matches!(value, Value::String(_)) {
+            result.push('\n');
+            let value_indent = "  ".repeat(indent_level + 1);
+            for line in value_str.lines() {
+                result.push_str(&format!("{value_indent}{line}\n"));
+            }
+            result = result.trim_end().to_string();
+        } else {
+            result.push_str(&value_str);
+        }
+    }
+    result
 }
 
 /// Check if a string needs to be quoted in YAML
@@ -1911,11 +2031,15 @@ pub fn parse_action_from_description_with_context(
     description: &str,
     context: &HashMap<String, Value>,
 ) -> ActionResult<Option<Box<dyn Action>>> {
-    // Create a mutable copy of the context to merge configuration variables
+    let enhanced_context = prepare_enhanced_context(context);
+    let rendered_description = render_with_liquid(&enhanced_context, description);
+    parse_action_from_description(&rendered_description)
+}
+
+/// Prepare enhanced context with configuration variables
+fn prepare_enhanced_context(context: &HashMap<String, Value>) -> HashMap<String, Value> {
     let mut enhanced_context = context.clone();
 
-    // Load and merge sah.toml configuration variables into the context
-    // This uses the new TemplateContext infrastructure
     if let Ok(template_context) = swissarmyhammer_config::load_configuration() {
         template_context.merge_into_workflow_context(&mut enhanced_context);
     } else {
@@ -1924,62 +2048,66 @@ pub fn parse_action_from_description_with_context(
         );
     }
 
-    let rendered_description = {
-        // Convert ALL context variables to liquid Object (not just _template_vars)
-        let mut liquid_vars = liquid::Object::new();
+    enhanced_context
+}
 
-        // Add all variables from the context (includes workflow vars like plan_filename)
-        for (key, value) in &enhanced_context {
-            // Skip internal keys
-            if !key.starts_with('_') {
-                liquid_vars.insert(
-                    key.clone().into(),
-                    liquid::model::to_value(value).unwrap_or(liquid::model::Value::Nil),
-                );
-            }
-        }
+/// Render description with liquid template
+fn render_with_liquid(context: &HashMap<String, Value>, description: &str) -> String {
+    let liquid_vars = build_liquid_variables(context);
 
-        // Also include template variables if they exist
-        if let Some(template_vars) = enhanced_context.get("_template_vars") {
-            if let Some(vars_map) = template_vars.as_object() {
-                for (key, value) in vars_map {
-                    // Template vars have lower precedence than workflow vars
-                    if !liquid_vars.contains_key(key.as_str()) {
-                        liquid_vars.insert(
-                            key.clone().into(),
-                            liquid::model::to_value(value).unwrap_or(liquid::model::Value::Nil),
-                        );
-                    }
-                }
-            }
-        }
-
-        // Parse and render the template
-        match liquid::ParserBuilder::with_stdlib()
-            .build()
-            .and_then(|parser| parser.parse(description))
-        {
-            Ok(template) => match template.render(&liquid_vars) {
-                Ok(rendered) => rendered,
-                Err(e) => {
-                    tracing::warn!(
-                        "Failed to render liquid template: {}. Using original text.",
-                        e
-                    );
-                    description.to_string()
-                }
-            },
+    match liquid::ParserBuilder::with_stdlib()
+        .build()
+        .and_then(|parser| parser.parse(description))
+    {
+        Ok(template) => match template.render(&liquid_vars) {
+            Ok(rendered) => rendered,
             Err(e) => {
                 tracing::warn!(
-                    "Failed to parse liquid template: {}. Using original text.",
+                    "Failed to render liquid template: {}. Using original text.",
                     e
                 );
                 description.to_string()
             }
+        },
+        Err(e) => {
+            tracing::warn!(
+                "Failed to parse liquid template: {}. Using original text.",
+                e
+            );
+            description.to_string()
         }
-    };
+    }
+}
 
-    parse_action_from_description(&rendered_description)
+/// Build liquid variables from context
+fn build_liquid_variables(context: &HashMap<String, Value>) -> liquid::Object {
+    let mut liquid_vars = liquid::Object::new();
+
+    // Add all variables from the context (includes workflow vars)
+    for (key, value) in context {
+        if !key.starts_with('_') {
+            liquid_vars.insert(
+                key.clone().into(),
+                liquid::model::to_value(value).unwrap_or(liquid::model::Value::Nil),
+            );
+        }
+    }
+
+    // Add template variables with lower precedence
+    if let Some(template_vars) = context.get("_template_vars") {
+        if let Some(vars_map) = template_vars.as_object() {
+            for (key, value) in vars_map {
+                if !liquid_vars.contains_key(key.as_str()) {
+                    liquid_vars.insert(
+                        key.clone().into(),
+                        liquid::model::to_value(value).unwrap_or(liquid::model::Value::Nil),
+                    );
+                }
+            }
+        }
+    }
+
+    liquid_vars
 }
 
 /// Parse action from state description text
@@ -2026,6 +2154,80 @@ mod tests {
     use crate::agents::ClaudeCodeExecutor;
 
     use swissarmyhammer_common::test_utils::IsolatedTestEnvironment;
+
+    /// Test helper structure for shell action result verification
+    ///
+    /// This structure consolidates duplicated assertion patterns across shell action tests,
+    /// providing a unified way to verify command execution results.
+    struct ShellActionTestResult {
+        success: bool,
+        exit_code: i64,
+        stdout: String,
+        stderr: String,
+        duration_ms: u64,
+    }
+
+    impl ShellActionTestResult {
+        /// Extract shell action results from workflow context
+        fn from_context(context: &WorkflowTemplateContext) -> Self {
+            Self {
+                success: context.get("success").and_then(|v| v.as_bool()).unwrap(),
+                exit_code: context.get("exit_code").and_then(|v| v.as_i64()).unwrap(),
+                stdout: context
+                    .get("stdout")
+                    .and_then(|v| v.as_str())
+                    .unwrap()
+                    .to_string(),
+                stderr: context
+                    .get("stderr")
+                    .and_then(|v| v.as_str())
+                    .unwrap()
+                    .to_string(),
+                duration_ms: context.get("duration_ms").and_then(|v| v.as_u64()).unwrap(),
+            }
+        }
+
+        /// Assert that the command executed successfully
+        fn assert_success(&self) {
+            assert_eq!(self.success, true);
+            assert_eq!(self.exit_code, 0);
+        }
+
+        /// Assert that the command failed with expected exit code
+        fn assert_failure(&self, expected_exit_code: i64) {
+            assert_eq!(self.success, false);
+            assert_eq!(self.exit_code, expected_exit_code);
+        }
+
+        /// Verify that stderr is acceptable (empty or contains only shell warnings)
+        fn assert_acceptable_stderr(&self) {
+            let stderr_trimmed = self.stderr.trim();
+            let is_acceptable = stderr_trimmed.is_empty()
+                || stderr_trimmed.contains("shell-init: error retrieving current directory")
+                || stderr_trimmed.contains("getcwd: cannot access parent directories");
+            assert!(is_acceptable, "Unexpected stderr content: {}", self.stderr);
+        }
+    }
+
+    /// Test helper for executing shell actions with timeout configuration
+    ///
+    /// This helper consolidates duplicated setup patterns for timeout test scenarios.
+    async fn execute_shell_action_with_timeout(
+        command: &str,
+        timeout_ms: u64,
+        result_variable: Option<String>,
+    ) -> (ActionResult<Value>, WorkflowTemplateContext) {
+        let mut action =
+            ShellAction::new(command.to_string()).with_timeout(Duration::from_millis(timeout_ms));
+
+        if let Some(var) = result_variable {
+            action = action.with_result_variable(var);
+        }
+
+        let mut context = WorkflowTemplateContext::with_vars_for_test(HashMap::new());
+        let result = action.execute(&mut context).await;
+        (result, context)
+    }
 
     #[test]
     fn test_variable_substitution() {
@@ -2112,7 +2314,7 @@ mod tests {
         let mut context = WorkflowTemplateContext::with_vars_for_test(HashMap::new());
 
         // Set up agent config
-        context.set_agent_config(AgentConfig::default());
+        context.set_agent_config(ModelConfig::default());
 
         let execution_context = AgentExecutionContext::new(&context);
         assert_eq!(
@@ -2124,7 +2326,12 @@ mod tests {
 
     #[tokio::test]
     async fn test_claude_executor_initialization() {
-        let mut executor = ClaudeCodeExecutor::new();
+        let mcp_server = agent_client_protocol::McpServer::Http {
+            name: "test".to_string(),
+            url: "http://localhost:8080/mcp".to_string(),
+            headers: Vec::new(),
+        };
+        let mut executor = ClaudeCodeExecutor::new(mcp_server);
 
         // Test initial state
         assert_eq!(executor.executor_type(), AgentExecutorType::ClaudeCode);
@@ -2166,8 +2373,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_executor_creation_claude() {
-        let mut context = WorkflowTemplateContext::with_vars_for_test(HashMap::new());
-        context.set_agent_config(AgentConfig::default());
+        let mut vars = HashMap::new();
+        vars.insert("_mcp_server_port".to_string(), 8080_u64.into());
+        let mut context = WorkflowTemplateContext::with_vars_for_test(vars);
+        context.set_agent_config(ModelConfig::default());
 
         let execution_context = AgentExecutionContext::new(&context);
         let action = PromptAction::new("test".to_string());
@@ -2189,9 +2398,9 @@ mod tests {
     async fn test_executor_creation_llama_agent() {
         let mut context = WorkflowTemplateContext::with_vars_for_test(HashMap::new());
 
-        use swissarmyhammer_config::agent::LlamaAgentConfig;
+        use swissarmyhammer_config::model::LlamaAgentConfig;
         let llama_config = LlamaAgentConfig::for_testing();
-        context.set_agent_config(AgentConfig::llama_agent(llama_config));
+        context.set_agent_config(ModelConfig::llama_agent(llama_config));
 
         let execution_context = AgentExecutionContext::new(&context);
         let action = PromptAction::new("test".to_string());
@@ -2779,32 +2988,13 @@ mod tests {
 
         let result = action.execute(&mut context).await.unwrap();
 
-        // Verify success context variables are set
-        assert_eq!(context.get("success"), Some(&Value::Bool(true)));
-        assert_eq!(context.get("failure"), Some(&Value::Bool(false)));
-        assert_eq!(context.get("exit_code"), Some(&Value::Number(0.into())));
+        // Use helper to verify results
+        let test_result = ShellActionTestResult::from_context(&context);
+        test_result.assert_success();
+        test_result.assert_acceptable_stderr();
 
         // Verify stdout contains expected output
-        let stdout = context.get("stdout").unwrap().as_str().unwrap();
-        assert!(stdout.contains("hello world"));
-
-        // Verify stderr is empty or contains only directory-related warnings from shell
-        let stderr = context.get("stderr").unwrap().as_str().unwrap();
-        let stderr_trimmed = stderr.trim();
-        // Allow shell warnings about directory access but not other errors
-        let is_acceptable_stderr = stderr_trimmed.is_empty()
-            || stderr_trimmed.contains("shell-init: error retrieving current directory")
-            || stderr_trimmed.contains("getcwd: cannot access parent directories");
-        assert!(
-            is_acceptable_stderr,
-            "Unexpected stderr content: {}",
-            stderr
-        );
-
-        // Verify duration is tracked
-        assert!(context.contains_key("duration_ms"));
-        let _duration_ms = context.get("duration_ms").unwrap().as_u64().unwrap();
-        // Duration is always >= 0 for u64, so just verify it exists
+        assert!(test_result.stdout.contains("hello world"));
 
         // Verify last action result is success
         assert_eq!(
@@ -2812,10 +3002,8 @@ mod tests {
             Some(&Value::Bool(true))
         );
 
-        // Result should contain stdout
         // Result should be trimmed version of stdout for usability
-        let stdout = context.get("stdout").unwrap().as_str().unwrap();
-        let expected_result = Value::String(stdout.trim().to_string());
+        let expected_result = Value::String(test_result.stdout.trim().to_string());
         assert_eq!(result, expected_result);
     }
 
@@ -2826,17 +3014,9 @@ mod tests {
 
         let _result = action.execute(&mut context).await.unwrap();
 
-        // Verify failure context variables are set
-        assert_eq!(context.get("success"), Some(&Value::Bool(false)));
-        assert_eq!(context.get("failure"), Some(&Value::Bool(true)));
-        assert_eq!(context.get("exit_code"), Some(&Value::Number(42.into())));
-
-        // Verify stdout and stderr are captured
-        assert!(context.contains_key("stdout"));
-        assert!(context.contains_key("stderr"));
-
-        // Verify duration is tracked
-        assert!(context.contains_key("duration_ms"));
+        // Use helper to verify results
+        let test_result = ShellActionTestResult::from_context(&context);
+        test_result.assert_failure(42);
 
         // Verify last action result is failure
         assert_eq!(
@@ -2954,42 +3134,28 @@ mod tests {
 
     #[tokio::test]
     async fn test_shell_action_timeout() {
-        use std::time::Duration;
+        // Use helper for timeout test
+        let (result, context) = execute_shell_action_with_timeout("sleep 10", 1000, None).await;
+        let result = result.unwrap();
 
-        // Create an action with a short timeout (1 second to ensure proper timeout behavior)
-        let action = ShellAction::new("sleep 10".to_string()).with_timeout(Duration::from_secs(1));
-        let mut context = WorkflowTemplateContext::with_vars_for_test(HashMap::new());
+        // Use test result helper
+        let test_result = ShellActionTestResult::from_context(&context);
+        test_result.assert_failure(-1);
 
-        let result = action.execute(&mut context).await.unwrap();
-
-        // Verify timeout results in failure state
-        assert_eq!(context.get("success"), Some(&Value::Bool(false)));
-        assert_eq!(context.get("failure"), Some(&Value::Bool(true)));
-
-        // Exit code should indicate timeout (-1)
-        assert_eq!(context.get("exit_code"), Some(&Value::Number((-1).into())));
-
-        // Verify stderr contains timeout message
-        assert_eq!(
-            context.get("stderr"),
-            Some(&Value::String("Command timed out".to_string()))
-        );
-
-        // Verify stdout is empty for timeout
-        assert_eq!(context.get("stdout"), Some(&Value::String("".to_string())));
+        // Verify timeout-specific behavior
+        assert_eq!(test_result.stderr, "Command timed out");
+        assert_eq!(test_result.stdout, "");
 
         // Duration should be tracked and around the timeout duration
-        assert!(context.contains_key("duration_ms"));
-        let duration_ms = context.get("duration_ms").unwrap().as_u64().unwrap();
-        // Should be around 1000ms or slightly more (allowing for process cleanup and system overhead)
-        // Being more lenient with timing to account for CI environment variations
         assert!(
-            duration_ms >= 800,
-            "Duration {duration_ms} ms should be at least 800ms"
+            test_result.duration_ms >= 800,
+            "Duration {} ms should be at least 800ms",
+            test_result.duration_ms
         );
         assert!(
-            duration_ms <= 3000,
-            "Duration {duration_ms} ms should not exceed 3000ms"
+            test_result.duration_ms <= 3000,
+            "Duration {} ms should not exceed 3000ms",
+            test_result.duration_ms
         );
 
         // Result should be false for timeout
@@ -3004,29 +3170,20 @@ mod tests {
 
     #[tokio::test]
     async fn test_shell_action_timeout_with_result_variable() {
-        use std::time::Duration;
+        // Use helper for timeout test with result variable
+        let (_result, context) =
+            execute_shell_action_with_timeout("sleep 5", 100, Some("output".to_string())).await;
 
-        // Create an action with timeout and result variable
-        let action = ShellAction::new("sleep 5".to_string())
-            .with_timeout(Duration::from_millis(100))
-            .with_result_variable("output".to_string());
-        let mut context = WorkflowTemplateContext::with_vars_for_test(HashMap::new());
-
-        let _result = action.execute(&mut context).await.unwrap();
-
-        // Verify timeout results in failure state
-        assert_eq!(context.get("success"), Some(&Value::Bool(false)));
-        assert_eq!(context.get("failure"), Some(&Value::Bool(true)));
+        // Use test result helper
+        let test_result = ShellActionTestResult::from_context(&context);
+        test_result.assert_failure(-1);
 
         // Result variable should NOT be set on timeout
         assert!(!context.contains_key("output"));
 
         // Verify timeout context variables
-        assert_eq!(
-            context.get("stderr"),
-            Some(&Value::String("Command timed out".to_string()))
-        );
-        assert_eq!(context.get("stdout"), Some(&Value::String("".to_string())));
+        assert_eq!(test_result.stderr, "Command timed out");
+        assert_eq!(test_result.stdout, "");
     }
 
     #[tokio::test]
@@ -3257,7 +3414,7 @@ mod tests {
 
         // Set up context with Claude executor
         let mut context = WorkflowTemplateContext::with_vars_for_test(HashMap::new());
-        context.set_agent_config(swissarmyhammer_config::agent::AgentConfig::claude_code());
+        context.set_agent_config(swissarmyhammer_config::model::ModelConfig::claude_code());
 
         // This test will likely fail without actual Claude CLI and prompt
         // but should demonstrate the integration
@@ -3288,8 +3445,10 @@ mod tests {
     async fn test_agent_executor_creation_claude_code() {
         let _guard = IsolatedTestEnvironment::new();
 
-        let mut context = WorkflowTemplateContext::with_vars_for_test(HashMap::new());
-        context.set_agent_config(swissarmyhammer_config::agent::AgentConfig::claude_code());
+        let mut vars = HashMap::new();
+        vars.insert("_mcp_server_port".to_string(), 8080_u64.into());
+        let mut context = WorkflowTemplateContext::with_vars_for_test(vars);
+        context.set_agent_config(swissarmyhammer_config::model::ModelConfig::claude_code());
 
         let execution_context = AgentExecutionContext::new(&context);
         let action = PromptAction::new("test".to_string());
@@ -3313,9 +3472,9 @@ mod tests {
         let _guard = IsolatedTestEnvironment::new();
 
         let mut context = WorkflowTemplateContext::with_vars_for_test(HashMap::new());
-        let llama_config = swissarmyhammer_config::agent::LlamaAgentConfig::for_testing();
+        let llama_config = swissarmyhammer_config::model::LlamaAgentConfig::for_testing();
         println!("DEBUG: Created llama_config for testing");
-        context.set_agent_config(swissarmyhammer_config::agent::AgentConfig::llama_agent(
+        context.set_agent_config(swissarmyhammer_config::model::ModelConfig::llama_agent(
             llama_config,
         ));
 

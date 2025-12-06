@@ -7,7 +7,7 @@ use crate::action_parser::ActionParser;
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use swissarmyhammer_config::{
-    agent::{AgentConfig, AgentExecutorType, LlamaAgentConfig, ModelSource},
+    model::{AgentExecutorType, LlamaAgentConfig, ModelConfig, ModelSource},
     ConfigurationResult, TemplateContext,
 };
 
@@ -25,31 +25,29 @@ pub struct WorkflowTemplateContext {
 }
 
 impl WorkflowTemplateContext {
-    /// Create a new WorkflowTemplateContext from configuration
-    pub fn load() -> ConfigurationResult<Self> {
-        let template_context = TemplateContext::load()?;
-        Ok(Self {
+    /// Create a WorkflowTemplateContext from a TemplateContext
+    fn from_template_context(template_context: TemplateContext) -> Self {
+        Self {
             template_context,
             workflow_vars: HashMap::new(),
-        })
+        }
+    }
+
+    /// Create a new WorkflowTemplateContext from configuration
+    pub fn load() -> ConfigurationResult<Self> {
+        Ok(Self::from_template_context(TemplateContext::load()?))
     }
 
     /// Create a new WorkflowTemplateContext with CLI environment variables loaded
     pub fn load_for_cli() -> ConfigurationResult<Self> {
-        let template_context = TemplateContext::load_for_cli()?;
-        Ok(Self {
-            template_context,
-            workflow_vars: HashMap::new(),
-        })
+        Ok(Self::from_template_context(TemplateContext::load_for_cli()?))
     }
 
     /// Create a WorkflowTemplateContext with additional template variables
     pub fn with_vars(vars: HashMap<String, Value>) -> ConfigurationResult<Self> {
-        let template_context = TemplateContext::with_template_vars(vars)?;
-        Ok(Self {
-            template_context,
-            workflow_vars: HashMap::new(),
-        })
+        Ok(Self::from_template_context(
+            TemplateContext::with_template_vars(vars)?,
+        ))
     }
 
     /// Create a WorkflowTemplateContext for testing without configuration discovery
@@ -183,21 +181,25 @@ impl WorkflowTemplateContext {
     /// 3. Using stored workflow variables with higher precedence over configuration
     /// 4. Internal variables (starting with _) are filtered out and left unrendered
     pub fn render_template(&self, input: &str) -> String {
-        // Get liquid context with workflow variables merged (excludes internal vars)
-        let liquid_vars = self.to_liquid_context();
+        let (template_for_liquid, placeholder_map) = self.handle_internal_variables(input);
+        let liquid_rendered = self.render_liquid_template(&template_for_liquid);
+        let restored_template = self.restore_internal_variables(liquid_rendered, placeholder_map);
+        let combined_context = self.create_combined_context();
+        self.apply_fallback_substitution(&restored_template, &combined_context)
+    }
 
-        // For liquid template parsing, we need to handle internal variables specially
-        // since liquid fails if it encounters undefined variables
+    /// Handle internal variables by replacing them with placeholders
+    ///
+    /// Internal variables (starting with _) are temporarily replaced with unique
+    /// placeholders so that liquid template rendering doesn't fail on undefined variables.
+    fn handle_internal_variables(&self, input: &str) -> (String, HashMap<String, String>) {
         let mut template_for_liquid = input.to_string();
-
-        // Find all internal variables in the template and temporarily replace them
         let internal_var_regex = regex::Regex::new(r"\{\{(_\w+)\}\}").unwrap();
         let internal_vars: Vec<String> = internal_var_regex
             .captures_iter(input)
             .map(|cap| cap[1].to_string())
             .collect();
 
-        // Replace internal variables with unique placeholders
         let mut placeholder_map = HashMap::new();
         for (i, var) in internal_vars.iter().enumerate() {
             let placeholder = format!("__INTERNAL_VAR_{}__", i);
@@ -206,26 +208,49 @@ impl WorkflowTemplateContext {
             placeholder_map.insert(placeholder, format!("{{{{{}}}}}", var));
         }
 
-        // Try liquid template rendering on the modified template
-        let liquid_rendered = match liquid::ParserBuilder::with_stdlib()
-            .build()
-            .and_then(|parser| parser.parse(&template_for_liquid))
-        {
-            Ok(template) => match template.render(&liquid_vars) {
-                Ok(rendered) => rendered,
-                Err(_) => template_for_liquid.clone(),
-            },
-            Err(_) => template_for_liquid.clone(),
-        };
+        (template_for_liquid, placeholder_map)
+    }
 
-        // Restore the internal variable placeholders back to their original form
-        let mut restored_template = liquid_rendered;
+    /// Render a template using the liquid templating engine
+    ///
+    /// This method attempts to parse and render the template with liquid.
+    /// If parsing or rendering fails, it returns the original template unchanged.
+    fn render_liquid_template(&self, template: &str) -> String {
+        let liquid_vars = self.to_liquid_context();
+
+        match liquid::ParserBuilder::with_stdlib()
+            .build()
+            .and_then(|parser| parser.parse(template))
+        {
+            Ok(parsed_template) => match parsed_template.render(&liquid_vars) {
+                Ok(rendered) => rendered,
+                Err(_) => template.to_string(),
+            },
+            Err(_) => template.to_string(),
+        }
+    }
+
+    /// Restore internal variable placeholders back to their original form
+    ///
+    /// This method replaces the placeholders that were inserted by
+    /// `handle_internal_variables` back to the original internal variable syntax.
+    fn restore_internal_variables(
+        &self,
+        template: String,
+        placeholder_map: HashMap<String, String>,
+    ) -> String {
+        let mut restored_template = template;
         for (placeholder, original) in placeholder_map {
             restored_template = restored_template.replace(&placeholder, &original);
         }
+        restored_template
+    }
 
-        // For fallback variable substitution, create a combined context
-        // that includes both template variables and workflow variables
+    /// Create a combined context from template variables and workflow variables
+    ///
+    /// This method merges template configuration variables and workflow variables,
+    /// with workflow variables taking precedence when there are conflicts.
+    fn create_combined_context(&self) -> HashMap<String, Value> {
         let mut combined_context = HashMap::new();
 
         // Add template variables first
@@ -238,11 +263,22 @@ impl WorkflowTemplateContext {
             combined_context.insert(key.clone(), value.clone());
         }
 
-        // Apply fallback variable substitution for any remaining ${variable} syntax
+        combined_context
+    }
+
+    /// Apply fallback variable substitution for ${variable} syntax
+    ///
+    /// This method handles variable substitution for templates that use
+    /// ${variable} syntax instead of {{variable}} liquid syntax.
+    fn apply_fallback_substitution(
+        &self,
+        template: &str,
+        context: &HashMap<String, Value>,
+    ) -> String {
         let parser = ActionParser::new().expect("Failed to create ActionParser");
         parser
-            .substitute_variables_safe(&restored_template, &combined_context)
-            .unwrap_or(restored_template)
+            .substitute_variables_safe(template, context)
+            .unwrap_or_else(|_| template.to_string())
     }
 
     /// Merge workflow HashMap context back into template context
@@ -352,32 +388,37 @@ impl WorkflowTemplateContext {
     }
 
     /// Set agent configuration for workflow execution
-    pub fn set_agent_config(&mut self, config: AgentConfig) {
+    pub fn set_agent_config(&mut self, config: ModelConfig) {
         self.set_workflow_var(
             "_agent_config".to_string(),
             serde_json::to_value(config).unwrap(),
         );
     }
 
-    /// Get agent configuration from workflow context
-    pub fn get_agent_config(&self) -> AgentConfig {
-        // First check if there's an agent config set in workflow variables
-        if let Some(config) = self
-            .get("_agent_config")
+    /// Get a configuration value with multi-source fallback resolution
+    fn get_config_with_fallback<T, F>(
+        &self,
+        workflow_key: &str,
+        template_key: &str,
+        default_fn: F,
+    ) -> T
+    where
+        T: serde::de::DeserializeOwned,
+        F: FnOnce() -> T,
+    {
+        self.get(workflow_key)
             .and_then(|v| serde_json::from_value(v.clone()).ok())
-        {
-            return config;
-        }
+            .or_else(|| {
+                self.template_context
+                    .get(template_key)
+                    .and_then(|v| serde_json::from_value(v.clone()).ok())
+            })
+            .unwrap_or_else(default_fn)
+    }
 
-        // Otherwise, try to get it from the underlying template context (from sah.yaml)
-        if let Some(agent_value) = self.template_context.get("agent") {
-            if let Ok(config) = serde_json::from_value::<AgentConfig>(agent_value.clone()) {
-                return config;
-            }
-        }
-
-        // Fall back to default (ClaudeCode)
-        AgentConfig::default()
+    /// Get agent configuration from workflow context
+    pub fn get_agent_config(&self) -> ModelConfig {
+        self.get_config_with_fallback("_agent_config", "agent", ModelConfig::default)
     }
 
     /// Get the executor type from agent configuration
@@ -388,7 +429,7 @@ impl WorkflowTemplateContext {
     /// Get LlamaAgent configuration if available
     pub fn get_llama_config(&self) -> Option<LlamaAgentConfig> {
         match &self.get_agent_config().executor {
-            swissarmyhammer_config::agent::AgentExecutorConfig::LlamaAgent(config) => {
+            swissarmyhammer_config::model::ModelExecutorConfig::LlamaAgent(config) => {
                 Some(config.clone())
             }
             _ => None,
@@ -438,21 +479,24 @@ impl WorkflowTemplateContext {
 
         // Get the current agent config and update its MCP port
         let mut agent_config = self.get_agent_config();
+        self.update_agent_config_mcp_port(&mut agent_config, port);
 
-        // Update the port if this is a LlamaAgent config
-        if let swissarmyhammer_config::agent::AgentConfig {
+        // Store the updated agent config back
+        self.set_agent_config(agent_config);
+        tracing::debug!("Stored updated agent config with MCP port {}", port);
+    }
+
+    /// Update the MCP port in an agent config
+    fn update_agent_config_mcp_port(&self, agent_config: &mut ModelConfig, port: u16) {
+        if let ModelConfig {
             executor:
-                swissarmyhammer_config::agent::AgentExecutorConfig::LlamaAgent(ref mut llama_config),
+                swissarmyhammer_config::model::ModelExecutorConfig::LlamaAgent(ref mut llama_config),
             ..
         } = agent_config
         {
             llama_config.mcp_server.port = port;
             tracing::debug!("Updated LlamaAgent MCP server port to {}", port);
         }
-
-        // Store the updated agent config back
-        self.set_agent_config(agent_config);
-        tracing::debug!("Stored updated agent config with MCP port {}", port);
     }
 }
 
@@ -461,12 +505,51 @@ mod tests {
     use super::*;
     use serde_json::json;
 
+    /// Create a test context with the provided variables
+    fn create_test_context_with_vars(
+        vars: Vec<(&str, serde_json::Value)>,
+    ) -> WorkflowTemplateContext {
+        let var_map: HashMap<String, Value> =
+            vars.into_iter().map(|(k, v)| (k.to_string(), v)).collect();
+        WorkflowTemplateContext::with_vars_safe(var_map)
+    }
+
+    /// Create a test context with both template and workflow variables
+    fn create_test_context_with_workflow_vars(
+        template_vars: Vec<(&str, serde_json::Value)>,
+        workflow_vars: Vec<(&str, serde_json::Value)>,
+    ) -> WorkflowTemplateContext {
+        let mut context = create_test_context_with_vars(template_vars);
+        let wf_map: HashMap<String, Value> = workflow_vars
+            .into_iter()
+            .map(|(k, v)| (k.to_string(), v))
+            .collect();
+        context.set_workflow_vars(wf_map);
+        context
+    }
+
+    /// Create an empty test context
+    fn create_empty_test_context() -> WorkflowTemplateContext {
+        WorkflowTemplateContext::with_vars_for_test(HashMap::new())
+    }
+
+    /// Assert that a template renders to the expected output
+    fn assert_template_renders(
+        template_vars: Vec<(&str, serde_json::Value)>,
+        workflow_vars: Vec<(&str, serde_json::Value)>,
+        template: &str,
+        expected: &str,
+    ) {
+        let context = create_test_context_with_workflow_vars(template_vars, workflow_vars);
+        let result = context.render_template(template);
+        assert_eq!(result, expected);
+    }
+
     #[test]
     fn test_basic_workflow_template_context() {
         // Simple test that doesn't rely on environment or file system
-        let vars = HashMap::from([("test_var".to_string(), json!("test_value"))]);
-
-        let workflow_context = WorkflowTemplateContext::with_vars_safe(vars);
+        let workflow_context =
+            create_test_context_with_vars(vec![("test_var", json!("test_value"))]);
 
         // Should be able to get the value we set
         assert_eq!(
@@ -485,11 +568,10 @@ mod tests {
     #[test]
     fn test_update_workflow_context_preserves_workflow_vars() {
         // Create a template context with some values
-        let vars = HashMap::from([
-            ("config_var".to_string(), json!("config_value")),
-            ("shared_var".to_string(), json!("config_shared")),
+        let workflow_context = create_test_context_with_vars(vec![
+            ("config_var", json!("config_value")),
+            ("shared_var", json!("config_shared")),
         ]);
-        let workflow_context = WorkflowTemplateContext::with_vars_safe(vars);
 
         // Create context with existing workflow variables
         let mut context = HashMap::new();
@@ -527,12 +609,10 @@ mod tests {
 
     #[test]
     fn test_liquid_context_conversion() {
-        let vars = HashMap::from([
-            ("project_name".to_string(), json!("TestProject")),
-            ("version".to_string(), json!("1.0.0")),
+        let workflow_context = create_test_context_with_vars(vec![
+            ("project_name", json!("TestProject")),
+            ("version", json!("1.0.0")),
         ]);
-
-        let workflow_context = WorkflowTemplateContext::with_vars_safe(vars);
         let liquid_context = workflow_context.to_liquid_context();
 
         // Should be able to use in liquid template
@@ -546,20 +626,17 @@ mod tests {
 
     #[test]
     fn test_liquid_context_with_workflow_vars() {
-        // Template context with base values
-        let template_vars = HashMap::from([
-            ("project_name".to_string(), json!("BaseProject")),
-            ("version".to_string(), json!("1.0.0")),
-        ]);
-        let mut workflow_context = WorkflowTemplateContext::with_vars_safe(template_vars);
-
-        // Workflow variables that should override template values
-        let workflow_vars = HashMap::from([
-            ("project_name".to_string(), json!("OverrideProject")),
-            ("build_number".to_string(), json!(42)),
-        ]);
-
-        workflow_context.set_workflow_vars(workflow_vars);
+        // Template context with base values and workflow variables that should override
+        let workflow_context = create_test_context_with_workflow_vars(
+            vec![
+                ("project_name", json!("BaseProject")),
+                ("version", json!("1.0.0")),
+            ],
+            vec![
+                ("project_name", json!("OverrideProject")),
+                ("build_number", json!(42)),
+            ],
+        );
         let liquid_context = workflow_context.to_liquid_context();
 
         // Test that workflow vars override template vars
@@ -573,110 +650,72 @@ mod tests {
 
     #[test]
     fn test_render_template_with_liquid_syntax() {
-        let template_vars = HashMap::from([
-            ("user_name".to_string(), json!("Alice")),
-            ("greeting".to_string(), json!("Hello")),
-        ]);
-        let mut workflow_context = WorkflowTemplateContext::with_vars_safe(template_vars);
-
-        let workflow_vars = HashMap::from([
-            ("action".to_string(), json!("deployed")),
-            ("service".to_string(), json!("API")),
-        ]);
-
-        workflow_context.set_workflow_vars(workflow_vars);
-        let template = "{{greeting}} {{user_name}}! The {{service}} was {{action}}.";
-        let result = workflow_context.render_template(template);
-
-        assert_eq!(result, "Hello Alice! The API was deployed.");
+        assert_template_renders(
+            vec![("user_name", json!("Alice")), ("greeting", json!("Hello"))],
+            vec![("action", json!("deployed")), ("service", json!("API"))],
+            "{{greeting}} {{user_name}}! The {{service}} was {{action}}.",
+            "Hello Alice! The API was deployed.",
+        );
     }
 
     #[test]
     fn test_render_template_with_fallback_syntax() {
-        let template_vars = HashMap::from([("base_url".to_string(), json!("https://example.com"))]);
-        let mut workflow_context = WorkflowTemplateContext::with_vars_safe(template_vars);
-
-        let workflow_vars = HashMap::from([
-            ("endpoint".to_string(), json!("/api/v1/users")),
-            ("method".to_string(), json!("GET")),
-        ]);
-
-        workflow_context.set_workflow_vars(workflow_vars);
-        let template = "${method} ${base_url}${endpoint}";
-        let result = workflow_context.render_template(template);
-
-        assert_eq!(result, "GET https://example.com/api/v1/users");
+        assert_template_renders(
+            vec![("base_url", json!("https://example.com"))],
+            vec![
+                ("endpoint", json!("/api/v1/users")),
+                ("method", json!("GET")),
+            ],
+            "${method} ${base_url}${endpoint}",
+            "GET https://example.com/api/v1/users",
+        );
     }
 
     #[test]
     fn test_render_template_mixed_syntax() {
-        let template_vars = HashMap::from([
-            ("app_name".to_string(), json!("MyApp")),
-            ("version".to_string(), json!("2.0.0")),
-        ]);
-        let mut workflow_context = WorkflowTemplateContext::with_vars_safe(template_vars);
-
-        let workflow_vars = HashMap::from([
-            ("environment".to_string(), json!("production")),
-            ("timestamp".to_string(), json!("2024-01-15T10:30:00Z")),
-        ]);
-
-        workflow_context.set_workflow_vars(workflow_vars);
         // Mix of liquid {{}} and fallback ${} syntax
-        let template = "Deploying {{app_name}} v{{version}} to ${environment} at ${timestamp}";
-        let result = workflow_context.render_template(template);
-
-        assert_eq!(
-            result,
-            "Deploying MyApp v2.0.0 to production at 2024-01-15T10:30:00Z"
+        assert_template_renders(
+            vec![("app_name", json!("MyApp")), ("version", json!("2.0.0"))],
+            vec![
+                ("environment", json!("production")),
+                ("timestamp", json!("2024-01-15T10:30:00Z")),
+            ],
+            "Deploying {{app_name}} v{{version}} to ${environment} at ${timestamp}",
+            "Deploying MyApp v2.0.0 to production at 2024-01-15T10:30:00Z",
         );
     }
 
     #[test]
     fn test_render_template_workflow_vars_precedence() {
-        // Template has a base value
-        let template_vars = HashMap::from([
-            ("database_host".to_string(), json!("localhost")),
-            ("database_port".to_string(), json!(5432)),
-        ]);
-        let mut workflow_context = WorkflowTemplateContext::with_vars_safe(template_vars);
-
-        // Workflow overrides the host but not port
-        let workflow_vars =
-            HashMap::from([("database_host".to_string(), json!("prod.example.com"))]);
-
-        workflow_context.set_workflow_vars(workflow_vars);
-        let template = "postgresql://{{database_host}}:{{database_port}}/mydb";
-        let result = workflow_context.render_template(template);
-
-        assert_eq!(result, "postgresql://prod.example.com:5432/mydb");
+        // Template has a base value, workflow overrides the host but not port
+        assert_template_renders(
+            vec![
+                ("database_host", json!("localhost")),
+                ("database_port", json!(5432)),
+            ],
+            vec![("database_host", json!("prod.example.com"))],
+            "postgresql://{{database_host}}:{{database_port}}/mydb",
+            "postgresql://prod.example.com:5432/mydb",
+        );
     }
 
     #[test]
     fn test_render_template_ignores_internal_keys() {
-        let template_vars = HashMap::from([("public_var".to_string(), json!("public_value"))]);
-        let mut workflow_context = WorkflowTemplateContext::with_vars_safe(template_vars);
-
-        let workflow_vars = HashMap::from([
-            ("_internal_var".to_string(), json!("should_be_ignored")),
-            ("normal_var".to_string(), json!("normal_value")),
-        ]);
-
-        workflow_context.set_workflow_vars(workflow_vars);
-        let template =
-            "Public: {{public_var}}, Normal: {{normal_var}}, Internal: {{_internal_var}}";
-        let result = workflow_context.render_template(template);
-
         // Internal variable should not be rendered, leaving the template syntax as-is
-        assert_eq!(
-            result,
-            "Public: public_value, Normal: normal_value, Internal: {{_internal_var}}"
+        assert_template_renders(
+            vec![("public_var", json!("public_value"))],
+            vec![
+                ("_internal_var", json!("should_be_ignored")),
+                ("normal_var", json!("normal_value")),
+            ],
+            "Public: {{public_var}}, Normal: {{normal_var}}, Internal: {{_internal_var}}",
+            "Public: public_value, Normal: normal_value, Internal: {{_internal_var}}",
         );
     }
 
     #[test]
     fn test_default_agent_config() {
-        let context = WorkflowTemplateContext::with_vars_for_test(HashMap::new());
+        let context = create_empty_test_context();
 
         // Should default to Claude Code
         assert_eq!(context.get_executor_type(), AgentExecutorType::ClaudeCode);
@@ -686,8 +725,8 @@ mod tests {
 
     #[test]
     fn test_set_and_get_agent_config() {
-        let mut context = WorkflowTemplateContext::with_vars_for_test(HashMap::new());
-        let config = AgentConfig::claude_code();
+        let mut context = create_empty_test_context();
+        let config = ModelConfig::claude_code();
 
         context.set_agent_config(config.clone());
         let retrieved_config = context.get_agent_config();
@@ -698,9 +737,9 @@ mod tests {
 
     #[test]
     fn test_llama_agent_config() {
-        let mut context = WorkflowTemplateContext::with_vars_for_test(HashMap::new());
+        let mut context = create_empty_test_context();
         let llama_config = LlamaAgentConfig::default();
-        let agent_config = AgentConfig::llama_agent(llama_config.clone());
+        let agent_config = ModelConfig::llama_agent(llama_config.clone());
 
         context.set_agent_config(agent_config);
 
@@ -714,9 +753,9 @@ mod tests {
 
     #[test]
     fn test_llama_agent_config_with_quiet() {
-        let mut context = WorkflowTemplateContext::with_vars_for_test(HashMap::new());
+        let mut context = create_empty_test_context();
         let llama_config = LlamaAgentConfig::for_testing();
-        let mut agent_config = AgentConfig::llama_agent(llama_config);
+        let mut agent_config = ModelConfig::llama_agent(llama_config);
         agent_config.quiet = true;
 
         context.set_agent_config(agent_config);
@@ -728,8 +767,8 @@ mod tests {
 
     #[test]
     fn test_agent_config_serialization() {
-        let mut context = WorkflowTemplateContext::with_vars_for_test(HashMap::new());
-        let config = AgentConfig::llama_agent(LlamaAgentConfig::for_testing());
+        let mut context = create_empty_test_context();
+        let config = ModelConfig::llama_agent(LlamaAgentConfig::for_testing());
 
         context.set_agent_config(config.clone());
 
@@ -741,8 +780,8 @@ mod tests {
 
     #[test]
     fn test_model_name_rendering_claude() {
-        let mut context = WorkflowTemplateContext::with_vars_for_test(HashMap::new());
-        let config = AgentConfig::claude_code();
+        let mut context = create_empty_test_context();
+        let config = ModelConfig::claude_code();
 
         context.set_agent_config(config);
         assert_eq!(context.get_model_name(), "claude");
@@ -754,13 +793,13 @@ mod tests {
 
     #[test]
     fn test_model_name_with_local_file() {
-        let mut context = WorkflowTemplateContext::with_vars_for_test(HashMap::new());
+        let mut context = create_empty_test_context();
         let mut llama_config = LlamaAgentConfig::for_testing();
         llama_config.model.source = ModelSource::Local {
             filename: std::path::PathBuf::from("/path/to/model.gguf"),
             folder: None,
         };
-        let config = AgentConfig::llama_agent(llama_config);
+        let config = ModelConfig::llama_agent(llama_config);
 
         context.set_agent_config(config);
         let model_name = context.get_model_name();

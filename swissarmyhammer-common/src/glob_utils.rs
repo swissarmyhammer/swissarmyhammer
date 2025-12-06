@@ -68,215 +68,274 @@ pub fn expand_glob_patterns(
     })?;
 
     for pattern in patterns {
-        // Check if this is a direct file or directory path
         let path = PathBuf::from(pattern);
+
         if path.is_file() {
-            // Filter out .git and .swissarmyhammer files even for direct paths
-            let should_include = !path.components().any(|c| {
-                let name = c.as_os_str().to_string_lossy();
-                name == ".git" || name == ".swissarmyhammer"
-            });
-            if should_include {
-                target_files.push(path);
-            } else {
-                tracing::info!("Filtering out direct file path: {}", path.display());
-            }
-            continue;
+            handle_direct_file_path(&path, &current_dir, &mut target_files);
         } else if path.is_dir() {
-            // Use WalkBuilder to respect gitignore when walking directories
-            let walker = WalkBuilder::new(&path)
-                .git_ignore(config.respect_gitignore)
-                .git_global(config.respect_gitignore)
-                .git_exclude(config.respect_gitignore)
-                .ignore(config.respect_gitignore)
-                .parents(true)
-                .hidden(config.include_hidden)
-                .build();
-
-            for entry in walker {
-                if target_files.len() >= config.max_files {
-                    break;
-                }
-                if let Ok(dir_entry) = entry {
-                    let entry_path = dir_entry.path();
-                    if entry_path.is_file() {
-                        target_files.push(entry_path.to_path_buf());
-                    }
-                }
-            }
-            continue;
-        }
-
-        // Otherwise treat as a glob pattern
-        let glob_pattern = if path.is_absolute() {
-            pattern.clone()
+            handle_directory_path(&path, config, &mut target_files)?;
         } else {
-            current_dir.join(pattern).to_string_lossy().to_string()
-        };
-
-        // Configure glob options
-        let mut glob_options = glob::MatchOptions::new();
-        glob_options.case_sensitive = config.case_sensitive;
-        glob_options.require_literal_separator = false;
-        glob_options.require_literal_leading_dot = false;
-
-        // For patterns like **/*.rs, we need to use WalkBuilder with pattern matching
-        if pattern.contains("**") || pattern.contains('*') || pattern.contains('?') {
-            // Use WalkBuilder for gitignore support with glob pattern matching
-            let search_dir = if path.is_absolute() {
-                path.parent().unwrap_or(&current_dir).to_path_buf()
-            } else {
-                current_dir.clone()
-            };
-
-            let walker = WalkBuilder::new(&search_dir)
-                .git_ignore(config.respect_gitignore)
-                .git_global(config.respect_gitignore)
-                .git_exclude(config.respect_gitignore)
-                .ignore(config.respect_gitignore)
-                .parents(true)
-                .hidden(config.include_hidden)
-                .build();
-
-            // Compile glob pattern
-            let glob_pattern_obj =
-                glob::Pattern::new(pattern).map_err(|e| SwissArmyHammerError::Other {
-                    message: format!("Invalid glob pattern '{}': {}", pattern, e),
-                })?;
-
-            for entry in walker {
-                if target_files.len() >= config.max_files {
-                    break;
-                }
-                if let Ok(dir_entry) = entry {
-                    let entry_path = dir_entry.path();
-                    if !entry_path.is_file() {
-                        continue;
-                    }
-
-                    let mut matched = false;
-
-                    // For patterns like "*.txt", match against filename
-                    if !pattern.contains('/') && !pattern.starts_with("**") {
-                        if let Some(file_name) = entry_path.file_name() {
-                            if glob_pattern_obj
-                                .matches_with(&file_name.to_string_lossy(), glob_options)
-                            {
-                                matched = true;
-                            }
-                        }
-                    }
-
-                    // For patterns like "**/*.rs" or "src/**/*.py", match against relative path
-                    if !matched {
-                        if let Ok(relative_path) = entry_path.strip_prefix(&search_dir) {
-                            if glob_pattern_obj
-                                .matches_with(&relative_path.to_string_lossy(), glob_options)
-                            {
-                                matched = true;
-                            }
-                        }
-                    }
-
-                    if matched {
-                        target_files.push(entry_path.to_path_buf());
-                    }
-                }
-            }
-        } else {
-            // Use basic glob for simple patterns
-            let entries = glob::glob_with(&glob_pattern, glob_options).map_err(|e| {
-                SwissArmyHammerError::Other {
-                    message: format!("Invalid glob pattern '{}': {}", pattern, e),
-                }
-            })?;
-
-            for entry in entries {
-                if target_files.len() >= config.max_files {
-                    break;
-                }
-                if let Ok(path) = entry {
-                    if path.is_file() {
-                        target_files.push(path);
-                    }
-                }
-            }
+            handle_glob_pattern(pattern, &path, &current_dir, config, &mut target_files)?;
         }
     }
 
-    // Filter out .git and .swissarmyhammer directories from all results
-    let before_filter = target_files.len();
-    target_files.retain(|file_path| {
-        let should_keep = !file_path.components().any(|c| {
-            let name = c.as_os_str().to_string_lossy();
-            name == ".git" || name == ".swissarmyhammer"
-        });
-        if !should_keep {
-            tracing::debug!("Filtering out: {}", file_path.display());
-        }
-        should_keep
-    });
-    let filtered_count = before_filter - target_files.len();
-    if filtered_count > 0 {
-        tracing::info!(
-            "Filtered out {} .git/.swissarmyhammer files ({} files remaining)",
-            filtered_count,
-            target_files.len()
-        );
-    }
-
-    // Filter out excluded paths using canonicalized path comparison
-    if !config.exclude_paths.is_empty() {
-        target_files.retain(|file_path| {
-            // Try to canonicalize paths for accurate comparison
-            let should_keep = if let Ok(canonical_file) = file_path.canonicalize() {
-                // Check if file is under any excluded path
-                !config.exclude_paths.iter().any(|excluded| {
-                    if let Ok(canonical_excluded) = excluded.canonicalize() {
-                        canonical_file.starts_with(&canonical_excluded)
-                    } else {
-                        // If excluded path can't be canonicalized, try direct comparison
-                        file_path.starts_with(excluded)
-                    }
-                })
-            } else {
-                // If file can't be canonicalized, try direct comparison with excluded paths
-                !config
-                    .exclude_paths
-                    .iter()
-                    .any(|excluded| file_path.starts_with(excluded))
-            };
-
-            should_keep
-        });
-    }
-
-    // Sort by modification time if requested
-    if config.sort_by_mtime {
-        sort_files_by_modification_time(&mut target_files);
-    }
+    filter_excluded_paths(&mut target_files, config);
+    apply_mtime_sorting(&mut target_files, config);
 
     Ok(target_files)
 }
 
+/// Handle direct file path expansion
+fn handle_direct_file_path(path: &Path, current_dir: &Path, target_files: &mut Vec<PathBuf>) {
+    // File is outside current directory - always include
+    if !path.starts_with(current_dir) {
+        target_files.push(path.to_path_buf());
+        return;
+    }
+
+    // Check for hidden directories within current directory
+    if is_in_hidden_directory(path, current_dir) {
+        tracing::debug!(
+            "Filtering out direct file path in hidden directory: {}",
+            path.display()
+        );
+        return;
+    }
+
+    target_files.push(path.to_path_buf());
+}
+
+/// Handle directory path expansion
+fn handle_directory_path(
+    path: &Path,
+    config: &GlobExpansionConfig,
+    target_files: &mut Vec<PathBuf>,
+) -> Result<()> {
+    let walker = WalkBuilder::new(path)
+        .git_ignore(config.respect_gitignore)
+        .git_global(config.respect_gitignore)
+        .git_exclude(config.respect_gitignore)
+        .ignore(config.respect_gitignore)
+        .parents(true)
+        .hidden(config.include_hidden)
+        .build();
+
+    for entry in walker {
+        if target_files.len() >= config.max_files {
+            break;
+        }
+        if let Ok(dir_entry) = entry {
+            let entry_path = dir_entry.path();
+            if entry_path.is_file() {
+                target_files.push(entry_path.to_path_buf());
+            }
+        }
+    }
+
+    Ok(())
+}
+
+/// Handle glob pattern expansion
+fn handle_glob_pattern(
+    pattern: &str,
+    path: &Path,
+    current_dir: &Path,
+    config: &GlobExpansionConfig,
+    target_files: &mut Vec<PathBuf>,
+) -> Result<()> {
+    let glob_pattern = if path.is_absolute() {
+        pattern.to_string()
+    } else {
+        current_dir.join(pattern).to_string_lossy().to_string()
+    };
+
+    let mut glob_options = glob::MatchOptions::new();
+    glob_options.case_sensitive = config.case_sensitive;
+    glob_options.require_literal_separator = false;
+    glob_options.require_literal_leading_dot = false;
+
+    if pattern.contains("**") || pattern.contains('*') || pattern.contains('?') {
+        expand_glob_pattern_with_walker(pattern, current_dir, config, glob_options, target_files)?;
+    } else {
+        expand_simple_glob_pattern(&glob_pattern, glob_options, config, target_files)?;
+    }
+
+    Ok(())
+}
+
+/// Expand glob pattern using WalkBuilder for gitignore support
+fn expand_glob_pattern_with_walker(
+    pattern: &str,
+    current_dir: &Path,
+    config: &GlobExpansionConfig,
+    glob_options: glob::MatchOptions,
+    target_files: &mut Vec<PathBuf>,
+) -> Result<()> {
+    let (base_dir, file_pattern) = parse_glob_pattern(pattern);
+    let search_dir = if base_dir.is_absolute() {
+        base_dir
+    } else {
+        current_dir.join(base_dir)
+    };
+
+    let walker = WalkBuilder::new(&search_dir)
+        .git_ignore(config.respect_gitignore)
+        .git_global(config.respect_gitignore)
+        .git_exclude(config.respect_gitignore)
+        .ignore(config.respect_gitignore)
+        .parents(true)
+        .hidden(config.include_hidden)
+        .build();
+
+    let glob_pattern_obj =
+        glob::Pattern::new(&file_pattern).map_err(|e| SwissArmyHammerError::Other {
+            message: format!("Invalid glob pattern '{}': {}", file_pattern, e),
+        })?;
+
+    for entry in walker {
+        if target_files.len() >= config.max_files {
+            break;
+        }
+        if let Ok(dir_entry) = entry {
+            let entry_path = dir_entry.path();
+            if !entry_path.is_file() {
+                continue;
+            }
+
+            if matches_path_against_pattern(
+                entry_path,
+                &search_dir,
+                &file_pattern,
+                &glob_pattern_obj,
+                glob_options,
+            ) {
+                if !is_in_hidden_directory(entry_path, &search_dir) {
+                    target_files.push(entry_path.to_path_buf());
+                } else {
+                    tracing::debug!(
+                        "Skipping file in hidden directory: {}",
+                        entry_path.display()
+                    );
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
+/// Match a path against a glob pattern
+fn matches_path_against_pattern(
+    entry_path: &Path,
+    search_dir: &Path,
+    file_pattern: &str,
+    glob_pattern_obj: &glob::Pattern,
+    glob_options: glob::MatchOptions,
+) -> bool {
+    if !file_pattern.contains('/') && !file_pattern.starts_with("**") {
+        if let Some(file_name) = entry_path.file_name() {
+            if glob_pattern_obj.matches_with(&file_name.to_string_lossy(), glob_options) {
+                tracing::debug!("Matched filename: {}", file_name.to_string_lossy());
+                return true;
+            }
+        }
+    }
+
+    if let Ok(relative_path) = entry_path.strip_prefix(search_dir) {
+        let rel_str = relative_path.to_string_lossy();
+        if glob_pattern_obj.matches_with(&rel_str, glob_options) {
+            return true;
+        }
+    }
+
+    false
+}
+
+/// Check if a path is in a hidden directory
+fn is_in_hidden_directory(entry_path: &Path, search_dir: &Path) -> bool {
+    if let Ok(relative_path) = entry_path.strip_prefix(search_dir) {
+        relative_path.components().any(|c| {
+            let name = c.as_os_str().to_string_lossy();
+            name.starts_with('.') && name != "." && name != ".."
+        })
+    } else {
+        false
+    }
+}
+
+/// Expand simple glob pattern without recursion
+fn expand_simple_glob_pattern(
+    glob_pattern: &str,
+    glob_options: glob::MatchOptions,
+    config: &GlobExpansionConfig,
+    target_files: &mut Vec<PathBuf>,
+) -> Result<()> {
+    let entries =
+        glob::glob_with(glob_pattern, glob_options).map_err(|e| SwissArmyHammerError::Other {
+            message: format!("Invalid glob pattern '{}': {}", glob_pattern, e),
+        })?;
+
+    for entry in entries {
+        if target_files.len() >= config.max_files {
+            break;
+        }
+        if let Ok(path) = entry {
+            if path.is_file() {
+                target_files.push(path);
+            }
+        }
+    }
+
+    Ok(())
+}
+
+/// Filter out excluded paths using canonicalized path comparison
+fn filter_excluded_paths(target_files: &mut Vec<PathBuf>, config: &GlobExpansionConfig) {
+    if config.exclude_paths.is_empty() {
+        return;
+    }
+
+    target_files.retain(|file_path| {
+        let should_keep = if let Ok(canonical_file) = file_path.canonicalize() {
+            !config.exclude_paths.iter().any(|excluded| {
+                if let Ok(canonical_excluded) = excluded.canonicalize() {
+                    canonical_file.starts_with(&canonical_excluded)
+                } else {
+                    file_path.starts_with(excluded)
+                }
+            })
+        } else {
+            !config
+                .exclude_paths
+                .iter()
+                .any(|excluded| file_path.starts_with(excluded))
+        };
+
+        should_keep
+    });
+}
+
+/// Apply modification time sorting if requested
+fn apply_mtime_sorting(target_files: &mut [PathBuf], config: &GlobExpansionConfig) {
+    if config.sort_by_mtime {
+        sort_files_by_modification_time(target_files);
+    }
+}
+
+/// Get the modification time for a file, returning UNIX_EPOCH if unavailable
+fn get_modification_time(path: &Path) -> std::time::SystemTime {
+    std::fs::metadata(path)
+        .ok()
+        .and_then(|m| m.modified().ok())
+        .unwrap_or(std::time::SystemTime::UNIX_EPOCH)
+}
+
 /// Sort files by modification time (most recent first)
 fn sort_files_by_modification_time(files: &mut [PathBuf]) {
-    use std::time::SystemTime;
-
     files.sort_by(|a, b| {
-        let a_metadata = std::fs::metadata(a).ok();
-        let b_metadata = std::fs::metadata(b).ok();
-
-        match (a_metadata, b_metadata) {
-            (Some(a_meta), Some(b_meta)) => {
-                let a_time = a_meta.modified().unwrap_or(SystemTime::UNIX_EPOCH);
-                let b_time = b_meta.modified().unwrap_or(SystemTime::UNIX_EPOCH);
-                b_time.cmp(&a_time) // Most recent first
-            }
-            (Some(_), None) => std::cmp::Ordering::Less, // Files with metadata come first
-            (None, Some(_)) => std::cmp::Ordering::Greater, // Files with metadata come first
-            (None, None) => a.cmp(b),                    // Fallback to lexicographic
-        }
+        let a_time = get_modification_time(a);
+        let b_time = get_modification_time(b);
+        b_time.cmp(&a_time).then_with(|| a.cmp(b))
     });
 }
 
@@ -536,6 +595,48 @@ mod tests {
         // Check that ignored.rs is not in results and included.rs is
         assert!(result.iter().any(|p| p.ends_with("included.rs")));
         assert!(!result.iter().any(|p| p.ends_with("ignored.rs")));
+    }
+
+    #[test]
+    fn test_expand_glob_patterns_filters_all_hidden_directories() {
+        let temp_dir = TempDir::new().unwrap();
+
+        // Create regular files
+        fs::write(temp_dir.path().join("visible.rs"), "fn main() {}").unwrap();
+
+        // Create various hidden directories
+        let hidden_dirs = [".git", ".vscode", ".idea", ".swissarmyhammer", ".cache"];
+        for dir in &hidden_dirs {
+            let hidden_dir = temp_dir.path().join(dir);
+            fs::create_dir(&hidden_dir).unwrap();
+            fs::write(hidden_dir.join("hidden.rs"), "fn hidden() {}").unwrap();
+        }
+
+        // Use absolute path pattern instead of changing directory
+        let pattern = format!("{}/**/*.rs", temp_dir.path().display());
+        let patterns = vec![pattern];
+        let config = GlobExpansionConfig::default();
+        let result = expand_glob_patterns(&patterns, &config).unwrap();
+
+        // Should only find visible.rs, none of the hidden directory files
+        assert_eq!(
+            result.len(),
+            1,
+            "Expected to find 1 file, found {}",
+            result.len()
+        );
+        assert!(result[0].ends_with("visible.rs"));
+
+        // Verify none of the hidden directory files are included
+        for dir in &hidden_dirs {
+            assert!(
+                !result
+                    .iter()
+                    .any(|p| p.components().any(|c| c.as_os_str() == *dir)),
+                "Should not include files from {} directory",
+                dir
+            );
+        }
     }
 
     #[test]

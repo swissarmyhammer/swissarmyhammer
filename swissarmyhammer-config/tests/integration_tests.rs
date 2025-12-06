@@ -8,33 +8,27 @@ use serde_json::json;
 use serial_test::serial;
 use std::env;
 use std::fs;
+use swissarmyhammer_common::test_utils::IsolatedTestEnvironment;
 use swissarmyhammer_config::TemplateContext;
-use tempfile::TempDir;
 
 /// Test helper for comprehensive integration testing
 struct IntegrationTestEnvironment {
-    temp_dir: TempDir,
+    _env: IsolatedTestEnvironment,
     original_cwd: std::path::PathBuf,
-    original_home: Option<String>,
     env_vars_to_restore: Vec<(String, Option<String>)>,
 }
 
 impl IntegrationTestEnvironment {
     fn new() -> Self {
-        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+        let env = IsolatedTestEnvironment::new().expect("Failed to create test environment");
         let original_cwd = env::current_dir().expect("Failed to get current dir");
-        let original_home = env::var("HOME").ok();
 
-        // Set up isolated environment
-        let home_dir = temp_dir.path().join("home");
-        fs::create_dir(&home_dir).expect("Failed to create home dir");
-        env::set_var("HOME", &home_dir);
-        env::set_current_dir(temp_dir.path()).expect("Failed to set current dir");
+        // Set current directory to temp dir for these tests
+        env::set_current_dir(env.temp_dir()).expect("Failed to set current dir");
 
         Self {
-            temp_dir,
+            _env: env,
             original_cwd,
-            original_home,
             env_vars_to_restore: Vec::new(),
         }
     }
@@ -46,21 +40,20 @@ impl IntegrationTestEnvironment {
     }
 
     fn project_config_dir(&self) -> std::path::PathBuf {
-        let config_dir = self.temp_dir.path().join(".swissarmyhammer");
+        let config_dir = self._env.temp_dir().join(".swissarmyhammer");
         fs::create_dir_all(&config_dir).expect("Failed to create project config dir");
         config_dir
     }
 
     fn home_config_dir(&self) -> std::path::PathBuf {
-        let home_path = env::var("HOME").expect("HOME not set");
-        let config_dir = std::path::Path::new(&home_path).join(".swissarmyhammer");
+        let config_dir = self._env.swissarmyhammer_dir();
         fs::create_dir_all(&config_dir).expect("Failed to create home config dir");
         config_dir
     }
 
     fn create_nested_project_structure(&self) -> std::path::PathBuf {
         // Create a nested project structure
-        let workspace_dir = self.temp_dir.path().join("workspace");
+        let workspace_dir = self._env.temp_dir().join("workspace");
         let project_dir = workspace_dir.join("my-project");
         let subdir = project_dir.join("src").join("components");
         fs::create_dir_all(&subdir).expect("Failed to create nested structure");
@@ -87,13 +80,8 @@ impl Drop for IntegrationTestEnvironment {
             }
         }
 
-        // Restore original environment
+        // Restore original directory - IsolatedTestEnvironment handles HOME restoration
         let _ = env::set_current_dir(&self.original_cwd);
-        if let Some(home) = &self.original_home {
-            env::set_var("HOME", home);
-        } else {
-            env::remove_var("HOME");
-        }
     }
 }
 
@@ -409,8 +397,8 @@ audit = true
 - **Deployed At**: {{deployment.timestamp}}
 
 ## Security Configuration
-- **SSL Required**: {% if security.ssl_required %}✅ Enabled{% else %}❌ Disabled{% endif %}
-- **Rate Limiting**: {% if security.rate_limiting %}✅ Enabled{% else %}❌ Disabled{% endif %}
+- **SSL Required**: {% if security.ssl_required %}✓ Enabled{% else %}✗ Disabled{% endif %}
+- **Rate Limiting**: {% if security.rate_limiting %}✓ Enabled{% else %}✗ Disabled{% endif %}
 - **Session Timeout**: {{security.session_timeout}}s
 - **SSL Certificate**: {{ssl.cert.path}}
 
@@ -418,7 +406,7 @@ audit = true
 - **Host**: {{database.host}}:{{database.port}}
 - **Pool Size**: {{database.pool_size}}
 - **SSL Mode**: {{database.ssl_mode}}
-- **Password**: {% if database.password %}✅ Set{% else %}❌ Not Set{% endif %}
+- **Password**: {% if database.password %}✓ Set{% else %}✗ Not Set{% endif %}
 
 ## Server Configuration
 - **Bind Address**: {{server.bind_address}}
@@ -427,26 +415,27 @@ audit = true
 - **Keepalive Timeout**: {{server.keepalive_timeout}}s
 
 ## Monitoring
-- **Enabled**: {% if monitoring.enabled %}✅ Yes{% else %}❌ No{% endif %}
+- **Enabled**: {% if monitoring.enabled %}✓ Yes{% else %}✗ No{% endif %}
 - **Metrics**: {{monitoring.metrics_endpoint}}
 - **Health Check**: {{monitoring.health_check_endpoint}}
-- **Datadog**: {% if monitoring.datadog_api_key %}✅ Configured{% else %}❌ Not Configured{% endif %}
-- **Sentry**: {% if monitoring.sentry_dsn %}✅ Configured{% else %}❌ Not Configured{% endif %}
+- **Datadog**: {% if monitoring.datadog_api_key %}✓ Configured{% else %}✗ Not Configured{% endif %}
+- **Sentry**: {% if monitoring.sentry_dsn %}✓ Configured{% else %}✗ Not Configured{% endif %}
 
 ## Logging
 - **Level**: {{logging.level}}
 - **Format**: {{logging.format}}
-- **Audit**: {% if logging.audit %}✅ Enabled{% else %}❌ Disabled{% endif %}
+- **Audit**: {% if logging.audit %}✓ Enabled{% else %}✗ Disabled{% endif %}
 
 ## Production Features
 {% for feature in features.production -%}
-✅ {{feature | capitalize}}
+✓ {{feature | capitalize}}
 {% endfor %}
 
 ---
 **⚠️ PRODUCTION ENVIRONMENT ⚠️**
 *Deployment verified at {{deployment.timestamp}}*
-"#.trim();
+"#
+    .trim();
 
     let liquid_context = context.to_liquid_context();
     let parser = ParserBuilder::with_stdlib()
@@ -464,14 +453,14 @@ audit = true
     assert!(rendered.contains("- **Name**: production-app"));
     assert!(rendered.contains("- **Version**: 2.1.0-build.789"));
     assert!(rendered.contains("- **Environment**: production"));
-    assert!(rendered.contains("- **SSL Required**: ✅ Enabled"));
-    assert!(rendered.contains("- **Rate Limiting**: ✅ Enabled"));
+    assert!(rendered.contains("- **SSL Required**: ✓ Enabled"));
+    assert!(rendered.contains("- **Rate Limiting**: ✓ Enabled"));
     assert!(rendered.contains("- **Port**: 443"));
-    assert!(rendered.contains("- **Password**: ✅ Set"));
-    assert!(rendered.contains("- **Datadog**: ✅ Configured"));
+    assert!(rendered.contains("- **Password**: ✓ Set"));
+    assert!(rendered.contains("- **Datadog**: ✓ Configured"));
     assert!(rendered.contains("- **Level**: error"));
-    assert!(rendered.contains("✅ Caching"));
-    assert!(rendered.contains("✅ Security"));
+    assert!(rendered.contains("✓ Caching"));
+    assert!(rendered.contains("✓ Security"));
     assert!(rendered.contains("**⚠️ PRODUCTION ENVIRONMENT ⚠️**"));
 
     println!("Production deployment template rendered successfully");
@@ -681,7 +670,7 @@ fn test_complex_nested_project_structure_with_inheritance() {
     let nested_subdir = test.create_nested_project_structure();
 
     // Create workspace-level configuration
-    let workspace_config_dir = test.temp_dir.path().join("workspace/.swissarmyhammer");
+    let workspace_config_dir = test._env.temp_dir().join("workspace/.swissarmyhammer");
     let workspace_config = r#"
 # Workspace-level configuration
 [workspace]
@@ -708,8 +697,8 @@ rust_version = "1.70"
 
     // Create project-level configuration
     let project_config_dir = test
-        .temp_dir
-        .path()
+        ._env
+        .temp_dir()
         .join("workspace/my-project/.swissarmyhammer");
     let project_config = r#"
 # Project-level configuration
@@ -941,7 +930,7 @@ csrf_protection = true
 {% if app.debug -%}
 🔧 DEBUG MODE ACTIVE
 {% else -%}
-✅ PRODUCTION MODE
+✓ PRODUCTION MODE
 {% endif %}
 
 Server: {{server.workers}} workers on port {{server.port}}
@@ -950,14 +939,14 @@ Database: {{database.url}} (pool: {{database.pool_size}})
 {% if features -%}
 Features:
 {% for feature in features -%}
-- {{feature[0] | replace: "_", " " | capitalize}}: {% if feature[1] %}✅{% else %}❌{% endif %}
+- {{feature[0] | replace: "_", " " | capitalize}}: {% if feature[1] %}✓{% else %}✗{% endif %}
 {% endfor %}
 {% endif %}
 
 {% if security -%}
 Security:
 {% for setting in security -%}
-- {{setting[0] | replace: "_", " " | capitalize}}: {% if setting[1] %}✅{% else %}❌{% endif %}
+- {{setting[0] | replace: "_", " " | capitalize}}: {% if setting[1] %}✓{% else %}✗{% endif %}
 {% endfor %}
 {% endif %}
 "#
@@ -991,15 +980,15 @@ Security:
                 assert!(rendered.contains("🔧 DEBUG MODE ACTIVE"));
                 assert!(rendered.contains("Server: 4 workers on port 3000"));
                 assert!(rendered.contains("Database: postgresql://localhost/app_dev (pool: 10)"));
-                assert!(rendered.contains("- New feature: ✅"));
-                assert!(rendered.contains("- Experimental ui: ❌"));
+                assert!(rendered.contains("- New feature: ✓"));
+                assert!(rendered.contains("- Experimental ui: ✗"));
             }
             "v1.0.0" => {
-                assert!(rendered.contains("✅ PRODUCTION MODE"));
+                assert!(rendered.contains("✓ PRODUCTION MODE"));
                 assert!(rendered.contains("Server: 8 workers on port 80"));
                 assert!(rendered.contains("Database: postgresql://prod-db/app_prod (pool: 50)"));
-                assert!(rendered.contains("- Performance monitoring: ✅"));
-                assert!(rendered.contains("- Ssl required: ✅"));
+                assert!(rendered.contains("- Performance monitoring: ✓"));
+                assert!(rendered.contains("- Ssl required: ✓"));
             }
             _ => panic!("Unexpected version: {}", version_name),
         }

@@ -2,9 +2,9 @@ use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::fs;
 use swissarmyhammer::*;
+use swissarmyhammer_common::test_utils::IsolatedTestEnvironment;
 use swissarmyhammer_common::{Parameter, ParameterType};
 use swissarmyhammer_config::TemplateContext;
-use tempfile::TempDir;
 
 #[test]
 fn test_library_creation() {
@@ -77,8 +77,9 @@ fn test_missing_required_argument() {
 
 #[test]
 fn test_library_with_directory() {
-    let temp_dir = TempDir::new().unwrap();
-    let prompts_dir = temp_dir.path().join("prompts");
+    let _env = IsolatedTestEnvironment::new().expect("Failed to create test environment");
+    let temp_dir = _env.temp_dir();
+    let prompts_dir = &temp_dir.join("prompts");
     fs::create_dir(&prompts_dir).unwrap();
 
     // Create a test prompt file
@@ -202,8 +203,9 @@ fn test_custom_filters() {
 
 #[test]
 fn test_prompt_loader() {
-    let temp_dir = TempDir::new().unwrap();
-    let prompts_dir = temp_dir.path().join("prompts");
+    let _env = IsolatedTestEnvironment::new().expect("Failed to create test environment");
+    let temp_dir = _env.temp_dir();
+    let prompts_dir = &temp_dir.join("prompts");
     fs::create_dir(&prompts_dir).unwrap();
 
     // Create multiple test prompt files
@@ -265,8 +267,9 @@ fn test_example_usage() {
 
 #[test]
 fn test_partial_rendering() {
-    let temp_dir = TempDir::new().unwrap();
-    let prompts_dir = temp_dir.path().join("prompts");
+    let _env = IsolatedTestEnvironment::new().expect("Failed to create test environment");
+    let temp_dir = _env.temp_dir();
+    let prompts_dir = &temp_dir.join("prompts");
     let partials_dir = prompts_dir.join("partials");
     fs::create_dir_all(&partials_dir).unwrap();
 
@@ -320,8 +323,9 @@ This is the main content."#;
 
 #[test]
 fn test_partial_rendering_with_md_extension() {
-    let temp_dir = TempDir::new().unwrap();
-    let prompts_dir = temp_dir.path().join("prompts");
+    let _env = IsolatedTestEnvironment::new().expect("Failed to create test environment");
+    let temp_dir = _env.temp_dir();
+    let prompts_dir = &temp_dir.join("prompts");
     fs::create_dir_all(&prompts_dir).unwrap();
 
     // Create a partial template with .md extension
@@ -358,8 +362,9 @@ Main content here.
 
 #[test]
 fn test_liquid_file_extension_loading() {
-    let temp_dir = TempDir::new().unwrap();
-    let prompts_dir = temp_dir.path().join("prompts");
+    let _env = IsolatedTestEnvironment::new().expect("Failed to create test environment");
+    let temp_dir = _env.temp_dir();
+    let prompts_dir = &temp_dir.join("prompts");
     fs::create_dir_all(&prompts_dir).unwrap();
 
     // Create files with different extensions
@@ -414,8 +419,9 @@ This is a regular md file"#;
 
 #[test]
 fn test_md_liquid_extension() {
-    let temp_dir = TempDir::new().unwrap();
-    let prompts_dir = temp_dir.path().join("prompts");
+    let _env = IsolatedTestEnvironment::new().expect("Failed to create test environment");
+    let temp_dir = _env.temp_dir();
+    let prompts_dir = &temp_dir.join("prompts");
     let partials_dir = prompts_dir.join("partials");
     fs::create_dir_all(&partials_dir).unwrap();
 
@@ -463,8 +469,9 @@ After partial"#;
 
 #[test]
 fn test_partial_rendering_without_variables() {
-    let temp_dir = TempDir::new().unwrap();
-    let prompts_dir = temp_dir.path().join("prompts");
+    let _env = IsolatedTestEnvironment::new().expect("Failed to create test environment");
+    let temp_dir = _env.temp_dir();
+    let prompts_dir = &temp_dir.join("prompts");
     fs::create_dir_all(&prompts_dir).unwrap();
 
     // Create a partial template without variables

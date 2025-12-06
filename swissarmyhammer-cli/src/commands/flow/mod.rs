@@ -6,15 +6,123 @@ pub mod display;
 pub mod list;
 pub mod params;
 pub mod run;
-pub mod shared;
 
 use crate::cli::{FlowSubcommand, OutputFormat, PromptSourceArg};
 use crate::context::CliContext;
 use crate::exit_codes::{EXIT_ERROR, EXIT_SUCCESS};
 use anyhow::{anyhow, Result};
+use std::sync::Arc;
 
 /// Help text for the flow command
 pub const DESCRIPTION: &str = include_str!("description.md");
+
+/// Helper function to extract the next argument value for a flag
+fn next_arg_value<'a>(args: &'a [String], i: &mut usize, flag: &str) -> Result<&'a str> {
+    *i += 1;
+    if *i < args.len() {
+        Ok(&args[*i])
+    } else {
+        Err(anyhow!("Missing value for flag: {}", flag))
+    }
+}
+
+/// Helper function to parse OutputFormat from a string
+fn parse_output_format(value: &str) -> Result<OutputFormat> {
+    match value {
+        "json" => Ok(OutputFormat::Json),
+        "yaml" => Ok(OutputFormat::Yaml),
+        "table" => Ok(OutputFormat::Table),
+        _ => Err(anyhow!("Invalid format: {}", value)),
+    }
+}
+
+/// Helper function to parse PromptSourceArg from a string
+fn parse_prompt_source(value: &str) -> Result<PromptSourceArg> {
+    match value {
+        "builtin" => Ok(PromptSourceArg::Builtin),
+        "user" => Ok(PromptSourceArg::User),
+        "local" => Ok(PromptSourceArg::Local),
+        "dynamic" => Ok(PromptSourceArg::Dynamic),
+        _ => Err(anyhow!("Invalid source: {}", value)),
+    }
+}
+
+/// Parse the "list" subcommand arguments
+fn parse_list_command(args: &[String]) -> Result<FlowSubcommand> {
+    let mut verbose = false;
+    let mut format = OutputFormat::Table;
+    let mut source = None;
+
+    let mut i = 1;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--verbose" | "-v" => verbose = true,
+            "--format" => {
+                let value = next_arg_value(args, &mut i, "--format")?;
+                format = parse_output_format(value)?;
+            }
+            "--source" => {
+                let value = next_arg_value(args, &mut i, "--source")?;
+                source = Some(parse_prompt_source(value)?);
+            }
+            _ => return Err(anyhow!("Unknown flag for list command: {}", args[i])),
+        }
+        i += 1;
+    }
+
+    Ok(FlowSubcommand::List {
+        format,
+        verbose,
+        source,
+    })
+}
+
+/// Parse workflow execution command arguments
+fn parse_execute_command(args: &[String]) -> Result<FlowSubcommand> {
+    let workflow = args[0].clone();
+    let mut positional_args = Vec::new();
+    let mut params = Vec::new();
+    let mut vars = Vec::new();
+    let mut interactive = false;
+    let mut dry_run = false;
+    let mut quiet = false;
+
+    let mut i = 1;
+    while i < args.len() {
+        let arg = &args[i];
+
+        if arg.starts_with("--") || arg.starts_with("-") {
+            match arg.as_str() {
+                "--param" | "-p" => {
+                    let value = next_arg_value(args, &mut i, arg)?;
+                    params.push(value.to_string());
+                }
+                "--var" => {
+                    let value = next_arg_value(args, &mut i, "--var")?;
+                    vars.push(value.to_string());
+                }
+                "--interactive" | "-i" => interactive = true,
+                "--dry-run" => dry_run = true,
+                "--quiet" | "-q" => quiet = true,
+                _ => return Err(anyhow!("Unknown flag for workflow execution: {}", arg)),
+            }
+        } else {
+            positional_args.push(arg.clone());
+        }
+
+        i += 1;
+    }
+
+    Ok(FlowSubcommand::Execute {
+        workflow,
+        positional_args,
+        params,
+        vars,
+        interactive,
+        dry_run,
+        quiet,
+    })
+}
 
 /// Parse flow command arguments into a FlowSubcommand
 ///
@@ -32,111 +140,18 @@ pub fn parse_flow_args(args: Vec<String>) -> Result<FlowSubcommand> {
 
     let first_arg = &args[0];
 
-    // Check if first arg is the special "list" command
     match first_arg.as_str() {
-        "list" => {
-            // Parse list command: flow list [--verbose] [--format FORMAT] [--source SOURCE]
-            let mut verbose = false;
-            let mut format = OutputFormat::Table;
-            let mut source = None;
-
-            let mut i = 1;
-            while i < args.len() {
-                match args[i].as_str() {
-                    "--verbose" | "-v" => verbose = true,
-                    "--format" => {
-                        i += 1;
-                        if i < args.len() {
-                            format = match args[i].as_str() {
-                                "json" => OutputFormat::Json,
-                                "yaml" => OutputFormat::Yaml,
-                                "table" => OutputFormat::Table,
-                                _ => return Err(anyhow!("Invalid format: {}", args[i])),
-                            };
-                        }
-                    }
-                    "--source" => {
-                        i += 1;
-                        if i < args.len() {
-                            source = Some(match args[i].as_str() {
-                                "builtin" => PromptSourceArg::Builtin,
-                                "user" => PromptSourceArg::User,
-                                "local" => PromptSourceArg::Local,
-                                "dynamic" => PromptSourceArg::Dynamic,
-                                _ => return Err(anyhow!("Invalid source: {}", args[i])),
-                            });
-                        }
-                    }
-                    _ => return Err(anyhow!("Unknown flag for list command: {}", args[i])),
-                }
-                i += 1;
-            }
-
-            Ok(FlowSubcommand::List {
-                format,
-                verbose,
-                source,
-            })
-        }
-
-        _ => {
-            // Not a special command, treat as workflow execution
-            // Parse: flow <workflow> [positional_args...] [--param KEY=VALUE]... [--var KEY=VALUE]... [flags]
-            let workflow = first_arg.clone();
-            let mut positional_args = Vec::new();
-            let mut params = Vec::new();
-            let mut vars = Vec::new();
-            let mut interactive = false;
-            let mut dry_run = false;
-            let mut quiet = false;
-
-            let mut i = 1;
-            while i < args.len() {
-                let arg = &args[i];
-
-                if arg.starts_with("--") || arg.starts_with("-") {
-                    // It's a flag
-                    match arg.as_str() {
-                        "--param" | "-p" => {
-                            i += 1;
-                            if i < args.len() {
-                                params.push(args[i].clone());
-                            }
-                        }
-                        "--var" => {
-                            i += 1;
-                            if i < args.len() {
-                                vars.push(args[i].clone());
-                            }
-                        }
-                        "--interactive" | "-i" => interactive = true,
-                        "--dry-run" => dry_run = true,
-                        "--quiet" | "-q" => quiet = true,
-                        _ => return Err(anyhow!("Unknown flag for workflow execution: {}", arg)),
-                    }
-                } else {
-                    // It's a positional argument
-                    positional_args.push(arg.clone());
-                }
-
-                i += 1;
-            }
-
-            Ok(FlowSubcommand::Execute {
-                workflow,
-                positional_args,
-                params,
-                vars,
-                interactive,
-                dry_run,
-                quiet,
-            })
-        }
+        "list" => parse_list_command(&args),
+        _ => parse_execute_command(&args),
     }
 }
 
 /// Handle the flow command - PURE ROUTING ONLY
-pub async fn handle_command(subcommand: FlowSubcommand, context: &CliContext) -> i32 {
+pub async fn handle_command(
+    subcommand: FlowSubcommand,
+    context: &CliContext,
+    cli_tool_context: Arc<crate::mcp_integration::CliToolContext>,
+) -> i32 {
     let result = match subcommand {
         FlowSubcommand::Execute {
             workflow,
@@ -163,6 +178,7 @@ pub async fn handle_command(subcommand: FlowSubcommand, context: &CliContext) ->
                     quiet,
                 },
                 context,
+                cli_tool_context,
             )
             .await
         }

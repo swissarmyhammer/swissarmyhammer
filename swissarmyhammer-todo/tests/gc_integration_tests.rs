@@ -10,30 +10,28 @@ use chrono::Utc;
 use std::fs;
 use std::path::PathBuf;
 use std::time::Duration;
+use swissarmyhammer_common::test_utils::IsolatedTestEnvironment;
 use swissarmyhammer_todo::{TodoId, TodoItem, TodoList, TodoStorage};
-use tempfile::TempDir;
 
 /// Test fixture that encapsulates TodoStorage and temporary directory
 struct TestFixture {
     storage: TodoStorage,
-    _temp_dir: TempDir,
+    _env: IsolatedTestEnvironment,
 }
 
 impl TestFixture {
     /// Create a new test fixture with TodoStorage and temporary directory
     fn new() -> Self {
-        let temp_dir = TempDir::new().expect("Failed to create temp dir");
-        fs::create_dir_all(temp_dir.path()).expect("Failed to create temp dir");
-        let storage = TodoStorage::new(temp_dir.path().to_path_buf());
-        Self {
-            storage,
-            _temp_dir: temp_dir,
-        }
+        let env = IsolatedTestEnvironment::new().expect("Failed to create test environment");
+        let temp_dir = env.temp_dir();
+        fs::create_dir_all(&temp_dir).expect("Failed to create temp dir");
+        let storage = TodoStorage::new(temp_dir);
+        Self { storage, _env: env }
     }
 
     /// Get the path to the todo file
     fn todo_file_path(&self) -> PathBuf {
-        self._temp_dir.path().join("todo.yaml")
+        self._env.temp_dir().join("todo.yaml")
     }
 
     /// Create a todo item with simplified error handling

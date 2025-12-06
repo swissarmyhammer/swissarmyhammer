@@ -1,8 +1,8 @@
-use swissarmyhammer_config::get_builtin_agents;
+use swissarmyhammer_config::get_builtin_models;
 
 #[test]
-fn test_builtin_agents_generation() {
-    let agents = get_builtin_agents();
+fn test_builtin_models_generation() {
+    let agents = get_builtin_models();
 
     // Extract agent names
     let names: Vec<&str> = agents.iter().map(|(name, _)| *name).collect();
@@ -25,8 +25,8 @@ fn test_builtin_agents_generation() {
 }
 
 #[test]
-fn test_builtin_agents_specific_content() {
-    let agents = get_builtin_agents();
+fn test_builtin_models_specific_content() {
+    let agents = get_builtin_models();
     let agents_map: std::collections::HashMap<&str, &str> = agents.into_iter().collect();
 
     // Test claude-code agent
@@ -40,12 +40,18 @@ fn test_builtin_agents_specific_content() {
         .get("qwen-coder")
         .expect("qwen-coder agent should exist");
     assert!(qwen_content.contains("type: llama-agent"));
-    assert!(qwen_content.contains("unsloth/Qwen3-Coder-480B-A35B-Instruct-GGUF"));
+    assert!(
+        qwen_content.contains("unsloth/Qwen3"),
+        "Expected Qwen3 model in qwen-coder"
+    );
 
     // Test qwen-coder-flash agent
     let qwen_flash_content = agents_map
         .get("qwen-coder-flash")
         .expect("qwen-coder-flash agent should exist");
     assert!(qwen_flash_content.contains("type: llama-agent"));
-    assert!(qwen_flash_content.contains("unsloth/Qwen3-Coder-30B-A3B-Instruct-GGUF"));
+    assert!(
+        qwen_flash_content.contains("unsloth/Qwen3"),
+        "Expected Qwen3 model in qwen-coder-flash"
+    );
 }

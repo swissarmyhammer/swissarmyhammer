@@ -10,7 +10,8 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use swissarmyhammer_common::{Result, SwissArmyHammerError};
-use swissarmyhammer_config::TemplateContext;
+use swissarmyhammer_config::model::{parse_model_config, ModelManager};
+use swissarmyhammer_config::{ModelUseCase, TemplateContext};
 use swissarmyhammer_git::GitOperations;
 use swissarmyhammer_prompts::{PromptLibrary, PromptResolver};
 
@@ -43,6 +44,48 @@ pub struct McpServer {
     pub tool_context: Arc<ToolContext>,
 }
 
+/// Determine if a retry should be attempted based on the error and attempt count.
+///
+/// # Arguments
+///
+/// * `attempt` - Current attempt number (1-indexed)
+/// * `error` - The error that occurred
+/// * `is_retryable` - Function to determine if an error is retryable
+///
+/// # Returns
+///
+/// * `bool` - True if should retry, false otherwise
+fn should_retry(
+    attempt: u32,
+    error: &SwissArmyHammerError,
+    is_retryable: fn(&SwissArmyHammerError) -> bool,
+) -> bool {
+    attempt < MAX_RETRIES && is_retryable(error)
+}
+
+/// Log a retry attempt with backoff information.
+///
+/// # Arguments
+///
+/// * `operation_name` - Name of the operation being retried
+/// * `attempt` - Current attempt number (1-indexed)
+/// * `backoff_ms` - Backoff delay in milliseconds
+/// * `error` - The error that occurred
+fn log_retry_attempt(
+    operation_name: &str,
+    attempt: u32,
+    backoff_ms: u64,
+    error: &SwissArmyHammerError,
+) {
+    tracing::warn!(
+        "⚠️ {} attempt {} failed, retrying in {}ms: {}",
+        operation_name,
+        attempt,
+        backoff_ms,
+        error
+    );
+}
+
 /// Retry an async operation with exponential backoff.
 ///
 /// # Arguments
@@ -70,30 +113,17 @@ where
         match operation().await {
             Ok(result) => {
                 if attempt > 1 {
-                    tracing::info!("✅ {} succeeded on attempt {}", operation_name, attempt);
+                    tracing::info!("✓ {} succeeded on attempt {}", operation_name, attempt);
                 }
                 return Ok(result);
             }
             Err(e) => {
-                last_error = Some(e);
-
-                // Check if this is a retryable error
-                if attempt < MAX_RETRIES && last_error.as_ref().is_some_and(is_retryable) {
-                    tracing::warn!(
-                        "⚠️ {} attempt {} failed, retrying in {}ms: {}",
-                        operation_name,
-                        attempt,
-                        backoff_ms,
-                        last_error
-                            .as_ref()
-                            .map_or("Unknown error".to_string(), |e| e.to_string())
-                    );
-
+                if should_retry(attempt, &e, is_retryable) {
+                    log_retry_attempt(operation_name, attempt, backoff_ms, &e);
                     tokio::time::sleep(tokio::time::Duration::from_millis(backoff_ms)).await;
-                    backoff_ms *= 2; // Exponential backoff
-                } else {
-                    break;
+                    backoff_ms *= 2;
                 }
+                last_error = Some(e);
             }
         }
     }
@@ -148,7 +178,7 @@ impl McpServer {
             // Fallback to a temporary directory if current directory is not accessible
             std::env::temp_dir()
         });
-        Self::new_with_work_dir(library, work_dir).await
+        Self::new_with_work_dir(library, work_dir, None).await
     }
 
     /// Create a new MCP server with the provided prompt library and working directory.
@@ -157,6 +187,7 @@ impl McpServer {
     ///
     /// * `library` - The prompt library to serve via MCP
     /// * `work_dir` - The working directory to use for issue storage and git operations
+    /// * `model_override` - Optional model name to override all use case model assignments
     ///
     /// # Returns
     ///
@@ -164,65 +195,226 @@ impl McpServer {
     ///
     /// # Errors
     ///
-    pub async fn new_with_work_dir(library: PromptLibrary, work_dir: PathBuf) -> Result<Self> {
-        // Initialize git operations with work_dir - make it optional for tests
-        let git_ops = match GitOperations::with_work_dir(work_dir.clone()) {
+    pub async fn new_with_work_dir(
+        library: PromptLibrary,
+        work_dir: PathBuf,
+        model_override: Option<String>,
+    ) -> Result<Self> {
+        let git_ops_arc = Self::initialize_git_operations(work_dir.clone());
+        let tool_handlers = ToolHandlers::new();
+        let agent_config = Self::load_template_context()?;
+        let use_case_agents = Self::initialize_use_case_agents(model_override)?;
+        let (tool_registry_arc, tool_context) = Self::create_tool_context_and_registry(
+            tool_handlers,
+            git_ops_arc,
+            agent_config,
+            use_case_agents,
+            Some(work_dir),
+        );
+
+        let server = Self {
+            library: Arc::new(RwLock::new(library)),
+            file_watcher: Arc::new(Mutex::new(FileWatcher::new())),
+            tool_registry: tool_registry_arc,
+            tool_context,
+        };
+
+        Ok(server)
+    }
+
+    /// Initialize git operations for the given working directory.
+    ///
+    /// # Arguments
+    ///
+    /// * `work_dir` - The working directory for git operations
+    ///
+    /// # Returns
+    ///
+    /// * `Arc<Mutex<Option<GitOperations>>>` - Wrapped git operations instance
+    fn initialize_git_operations(work_dir: PathBuf) -> Arc<Mutex<Option<GitOperations>>> {
+        let git_ops = match GitOperations::with_work_dir(work_dir) {
             Ok(ops) => Some(ops),
             Err(e) => {
                 tracing::warn!("Git operations not available: {}", e);
                 None
             }
         };
+        Arc::new(Mutex::new(git_ops))
+    }
 
-        let git_ops_arc = Arc::new(Mutex::new(git_ops));
-
-        // Initialize tool handlers
-        let tool_handlers = ToolHandlers::new();
-
-        // Load agent configuration from sah.yaml
+    /// Load template context and agent configuration.
+    ///
+    /// # Returns
+    ///
+    /// * `Result<Arc<swissarmyhammer_config::model::ModelConfig>>` - Agent configuration
+    fn load_template_context() -> Result<Arc<swissarmyhammer_config::model::ModelConfig>> {
         let template_context = TemplateContext::load_for_cli().map_err(|e| {
             tracing::warn!("Failed to load configuration, using default: {}", e);
             SwissArmyHammerError::Other {
                 message: format!("Failed to load configuration: {}", e),
             }
         })?;
-        let agent_config = Arc::new(template_context.get_agent_config(None));
+        Ok(Arc::new(template_context.get_agent_config(None)))
+    }
 
-        // Initialize tool registry and context
-        let mut tool_registry = ToolRegistry::new();
-        let tool_context = Arc::new(ToolContext::new(
-            Arc::new(tool_handlers.clone()),
-            git_ops_arc.clone(),
-            agent_config,
-        ));
+    /// Initialize agent configurations for all use cases.
+    ///
+    /// # Arguments
+    ///
+    /// * `model_override` - Optional model name to override all use case assignments
+    ///
+    /// # Returns
+    ///
+    /// * `Result<HashMap<ModelUseCase, Arc<swissarmyhammer_config::model::ModelConfig>>>` - Use case agent map
+    fn initialize_use_case_agents(
+        model_override: Option<String>,
+    ) -> Result<HashMap<ModelUseCase, Arc<swissarmyhammer_config::model::ModelConfig>>> {
+        let mut use_case_agents = HashMap::new();
 
-        // Register all available tools
-        register_abort_tools(&mut tool_registry);
-        register_file_tools(&mut tool_registry);
-        register_flow_tools(&mut tool_registry);
-        register_git_tools(&mut tool_registry);
-        register_questions_tools(&mut tool_registry);
-        register_rules_tools(&mut tool_registry);
-        register_shell_tools(&mut tool_registry);
-        register_todo_tools(&mut tool_registry);
-        register_web_fetch_tools(&mut tool_registry);
-        register_web_search_tools(&mut tool_registry);
-        tracing::debug!("Registered all tool handlers");
+        if let Some(override_model_name) = model_override {
+            Self::apply_model_override(&mut use_case_agents, override_model_name)?;
+        } else {
+            Self::resolve_use_case_agents(&mut use_case_agents);
+        }
 
-        // Wrap registry in Arc<RwLock> and add to context
-        let tool_registry_arc = Arc::new(RwLock::new(tool_registry));
-        let tool_context = Arc::new(
-            Arc::try_unwrap(tool_context)
-                .unwrap_or_else(|arc| (*arc).clone())
-                .with_tool_registry(tool_registry_arc.clone()),
+        Ok(use_case_agents)
+    }
+
+    /// Apply model override to all use cases.
+    ///
+    /// # Arguments
+    ///
+    /// * `use_case_agents` - Map to populate with agent configurations
+    /// * `override_model_name` - Model name to use for all use cases
+    ///
+    /// # Returns
+    ///
+    /// * `Result<()>` - Ok if override is successfully applied
+    fn apply_model_override(
+        use_case_agents: &mut HashMap<
+            ModelUseCase,
+            Arc<swissarmyhammer_config::model::ModelConfig>,
+        >,
+        override_model_name: String,
+    ) -> Result<()> {
+        tracing::info!(
+            "Using global model override '{}' for all use cases",
+            override_model_name
         );
 
-        Ok(Self {
-            library: Arc::new(RwLock::new(library)),
-            file_watcher: Arc::new(Mutex::new(FileWatcher::new())),
-            tool_registry: tool_registry_arc,
-            tool_context,
-        })
+        let override_agent = match ModelManager::find_agent_by_name(&override_model_name) {
+            Ok(info) => match parse_model_config(&info.content) {
+                Ok(config) => config,
+                Err(e) => {
+                    return Err(SwissArmyHammerError::Other {
+                        message: format!("Invalid model override '{}': {}", override_model_name, e),
+                    });
+                }
+            },
+            Err(e) => {
+                return Err(SwissArmyHammerError::Other {
+                    message: format!("Invalid model override '{}': {}", override_model_name, e),
+                });
+            }
+        };
+
+        for use_case in [
+            ModelUseCase::Root,
+            ModelUseCase::Rules,
+            ModelUseCase::Workflows,
+        ] {
+            use_case_agents.insert(use_case, Arc::new(override_agent.clone()));
+        }
+
+        Ok(())
+    }
+
+    /// Resolve agent configurations for all use cases from configuration.
+    ///
+    /// # Arguments
+    ///
+    /// * `use_case_agents` - Map to populate with agent configurations
+    fn resolve_use_case_agents(
+        use_case_agents: &mut HashMap<
+            ModelUseCase,
+            Arc<swissarmyhammer_config::model::ModelConfig>,
+        >,
+    ) {
+        for use_case in [
+            ModelUseCase::Root,
+            ModelUseCase::Rules,
+            ModelUseCase::Workflows,
+        ] {
+            match ModelManager::resolve_agent_config_for_use_case(use_case) {
+                Ok(config) => {
+                    tracing::debug!(
+                        "Resolved {} use case to agent: {:?}",
+                        use_case,
+                        config.executor_type()
+                    );
+                    use_case_agents.insert(use_case, Arc::new(config));
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        "Failed to resolve agent for {} use case: {}, using root",
+                        use_case,
+                        e
+                    );
+                }
+            }
+        }
+    }
+
+    /// Create tool context and registry with all tools registered.
+    ///
+    /// # Arguments
+    ///
+    /// * `tool_handlers` - Tool handlers instance
+    /// * `git_ops_arc` - Git operations wrapped in Arc<Mutex>
+    /// * `agent_config` - Agent configuration
+    /// * `use_case_agents` - Use case to agent configuration map
+    /// * `working_dir` - Working directory for tool operations
+    ///
+    /// # Returns
+    ///
+    /// * `(Arc<RwLock<ToolRegistry>>, Arc<ToolContext>)` - Registry and context
+    fn create_tool_context_and_registry(
+        tool_handlers: ToolHandlers,
+        git_ops_arc: Arc<Mutex<Option<GitOperations>>>,
+        agent_config: Arc<swissarmyhammer_config::model::ModelConfig>,
+        use_case_agents: HashMap<ModelUseCase, Arc<swissarmyhammer_config::model::ModelConfig>>,
+        working_dir: Option<PathBuf>,
+    ) -> (Arc<RwLock<ToolRegistry>>, Arc<ToolContext>) {
+        let mut tool_registry = ToolRegistry::new();
+        Self::register_all_tools(&mut tool_registry);
+
+        let mut tool_context = ToolContext::new(Arc::new(tool_handlers), git_ops_arc, agent_config);
+        tool_context.use_case_agents = Arc::new(use_case_agents);
+        tool_context.working_dir = working_dir;
+
+        let tool_registry_arc = Arc::new(RwLock::new(tool_registry));
+        let tool_context = Arc::new(tool_context.with_tool_registry(tool_registry_arc.clone()));
+
+        (tool_registry_arc, tool_context)
+    }
+
+    /// Register all available tools in the tool registry.
+    ///
+    /// # Arguments
+    ///
+    /// * `tool_registry` - Registry to register tools into
+    fn register_all_tools(tool_registry: &mut ToolRegistry) {
+        register_abort_tools(tool_registry);
+        register_file_tools(tool_registry);
+        register_flow_tools(tool_registry);
+        register_git_tools(tool_registry);
+        register_questions_tools(tool_registry);
+        register_rules_tools(tool_registry);
+        register_shell_tools(tool_registry);
+        register_todo_tools(tool_registry);
+        register_web_fetch_tools(tool_registry);
+        register_web_search_tools(tool_registry);
+        tracing::debug!("Registered all tool handlers");
     }
 
     /// Get a reference to the underlying prompt library.
@@ -546,6 +738,110 @@ impl McpServer {
         let mut watcher = self.file_watcher.lock().await;
         watcher.stop_watching();
     }
+
+    /// Validate that a prompt can be accessed via MCP.
+    ///
+    /// # Arguments
+    ///
+    /// * `prompt` - The prompt to validate
+    /// * `name` - The name of the prompt for error messages
+    ///
+    /// # Returns
+    ///
+    /// * `Result<(), McpError>` - Ok if prompt is accessible, error if it's a partial template
+    fn validate_prompt_access(
+        prompt: &swissarmyhammer_prompts::Prompt,
+        name: &str,
+    ) -> std::result::Result<(), McpError> {
+        if prompt.is_partial_template() {
+            return Err(McpError::invalid_request(
+                format!(
+                    "Cannot access partial template '{}' via MCP. Partial templates are for internal use only.",
+                    name
+                ),
+                None,
+            ));
+        }
+        Ok(())
+    }
+
+    /// Render a prompt with the provided arguments.
+    ///
+    /// # Arguments
+    ///
+    /// * `library` - The prompt library containing the template
+    /// * `name` - The name of the prompt to render
+    /// * `prompt` - The prompt object
+    /// * `arguments` - Optional arguments for template rendering
+    ///
+    /// # Returns
+    ///
+    /// * `Result<String, McpError>` - The rendered content or an error
+    fn render_prompt_with_args(
+        library: &PromptLibrary,
+        name: &str,
+        prompt: &swissarmyhammer_prompts::Prompt,
+        arguments: &Option<serde_json::Map<String, Value>>,
+    ) -> std::result::Result<String, McpError> {
+        if let Some(args) = arguments {
+            let template_args = Self::json_map_to_string_map(args);
+
+            let template_context = TemplateContext::with_template_vars(
+                template_args
+                    .iter()
+                    .map(|(k, v)| (k.clone(), serde_json::Value::String(v.clone())))
+                    .collect(),
+            )
+            .map_err(|e| {
+                McpError::internal_error(format!("Failed to create template context: {}", e), None)
+            })?;
+
+            library.render(name, &template_context).map_err(|e| {
+                McpError::internal_error(format!("Template rendering error: {e}"), None)
+            })
+        } else {
+            Ok(prompt.template.clone())
+        }
+    }
+
+    /// Prepare tool context with peer for elicitation support.
+    ///
+    /// # Arguments
+    ///
+    /// * `peer` - The MCP peer connection
+    ///
+    /// # Returns
+    ///
+    /// * `ToolContext` - Tool context with peer configured
+    fn prepare_tool_context(&self, peer: rmcp::Peer<RoleServer>) -> ToolContext {
+        (*self.tool_context)
+            .clone()
+            .with_peer(Arc::new(peer.clone()))
+    }
+
+    /// Execute a tool with logging.
+    ///
+    /// # Arguments
+    ///
+    /// * `tool` - The tool to execute
+    /// * `name` - The name of the tool
+    /// * `arguments` - Tool arguments
+    /// * `context` - Tool execution context
+    ///
+    /// # Returns
+    ///
+    /// * `Result<CallToolResult, McpError>` - The execution result
+    async fn execute_tool_with_logging(
+        tool: &dyn super::tool_registry::McpTool,
+        name: &str,
+        arguments: serde_json::Map<String, Value>,
+        context: &ToolContext,
+    ) -> std::result::Result<CallToolResult, McpError> {
+        tracing::info!("🔧 Executing tool: {}", name);
+        let result = tool.execute(arguments, context).await;
+        tracing::debug!("🔧 Tool execution result for {}: {:?}", name, result);
+        result
+    }
 }
 
 impl ServerHandler for McpServer {
@@ -566,7 +862,7 @@ impl ServerHandler for McpServer {
                 tracing::info!("🔍 File watching started for MCP client");
             }
             Err(e) => {
-                tracing::error!("❌ Failed to start file watching for MCP client: {}", e);
+                tracing::error!("✗ Failed to start file watching for MCP client: {}", e);
                 // Continue initialization even if file watching fails
             }
         }
@@ -633,72 +929,32 @@ impl ServerHandler for McpServer {
         _context: RequestContext<RoleServer>,
     ) -> std::result::Result<GetPromptResult, McpError> {
         let library = self.library.read().await;
-        match library.get(&request.name) {
-            Ok(prompt) => {
-                // Check if this is a partial template
-                if prompt.is_partial_template() {
-                    return Err(McpError::invalid_request(
-                        format!(
-                            "Cannot access partial template '{}' via MCP. Partial templates are for internal use only.",
-                            request.name
-                        ),
-                        None,
-                    ));
-                }
-
-                // Handle arguments if provided
-                let content = if let Some(args) = &request.arguments {
-                    let template_args = Self::json_map_to_string_map(args);
-
-                    let template_context = match TemplateContext::with_template_vars(
-                        template_args
-                            .iter()
-                            .map(|(k, v)| (k.clone(), serde_json::Value::String(v.clone())))
-                            .collect(),
-                    ) {
-                        Ok(ctx) => ctx,
-                        Err(e) => {
-                            return Ok(GetPromptResult {
-                                description: Some(format!(
-                                    "Error: Failed to create template context: {}",
-                                    e
-                                )),
-                                messages: vec![],
-                            });
-                        }
-                    };
-                    match library.render(&request.name, &template_context) {
-                        Ok(rendered) => rendered,
-                        Err(e) => {
-                            return Err(McpError::internal_error(
-                                format!("Template rendering error: {e}"),
-                                None,
-                            ))
-                        }
-                    }
-                } else {
-                    prompt.template.clone()
-                };
-
-                Ok(GetPromptResult {
-                    description: prompt.description.clone(),
-                    messages: vec![PromptMessage {
-                        role: PromptMessageRole::User,
-                        content: PromptMessageContent::Text { text: content },
-                    }],
-                })
-            }
+        let prompt = match library.get(&request.name) {
+            Ok(p) => p,
             Err(e) => {
                 tracing::warn!("Prompt '{}' not found: {}", request.name, e);
-                Err(McpError::invalid_request(
+                return Err(McpError::invalid_request(
                     format!(
                         "Prompt '{}' is not available. It may have been deleted or renamed.",
                         request.name
                     ),
                     None,
-                ))
+                ));
             }
-        }
+        };
+
+        Self::validate_prompt_access(&prompt, &request.name)?;
+
+        let content =
+            Self::render_prompt_with_args(&library, &request.name, &prompt, &request.arguments)?;
+
+        Ok(GetPromptResult {
+            description: prompt.description.clone(),
+            messages: vec![PromptMessage {
+                role: PromptMessageRole::User,
+                content: PromptMessageContent::Text { text: content },
+            }],
+        })
     }
 
     async fn list_tools(
@@ -724,33 +980,16 @@ impl ServerHandler for McpServer {
         );
 
         let registry = self.tool_registry.read().await;
-        if let Some(tool) = registry.get_tool(&request.name) {
-            tracing::info!("🔧 Executing tool: {}", request.name);
-
-            // Create a tool context with the peer for elicitation support
-            let tool_context_with_peer = (*self.tool_context)
-                .clone()
-                .with_peer(Arc::new(context.peer.clone()));
-
-            let result = tool
-                .execute(
-                    request.arguments.unwrap_or_default(),
-                    &tool_context_with_peer,
-                )
-                .await;
-            tracing::debug!(
-                "🔧 Tool execution result for {}: {:?}",
-                request.name,
-                result
-            );
-            result
-        } else {
+        let tool = registry.get_tool(&request.name).ok_or_else(|| {
             tracing::error!("🔧 Unknown tool requested: {}", request.name);
-            Err(McpError::invalid_request(
-                format!("Unknown tool: {}", request.name),
-                None,
-            ))
-        }
+            McpError::invalid_request(format!("Unknown tool: {}", request.name), None)
+        })?;
+
+        let tool_context_with_peer = self.prepare_tool_context(context.peer.clone());
+        let arguments = request.arguments.unwrap_or_default();
+
+        Self::execute_tool_with_logging(tool, &request.name, arguments, &tool_context_with_peer)
+            .await
     }
 
     fn get_info(&self) -> ServerInfo {

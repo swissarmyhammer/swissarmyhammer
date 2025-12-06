@@ -34,7 +34,7 @@
 //! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
 //! // Create and start an MCP server in stdio mode
 //! let library = PromptLibrary::new();
-//! let handle = start_mcp_server(library, None, McpServerMode::Stdio).await?;
+//! let handle = start_mcp_server(library, None, McpServerMode::Stdio, None).await?;
 //!
 //! // Server is now running and handling requests
 //! # Ok(())
@@ -110,9 +110,9 @@ pub use progress_notifications::{
 pub use server::McpServer;
 pub use tool_handlers::ToolHandlers;
 pub use tool_registry::{
-    register_abort_tools, register_file_tools, register_git_tools, register_rules_tools,
-    register_shell_tools, register_todo_tools, register_web_fetch_tools, register_web_search_tools,
-    ToolContext, ToolRegistry,
+    register_abort_tools, register_file_tools, register_flow_tools, register_git_tools,
+    register_rules_tools, register_shell_tools, register_todo_tools, register_web_fetch_tools,
+    register_web_search_tools, ToolContext, ToolRegistry,
 };
 pub use types::{GetPromptRequest, ListPromptsRequest};
 pub use unified_server::{

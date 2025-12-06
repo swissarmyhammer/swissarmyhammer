@@ -20,7 +20,3 @@ List only completed todos:
   "completed": true
 }
 ```
-
-## Returns
-
-Returns list of all todos with their metadata including id, task, context, completion status, along with summary counts of total, completed, and pending items.
