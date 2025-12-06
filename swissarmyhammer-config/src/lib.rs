@@ -178,11 +178,11 @@
 //! }
 //! ```
 
-/// Agent configuration types and infrastructure
-pub mod agent;
+/// Model configuration types and infrastructure
+pub mod model;
 
-// Include generated builtin agents at build time
-include!(concat!(env!("OUT_DIR"), "/builtin_agents.rs"));
+// Include generated builtin models at build time
+include!(concat!(env!("OUT_DIR"), "/builtin_models.rs"));
 /// File discovery logic for configuration files
 pub mod discovery;
 /// Environment variable processing and substitution
@@ -195,14 +195,14 @@ pub mod provider;
 pub mod template_context;
 
 // Re-export main types for easier access
-pub use agent::{
-    parse_agent_description, AgentConfig, AgentError, AgentExecutorConfig, AgentExecutorType,
-    AgentInfo, AgentSource, AgentUseCase, ClaudeCodeConfig, LlamaAgentConfig, McpServerConfig,
-    ModelConfig, ModelSource,
-};
 pub use discovery::{ConfigurationDiscovery, DiscoveryPaths};
 pub use env_vars::EnvVarSubstitution;
 pub use error::{ConfigurationError, ConfigurationResult};
+pub use model::{
+    parse_model_config, parse_model_description, AgentExecutorType, ClaudeCodeConfig,
+    LlamaAgentConfig, LlmModelConfig, McpServerConfig, ModelConfig, ModelConfigSource, ModelError,
+    ModelExecutorConfig, ModelInfo, ModelManager, ModelSource, ModelUseCase,
+};
 pub use provider::ConfigurationProvider;
 pub use template_context::TemplateContext;
 
@@ -390,8 +390,9 @@ pub const DEFAULT_TEST_EMBEDDING_MODEL: &str = "BAAI/bge-small-en-v1.5";
 
 /// Test configuration utilities for LlamaAgent testing
 pub mod test_config {
-    use crate::agent::{
-        AgentConfig, AgentExecutorType, LlamaAgentConfig, McpServerConfig, ModelConfig, ModelSource,
+    use crate::model::{
+        AgentExecutorType, LlamaAgentConfig, LlmModelConfig, McpServerConfig, ModelConfig,
+        ModelSource,
     };
     use std::env;
 
@@ -418,7 +419,7 @@ pub mod test_config {
 
         pub fn create_llama_config(&self) -> LlamaAgentConfig {
             LlamaAgentConfig {
-                model: ModelConfig {
+                model: LlmModelConfig {
                     source: ModelSource::HuggingFace {
                         repo: self.llama_model_repo.clone(),
                         filename: Some(self.llama_model_filename.clone()),
@@ -437,12 +438,12 @@ pub mod test_config {
             }
         }
 
-        pub fn create_claude_config() -> AgentConfig {
-            AgentConfig::claude_code()
+        pub fn create_claude_config() -> ModelConfig {
+            ModelConfig::claude_code()
         }
 
-        pub fn create_llama_agent_config(&self) -> AgentConfig {
-            AgentConfig::llama_agent(self.create_llama_config())
+        pub fn create_llama_agent_config(&self) -> ModelConfig {
+            ModelConfig::llama_agent(self.create_llama_config())
         }
     }
 

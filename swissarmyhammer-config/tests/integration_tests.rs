@@ -8,33 +8,27 @@ use serde_json::json;
 use serial_test::serial;
 use std::env;
 use std::fs;
+use swissarmyhammer_common::test_utils::IsolatedTestEnvironment;
 use swissarmyhammer_config::TemplateContext;
-use tempfile::TempDir;
 
 /// Test helper for comprehensive integration testing
 struct IntegrationTestEnvironment {
-    temp_dir: TempDir,
+    _env: IsolatedTestEnvironment,
     original_cwd: std::path::PathBuf,
-    original_home: Option<String>,
     env_vars_to_restore: Vec<(String, Option<String>)>,
 }
 
 impl IntegrationTestEnvironment {
     fn new() -> Self {
-        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+        let env = IsolatedTestEnvironment::new().expect("Failed to create test environment");
         let original_cwd = env::current_dir().expect("Failed to get current dir");
-        let original_home = env::var("HOME").ok();
 
-        // Set up isolated environment
-        let home_dir = temp_dir.path().join("home");
-        fs::create_dir(&home_dir).expect("Failed to create home dir");
-        env::set_var("HOME", &home_dir);
-        env::set_current_dir(temp_dir.path()).expect("Failed to set current dir");
+        // Set current directory to temp dir for these tests
+        env::set_current_dir(env.temp_dir()).expect("Failed to set current dir");
 
         Self {
-            temp_dir,
+            _env: env,
             original_cwd,
-            original_home,
             env_vars_to_restore: Vec::new(),
         }
     }
@@ -46,21 +40,20 @@ impl IntegrationTestEnvironment {
     }
 
     fn project_config_dir(&self) -> std::path::PathBuf {
-        let config_dir = self.temp_dir.path().join(".swissarmyhammer");
+        let config_dir = self._env.temp_dir().join(".swissarmyhammer");
         fs::create_dir_all(&config_dir).expect("Failed to create project config dir");
         config_dir
     }
 
     fn home_config_dir(&self) -> std::path::PathBuf {
-        let home_path = env::var("HOME").expect("HOME not set");
-        let config_dir = std::path::Path::new(&home_path).join(".swissarmyhammer");
+        let config_dir = self._env.swissarmyhammer_dir();
         fs::create_dir_all(&config_dir).expect("Failed to create home config dir");
         config_dir
     }
 
     fn create_nested_project_structure(&self) -> std::path::PathBuf {
         // Create a nested project structure
-        let workspace_dir = self.temp_dir.path().join("workspace");
+        let workspace_dir = self._env.temp_dir().join("workspace");
         let project_dir = workspace_dir.join("my-project");
         let subdir = project_dir.join("src").join("components");
         fs::create_dir_all(&subdir).expect("Failed to create nested structure");
@@ -87,13 +80,8 @@ impl Drop for IntegrationTestEnvironment {
             }
         }
 
-        // Restore original environment
+        // Restore original directory - IsolatedTestEnvironment handles HOME restoration
         let _ = env::set_current_dir(&self.original_cwd);
-        if let Some(home) = &self.original_home {
-            env::set_var("HOME", home);
-        } else {
-            env::remove_var("HOME");
-        }
     }
 }
 
@@ -682,7 +670,7 @@ fn test_complex_nested_project_structure_with_inheritance() {
     let nested_subdir = test.create_nested_project_structure();
 
     // Create workspace-level configuration
-    let workspace_config_dir = test.temp_dir.path().join("workspace/.swissarmyhammer");
+    let workspace_config_dir = test._env.temp_dir().join("workspace/.swissarmyhammer");
     let workspace_config = r#"
 # Workspace-level configuration
 [workspace]
@@ -709,8 +697,8 @@ rust_version = "1.70"
 
     // Create project-level configuration
     let project_config_dir = test
-        .temp_dir
-        .path()
+        ._env
+        .temp_dir()
         .join("workspace/my-project/.swissarmyhammer");
     let project_config = r#"
 # Project-level configuration

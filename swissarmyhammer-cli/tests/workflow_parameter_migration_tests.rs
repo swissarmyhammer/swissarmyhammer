@@ -1,4 +1,5 @@
 //! Tests for builtin workflow migration to parameter format
+// sah rule ignore test_rule_with_allow
 
 use anyhow::Result;
 use std::path::PathBuf;

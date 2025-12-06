@@ -2,6 +2,8 @@
 //!
 //! This module provides utilities for CLI commands to call MCP tools directly,
 //! eliminating code duplication between CLI and MCP implementations.
+//!
+//! sah rule ignore test_rule_with_allow
 
 use rmcp::model::CallToolResult;
 use rmcp::ErrorData as McpError;
@@ -9,8 +11,8 @@ use serde_json::{Map, Value};
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use swissarmyhammer_config::agent::{parse_agent_config, AgentConfig, AgentManager};
-use swissarmyhammer_config::AgentUseCase;
+use swissarmyhammer_config::model::{parse_model_config, ModelConfig, ModelManager};
+use swissarmyhammer_config::ModelUseCase;
 use swissarmyhammer_git::GitOperations;
 use swissarmyhammer_tools::mcp::unified_server::{start_mcp_server, McpServerMode};
 use swissarmyhammer_tools::{
@@ -42,66 +44,27 @@ impl CliToolContext {
         Self::new_with_config(working_dir, None).await
     }
 
-    /// Create a new CLI tool context with optional agent override
+    /// Create a new CLI tool context with optional model override
     ///
     /// # Arguments
     ///
     /// * `working_dir` - The working directory for tool operations
-    /// * `agent_override` - Optional agent name to use for ALL use cases (runtime override)
+    /// * `model_override` - Optional model name to use for ALL use cases (runtime override)
     ///
     /// # Returns
     ///
     /// Result containing the initialized CliToolContext or an error
     pub async fn new_with_config(
         working_dir: &std::path::Path,
-        agent_override: Option<&str>,
+        model_override: Option<&str>,
     ) -> Result<Self, Box<dyn std::error::Error>> {
-        // Start MCP HTTP server on random port
-        // Required for all agent executors to have deterministic tool access
-        tracing::info!("Starting MCP HTTP server for CLI tool context");
-
-        // Set SAH_CLI_MODE to prevent MCP server from configuring logging
-        std::env::set_var("SAH_CLI_MODE", "1");
-
-        let mcp_server_handle = start_mcp_server(
-            McpServerMode::Http { port: None },
-            None,
-            agent_override.map(|s| s.to_string()),
-        )
-        .await?;
-
+        let mcp_server_handle = Self::initialize_mcp_server(model_override).await?;
         let mcp_port = mcp_server_handle.info().port;
-        tracing::info!("MCP HTTP server ready on port {:?}", mcp_port);
 
-        let git_ops = Self::create_git_operations(working_dir);
-        let tool_handlers = Self::create_tool_handlers();
-        let agent_config = Arc::new(AgentConfig::default());
+        let mut tool_context = Self::setup_tool_context(working_dir, mcp_port).await;
 
-        let mut tool_context = ToolContext::new(tool_handlers, git_ops, agent_config)
-            .with_working_dir(working_dir.to_path_buf());
-
-        // Store MCP server port in context
-        *tool_context.mcp_server_port.write().await = mcp_port;
-
-        // Apply agent override if provided
-        if let Some(agent_name) = agent_override {
-            tracing::info!(
-                "Applying global agent override '{}' for all use cases",
-                agent_name
-            );
-
-            // Look up the agent by name
-            let agent_info = AgentManager::find_agent_by_name(agent_name)?;
-            let override_config = parse_agent_config(&agent_info.content)?;
-            let override_config_arc = Arc::new(override_config);
-
-            // Apply to all use cases
-            let mut use_case_agents = HashMap::new();
-            use_case_agents.insert(AgentUseCase::Root, override_config_arc.clone());
-            use_case_agents.insert(AgentUseCase::Rules, override_config_arc.clone());
-            use_case_agents.insert(AgentUseCase::Workflows, override_config_arc.clone());
-
-            tool_context.use_case_agents = Arc::new(use_case_agents);
+        if let Some(model_name) = model_override {
+            Self::apply_model_override(&mut tool_context, model_name)?;
         }
 
         let tool_registry = Self::create_tool_registry();
@@ -111,6 +74,73 @@ impl CliToolContext {
             tool_registry: tool_registry_arc,
             mcp_server_handle: Some(mcp_server_handle),
         })
+    }
+
+    /// Initialize MCP HTTP server
+    async fn initialize_mcp_server(
+        model_override: Option<&str>,
+    ) -> Result<
+        swissarmyhammer_tools::mcp::unified_server::McpServerHandle,
+        Box<dyn std::error::Error>,
+    > {
+        tracing::info!("Starting MCP HTTP server for CLI tool context");
+
+        std::env::set_var("SAH_CLI_MODE", "1");
+
+        let mcp_server_handle = start_mcp_server(
+            McpServerMode::Http { port: None },
+            None,
+            model_override.map(|s| s.to_string()),
+        )
+        .await?;
+
+        tracing::info!(
+            "MCP HTTP server ready on port {:?}",
+            mcp_server_handle.info().port
+        );
+
+        Ok(mcp_server_handle)
+    }
+
+    /// Setup tool context with working directory and MCP port
+    async fn setup_tool_context(
+        working_dir: &std::path::Path,
+        mcp_port: Option<u16>,
+    ) -> ToolContext {
+        let git_ops = Self::create_git_operations(working_dir);
+        let tool_handlers = Self::create_tool_handlers();
+        let agent_config = Arc::new(ModelConfig::default());
+
+        let tool_context = ToolContext::new(tool_handlers, git_ops, agent_config)
+            .with_working_dir(working_dir.to_path_buf());
+
+        *tool_context.mcp_server_port.write().await = mcp_port;
+
+        tool_context
+    }
+
+    /// Apply global model override for all use cases
+    fn apply_model_override(
+        tool_context: &mut ToolContext,
+        model_name: &str,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        tracing::info!(
+            "Applying global model override '{}' for all use cases",
+            model_name
+        );
+
+        let agent_info = ModelManager::find_agent_by_name(model_name)?;
+        let override_config = parse_model_config(&agent_info.content)?;
+        let override_config_arc = Arc::new(override_config);
+
+        let mut use_case_agents = HashMap::new();
+        use_case_agents.insert(ModelUseCase::Root, override_config_arc.clone());
+        use_case_agents.insert(ModelUseCase::Rules, override_config_arc.clone());
+        use_case_agents.insert(ModelUseCase::Workflows, override_config_arc.clone());
+
+        tool_context.use_case_agents = Arc::new(use_case_agents);
+
+        Ok(())
     }
 
     /// Create git operations handler

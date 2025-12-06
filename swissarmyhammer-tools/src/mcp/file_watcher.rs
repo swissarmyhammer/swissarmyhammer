@@ -265,6 +265,64 @@ impl FileWatcherCallback for McpFileWatcherCallback {
     }
 }
 
+/// Retry an async operation with exponential backoff
+///
+/// # Arguments
+///
+/// * `max_retries` - Maximum number of retry attempts
+/// * `initial_backoff_ms` - Initial backoff duration in milliseconds
+/// * `is_retryable` - Function to determine if an error is retryable
+/// * `operation` - The async operation to retry
+///
+/// # Returns
+///
+/// Returns the result of the operation or the last error encountered
+async fn retry_with_backoff<F, Fut, T, E>(
+    max_retries: u32,
+    initial_backoff_ms: u64,
+    is_retryable: fn(&E) -> bool,
+    mut operation: F,
+) -> std::result::Result<T, E>
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = std::result::Result<T, E>>,
+    E: std::fmt::Display,
+{
+    let mut backoff_ms = initial_backoff_ms;
+    let mut last_error = None;
+
+    for attempt in 1..=max_retries {
+        match operation().await {
+            Ok(value) => {
+                if attempt > 1 {
+                    tracing::info!("✓ Operation succeeded on attempt {}", attempt);
+                }
+                return Ok(value);
+            }
+            Err(e) => {
+                let should_retry = attempt < max_retries && is_retryable(&e);
+
+                if should_retry {
+                    tracing::warn!(
+                        "⚠️ Attempt {} failed, retrying in {}ms: {}",
+                        attempt,
+                        backoff_ms,
+                        e
+                    );
+
+                    tokio::time::sleep(tokio::time::Duration::from_millis(backoff_ms)).await;
+                    backoff_ms *= 2; // Exponential backoff
+                    last_error = Some(e);
+                } else {
+                    return Err(e);
+                }
+            }
+        }
+    }
+
+    Err(last_error.unwrap())
+}
+
 /// File watcher operations for MCP server
 pub struct McpFileWatcher {
     file_watcher: Arc<Mutex<FileWatcher>>,
@@ -304,49 +362,17 @@ impl McpFileWatcher {
         // Create callback that handles file changes and notifications
         let callback = McpFileWatcherCallback::new(server, peer);
 
-        let mut last_error = None;
-        let mut backoff_ms = INITIAL_BACKOFF_MS;
-
-        for attempt in 1..=MAX_RETRIES {
-            // Start watching using the file watcher module
-            let result = {
+        // Use retry logic to handle transient file system errors
+        retry_with_backoff(
+            MAX_RETRIES,
+            INITIAL_BACKOFF_MS,
+            Self::is_retryable_fs_error,
+            || async {
                 let mut watcher = self.file_watcher.lock().await;
                 watcher.start_watching(callback.clone()).await
-            };
-
-            match result {
-                Ok(()) => {
-                    if attempt > 1 {
-                        tracing::info!(
-                            "✓ File watcher started successfully on attempt {}",
-                            attempt
-                        );
-                    }
-                    return Ok(());
-                }
-                Err(e) => {
-                    last_error = Some(e);
-
-                    if attempt < MAX_RETRIES
-                        && Self::is_retryable_fs_error(last_error.as_ref().unwrap())
-                    {
-                        tracing::warn!(
-                            "⚠️ File watcher initialization attempt {} failed, retrying in {}ms: {}",
-                            attempt,
-                            backoff_ms,
-                            last_error.as_ref().unwrap()
-                        );
-
-                        tokio::time::sleep(tokio::time::Duration::from_millis(backoff_ms)).await;
-                        backoff_ms *= 2; // Exponential backoff
-                    } else {
-                        break;
-                    }
-                }
-            }
-        }
-
-        Err(last_error.unwrap())
+            },
+        )
+        .await
     }
 
     /// Stop watching prompt directories for file changes.

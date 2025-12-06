@@ -432,55 +432,56 @@ impl OutputBuffer {
         self.total_bytes_processed
     }
 
+    /// Truncate buffer to line boundary for cleaner output
+    fn truncate_to_line_boundary(buffer: &mut Vec<u8>) {
+        while !buffer.is_empty() && buffer[buffer.len() - 1] != b'\n' {
+            buffer.pop();
+        }
+    }
+
+    /// Make room in buffer by truncating to accommodate marker
+    fn make_room_for_marker(&mut self, needed_space: usize) {
+        if !self.stdout_buffer.is_empty() {
+            let to_remove = std::cmp::min(needed_space, self.stdout_buffer.len());
+            self.stdout_buffer
+                .truncate(self.stdout_buffer.len() - to_remove);
+            Self::truncate_to_line_boundary(&mut self.stdout_buffer);
+        } else if !self.stderr_buffer.is_empty() {
+            let to_remove = std::cmp::min(needed_space, self.stderr_buffer.len());
+            self.stderr_buffer
+                .truncate(self.stderr_buffer.len() - to_remove);
+            Self::truncate_to_line_boundary(&mut self.stderr_buffer);
+        }
+    }
+
+    /// Append marker to appropriate buffer
+    fn append_marker(&mut self, marker: &[u8]) {
+        if !self.stdout_buffer.is_empty() {
+            self.stdout_buffer.extend_from_slice(marker);
+        } else if !self.stderr_buffer.is_empty() {
+            self.stderr_buffer.extend_from_slice(marker);
+        } else {
+            self.stdout_buffer.extend_from_slice(marker);
+        }
+    }
+
     /// Add truncation marker to indicate data was truncated
     pub fn add_truncation_marker(&mut self) {
-        if self.truncated {
-            let marker = b"\n[Output truncated - exceeded size limit]";
-            let available = self.max_size.saturating_sub(self.current_size());
+        if !self.truncated {
+            return;
+        }
 
-            // If there's not enough space, make room by truncating existing content
-            if available < marker.len() {
-                let needed_space = marker.len() - available;
+        let marker = b"\n[Output truncated - exceeded size limit]";
+        let available = self.max_size.saturating_sub(self.current_size());
 
-                // Truncate from stdout first, then stderr if needed
-                if !self.stdout_buffer.is_empty() {
-                    let to_remove = std::cmp::min(needed_space, self.stdout_buffer.len());
-                    self.stdout_buffer
-                        .truncate(self.stdout_buffer.len() - to_remove);
+        if available < marker.len() {
+            let needed_space = marker.len() - available;
+            self.make_room_for_marker(needed_space);
+        }
 
-                    // Try to find a good truncation point (line boundary)
-                    while !self.stdout_buffer.is_empty()
-                        && self.stdout_buffer[self.stdout_buffer.len() - 1] != b'\n'
-                    {
-                        self.stdout_buffer.pop();
-                    }
-                } else if !self.stderr_buffer.is_empty() {
-                    let to_remove = std::cmp::min(needed_space, self.stderr_buffer.len());
-                    self.stderr_buffer
-                        .truncate(self.stderr_buffer.len() - to_remove);
-
-                    // Try to find a good truncation point (line boundary)
-                    while !self.stderr_buffer.is_empty()
-                        && self.stderr_buffer[self.stderr_buffer.len() - 1] != b'\n'
-                    {
-                        self.stderr_buffer.pop();
-                    }
-                }
-            }
-
-            // Now add the marker if there's space
-            let available = self.max_size.saturating_sub(self.current_size());
-            if available >= marker.len() {
-                // Add to stdout if it has content, otherwise stderr
-                if !self.stdout_buffer.is_empty() {
-                    self.stdout_buffer.extend_from_slice(marker);
-                } else if !self.stderr_buffer.is_empty() {
-                    self.stderr_buffer.extend_from_slice(marker);
-                } else {
-                    // If both buffers are empty (shouldn't happen), add to stdout
-                    self.stdout_buffer.extend_from_slice(marker);
-                }
-            }
+        let available = self.max_size.saturating_sub(self.current_size());
+        if available >= marker.len() {
+            self.append_marker(marker);
         }
     }
 }
@@ -917,13 +918,18 @@ async fn read_remaining_with_context<R>(
 /// # Returns
 ///
 /// Returns a Result containing either the captured output in an OutputBuffer or an error.
-async fn process_child_output_with_limits(
-    mut child: Child,
+/// Setup for output capture from child process
+struct OutputCaptureSetup {
+    stdout_reader: tokio::io::Lines<BufReader<tokio::process::ChildStdout>>,
+    stderr_reader: tokio::io::Lines<BufReader<tokio::process::ChildStderr>>,
+    output_buffer: OutputBuffer,
+}
+
+/// Initialize output capture for a child process
+fn setup_output_capture(
+    child: &mut Child,
     output_limits: &OutputLimits,
-    progress_sender: Option<&ProgressSender>,
-    progress_token: &str,
-) -> Result<(std::process::ExitStatus, OutputBuffer, u32), ShellError> {
-    // Take stdout and stderr from the child process
+) -> Result<OutputCaptureSetup, ShellError> {
     let stdout = child.stdout.take().ok_or_else(|| ShellError::SystemError {
         message: "Failed to capture stdout from child process".to_string(),
     })?;
@@ -932,130 +938,143 @@ async fn process_child_output_with_limits(
         message: "Failed to capture stderr from child process".to_string(),
     })?;
 
-    // Create output buffer with configured limits
-    let mut output_buffer = OutputBuffer::new(output_limits.max_output_size);
+    Ok(OutputCaptureSetup {
+        stdout_reader: BufReader::new(stdout).lines(),
+        stderr_reader: BufReader::new(stderr).lines(),
+        output_buffer: OutputBuffer::new(output_limits.max_output_size),
+    })
+}
 
-    // Create buffered readers for efficient streaming
-    let mut stdout_reader = BufReader::new(stdout).lines();
-    let mut stderr_reader = BufReader::new(stderr).lines();
+/// Collect any remaining output after process exits
+async fn collect_remaining_output(
+    stdout_reader: &mut tokio::io::Lines<BufReader<tokio::process::ChildStdout>>,
+    stderr_reader: &mut tokio::io::Lines<BufReader<tokio::process::ChildStderr>>,
+    line_count: &mut u32,
+    output_buffer: &mut OutputBuffer,
+    binary_notified: &mut bool,
+    progress_sender: Option<&ProgressSender>,
+    progress_token: &str,
+) {
+    const REMAINING_OUTPUT_TIMEOUT: Duration = Duration::from_millis(500);
 
-    // Track line count for batched progress notifications
-    let mut line_count: u32 = 0;
-    let mut binary_notified = false;
+    let stdout_future = read_remaining_with_context(
+        stdout_reader,
+        line_count,
+        output_buffer,
+        binary_notified,
+        progress_sender,
+        progress_token,
+        |buf, data| buf.append_stdout(data),
+    );
+    let _ = tokio::time::timeout(REMAINING_OUTPUT_TIMEOUT, stdout_future).await;
+
+    let stderr_future = read_remaining_with_context(
+        stderr_reader,
+        line_count,
+        output_buffer,
+        binary_notified,
+        progress_sender,
+        progress_token,
+        |buf, data| buf.append_stderr(data),
+    );
+    let _ = tokio::time::timeout(REMAINING_OUTPUT_TIMEOUT, stderr_future).await;
+}
+
+/// Stream output until process completes or buffer limit reached
+async fn stream_output_until_complete(
+    stdout_reader: &mut tokio::io::Lines<BufReader<tokio::process::ChildStdout>>,
+    stderr_reader: &mut tokio::io::Lines<BufReader<tokio::process::ChildStderr>>,
+    child: &mut Child,
+    line_count: &mut u32,
+    output_buffer: &mut OutputBuffer,
+    binary_notified: &mut bool,
+    progress_sender: Option<&ProgressSender>,
+    progress_token: &str,
+) -> Result<std::process::ExitStatus, ShellError> {
     const BATCH_SIZE: u32 = 10;
 
-    // Process output streams concurrently until process exits
     loop {
         tokio::select! {
-            // Read from stdout
             stdout_line = stdout_reader.next_line() => {
                 let mut ctx = OutputLineContext {
-                    line_count: &mut line_count,
-                    output_buffer: &mut output_buffer,
-                    binary_notified: &mut binary_notified,
-                    progress_sender,
-                    progress_token,
-                    batch_size: BATCH_SIZE,
+                    line_count, output_buffer, binary_notified,
+                    progress_sender, progress_token, batch_size: BATCH_SIZE,
                 };
                 if !process_stream_line_result(
-                    stdout_line,
-                    &mut ctx,
-                    |buf, data| buf.append_stdout(data),
-                    "stdout",
-                ) {
-                    break;
-                }
+                    stdout_line, &mut ctx,
+                    |buf, data| buf.append_stdout(data), "stdout",
+                ) { break; }
             }
 
-            // Read from stderr
             stderr_line = stderr_reader.next_line() => {
                 let mut ctx = OutputLineContext {
-                    line_count: &mut line_count,
-                    output_buffer: &mut output_buffer,
-                    binary_notified: &mut binary_notified,
-                    progress_sender,
-                    progress_token,
-                    batch_size: BATCH_SIZE,
+                    line_count, output_buffer, binary_notified,
+                    progress_sender, progress_token, batch_size: BATCH_SIZE,
                 };
                 if !process_stream_line_result(
-                    stderr_line,
-                    &mut ctx,
-                    |buf, data| buf.append_stderr(data),
-                    "stderr",
-                ) {
-                    break;
-                }
+                    stderr_line, &mut ctx,
+                    |buf, data| buf.append_stderr(data), "stderr",
+                ) { break; }
             }
 
-            // Check if process has exited
             exit_status = child.wait() => {
-                match exit_status {
-                    Ok(status) => {
-                        tracing::debug!("Process exited with status: {:?}", status);
-
-                        // Continue reading any remaining output after process exit with a timeout
-                        // This is important for processes that exit quickly but have buffered output
-                        // However, we need a timeout to handle background processes that keep pipes open
-
-                        const REMAINING_OUTPUT_TIMEOUT: Duration = Duration::from_millis(500);
-
-                        // Read remaining stdout with timeout
-                        let stdout_future = read_remaining_with_context(
-                            &mut stdout_reader,
-                            &mut line_count,
-                            &mut output_buffer,
-                            &mut binary_notified,
-                            progress_sender,
-                            progress_token,
-                            |buf, data| buf.append_stdout(data),
-                        );
-                        let _ = tokio::time::timeout(REMAINING_OUTPUT_TIMEOUT, stdout_future).await;
-
-                        // Read remaining stderr with timeout
-                        let stderr_future = read_remaining_with_context(
-                            &mut stderr_reader,
-                            &mut line_count,
-                            &mut output_buffer,
-                            &mut binary_notified,
-                            progress_sender,
-                            progress_token,
-                            |buf, data| buf.append_stderr(data),
-                        );
-                        let _ = tokio::time::timeout(REMAINING_OUTPUT_TIMEOUT, stderr_future).await;
-
-                        // Add truncation marker if needed
-                        output_buffer.add_truncation_marker();
-
-                        return Ok((status, output_buffer, line_count));
-                    }
-                    Err(e) => {
-                        return Err(ShellError::ExecutionError {
-                            command: "child process".to_string(),
-                            message: format!("Failed to wait for process: {e}"),
-                        });
-                    }
-                }
+                return exit_status.map_err(|e| ShellError::ExecutionError {
+                    command: "child process".to_string(),
+                    message: format!("Failed to wait for process: {e}"),
+                });
             }
         }
 
-        // Safety check: if buffer is at limit, stop processing
         if output_buffer.is_at_limit() {
             tracing::debug!("Output buffer at limit, stopping all processing");
             break;
         }
     }
 
-    // If we reach here, we hit the buffer limit but process is still running
-    // Wait for the process to complete, but don't capture more output
-    let exit_status = child.wait().await.map_err(|e| ShellError::ExecutionError {
+    child.wait().await.map_err(|e| ShellError::ExecutionError {
         command: "child process".to_string(),
         message: format!("Failed to wait for process: {e}"),
-    })?;
+    })
+}
 
-    // Add truncation marker
-    output_buffer.add_truncation_marker();
+async fn process_child_output_with_limits(
+    mut child: Child,
+    output_limits: &OutputLimits,
+    progress_sender: Option<&ProgressSender>,
+    progress_token: &str,
+) -> Result<(std::process::ExitStatus, OutputBuffer, u32), ShellError> {
+    let mut setup = setup_output_capture(&mut child, output_limits)?;
+    let mut line_count: u32 = 0;
+    let mut binary_notified = false;
 
-    Ok((exit_status, output_buffer, line_count))
+    let exit_status = stream_output_until_complete(
+        &mut setup.stdout_reader,
+        &mut setup.stderr_reader,
+        &mut child,
+        &mut line_count,
+        &mut setup.output_buffer,
+        &mut binary_notified,
+        progress_sender,
+        progress_token,
+    )
+    .await?;
+
+    tracing::debug!("Process exited with status: {:?}", exit_status);
+
+    collect_remaining_output(
+        &mut setup.stdout_reader,
+        &mut setup.stderr_reader,
+        &mut line_count,
+        &mut setup.output_buffer,
+        &mut binary_notified,
+        progress_sender,
+        progress_token,
+    )
+    .await;
+
+    setup.output_buffer.add_truncation_marker();
+
+    Ok((exit_status, setup.output_buffer, line_count))
 }
 
 /// Execute a shell command with process management and full output capture
@@ -1145,6 +1164,143 @@ async fn process_child_output_with_limits(
 /// - **Binary Detection**: Binary content is safely formatted as descriptive text
 /// - **Streaming Processing**: Output is processed in real-time, not buffered entirely
 /// - **Metadata**: Results include truncation status, binary detection, and byte counts
+/// Validate and prepare working directory
+fn prepare_working_directory(working_directory: Option<PathBuf>) -> Result<PathBuf, ShellError> {
+    let work_dir = working_directory
+        .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+
+    if !work_dir.exists() {
+        return Err(ShellError::WorkingDirectoryError {
+            message: format!("Working directory does not exist: {}", work_dir.display()),
+        });
+    }
+
+    Ok(work_dir)
+}
+
+/// Prepare shell command for execution
+fn prepare_shell_command(
+    command: &str,
+    work_dir: &PathBuf,
+    environment: Option<&std::collections::HashMap<String, String>>,
+) -> Command {
+    let (program, args) = if cfg!(target_os = "windows") {
+        ("cmd", vec!["/C", command])
+    } else {
+        ("sh", vec!["-c", command])
+    };
+
+    let mut cmd = Command::new(program);
+    cmd.args(args).current_dir(work_dir);
+
+    if let Some(env_vars) = environment {
+        for (key, value) in env_vars {
+            cmd.env(key, value);
+        }
+    }
+
+    cmd.stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+
+    cmd
+}
+
+/// Spawn command process with error handling
+fn spawn_command_process(
+    mut cmd: Command,
+    command: &str,
+    work_dir: &PathBuf,
+) -> Result<Child, ShellError> {
+    tracing::info!(
+        "Executing shell command: '{}' in directory: {}",
+        command,
+        work_dir.display()
+    );
+
+    cmd.spawn().map_err(|e| {
+        tracing::error!("Failed to spawn command '{}': {}", command, e);
+        ShellError::CommandSpawnError {
+            command: command.to_string(),
+            source: e,
+        }
+    })
+}
+
+/// Send completion progress notification
+fn send_completion_notification(
+    progress_sender: Option<&ProgressSender>,
+    progress_token: &str,
+    line_count: u32,
+    exit_code: i32,
+    execution_time_ms: u64,
+    output_truncated: bool,
+) {
+    if let Some(sender) = progress_sender {
+        sender
+            .send_progress_with_metadata(
+                progress_token,
+                Some(line_count),
+                format!(
+                    "Command completed: {} lines, exit code {}",
+                    line_count, exit_code
+                ),
+                json!({
+                    "exit_code": exit_code,
+                    "duration_ms": execution_time_ms,
+                    "line_count": line_count,
+                    "output_truncated": output_truncated
+                }),
+            )
+            .ok();
+    }
+}
+
+/// Format execution result from output buffer
+fn format_execution_result(
+    command: String,
+    work_dir: PathBuf,
+    exit_status: std::process::ExitStatus,
+    output_buffer: OutputBuffer,
+    execution_time_ms: u64,
+    output_limits: &OutputLimits,
+) -> ShellExecutionResult {
+    let exit_code = exit_status.code().unwrap_or(-1);
+    let truncation_info = if output_buffer.is_truncated() {
+        format!(
+            " (output truncated at {} bytes)",
+            output_limits.max_output_size
+        )
+    } else {
+        String::new()
+    };
+    let binary_info = if output_buffer.has_binary_content() {
+        " (binary content detected)"
+    } else {
+        ""
+    };
+
+    tracing::info!(
+        "Command '{}' completed with exit code {} in {}ms{}{}",
+        command,
+        exit_code,
+        execution_time_ms,
+        truncation_info,
+        binary_info
+    );
+
+    ShellExecutionResult {
+        command,
+        exit_code,
+        stdout: output_buffer.get_stdout(),
+        stderr: output_buffer.get_stderr(),
+        execution_time_ms,
+        working_directory: work_dir,
+        output_truncated: output_buffer.is_truncated(),
+        total_output_size: output_buffer.total_bytes_processed(),
+        binary_output_detected: output_buffer.has_binary_content(),
+    }
+}
+
 async fn execute_shell_command(
     command: String,
     working_directory: Option<PathBuf>,
@@ -1153,153 +1309,163 @@ async fn execute_shell_command(
     progress_token: &str,
 ) -> Result<ShellExecutionResult, ShellError> {
     let start_time = Instant::now();
+    let work_dir = prepare_working_directory(working_directory)?;
+    let cmd = prepare_shell_command(&command, &work_dir, environment.as_ref());
+    let child = spawn_command_process(cmd, &command, &work_dir)?;
 
-    // Determine working directory - use provided or current directory
-    let work_dir = working_directory
-        .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
-
-    // Validate that working directory exists
-    if !work_dir.exists() {
-        return Err(ShellError::WorkingDirectoryError {
-            message: format!("Working directory does not exist: {}", work_dir.display()),
-        });
-    }
-
-    // Parse command into parts for proper execution
-    // For Unix systems, we'll use sh -c to handle complex commands properly
-    let (program, args) = if cfg!(target_os = "windows") {
-        ("cmd", vec!["/C", &command])
-    } else {
-        ("sh", vec!["-c", &command])
-    };
-
-    // Build the tokio Command
-    let mut cmd = Command::new(program);
-    cmd.args(args).current_dir(&work_dir);
-
-    // Note: Process group configuration is not used for compatibility
-    // The AsyncProcessGuard will handle process cleanup using kill/killpg
-
-    // Add environment variables if provided
-    if let Some(env_vars) = &environment {
-        for (key, value) in env_vars {
-            cmd.env(key, value);
-        }
-    }
-
-    // Configure output capture
-    cmd.stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped());
-
-    tracing::info!(
-        "Executing shell command: '{}' in directory: {}",
-        command,
-        work_dir.display()
-    );
-
-    // Spawn the process
-    let child = cmd.spawn().map_err(|e| {
-        tracing::error!("Failed to spawn command '{}': {}", command, e);
-        ShellError::CommandSpawnError {
-            command: command.clone(),
-            source: e,
-        }
-    })?;
-
-    // Create process guard for automatic cleanup
     let mut process_guard = AsyncProcessGuard::new(child, command.clone());
-
-    // Create output limits configuration with defaults
     let output_limits = OutputLimits::with_defaults().map_err(|e| ShellError::SystemError {
         message: format!("Invalid output configuration: {e}"),
     })?;
 
-    // Execute command directly (rely on MCP server timeout)
-    {
-        // Take the child from the guard for execution
-        let child = process_guard
-            .take_child()
-            .ok_or_else(|| ShellError::SystemError {
-                message: "Process guard has no child process".to_string(),
+    let child = process_guard
+        .take_child()
+        .ok_or_else(|| ShellError::SystemError {
+            message: "Process guard has no child process".to_string(),
+        })?;
+
+    let (exit_status, output_buffer, line_count) =
+        process_child_output_with_limits(child, &output_limits, progress_sender, progress_token)
+            .await?;
+
+    let execution_time_ms = start_time.elapsed().as_millis() as u64;
+    let exit_code = exit_status.code().unwrap_or(-1);
+
+    send_completion_notification(
+        progress_sender,
+        progress_token,
+        line_count,
+        exit_code,
+        execution_time_ms,
+        output_buffer.is_truncated(),
+    );
+
+    Ok(format_execution_result(
+        command,
+        work_dir,
+        exit_status,
+        output_buffer,
+        execution_time_ms,
+        &output_limits,
+    ))
+}
+
+/// Validate shell request for security and correctness
+fn validate_shell_request(request: &ShellExecuteRequest) -> Result<(), McpError> {
+    McpValidation::validate_not_empty(&request.command, "shell command")
+        .map_err(|e| McpErrorHandler::handle_error(e, "validate shell command"))?;
+
+    swissarmyhammer_shell::validate_command(&request.command).map_err(|e| {
+        tracing::warn!("Command security validation failed: {}", e);
+        McpError::invalid_params(format!("Command security check failed: {e}"), None)
+    })?;
+
+    if let Some(ref working_dir) = request.working_directory {
+        McpValidation::validate_not_empty(working_dir, "working directory")
+            .map_err(|e| McpErrorHandler::handle_error(e, "validate working directory"))?;
+
+        swissarmyhammer_shell::validate_working_directory_security(std::path::Path::new(
+            working_dir,
+        ))
+        .map_err(|e| {
+            tracing::warn!("Working directory security validation failed: {}", e);
+            McpError::invalid_params(
+                format!("Working directory security check failed: {e}"),
+                None,
+            )
+        })?;
+    }
+
+    Ok(())
+}
+
+/// Parse and validate environment variables from JSON string
+fn parse_environment_variables(
+    env_str: Option<&str>,
+) -> Result<Option<std::collections::HashMap<String, String>>, McpError> {
+    if let Some(env_str) = env_str {
+        let env_vars: std::collections::HashMap<String, String> = serde_json::from_str(env_str)
+            .map_err(|e| {
+                tracing::warn!("Failed to parse environment variables JSON: {}", e);
+                McpError::invalid_params(
+                    format!("Invalid JSON format for environment variables: {e}"),
+                    None,
+                )
             })?;
 
-        // Process output with limits using streaming
-        let (exit_status, output_buffer, line_count) = process_child_output_with_limits(
-            child,
-            &output_limits,
-            progress_sender,
-            progress_token,
-        )
-        .await?;
-        {
-            let execution_time = start_time.elapsed();
-            let execution_time_ms = execution_time.as_millis() as u64;
+        swissarmyhammer_shell::validate_environment_variables_security(&env_vars).map_err(|e| {
+            tracing::warn!("Environment variables security validation failed: {}", e);
+            McpError::invalid_params(
+                format!("Environment variables security check failed: {e}"),
+                None,
+            )
+        })?;
 
-            // Get formatted output strings with binary handling
-            let stdout = output_buffer.get_stdout();
-            let stderr = output_buffer.get_stderr();
-
-            // Get the exit code
-            let exit_code = exit_status.code().unwrap_or(-1);
-
-            // Log execution completion with output metadata
-            let truncation_info = if output_buffer.is_truncated() {
-                format!(
-                    " (output truncated at {} bytes)",
-                    output_limits.max_output_size
-                )
-            } else {
-                String::new()
-            };
-
-            let binary_info = if output_buffer.has_binary_content() {
-                " (binary content detected)"
-            } else {
-                ""
-            };
-
-            tracing::info!(
-                "Command '{}' completed with exit code {} in {}ms{}{}",
-                command,
-                exit_code,
-                execution_time_ms,
-                truncation_info,
-                binary_info
-            );
-
-            // Send completion notification
-            if let Some(sender) = progress_sender {
-                sender
-                    .send_progress_with_metadata(
-                        progress_token,
-                        Some(line_count),
-                        format!(
-                            "Command completed: {} lines, exit code {}",
-                            line_count, exit_code
-                        ),
-                        json!({
-                            "exit_code": exit_code,
-                            "duration_ms": execution_time_ms,
-                            "line_count": line_count,
-                            "output_truncated": output_buffer.is_truncated()
-                        }),
-                    )
-                    .ok();
-            }
-
-            Ok(ShellExecutionResult {
-                command,
-                exit_code,
-                stdout,
-                stderr,
-                execution_time_ms,
-                working_directory: work_dir,
-                output_truncated: output_buffer.is_truncated(),
-                total_output_size: output_buffer.total_bytes_processed(),
-                binary_output_detected: output_buffer.has_binary_content(),
-            })
-        }
+        Ok(Some(env_vars))
+    } else {
+        Ok(None)
     }
+}
+
+/// Send start notification for command execution
+fn send_start_notification(
+    progress_sender: &Option<ProgressSender>,
+    progress_token: &str,
+    command: &str,
+) {
+    if let Some(sender) = progress_sender {
+        sender
+            .send_progress(progress_token, Some(0), format!("Executing: {}", command))
+            .ok();
+    }
+}
+
+/// Format successful execution result
+fn format_success_result(result: ShellExecutionResult) -> Result<CallToolResult, McpError> {
+    let is_error = result.exit_code != 0;
+    let json_response = serde_json::to_string_pretty(&result).map_err(|e| {
+        tracing::error!("Failed to serialize shell result: {}", e);
+        McpError::internal_error(format!("Serialization failed: {e}"), None)
+    })?;
+
+    tracing::info!(
+        "Shell command '{}' completed with exit code {} in {}ms",
+        result.command,
+        result.exit_code,
+        result.execution_time_ms
+    );
+
+    Ok(CallToolResult {
+        content: vec![rmcp::model::Annotated::new(
+            rmcp::model::RawContent::Text(rmcp::model::RawTextContent {
+                text: json_response,
+                meta: None,
+            }),
+            None,
+        )],
+        structured_content: None,
+        meta: None,
+        is_error: Some(is_error),
+    })
+}
+
+/// Format error result
+fn format_error_result(shell_error: ShellError) -> Result<CallToolResult, McpError> {
+    let error_message = format!("Shell execution failed: {shell_error}");
+    tracing::error!("{}", error_message);
+
+    Ok(CallToolResult {
+        content: vec![rmcp::model::Annotated::new(
+            rmcp::model::RawContent::Text(rmcp::model::RawTextContent {
+                text: error_message,
+                meta: None,
+            }),
+            None,
+        )],
+        structured_content: None,
+        meta: None,
+        is_error: Some(true),
+    })
 }
 
 /// Tool for executing shell commands
@@ -1353,84 +1519,14 @@ impl McpTool for ShellExecuteTool {
         _context: &ToolContext,
     ) -> std::result::Result<CallToolResult, McpError> {
         let request: ShellExecuteRequest = BaseToolImpl::parse_arguments(arguments)?;
-
         tracing::debug!("Executing shell command: {:?}", request.command);
 
-        // Using default shell configuration (does not use sah_config)
-
-        // Validate command is not empty
-        McpValidation::validate_not_empty(&request.command, "shell command")
-            .map_err(|e| McpErrorHandler::handle_error(e, "validate shell command"))?;
-
-        // Apply comprehensive command security validation from workflow system
-        swissarmyhammer_shell::validate_command(&request.command).map_err(|e| {
-            tracing::warn!("Command security validation failed: {}", e);
-            McpError::invalid_params(format!("Command security check failed: {e}"), None)
-        })?;
-
-        // Validate working directory if provided with security checks
-        if let Some(ref working_dir) = request.working_directory {
-            McpValidation::validate_not_empty(working_dir, "working directory")
-                .map_err(|e| McpErrorHandler::handle_error(e, "validate working directory"))?;
-
-            // Apply security validation from workflow system
-            swissarmyhammer_shell::validate_working_directory_security(std::path::Path::new(
-                working_dir,
-            ))
-            .map_err(|e| {
-                tracing::warn!("Working directory security validation failed: {}", e);
-                McpError::invalid_params(
-                    format!("Working directory security check failed: {e}"),
-                    None,
-                )
-            })?;
-        }
-
-        // Parse and validate environment variables if provided
-        let parsed_environment: Option<std::collections::HashMap<String, String>> =
-            if let Some(ref env_str) = request.environment {
-                // Parse JSON string into HashMap
-                let env_vars: std::collections::HashMap<String, String> =
-                    serde_json::from_str(env_str).map_err(|e| {
-                        tracing::warn!("Failed to parse environment variables JSON: {}", e);
-                        McpError::invalid_params(
-                            format!("Invalid JSON format for environment variables: {e}"),
-                            None,
-                        )
-                    })?;
-
-                // Validate environment variables with security checks
-                swissarmyhammer_shell::validate_environment_variables_security(&env_vars).map_err(
-                    |e| {
-                        tracing::warn!("Environment variables security validation failed: {}", e);
-                        McpError::invalid_params(
-                            format!("Environment variables security check failed: {e}"),
-                            None,
-                        )
-                    },
-                )?;
-
-                Some(env_vars)
-            } else {
-                None
-            };
-
-        // Execute the shell command using our core execution function
+        validate_shell_request(&request)?;
+        let parsed_environment = parse_environment_variables(request.environment.as_deref())?;
         let working_directory = request.working_directory.map(PathBuf::from);
 
-        // Generate progress token for this execution
         let progress_token = generate_progress_token();
-
-        // Send start notification
-        if let Some(sender) = &_context.progress_sender {
-            sender
-                .send_progress(
-                    &progress_token,
-                    Some(0),
-                    format!("Executing: {}", request.command),
-                )
-                .ok();
-        }
+        send_start_notification(&_context.progress_sender, &progress_token, &request.command);
 
         match execute_shell_command(
             request.command.clone(),
@@ -1441,56 +1537,8 @@ impl McpTool for ShellExecuteTool {
         )
         .await
         {
-            Ok(result) => {
-                // Command executed successfully - create response based on exit code
-                let is_error = result.exit_code != 0;
-
-                // Serialize the result as JSON for the response
-                let json_response = serde_json::to_string_pretty(&result).map_err(|e| {
-                    tracing::error!("Failed to serialize shell result: {}", e);
-                    McpError::internal_error(format!("Serialization failed: {e}"), None)
-                })?;
-
-                tracing::info!(
-                    "Shell command '{}' completed with exit code {} in {}ms",
-                    result.command,
-                    result.exit_code,
-                    result.execution_time_ms
-                );
-
-                // Create response with structured JSON data
-                Ok(CallToolResult {
-                    content: vec![rmcp::model::Annotated::new(
-                        rmcp::model::RawContent::Text(rmcp::model::RawTextContent {
-                            text: json_response,
-                            meta: None,
-                        }),
-                        None,
-                    )],
-                    structured_content: None,
-                    meta: None,
-                    is_error: Some(is_error),
-                })
-            }
-            Err(shell_error) => {
-                // Handle different types of shell errors with appropriate responses
-                // Return standard error response
-                let error_message = format!("Shell execution failed: {shell_error}");
-                tracing::error!("{}", error_message);
-
-                Ok(CallToolResult {
-                    content: vec![rmcp::model::Annotated::new(
-                        rmcp::model::RawContent::Text(rmcp::model::RawTextContent {
-                            text: error_message,
-                            meta: None,
-                        }),
-                        None,
-                    )],
-                    structured_content: None,
-                    meta: None,
-                    is_error: Some(true),
-                })
-            }
+            Ok(result) => format_success_result(result),
+            Err(shell_error) => format_error_result(shell_error),
         }
     }
 }

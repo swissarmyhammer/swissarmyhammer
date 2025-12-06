@@ -66,7 +66,7 @@ async fn test_claude_executor_can_use_mcp_tools() {
         .expect("Executor should initialize");
 
     // Create execution context
-    let agent_config = swissarmyhammer_config::agent::AgentConfig::claude_code();
+    let agent_config = swissarmyhammer_config::model::ModelConfig::claude_code();
     let context = AgentExecutionContext::new(&agent_config);
 
     // Execute a prompt that requires Claude to use the Read tool

@@ -4,8 +4,8 @@
 //! by actually running a rule check with a small LlamaAgent model.
 
 use std::fs;
-use swissarmyhammer_config::agent::{AgentManager, AgentUseCase};
-use tempfile::TempDir;
+use swissarmyhammer_common::test_utils::IsolatedTestEnvironment;
+use swissarmyhammer_config::model::{ModelManager, ModelUseCase};
 
 /// Test that rule checking can use a small LlamaAgent model
 ///
@@ -19,13 +19,14 @@ async fn test_rule_check_with_small_llama_model() {
     let test_model_file = "tinydolphin-2.8-1.1b.Q4_K_M.gguf";
 
     // Create temp directory with config
-    let temp_dir = TempDir::new().unwrap();
-    let temp_path = temp_dir.path().to_path_buf();
+    let _env = IsolatedTestEnvironment::new().expect("Failed to create test environment");
+    let temp_dir = _env.temp_dir();
+    let temp_path = temp_dir;
     let sah_dir = temp_path.join(".swissarmyhammer");
     fs::create_dir_all(&sah_dir).unwrap();
 
     // Create a custom agent config with the small test model
-    let agent_dir = temp_path.join("agents");
+    let agent_dir = temp_path.join("models");
     fs::create_dir_all(&agent_dir).unwrap();
 
     let small_agent_config = format!(
@@ -54,11 +55,11 @@ executor:
 
     // Verify agent can be resolved
     let agent_name =
-        AgentManager::get_agent_for_use_case(AgentUseCase::Rules).expect("Should read config");
+        ModelManager::get_agent_for_use_case(ModelUseCase::Rules).expect("Should read config");
     eprintln!("Configured agent for rules: {:?}", agent_name);
     assert_eq!(agent_name, Some("test-small".to_string()));
 
-    let agent_config = AgentManager::resolve_agent_config_for_use_case(AgentUseCase::Rules)
+    let agent_config = ModelManager::resolve_agent_config_for_use_case(ModelUseCase::Rules)
         .expect("Should resolve agent config");
     eprintln!("Agent executor type: {:?}", agent_config.executor_type());
 
@@ -81,33 +82,34 @@ executor:
 
 /// Test proving config is read correctly (fast, no model needed)
 #[tokio::test]
-async fn test_config_specifies_rules_agent() {
-    let temp_dir = TempDir::new().unwrap();
-    let temp_path = temp_dir.path().to_path_buf();
+async fn test_config_specifies_rules_model() {
+    let _env = IsolatedTestEnvironment::new().expect("Failed to create test environment");
+    let temp_dir = _env.temp_dir();
+    let temp_path = temp_dir;
     let sah_dir = temp_path.join(".swissarmyhammer");
     fs::create_dir_all(&sah_dir).unwrap();
 
     let config_path = sah_dir.join("sah.yaml");
 
     // Test 1: qwen-coder-flash
-    fs::write(&config_path, "agents:\n  rules: qwen-coder-flash\n").unwrap();
+    fs::write(&config_path, "models:\n  rules: qwen-coder-flash\n").unwrap();
 
     let original_dir = std::env::current_dir().unwrap();
     std::env::set_current_dir(&temp_path).unwrap();
 
-    let agent1 = AgentManager::get_agent_for_use_case(AgentUseCase::Rules).expect("Should read");
+    let agent1 = ModelManager::get_agent_for_use_case(ModelUseCase::Rules).expect("Should read");
     eprintln!("Test 1 - Agent: {:?}", agent1);
     assert_eq!(agent1, Some("qwen-coder-flash".to_string()));
 
     // Test 2: claude-code
-    fs::write(&config_path, "agents:\n  rules: claude-code\n").unwrap();
-    let agent2 = AgentManager::get_agent_for_use_case(AgentUseCase::Rules).expect("Should read");
+    fs::write(&config_path, "models:\n  rules: claude-code\n").unwrap();
+    let agent2 = ModelManager::get_agent_for_use_case(ModelUseCase::Rules).expect("Should read");
     eprintln!("Test 2 - Agent: {:?}", agent2);
     assert_eq!(agent2, Some("claude-code".to_string()));
 
     // Test 3: No config (should return None)
     fs::write(&config_path, "# empty\n").unwrap();
-    let agent3 = AgentManager::get_agent_for_use_case(AgentUseCase::Rules).expect("Should read");
+    let agent3 = ModelManager::get_agent_for_use_case(ModelUseCase::Rules).expect("Should read");
     eprintln!("Test 3 - Agent: {:?}", agent3);
     assert_eq!(agent3, None);
 

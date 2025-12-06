@@ -4,7 +4,7 @@
 //! and delegate to the actual implementations from agent-executor crate.
 
 use async_trait::async_trait;
-use swissarmyhammer_config::agent::AgentExecutorType;
+use swissarmyhammer_config::model::AgentExecutorType;
 use swissarmyhammer_config::LlamaAgentConfig;
 
 // Import types from agent-executor

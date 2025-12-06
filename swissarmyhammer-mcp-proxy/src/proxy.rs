@@ -4,6 +4,9 @@ use rmcp::service::RequestContext;
 use rmcp::{ErrorData as McpError, RoleServer, ServerHandler};
 use std::sync::Arc;
 
+/// Type alias for cached peer connection
+type CachedPeerConnection = Option<(rmcp::Peer<rmcp::RoleClient>, tokio::task::JoinHandle<()>)>;
+
 /// Filtering proxy that wraps an upstream MCP server via HTTP.
 ///
 /// This proxy implements ServerHandler and forwards all requests to an upstream
@@ -20,9 +23,7 @@ pub struct FilteringMcpProxy {
     /// Tool filter with allow/deny patterns
     tool_filter: ToolFilter,
     /// Cached peer connection (with interior mutability)
-    cached_peer: Arc<
-        tokio::sync::Mutex<Option<(rmcp::Peer<rmcp::RoleClient>, tokio::task::JoinHandle<()>)>>,
-    >,
+    cached_peer: Arc<tokio::sync::Mutex<CachedPeerConnection>>,
 }
 
 impl FilteringMcpProxy {
@@ -79,6 +80,35 @@ impl FilteringMcpProxy {
 
         Ok(peer)
     }
+
+    /// Create proxy implementation metadata
+    fn proxy_implementation() -> Implementation {
+        Implementation {
+            name: "swissarmyhammer-filtering-proxy".into(),
+            version: env!("CARGO_PKG_VERSION").into(),
+            title: Some("SwissArmyHammer Filtering Proxy".into()),
+            website_url: None,
+            icons: None,
+        }
+    }
+
+    /// Create proxy capabilities
+    fn proxy_capabilities() -> ServerCapabilities {
+        ServerCapabilities {
+            prompts: Some(PromptsCapability {
+                list_changed: Some(false),
+            }),
+            tools: Some(ToolsCapability {
+                list_changed: Some(false),
+            }),
+            ..Default::default()
+        }
+    }
+
+    /// Map upstream service errors to MCP errors
+    fn map_upstream_error(operation: &str, e: rmcp::service::ServiceError) -> McpError {
+        McpError::internal_error(format!("{} failed: {}", operation, e), None)
+    }
 }
 
 impl ServerHandler for FilteringMcpProxy {
@@ -97,23 +127,9 @@ impl ServerHandler for FilteringMcpProxy {
         // The upstream server is already running and initialized
         Ok(InitializeResult {
             protocol_version: ProtocolVersion::default(),
-            capabilities: ServerCapabilities {
-                prompts: Some(PromptsCapability {
-                    list_changed: Some(false),
-                }),
-                tools: Some(ToolsCapability {
-                    list_changed: Some(false),
-                }),
-                ..Default::default()
-            },
+            capabilities: Self::proxy_capabilities(),
             instructions: Some("Filtering proxy for MCP tool access control".into()),
-            server_info: Implementation {
-                name: "swissarmyhammer-filtering-proxy".into(),
-                version: env!("CARGO_PKG_VERSION").into(),
-                title: Some("SwissArmyHammer Filtering Proxy".into()),
-                website_url: None,
-                icons: None,
-            },
+            server_info: Self::proxy_implementation(),
         })
     }
 
@@ -131,7 +147,7 @@ impl ServerHandler for FilteringMcpProxy {
         let peer = self.get_peer().await?;
         peer.list_prompts(request)
             .await
-            .map_err(|e| McpError::internal_error(format!("list_prompts failed: {}", e), None))
+            .map_err(|e| Self::map_upstream_error("list_prompts", e))
     }
 
     /// Forward get_prompt request to upstream server via rmcp peer.
@@ -149,7 +165,7 @@ impl ServerHandler for FilteringMcpProxy {
         let peer = self.get_peer().await?;
         peer.get_prompt(request)
             .await
-            .map_err(|e| McpError::internal_error(format!("get_prompt failed: {}", e), None))
+            .map_err(|e| Self::map_upstream_error("get_prompt", e))
     }
 
     /// Filter list_tools to only return allowed tools.
@@ -171,7 +187,7 @@ impl ServerHandler for FilteringMcpProxy {
         let result = peer
             .list_tools(None)
             .await
-            .map_err(|e| McpError::internal_error(format!("list_tools failed: {}", e), None))?;
+            .map_err(|e| Self::map_upstream_error("list_tools", e))?;
 
         // Filter tools based on allow/deny patterns
         let total_tools = result.tools.len();
@@ -222,29 +238,15 @@ impl ServerHandler for FilteringMcpProxy {
         let peer = self.get_peer().await?;
         peer.call_tool(request)
             .await
-            .map_err(|e| McpError::internal_error(format!("call_tool failed: {}", e), None))
+            .map_err(|e| Self::map_upstream_error("call_tool", e))
     }
 
     /// Return server info for the proxy itself
     fn get_info(&self) -> ServerInfo {
         ServerInfo {
             protocol_version: ProtocolVersion::default(),
-            capabilities: ServerCapabilities {
-                prompts: Some(PromptsCapability {
-                    list_changed: Some(false),
-                }),
-                tools: Some(ToolsCapability {
-                    list_changed: Some(false),
-                }),
-                ..Default::default()
-            },
-            server_info: Implementation {
-                name: "swissarmyhammer-filtering-proxy".into(),
-                version: env!("CARGO_PKG_VERSION").into(),
-                title: Some("SwissArmyHammer Filtering Proxy".into()),
-                website_url: None,
-                icons: None,
-            },
+            capabilities: Self::proxy_capabilities(),
+            server_info: Self::proxy_implementation(),
             instructions: Some("Filtering proxy for MCP tool access control".into()),
         }
     }

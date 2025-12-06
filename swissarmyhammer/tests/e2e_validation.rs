@@ -4,19 +4,56 @@ use serde_json::json;
 use std::collections::HashMap;
 
 use swissarmyhammer::test_utils::IsolatedTestEnvironment;
-use swissarmyhammer_config::agent::{AgentConfig, LlamaAgentConfig};
+use swissarmyhammer_config::model::{LlamaAgentConfig, ModelConfig};
 use swissarmyhammer_workflow::actions::AgentExecutionContext;
 use swissarmyhammer_workflow::template_context::WorkflowTemplateContext;
 
+fn process_workflow_step(
+    step_name: &str,
+    accumulated_context: &mut HashMap<String, serde_json::Value>,
+    step_data: &serde_json::Value,
+    config: &ModelConfig,
+) {
+    println!("  Processing step: {}", step_name);
+
+    // Add current step data to accumulated context
+    for (key, value) in step_data.as_object().unwrap() {
+        accumulated_context.insert(key.clone(), value.clone());
+    }
+
+    // Add step metadata
+    accumulated_context.insert("current_step".to_string(), json!(step_name));
+    accumulated_context.insert("workflow_id".to_string(), json!("test_workflow_001"));
+
+    let context = WorkflowTemplateContext::with_vars(accumulated_context.clone())
+        .expect("Failed to create context");
+    let mut context_with_config = context;
+    context_with_config.set_agent_config(config.clone());
+    let execution_context = AgentExecutionContext::new(&context_with_config);
+
+    // Verify execution context is properly configured
+    assert_eq!(execution_context.executor_type(), config.executor_type());
+    println!(
+        "    ✓ Step {} execution context created successfully",
+        step_name
+    );
+}
+
+fn verify_accumulated_context(accumulated_context: &HashMap<String, serde_json::Value>) {
+    assert!(accumulated_context.contains_key("task"));
+    assert!(accumulated_context.contains_key("analysis"));
+    assert!(accumulated_context.contains_key("plan"));
+    assert!(accumulated_context.contains_key("result"));
+    assert!(accumulated_context.contains_key("current_step"));
+    assert!(accumulated_context.contains_key("workflow_id"));
+}
+
 #[tokio::test]
 async fn test_multi_step_workflow_simulation() {
-    // Skip test if LlamaAgent testing is disabled
-
     let _guard = IsolatedTestEnvironment::new().expect("Failed to create test environment");
 
     println!("Testing multi-step workflow simulation");
 
-    // Simulate a workflow with multiple variable passing steps
     let workflow_steps = [
         ("analyze", json!({"task": "analyze user requirements"})),
         (
@@ -34,46 +71,18 @@ async fn test_multi_step_workflow_simulation() {
         );
 
         let config = match executor_name {
-            "Claude" => AgentConfig::claude_code(),
-            "LlamaAgent" => AgentConfig::llama_agent(LlamaAgentConfig::for_testing()),
+            "Claude" => ModelConfig::claude_code(),
+            "LlamaAgent" => ModelConfig::llama_agent(LlamaAgentConfig::for_testing()),
             _ => unreachable!(),
         };
 
         let mut accumulated_context = HashMap::new();
 
         for (step_name, step_data) in &workflow_steps {
-            println!("  Processing step: {}", step_name);
-
-            // Add current step data to accumulated context
-            for (key, value) in step_data.as_object().unwrap() {
-                accumulated_context.insert(key.clone(), value.clone());
-            }
-
-            // Add step metadata
-            accumulated_context.insert("current_step".to_string(), json!(step_name));
-            accumulated_context.insert("workflow_id".to_string(), json!("test_workflow_001"));
-
-            let context = WorkflowTemplateContext::with_vars(accumulated_context.clone())
-                .expect("Failed to create context");
-            let mut context_with_config = context;
-            context_with_config.set_agent_config(config.clone());
-            let execution_context = AgentExecutionContext::new(&context_with_config);
-
-            // Verify execution context is properly configured
-            assert_eq!(execution_context.executor_type(), config.executor_type());
-            println!(
-                "    ✓ Step {} execution context created successfully",
-                step_name
-            );
+            process_workflow_step(step_name, &mut accumulated_context, step_data, &config);
         }
 
-        // Verify final context has all expected variables
-        assert!(accumulated_context.contains_key("task"));
-        assert!(accumulated_context.contains_key("analysis"));
-        assert!(accumulated_context.contains_key("plan"));
-        assert!(accumulated_context.contains_key("result"));
-        assert!(accumulated_context.contains_key("current_step"));
-        assert!(accumulated_context.contains_key("workflow_id"));
+        verify_accumulated_context(&accumulated_context);
 
         println!("  ✓ Multi-step workflow completed with {}", executor_name);
     }
@@ -81,8 +90,6 @@ async fn test_multi_step_workflow_simulation() {
 
 #[tokio::test]
 async fn test_error_recovery_scenarios() {
-    // Skip test if LlamaAgent testing is disabled
-
     let _guard = IsolatedTestEnvironment::new().expect("Failed to create test environment");
 
     println!("Testing error recovery scenarios");
@@ -103,8 +110,8 @@ async fn test_error_recovery_scenarios() {
 
         for executor_name in ["Claude", "LlamaAgent"] {
             let config = match executor_name {
-                "Claude" => AgentConfig::claude_code(),
-                "LlamaAgent" => AgentConfig::llama_agent(LlamaAgentConfig::for_testing()),
+                "Claude" => ModelConfig::claude_code(),
+                "LlamaAgent" => ModelConfig::llama_agent(LlamaAgentConfig::for_testing()),
                 _ => unreachable!(),
             };
 
@@ -128,8 +135,6 @@ async fn test_error_recovery_scenarios() {
 
 #[tokio::test]
 async fn test_variable_templating_patterns() {
-    // Skip test if LlamaAgent testing is disabled
-
     let _guard = IsolatedTestEnvironment::new().expect("Failed to create test environment");
 
     println!("Testing variable templating patterns");
@@ -153,13 +158,13 @@ async fn test_variable_templating_patterns() {
 
         let context = WorkflowTemplateContext::with_vars(vars).expect("Failed to create context");
         let mut context_with_config = context;
-        context_with_config.set_agent_config(AgentConfig::claude_code());
+        context_with_config.set_agent_config(ModelConfig::claude_code());
         let execution_context = AgentExecutionContext::new(&context_with_config);
 
         // Test that complex variables don't break context creation
         assert_eq!(
             execution_context.executor_type(),
-            swissarmyhammer_config::agent::AgentExecutorType::ClaudeCode
+            swissarmyhammer_config::model::AgentExecutorType::ClaudeCode
         );
         println!("  ✓ Template pattern {} handled successfully", test_name);
     }
@@ -167,15 +172,50 @@ async fn test_variable_templating_patterns() {
     println!("✓ Variable templating patterns test completed");
 }
 
+fn test_condition_execution(
+    condition_name: &str,
+    should_execute: bool,
+    action: &str,
+    executor_name: &str,
+    config: &ModelConfig,
+) {
+    let vars = HashMap::from([
+        ("condition".to_string(), json!(condition_name)),
+        ("should_execute".to_string(), json!(should_execute)),
+        ("action".to_string(), json!(action)),
+        (
+            "execution_id".to_string(),
+            json!(format!("exec_{}", condition_name)),
+        ),
+    ]);
+
+    let context =
+        WorkflowTemplateContext::with_vars(vars.clone()).expect("Failed to create context");
+    let mut context_with_config = context;
+    context_with_config.set_agent_config(config.clone());
+    let execution_context = AgentExecutionContext::new(&context_with_config);
+
+    // Test conditional execution context creation
+    assert_eq!(execution_context.executor_type(), config.executor_type());
+    if should_execute {
+        println!(
+            "    ✓ Condition {} with {} executed successfully",
+            condition_name, executor_name
+        );
+    } else {
+        println!(
+            "    ✓ Condition {} with {} context created (execution skipped)",
+            condition_name, executor_name
+        );
+    }
+}
+
 #[tokio::test]
 async fn test_conditional_execution_simulation() {
-    // Skip test if LlamaAgent testing is disabled
-
     let _guard = IsolatedTestEnvironment::new().expect("Failed to create test environment");
 
     println!("Testing conditional execution simulation");
 
-    // Simulate conditional workflow branches
     let conditions = [
         ("success_path", true, "continue"),
         ("error_path", false, "halt"),
@@ -189,57 +229,78 @@ async fn test_conditional_execution_simulation() {
             condition_name, should_execute, action
         );
 
-        let vars = HashMap::from([
-            ("condition".to_string(), json!(condition_name)),
-            ("should_execute".to_string(), json!(should_execute)),
-            ("action".to_string(), json!(action)),
-            (
-                "execution_id".to_string(),
-                json!(format!("exec_{}", condition_name)),
-            ),
-        ]);
-
         for executor_name in ["Claude", "LlamaAgent"] {
             let config = match executor_name {
-                "Claude" => AgentConfig::claude_code(),
-                "LlamaAgent" => AgentConfig::llama_agent(LlamaAgentConfig::for_testing()),
+                "Claude" => ModelConfig::claude_code(),
+                "LlamaAgent" => ModelConfig::llama_agent(LlamaAgentConfig::for_testing()),
                 _ => unreachable!(),
             };
 
-            let context =
-                WorkflowTemplateContext::with_vars(vars.clone()).expect("Failed to create context");
-            let mut context_with_config = context;
-            context_with_config.set_agent_config(config.clone());
-            let execution_context = AgentExecutionContext::new(&context_with_config);
-
-            // Test conditional execution context creation
-            assert_eq!(execution_context.executor_type(), config.executor_type());
-            if should_execute {
-                println!(
-                    "    ✓ Condition {} with {} executed successfully",
-                    condition_name, executor_name
-                );
-            } else {
-                println!(
-                    "    ✓ Condition {} with {} context created (execution skipped)",
-                    condition_name, executor_name
-                );
-            }
+            test_condition_execution(
+                condition_name,
+                should_execute,
+                action,
+                executor_name,
+                &config,
+            );
         }
     }
 
     println!("✓ Conditional execution simulation completed");
 }
 
+fn process_state_transition(
+    new_status: &str,
+    additional_state: &serde_json::Value,
+    workflow_state: &mut HashMap<String, serde_json::Value>,
+) {
+    println!("Transitioning to state: {}", new_status);
+
+    // Update workflow state
+    workflow_state.insert("status".to_string(), json!(new_status));
+
+    // Merge in additional state
+    for (key, value) in additional_state.as_object().unwrap() {
+        workflow_state.insert(key.clone(), value.clone());
+    }
+
+    // Add timestamp for this state change
+    workflow_state.insert(
+        format!("{}_at", new_status),
+        json!(format!("2024-01-01T{}:00:00Z", workflow_state.len())),
+    );
+
+    let context = WorkflowTemplateContext::with_vars(workflow_state.clone())
+        .expect("Failed to create context");
+    let mut context_with_config = context;
+    context_with_config.set_agent_config(ModelConfig::claude_code());
+    let execution_context = AgentExecutionContext::new(&context_with_config);
+
+    // Verify execution context for state persistence
+    assert_eq!(
+        execution_context.executor_type(),
+        swissarmyhammer_config::model::AgentExecutorType::ClaudeCode
+    );
+    println!("  ✓ State {} processed successfully", new_status);
+
+    // Verify state accumulation
+    assert!(workflow_state.contains_key("workflow_id"));
+    assert!(workflow_state.contains_key("status"));
+    assert_eq!(workflow_state["status"], json!(new_status));
+}
+
+fn verify_final_state(workflow_state: &HashMap<String, serde_json::Value>) {
+    assert!(workflow_state.contains_key("progress"));
+    assert!(workflow_state.contains_key("final_result"));
+    assert_eq!(workflow_state["progress"], json!(100));
+}
+
 #[tokio::test]
 async fn test_workflow_state_persistence() {
-    // Skip test if LlamaAgent testing is disabled
-
     let _guard = IsolatedTestEnvironment::new().expect("Failed to create test environment");
 
     println!("Testing workflow state persistence simulation");
 
-    // Simulate a workflow that maintains state across multiple operations
     let mut workflow_state = HashMap::from([
         ("workflow_id".to_string(), json!("persistent_workflow_001")),
         ("started_at".to_string(), json!("2024-01-01T00:00:00Z")),
@@ -263,58 +324,51 @@ async fn test_workflow_state_persistence() {
     ];
 
     for (new_status, additional_state) in state_transitions {
-        println!("Transitioning to state: {}", new_status);
-
-        // Update workflow state
-        workflow_state.insert("status".to_string(), json!(new_status));
-
-        // Merge in additional state
-        for (key, value) in additional_state.as_object().unwrap() {
-            workflow_state.insert(key.clone(), value.clone());
-        }
-
-        // Add timestamp for this state change
-        workflow_state.insert(
-            format!("{}_at", new_status),
-            json!(format!("2024-01-01T{}:00:00Z", workflow_state.len())),
-        );
-
-        let context = WorkflowTemplateContext::with_vars(workflow_state.clone())
-            .expect("Failed to create context");
-        let mut context_with_config = context;
-        context_with_config.set_agent_config(AgentConfig::claude_code());
-        let execution_context = AgentExecutionContext::new(&context_with_config);
-
-        // Verify execution context for state persistence
-        assert_eq!(
-            execution_context.executor_type(),
-            swissarmyhammer_config::agent::AgentExecutorType::ClaudeCode
-        );
-        println!("  ✓ State {} processed successfully", new_status);
-
-        // Verify state accumulation
-        assert!(workflow_state.contains_key("workflow_id"));
-        assert!(workflow_state.contains_key("status"));
-        assert_eq!(workflow_state["status"], json!(new_status));
+        process_state_transition(new_status, &additional_state, &mut workflow_state);
     }
 
-    // Final verification that all states were captured
-    assert!(workflow_state.contains_key("progress"));
-    assert!(workflow_state.contains_key("final_result"));
-    assert_eq!(workflow_state["progress"], json!(100));
+    verify_final_state(&workflow_state);
 
     println!("✓ Workflow state persistence test completed");
 }
 
+fn test_error_case(test_case: &str, vars: HashMap<String, serde_json::Value>) {
+    println!("Testing intentional error case: {}", test_case);
+
+    let context = WorkflowTemplateContext::with_vars(vars);
+
+    match context {
+        Ok(ctx) => {
+            let mut context_with_config = ctx;
+            context_with_config.set_agent_config(ModelConfig::claude_code());
+            let execution_context = AgentExecutionContext::new(&context_with_config);
+
+            // Verify execution context creation with special cases
+            assert_eq!(
+                execution_context.executor_type(),
+                swissarmyhammer_config::model::AgentExecutorType::ClaudeCode
+            );
+            println!("  ✓ Error case {} handled gracefully", test_case);
+        }
+        Err(e) => {
+            println!(
+                "  ✓ Error case {} failed at context creation: {}",
+                test_case, e
+            );
+
+            // Context creation errors are also valid for testing
+            let error_str = e.to_string();
+            assert!(!error_str.is_empty());
+        }
+    }
+}
+
 #[tokio::test]
 async fn test_intentional_error_handling() {
-    // Skip test if LlamaAgent testing is disabled
-
     let _guard = IsolatedTestEnvironment::new().expect("Failed to create test environment");
 
     println!("Testing intentional error handling");
 
-    // Test scenarios that should trigger specific error conditions
     let error_test_cases = [
         ("executor_creation_error", HashMap::new()),
         (
@@ -337,34 +391,7 @@ async fn test_intentional_error_handling() {
     ];
 
     for (test_case, vars) in error_test_cases {
-        println!("Testing intentional error case: {}", test_case);
-
-        let context = WorkflowTemplateContext::with_vars(vars);
-
-        match context {
-            Ok(ctx) => {
-                let mut context_with_config = ctx;
-                context_with_config.set_agent_config(AgentConfig::claude_code());
-                let execution_context = AgentExecutionContext::new(&context_with_config);
-
-                // Verify execution context creation with special cases
-                assert_eq!(
-                    execution_context.executor_type(),
-                    swissarmyhammer_config::agent::AgentExecutorType::ClaudeCode
-                );
-                println!("  ✓ Error case {} handled gracefully", test_case);
-            }
-            Err(e) => {
-                println!(
-                    "  ✓ Error case {} failed at context creation: {}",
-                    test_case, e
-                );
-
-                // Context creation errors are also valid for testing
-                let error_str = e.to_string();
-                assert!(!error_str.is_empty());
-            }
-        }
+        test_error_case(test_case, vars);
     }
 
     println!("✓ Intentional error handling test completed");

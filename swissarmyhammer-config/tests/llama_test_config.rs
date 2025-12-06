@@ -8,7 +8,7 @@ use serial_test::serial;
 use std::env;
 use std::sync::OnceLock;
 use swissarmyhammer_config::{
-    agent::{AgentConfig, LlamaAgentConfig, McpServerConfig, ModelConfig, ModelSource},
+    model::{LlamaAgentConfig, LlmModelConfig, McpServerConfig, ModelConfig, ModelSource},
     DEFAULT_TEST_LLM_MODEL_FILENAME, DEFAULT_TEST_LLM_MODEL_REPO,
 };
 
@@ -34,6 +34,14 @@ impl TestConfig {
         CONFIG.get_or_init(Self::from_environment_uncached)
     }
 
+    /// Parse concurrent test limit from environment variable
+    fn parse_concurrent_limit(default: usize) -> usize {
+        env::var("SAH_TEST_MAX_CONCURRENT")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(default)
+    }
+
     /// Load test configuration from environment variables (uncached, for testing)
     fn from_environment_uncached() -> Self {
         let is_ci = env::var("CI")
@@ -51,47 +59,36 @@ impl TestConfig {
                 .unwrap_or_else(|_| DEFAULT_TEST_LLM_MODEL_REPO.to_string()),
             llama_model_filename: env::var("SAH_TEST_MODEL_FILENAME")
                 .unwrap_or_else(|_| DEFAULT_TEST_LLM_MODEL_FILENAME.to_string()),
-            max_concurrent_tests: if is_ci {
-                env::var("SAH_TEST_MAX_CONCURRENT")
-                    .ok()
-                    .and_then(|v| v.parse().ok())
-                    .unwrap_or(3) // Lower concurrency in CI
-            } else {
-                env::var("SAH_TEST_MAX_CONCURRENT")
-                    .ok()
-                    .and_then(|v| v.parse().ok())
-                    .unwrap_or(5) // Higher concurrency for local development
-            },
+            max_concurrent_tests: Self::parse_concurrent_limit(if is_ci { 3 } else { 5 }),
+            is_ci,
+        }
+    }
+
+    /// Create configuration with CI-specific settings
+    fn with_ci_settings(is_ci: bool) -> Self {
+        Self {
+            enable_claude_tests: true,
+            llama_model_repo: DEFAULT_TEST_LLM_MODEL_REPO.to_string(),
+            llama_model_filename: DEFAULT_TEST_LLM_MODEL_FILENAME.to_string(),
+            max_concurrent_tests: if is_ci { 3 } else { 5 },
             is_ci,
         }
     }
 
     /// Get optimized configuration for development environment
     pub fn development() -> Self {
-        Self {
-            enable_claude_tests: true,
-            llama_model_repo: DEFAULT_TEST_LLM_MODEL_REPO.to_string(),
-            llama_model_filename: DEFAULT_TEST_LLM_MODEL_FILENAME.to_string(),
-            max_concurrent_tests: 5,
-            is_ci: false,
-        }
+        Self::with_ci_settings(false)
     }
 
     /// Get optimized configuration for CI environment
     pub fn ci() -> Self {
-        Self {
-            enable_claude_tests: true,
-            llama_model_repo: DEFAULT_TEST_LLM_MODEL_REPO.to_string(),
-            llama_model_filename: DEFAULT_TEST_LLM_MODEL_FILENAME.to_string(),
-            max_concurrent_tests: 3,
-            is_ci: true,
-        }
+        Self::with_ci_settings(true)
     }
 
     /// Create LlamaAgent configuration for testing
     pub fn create_llama_config(&self) -> LlamaAgentConfig {
         LlamaAgentConfig {
-            model: ModelConfig {
+            model: LlmModelConfig {
                 source: ModelSource::HuggingFace {
                     repo: self.llama_model_repo.clone(),
                     filename: Some(self.llama_model_filename.clone()),
@@ -110,18 +107,20 @@ impl TestConfig {
         }
     }
 
-    /// Create Claude Code configuration for testing
-    pub fn create_claude_config(&self) -> AgentConfig {
-        let mut config = AgentConfig::claude_code();
-        config.quiet = true; // Quiet mode for tests
+    /// Make a configuration quiet for testing
+    fn make_quiet(mut config: ModelConfig) -> ModelConfig {
+        config.quiet = true;
         config
     }
 
+    /// Create Claude Code configuration for testing
+    pub fn create_claude_config(&self) -> ModelConfig {
+        Self::make_quiet(ModelConfig::claude_code())
+    }
+
     /// Create LlamaAgent configuration for testing
-    pub fn create_llama_agent_config(&self) -> AgentConfig {
-        let mut config = AgentConfig::llama_agent(self.create_llama_config());
-        config.quiet = true; // Quiet mode for tests
-        config
+    pub fn create_llama_agent_config(&self) -> ModelConfig {
+        Self::make_quiet(ModelConfig::llama_agent(self.create_llama_config()))
     }
 }
 
@@ -180,23 +179,35 @@ impl Default for TestEnvironment {
     }
 }
 
+/// Generic skip function for test conditions
+fn skip_if(condition: bool, reason: &str, hint: Option<&str>) {
+    if condition {
+        eprintln!("⚠️ {}", reason);
+        if let Some(h) = hint {
+            eprintln!("   {}", h);
+        }
+        std::process::exit(0);
+    }
+}
+
 /// Skip test if Claude testing is disabled
 pub fn skip_if_claude_disabled() {
     let config = TestConfig::from_environment();
-    if !config.enable_claude_tests {
-        eprintln!("⚠️ Skipping Claude test (set SAH_TEST_CLAUDE=false to disable)");
-        std::process::exit(0); // Skip test gracefully
-    }
+    skip_if(
+        !config.enable_claude_tests,
+        "Skipping Claude test (set SAH_TEST_CLAUDE=false to disable)",
+        None,
+    );
 }
 
 /// Skip test if both executors are disabled
 pub fn skip_if_both_disabled() {
     let config = TestConfig::from_environment();
-    if !config.enable_claude_tests {
-        eprintln!("⚠️ Skipping test - Claude tests are disabled");
-        eprintln!("   Enable with SAH_TEST_CLAUDE=true");
-        std::process::exit(0); // Skip test gracefully
-    }
+    skip_if(
+        !config.enable_claude_tests,
+        "Skipping test - Claude tests are disabled",
+        Some("Enable with SAH_TEST_CLAUDE=true"),
+    );
 }
 
 /// Macro for executor-specific test setup
@@ -208,12 +219,12 @@ pub fn skip_if_both_disabled() {
 ///
 /// ```rust
 /// executor_test!(test_claude_only, claude, {
-///     let config = AgentConfig::claude_code();
+///     let config = ModelConfig::claude_code();
 ///     // Test Claude executor only
 /// });
 ///
 /// executor_test!(test_llama_only, llama, {
-///     let config = AgentConfig::llama_agent(LlamaAgentConfig::for_testing());
+///     let config = ModelConfig::llama_agent(LlamaAgentConfig::for_testing());
 ///     // Test LlamaAgent executor only
 /// });
 /// ```
@@ -250,8 +261,8 @@ macro_rules! executor_test {
 ///
 /// ```rust
 /// cross_executor_test!(test_both_executors, {
-///     |config: AgentConfig| async move {
-///         // Test logic that works with any AgentConfig
+///     |config: ModelConfig| async move {
+///         // Test logic that works with any ModelConfig
 ///         let context = WorkflowTemplateContext::with_vars_for_test(HashMap::new());
 ///         // ... test implementation
 ///     }
@@ -350,20 +361,20 @@ mod tests {
         assert!(agent_config.quiet);
         assert!(matches!(
             agent_config.executor,
-            swissarmyhammer_config::agent::AgentExecutorConfig::ClaudeCode(_)
+            swissarmyhammer_config::ModelExecutorConfig::ClaudeCode(_)
         ));
     }
 
     #[test]
     #[serial]
-    fn test_llama_agent_config_creation() {
+    fn test_llama_model_config_creation() {
         let config = TestConfig::development();
         let agent_config = config.create_llama_agent_config();
 
         assert!(agent_config.quiet);
         assert!(matches!(
             agent_config.executor,
-            swissarmyhammer_config::agent::AgentExecutorConfig::LlamaAgent(_)
+            swissarmyhammer_config::ModelExecutorConfig::LlamaAgent(_)
         ));
     }
 

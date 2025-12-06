@@ -8,8 +8,8 @@ use serial_test::serial;
 use std::env;
 use std::fs;
 use std::sync::Mutex;
+use swissarmyhammer_common::test_utils::IsolatedTestEnvironment;
 use swissarmyhammer_config::TemplateContext;
-use tempfile::TempDir;
 
 /// Global mutex to serialize environment variable tests
 /// This prevents race conditions when multiple tests modify environment variables
@@ -17,7 +17,7 @@ static ENV_TEST_LOCK: Mutex<()> = Mutex::new(());
 
 /// Test helper for isolated environment variable testing
 struct IsolatedEnvTest {
-    temp_dir: TempDir,
+    _env: IsolatedTestEnvironment,
     original_cwd: std::path::PathBuf,
     original_home: Option<String>,
     env_vars_to_restore: Vec<(String, Option<String>)>,
@@ -33,7 +33,7 @@ impl IsolatedEnvTest {
             poisoned.into_inner()
         });
 
-        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+        let env = IsolatedTestEnvironment::new().expect("Failed to create test environment");
         let original_cwd = env::current_dir().expect("Failed to get current dir");
         let original_home = env::var("HOME").ok();
 
@@ -46,19 +46,24 @@ impl IsolatedEnvTest {
         }
 
         // Set up isolated environment
-        let home_dir = temp_dir.path().join("home");
+        let home_dir = env.temp_dir().join("home");
         fs::create_dir(&home_dir).expect("Failed to create home dir");
         env::set_var("HOME", &home_dir);
-        env::set_current_dir(temp_dir.path()).expect("Failed to set current dir");
+        env::set_current_dir(&env.temp_dir()).expect("Failed to set current dir");
 
         Self {
-            temp_dir,
+            _env: env,
             original_cwd,
             original_home,
             env_vars_to_restore: Vec::new(),
             original_sah_vars,
             _lock_guard: lock_guard,
         }
+    }
+
+    /// Access the underlying IsolatedTestEnvironment
+    fn temp_dir(&self) -> &IsolatedTestEnvironment {
+        &self._env
     }
 
     fn set_env_var(&mut self, key: &str, value: &str) {
@@ -378,7 +383,7 @@ fn test_environment_variable_override_config_file() {
     let mut test = IsolatedEnvTest::new();
 
     // Create a config file
-    let config_dir = test.temp_dir.path().join(".swissarmyhammer");
+    let config_dir = test.temp_dir().temp_dir().join(".swissarmyhammer");
     fs::create_dir_all(&config_dir).expect("Failed to create config dir");
 
     let config_content = r#"
@@ -618,7 +623,7 @@ fn test_env_var_precedence_order_consistency() {
     let mut test = IsolatedEnvTest::new();
 
     // Create config file
-    let config_dir = test.temp_dir.path().join(".swissarmyhammer");
+    let config_dir = test.temp_dir().temp_dir().join(".swissarmyhammer");
     fs::create_dir_all(&config_dir).expect("Failed to create config dir");
 
     let config_content = r#"

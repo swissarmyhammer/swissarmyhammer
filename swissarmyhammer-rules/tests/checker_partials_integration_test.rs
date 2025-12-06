@@ -6,9 +6,9 @@
 use std::sync::Arc;
 use swissarmyhammer_agent_executor::LlamaAgentExecutorWrapper;
 use swissarmyhammer_common::error::SwissArmyHammerError;
+use swissarmyhammer_common::test_utils::IsolatedTestEnvironment;
 use swissarmyhammer_config::LlamaAgentConfig;
 use swissarmyhammer_rules::{Rule, RuleChecker, Severity};
-use tempfile::TempDir;
 
 /// Create a test agent with default configuration
 fn create_test_agent() -> Arc<LlamaAgentExecutorWrapper> {
@@ -45,8 +45,9 @@ async fn test_rule_checker_with_partial_includes() {
     }
 
     // Create a temp directory with partials and rules
-    let temp_dir = TempDir::new().unwrap();
-    let partials_dir = temp_dir.path().join("_partials");
+    let _env = IsolatedTestEnvironment::new().expect("Failed to create test environment");
+    let temp_dir = _env.temp_dir();
+    let partials_dir = temp_dir.join("_partials");
     std::fs::create_dir(&partials_dir).unwrap();
 
     // Create a partial template
@@ -58,7 +59,7 @@ async fn test_rule_checker_with_partial_includes() {
     .unwrap();
 
     // Create a rule that uses the partial
-    let rule_path = temp_dir.path().join("test-rule.md");
+    let rule_path = temp_dir.join("test-rule.md");
     std::fs::write(
         &rule_path,
         r#"---
@@ -82,7 +83,7 @@ If no issues found, respond with "PASS".
         .expect("Rule should be loaded");
 
     // Create a test file to check
-    let test_file = temp_dir.path().join("test.rs");
+    let test_file = temp_dir.join("test.rs");
     std::fs::write(&test_file, "fn main() {}\n").unwrap();
 
     // Try to check the file with the rule that uses a partial
@@ -132,8 +133,9 @@ async fn test_rule_with_builtin_partial() {
     );
 
     // Create a test file
-    let temp_dir = TempDir::new().unwrap();
-    let test_file = temp_dir.path().join("test.rs");
+    let _env = IsolatedTestEnvironment::new().expect("Failed to create test environment");
+    let temp_dir = _env.temp_dir();
+    let test_file = temp_dir.join("test.rs");
     std::fs::write(&test_file, "fn main() {}\n").unwrap();
 
     // Try to check with a rule that uses a builtin partial

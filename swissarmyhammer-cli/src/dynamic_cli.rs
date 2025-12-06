@@ -83,6 +83,288 @@ struct CommandConfig {
     long_about: &'static str,
 }
 
+// Documentation constants for commands
+const BASE_CLI_LONG_ABOUT: &str = "
+SwissArmyHammer - The only coding assistant you'll ever need
+
+Commands are organized into three types:
+- Static commands (serve, doctor, validate, model, prompt, rule, flow)
+- Workflow shortcuts (do, plan, review, etc.) - use 'sah flow list' to see all
+- Tool commands (file, issue, memo, search, shell, web-search)
+
+Examples:
+  sah serve                    Run as MCP server
+  sah doctor                   Diagnose configuration
+  sah flow list                List all workflows
+  sah do                       Execute do workflow (shortcut)
+  sah plan spec.md             Execute plan workflow (shortcut)
+  sah file read path.txt       Read a file via MCP tool
+";
+
+const SERVE_COMMAND_LONG_ABOUT: &str = "
+Runs swissarmyhammer as an MCP server. This is the default mode when
+invoked via stdio (e.g., by Claude Code). The server will:
+
+- Load all prompts from builtin, user, and local directories
+- Watch for file changes and reload prompts automatically
+- Expose prompts via the MCP protocol
+- Support template substitution with {{variables}}
+
+Example:
+  swissarmyhammer serve
+  swissarmyhammer serve http --port 8080 --host 127.0.0.1
+  # Or configure in Claude Code's MCP settings
+";
+
+const SERVE_HTTP_LONG_ABOUT: &str = "
+Starts an HTTP MCP server for web clients, debugging, and LlamaAgent integration.
+The server exposes MCP tools through HTTP endpoints and provides:
+
+- RESTful MCP protocol implementation
+- Health check endpoint at /health
+- Support for random port allocation (use port 0)
+- Graceful shutdown with Ctrl+C
+
+Example:
+  swissarmyhammer serve http --port 8080 --host 127.0.0.1
+  swissarmyhammer serve http --port 0  # Random port
+";
+
+const DOCTOR_COMMAND_LONG_ABOUT: &str = "
+Runs comprehensive diagnostics to help troubleshoot setup issues.
+The doctor command will check:
+
+- If swissarmyhammer is in your PATH
+- Claude Code MCP configuration
+- Prompt directories and permissions
+- YAML syntax in prompt files
+- File watching capabilities
+
+Exit codes:
+  0 - All checks passed
+  1 - Warnings found
+  2 - Errors found
+
+Example:
+  swissarmyhammer doctor
+  swissarmyhammer doctor               # Check system health and configuration
+";
+
+const VALIDATE_COMMAND_LONG_ABOUT: &str = "
+Validates BOTH prompt files AND workflows for syntax errors and best practices.
+
+This command comprehensively validates:
+- All prompt files from builtin, user, and local directories
+- All workflow files from standard locations (builtin, user, local)
+
+Validation checks:
+- YAML front matter syntax (skipped for .liquid files with {% partial %} marker)
+- Required fields (title, description)
+- Template variables match arguments
+- Liquid template syntax
+- Workflow structure and connectivity
+- Best practice recommendations
+
+Examples:
+  swissarmyhammer validate                 # Validate all prompts and workflows
+  swissarmyhammer validate --quiet         # CI/CD mode - only shows errors, hides warnings
+  swissarmyhammer validate --format json   # JSON output for tooling
+";
+
+const PROMPT_COMMAND_LONG_ABOUT: &str = "
+Manage and test prompts with a clean, simplified interface.
+
+The prompt system provides two main commands:
+• list - Display all available prompts from all sources  
+• test - Test prompts interactively with sample data
+
+Use global arguments to control output:
+  --verbose         Show detailed information
+  --format FORMAT   Output format: table, json, yaml
+  --debug           Enable debug mode
+  --quiet           Suppress output except errors
+
+Examples:
+  sah prompt list                           # List all prompts
+  sah --verbose prompt list                 # Show detailed information
+  sah --format=json prompt list             # Output as JSON
+  sah prompt test code-review               # Interactive testing
+  sah prompt test help --var topic=git      # Test with parameters  
+  sah --debug prompt test plan              # Test with debug output
+";
+
+const PROMPT_LIST_LONG_ABOUT: &str = "
+Display all available prompts from all sources (built-in, user, local).
+
+## Global Options
+
+Control output using global arguments:
+
+  sah --verbose prompt list           # Show detailed information including descriptions
+  sah --format=json prompt list       # Output as JSON for scripting
+  sah --format=yaml prompt list       # Output as YAML for scripting  
+
+## Output
+
+### Standard Output (default)
+Shows prompt names and titles in a clean table format.
+
+### Verbose Output (--verbose)
+Shows additional information including:
+- Full descriptions
+- Source information (builtin, user, local)
+- Categories and tags
+- Parameter counts
+
+### Structured Output (--format=json|yaml)
+Machine-readable output suitable for scripting and automation.
+
+## Examples
+
+  # Basic list
+  sah prompt list
+
+  # Detailed information  
+  sah --verbose prompt list
+
+  # JSON output for scripts
+  sah --format=json prompt list | jq '.[] | .name'
+
+  # Save YAML output
+  sah --format=yaml prompt list > prompts.yaml
+
+## Notes
+
+- Partial templates (internal templates used by other prompts) are automatically filtered out
+- All available prompt sources are included automatically
+- Use global --quiet to suppress output except errors
+";
+
+const PROMPT_TEST_LONG_ABOUT: &str = "
+Test prompts interactively to see how they render with different arguments.
+Perfect for debugging template issues and previewing prompt output.
+
+## Usage
+  sah prompt test <PROMPT_NAME> [OPTIONS]
+  sah prompt test --file <FILE> [OPTIONS]
+
+## Arguments
+
+- <PROMPT_NAME> - Name of the prompt to test
+- --file <FILE> - Path to a local prompt file to test
+
+## Options
+
+- --var <KEY=VALUE> - Set template variables (can be used multiple times)
+- --raw - Output raw prompt without additional formatting
+- --copy - Copy rendered prompt to clipboard (if supported)
+- --save <FILE> - Save rendered prompt to file
+- --debug - Show debug information during processing
+
+## Global Options
+
+- --verbose - Show detailed execution information
+- --debug - Enable comprehensive debug output
+- --quiet - Suppress all output except the rendered prompt
+
+## Interactive Mode
+
+When variables are not provided via --var, the command prompts interactively:
+
+- Shows parameter descriptions and default values
+- Validates input according to parameter types
+- Supports boolean (true/false, yes/no, 1/0), numbers, choices
+- Detects non-interactive environments (CI/CD) and uses defaults
+
+## Examples
+
+### Basic Testing
+  # Interactive mode - prompts for all parameters
+  sah prompt test code-review
+
+  # Non-interactive with all parameters provided  
+  sah prompt test help --var topic=git --var format=markdown
+
+  # Test from file
+  sah prompt test --file ./my-prompt.md --var name=John
+
+### Advanced Usage
+  # Verbose output with debug information
+  sah --verbose --debug prompt test plan --var project=myapp
+
+  # Save output to file
+  sah prompt test help --var topic=testing --save help-output.md
+
+  # Raw output (no extra formatting)
+  sah prompt test summary --var title=\"Project Status\" --raw
+
+  # Multiple variables
+  sah prompt test code-review \\
+    --var author=Jane \\
+    --var version=2.1 \\
+    --var language=Python \\
+    --var files=src/main.py,tests/test_main.py
+";
+
+const FLOW_COMMAND_LONG_ABOUT: &str = "Execute workflows or list available workflows.
+
+Usage:
+  sah flow list                List all workflows
+  sah flow <workflow> [args]   Execute a workflow
+
+Special case: 'list' shows all available workflows
+All other names execute the named workflow.
+
+Examples:
+  sah flow list --verbose
+  sah flow do
+  sah flow plan spec.md
+";
+
+const MODEL_COMMAND_LONG_ABOUT: &str = "
+Manage and interact with models in the SwissArmyHammer system.
+Models provide specialized functionality through dedicated workflows
+and tools for specific use cases.
+
+The model system provides three main commands:
+• show - Display current model use case assignments (default)
+• list - Display all available models from all sources
+• use - Apply or execute a specific model
+
+Use global arguments to control output:
+  --verbose         Show detailed information
+  --format FORMAT   Output format: table, json, yaml
+  --debug           Enable debug mode
+  --quiet           Suppress output except errors
+
+Examples:
+  sah model                                # Show use case assignments
+  sah model show                           # Same as above
+  sah model list                           # List all models
+  sah --verbose model list                 # Show detailed information
+  sah --format=json model list             # Output as JSON
+  sah model use code-reviewer              # Apply code-reviewer model
+  sah --debug model use planner            # Use model with debug output
+";
+
+const MODEL_USE_LONG_ABOUT: &str = "
+Apply a specific model configuration to the project for a use case.
+
+Usage patterns:
+  sah model use <MODEL>              # Set root model (backward compatible)
+  sah model use <USE_CASE> <MODEL>   # Set model for specific use case
+
+Use cases:
+  root      - Default model for general operations
+  rules     - Model for rule checking operations
+  workflows - Model for workflow execution
+
+Examples:
+  sah model use claude-code               # Set root model
+  sah model use rules qwen-coder          # Use Qwen for rules
+  sah model use workflows claude-code     # Use Claude for workflows
+";
+
 /// Statistics about CLI tool validation
 #[derive(Debug, Clone, Default)]
 pub struct CliValidationStats {
@@ -158,14 +440,7 @@ pub struct CliBuilder {
 impl CliBuilder {
     /// Create a new CLI builder with the given tool registry
     pub fn new(tool_registry: Arc<RwLock<ToolRegistry>>) -> Self {
-        let (category_commands, tool_commands) = {
-            let registry = tool_registry
-                .try_read()
-                .expect("ToolRegistry should not be locked");
-            let category_commands = Self::precompute_category_commands(&registry);
-            let tool_commands = Self::precompute_tool_commands(&registry);
-            (category_commands, tool_commands)
-        }; // Drop registry guard
+        let (category_commands, tool_commands) = Self::precompute_all_commands(&tool_registry);
 
         Self {
             tool_registry,
@@ -174,26 +449,53 @@ impl CliBuilder {
         }
     }
 
+    /// Precompute all command data from the registry
+    fn precompute_all_commands(
+        tool_registry: &Arc<RwLock<ToolRegistry>>,
+    ) -> (
+        HashMap<String, CommandData>,
+        HashMap<String, HashMap<String, CommandData>>,
+    ) {
+        let registry = tool_registry
+            .try_read()
+            .expect("ToolRegistry should not be locked");
+        let category_commands = Self::precompute_category_commands(&registry);
+        let tool_commands = Self::precompute_tool_commands(&registry);
+        (category_commands, tool_commands)
+    }
+
     /// Generic iteration helper over the tool registry
     ///
     /// Consolidates all iteration patterns into a single helper function
-    fn iter_registry<F>(registry: &ToolRegistry, iter_type: RegistryIterType, mut f: F)
+    fn iter_registry<F>(registry: &ToolRegistry, iter_type: RegistryIterType, f: F)
     where
         F: FnMut(&dyn McpTool),
     {
         match iter_type {
-            RegistryIterType::AllTools => {
-                for category in registry.get_cli_categories() {
-                    for tool in registry.get_tools_for_category(&category) {
-                        f(tool);
-                    }
-                }
-            }
+            RegistryIterType::AllTools => Self::iter_all_categories(registry, f),
             RegistryIterType::ToolsInCategory(category) => {
-                for tool in registry.get_tools_for_category(&category) {
-                    f(tool);
-                }
+                Self::iter_category_tools(registry, &category, f)
             }
+        }
+    }
+
+    /// Iterate through all categories and their tools
+    fn iter_all_categories<F>(registry: &ToolRegistry, mut f: F)
+    where
+        F: FnMut(&dyn McpTool),
+    {
+        for category in registry.get_cli_categories() {
+            Self::iter_category_tools(registry, &category, &mut f);
+        }
+    }
+
+    /// Iterate through tools in a specific category
+    fn iter_category_tools<F>(registry: &ToolRegistry, category: &str, mut f: F)
+    where
+        F: FnMut(&dyn McpTool),
+    {
+        for tool in registry.get_tools_for_category(category) {
+            f(tool);
         }
     }
 
@@ -244,28 +546,15 @@ impl CliBuilder {
         let mut tool_commands = HashMap::new();
 
         Self::iter_categories(registry, |category| {
-            let category_name = category.to_string();
-            let tools_in_category = Self::precompute_tools_for_category(registry, category);
-            tool_commands.insert(category_name, tools_in_category);
+            let tools_in_category = Self::precompute_category_tool_commands(registry, category);
+            tool_commands.insert(category.to_string(), tools_in_category);
         });
 
         tool_commands
     }
 
-    /// Iterate through tools in a category, applying a function to each
-    fn iter_tools_in_category<F>(registry: &ToolRegistry, category: &str, f: F)
-    where
-        F: FnMut(&dyn McpTool),
-    {
-        Self::iter_registry(
-            registry,
-            RegistryIterType::ToolsInCategory(category.to_string()),
-            f,
-        )
-    }
-
     /// Pre-compute tool commands for a specific category
-    fn precompute_tools_for_category(
+    fn precompute_category_tool_commands(
         registry: &ToolRegistry,
         category: &str,
     ) -> HashMap<String, CommandData> {
@@ -280,6 +569,18 @@ impl CliBuilder {
         });
 
         tools_in_category
+    }
+
+    /// Iterate through tools in a category, applying a function to each
+    fn iter_tools_in_category<F>(registry: &ToolRegistry, category: &str, f: F)
+    where
+        F: FnMut(&dyn McpTool),
+    {
+        Self::iter_registry(
+            registry,
+            RegistryIterType::ToolsInCategory(category.to_string()),
+            f,
+        )
     }
 
     /// Pre-compute command data for a tool with validation
@@ -306,22 +607,30 @@ impl CliBuilder {
 
     /// Pre-compute argument data from JSON schema
     fn precompute_args(schema: &Value) -> Vec<ArgData> {
-        let mut args = Vec::new();
+        let properties = match schema.get("properties").and_then(|p| p.as_object()) {
+            Some(props) => props,
+            None => return Vec::new(),
+        };
 
-        if let Some(properties) = schema.get("properties").and_then(|p| p.as_object()) {
-            let required_fields = Self::extract_required_fields(schema);
+        let required_fields = Self::extract_required_fields(schema);
+        Self::extract_property_args(properties, &required_fields)
+    }
 
-            for (prop_name, prop_schema) in properties {
-                let arg_data = Self::precompute_arg_data(
+    /// Extract argument data from properties object
+    fn extract_property_args(
+        properties: &serde_json::Map<String, Value>,
+        required_fields: &std::collections::HashSet<String>,
+    ) -> Vec<ArgData> {
+        properties
+            .iter()
+            .map(|(prop_name, prop_schema)| {
+                Self::precompute_arg_data(
                     prop_name,
                     prop_schema,
                     required_fields.contains(prop_name),
-                );
-                args.push(arg_data);
-            }
-        }
-
-        args
+                )
+            })
+            .collect()
     }
 
     /// Extract required field names from JSON schema
@@ -368,32 +677,35 @@ impl CliBuilder {
 
     /// Determine the argument type from a JSON schema
     fn determine_arg_type(schema: &Value) -> ArgType {
-        // Check for nullable boolean (both types must be present)
-        if schema_has_type(schema, "boolean") && schema_has_type(schema, "null") {
+        // Check for nullable boolean first (both types must be present)
+        if Self::is_nullable_boolean(schema) {
             return ArgType::NullableBoolean;
         }
 
-        // Check for boolean type
-        if schema_has_type(schema, "boolean") {
-            return ArgType::Boolean;
+        // Match on primary type
+        match Self::get_primary_type(schema) {
+            Some("boolean") => ArgType::Boolean,
+            Some("integer") => ArgType::Integer,
+            Some("number") => ArgType::Float,
+            Some("array") => ArgType::Array,
+            Some("string") | _ => ArgType::String,
         }
+    }
 
-        // Check for numeric types
-        if schema_has_type(schema, "integer") {
-            return ArgType::Integer;
+    /// Check if schema represents a nullable boolean
+    fn is_nullable_boolean(schema: &Value) -> bool {
+        schema_has_type(schema, "boolean") && schema_has_type(schema, "null")
+    }
+
+    /// Get the primary type from a schema
+    fn get_primary_type(schema: &Value) -> Option<&str> {
+        match schema.get("type") {
+            Some(Value::String(t)) => Some(t.as_str()),
+            Some(Value::Array(types)) => types
+                .iter()
+                .find_map(|t| t.as_str().filter(|s| *s != "null")),
+            _ => None,
         }
-
-        if schema_has_type(schema, "number") {
-            return ArgType::Float;
-        }
-
-        // Check for array type
-        if schema_has_type(schema, "array") {
-            return ArgType::Array;
-        }
-
-        // Default to string
-        ArgType::String
     }
 
     /// Build the complete CLI with dynamic commands generated from MCP tools
@@ -405,7 +717,7 @@ impl CliBuilder {
     pub fn build_cli(&self, workflow_storage: Option<&WorkflowStorage>) -> Command {
         let mut cli = Self::build_base_cli();
 
-        // Add static commands (serve, doctor, prompt, flow, validate, agent)
+        // Add static commands (serve, doctor, prompt, flow, validate, model)
         cli = Self::add_static_commands(cli);
 
         // Add workflow shortcuts if storage is provided
@@ -419,73 +731,61 @@ impl CliBuilder {
 
     /// Build the base CLI command with global arguments
     fn build_base_cli() -> Command {
-        Command::new("swissarmyhammer")
+        let cmd = Command::new("swissarmyhammer")
             .version(env!("CARGO_PKG_VERSION"))
             .about("The only coding assistant you'll ever need")
-            .long_about(
-                "
-SwissArmyHammer - The only coding assistant you'll ever need
+            .long_about(BASE_CLI_LONG_ABOUT);
 
-Commands are organized into three types:
-- Static commands (serve, doctor, validate, agent, prompt, rule, flow)
-- Workflow shortcuts (do, plan, review, etc.) - use 'sah flow list' to see all
-- Tool commands (file, issue, memo, search, shell, web-search)
+        Self::add_global_arguments(cmd)
+    }
 
-Examples:
-  sah serve                    Run as MCP server
-  sah doctor                   Diagnose configuration
-  sah flow list                List all workflows
-  sah do                       Execute do workflow (shortcut)
-  sah plan spec.md             Execute plan workflow (shortcut)
-  sah file read path.txt       Read a file via MCP tool
-",
-            )
-            // Add verbose/debug/quiet flags from parent CLI
-            .arg(Self::create_flag_arg(
-                "verbose",
-                "verbose",
-                Some('v'),
-                "Enable verbose logging",
-            ))
-            .arg(Self::create_flag_arg(
-                "debug",
-                "debug",
-                Some('d'),
-                "Enable debug logging",
-            ))
-            .arg(
-                Arg::new("cwd")
-                    .long("cwd")
-                    .help("Set working directory before executing command")
-                    .value_name("PATH")
-                    .global(true)
-                    .value_parser(clap::value_parser!(std::path::PathBuf)),
-            )
-            .arg(Self::create_flag_arg(
-                "quiet",
-                "quiet",
-                Some('q'),
-                "Suppress all output except errors",
-            ))
-            .arg(Self::create_flag_arg(
-                "validate-tools",
-                "validate-tools",
-                None,
-                "Validate all tool schemas and exit",
-            ))
-            .arg(
-                Arg::new("format")
-                    .long("format")
-                    .help("Global output format")
-                    .value_parser(["table", "json", "yaml"]),
-            )
-            .arg(
-                Arg::new("agent")
-                    .long("agent")
-                    .help("Override agent for all use cases (runtime only, doesn't modify config)")
-                    .value_name("AGENT")
-                    .global(true),
-            )
+    /// Add global arguments to the base CLI command
+    fn add_global_arguments(cmd: Command) -> Command {
+        cmd.arg(Self::create_flag_arg(
+            "verbose",
+            "verbose",
+            Some('v'),
+            "Enable verbose logging",
+        ))
+        .arg(Self::create_flag_arg(
+            "debug",
+            "debug",
+            Some('d'),
+            "Enable debug logging",
+        ))
+        .arg(
+            Arg::new("cwd")
+                .long("cwd")
+                .help("Set working directory before executing command")
+                .value_name("PATH")
+                .global(true)
+                .value_parser(clap::value_parser!(std::path::PathBuf)),
+        )
+        .arg(Self::create_flag_arg(
+            "quiet",
+            "quiet",
+            Some('q'),
+            "Suppress all output except errors",
+        ))
+        .arg(Self::create_flag_arg(
+            "validate-tools",
+            "validate-tools",
+            None,
+            "Validate all tool schemas and exit",
+        ))
+        .arg(
+            Arg::new("format")
+                .long("format")
+                .help("Global output format")
+                .value_parser(["table", "json", "yaml"]),
+        )
+        .arg(
+            Arg::new("model")
+                .long("model")
+                .help("Override model for all use cases (runtime only, doesn't modify config)")
+                .value_name("MODEL")
+                .global(true),
+        )
     }
 
     /// Add workflow shortcuts to the CLI if storage is provided
@@ -495,10 +795,7 @@ Examples:
         workflow_storage: Option<&WorkflowStorage>,
     ) -> Command {
         if let Some(storage) = workflow_storage {
-            let mut shortcuts = Self::build_workflow_shortcuts(storage);
-            // Sort alphabetically for easier scanning
-            shortcuts.sort_by(|a, b| a.get_name().cmp(b.get_name()));
-
+            let shortcuts = Self::get_sorted_workflow_shortcuts(storage);
             for shortcut in shortcuts {
                 cli = cli.subcommand(shortcut);
             }
@@ -506,11 +803,16 @@ Examples:
         cli
     }
 
+    /// Get sorted workflow shortcuts
+    fn get_sorted_workflow_shortcuts(storage: &WorkflowStorage) -> Vec<Command> {
+        let mut shortcuts = Self::build_workflow_shortcuts(storage);
+        shortcuts.sort_by(|a, b| a.get_name().cmp(b.get_name()));
+        shortcuts
+    }
+
     /// Add dynamic MCP tool category commands to the CLI
     fn add_tool_category_commands(&self, mut cli: Command) -> Command {
-        // Get sorted category names for consistent ordering
-        let mut category_names: Vec<String> = self.category_commands.keys().cloned().collect();
-        category_names.sort();
+        let category_names = self.get_sorted_category_names();
 
         for category_name in category_names.iter() {
             if let Some(category_data) = self.category_commands.get(category_name) {
@@ -520,6 +822,13 @@ Examples:
         }
 
         cli
+    }
+
+    /// Get sorted category names for consistent ordering
+    fn get_sorted_category_names(&self) -> Vec<String> {
+        let mut category_names: Vec<String> = self.category_commands.keys().cloned().collect();
+        category_names.sort();
+        category_names
     }
 
     /// Build CLI with warnings for validation issues (graceful degradation)
@@ -587,7 +896,7 @@ Examples:
     /// # Returns
     ///
     /// Final accumulated result
-    fn fold_validation_results<T, F>(&self, init: T, mut folder: F) -> T
+    fn fold_validation_results<T, F>(&self, init: T, folder: F) -> T
     where
         F: FnMut(T, Result<(), Vec<ValidationError>>) -> T,
     {
@@ -596,20 +905,28 @@ Examples:
             .try_read()
             .expect("ToolRegistry should not be locked");
 
-        let mut accumulator = init;
-        let validation_results: Vec<_> = {
-            let mut results = Vec::new();
-            Self::iter_all_tools(&registry, |tool| {
-                results.push(self.validate_single_tool(tool));
-            });
-            results
-        };
+        Self::collect_and_fold_validation_results(&registry, self, init, folder)
+    }
 
-        for validation_result in validation_results {
-            accumulator = folder(accumulator, validation_result);
-        }
+    /// Collect validation results and fold them into an accumulator
+    fn collect_and_fold_validation_results<T, F>(
+        registry: &ToolRegistry,
+        builder: &CliBuilder,
+        init: T,
+        mut folder: F,
+    ) -> T
+    where
+        F: FnMut(T, Result<(), Vec<ValidationError>>) -> T,
+    {
+        let mut validation_results = Vec::new();
 
-        accumulator
+        Self::iter_all_tools(registry, |tool| {
+            validation_results.push(builder.validate_single_tool(tool));
+        });
+
+        validation_results
+            .into_iter()
+            .fold(init, |acc, result| folder(acc, result))
     }
 
     /// Validate a single tool for CLI compatibility
@@ -769,28 +1086,29 @@ Examples:
         let name_static = intern_string(arg_data.name.clone());
         let arg = Arg::new(name_static).long(name_static);
 
-        // Configure argument type first
-        let arg = Self::configure_arg_by_type(arg, arg_data);
+        // Set as required if specified
+        let arg = if arg_data.is_required {
+            arg.required(true)
+        } else {
+            arg
+        };
+
+        // Configure based on type using strategy pattern
+        let arg = Self::build_typed_arg(arg, arg_data);
 
         // Apply optional configurations (help, enum values, defaults)
         Self::apply_arg_metadata(arg, arg_data)
     }
 
-    /// Configure argument based on its type
-    fn configure_arg_by_type(mut arg: Arg, arg_data: &ArgData) -> Arg {
-        // Set as required if specified
-        if arg_data.is_required {
-            arg = arg.required(true);
-        }
-
-        // Configure based on type
+    /// Build typed argument by dispatching to type-specific builders
+    fn build_typed_arg(arg: Arg, arg_data: &ArgData) -> Arg {
         match arg_data.arg_type {
-            ArgType::Boolean => Self::configure_boolean_arg(arg),
-            ArgType::NullableBoolean => Self::configure_nullable_boolean_arg(arg),
-            ArgType::Integer => Self::configure_integer_arg(arg, arg_data.is_required),
-            ArgType::Float => Self::configure_float_arg(arg, arg_data.is_required),
-            ArgType::Array => Self::configure_array_arg(arg, arg_data.is_required),
-            ArgType::String => Self::configure_string_arg(arg, arg_data.is_required),
+            ArgType::Boolean => Self::build_boolean_arg(arg),
+            ArgType::NullableBoolean => Self::build_nullable_boolean_arg(arg),
+            ArgType::Integer => Self::build_integer_arg(arg, arg_data.is_required),
+            ArgType::Float => Self::build_float_arg(arg, arg_data.is_required),
+            ArgType::Array => Self::build_array_arg(arg, arg_data.is_required),
+            ArgType::String => Self::build_string_arg(arg, arg_data.is_required),
         }
     }
 
@@ -816,15 +1134,46 @@ Examples:
         arg
     }
 
-    /// Configure a boolean argument
-    fn configure_boolean_arg(arg: Arg) -> Arg {
+    /// Build a boolean argument
+    fn build_boolean_arg(arg: Arg) -> Arg {
         arg.action(ArgAction::SetTrue)
     }
 
-    /// Configure a nullable boolean argument
-    fn configure_nullable_boolean_arg(arg: Arg) -> Arg {
+    /// Build a nullable boolean argument
+    fn build_nullable_boolean_arg(arg: Arg) -> Arg {
         arg.value_parser(clap::builder::PossibleValuesParser::new(["true", "false"]))
             .value_name("BOOL")
+    }
+
+    /// Build an integer argument
+    fn build_integer_arg(arg: Arg, is_required: bool) -> Arg {
+        Self::build_numeric_arg(arg, is_required, clap::value_parser!(i64))
+    }
+
+    /// Build a float argument
+    fn build_float_arg(arg: Arg, is_required: bool) -> Arg {
+        Self::build_numeric_arg(arg, is_required, clap::value_parser!(f64))
+    }
+
+    /// Build a numeric argument with a specific value parser
+    fn build_numeric_arg(
+        arg: Arg,
+        is_required: bool,
+        parser: impl clap::builder::IntoResettable<clap::builder::ValueParser>,
+    ) -> Arg {
+        let arg = arg.value_parser(parser);
+        Self::add_optional_value_name(arg, is_required, "NUMBER")
+    }
+
+    /// Build an array argument
+    fn build_array_arg(arg: Arg, is_required: bool) -> Arg {
+        let arg = arg.action(ArgAction::Append);
+        Self::add_optional_value_name(arg, is_required, "VALUE")
+    }
+
+    /// Build a string argument
+    fn build_string_arg(arg: Arg, is_required: bool) -> Arg {
+        Self::add_optional_value_name(arg, is_required, "TEXT")
     }
 
     /// Add value_name to optional arguments
@@ -834,39 +1183,6 @@ Examples:
         } else {
             arg
         }
-    }
-
-    /// Configure a numeric argument with a specific value parser
-    ///
-    /// Consolidates the common pattern of setting a value parser and optional value name
-    fn configure_numeric_arg_with_parser(
-        arg: Arg,
-        is_required: bool,
-        parser: impl clap::builder::IntoResettable<clap::builder::ValueParser>,
-    ) -> Arg {
-        let arg = arg.value_parser(parser);
-        Self::add_optional_value_name(arg, is_required, "NUMBER")
-    }
-
-    /// Configure an integer argument
-    fn configure_integer_arg(arg: Arg, is_required: bool) -> Arg {
-        Self::configure_numeric_arg_with_parser(arg, is_required, clap::value_parser!(i64))
-    }
-
-    /// Configure a float argument
-    fn configure_float_arg(arg: Arg, is_required: bool) -> Arg {
-        Self::configure_numeric_arg_with_parser(arg, is_required, clap::value_parser!(f64))
-    }
-
-    /// Configure an array argument
-    fn configure_array_arg(arg: Arg, is_required: bool) -> Arg {
-        let arg = arg.action(ArgAction::Append);
-        Self::add_optional_value_name(arg, is_required, "VALUE")
-    }
-
-    /// Configure a string argument
-    fn configure_string_arg(arg: Arg, is_required: bool) -> Arg {
-        Self::add_optional_value_name(arg, is_required, "TEXT")
     }
 
     /// Create a flag argument (boolean with SetTrue action)
@@ -921,19 +1237,7 @@ Examples:
             CommandConfig {
                 name: "http",
                 about: "Start HTTP MCP server",
-                long_about: "
-Starts an HTTP MCP server for web clients, debugging, and LlamaAgent integration.
-The server exposes MCP tools through HTTP endpoints and provides:
-
-- RESTful MCP protocol implementation
-- Health check endpoint at /health
-- Support for random port allocation (use port 0)
-- Graceful shutdown with Ctrl+C
-
-Example:
-  swissarmyhammer serve http --port 8080 --host 127.0.0.1
-  swissarmyhammer serve http --port 0  # Random port
-                ",
+                long_about: SERVE_HTTP_LONG_ABOUT,
             },
             vec![
                 Arg::new("port")
@@ -956,20 +1260,7 @@ Example:
         Self::build_command_with_docs(CommandConfig {
             name: "serve",
             about: "Run as MCP server (default when invoked via stdio)",
-            long_about: "
-Runs swissarmyhammer as an MCP server. This is the default mode when
-invoked via stdio (e.g., by Claude Code). The server will:
-
-- Load all prompts from builtin, user, and local directories
-- Watch for file changes and reload prompts automatically
-- Expose prompts via the MCP protocol
-- Support template substitution with {{variables}}
-
-Example:
-  swissarmyhammer serve
-  swissarmyhammer serve http --port 8080 --host 127.0.0.1
-  # Or configure in Claude Code's MCP settings
-            ",
+            long_about: SERVE_COMMAND_LONG_ABOUT,
         })
         .subcommand(Self::build_serve_http_subcommand())
     }
@@ -979,25 +1270,7 @@ Example:
         Self::build_command_with_docs(CommandConfig {
             name: "doctor",
             about: "Diagnose configuration and setup issues",
-            long_about: "
-Runs comprehensive diagnostics to help troubleshoot setup issues.
-The doctor command will check:
-
-- If swissarmyhammer is in your PATH
-- Claude Code MCP configuration
-- Prompt directories and permissions
-- YAML syntax in prompt files
-- File watching capabilities
-
-Exit codes:
-  0 - All checks passed
-  1 - Warnings found
-  2 - Errors found
-
-Example:
-  swissarmyhammer doctor
-  swissarmyhammer doctor               # Check system health and configuration
-                ",
+            long_about: DOCTOR_COMMAND_LONG_ABOUT,
         })
     }
 
@@ -1007,52 +1280,38 @@ Example:
             CommandConfig {
                 name: "validate",
                 about: "Validate prompt files and workflows for syntax and best practices",
-                long_about: "
-Validates BOTH prompt files AND workflows for syntax errors and best practices.
-
-This command comprehensively validates:
-- All prompt files from builtin, user, and local directories
-- All workflow files from standard locations (builtin, user, local)
-
-Validation checks:
-- YAML front matter syntax (skipped for .liquid files with {% partial %} marker)
-- Required fields (title, description)
-- Template variables match arguments
-- Liquid template syntax
-- Workflow structure and connectivity
-- Best practice recommendations
-
-Examples:
-  swissarmyhammer validate                 # Validate all prompts and workflows
-  swissarmyhammer validate --quiet         # CI/CD mode - only shows errors, hides warnings
-  swissarmyhammer validate --format json   # JSON output for tooling
-                ",
+                long_about: VALIDATE_COMMAND_LONG_ABOUT,
             },
-            vec![
-                Arg::new("quiet")
-                    .short('q')
-                    .long("quiet")
-                    .help("Suppress all output except errors")
-                    .action(ArgAction::SetTrue),
-                Arg::new("format")
-                    .long("format")
-                    .help("Output format")
-                    .value_parser(["text", "json"])
-                    .default_value("text"),
-                Arg::new("workflow-dirs")
-                    .long("workflow-dir")
-                    .help("[DEPRECATED] This parameter is ignored. Workflows are now only loaded from standard locations.")
-                    .action(ArgAction::Append)
-                    .hide(true),
-                Arg::new("validate-tools")
-                    .long("validate-tools")
-                    .help("Validate MCP tool schemas for CLI compatibility")
-                    .action(ArgAction::SetTrue),
-            ],
+            Self::create_validate_command_args(),
         )
     }
 
-    /// Add static commands to the CLI (serve, doctor, prompt, flow, validate, agent)
+    /// Create arguments for the validate command
+    fn create_validate_command_args() -> Vec<Arg> {
+        vec![
+            Arg::new("quiet")
+                .short('q')
+                .long("quiet")
+                .help("Suppress all output except errors")
+                .action(ArgAction::SetTrue),
+            Arg::new("format")
+                .long("format")
+                .help("Output format")
+                .value_parser(["text", "json"])
+                .default_value("text"),
+            Arg::new("workflow-dirs")
+                .long("workflow-dir")
+                .help("[DEPRECATED] This parameter is ignored. Workflows are now only loaded from standard locations.")
+                .action(ArgAction::Append)
+                .hide(true),
+            Arg::new("validate-tools")
+                .long("validate-tools")
+                .help("Validate MCP tool schemas for CLI compatibility")
+                .action(ArgAction::SetTrue),
+        ]
+    }
+
+    /// Add static commands to the CLI (serve, doctor, prompt, flow, validate, model)
     fn add_static_commands(mut cli: Command) -> Command {
         // Add serve command
         cli = cli.subcommand(Self::build_serve_command());
@@ -1069,8 +1328,8 @@ Examples:
         // Add validate command
         cli = cli.subcommand(Self::build_validate_command());
 
-        // Add agent command with subcommands
-        cli = cli.subcommand(Self::build_agent_command());
+        // Add model command with subcommands
+        cli = cli.subcommand(Self::build_model_command());
 
         // Add rule command with subcommands
         // Rule command is now dynamically generated from rules_check MCP tool
@@ -1084,27 +1343,7 @@ Examples:
         Self::build_command_with_docs(CommandConfig {
             name: "prompt",
             about: "Manage and test prompts",
-            long_about: "
-Manage and test prompts with a clean, simplified interface.
-
-The prompt system provides two main commands:
-• list - Display all available prompts from all sources  
-• test - Test prompts interactively with sample data
-
-Use global arguments to control output:
-  --verbose         Show detailed information
-  --format FORMAT   Output format: table, json, yaml
-  --debug           Enable debug mode
-  --quiet           Suppress output except errors
-
-Examples:
-  sah prompt list                           # List all prompts
-  sah --verbose prompt list                 # Show detailed information
-  sah --format=json prompt list             # Output as JSON
-  sah prompt test code-review               # Interactive testing
-  sah prompt test help --var topic=git      # Test with parameters  
-  sah --debug prompt test plan              # Test with debug output
-",
+            long_about: PROMPT_COMMAND_LONG_ABOUT,
         })
         .subcommand(Self::build_prompt_list_subcommand())
         .subcommand(Self::build_prompt_test_subcommand())
@@ -1115,127 +1354,14 @@ Examples:
     fn build_prompt_list_subcommand() -> Command {
         Command::new("list")
             .about("Display all available prompts from all sources")
-            .long_about(
-                "
-Display all available prompts from all sources (built-in, user, local).
-
-## Global Options
-
-Control output using global arguments:
-
-  sah --verbose prompt list           # Show detailed information including descriptions
-  sah --format=json prompt list       # Output as JSON for scripting
-  sah --format=yaml prompt list       # Output as YAML for scripting  
-
-## Output
-
-### Standard Output (default)
-Shows prompt names and titles in a clean table format.
-
-### Verbose Output (--verbose)
-Shows additional information including:
-- Full descriptions
-- Source information (builtin, user, local)
-- Categories and tags
-- Parameter counts
-
-### Structured Output (--format=json|yaml)
-Machine-readable output suitable for scripting and automation.
-
-## Examples
-
-  # Basic list
-  sah prompt list
-
-  # Detailed information  
-  sah --verbose prompt list
-
-  # JSON output for scripts
-  sah --format=json prompt list | jq '.[] | .name'
-
-  # Save YAML output
-  sah --format=yaml prompt list > prompts.yaml
-
-## Notes
-
-- Partial templates (internal templates used by other prompts) are automatically filtered out
-- All available prompt sources are included automatically
-- Use global --quiet to suppress output except errors
-",
-            )
+            .long_about(PROMPT_LIST_LONG_ABOUT)
     }
 
     /// Build the prompt test subcommand
     fn build_prompt_test_subcommand() -> Command {
         Command::new("test")
             .about("Test prompts interactively with sample arguments")
-            .long_about(
-                "
-Test prompts interactively to see how they render with different arguments.
-Perfect for debugging template issues and previewing prompt output.
-
-## Usage
-  sah prompt test <PROMPT_NAME> [OPTIONS]
-  sah prompt test --file <FILE> [OPTIONS]
-
-## Arguments
-
-- <PROMPT_NAME> - Name of the prompt to test
-- --file <FILE> - Path to a local prompt file to test
-
-## Options
-
-- --var <KEY=VALUE> - Set template variables (can be used multiple times)
-- --raw - Output raw prompt without additional formatting
-- --copy - Copy rendered prompt to clipboard (if supported)
-- --save <FILE> - Save rendered prompt to file
-- --debug - Show debug information during processing
-
-## Global Options
-
-- --verbose - Show detailed execution information
-- --debug - Enable comprehensive debug output
-- --quiet - Suppress all output except the rendered prompt
-
-## Interactive Mode
-
-When variables are not provided via --var, the command prompts interactively:
-
-- Shows parameter descriptions and default values
-- Validates input according to parameter types
-- Supports boolean (true/false, yes/no, 1/0), numbers, choices
-- Detects non-interactive environments (CI/CD) and uses defaults
-
-## Examples
-
-### Basic Testing
-  # Interactive mode - prompts for all parameters
-  sah prompt test code-review
-
-  # Non-interactive with all parameters provided  
-  sah prompt test help --var topic=git --var format=markdown
-
-  # Test from file
-  sah prompt test --file ./my-prompt.md --var name=John
-
-### Advanced Usage
-  # Verbose output with debug information
-  sah --verbose --debug prompt test plan --var project=myapp
-
-  # Save output to file
-  sah prompt test help --var topic=testing --save help-output.md
-
-  # Raw output (no extra formatting)
-  sah prompt test summary --var title=\"Project Status\" --raw
-
-  # Multiple variables
-  sah prompt test code-review \\
-    --var author=Jane \\
-    --var version=2.1 \\
-    --var language=Python \\
-    --var files=src/main.py,tests/test_main.py
-",
-            )
+            .long_about(PROMPT_TEST_LONG_ABOUT)
             .arg(
                 Arg::new("prompt_name")
                     .help("Prompt name to test")
@@ -1299,20 +1425,7 @@ When variables are not provided via --var, the command prompts interactively:
         Self::build_command_with_docs(CommandConfig {
             name: "flow",
             about: "Execute or list workflows",
-            long_about: "Execute workflows or list available workflows.
-
-Usage:
-  sah flow list                List all workflows
-  sah flow <workflow> [args]   Execute a workflow
-
-Special case: 'list' shows all available workflows
-All other names execute the named workflow.
-
-Examples:
-  sah flow list --verbose
-  sah flow do
-  sah flow plan spec.md
-",
+            long_about: FLOW_COMMAND_LONG_ABOUT,
         })
         .trailing_var_arg(true)
         .allow_external_subcommands(true)
@@ -1323,92 +1436,59 @@ Examples:
         )
     }
 
-    /// Build the agent command with all its subcommands
-    pub fn build_agent_command() -> Command {
+    /// Build the model command with all its subcommands
+    pub fn build_model_command() -> Command {
         Self::build_command_with_docs(CommandConfig {
-            name: "agent",
-            about: "Manage and interact with agents",
-            long_about: "
-Manage and interact with agents in the SwissArmyHammer system.
-Agents provide specialized functionality through dedicated workflows
-and tools for specific use cases.
-
-The agent system provides three main commands:
-• show - Display current agent use case assignments (default)
-• list - Display all available agents from all sources
-• use - Apply or execute a specific agent
-
-Use global arguments to control output:
-  --verbose         Show detailed information
-  --format FORMAT   Output format: table, json, yaml
-  --debug           Enable debug mode
-  --quiet           Suppress output except errors
-
-Examples:
-  sah agent                                # Show use case assignments
-  sah agent show                           # Same as above
-  sah agent list                           # List all agents
-  sah --verbose agent list                 # Show detailed information
-  sah --format=json agent list             # Output as JSON
-  sah agent use code-reviewer              # Apply code-reviewer agent
-  sah --debug agent use planner            # Use agent with debug output
-                ",
+            name: "model",
+            about: "Manage and interact with models",
+            long_about: MODEL_COMMAND_LONG_ABOUT,
         })
-        .subcommand(
-            Command::new("show")
-                .about("Show current agent use case assignments")
-                .arg(
-                    Arg::new("format")
-                        .long("format")
-                        .help("Output format")
-                        .value_parser(["table", "json", "yaml"])
-                        .default_value("table"),
-                ),
-        )
-        .subcommand(
-            Command::new("list").about("List available agents").arg(
+        .subcommand(Self::build_model_show_subcommand())
+        .subcommand(Self::build_model_list_subcommand())
+        .subcommand(Self::build_model_use_subcommand())
+    }
+
+    /// Build the model show subcommand
+    fn build_model_show_subcommand() -> Command {
+        Command::new("show")
+            .about("Show current model use case assignments")
+            .arg(
                 Arg::new("format")
                     .long("format")
                     .help("Output format")
                     .value_parser(["table", "json", "yaml"])
                     .default_value("table"),
-            ),
+            )
+    }
+
+    /// Build the model list subcommand
+    fn build_model_list_subcommand() -> Command {
+        Command::new("list").about("List available models").arg(
+            Arg::new("format")
+                .long("format")
+                .help("Output format")
+                .value_parser(["table", "json", "yaml"])
+                .default_value("table"),
         )
-        .subcommand(
-            Command::new("use")
-                .about("Use a specific agent for a use case")
-                .long_about(
-                    "
-Apply a specific agent configuration to the project for a use case.
+    }
 
-Usage patterns:
-  sah agent use <AGENT>              # Set root agent (backward compatible)
-  sah agent use <USE_CASE> <AGENT>   # Set agent for specific use case
-
-Use cases:
-  root      - Default agent for general operations
-  rules     - Agent for rule checking operations
-  workflows - Agent for workflow execution
-
-Examples:
-  sah agent use claude-code               # Set root agent
-  sah agent use rules qwen-coder          # Use Qwen for rules
-  sah agent use workflows claude-code     # Use Claude for workflows
-                ",
-                )
-                .arg(
-                    Arg::new("first")
-                        .help("Agent name OR use case (root, rules, workflows)")
-                        .value_name("FIRST")
-                        .required(true),
-                )
-                .arg(
-                    Arg::new("second")
-                        .help("Agent name (required when first argument is a use case)")
-                        .value_name("SECOND")
-                        .required(false),
-                ),
-        )
+    /// Build the model use subcommand
+    fn build_model_use_subcommand() -> Command {
+        Command::new("use")
+            .about("Use a specific model for a use case")
+            .long_about(MODEL_USE_LONG_ABOUT)
+            .arg(
+                Arg::new("first")
+                    .help("Model name OR use case (root, rules, workflows)")
+                    .value_name("FIRST")
+                    .required(true),
+            )
+            .arg(
+                Arg::new("second")
+                    .help("Model name (required when first argument is a use case)")
+                    .value_name("SECOND")
+                    .required(false),
+            )
     }
 
     /// Generate workflow shortcut commands dynamically
@@ -1419,7 +1499,7 @@ Examples:
     /// # Conflict Resolution
     ///
     /// Workflows that conflict with reserved command names get an underscore prefix:
-    /// - Reserved: serve, doctor, prompt, rule, flow, agent, validate, plan, implement, list
+    /// - Reserved: serve, doctor, prompt, rule, flow, model, validate, plan, implement, list
     /// - Example: A workflow named "list" becomes "_list"
     ///
     /// # Parameters
@@ -1430,15 +1510,27 @@ Examples:
     ///
     /// Vector of clap Commands, one for each workflow with proper argument handling
     pub fn build_workflow_shortcuts(workflow_storage: &WorkflowStorage) -> Vec<Command> {
-        // Load workflows from storage
-        let workflows = match workflow_storage.list_workflows() {
+        let workflows = Self::load_available_workflows(workflow_storage);
+        Self::create_shortcuts_from_workflows(workflows)
+    }
+
+    /// Load available workflows from storage
+    fn load_available_workflows(
+        workflow_storage: &WorkflowStorage,
+    ) -> Vec<swissarmyhammer_workflow::Workflow> {
+        match workflow_storage.list_workflows() {
             Ok(workflows) => workflows,
             Err(e) => {
                 tracing::warn!("Failed to load workflows for shortcuts: {}", e);
-                return Vec::new();
+                Vec::new()
             }
-        };
+        }
+    }
 
+    /// Create shortcut commands from workflows
+    fn create_shortcuts_from_workflows(
+        workflows: Vec<swissarmyhammer_workflow::Workflow>,
+    ) -> Vec<Command> {
         workflows
             .into_iter()
             .map(Self::create_workflow_shortcut_command)
@@ -1447,7 +1539,7 @@ Examples:
 
     /// Reserved command names that would conflict with top-level commands
     const RESERVED_COMMAND_NAMES: &'static [&'static str] = &[
-        "serve", "doctor", "prompt", "rule", "flow", "agent", "validate",
+        "serve", "doctor", "prompt", "rule", "flow", "model", "validate",
         "list", // Special: flow subcommand that should not conflict
     ];
 

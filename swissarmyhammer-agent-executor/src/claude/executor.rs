@@ -1,9 +1,10 @@
 //! Claude Code CLI executor implementation
+//! sah rule ignore test_rule_with_allow
 
 use crate::{ActionError, ActionResult, AgentExecutionContext, AgentExecutor, AgentResponse};
 use agent_client_protocol::McpServer;
 use async_trait::async_trait;
-use swissarmyhammer_config::agent::AgentExecutorType;
+use swissarmyhammer_config::model::AgentExecutorType;
 
 /// Executor that shells out to Claude Code CLI
 #[derive(Debug, Clone)]
@@ -37,23 +38,8 @@ impl ClaudeCodeExecutor {
         })
     }
 
-    /// Execute Claude command using stdin approach (maintaining backward compatibility)
-    async fn execute_claude_command(
-        &self,
-        claude_path: &std::path::PathBuf,
-        prompt: String,
-        system_prompt: Option<String>,
-        _context: &AgentExecutionContext<'_>,
-    ) -> ActionResult<AgentResponse> {
-        use tokio::process::Command;
-
-        tracing::debug!(
-            "Executing Claude command: {} with prompt length: {}",
-            claude_path.display(),
-            prompt.len()
-        );
-
-        // Extract URL from McpServer and create Claude-compatible JSON
+    /// Build MCP configuration JSON string for Claude CLI
+    fn build_mcp_config(&self) -> ActionResult<String> {
         let (server_name, server_url) = match &self.mcp_server {
             McpServer::Http { name, url, .. } => (name, url),
             McpServer::Sse { name, url, .. } => (name, url),
@@ -64,7 +50,6 @@ impl ClaudeCodeExecutor {
             }
         };
 
-        // Create MCP config with headers as object (not array) for Claude compatibility
         let mcp_config_json = serde_json::json!({
             "mcpServers": {
                 server_name: {
@@ -75,7 +60,6 @@ impl ClaudeCodeExecutor {
             }
         });
 
-        // Pass MCP config as JSON string directly to --mcp-config
         let mcp_config_string = serde_json::to_string(&mcp_config_json).map_err(|e| {
             ActionError::ClaudeError(format!("Failed to serialize MCP config: {}", e))
         })?;
@@ -86,18 +70,26 @@ impl ClaudeCodeExecutor {
             server_url
         );
 
-        // Build command - IMPORTANT: --mcp-config must come BEFORE --print for CLI parsing to work
+        Ok(mcp_config_string)
+    }
+
+    /// Build Claude CLI command with all necessary arguments
+    fn build_claude_command(
+        &self,
+        claude_path: &std::path::Path,
+        mcp_config: &str,
+        system_prompt: Option<&str>,
+    ) -> tokio::process::Command {
+        use tokio::process::Command;
+
         let mut cmd = Command::new(claude_path);
         cmd.args(["--dangerously-skip-permissions"]);
-        cmd.args(["--mcp-config", &mcp_config_string]);
+        cmd.args(["--mcp-config", mcp_config]);
         cmd.args(["--strict-mcp-config"]);
         cmd.args(["--print"]);
-
-        // Disable built-in tools for deterministic behavior
         cmd.args(["--tools", ""]);
 
-        // Add system prompt parameter if provided
-        if let Some(ref sys_prompt) = system_prompt {
+        if let Some(sys_prompt) = system_prompt {
             tracing::debug!(
                 "Executing Claude command: {} with system prompt length: {}",
                 claude_path.display(),
@@ -106,10 +98,19 @@ impl ClaudeCodeExecutor {
             cmd.args(["--append-system-prompt", sys_prompt]);
         }
 
-        // Log the full command for debugging
         tracing::debug!("Claude command: {:?}", cmd.as_std());
 
-        // Use stdin for prompt input (required when using --mcp-config before --print)
+        cmd
+    }
+
+    /// Execute command with prompt via stdin
+    async fn execute_with_prompt(
+        &self,
+        mut cmd: tokio::process::Command,
+        prompt: String,
+    ) -> ActionResult<std::process::Output> {
+        use tokio::io::AsyncWriteExt;
+
         let mut child = cmd
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
@@ -117,28 +118,26 @@ impl ClaudeCodeExecutor {
             .spawn()
             .map_err(|e| ActionError::ClaudeError(format!("Failed to execute Claude: {e}")))?;
 
-        // Write prompt to stdin
         if let Some(stdin) = child.stdin.as_mut() {
-            use tokio::io::AsyncWriteExt;
             stdin.write_all(prompt.as_bytes()).await.map_err(|e| {
                 ActionError::ClaudeError(format!("Failed to write prompt to stdin: {e}"))
             })?;
         }
 
-        // Wait for command completion
-        let output = child
+        child
             .wait_with_output()
             .await
-            .map_err(|e| ActionError::ClaudeError(format!("Failed to wait for Claude: {e}")))?;
+            .map_err(|e| ActionError::ClaudeError(format!("Failed to wait for Claude: {e}")))
+    }
 
-        // Check if Claude execution was successful
+    /// Process command output and handle errors
+    fn process_command_output(&self, output: std::process::Output) -> ActionResult<AgentResponse> {
         if !output.status.success() {
             let exit_code = output.status.code().unwrap_or(-1);
             let stderr = String::from_utf8_lossy(&output.stderr);
 
-            // Check for rate limiting
             if stderr.contains("rate limit") || stderr.contains("Rate limit") {
-                let wait_time = std::time::Duration::from_secs(60); // Default wait time
+                let wait_time = std::time::Duration::from_secs(60);
                 return Err(ActionError::RateLimit {
                     message: stderr.to_string(),
                     wait_time,
@@ -151,10 +150,8 @@ impl ClaudeCodeExecutor {
             )));
         }
 
-        // Extract response from stdout
         let response_text = String::from_utf8_lossy(&output.stdout).to_string();
 
-        // Process the response
         let response_text = if response_text.trim().is_empty() {
             tracing::warn!("Empty response from Claude Code");
             "No response from Claude".to_string()
@@ -163,6 +160,26 @@ impl ClaudeCodeExecutor {
         };
 
         Ok(AgentResponse::success(response_text))
+    }
+
+    /// Execute Claude command using stdin approach
+    async fn execute_claude_command(
+        &self,
+        claude_path: &std::path::Path,
+        prompt: String,
+        system_prompt: Option<String>,
+        _context: &AgentExecutionContext<'_>,
+    ) -> ActionResult<AgentResponse> {
+        tracing::debug!(
+            "Executing Claude command: {} with prompt length: {}",
+            claude_path.display(),
+            prompt.len()
+        );
+
+        let mcp_config = self.build_mcp_config()?;
+        let cmd = self.build_claude_command(claude_path, &mcp_config, system_prompt.as_deref());
+        let output = self.execute_with_prompt(cmd, prompt).await?;
+        self.process_command_output(output)
     }
 }
 
@@ -176,19 +193,16 @@ impl AgentExecutor for ClaudeCodeExecutor {
     ) -> ActionResult<AgentResponse> {
         let claude_path = self.get_claude_path()?;
 
-        // Get Claude CLI path from environment
         let claude_path_buf = std::env::var("SAH_CLAUDE_PATH")
             .map(std::path::PathBuf::from)
             .unwrap_or_else(|_| claude_path.clone());
 
-        // Convert system prompt to Option for backward compatibility
         let system_prompt_opt = if system_prompt.is_empty() {
             None
         } else {
             Some(system_prompt)
         };
 
-        // Execute Claude command using the same approach as the original implementation
         self.execute_claude_command(
             &claude_path_buf,
             rendered_prompt,
@@ -207,7 +221,6 @@ impl AgentExecutor for ClaudeCodeExecutor {
             return Ok(());
         }
 
-        // Find claude executable in PATH
         self.claude_path = Some(which::which("claude").map_err(|_| {
             ActionError::ExecutionError(
                 "Claude CLI not found in PATH. Please install Claude Code CLI.".to_string(),
@@ -223,7 +236,6 @@ impl AgentExecutor for ClaudeCodeExecutor {
     }
 
     async fn shutdown(&mut self) -> ActionResult<()> {
-        // No resources to cleanup for CLI approach
         self.initialized = false;
         Ok(())
     }

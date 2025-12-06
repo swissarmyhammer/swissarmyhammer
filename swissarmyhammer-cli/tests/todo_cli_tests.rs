@@ -13,7 +13,7 @@
 use git2::Repository;
 use serde_json::Value;
 use std::process::Command;
-use tempfile::TempDir;
+use swissarmyhammer_common::test_utils::IsolatedTestEnvironment;
 
 /// Length of the JSON prefix `"id":"` used when parsing todo IDs from command output
 const JSON_ID_PREFIX_LEN: usize = 6;
@@ -49,15 +49,15 @@ fn init_git_repo(path: &std::path::Path) {
 ///
 /// Returns a tuple of (TempDir, Path) to reduce the repetitive pattern of calling
 /// `setup_todo_test_env()` followed by `temp_dir.path()` in every test.
-fn setup_todo_test_env() -> TempDir {
-    let temp_dir = TempDir::new().expect("Failed to create temp dir");
-    let temp_path = temp_dir.path();
+fn setup_todo_test_env() -> IsolatedTestEnvironment {
+    let env = IsolatedTestEnvironment::new().expect("Failed to create test environment");
+    let temp_path = env.temp_dir();
 
-    init_git_repo(temp_path);
+    init_git_repo(&temp_path);
     std::fs::create_dir_all(temp_path.join(".swissarmyhammer"))
         .expect("Failed to create .swissarmyhammer dir");
 
-    temp_dir
+    env
 }
 
 /// Helper function that returns both TempDir and path for convenient test setup
@@ -65,10 +65,10 @@ fn setup_todo_test_env() -> TempDir {
 /// This eliminates the common pattern of `let temp_dir = setup_todo_test_env(); let temp_path = temp_dir.path();`
 /// Usage: `let (temp_dir, temp_path) = setup_todo_test();`
 #[allow(dead_code)]
-fn setup_todo_test() -> (TempDir, std::path::PathBuf) {
-    let temp_dir = setup_todo_test_env();
-    let temp_path = temp_dir.path().to_path_buf();
-    (temp_dir, temp_path)
+fn setup_todo_test() -> (IsolatedTestEnvironment, std::path::PathBuf) {
+    let env = setup_todo_test_env();
+    let temp_path = env.temp_dir();
+    (env, temp_path)
 }
 
 /// Helper function to extract todo ID from JSON output
@@ -362,7 +362,7 @@ fn test_todo_commands_in_help() {
 #[ignore = "Git repo detection issue with symlinked temp paths on macOS - see issue notes"]
 fn test_todo_create_command() {
     let temp_dir = setup_todo_test_env();
-    let temp_path = temp_dir.path();
+    let temp_path = &temp_dir.temp_dir();
 
     assert_output_contains(
         &[
@@ -387,7 +387,7 @@ fn test_todo_create_command() {
 #[ignore = "Git repo detection issue with symlinked temp paths on macOS - see issue notes"]
 fn test_todo_create_without_context() {
     let temp_dir = setup_todo_test_env();
-    let temp_path = temp_dir.path();
+    let temp_path = &temp_dir.temp_dir();
 
     assert_output_contains(
         &["todo", "create", "--task", "Simple task"],
@@ -405,7 +405,7 @@ fn test_todo_create_without_context() {
 #[ignore = "Git repo detection issue with symlinked temp paths on macOS - see issue notes"]
 fn test_todo_show_next() {
     let temp_dir = setup_todo_test_env();
-    let temp_path = temp_dir.path();
+    let temp_path = &temp_dir.temp_dir();
 
     // Create a todo item
     create_todo_and_get_id("Task to show", None, temp_path);
@@ -419,7 +419,7 @@ fn test_todo_show_next() {
 #[ignore = "Git repo detection issue with symlinked temp paths on macOS - see issue notes"]
 fn test_todo_show_next_empty() {
     let temp_dir = setup_todo_test_env();
-    let temp_path = temp_dir.path();
+    let temp_path = &temp_dir.temp_dir();
 
     assert_no_incomplete_todos(&["todo", "show", "--item", "next"], temp_path);
 }
@@ -429,7 +429,7 @@ fn test_todo_show_next_empty() {
 #[ignore = "Git repo detection issue with symlinked temp paths on macOS - see issue notes"]
 fn test_todo_complete_command() {
     let temp_dir = setup_todo_test_env();
-    let temp_path = temp_dir.path();
+    let temp_path = &temp_dir.temp_dir();
 
     // Create a todo and get its ID
     let todo_id = create_todo_and_get_id("Task to complete", None, temp_path);
@@ -442,7 +442,7 @@ fn test_todo_complete_command() {
 #[test]
 fn test_todo_create_missing_task() {
     let temp_dir = setup_todo_test_env();
-    let temp_path = temp_dir.path();
+    let temp_path = &temp_dir.temp_dir();
 
     let stderr = run_and_get_output(&["todo", "create"], temp_path, false);
     assert!(
@@ -455,7 +455,7 @@ fn test_todo_create_missing_task() {
 #[test]
 fn test_todo_complete_invalid_id() {
     let temp_dir = setup_todo_test_env();
-    let temp_path = temp_dir.path();
+    let temp_path = &temp_dir.temp_dir();
 
     // Should fail with an error about the ID not being found
     run_and_get_output(
@@ -470,7 +470,7 @@ fn test_todo_complete_invalid_id() {
 #[ignore = "Git repo detection issue with symlinked temp paths on macOS - see issue notes"]
 fn test_todo_full_workflow() {
     let temp_dir = setup_todo_test_env();
-    let temp_path = temp_dir.path();
+    let temp_path = &temp_dir.temp_dir();
 
     // Step 1: Create a todo and get its ID
     let todo_id = create_todo_and_get_id(
@@ -494,7 +494,7 @@ fn test_todo_full_workflow() {
 #[ignore = "Git repo detection issue with symlinked temp paths on macOS - see issue notes"]
 fn test_todo_list_empty() {
     let temp_dir = setup_todo_test_env();
-    let temp_path = temp_dir.path();
+    let temp_path = &temp_dir.temp_dir();
 
     let stdout = run_and_get_output(&["todo", "list"], temp_path, true);
     assert_todo_counts(&stdout, 0, 0, 0);
@@ -505,7 +505,7 @@ fn test_todo_list_empty() {
 #[ignore = "Git repo detection issue with symlinked temp paths on macOS - see issue notes"]
 fn test_todo_list_multiple() {
     let temp_dir = setup_todo_test_env();
-    let temp_path = temp_dir.path();
+    let temp_path = &temp_dir.temp_dir();
 
     // Create three todos
     create_three_test_todos(temp_path);
@@ -528,7 +528,7 @@ fn test_todo_list_with_filter(
     expected_count: u32,
 ) {
     let temp_dir = setup_todo_test_env();
-    let temp_path = temp_dir.path();
+    let temp_path = &temp_dir.temp_dir();
 
     // Create three todos with Task 2 completed
     setup_todos_with_one_completed(temp_path, 1);
@@ -562,7 +562,7 @@ fn test_todo_list_filter_completed() {
 #[ignore = "Git repo detection issue with symlinked temp paths on macOS - see issue notes"]
 fn test_todo_list_sort_order() {
     let temp_dir = setup_todo_test_env();
-    let temp_path = temp_dir.path();
+    let temp_path = &temp_dir.temp_dir();
 
     // Create three todos with Task 1 completed
     setup_todos_with_one_completed(temp_path, 0);

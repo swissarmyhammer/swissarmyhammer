@@ -1,6 +1,6 @@
 //! Agent execution context
 
-use swissarmyhammer_config::agent::{AgentConfig, AgentExecutorType};
+use swissarmyhammer_config::model::{AgentExecutorType, ModelConfig};
 
 /// Agent execution context for prompt execution
 ///
@@ -13,14 +13,14 @@ use swissarmyhammer_config::agent::{AgentConfig, AgentExecutorType};
 #[derive(Debug)]
 pub struct AgentExecutionContext<'a> {
     /// Agent configuration
-    agent_config: &'a AgentConfig,
+    agent_config: &'a ModelConfig,
     /// Skip tool discovery for this execution (optimization for rule checking)
     skip_tools: bool,
 }
 
 impl<'a> AgentExecutionContext<'a> {
     /// Create a new agent execution context with the given configuration
-    pub fn new(agent_config: &'a AgentConfig) -> Self {
+    pub fn new(agent_config: &'a ModelConfig) -> Self {
         Self {
             agent_config,
             skip_tools: false,
@@ -28,7 +28,7 @@ impl<'a> AgentExecutionContext<'a> {
     }
 
     /// Create a new agent execution context optimized for rule checking (no tools)
-    pub fn for_rule_checking(agent_config: &'a AgentConfig) -> Self {
+    pub fn for_rule_checking(agent_config: &'a ModelConfig) -> Self {
         Self {
             agent_config,
             skip_tools: true,
@@ -36,7 +36,7 @@ impl<'a> AgentExecutionContext<'a> {
     }
 
     /// Get agent configuration
-    pub fn agent_config(&self) -> &AgentConfig {
+    pub fn agent_config(&self) -> &ModelConfig {
         self.agent_config
     }
 

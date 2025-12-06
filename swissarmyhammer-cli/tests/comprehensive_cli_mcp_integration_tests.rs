@@ -22,14 +22,49 @@ async fn create_test_context_with_git() -> Result<(IsolatedTestEnvironment, CliT
     Ok((env, context))
 }
 
-/// Test error propagation from MCP tools to CLI
-#[tokio::test]
-async fn test_mcp_error_propagation() -> Result<()> {
-    let _env = IsolatedTestEnvironment::new().unwrap();
-    let temp_path = _env.temp_dir();
+/// Helper to create a test context without git repository
+async fn create_test_context() -> Result<(IsolatedTestEnvironment, CliToolContext)> {
+    let env = IsolatedTestEnvironment::new()?;
+    let temp_path = env.temp_dir();
     let context = CliToolContext::new_with_dir(&temp_path)
         .await
         .map_err(|e| anyhow::anyhow!("{}", e))?;
+    Ok((env, context))
+}
+
+/// Helper to create todo arguments
+fn create_todo_args(
+    context: &CliToolContext,
+    task: &str,
+    content: &str,
+) -> serde_json::Map<String, serde_json::Value> {
+    context.create_arguments(vec![("task", json!(task)), ("context", json!(content))])
+}
+
+/// Helper to assert error contains expected phrases
+fn assert_error_contains_any(error: &rmcp::model::ErrorData, expected_phrases: &[&str]) {
+    let error_msg = error.to_string();
+    assert!(
+        expected_phrases
+            .iter()
+            .any(|phrase| error_msg.contains(phrase)),
+        "Error message should contain one of {:?}, got: {}",
+        expected_phrases,
+        error_msg
+    );
+}
+
+/// Macro for asserting tool success
+macro_rules! assert_tool_success {
+    ($result:expr, $msg:expr) => {
+        assert!($result.is_ok(), "{}: {:?}", $msg, $result);
+    };
+}
+
+/// Test error propagation from MCP tools to CLI
+#[tokio::test]
+async fn test_mcp_error_propagation() -> Result<()> {
+    let (_env, context) = create_test_context().await?;
 
     // Test invalid arguments error
     let invalid_args = context.create_arguments(vec![("invalid_field", json!("invalid_value"))]);
@@ -92,12 +127,9 @@ pub fn test_function() -> String { "test".to_string() }"#,
         .map_err(|e| anyhow::anyhow!("{}", e))?;
 
     // Test correct argument types
-    let valid_args = context.create_arguments(vec![
-        ("task", json!("String Title")),
-        ("context", json!("String content")),
-    ]);
+    let valid_args = create_todo_args(&context, "String Title", "String content");
     let result = context.execute_tool("todo_create", valid_args).await;
-    assert!(result.is_ok(), "Valid arguments should succeed");
+    assert_tool_success!(result, "Valid arguments should succeed");
 
     Ok(())
 }
@@ -108,10 +140,7 @@ async fn test_response_formatting() -> Result<()> {
     let (_env, context) = create_test_context_with_git().await?;
 
     // Test successful response formatting with todo_create
-    let args = context.create_arguments(vec![
-        ("task", json!("Format Test Task")),
-        ("context", json!("Testing response formatting")),
-    ]);
+    let args = create_todo_args(&context, "Format Test Task", "Testing response formatting");
     let result = context.execute_tool("todo_create", args).await?;
 
     let success_response =
@@ -159,10 +188,11 @@ async fn test_concurrent_tool_execution() -> Result<()> {
             .await
             .map_err(|e| anyhow::anyhow!("{}", e))?;
         let handle = tokio::spawn(async move {
-            let args = context_clone.create_arguments(vec![
-                ("task", json!(format!("Concurrent Test Task {}", i))),
-                ("context", json!(format!("Context for task {}", i))),
-            ]);
+            let args = create_todo_args(
+                &context_clone,
+                &format!("Concurrent Test Task {}", i),
+                &format!("Context for task {}", i),
+            );
             context_clone.execute_tool("todo_create", args).await
         });
         handles.push(handle);
@@ -184,11 +214,7 @@ async fn test_concurrent_tool_execution() -> Result<()> {
 /// Test error message formatting and user-friendliness
 #[tokio::test]
 async fn test_error_message_formatting() -> Result<()> {
-    let _env = IsolatedTestEnvironment::new().unwrap();
-    let temp_path = _env.temp_dir();
-    let context = CliToolContext::new_with_dir(&temp_path)
-        .await
-        .map_err(|e| anyhow::anyhow!("{}", e))?;
+    let (_env, context) = create_test_context().await?;
 
     // Test missing required field error
     let result = context
@@ -196,14 +222,9 @@ async fn test_error_message_formatting() -> Result<()> {
         .await;
     assert!(result.is_err(), "Should error on missing required fields");
 
-    let error = result.unwrap_err();
-    let error_msg = error.to_string();
-    assert!(
-        error_msg.contains("required")
-            || error_msg.contains("missing")
-            || error_msg.contains("task"),
-        "Error message should be descriptive: {error_msg}"
-    );
+    if let Err(error) = result {
+        assert_error_contains_any(&error, &["required", "missing", "task"]);
+    }
 
     // Test invalid tool name error
     let result = context
@@ -211,14 +232,9 @@ async fn test_error_message_formatting() -> Result<()> {
         .await;
     assert!(result.is_err(), "Should error on nonexistent tool");
 
-    let error = result.unwrap_err();
-    let error_msg = error.to_string();
-    assert!(
-        error_msg.contains("not found")
-            || error_msg.contains("Tool not found")
-            || error_msg.contains("Unknown tool"),
-        "Error message should indicate tool not found: {error_msg}"
-    );
+    if let Err(error) = result {
+        assert_error_contains_any(&error, &["not found", "Tool not found", "Unknown tool"]);
+    }
 
     Ok(())
 }
@@ -235,20 +251,14 @@ async fn test_tool_context_configurations() -> Result<()> {
         .map_err(|e| anyhow::anyhow!("{}", e))?;
 
     // Both should work independently
-    let args1 = context1.create_arguments(vec![
-        ("task", json!("Context 1 Task")),
-        ("context", json!("From context 1")),
-    ]);
-    let args2 = context2.create_arguments(vec![
-        ("task", json!("Context 2 Task")),
-        ("context", json!("From context 2")),
-    ]);
+    let args1 = create_todo_args(&context1, "Context 1 Task", "From context 1");
+    let args2 = create_todo_args(&context2, "Context 2 Task", "From context 2");
 
     let result1 = context1.execute_tool("todo_create", args1).await;
     let result2 = context2.execute_tool("todo_create", args2).await;
 
-    assert!(result1.is_ok(), "Context 1 should work independently");
-    assert!(result2.is_ok(), "Context 2 should work independently");
+    assert_tool_success!(result1, "Context 1 should work independently");
+    assert_tool_success!(result2, "Context 2 should work independently");
 
     Ok(())
 }
@@ -267,15 +277,9 @@ async fn test_mcp_error_boundaries() -> Result<()> {
     );
 
     // Test context recovery after error
-    let valid_args = context.create_arguments(vec![
-        ("task", json!("Recovery Test")),
-        ("context", json!("Testing recovery after error")),
-    ]);
+    let valid_args = create_todo_args(&context, "Recovery Test", "Testing recovery after error");
     let result = context.execute_tool("todo_create", valid_args).await;
-    assert!(
-        result.is_ok(),
-        "Context should recover after error: {result:?}"
-    );
+    assert_tool_success!(result, "Context should recover after error");
 
     Ok(())
 }

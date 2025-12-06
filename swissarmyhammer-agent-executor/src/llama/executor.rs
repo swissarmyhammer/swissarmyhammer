@@ -8,7 +8,7 @@ use async_trait::async_trait;
 
 use std::sync::Arc;
 
-use swissarmyhammer_config::agent::AgentExecutorType;
+use swissarmyhammer_config::model::AgentExecutorType;
 use swissarmyhammer_config::{LlamaAgentConfig, ModelSource};
 use tokio::sync::OnceCell;
 
@@ -174,36 +174,31 @@ impl LlamaAgentExecutor {
         }
     }
 
-    /// Convert SwissArmyHammer LlamaAgentConfig to llama-agent AgentConfig
-    fn to_llama_agent_config(&self) -> ActionResult<AgentConfig> {
-        tracing::debug!("Converting to llama-agent config with MCP server");
-        // Convert model source with validation
-        let model_source = match &self.config.model.source {
+    /// Convert model source with validation
+    fn convert_model_source(&self) -> ActionResult<LlamaModelSource> {
+        match &self.config.model.source {
             ModelSource::HuggingFace {
                 repo,
                 filename,
                 folder,
             } => {
-                // Validate repo is not empty (simulate real llama-agent validation)
                 if repo.is_empty() {
                     return Err(ActionError::ExecutionError(
                         "LlamaAgent initialization failed: Invalid model repository - empty repo string not allowed".to_string()
                     ));
                 }
 
-                LlamaModelSource::HuggingFace {
+                Ok(LlamaModelSource::HuggingFace {
                     repo: repo.clone(),
-                    // If folder is provided, use it and set filename to None
-                    // If folder is not provided, use filename
                     filename: if folder.is_some() {
                         None
                     } else {
                         filename.clone()
                     },
                     folder: folder.clone(),
-                }
+                })
             }
-            ModelSource::Local { filename, folder } => LlamaModelSource::Local {
+            ModelSource::Local { filename, folder } => Ok(LlamaModelSource::Local {
                 folder: folder.clone().unwrap_or_else(|| {
                     filename
                         .parent()
@@ -213,11 +208,14 @@ impl LlamaAgentExecutor {
                 filename: filename
                     .file_name()
                     .map(|s| s.to_string_lossy().to_string()),
-            },
-        };
+            }),
+        }
+    }
 
-        let model_config = ModelConfig {
-            source: model_source,
+    /// Create model configuration
+    fn create_model_config(&self, source: LlamaModelSource) -> ModelConfig {
+        ModelConfig {
+            source,
             batch_size: self.config.model.batch_size,
             use_hf_params: self.config.model.use_hf_params,
             retry_config: RetryConfig {
@@ -226,58 +224,67 @@ impl LlamaAgentExecutor {
                 backoff_multiplier: 1.5,
                 max_delay_ms: 1000,
             },
-            debug: false, // Hardcode to false to suppress llama.cpp verbose logging
-            // Thread and sequence configuration for llama.cpp
-            // n_seq_max: Maximum number of parallel sequences/contexts (1 = single conversation)
-            // n_threads: Number of threads for prompt processing (4 = balanced for multi-core CPUs)
-            // n_threads_batch: Number of threads for batch processing (4 = parallel token generation)
+            debug: false,
             n_seq_max: 1,
             n_threads: 4,
             n_threads_batch: 4,
-        };
+        }
+    }
 
-        // Extract URL from McpServer configuration
-        let mcp_url = match &self.mcp_server {
-            agent_client_protocol::McpServer::Http {
-                name: _,
-                url,
-                headers: _,
-            } => url.clone(),
-            agent_client_protocol::McpServer::Sse {
-                name: _,
-                url,
-                headers: _,
-            } => url.clone(),
-            agent_client_protocol::McpServer::Stdio { .. } => {
-                return Err(ActionError::ExecutionError(
-                    "LlamaAgent requires HTTP MCP server, got Stdio".to_string(),
-                ))
-            }
-        };
+    /// Extract MCP server URL from configuration
+    fn extract_mcp_url(&self) -> ActionResult<String> {
+        Self::get_mcp_server_url(&self.mcp_server).ok_or_else(|| {
+            ActionError::ExecutionError(
+                "LlamaAgent requires HTTP MCP server, got Stdio".to_string(),
+            )
+        })
+    }
 
+    /// Create MCP server configuration
+    fn create_mcp_config(&self) -> ActionResult<MCPServerConfig> {
+        let mcp_url = self.extract_mcp_url()?;
         tracing::debug!("Configuring HTTP MCP server at {}", mcp_url);
 
-        let server_name = match &self.mcp_server {
-            agent_client_protocol::McpServer::Http { name, .. } => name.clone(),
-            agent_client_protocol::McpServer::Sse { name, .. } => name.clone(),
-            agent_client_protocol::McpServer::Stdio { name, .. } => name.clone(),
-        };
+        let server_name = Self::get_mcp_server_name(&self.mcp_server);
 
         let http_config = HttpServerConfig {
             name: server_name,
             url: mcp_url,
             timeout_secs: Some(self.config.mcp_server.timeout_seconds),
-            sse_keep_alive_secs: Some(30), // 30 second keepalive
-            stateful_mode: false,          // Use stateless mode for simplicity
+            sse_keep_alive_secs: Some(30),
+            stateful_mode: false,
         };
 
-        let mcp_config = MCPServerConfig::Http(http_config);
+        Ok(MCPServerConfig::Http(http_config))
+    }
+
+    /// Helper: Extract URL from any McpServer variant
+    fn get_mcp_server_url(mcp_server: &agent_client_protocol::McpServer) -> Option<String> {
+        match mcp_server {
+            agent_client_protocol::McpServer::Http { url, .. }
+            | agent_client_protocol::McpServer::Sse { url, .. } => Some(url.clone()),
+            agent_client_protocol::McpServer::Stdio { .. } => None,
+        }
+    }
+
+    /// Helper: Extract name from any McpServer variant
+    fn get_mcp_server_name(mcp_server: &agent_client_protocol::McpServer) -> String {
+        match mcp_server {
+            agent_client_protocol::McpServer::Http { name, .. }
+            | agent_client_protocol::McpServer::Sse { name, .. }
+            | agent_client_protocol::McpServer::Stdio { name, .. } => name.clone(),
+        }
+    }
+
+    /// Convert SwissArmyHammer LlamaAgentConfig to llama-agent AgentConfig
+    fn to_llama_agent_config(&self) -> ActionResult<AgentConfig> {
+        tracing::debug!("Converting to llama-agent config with MCP server");
+
+        let model_source = self.convert_model_source()?;
+        let model_config = self.create_model_config(model_source);
+        let mcp_config = self.create_mcp_config()?;
+
         tracing::debug!("MCP server config created: {:?}", mcp_config);
-
-        let mcp_servers = vec![mcp_config];
-
-        // Repetition detection has been removed from llama-agent crate.
-        // Only basic stopping config with EOS detection is now available.
         tracing::debug!("Using basic StoppingConfig with EOS detection only");
 
         Ok(AgentConfig {
@@ -287,7 +294,7 @@ impl LlamaAgentExecutor {
                 worker_threads: 1,
             },
             session_config: SessionConfig::default(),
-            mcp_servers,
+            mcp_servers: vec![mcp_config],
             parallel_execution_config: ParallelConfig::default(),
         })
     }
@@ -309,12 +316,7 @@ impl LlamaAgentExecutor {
             self.get_model_display_name()
         );
 
-        let server_name = match &self.mcp_server {
-            agent_client_protocol::McpServer::Http { name, .. } => name,
-            agent_client_protocol::McpServer::Sse { name, .. } => name,
-            agent_client_protocol::McpServer::Stdio { name, .. } => name,
-        };
-
+        let server_name = Self::get_mcp_server_name(&self.mcp_server);
         tracing::info!("Using MCP server '{}'", server_name);
 
         // Give the HTTP MCP server a moment to fully initialize
@@ -404,23 +406,19 @@ impl LlamaAgentExecutor {
 
     /// Get MCP server URL
     pub fn mcp_server_url(&self) -> Option<String> {
-        match &self.mcp_server {
-            agent_client_protocol::McpServer::Http { url, .. }
-            | agent_client_protocol::McpServer::Sse { url, .. } => Some(url.clone()),
-            agent_client_protocol::McpServer::Stdio { .. } => None,
-        }
+        Self::get_mcp_server_url(&self.mcp_server)
+    }
+
+    /// Parse port from URL string
+    fn parse_port_from_url(url: &str) -> Option<u16> {
+        let port_part = url.split(':').nth(2)?;
+        let port_str = port_part.split('/').next()?;
+        port_str.parse().ok()
     }
 
     /// Get MCP server port from configuration
     pub fn mcp_server_port(&self) -> Option<u16> {
-        match &self.mcp_server {
-            agent_client_protocol::McpServer::Http { url, .. }
-            | agent_client_protocol::McpServer::Sse { url, .. } => {
-                // Parse port from URL like "http://127.0.0.1:8080/mcp"
-                url.split(':').nth(2)?.split('/').next()?.parse().ok()
-            }
-            agent_client_protocol::McpServer::Stdio { .. } => None,
-        }
+        Self::get_mcp_server_url(&self.mcp_server).and_then(|url| Self::parse_port_from_url(&url))
     }
 
     /// Get the model display name for logging and debugging
@@ -451,6 +449,82 @@ impl LlamaAgentExecutor {
         }
     }
 
+    /// Error message constants
+    const ERROR_EMPTY_REPO: &'static str = "HuggingFace repository name cannot be empty";
+    const ERROR_EMPTY_FILENAME: &'static str = "Model filename cannot be empty when specified";
+    const ERROR_INVALID_EXTENSION: &'static str = "Local model file must end with .gguf extension";
+    const ERROR_FILE_NOT_FOUND: &'static str = "Local model file not found";
+    const ERROR_ZERO_TIMEOUT: &'static str = "MCP server timeout must be greater than 0 seconds";
+
+    /// Validate HuggingFace model configuration
+    fn validate_huggingface_config(
+        &self,
+        repo: &str,
+        filename: &Option<String>,
+    ) -> Result<(), ActionError> {
+        if repo.is_empty() {
+            return Err(ActionError::ExecutionError(
+                Self::ERROR_EMPTY_REPO.to_string(),
+            ));
+        }
+
+        if let Some(filename) = filename {
+            if filename.is_empty() {
+                return Err(ActionError::ExecutionError(
+                    Self::ERROR_EMPTY_FILENAME.to_string(),
+                ));
+            }
+        }
+
+        tracing::debug!("HuggingFace model configuration is valid: {}", repo);
+        Ok(())
+    }
+
+    /// Validate local model configuration
+    fn validate_local_config(&self, filename: &std::path::Path) -> Result<(), ActionError> {
+        if !filename.extension().is_some_and(|ext| ext == "gguf") {
+            return Err(ActionError::ExecutionError(format!(
+                "{}, got: {}",
+                Self::ERROR_INVALID_EXTENSION,
+                filename.display()
+            )));
+        }
+
+        if !filename.exists() {
+            return Err(ActionError::ExecutionError(format!(
+                "{}: {}",
+                Self::ERROR_FILE_NOT_FOUND,
+                filename.display()
+            )));
+        }
+
+        tracing::debug!("Local model configuration is valid: {}", filename.display());
+        Ok(())
+    }
+
+    /// Validate MCP server configuration
+    fn validate_mcp_server_config(&self) -> Result<(), ActionError> {
+        if self.config.mcp_server.timeout_seconds == 0 {
+            return Err(ActionError::ExecutionError(
+                Self::ERROR_ZERO_TIMEOUT.to_string(),
+            ));
+        }
+
+        if self.config.mcp_server.timeout_seconds > 300 {
+            tracing::warn!(
+                "MCP server timeout is very high ({}s), this may cause performance issues",
+                self.config.mcp_server.timeout_seconds
+            );
+        }
+
+        tracing::debug!(
+            "MCP server configuration is valid: timeout={}s",
+            self.config.mcp_server.timeout_seconds
+        );
+
+        Ok(())
+    }
+
     /// Validate the LlamaAgent configuration
     ///
     /// Performs comprehensive validation of the configuration to ensure it meets
@@ -472,67 +546,16 @@ impl LlamaAgentExecutor {
     pub fn validate_config(&self) -> Result<(), ActionError> {
         tracing::debug!("Validating LlamaAgent configuration");
 
-        // Validate model source configuration
         match &self.config.model.source {
             ModelSource::HuggingFace { repo, filename, .. } => {
-                // Validate repository name
-                if repo.is_empty() {
-                    return Err(ActionError::ExecutionError(
-                        "HuggingFace repository name cannot be empty".to_string(),
-                    ));
-                }
-
-                // Validate filename if provided
-                if let Some(filename) = filename {
-                    if filename.is_empty() {
-                        return Err(ActionError::ExecutionError(
-                            "Model filename cannot be empty when specified".to_string(),
-                        ));
-                    }
-                }
-
-                tracing::debug!("HuggingFace model configuration is valid: {}", repo);
+                self.validate_huggingface_config(repo, filename)?;
             }
             ModelSource::Local { filename, .. } => {
-                // Validate local file extension
-                if !filename.extension().is_some_and(|ext| ext == "gguf") {
-                    return Err(ActionError::ExecutionError(format!(
-                        "Local model file must end with .gguf extension, got: {}",
-                        filename.display()
-                    )));
-                }
-
-                // Validate local file exists
-                if !filename.exists() {
-                    return Err(ActionError::ExecutionError(format!(
-                        "Local model file not found: {}",
-                        filename.display()
-                    )));
-                }
-
-                tracing::debug!("Local model configuration is valid: {}", filename.display());
+                self.validate_local_config(filename)?;
             }
         }
 
-        // Validate MCP server configuration
-        if self.config.mcp_server.timeout_seconds == 0 {
-            return Err(ActionError::ExecutionError(
-                "MCP server timeout must be greater than 0 seconds".to_string(),
-            ));
-        }
-
-        // Warn about high timeout values but don't fail validation
-        if self.config.mcp_server.timeout_seconds > 300 {
-            tracing::warn!(
-                "MCP server timeout is very high ({}s), this may cause performance issues",
-                self.config.mcp_server.timeout_seconds
-            );
-        }
-
-        tracing::debug!(
-            "MCP server configuration is valid: timeout={}s",
-            self.config.mcp_server.timeout_seconds
-        );
+        self.validate_mcp_server_config()?;
 
         tracing::info!(
             "LlamaAgent configuration validation passed for model: {}",
@@ -677,22 +700,17 @@ impl AgentExecutor for LlamaAgentExecutor {
 }
 
 impl LlamaAgentExecutor {
-    /// Execute with real LlamaAgent when the feature is enabled
-    async fn execute_with_real_agent(
+    /// Setup session with optional tool discovery
+    async fn setup_session(
         &self,
         agent_server: &Arc<AgentServer>,
-        system_prompt: String,
-        rendered_prompt: String,
-        execution_start: std::time::Instant,
         skip_tools: bool,
-    ) -> ActionResult<AgentResponse> {
-        // Create a new session
+    ) -> ActionResult<llama_agent::types::Session> {
         let mut session = agent_server
             .create_session()
             .await
             .map_err(|e| ActionError::ExecutionError(format!("Failed to create session: {}", e)))?;
 
-        // Discover available tools only if needed (skipped for rule checking optimization)
         if !skip_tools {
             agent_server
                 .discover_tools(&mut session)
@@ -704,45 +722,61 @@ impl LlamaAgentExecutor {
             tracing::debug!("Skipping tool discovery for rule checking (optimization)");
         }
 
-        // Add system message if provided
+        Ok(session)
+    }
+
+    /// Add messages to session
+    async fn add_messages_to_session(
+        &self,
+        agent_server: &Arc<AgentServer>,
+        session_id: &llama_agent::SessionId,
+        system_prompt: String,
+        rendered_prompt: String,
+    ) -> ActionResult<()> {
         if !system_prompt.is_empty() {
             let system_message = Message {
                 role: MessageRole::System,
-                content: system_prompt.clone(),
+                content: system_prompt,
                 tool_call_id: None,
                 tool_name: None,
                 timestamp: std::time::SystemTime::now(),
             };
             agent_server
-                .add_message(&session.id, system_message)
+                .add_message(session_id, system_message)
                 .await
                 .map_err(|e| {
                     ActionError::ExecutionError(format!("Failed to add system message: {}", e))
                 })?;
         }
 
-        // Add user message
         let user_message = Message {
             role: MessageRole::User,
-            content: rendered_prompt.clone(),
+            content: rendered_prompt,
             tool_call_id: None,
             tool_name: None,
             timestamp: std::time::SystemTime::now(),
         };
         agent_server
-            .add_message(&session.id, user_message)
+            .add_message(session_id, user_message)
             .await
             .map_err(|e| {
                 ActionError::ExecutionError(format!("Failed to add user message: {}", e))
             })?;
 
-        // Create generation request with repetition detection
-        let stopping_config = self.create_stopping_config();
-        let session_id = session.id;
-        let generation_request =
-            GenerationRequest::new(session_id).with_stopping_config(stopping_config);
+        Ok(())
+    }
 
-        // Generate response
+    /// Generate and format response
+    async fn generate_and_format_response(
+        &self,
+        agent_server: &Arc<AgentServer>,
+        session: &llama_agent::types::Session,
+        execution_start: std::time::Instant,
+    ) -> ActionResult<AgentResponse> {
+        let stopping_config = self.create_stopping_config();
+        let generation_request =
+            GenerationRequest::new(session.id).with_stopping_config(stopping_config);
+
         let result = agent_server
             .generate(generation_request)
             .await
@@ -757,7 +791,6 @@ impl LlamaAgentExecutor {
             result.tokens_generated
         );
 
-        // Return response in expected format
         let response = serde_json::json!({
             "status": "success",
             "message": result.generated_text,
@@ -766,7 +799,6 @@ impl LlamaAgentExecutor {
                 "mcp_server_url": mcp_url,
                 "mcp_server_port": self.mcp_server_port(),
                 "execution_time_ms": execution_time.as_millis(),
-
                 "model": self.get_model_display_name(),
                 "tokens_generated": result.tokens_generated,
                 "generation_time_ms": result.generation_time.as_millis(),
@@ -783,12 +815,28 @@ impl LlamaAgentExecutor {
             }
         });
 
-        // Convert the JSON response to AgentResponse
-        let response_content = result.generated_text;
         Ok(AgentResponse::success_with_metadata(
-            response_content,
+            result.generated_text,
             response,
         ))
+    }
+
+    /// Execute with real LlamaAgent when the feature is enabled
+    async fn execute_with_real_agent(
+        &self,
+        agent_server: &Arc<AgentServer>,
+        system_prompt: String,
+        rendered_prompt: String,
+        execution_start: std::time::Instant,
+        skip_tools: bool,
+    ) -> ActionResult<AgentResponse> {
+        let session = self.setup_session(agent_server, skip_tools).await?;
+
+        self.add_messages_to_session(agent_server, &session.id, system_prompt, rendered_prompt)
+            .await?;
+
+        self.generate_and_format_response(agent_server, &session, execution_start)
+            .await
     }
 }
 
@@ -868,17 +916,42 @@ impl AgentExecutor for LlamaAgentExecutorWrapper {
 mod tests {
     use super::*;
     use serial_test::serial;
-    use swissarmyhammer_config::{McpServerConfig, ModelConfig};
+    use swissarmyhammer_config::{LlmModelConfig, McpServerConfig, ModelSource};
+
+    /// Test utility: Create a test MCP server configuration
+    fn create_test_mcp_server(port: u16) -> agent_client_protocol::McpServer {
+        agent_client_protocol::McpServer::Http {
+            name: "test".to_string(),
+            url: format!("http://127.0.0.1:{}/mcp", port),
+            headers: Vec::new(),
+        }
+    }
+
+    /// Test utility: Start MCP server and return handle with port
+    async fn start_test_mcp_server() -> swissarmyhammer_tools::mcp::unified_server::McpServerHandle
+    {
+        use swissarmyhammer_prompts::PromptLibrary;
+        use swissarmyhammer_tools::mcp::unified_server::{start_mcp_server, McpServerMode};
+
+        start_mcp_server(
+            McpServerMode::Http { port: None },
+            Some(PromptLibrary::default()),
+            None,
+        )
+        .await
+        .expect("Failed to start test MCP server")
+    }
+
+    /// Test utility: Create a test executor with the given port
+    fn create_test_executor(port: u16) -> LlamaAgentExecutor {
+        let config = LlamaAgentConfig::for_testing();
+        let mcp_server = create_test_mcp_server(port);
+        LlamaAgentExecutor::new(config, mcp_server)
+    }
 
     #[test_log::test(tokio::test)]
     async fn test_llama_agent_executor_creation() {
-        let config = LlamaAgentConfig::for_testing();
-        let mcp_server = agent_client_protocol::McpServer::Http {
-            name: "test".to_string(),
-            url: "http://127.0.0.1:8080/mcp".to_string(),
-            headers: Vec::new(),
-        };
-        let executor = LlamaAgentExecutor::new(config, mcp_server);
+        let executor = create_test_executor(8080);
 
         assert!(!executor.initialized);
         assert_eq!(executor.executor_type(), AgentExecutorType::LlamaAgent);
@@ -887,28 +960,9 @@ mod tests {
     #[test_log::test(tokio::test)]
     #[serial]
     async fn test_llama_agent_executor_initialization() {
-        // Start MCP server first (now done at workflow layer)
-        use swissarmyhammer_prompts::PromptLibrary;
-        use swissarmyhammer_tools::mcp::unified_server::{start_mcp_server, McpServerMode};
-
-        let tools_handle = start_mcp_server(
-            McpServerMode::Http { port: None },
-            Some(PromptLibrary::default()),
-            None,
-        )
-        .await
-        .expect("Failed to start test MCP server");
-
-        // Get the actual port the server is running on
+        let tools_handle = start_test_mcp_server().await;
         let port = tools_handle.info().port.unwrap_or(0);
-
-        let config = LlamaAgentConfig::for_testing();
-        let mcp_server = agent_client_protocol::McpServer::Http {
-            name: "test".to_string(),
-            url: format!("http://127.0.0.1:{}/mcp", port),
-            headers: Vec::new(),
-        };
-        let mut executor = LlamaAgentExecutor::new(config, mcp_server);
+        let mut executor = create_test_executor(port);
 
         // Initialize executor - must succeed for real test
         executor
@@ -933,7 +987,7 @@ mod tests {
     fn test_llama_agent_executor_model_display_name() {
         // Test HuggingFace model with filename
         let config = LlamaAgentConfig {
-            model: ModelConfig {
+            model: LlmModelConfig {
                 source: ModelSource::HuggingFace {
                     repo: "unsloth/Phi-4-mini-instruct-GGUF".to_string(),
                     filename: Some("Phi-4-mini-instruct-Q4_K_M.gguf".to_string()),
@@ -947,11 +1001,7 @@ mod tests {
 
             repetition_detection: Default::default(),
         };
-        let mcp_server = agent_client_protocol::McpServer::Http {
-            name: "test".to_string(),
-            url: "http://127.0.0.1:8080/mcp".to_string(),
-            headers: Vec::new(),
-        };
+        let mcp_server = create_test_mcp_server(8080);
         let executor = LlamaAgentExecutor::new(config, mcp_server);
         assert_eq!(
             executor.get_model_display_name(),
@@ -960,7 +1010,7 @@ mod tests {
 
         // Test HuggingFace model without filename
         let config = LlamaAgentConfig {
-            model: ModelConfig {
+            model: LlmModelConfig {
                 source: ModelSource::HuggingFace {
                     repo: "unsloth/Phi-4-mini-instruct-GGUF".to_string(),
                     filename: None,
@@ -974,11 +1024,7 @@ mod tests {
 
             repetition_detection: Default::default(),
         };
-        let mcp_server = agent_client_protocol::McpServer::Http {
-            name: "test".to_string(),
-            url: "http://127.0.0.1:8080/mcp".to_string(),
-            headers: Vec::new(),
-        };
+        let mcp_server = create_test_mcp_server(8080);
         let executor = LlamaAgentExecutor::new(config, mcp_server);
         assert_eq!(
             executor.get_model_display_name(),
@@ -987,7 +1033,7 @@ mod tests {
 
         // Test local model
         let config = LlamaAgentConfig {
-            model: ModelConfig {
+            model: LlmModelConfig {
                 source: ModelSource::Local {
                     filename: std::path::PathBuf::from("/path/to/model.gguf"),
                     folder: None,
@@ -1000,11 +1046,7 @@ mod tests {
 
             repetition_detection: Default::default(),
         };
-        let mcp_server = agent_client_protocol::McpServer::Http {
-            name: "test".to_string(),
-            url: "http://127.0.0.1:8080/mcp".to_string(),
-            headers: Vec::new(),
-        };
+        let mcp_server = create_test_mcp_server(8080);
         let executor = LlamaAgentExecutor::new(config, mcp_server);
         assert_eq!(
             executor.get_model_display_name(),
@@ -1015,27 +1057,9 @@ mod tests {
     #[test_log::test(tokio::test)]
     #[serial]
     async fn test_llama_agent_executor_initialization_with_validation() {
-        // Start MCP server first
-        use swissarmyhammer_prompts::PromptLibrary;
-        use swissarmyhammer_tools::mcp::unified_server::{start_mcp_server, McpServerMode};
-
-        let tools_handle = start_mcp_server(
-            McpServerMode::Http { port: None },
-            Some(PromptLibrary::default()),
-            None,
-        )
-        .await
-        .expect("Failed to start test MCP server");
-
+        let tools_handle = start_test_mcp_server().await;
         let port = tools_handle.info().port.unwrap_or(0);
-
-        let config = LlamaAgentConfig::for_testing();
-        let mcp_server = agent_client_protocol::McpServer::Http {
-            name: "test".to_string(),
-            url: format!("http://127.0.0.1:{}/mcp", port),
-            headers: Vec::new(),
-        };
-        let mut executor = LlamaAgentExecutor::new(config, mcp_server);
+        let mut executor = create_test_executor(port);
 
         // Initialize must succeed for real test
         executor
@@ -1050,23 +1074,12 @@ mod tests {
     #[test_log::test(tokio::test)]
     #[serial]
     async fn test_llama_agent_executor_initialization_with_invalid_config() {
-        // Start MCP server first
-        use swissarmyhammer_prompts::PromptLibrary;
-        use swissarmyhammer_tools::mcp::unified_server::{start_mcp_server, McpServerMode};
-
-        let tools_handle = start_mcp_server(
-            McpServerMode::Http { port: None },
-            Some(PromptLibrary::default()),
-            None,
-        )
-        .await
-        .expect("Failed to start test MCP server");
-
+        let tools_handle = start_test_mcp_server().await;
         let port = tools_handle.info().port.unwrap_or(0);
 
         // Test initialization with invalid configuration
         let invalid_config = LlamaAgentConfig {
-            model: ModelConfig {
+            model: LlmModelConfig {
                 source: ModelSource::HuggingFace {
                     repo: "".to_string(), // Invalid empty repo
                     filename: Some("test.gguf".to_string()),
@@ -1080,11 +1093,7 @@ mod tests {
 
             repetition_detection: Default::default(),
         };
-        let mcp_server = agent_client_protocol::McpServer::Http {
-            name: "test".to_string(),
-            url: format!("http://127.0.0.1:{}/mcp", port),
-            headers: Vec::new(),
-        };
+        let mcp_server = create_test_mcp_server(port);
         let mut executor = LlamaAgentExecutor::new(invalid_config, mcp_server);
 
         // Should fail during initialization - validation now handled by llama-agent
@@ -1101,35 +1110,14 @@ mod tests {
     #[test_log::test(tokio::test)]
     #[serial]
     async fn test_llama_agent_executor_global_management() {
-        // Start MCP server for the global executor
-        use swissarmyhammer_prompts::PromptLibrary;
-        use swissarmyhammer_tools::mcp::unified_server::{start_mcp_server, McpServerMode};
-
-        let tools_handle = start_mcp_server(
-            McpServerMode::Http { port: None },
-            Some(PromptLibrary::default()),
-            None,
-        )
-        .await
-        .expect("Failed to start test MCP server");
-
+        let tools_handle = start_test_mcp_server().await;
         let port = tools_handle.info.port.unwrap_or(0);
-
-        // Clone for second call (dummy handles are cheap)
 
         let config1 = LlamaAgentConfig::for_testing();
         let config2 = LlamaAgentConfig::for_testing();
 
-        let mcp_server1 = agent_client_protocol::McpServer::Http {
-            name: "test".to_string(),
-            url: format!("http://127.0.0.1:{}/mcp", port),
-            headers: Vec::new(),
-        };
-        let mcp_server2 = agent_client_protocol::McpServer::Http {
-            name: "test".to_string(),
-            url: format!("http://127.0.0.1:{}/mcp", port),
-            headers: Vec::new(),
-        };
+        let mcp_server1 = create_test_mcp_server(port);
+        let mcp_server2 = create_test_mcp_server(port);
 
         // First call should create and initialize the global executor, or return existing one
         // Note: If another test already initialized the global executor, this will return it
@@ -1155,13 +1143,7 @@ mod tests {
 
     #[test_log::test(tokio::test)]
     async fn test_llama_agent_executor_execute_without_init() {
-        let config = LlamaAgentConfig::for_testing();
-        let mcp_server = agent_client_protocol::McpServer::Http {
-            name: "test".to_string(),
-            url: "http://127.0.0.1:8080/mcp".to_string(),
-            headers: Vec::new(),
-        };
-        let executor = LlamaAgentExecutor::new(config, mcp_server);
+        let executor = create_test_executor(8080);
 
         // Create a test execution context
         let agent_config = create_test_agent_config();
@@ -1183,13 +1165,7 @@ mod tests {
     #[test]
     fn test_create_stopping_config() {
         // Test StoppingConfig creation (repetition detection has been removed from llama-agent)
-        let config = LlamaAgentConfig::for_testing();
-        let mcp_server = agent_client_protocol::McpServer::Http {
-            name: "test".to_string(),
-            url: "http://127.0.0.1:8080/mcp".to_string(),
-            headers: Vec::new(),
-        };
-        let executor = LlamaAgentExecutor::new(config, mcp_server);
+        let executor = create_test_executor(8080);
         let stopping_config = executor.create_stopping_config();
 
         // Verify the remaining fields
@@ -1201,7 +1177,7 @@ mod tests {
     fn test_folder_based_model_display_name() {
         // Test display name format for folder-based models
         let folder_model_config = LlamaAgentConfig {
-            model: ModelConfig {
+            model: LlmModelConfig {
                 source: ModelSource::HuggingFace {
                     repo: "microsoft/Phi-3-mini-4k-instruct-gguf".to_string(),
                     filename: Some("Phi-3-mini-4k-instruct-q4".to_string()), // Folder name containing chunks
@@ -1215,11 +1191,7 @@ mod tests {
             repetition_detection: Default::default(),
         };
 
-        let mcp_server = agent_client_protocol::McpServer::Http {
-            name: "test".to_string(),
-            url: "http://localhost:8080/mcp".to_string(),
-            headers: Vec::new(),
-        };
+        let mcp_server = create_test_mcp_server(8080);
         let executor = LlamaAgentExecutor::new(folder_model_config, mcp_server);
 
         // Test display name format for folder-based model
@@ -1233,7 +1205,7 @@ mod tests {
     fn test_single_file_model_display_name() {
         // Test display name format for single .gguf files
         let single_file_config = LlamaAgentConfig {
-            model: ModelConfig {
+            model: LlmModelConfig {
                 source: ModelSource::HuggingFace {
                     repo: "microsoft/Phi-3-mini-4k-instruct-gguf".to_string(),
                     filename: Some("Phi-3-mini-4k-instruct-q4.gguf".to_string()), // Single .gguf file
@@ -1247,11 +1219,7 @@ mod tests {
             repetition_detection: Default::default(),
         };
 
-        let mcp_server = agent_client_protocol::McpServer::Http {
-            name: "test".to_string(),
-            url: "http://localhost:8080/mcp".to_string(),
-            headers: Vec::new(),
-        };
+        let mcp_server = create_test_mcp_server(8080);
         let executor = LlamaAgentExecutor::new(single_file_config, mcp_server);
 
         // Test display name format for single file model
@@ -1267,7 +1235,7 @@ mod tests {
 
         // Test ModelSource::Local with explicit folder
         let config_with_folder = LlamaAgentConfig {
-            model: ModelConfig {
+            model: LlmModelConfig {
                 source: ModelSource::Local {
                     filename: PathBuf::from("model.gguf"),
                     folder: Some(PathBuf::from("/custom/models")),
@@ -1280,16 +1248,12 @@ mod tests {
             repetition_detection: Default::default(),
         };
 
-        let mcp_server1 = agent_client_protocol::McpServer::Http {
-            name: "test".to_string(),
-            url: "http://localhost:8080/mcp".to_string(),
-            headers: Vec::new(),
-        };
+        let mcp_server1 = create_test_mcp_server(8080);
         let executor_with_folder = LlamaAgentExecutor::new(config_with_folder, mcp_server1);
 
         // Test ModelSource::Local without explicit folder (should derive from filename)
         let config_without_folder = LlamaAgentConfig {
-            model: ModelConfig {
+            model: LlmModelConfig {
                 source: ModelSource::Local {
                     filename: PathBuf::from("/path/to/model.gguf"),
                     folder: None,
@@ -1302,11 +1266,7 @@ mod tests {
             repetition_detection: Default::default(),
         };
 
-        let mcp_server2 = agent_client_protocol::McpServer::Http {
-            name: "test".to_string(),
-            url: "http://localhost:8080/mcp".to_string(),
-            headers: Vec::new(),
-        };
+        let mcp_server2 = create_test_mcp_server(8080);
         let executor_without_folder = LlamaAgentExecutor::new(config_without_folder, mcp_server2);
 
         // Both executors should have valid display names (just testing they don't panic)
@@ -1328,19 +1288,15 @@ mod tests {
 
     /// Helper function for creating test execution context
     // Helper to create test agent config
-    fn create_test_agent_config() -> swissarmyhammer_config::agent::AgentConfig {
-        swissarmyhammer_config::agent::AgentConfig::default()
+    fn create_test_agent_config() -> swissarmyhammer_config::model::ModelConfig {
+        swissarmyhammer_config::model::ModelConfig::default()
     }
 
     // Tests for LlamaAgentExecutorWrapper
     #[tokio::test]
     async fn test_wrapper_creation() {
         let config = LlamaAgentConfig::for_testing();
-        let mcp_server = agent_client_protocol::McpServer::Http {
-            name: "test".to_string(),
-            url: "http://localhost:8080/mcp".to_string(),
-            headers: Vec::new(),
-        };
+        let mcp_server = create_test_mcp_server(8080);
         let wrapper = LlamaAgentExecutorWrapper::new(config, mcp_server);
 
         assert_eq!(wrapper.executor_type(), AgentExecutorType::LlamaAgent);
@@ -1350,34 +1306,15 @@ mod tests {
     #[tokio::test]
     #[serial]
     async fn test_wrapper_singleton_behavior() {
-        // Start MCP server for wrapper tests
-        use swissarmyhammer_prompts::PromptLibrary;
-        use swissarmyhammer_tools::mcp::unified_server::{start_mcp_server, McpServerMode};
-
-        let tools_handle = start_mcp_server(
-            McpServerMode::Http { port: None },
-            Some(PromptLibrary::default()),
-            None,
-        )
-        .await
-        .expect("Failed to start test MCP server");
-
+        let tools_handle = start_test_mcp_server().await;
         let port = tools_handle.info.port.unwrap_or(0);
 
         let config1 = LlamaAgentConfig::for_testing();
-        let mcp_server1 = agent_client_protocol::McpServer::Http {
-            name: "test".to_string(),
-            url: format!("http://127.0.0.1:{}/mcp", port),
-            headers: Vec::new(),
-        };
+        let mcp_server1 = create_test_mcp_server(port);
         let mut wrapper1 = LlamaAgentExecutorWrapper::new(config1, mcp_server1);
 
         let config2 = LlamaAgentConfig::for_testing();
-        let mcp_server2 = agent_client_protocol::McpServer::Http {
-            name: "test".to_string(),
-            url: format!("http://127.0.0.1:{}/mcp", port),
-            headers: Vec::new(),
-        };
+        let mcp_server2 = create_test_mcp_server(port);
         let mut wrapper2 = LlamaAgentExecutorWrapper::new(config2, mcp_server2);
 
         // Initialize both wrappers
@@ -1419,11 +1356,7 @@ mod tests {
     #[tokio::test]
     async fn test_wrapper_execute_without_init() {
         let config = LlamaAgentConfig::for_testing();
-        let mcp_server = agent_client_protocol::McpServer::Http {
-            name: "test".to_string(),
-            url: "http://localhost:8080/mcp".to_string(),
-            headers: Vec::new(),
-        };
+        let mcp_server = create_test_mcp_server(8080);
         let wrapper = LlamaAgentExecutorWrapper::new(config, mcp_server);
 
         let agent_config = create_test_agent_config();

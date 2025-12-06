@@ -1,7 +1,7 @@
-//! Integration tests for agent CLI commands
+//! Integration tests for model CLI commands
 //!
-//! Tests the sah agent list and sah agent use commands with real built-in agents,
-//! error scenarios, and agent discovery hierarchy.
+//! Tests the sah model list and sah model use commands with real built-in models,
+//! error scenarios, and model discovery hierarchy.
 
 use anyhow::Result;
 use std::env;
@@ -11,8 +11,8 @@ use swissarmyhammer::test_utils::IsolatedTestEnvironment;
 use tempfile::TempDir;
 use tokio::process::Command;
 
-/// Test utility to run sah agent commands
-async fn run_agent_command(args: &[&str]) -> Result<std::process::Output> {
+/// Test utility to run sah model commands
+async fn run_model_command(args: &[&str]) -> Result<std::process::Output> {
     let binary_path = if let Ok(path) = std::env::var("CARGO_BIN_EXE_sah") {
         path
     } else {
@@ -31,8 +31,8 @@ async fn run_agent_command(args: &[&str]) -> Result<std::process::Output> {
     Ok(output)
 }
 
-/// Test utility to run sah agent commands in a specific directory
-async fn run_agent_command_in_dir(
+/// Test utility to run sah model commands in a specific directory
+async fn run_model_command_in_dir(
     args: &[&str],
     working_dir: &Path,
 ) -> Result<std::process::Output> {
@@ -55,13 +55,13 @@ async fn run_agent_command_in_dir(
     Ok(output)
 }
 
-/// Create test agent files in a directory
-fn create_test_agent_files(dir: &Path) -> Result<()> {
+/// Create test model files in a directory
+fn create_test_model_files(dir: &Path) -> Result<()> {
     fs::create_dir_all(dir)?;
 
-    // Create a user agent that overrides a builtin
+    // Create a user model that overrides a builtin
     let user_claude_content = r#"---
-description: "User-overridden Claude Code agent"
+description: "User-overridden Claude Code model"
 ---
 executor:
   type: claude-code
@@ -71,9 +71,9 @@ executor:
 quiet: false"#;
     fs::write(dir.join("claude-code.yaml"), user_claude_content)?;
 
-    // Create a custom user agent
-    let custom_agent_content = r#"---
-description: "Custom test agent"
+    // Create a custom user model
+    let custom_model_content = r#"---
+description: "Custom test model"
 ---
 executor:
   type: claude-code
@@ -81,16 +81,16 @@ executor:
     claude_path: /custom/claude
     args: ["--custom-mode"]
 quiet: true"#;
-    fs::write(dir.join("custom-test-agent.yaml"), custom_agent_content)?;
+    fs::write(dir.join("custom-test-agent.yaml"), custom_model_content)?;
 
     Ok(())
 }
 
-/// Create project agent files in a directory  
-fn create_project_agent_files(dir: &Path) -> Result<()> {
+/// Create project model files in a directory  
+fn create_project_model_files(dir: &Path) -> Result<()> {
     fs::create_dir_all(dir)?;
 
-    // Create a project agent that overrides a builtin
+    // Create a project model that overrides a builtin
     let project_qwen_content = r#"---
 description: "Project-customized Qwen Coder"
 ---
@@ -105,9 +105,9 @@ executor:
 quiet: false"#;
     fs::write(dir.join("qwen-coder.yaml"), project_qwen_content)?;
 
-    // Create a unique project agent
-    let project_agent_content = r#"---
-description: "Project-specific development agent"
+    // Create a unique project model
+    let project_model_content = r#"---
+description: "Project-specific development model"
 ---
 executor:
   type: claude-code
@@ -115,7 +115,7 @@ executor:
     claude_path: /project/claude
     args: ["--project-dev"]
 quiet: false"#;
-    fs::write(dir.join("project-dev-agent.yaml"), project_agent_content)?;
+    fs::write(dir.join("project-dev-agent.yaml"), project_model_content)?;
 
     Ok(())
 }
@@ -125,31 +125,31 @@ quiet: false"#;
 // =============================================================================
 
 #[tokio::test]
-async fn test_agent_list_basic_functionality() -> Result<()> {
-    let output = run_agent_command(&["agent", "list"]).await?;
+async fn test_model_list_basic_functionality() -> Result<()> {
+    let output = run_model_command(&["model", "list"]).await?;
 
-    assert!(output.status.success(), "agent list should succeed");
+    assert!(output.status.success(), "model list should succeed");
 
     let stdout = String::from_utf8_lossy(&output.stdout);
 
-    // Should contain built-in agents
+    // Should contain built-in models
     assert!(
         stdout.contains("claude-code"),
-        "Should list claude-code agent"
+        "Should list claude-code model"
     );
     assert!(
         stdout.contains("qwen-coder"),
-        "Should list qwen-coder agent"
+        "Should list qwen-coder model"
     );
     assert!(
         stdout.contains("qwen-coder-flash"),
-        "Should list qwen-coder-flash agent"
+        "Should list qwen-coder-flash model"
     );
 
     // Should show summary information
     assert!(
-        stdout.contains("Agents:"),
-        "Should show agent count summary"
+        stdout.contains("Models:"),
+        "Should show model count summary"
     );
     assert!(stdout.contains("Built-in:"), "Should show built-in count");
 
@@ -157,12 +157,12 @@ async fn test_agent_list_basic_functionality() -> Result<()> {
 }
 
 #[tokio::test]
-async fn test_agent_list_json_format() -> Result<()> {
-    let output = run_agent_command(&["agent", "list", "--format", "json"]).await?;
+async fn test_model_list_json_format() -> Result<()> {
+    let output = run_model_command(&["model", "list", "--format", "json"]).await?;
 
     assert!(
         output.status.success(),
-        "agent list --format json should succeed"
+        "model list --format json should succeed"
     );
 
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -174,35 +174,35 @@ async fn test_agent_list_json_format() -> Result<()> {
     // Should be an array
     assert!(json_value.is_array(), "JSON output should be an array");
 
-    let agents = json_value.as_array().unwrap();
-    assert!(!agents.is_empty(), "Should have at least built-in agents");
+    let models = json_value.as_array().unwrap();
+    assert!(!models.is_empty(), "Should have at least built-in models");
 
-    // Check structure of first agent
-    let first_agent = &agents[0];
+    // Check structure of first model
+    let first_model = &models[0];
     assert!(
-        first_agent["name"].is_string(),
-        "Agent should have name field"
+        first_model["name"].is_string(),
+        "Model should have name field"
     );
     assert!(
-        first_agent["description"].is_string(),
-        "Agent should have description field"
+        first_model["description"].is_string(),
+        "Model should have description field"
     );
     assert!(
-        first_agent["source"].is_string(),
-        "Agent should have source field"
+        first_model["source"].is_string(),
+        "Model should have source field"
     );
 
-    // Should contain built-in agents
-    let agent_names: Vec<_> = agents
+    // Should contain built-in models
+    let model_names: Vec<_> = models
         .iter()
-        .map(|agent| agent["name"].as_str().unwrap())
+        .map(|model| model["name"].as_str().unwrap())
         .collect();
     assert!(
-        agent_names.contains(&"claude-code"),
+        model_names.contains(&"claude-code"),
         "Should include claude-code"
     );
     assert!(
-        agent_names.contains(&"qwen-coder"),
+        model_names.contains(&"qwen-coder"),
         "Should include qwen-coder"
     );
 
@@ -210,12 +210,12 @@ async fn test_agent_list_json_format() -> Result<()> {
 }
 
 #[tokio::test]
-async fn test_agent_list_yaml_format() -> Result<()> {
-    let output = run_agent_command(&["agent", "list", "--format", "yaml"]).await?;
+async fn test_model_list_yaml_format() -> Result<()> {
+    let output = run_model_command(&["model", "list", "--format", "yaml"]).await?;
 
     assert!(
         output.status.success(),
-        "agent list --format yaml should succeed"
+        "model list --format yaml should succeed"
     );
 
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -227,40 +227,40 @@ async fn test_agent_list_yaml_format() -> Result<()> {
     // Should be an array
     assert!(yaml_value.is_sequence(), "YAML output should be a sequence");
 
-    let agents = yaml_value.as_sequence().unwrap();
-    assert!(!agents.is_empty(), "Should have at least built-in agents");
+    let models = yaml_value.as_sequence().unwrap();
+    assert!(!models.is_empty(), "Should have at least built-in models");
 
     Ok(())
 }
 
 #[tokio::test]
-async fn test_agent_use_builtin_agent() -> Result<()> {
+async fn test_model_use_builtin_model() -> Result<()> {
     let _env = IsolatedTestEnvironment::new()?;
 
-    let output = run_agent_command(&["agent", "use", "claude-code"]).await?;
+    let output = run_model_command(&["model", "use", "claude-code"]).await?;
 
     // Should succeed or fail with specific config-related errors only
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         let stdout = String::from_utf8_lossy(&output.stdout);
 
-        // Should not fail with "not found" error for built-in agent
+        // Should not fail with "not found" error for built-in model
         assert!(
             !stderr.contains("not found") && !stdout.contains("not found"),
-            "Built-in agent should not be 'not found'. stderr: {}, stdout: {}",
+            "Built-in model should not be 'not found'. stderr: {}, stdout: {}",
             stderr,
             stdout
         );
     } else {
         let stdout = String::from_utf8_lossy(&output.stdout);
         assert!(
-            stdout.contains("Successfully set") && stdout.contains("use case to agent"),
+            stdout.contains("Successfully set") && stdout.contains("use case to model"),
             "Should show success message. Actual: {}",
             stdout
         );
         assert!(
             stdout.contains("claude-code"),
-            "Should mention the agent name"
+            "Should mention the model name"
         );
     }
 
@@ -268,27 +268,27 @@ async fn test_agent_use_builtin_agent() -> Result<()> {
 }
 
 #[tokio::test]
-async fn test_agent_use_nonexistent_agent() -> Result<()> {
-    let output = run_agent_command(&["agent", "use", "nonexistent-agent-xyz"]).await?;
+async fn test_model_use_nonexistent_model() -> Result<()> {
+    let output = run_model_command(&["model", "use", "nonexistent-agent-xyz"]).await?;
 
     assert!(
         !output.status.success(),
-        "Using nonexistent agent should fail"
+        "Using nonexistent model should fail"
     );
 
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
         stderr.contains("not found"),
-        "Should report agent not found"
+        "Should report model not found"
     );
     assert!(
         stderr.contains("nonexistent-agent-xyz"),
-        "Should mention the agent name"
+        "Should mention the model name"
     );
 
-    // Should provide suggestions or list available agents
+    // Should provide suggestions or list available models
     assert!(
-        stderr.contains("Available agents:") || stderr.contains("Did you mean:"),
+        stderr.contains("Available models:") || stderr.contains("Did you mean:"),
         "Should provide helpful suggestions. stderr: {}",
         stderr
     );
@@ -297,12 +297,12 @@ async fn test_agent_use_nonexistent_agent() -> Result<()> {
 }
 
 #[tokio::test]
-async fn test_agent_use_empty_name() -> Result<()> {
-    let output = run_agent_command(&["agent", "use", ""]).await?;
+async fn test_model_use_empty_name() -> Result<()> {
+    let output = run_model_command(&["model", "use", ""]).await?;
 
     assert!(
         !output.status.success(),
-        "Using empty agent name should fail"
+        "Using empty model name should fail"
     );
 
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -315,18 +315,18 @@ async fn test_agent_use_empty_name() -> Result<()> {
 }
 
 // =============================================================================
-// AGENT DISCOVERY HIERARCHY TESTS
+// MODEL DISCOVERY HIERARCHY TESTS
 // =============================================================================
 
 #[tokio::test]
 #[serial_test::serial]
-async fn test_agent_precedence_user_over_builtin() -> Result<()> {
+async fn test_model_precedence_user_over_builtin() -> Result<()> {
     let temp_dir = TempDir::new()?;
     let temp_home = temp_dir.path();
 
-    // Create user agents directory with override
-    let user_agents_dir = temp_home.join(".swissarmyhammer").join("agents");
-    create_test_agent_files(&user_agents_dir)?;
+    // Create user models directory with override
+    let user_agents_dir = temp_home.join(".swissarmyhammer").join("models");
+    create_test_model_files(&user_agents_dir)?;
 
     // Set temporary home directory
     let original_home = env::var("HOME").ok();
@@ -341,68 +341,68 @@ async fn test_agent_precedence_user_over_builtin() -> Result<()> {
         }
     });
 
-    let output = run_agent_command(&["agent", "list"]).await?;
-    assert!(output.status.success(), "agent list should succeed");
+    let output = run_model_command(&["model", "list"]).await?;
+    assert!(output.status.success(), "model list should succeed");
 
     let stdout = String::from_utf8_lossy(&output.stdout);
 
     // Should still list claude-code, but now from user source
     assert!(stdout.contains("claude-code"), "Should list claude-code");
 
-    // Should list the custom user agent
+    // Should list the custom user model
     assert!(
         stdout.contains("custom-test-agent"),
-        "Should list custom user agent"
+        "Should list custom user model"
     );
     assert!(
-        stdout.contains("Custom test agent"),
-        "Should show user agent description"
+        stdout.contains("Custom test model"),
+        "Should show user model description"
     );
 
     // Should show user source counts
-    assert!(stdout.contains("User:"), "Should show user agent count");
+    assert!(stdout.contains("User:"), "Should show user model count");
 
     Ok(())
 }
 
 #[tokio::test]
-async fn test_agent_precedence_project_over_builtin() -> Result<()> {
+async fn test_model_precedence_project_over_builtin() -> Result<()> {
     let temp_dir = TempDir::new()?;
     let project_root = temp_dir.path();
 
-    // Create project agents directory
-    let project_agents_dir = project_root.join("agents");
-    create_project_agent_files(&project_agents_dir)?;
+    // Create project models directory
+    let project_agents_dir = project_root.join("models");
+    create_project_model_files(&project_agents_dir)?;
 
-    let output = run_agent_command_in_dir(&["agent", "list"], project_root).await?;
+    let output = run_model_command_in_dir(&["model", "list"], project_root).await?;
     assert!(
         output.status.success(),
-        "agent list should succeed in project"
+        "model list should succeed in project"
     );
 
     let stdout = String::from_utf8_lossy(&output.stdout);
 
-    // Should list project-specific agent
+    // Should list project-specific model
     assert!(
         stdout.contains("project-dev-agent"),
-        "Should list project agent"
+        "Should list project model"
     );
     assert!(
-        stdout.contains("Project-specific development agent"),
-        "Should show project agent description"
+        stdout.contains("Project-specific development model"),
+        "Should show project model description"
     );
 
     // Should show project source counts
     assert!(
         stdout.contains("Project:"),
-        "Should show project agent count"
+        "Should show project model count"
     );
 
     Ok(())
 }
 
-#[tokio::test]
-async fn test_agent_discovery_hierarchy_full() -> Result<()> {
+/// Helper function to set up a test environment with user and project models
+fn setup_hierarchy_test_dirs() -> Result<(TempDir, std::path::PathBuf, std::path::PathBuf)> {
     let temp_dir = TempDir::new()?;
     let temp_home = temp_dir.path().join("home");
     let project_root = temp_dir.path().join("project");
@@ -410,19 +410,22 @@ async fn test_agent_discovery_hierarchy_full() -> Result<()> {
     fs::create_dir_all(&temp_home)?;
     fs::create_dir_all(&project_root)?;
 
-    // Create user agents
-    let user_agents_dir = temp_home.join(".swissarmyhammer").join("agents");
-    create_test_agent_files(&user_agents_dir)?;
+    let user_agents_dir = temp_home.join(".swissarmyhammer").join("models");
+    create_test_model_files(&user_agents_dir)?;
 
-    // Create project agents
-    let project_agents_dir = project_root.join("agents");
-    create_project_agent_files(&project_agents_dir)?;
+    let project_agents_dir = project_root.join("models");
+    create_project_model_files(&project_agents_dir)?;
 
-    // Set temporary home directory
+    Ok((temp_dir, temp_home, project_root))
+}
+
+#[tokio::test]
+async fn test_model_hierarchy_all_sources_present() -> Result<()> {
+    let (_temp_dir, temp_home, project_root) = setup_hierarchy_test_dirs()?;
+
     let original_home = env::var("HOME").ok();
     env::set_var("HOME", &temp_home);
 
-    // Ensure cleanup
     let _cleanup = scopeguard::guard((), |_| {
         if let Some(home) = original_home {
             env::set_var("HOME", home);
@@ -431,20 +434,41 @@ async fn test_agent_discovery_hierarchy_full() -> Result<()> {
         }
     });
 
-    let output = run_agent_command_in_dir(&["agent", "list"], &project_root).await?;
+    let output = run_model_command_in_dir(&["model", "list"], &project_root).await?;
     assert!(
         output.status.success(),
-        "agent list should succeed with full hierarchy"
+        "model list should succeed with full hierarchy"
     );
 
     let stdout = String::from_utf8_lossy(&output.stdout);
 
-    // Should have agents from all sources
-    assert!(stdout.contains("Built-in:"), "Should show built-in agents");
-    assert!(stdout.contains("Project:"), "Should show project agents");
-    assert!(stdout.contains("User:"), "Should show user agents");
+    assert!(stdout.contains("Built-in:"), "Should show built-in models");
+    assert!(stdout.contains("Project:"), "Should show project models");
+    assert!(stdout.contains("User:"), "Should show user models");
 
-    // Should show agents from different sources
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_model_hierarchy_specific_models_from_each_source() -> Result<()> {
+    let (_temp_dir, temp_home, project_root) = setup_hierarchy_test_dirs()?;
+
+    let original_home = env::var("HOME").ok();
+    env::set_var("HOME", &temp_home);
+
+    let _cleanup = scopeguard::guard((), |_| {
+        if let Some(home) = original_home {
+            env::set_var("HOME", home);
+        } else {
+            env::remove_var("HOME");
+        }
+    });
+
+    let output = run_model_command_in_dir(&["model", "list"], &project_root).await?;
+    assert!(output.status.success(), "model list should succeed");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
     assert!(
         stdout.contains("claude-code"),
         "Should list claude-code (from user or builtin)"
@@ -455,11 +479,11 @@ async fn test_agent_discovery_hierarchy_full() -> Result<()> {
     );
     assert!(
         stdout.contains("project-dev-agent"),
-        "Should list project-specific agent"
+        "Should list project-specific model"
     );
     assert!(
         stdout.contains("custom-test-agent"),
-        "Should list user agent"
+        "Should list user model"
     );
 
     Ok(())
@@ -470,7 +494,7 @@ async fn test_agent_discovery_hierarchy_full() -> Result<()> {
 // =============================================================================
 
 #[tokio::test]
-async fn test_agent_use_permission_denied() -> Result<()> {
+async fn test_model_use_permission_denied() -> Result<()> {
     // Create a temporary directory where we can't write config
     let temp_dir = TempDir::new()?;
     let readonly_dir = temp_dir.path().join("readonly");
@@ -482,8 +506,8 @@ async fn test_agent_use_permission_denied() -> Result<()> {
     permissions.set_readonly(true);
     let _ = fs::set_permissions(&readonly_dir, permissions);
 
-    // Try to use agent in read-only directory
-    let output = run_agent_command_in_dir(&["agent", "use", "claude-code"], &readonly_dir).await?;
+    // Try to use model in read-only directory
+    let output = run_model_command_in_dir(&["model", "use", "claude-code"], &readonly_dir).await?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -516,21 +540,21 @@ async fn test_agent_use_permission_denied() -> Result<()> {
 
 #[tokio::test]
 #[serial_test::serial]
-async fn test_agent_list_with_invalid_agent_files() -> Result<()> {
+async fn test_model_list_with_invalid_model_files() -> Result<()> {
     let temp_dir = TempDir::new()?;
     let temp_home = temp_dir.path();
 
-    // Create user agents directory with invalid agent file
-    let user_agents_dir = temp_home.join(".swissarmyhammer").join("agents");
+    // Create user models directory with invalid model file
+    let user_agents_dir = temp_home.join(".swissarmyhammer").join("models");
     fs::create_dir_all(&user_agents_dir)?;
 
     // Create invalid YAML file
     let invalid_content = "invalid: yaml: content: [unclosed";
     fs::write(user_agents_dir.join("invalid-agent.yaml"), invalid_content)?;
 
-    // Create valid agent file alongside invalid one
+    // Create valid model file alongside invalid one
     let valid_content = r#"---
-description: "Valid test agent"
+description: "Valid test model"
 ---
 executor:
   type: claude-code
@@ -551,23 +575,23 @@ quiet: false"#;
         }
     });
 
-    let output = run_agent_command(&["agent", "list"]).await?;
+    let output = run_model_command(&["model", "list"]).await?;
 
-    // Should succeed and load valid agents, skipping invalid ones
+    // Should succeed and load valid models, skipping invalid ones
     assert!(
         output.status.success(),
-        "agent list should succeed despite invalid files"
+        "model list should succeed despite invalid files"
     );
 
     let stdout = String::from_utf8_lossy(&output.stdout);
 
-    // Should list the valid agent
-    assert!(stdout.contains("valid-agent"), "Should list valid agent");
+    // Should list the valid model
+    assert!(stdout.contains("valid-agent"), "Should list valid model");
 
-    // Should not list the invalid agent
+    // Should not list the invalid model
     assert!(
         !stdout.contains("invalid-agent"),
-        "Should not list invalid agent"
+        "Should not list invalid model"
     );
 
     Ok(())
@@ -578,7 +602,7 @@ quiet: false"#;
 // =============================================================================
 
 #[tokio::test]
-async fn test_agent_use_creates_config_file() -> Result<()> {
+async fn test_model_use_creates_config_file() -> Result<()> {
     let temp_dir = TempDir::new()?;
     let project_root = temp_dir.path();
 
@@ -586,7 +610,7 @@ async fn test_agent_use_creates_config_file() -> Result<()> {
     let config_path = project_root.join(".swissarmyhammer").join("sah.yaml");
     assert!(!config_path.exists(), "Config should not exist initially");
 
-    let output = run_agent_command_in_dir(&["agent", "use", "claude-code"], project_root).await?;
+    let output = run_model_command_in_dir(&["model", "use", "claude-code"], project_root).await?;
 
     if output.status.success() {
         // Should have created config file
@@ -594,13 +618,13 @@ async fn test_agent_use_creates_config_file() -> Result<()> {
 
         let config_content = fs::read_to_string(&config_path)?;
         assert!(
-            config_content.contains("agents:"),
-            "Config should contain agents section. Actual: {}",
+            config_content.contains("models:"),
+            "Config should contain models section. Actual: {}",
             config_content
         );
         assert!(
             config_content.contains("root:") || config_content.contains("claude-code"),
-            "Config should contain agent assignment. Actual: {}",
+            "Config should contain model assignment. Actual: {}",
             config_content
         );
     }
@@ -610,7 +634,7 @@ async fn test_agent_use_creates_config_file() -> Result<()> {
 }
 
 #[tokio::test]
-async fn test_agent_use_updates_existing_config() -> Result<()> {
+async fn test_model_use_updates_existing_config() -> Result<()> {
     let temp_dir = TempDir::new()?;
     let project_root = temp_dir.path();
 
@@ -628,7 +652,7 @@ existing_agent:
 "#;
     fs::write(&config_path, existing_config)?;
 
-    let output = run_agent_command_in_dir(&["agent", "use", "claude-code"], project_root).await?;
+    let output = run_model_command_in_dir(&["model", "use", "claude-code"], project_root).await?;
 
     if output.status.success() {
         let updated_config = fs::read_to_string(&config_path)?;
@@ -643,15 +667,15 @@ existing_agent:
             "Should preserve existing values"
         );
 
-        // Should add/update agents section
+        // Should add/update models section
         assert!(
-            updated_config.contains("agents:"),
-            "Should have agents section. Actual: {}",
+            updated_config.contains("models:"),
+            "Should have models section. Actual: {}",
             updated_config
         );
         assert!(
             updated_config.contains("root:") || updated_config.contains("claude-code"),
-            "Should have agent assignment. Actual: {}",
+            "Should have model assignment. Actual: {}",
             updated_config
         );
     }
@@ -664,15 +688,15 @@ existing_agent:
 // =============================================================================
 
 #[tokio::test]
-async fn test_complete_agent_workflow() -> Result<()> {
+async fn test_complete_model_workflow() -> Result<()> {
     let temp_dir = TempDir::new()?;
     let project_root = temp_dir.path();
 
-    // Step 1: List agents initially
-    let list_output = run_agent_command_in_dir(&["agent", "list"], project_root).await?;
+    // Step 1: List models initially
+    let list_output = run_model_command_in_dir(&["model", "list"], project_root).await?;
     assert!(
         list_output.status.success(),
-        "Initial agent list should succeed"
+        "Initial model list should succeed"
     );
 
     let list_stdout = String::from_utf8_lossy(&list_output.stdout);
@@ -681,14 +705,14 @@ async fn test_complete_agent_workflow() -> Result<()> {
         "Should list claude-code initially"
     );
 
-    // Step 2: Use claude-code agent
+    // Step 2: Use claude-code model
     let use_output =
-        run_agent_command_in_dir(&["agent", "use", "claude-code"], project_root).await?;
+        run_model_command_in_dir(&["model", "use", "claude-code"], project_root).await?;
 
     if use_output.status.success() {
         let use_stdout = String::from_utf8_lossy(&use_output.stdout);
         assert!(
-            use_stdout.contains("Successfully set") && use_stdout.contains("use case to agent"),
+            use_stdout.contains("Successfully set") && use_stdout.contains("use case to model"),
             "Should show success. Actual: {}",
             use_stdout
         );
@@ -697,22 +721,22 @@ async fn test_complete_agent_workflow() -> Result<()> {
         let config_path = project_root.join(".swissarmyhammer").join("sah.yaml");
         assert!(config_path.exists(), "Config file should be created");
 
-        // Step 4: Switch to different agent
+        // Step 4: Switch to different model
         let switch_output =
-            run_agent_command_in_dir(&["agent", "use", "qwen-coder"], project_root).await?;
+            run_model_command_in_dir(&["model", "use", "qwen-coder"], project_root).await?;
 
         if switch_output.status.success() {
             let switch_stdout = String::from_utf8_lossy(&switch_output.stdout);
             assert!(
                 switch_stdout.contains("qwen-coder"),
-                "Should show new agent"
+                "Should show new model"
             );
 
             // Step 5: Verify config was updated
             let config_content = fs::read_to_string(&config_path)?;
             assert!(
                 config_content.contains("qwen-coder") || config_content.contains("llama-agent"),
-                "Config should reflect new agent"
+                "Config should reflect new model"
             );
         }
     }
@@ -721,24 +745,24 @@ async fn test_complete_agent_workflow() -> Result<()> {
 }
 
 #[tokio::test]
-async fn test_all_builtin_agents_usable() -> Result<()> {
+async fn test_all_builtin_models_usable() -> Result<()> {
     let temp_dir = TempDir::new()?;
     let project_root = temp_dir.path();
 
     let builtin_agents = ["claude-code", "qwen-coder", "qwen-coder-flash"];
 
-    for agent_name in &builtin_agents {
-        let output = run_agent_command_in_dir(&["agent", "use", agent_name], project_root).await?;
+    for model_name in &builtin_agents {
+        let output = run_model_command_in_dir(&["model", "use", model_name], project_root).await?;
 
         // Should either succeed or fail with config-related issues only
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
 
-            // Should not fail with "not found" for any builtin agent
+            // Should not fail with "not found" for any builtin model
             assert!(
                 !stderr.contains("not found"),
-                "Built-in agent '{}' should not be 'not found'. stderr: {}",
-                agent_name,
+                "Built-in model '{}' should not be 'not found'. stderr: {}",
+                model_name,
                 stderr
             );
         }
@@ -752,15 +776,15 @@ async fn test_all_builtin_agents_usable() -> Result<()> {
 // =============================================================================
 
 #[tokio::test]
-async fn test_agent_help() -> Result<()> {
-    let output = run_agent_command(&["agent", "--help"]).await?;
+async fn test_model_help() -> Result<()> {
+    let output = run_model_command(&["model", "--help"]).await?;
 
-    assert!(output.status.success(), "agent --help should succeed");
+    assert!(output.status.success(), "model --help should succeed");
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
-        stdout.contains("agent"),
-        "Help should mention agent command"
+        stdout.contains("model"),
+        "Help should mention model command"
     );
     assert!(
         stdout.contains("list"),
@@ -772,10 +796,10 @@ async fn test_agent_help() -> Result<()> {
 }
 
 #[tokio::test]
-async fn test_agent_list_help() -> Result<()> {
-    let output = run_agent_command(&["agent", "list", "--help"]).await?;
+async fn test_model_list_help() -> Result<()> {
+    let output = run_model_command(&["model", "list", "--help"]).await?;
 
-    assert!(output.status.success(), "agent list --help should succeed");
+    assert!(output.status.success(), "model list --help should succeed");
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
@@ -787,15 +811,15 @@ async fn test_agent_list_help() -> Result<()> {
 }
 
 #[tokio::test]
-async fn test_agent_use_help() -> Result<()> {
-    let output = run_agent_command(&["agent", "use", "--help"]).await?;
+async fn test_model_use_help() -> Result<()> {
+    let output = run_model_command(&["model", "use", "--help"]).await?;
 
-    assert!(output.status.success(), "agent use --help should succeed");
+    assert!(output.status.success(), "model use --help should succeed");
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
-        stdout.contains("FIRST") || stdout.contains("AGENT_NAME"),
-        "Help should show agent name parameter. Actual: {}",
+        stdout.contains("FIRST") || stdout.contains("MODEL_NAME"),
+        "Help should show model name parameter. Actual: {}",
         stdout
     );
 

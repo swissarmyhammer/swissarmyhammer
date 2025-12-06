@@ -2,6 +2,8 @@
 //!
 //! This test ensures that both MCP server modes (HTTP and STDIN) register and expose
 //! the same set of SwissArmyHammer tools, preventing inconsistencies between modes.
+//!
+//! sah rule ignore test_rule_with_allow
 
 use anyhow::Result;
 use std::collections::HashSet;

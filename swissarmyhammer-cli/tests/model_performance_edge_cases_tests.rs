@@ -1,6 +1,7 @@
-//! Performance and edge case tests for agent management
+// sah rule ignore test_rule_with_allow
+//! Performance and edge case tests for model management
 //!
-//! Tests large numbers of agents, deeply nested project structures,
+//! Tests large numbers of models, deeply nested project structures,
 //! concurrent access scenarios, and invalid YAML handling/recovery.
 
 use anyhow::Result;
@@ -9,7 +10,7 @@ use std::fs;
 use std::path::Path;
 use std::time::{Duration, Instant};
 
-use tempfile::TempDir;
+use swissarmyhammer_common::test_utils::IsolatedTestEnvironment;
 use tokio::process::Command;
 
 /// Test utility to run sah commands with timeout
@@ -46,7 +47,70 @@ async fn run_sah_command_with_timeout(
     }
 }
 
-/// Generate a large number of test agent files
+/// Helper to assert that an operation completed successfully within a time limit
+fn assert_operation_completed_within(
+    output: &std::process::Output,
+    duration: Duration,
+    max_duration: Duration,
+    operation_description: &str,
+) -> Result<()> {
+    assert!(
+        output.status.success(),
+        "{} should succeed",
+        operation_description
+    );
+    assert!(
+        duration < max_duration,
+        "{} should complete in under {:?}, took {:?}",
+        operation_description,
+        max_duration,
+        duration
+    );
+    Ok(())
+}
+
+/// Helper to assert model list contains minimum number of agents
+async fn assert_agent_list_contains_minimum(
+    project_root: &Path,
+    min_count: usize,
+    timeout_secs: u64,
+) -> Result<Vec<serde_json::Value>> {
+    let list_output = run_sah_command_with_timeout(
+        &["model", "list", "--format", "json"],
+        Some(project_root),
+        timeout_secs,
+    )
+    .await?;
+
+    assert!(list_output.status.success(), "Should list agents");
+
+    let stdout = String::from_utf8_lossy(&list_output.stdout);
+    let agents_json: serde_json::Value = serde_json::from_str(&stdout)?;
+    let agents_array = agents_json.as_array().unwrap().clone();
+
+    assert!(
+        agents_array.len() >= min_count,
+        "Should list at least {} agents, got {}",
+        min_count,
+        agents_array.len()
+    );
+
+    Ok(agents_array)
+}
+
+/// Helper to generate large YAML config with custom entry generator
+fn generate_large_yaml_config<F>(header: &str, entry_count: usize, entry_generator: F) -> String
+where
+    F: Fn(usize) -> String,
+{
+    let mut config = String::from(header);
+    for i in 0..entry_count {
+        config.push_str(&entry_generator(i));
+    }
+    config
+}
+
+/// Generate a large number of test model files
 fn create_large_agent_set(dir: &Path, count: usize) -> Result<Vec<String>> {
     fs::create_dir_all(dir)?;
     let mut agent_names = Vec::new();
@@ -55,7 +119,7 @@ fn create_large_agent_set(dir: &Path, count: usize) -> Result<Vec<String>> {
         let agent_name = format!("test-agent-{:04}", i);
         let agent_content = format!(
             r#"---
-description: "Generated test agent number {} for performance testing"
+description: "Generated test model number {} for performance testing"
 version: "1.0"
 category: "performance-test"
 generated: true
@@ -97,7 +161,7 @@ fn create_nested_agent_structure(
         fs::create_dir_all(current_dir)?;
 
         // Create agents at current level
-        let agents_dir = current_dir.join("agents");
+        let agents_dir = current_dir.join("models");
         if remaining_depth > 0 {
             fs::create_dir_all(&agents_dir)?;
 
@@ -105,7 +169,7 @@ fn create_nested_agent_structure(
                 let agent_name = format!("nested-l{}-{}", level_index, i);
                 let agent_content = format!(
                     r#"---
-description: "Nested agent at level {} position {}"
+description: "Nested model at level {} position {}"
 depth: {}
 position: {}
 ---
@@ -145,12 +209,8 @@ quiet: false"#,
     create_level(base_dir, depth, agents_per_level, 0)
 }
 
-/// Create various invalid YAML files to test error handling
-fn create_invalid_agent_files(dir: &Path) -> Result<Vec<String>> {
-    fs::create_dir_all(dir)?;
-    let mut invalid_files = Vec::new();
-
-    // Invalid YAML syntax
+/// Create invalid YAML syntax error files
+fn create_yaml_syntax_errors(dir: &Path, invalid_files: &mut Vec<String>) -> Result<()> {
     let syntax_errors = vec![
         ("unclosed-bracket.yaml", "invalid: yaml: [unclosed bracket"),
         ("unclosed-quote.yaml", r#"description: "unclosed quote"#),
@@ -173,7 +233,11 @@ fn create_invalid_agent_files(dir: &Path) -> Result<Vec<String>> {
         invalid_files.push(filename.to_string());
     }
 
-    // Invalid agent structure
+    Ok(())
+}
+
+/// Create invalid YAML structure error files
+fn create_yaml_structure_errors(dir: &Path, invalid_files: &mut Vec<String>) -> Result<()> {
     let structure_errors = vec![
         (
             "missing-executor.yaml",
@@ -209,6 +273,17 @@ quiet: not-a-boolean"#,
         invalid_files.push(filename.to_string());
     }
 
+    Ok(())
+}
+
+/// Create various invalid YAML files to test error handling
+fn create_invalid_agent_files(dir: &Path) -> Result<Vec<String>> {
+    fs::create_dir_all(dir)?;
+    let mut invalid_files = Vec::new();
+
+    create_yaml_syntax_errors(dir, &mut invalid_files)?;
+    create_yaml_structure_errors(dir, &mut invalid_files)?;
+
     Ok(invalid_files)
 }
 
@@ -216,23 +291,33 @@ quiet: not-a-boolean"#,
 // PERFORMANCE TESTS
 // =============================================================================
 
-#[tokio::test]
-async fn test_large_agent_list_performance() -> Result<()> {
-    let temp_dir = TempDir::new()?;
-    let temp_home = temp_dir.path().join("home");
-    let project_root = temp_dir.path().join("project");
+/// Setup large agent test environment with user and project agents
+fn setup_large_agent_test_environment(
+    temp_home: &Path,
+    project_root: &Path,
+) -> Result<(Vec<String>, Vec<String>)> {
+    fs::create_dir_all(temp_home)?;
+    fs::create_dir_all(project_root)?;
 
-    fs::create_dir_all(&temp_home)?;
-    fs::create_dir_all(&project_root)?;
-
-    // Create large sets of agents
-    let user_agents_dir = temp_home.join(".swissarmyhammer").join("agents");
-    let project_agents_dir = project_root.join("agents");
+    let user_agents_dir = temp_home.join(".swissarmyhammer").join("models");
+    let project_agents_dir = project_root.join("models");
 
     let user_agents = create_large_agent_set(&user_agents_dir, 50)?;
     let project_agents = create_large_agent_set(&project_agents_dir, 100)?;
 
-    // Set up environment
+    Ok((user_agents, project_agents))
+}
+
+#[tokio::test]
+async fn test_large_model_list_performance() -> Result<()> {
+    let _env = IsolatedTestEnvironment::new().expect("Failed to create test environment");
+    let temp_dir = _env.temp_dir();
+    let temp_home = &temp_dir.join("home");
+    let project_root = &temp_dir.join("project");
+
+    let (user_agents, project_agents) =
+        setup_large_agent_test_environment(&temp_home, &project_root)?;
+
     let original_home = env::var("HOME").ok();
     env::set_var("HOME", &temp_home);
 
@@ -244,11 +329,10 @@ async fn test_large_agent_list_performance() -> Result<()> {
         }
     });
 
-    // Test performance of listing large number of agents
     let start_time = Instant::now();
 
     let list_output = run_sah_command_with_timeout(
-        &["agent", "list", "--format", "json"],
+        &["model", "list", "--format", "json"],
         Some(&project_root),
         30,
     )
@@ -256,25 +340,18 @@ async fn test_large_agent_list_performance() -> Result<()> {
 
     let duration = start_time.elapsed();
 
-    assert!(
-        list_output.status.success(),
-        "Should list large number of agents"
-    );
-    assert!(
-        duration < Duration::from_secs(10),
-        "Should list {} agents in under 10 seconds, took {:?}",
-        user_agents.len() + project_agents.len() + 3,
-        duration
-    ); // +3 for builtins
+    assert_operation_completed_within(
+        &list_output,
+        duration,
+        Duration::from_secs(10),
+        "List large number of agents",
+    )?;
 
-    // Parse and verify all agents are listed
     let stdout = String::from_utf8_lossy(&list_output.stdout);
     let agents_json: serde_json::Value = serde_json::from_str(&stdout)?;
     let agents_array = agents_json.as_array().unwrap();
 
-    // Should have most agents (some may be filtered due to validation)
-    // Allow for some agents to be filtered out due to validation issues
-    let expected_min = (user_agents.len() + project_agents.len()) / 2 + 3; // At least half + builtins
+    let expected_min = (user_agents.len() + project_agents.len()) / 2 + 3;
     assert!(
         agents_array.len() >= expected_min,
         "Should list at least {} agents, got {}",
@@ -282,39 +359,25 @@ async fn test_large_agent_list_performance() -> Result<()> {
         agents_array.len()
     );
 
-    // Verify performance scales reasonably
     println!("Listed {} agents in {:?}", agents_array.len(), duration);
 
     Ok(())
 }
 
-#[tokio::test]
-async fn test_agent_use_performance_with_large_config() -> Result<()> {
-    let temp_dir = TempDir::new()?;
-    let project_root = temp_dir.path();
+/// Create large configuration content for testing
+fn create_large_config() -> String {
+    let header = r#"# Large configuration file
 
-    // Create existing config with large amount of data
-    let sah_dir = project_root.join(".swissarmyhammer");
-    fs::create_dir_all(&sah_dir)?;
-    let config_path = sah_dir.join("sah.yaml");
-
-    let mut large_config = String::from("# Large configuration file\n");
-
-    // Add multiple sections with lots of data
-    large_config.push_str(
-        r#"
 prompts:
   default: "greeting"
   library_path: "./prompts"
   
 workflows:
   timeout: 300
-"#,
-    );
+"#;
 
-    // Add many workflow entries
-    for i in 0..500 {
-        large_config.push_str(&format!(
+    let mut large_config = generate_large_yaml_config(header, 500, |i| {
+        format!(
             r#"
   workflow_{:03}:
     name: "Test Workflow {}"
@@ -328,10 +391,9 @@ workflows:
             60 + i,
             i % 5 + 1,
             i % 2 == 0
-        ));
-    }
+        )
+    });
 
-    // Add other large sections
     large_config.push_str(
         r#"
 other_data:
@@ -343,9 +405,8 @@ other_data:
 "#,
     );
 
-    // Add large custom data section
-    for i in 0..200 {
-        large_config.push_str(&format!(
+    large_config.push_str(&generate_large_yaml_config("", 200, |i| {
+        format!(
             r#"
     key_{:03}: "value_{}"
     nested_{:03}:
@@ -359,57 +420,76 @@ other_data:
             i,
             i * 2,
             i % 2 == 0
-        ));
-    }
+        )
+    }));
 
-    fs::write(&config_path, large_config)?;
+    large_config
+}
 
-    // Test performance of updating large config
+/// Verify config preservation after update
+fn verify_config_preservation(config_path: &Path) -> Result<()> {
+    let updated_config = fs::read_to_string(config_path)?;
+    assert!(
+        updated_config.contains("prompts:"),
+        "Should preserve prompts"
+    );
+    assert!(
+        updated_config.contains("workflows:"),
+        "Should preserve workflows"
+    );
+    assert!(
+        updated_config.contains("workflow_499:"),
+        "Should preserve last workflow"
+    );
+    assert!(
+        updated_config.contains("other_data:"),
+        "Should preserve other data"
+    );
+    assert!(
+        updated_config.contains("key_199:"),
+        "Should preserve custom data"
+    );
+    assert!(
+        updated_config.contains("models:"),
+        "Should add model section"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_model_use_performance_with_large_config() -> Result<()> {
+    let _env = IsolatedTestEnvironment::new().expect("Failed to create test environment");
+    let temp_dir = _env.temp_dir();
+    let project_root = &temp_dir;
+
+    let sah_dir = project_root.join(".swissarmyhammer");
+    fs::create_dir_all(&sah_dir)?;
+    let config_path = sah_dir.join("sah.yaml");
+
+    let large_config = create_large_config();
+    fs::write(&config_path, &large_config)?;
+
     let start_time = Instant::now();
 
     let use_output =
-        run_sah_command_with_timeout(&["agent", "use", "claude-code"], Some(project_root), 15)
+        run_sah_command_with_timeout(&["model", "use", "claude-code"], Some(project_root), 15)
             .await?;
 
     let duration = start_time.elapsed();
 
     if use_output.status.success() {
-        assert!(
-            duration < Duration::from_secs(6),
-            "Should update large config in under 6 seconds, took {:?}",
-            duration
-        );
+        assert_operation_completed_within(
+            &use_output,
+            duration,
+            Duration::from_secs(6),
+            "Update large config",
+        )?;
 
-        // Verify all data is preserved
-        let updated_config = fs::read_to_string(&config_path)?;
-        assert!(
-            updated_config.contains("prompts:"),
-            "Should preserve prompts"
-        );
-        assert!(
-            updated_config.contains("workflows:"),
-            "Should preserve workflows"
-        );
-        assert!(
-            updated_config.contains("workflow_499:"),
-            "Should preserve last workflow"
-        );
-        assert!(
-            updated_config.contains("other_data:"),
-            "Should preserve other data"
-        );
-        assert!(
-            updated_config.contains("key_199:"),
-            "Should preserve custom data"
-        );
-        assert!(
-            updated_config.contains("agents:"),
-            "Should add agent section"
-        );
+        verify_config_preservation(&config_path)?;
 
         println!(
             "Updated large config ({} bytes) in {:?}",
-            updated_config.len(),
+            large_config.len(),
             duration
         );
     }
@@ -423,8 +503,9 @@ other_data:
 
 #[tokio::test]
 async fn test_deeply_nested_project_structures() -> Result<()> {
-    let temp_dir = TempDir::new()?;
-    let base_dir = temp_dir.path();
+    let _env = IsolatedTestEnvironment::new().expect("Failed to create test environment");
+    let temp_dir = _env.temp_dir();
+    let base_dir = &temp_dir;
 
     // Create deeply nested structure: 5 levels deep, 2 agents per level
     create_nested_agent_structure(base_dir, 5, 2)?;
@@ -443,7 +524,7 @@ async fn test_deeply_nested_project_structures() -> Result<()> {
     for test_dir in test_dirs {
         if test_dir.exists() {
             let list_output =
-                run_sah_command_with_timeout(&["agent", "list"], Some(&test_dir), 10).await?;
+                run_sah_command_with_timeout(&["model", "list"], Some(&test_dir), 10).await?;
 
             if list_output.status.success() {
                 let stdout = String::from_utf8_lossy(&list_output.stdout);
@@ -462,10 +543,11 @@ async fn test_deeply_nested_project_structures() -> Result<()> {
 
 #[tokio::test]
 async fn test_deep_directory_traversal_performance() -> Result<()> {
-    let temp_dir = TempDir::new()?;
-    let base_dir = temp_dir.path();
+    let _env = IsolatedTestEnvironment::new().expect("Failed to create test environment");
+    let temp_dir = _env.temp_dir();
+    let base_dir = &temp_dir;
 
-    // Create very deep structure: 10 levels, 1 agent per level
+    // Create very deep structure: 10 levels, 1 model per level
     create_nested_agent_structure(base_dir, 10, 1)?;
 
     // Test performance from deepest directory
@@ -478,7 +560,7 @@ async fn test_deep_directory_traversal_performance() -> Result<()> {
         let start_time = Instant::now();
 
         let list_output =
-            run_sah_command_with_timeout(&["agent", "list"], Some(&deep_dir), 15).await?;
+            run_sah_command_with_timeout(&["model", "list"], Some(&deep_dir), 15).await?;
 
         let duration = start_time.elapsed();
 
@@ -498,21 +580,67 @@ async fn test_deep_directory_traversal_performance() -> Result<()> {
 // INVALID YAML HANDLING TESTS
 // =============================================================================
 
+/// Verify valid agents are loaded
+fn verify_valid_agents_loaded(
+    agents_array: &[serde_json::Value],
+    valid_agents: &[String],
+) -> Result<()> {
+    assert!(
+        agents_array.len() >= valid_agents.len() + 3,
+        "Should load {} valid agents, got {}",
+        valid_agents.len() + 3,
+        agents_array.len()
+    );
+
+    let agent_names: Vec<_> = agents_array
+        .iter()
+        .filter_map(|a| a["name"].as_str())
+        .collect();
+
+    for valid_model in valid_agents {
+        assert!(
+            agent_names.contains(&valid_model.as_str()),
+            "Should include valid model: {}",
+            valid_model
+        );
+    }
+
+    Ok(())
+}
+
+/// Verify invalid agents are excluded
+fn verify_invalid_agents_excluded(
+    agents_array: &[serde_json::Value],
+    invalid_files: &[String],
+) -> Result<()> {
+    let agent_names: Vec<_> = agents_array
+        .iter()
+        .filter_map(|a| a["name"].as_str())
+        .collect();
+
+    for invalid_file in invalid_files {
+        let invalid_name = invalid_file.replace(".yaml", "");
+        assert!(
+            !agent_names.contains(&invalid_name.as_str()),
+            "Should not load invalid agent: {}",
+            invalid_name
+        );
+    }
+
+    Ok(())
+}
+
 #[tokio::test]
 async fn test_invalid_yaml_recovery() -> Result<()> {
-    let temp_dir = TempDir::new()?;
-    let temp_home = temp_dir.path().join("home");
+    let _env = IsolatedTestEnvironment::new().expect("Failed to create test environment");
+    let temp_dir = _env.temp_dir();
+    let temp_home = &temp_dir.join("home");
 
-    // Create user agents directory with mix of valid and invalid files
-    let user_agents_dir = temp_home.join(".swissarmyhammer").join("agents");
+    let user_agents_dir = temp_home.join(".swissarmyhammer").join("models");
 
-    // Create valid agents
     let valid_agents = create_large_agent_set(&user_agents_dir, 10)?;
-
-    // Create invalid agents
     let invalid_files = create_invalid_agent_files(&user_agents_dir)?;
 
-    // Set up environment
     let original_home = env::var("HOME").ok();
     env::set_var("HOME", &temp_home);
 
@@ -524,56 +652,15 @@ async fn test_invalid_yaml_recovery() -> Result<()> {
         }
     });
 
-    // Test that system continues to work despite invalid files
-    let list_output =
-        run_sah_command_with_timeout(&["agent", "list", "--format", "json"], None, 10).await?;
+    let agents_array =
+        assert_agent_list_contains_minimum(&temp_dir, valid_agents.len() + 3, 10).await?;
 
-    assert!(
-        list_output.status.success(),
-        "Should list agents despite invalid YAML files"
-    );
+    verify_valid_agents_loaded(&agents_array, &valid_agents)?;
+    verify_invalid_agents_excluded(&agents_array, &invalid_files)?;
 
-    let stdout = String::from_utf8_lossy(&list_output.stdout);
-    let agents_json: serde_json::Value = serde_json::from_str(&stdout)?;
-    let agents_array = agents_json.as_array().unwrap();
-
-    // Should load valid agents (builtin + valid user agents)
-    assert!(
-        agents_array.len() >= valid_agents.len() + 3, // +3 for builtins
-        "Should load {} valid agents, got {}",
-        valid_agents.len() + 3,
-        agents_array.len()
-    );
-
-    // Verify valid agents are present
-    let agent_names: Vec<_> = agents_array
-        .iter()
-        .filter_map(|a| a["name"].as_str())
-        .collect();
-
-    for valid_agent in &valid_agents {
-        assert!(
-            agent_names.contains(&valid_agent.as_str()),
-            "Should include valid agent: {}",
-            valid_agent
-        );
-    }
-
-    // Verify invalid files are not loaded
-    for invalid_file in &invalid_files {
-        let invalid_name = invalid_file.replace(".yaml", "");
-        assert!(
-            !agent_names.contains(&invalid_name.as_str()),
-            "Should not load invalid agent: {}",
-            invalid_name
-        );
-    }
-
-    // Test that we can still use agents after encountering invalid files
     let use_output =
-        run_sah_command_with_timeout(&["agent", "use", "claude-code"], None, 10).await?;
+        run_sah_command_with_timeout(&["model", "use", "claude-code"], None, 10).await?;
 
-    // Should work or fail with config issues, not with parsing errors
     if !use_output.status.success() {
         let stderr = String::from_utf8_lossy(&use_output.stderr);
         assert!(
@@ -588,8 +675,9 @@ async fn test_invalid_yaml_recovery() -> Result<()> {
 
 #[tokio::test]
 async fn test_corrupted_config_recovery() -> Result<()> {
-    let temp_dir = TempDir::new()?;
-    let project_root = temp_dir.path();
+    let _env = IsolatedTestEnvironment::new().expect("Failed to create test environment");
+    let temp_dir = _env.temp_dir();
+    let project_root = &temp_dir;
 
     // Create corrupted config file
     let sah_dir = project_root.join(".swissarmyhammer");
@@ -609,9 +697,9 @@ other_section:
 "#;
     fs::write(&config_path, corrupted_config)?;
 
-    // Test that agent use handles corrupted config gracefully
+    // Test that model use handles corrupted config gracefully
     let use_output =
-        run_sah_command_with_timeout(&["agent", "use", "claude-code"], Some(project_root), 10)
+        run_sah_command_with_timeout(&["model", "use", "claude-code"], Some(project_root), 10)
             .await?;
 
     // Should either succeed (by creating new config) or fail with helpful error
@@ -630,8 +718,8 @@ other_section:
         let fixed_config = fs::read_to_string(&config_path)?;
         let parsed: serde_yaml::Value = serde_yaml::from_str(&fixed_config)?;
         assert!(
-            parsed.get("agents").is_some(),
-            "Should have valid agents section. Actual: {:?}",
+            parsed.get("models").is_some(),
+            "Should have valid models section. Actual: {:?}",
             parsed
         );
     }
@@ -645,8 +733,9 @@ other_section:
 
 #[tokio::test]
 async fn test_rapid_sequential_operations() -> Result<()> {
-    let temp_dir = TempDir::new()?;
-    let project_root = temp_dir.path();
+    let _env = IsolatedTestEnvironment::new().expect("Failed to create test environment");
+    let temp_dir = _env.temp_dir();
+    let project_root = &temp_dir;
 
     // Simulate rapid sequential operations like a user clicking quickly
     let agents = [
@@ -663,31 +752,24 @@ async fn test_rapid_sequential_operations() -> Result<()> {
 
         // Rapid list and use operations
         let list_output = run_sah_command_with_timeout(
-            &["agent", "list", "--format", "json"],
+            &["model", "list", "--format", "json"],
             Some(project_root),
             5,
         )
         .await?;
 
         let use_output =
-            run_sah_command_with_timeout(&["agent", "use", agent], Some(project_root), 5).await?;
+            run_sah_command_with_timeout(&["model", "use", agent], Some(project_root), 5).await?;
 
         let operation_time = start_time.elapsed();
 
         // Operations should complete quickly
-        assert!(
-            operation_time < Duration::from_secs(10),
-            "Rapid operation {} should complete quickly, took {:?}",
-            i,
-            operation_time
-        );
-
-        // At least list should succeed
-        assert!(
-            list_output.status.success(),
-            "List should succeed on rapid operation {}",
-            i
-        );
+        assert_operation_completed_within(
+            &list_output,
+            operation_time,
+            Duration::from_secs(10),
+            &format!("Rapid operation {}", i),
+        )?;
 
         // If use succeeded, verify config consistency
         if use_output.status.success() && config_path.exists() {
@@ -704,8 +786,9 @@ async fn test_rapid_sequential_operations() -> Result<()> {
 
 #[tokio::test]
 async fn test_file_lock_simulation() -> Result<()> {
-    let temp_dir = TempDir::new()?;
-    let project_root = temp_dir.path();
+    let _env = IsolatedTestEnvironment::new().expect("Failed to create test environment");
+    let temp_dir = _env.temp_dir();
+    let project_root = &temp_dir;
 
     // Create initial config
     let sah_dir = project_root.join(".swissarmyhammer");
@@ -726,14 +809,14 @@ agent:
 
     // Test multiple operations with potential file contention
     for i in 0..5 {
-        let agent = if i % 2 == 0 {
+        let model = if i % 2 == 0 {
             "claude-code"
         } else {
             "qwen-coder"
         };
 
         let use_output =
-            run_sah_command_with_timeout(&["agent", "use", agent], Some(project_root), 10).await?;
+            run_sah_command_with_timeout(&["model", "use", model], Some(project_root), 10).await?;
 
         // Should handle file access gracefully
         if !use_output.status.success() {
@@ -766,24 +849,32 @@ agent:
 // RESOURCE USAGE AND LIMITS TESTS
 // =============================================================================
 
-#[tokio::test]
-async fn test_memory_usage_with_large_datasets() -> Result<()> {
-    let temp_dir = TempDir::new()?;
-    let temp_home = temp_dir.path().join("home");
-    let project_root = temp_dir.path().join("project");
+/// Setup large dataset environment with many agents
+fn setup_large_dataset_environment(
+    temp_home: &Path,
+    project_root: &Path,
+) -> Result<(Vec<String>, Vec<String>)> {
+    fs::create_dir_all(temp_home)?;
+    fs::create_dir_all(project_root)?;
 
-    fs::create_dir_all(&temp_home)?;
-    fs::create_dir_all(&project_root)?;
+    let user_agents_dir = temp_home.join(".swissarmyhammer").join("models");
+    let project_agents_dir = project_root.join("models");
 
-    // Create very large agent sets
-    let user_agents_dir = temp_home.join(".swissarmyhammer").join("agents");
-    let project_agents_dir = project_root.join("agents");
-
-    // Create 200 user agents and 300 project agents
     let user_agents = create_large_agent_set(&user_agents_dir, 200)?;
     let project_agents = create_large_agent_set(&project_agents_dir, 300)?;
 
-    // Set up environment
+    Ok((user_agents, project_agents))
+}
+
+#[tokio::test]
+async fn test_memory_usage_with_large_datasets() -> Result<()> {
+    let _env = IsolatedTestEnvironment::new().expect("Failed to create test environment");
+    let temp_dir = _env.temp_dir();
+    let temp_home = &temp_dir.join("home");
+    let project_root = &temp_dir.join("project");
+
+    let (user_agents, project_agents) = setup_large_dataset_environment(&temp_home, &project_root)?;
+
     let original_home = env::var("HOME").ok();
     env::set_var("HOME", &temp_home);
 
@@ -795,11 +886,10 @@ async fn test_memory_usage_with_large_datasets() -> Result<()> {
         }
     });
 
-    // Test memory usage with large datasets
     let start_time = Instant::now();
 
     let list_output = run_sah_command_with_timeout(
-        &["agent", "list", "--format", "json"],
+        &["model", "list", "--format", "json"],
         Some(&project_root),
         60,
     )
@@ -807,21 +897,21 @@ async fn test_memory_usage_with_large_datasets() -> Result<()> {
 
     let duration = start_time.elapsed();
 
-    assert!(list_output.status.success(), "Should handle large dataset");
-    assert!(
-        duration < Duration::from_secs(30),
-        "Should process {} agents in under 30 seconds, took {:?}",
-        user_agents.len() + project_agents.len() + 3,
-        duration
-    );
+    assert_operation_completed_within(
+        &list_output,
+        duration,
+        Duration::from_secs(30),
+        &format!(
+            "Process {} agents",
+            user_agents.len() + project_agents.len() + 3
+        ),
+    )?;
 
-    // Verify all agents are loaded
     let stdout = String::from_utf8_lossy(&list_output.stdout);
     let agents_json: serde_json::Value = serde_json::from_str(&stdout)?;
     let agents_array = agents_json.as_array().unwrap();
 
-    // Allow for some agents to be filtered due to validation issues
-    let expected_min = (user_agents.len() + project_agents.len()) / 2 + 3; // At least half + builtins
+    let expected_min = (user_agents.len() + project_agents.len()) / 2 + 3;
     assert!(
         agents_array.len() >= expected_min,
         "Should load at least {} agents, got {}",
@@ -834,25 +924,14 @@ async fn test_memory_usage_with_large_datasets() -> Result<()> {
     Ok(())
 }
 
-#[tokio::test]
-async fn test_extremely_large_config_handling() -> Result<()> {
-    let temp_dir = TempDir::new()?;
-    let project_root = temp_dir.path();
-
-    // Create extremely large config file (several MB)
-    let sah_dir = project_root.join(".swissarmyhammer");
-    fs::create_dir_all(&sah_dir)?;
-    let config_path = sah_dir.join("sah.yaml");
-
-    let mut huge_config = String::from("# Extremely large configuration\n");
-
-    // Add thousands of entries
-    for i in 0..5000 {
-        huge_config.push_str(&format!(
+/// Generate huge config content for stress testing
+fn generate_huge_config() -> String {
+    generate_large_yaml_config("# Extremely large configuration\n", 5000, |i| {
+        format!(
             r#"
 entry_{:05}:
   name: "Entry {}"
-  description: "Generated entry for stress testing agent configuration handling"
+  description: "Generated entry for stress testing model configuration handling"
   data:
     value_a: "data_{}"
     value_b: {}
@@ -872,9 +951,38 @@ entry_{:05}:
             i,
             i * 3,
             i
-        ));
-    }
+        )
+    })
+}
 
+/// Verify huge config integrity after update
+fn verify_huge_config_integrity(config_path: &Path) -> Result<Duration> {
+    let updated_config = fs::read_to_string(config_path)?;
+    assert!(
+        updated_config.contains("entry_04999:"),
+        "Should preserve all entries"
+    );
+    assert!(
+        updated_config.contains("models:"),
+        "Should add model section"
+    );
+
+    let parse_start = Instant::now();
+    let _: serde_yaml::Value = serde_yaml::from_str(&updated_config)?;
+    Ok(parse_start.elapsed())
+}
+
+#[tokio::test]
+async fn test_extremely_large_config_handling() -> Result<()> {
+    let _env = IsolatedTestEnvironment::new().expect("Failed to create test environment");
+    let temp_dir = _env.temp_dir();
+    let project_root = &temp_dir;
+
+    let sah_dir = project_root.join(".swissarmyhammer");
+    fs::create_dir_all(&sah_dir)?;
+    let config_path = sah_dir.join("sah.yaml");
+
+    let huge_config = generate_huge_config();
     fs::write(&config_path, &huge_config)?;
 
     let file_size = huge_config.len();
@@ -884,39 +992,22 @@ entry_{:05}:
         file_size as f64 / 1024.0 / 1024.0
     );
 
-    // Test performance with extremely large config
     let start_time = Instant::now();
 
     let use_output =
-        run_sah_command_with_timeout(&["agent", "use", "claude-code"], Some(project_root), 30)
+        run_sah_command_with_timeout(&["model", "use", "claude-code"], Some(project_root), 30)
             .await?;
 
     let duration = start_time.elapsed();
 
-    // Should handle large config reasonably
-    assert!(
-        duration < Duration::from_secs(30),
-        "Should handle {:.2} MB config in under 30 seconds, took {:?}",
-        file_size as f64 / 1024.0 / 1024.0,
-        duration
-    );
-
     if use_output.status.success() {
-        // Verify config integrity
-        let updated_config = fs::read_to_string(&config_path)?;
-        assert!(
-            updated_config.contains("entry_04999:"),
-            "Should preserve all entries"
-        );
-        assert!(
-            updated_config.contains("agents:"),
-            "Should add agent section"
-        );
-
-        // Config should still be valid YAML (though this might be slow)
-        let parse_start = Instant::now();
-        let _: serde_yaml::Value = serde_yaml::from_str(&updated_config)?;
-        let parse_time = parse_start.elapsed();
+        assert_operation_completed_within(
+            &use_output,
+            duration,
+            Duration::from_secs(30),
+            &format!("Handle {:.2} MB config", file_size as f64 / 1024.0 / 1024.0),
+        )?;
+        let parse_time = verify_huge_config_integrity(&config_path)?;
 
         println!(
             "Updated and validated {:.2} MB config in {:?} + {:?}",
@@ -933,63 +1024,69 @@ entry_{:05}:
 // ERROR BOUNDARY AND RECOVERY TESTS
 // =============================================================================
 
+/// Test a single error scenario and recovery
+async fn test_error_scenario_and_recovery(
+    invalid_agent: &str,
+    expected_error: &str,
+    project_root: &Path,
+) -> Result<()> {
+    let error_output =
+        run_sah_command_with_timeout(&["model", "use", invalid_agent], Some(project_root), 5)
+            .await?;
+
+    assert!(
+        !error_output.status.success(),
+        "Should fail for invalid agent: {}",
+        invalid_agent
+    );
+
+    let stderr = String::from_utf8_lossy(&error_output.stderr);
+    let stderr_lower = stderr.to_lowercase();
+    assert!(
+        stderr_lower.contains("not found")
+            || stderr_lower.contains("model command failed")
+            || stderr_lower.contains(expected_error),
+        "Should contain expected error '{}' for '{}': {}",
+        expected_error,
+        invalid_agent,
+        stderr
+    );
+
+    let recovery_output =
+        run_sah_command_with_timeout(&["model", "list"], Some(project_root), 5).await?;
+
+    assert!(
+        recovery_output.status.success(),
+        "Should recover from error scenario: {}",
+        invalid_agent
+    );
+
+    let valid_use =
+        run_sah_command_with_timeout(&["model", "use", "claude-code"], Some(project_root), 10)
+            .await?;
+
+    if !valid_use.status.success() {
+        let stderr = String::from_utf8_lossy(&valid_use.stderr);
+        assert!(
+            !stderr.contains("not found"),
+            "Should not fail with 'not found' for builtin after recovery from {}",
+            invalid_agent
+        );
+    }
+
+    Ok(())
+}
+
 #[tokio::test]
 async fn test_comprehensive_error_recovery() -> Result<()> {
-    let temp_dir = TempDir::new()?;
-    let project_root = temp_dir.path();
+    let _env = IsolatedTestEnvironment::new().expect("Failed to create test environment");
+    let temp_dir = _env.temp_dir();
+    let project_root = &temp_dir;
 
-    // Test various error scenarios and recovery
-    let error_scenarios = vec![("nonexistent-agent", "agent not found"), ("", "empty name")];
+    let error_scenarios = vec![("nonexistent-agent", "model not found"), ("", "empty name")];
 
     for (invalid_agent, expected_error) in error_scenarios {
-        // Cause error
-        let error_output =
-            run_sah_command_with_timeout(&["agent", "use", invalid_agent], Some(project_root), 5)
-                .await?;
-
-        assert!(
-            !error_output.status.success(),
-            "Should fail for invalid agent: {}",
-            invalid_agent
-        );
-
-        let stderr = String::from_utf8_lossy(&error_output.stderr);
-        let stderr_lower = stderr.to_lowercase();
-        // Check for actual error message patterns from the CLI output
-        assert!(
-            stderr_lower.contains("not found")
-                || stderr_lower.contains("agent command failed")
-                || stderr_lower.contains(expected_error),
-            "Should contain expected error '{}' for '{}': {}",
-            expected_error,
-            invalid_agent,
-            stderr
-        );
-
-        // Test recovery - should still be able to list agents
-        let recovery_output =
-            run_sah_command_with_timeout(&["agent", "list"], Some(project_root), 5).await?;
-
-        assert!(
-            recovery_output.status.success(),
-            "Should recover from error scenario: {}",
-            invalid_agent
-        );
-
-        // Should be able to use valid agent after error
-        let valid_use =
-            run_sah_command_with_timeout(&["agent", "use", "claude-code"], Some(project_root), 10)
-                .await?;
-
-        // Should work or fail with non-error reasons
-        if !valid_use.status.success() {
-            let stderr = String::from_utf8_lossy(&valid_use.stderr);
-            assert!(
-                !stderr.contains("not found"),
-                "Should not fail with 'not found' for builtin after recovery from {}",
-                invalid_agent
-            );
-        }
+        test_error_scenario_and_recovery(invalid_agent, expected_error, project_root).await?;
     }
 
     Ok(())

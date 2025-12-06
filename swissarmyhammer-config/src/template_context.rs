@@ -1,7 +1,7 @@
-use crate::agent::AgentConfig;
 use crate::discovery::ConfigurationDiscovery;
 use crate::env_vars::EnvVarSubstitution;
 use crate::error::{ConfigurationError, ConfigurationResult};
+use crate::model::ModelConfig;
 use crate::provider::{
     CliProvider, ConfigurationProvider, DefaultProvider, EnvProvider, FileProvider,
 };
@@ -295,18 +295,28 @@ impl TemplateContext {
         context
     }
 
-    /// Load configuration with specific options
+    /// Load configuration with specific options (refactored to reduce complexity)
     fn load_with_options(for_cli: bool, cli_args: Option<Value>) -> ConfigurationResult<Self> {
         debug!("Loading template context with CLI mode: {}", for_cli);
 
-        // Create figment starting with defaults
-        let mut figment = Figment::new();
+        let figment = Self::build_figment(for_cli)?;
+        let figment = Self::load_config_files(figment, for_cli)?;
+        let figment = Self::load_env_vars(figment)?;
+        let figment = Self::load_cli_args(figment, cli_args)?;
 
-        // 1. Load default values (lowest precedence)
+        Self::finalize_config(figment)
+    }
+
+    /// Build the initial figment with default values
+    fn build_figment(_for_cli: bool) -> ConfigurationResult<Figment> {
+        let mut figment = Figment::new();
         let default_provider = DefaultProvider::empty();
         figment = default_provider.load_into(figment)?;
+        Ok(figment)
+    }
 
-        // 2. Discover and load configuration files
+    /// Discover and load configuration files into figment
+    fn load_config_files(mut figment: Figment, for_cli: bool) -> ConfigurationResult<Figment> {
         let discovery = if for_cli {
             ConfigurationDiscovery::for_cli()?
         } else {
@@ -321,32 +331,43 @@ impl TemplateContext {
             figment = file_provider.load_into(figment)?;
         }
 
-        // 3. Load environment variables
+        Ok(figment)
+    }
+
+    /// Load environment variables into figment
+    fn load_env_vars(mut figment: Figment) -> ConfigurationResult<Figment> {
         let sah_env_provider = EnvProvider::sah();
         figment = sah_env_provider.load_into(figment)?;
 
         let swissarmyhammer_env_provider = EnvProvider::swissarmyhammer();
         figment = swissarmyhammer_env_provider.load_into(figment)?;
 
-        // 4. Load CLI arguments if provided (highest precedence)
+        Ok(figment)
+    }
+
+    /// Load CLI arguments into figment if provided
+    fn load_cli_args(
+        mut figment: Figment,
+        cli_args: Option<Value>,
+    ) -> ConfigurationResult<Figment> {
         if let Some(cli_args) = cli_args {
             let cli_provider = CliProvider::new(cli_args);
             figment = cli_provider.load_into(figment)?;
         }
+        Ok(figment)
+    }
 
-        // Extract the final configuration
+    /// Extract, substitute, and finalize configuration from figment
+    fn finalize_config(figment: Figment) -> ConfigurationResult<Self> {
         let config_value: Value = figment.extract().map_err(|e| {
             ConfigurationError::template_context(format!("Failed to extract configuration: {}", e))
         })?;
 
-        // Apply environment variable substitution to the final configuration
         let env_substitution = EnvVarSubstitution::new()?;
         let substituted_config = env_substitution.substitute_in_value(config_value)?;
 
-        // Convert to template context
         let variables = match substituted_config {
             Value::Null => {
-                // Handle null/empty configuration gracefully
                 debug!("Configuration is null/empty, using empty map");
                 Map::new()
             }
@@ -364,29 +385,24 @@ impl TemplateContext {
         Ok(Self { variables })
     }
 
+    /// Navigate through nested map structure using dot-notated path
+    fn navigate_nested_value<'a>(map: &'a Map<String, Value>, parts: &[&str]) -> Option<&'a Value> {
+        let mut current = map;
+        for part in &parts[..parts.len() - 1] {
+            match current.get(*part) {
+                Some(Value::Object(nested)) => current = nested,
+                _ => return None,
+            }
+        }
+        parts.last().and_then(|last| current.get(*last))
+    }
+
     /// Get a configuration value by key
     pub fn get(&self, key: &str) -> Option<&Value> {
         // Support nested keys with dot notation (e.g., "database.host", "database.ssl.enabled")
         if key.contains('.') {
             let parts: Vec<&str> = key.split('.').collect();
-            let mut current = &self.variables;
-
-            // Navigate through nested structure
-            for part in &parts[..parts.len() - 1] {
-                match current.get(*part) {
-                    Some(Value::Object(nested)) => {
-                        current = nested;
-                    }
-                    _ => return None,
-                }
-            }
-
-            // Get the final value
-            if let Some(last_part) = parts.last() {
-                current.get(*last_part)
-            } else {
-                None
-            }
+            Self::navigate_nested_value(&self.variables, &parts)
         } else {
             self.variables.get(key)
         }
@@ -520,6 +536,23 @@ impl TemplateContext {
         context.insert("_template_vars".to_string(), Value::Object(merged_vars));
     }
 
+    /// Try to get config from a key, checking both flat and nested access
+    fn try_get_config(&self, key: &str) -> Option<ModelConfig> {
+        // Try flat key access first (for programmatically set configs)
+        if let Some(config) = self.variables.get(key) {
+            if let Ok(agent_config) = serde_json::from_value::<ModelConfig>(config.clone()) {
+                return Some(agent_config);
+            }
+        }
+        // Try nested access (for file-loaded configs)
+        if let Some(config) = self.get(key) {
+            if let Ok(agent_config) = serde_json::from_value::<ModelConfig>(config.clone()) {
+                return Some(agent_config);
+            }
+        }
+        None
+    }
+
     /// Get agent configuration with hierarchical fallback
     ///
     /// Priority: workflow-specific → repo default → system default (Claude)
@@ -528,72 +561,45 @@ impl TemplateContext {
     /// * `workflow_name` - Optional workflow name to look for specific configuration
     ///
     /// # Returns
-    /// * `AgentConfig` - The agent configuration with proper fallback
+    /// * `ModelConfig` - The agent configuration with proper fallback
     ///
     /// # Examples
     ///
     /// ```
-    /// use swissarmyhammer_config::{TemplateContext, AgentConfig, AgentExecutorType};
+    /// use swissarmyhammer_config::{TemplateContext, ModelConfig, ModelExecutorType};
     /// use serde_json::json;
     ///
     /// let mut context = TemplateContext::new();
     ///
     /// // System default (Claude Code)
     /// let config = context.get_agent_config(None);
-    /// assert_eq!(config.executor_type(), AgentExecutorType::ClaudeCode);
+    /// assert_eq!(config.executor_type(), ModelExecutorType::ClaudeCode);
     /// ```
-    pub fn get_agent_config(&self, workflow_name: Option<&str>) -> AgentConfig {
+    pub fn get_agent_config(&self, workflow_name: Option<&str>) -> ModelConfig {
         // 1. Check workflow-specific config
         if let Some(workflow) = workflow_name {
-            let workflow_key = format!("agent.configs.{}", workflow);
-
-            // Try flat key access first (for programmatically set configs)
-            if let Some(config) = self.variables.get(&workflow_key) {
-                if let Ok(agent_config) = serde_json::from_value::<AgentConfig>(config.clone()) {
-                    return agent_config;
-                }
-            }
-
-            // Try nested access (for file-loaded configs)
-            if let Some(config) = self.get(&workflow_key) {
-                if let Ok(agent_config) = serde_json::from_value::<AgentConfig>(config.clone()) {
-                    return agent_config;
-                }
+            if let Some(config) = self.try_get_config(&format!("agent.configs.{}", workflow)) {
+                return config;
             }
         }
 
         // 2. Check repo default config
-        // Try flat key access first (for programmatically set configs)
-        if let Some(config) = self.variables.get("agent.default") {
-            if let Ok(agent_config) = serde_json::from_value::<AgentConfig>(config.clone()) {
-                return agent_config;
-            }
-        }
-
-        // Try nested access (for file-loaded configs)
-        if let Some(config) = self.get("agent.default") {
-            if let Ok(agent_config) = serde_json::from_value::<AgentConfig>(config.clone()) {
-                return agent_config;
-            }
+        if let Some(config) = self.try_get_config("agent.default") {
+            return config;
         }
 
         // 3. Check for config directly under "agent" key (sah.yaml format)
-        // Try flat key access first (for programmatically set configs)
-        if let Some(config) = self.variables.get("agent") {
-            if let Ok(agent_config) = serde_json::from_value::<AgentConfig>(config.clone()) {
-                return agent_config;
-            }
-        }
-
-        // Try nested access (for file-loaded configs)
-        if let Some(config) = self.get("agent") {
-            if let Ok(agent_config) = serde_json::from_value::<AgentConfig>(config.clone()) {
-                return agent_config;
-            }
+        if let Some(config) = self.try_get_config("agent") {
+            return config;
         }
 
         // 4. Fall back to system default (Claude Code)
-        AgentConfig::default()
+        ModelConfig::default()
+    }
+
+    /// Try to extract a ModelConfig from a Value
+    fn try_extract_config(value: &Value) -> Option<ModelConfig> {
+        serde_json::from_value::<ModelConfig>(value.clone()).ok()
     }
 
     /// Get all available agent configurations
@@ -604,94 +610,70 @@ impl TemplateContext {
     /// (programmatically set configs).
     ///
     /// # Returns
-    /// * `HashMap<String, AgentConfig>` - Map of configuration names to agent configs
+    /// * `HashMap<String, ModelConfig>` - Map of configuration names to agent configs
     ///
     /// # Examples
     ///
     /// ```
-    /// use swissarmyhammer_config::{TemplateContext, AgentConfig, LlamaAgentConfig};
+    /// use swissarmyhammer_config::{TemplateContext, ModelConfig, LlamaAgentConfig};
     /// use serde_json::json;
     ///
     /// let mut context = TemplateContext::new();
     /// context.set("agent.default".to_string(),
-    ///     serde_json::to_value(AgentConfig::llama_agent(LlamaAgentConfig::default())).unwrap());
+    ///     serde_json::to_value(ModelConfig::llama_agent(LlamaAgentConfig::default())).unwrap());
     ///
     /// let configs = context.get_all_agent_configs();
     /// assert!(configs.contains_key("default"));
     /// ```
-    pub fn get_all_agent_configs(&self) -> HashMap<String, AgentConfig> {
+    pub fn get_all_agent_configs(&self) -> HashMap<String, ModelConfig> {
         let mut configs = HashMap::new();
 
         // Add default config if available
-        // Try flat key access first (for programmatically set configs)
-        if let Some(default_config) = self.variables.get("agent.default") {
-            if let Ok(agent_config) = serde_json::from_value::<AgentConfig>(default_config.clone())
-            {
-                configs.insert("default".to_string(), agent_config);
-            }
-        }
-        // Try nested access only if flat key didn't work (for file-loaded configs)
-        else if let Some(default_config) = self.get("agent.default") {
-            if let Ok(agent_config) = serde_json::from_value::<AgentConfig>(default_config.clone())
-            {
-                configs.insert("default".to_string(), agent_config);
-            }
+        if let Some(config) = self.try_get_config("agent.default") {
+            configs.insert("default".to_string(), config);
         }
 
-        // Look for flat keys that start with "agent.configs." first (programmatically set)
+        // Look for flat keys that start with "agent.configs." (programmatically set)
         for (key, value) in &self.variables {
             if let Some(workflow_name) = key.strip_prefix("agent.configs.") {
-                if let Ok(agent_config) = serde_json::from_value::<AgentConfig>(value.clone()) {
+                if let Some(agent_config) = Self::try_extract_config(value) {
                     configs.insert(workflow_name.to_string(), agent_config);
                 }
             }
         }
 
-        // Add named configs - check if agent.configs exists as a nested object (file-loaded)
-        // Only add if not already added from flat keys
-        if let Some(serde_json::Value::Object(agent_configs)) = self.get("agent.configs") {
+        // Add named configs from nested object (file-loaded), only if not already present
+        if let Some(Value::Object(agent_configs)) = self.get("agent.configs") {
             for (workflow_name, config_value) in agent_configs {
-                if !configs.contains_key(workflow_name) {
-                    if let Ok(agent_config) =
-                        serde_json::from_value::<AgentConfig>(config_value.clone())
-                    {
-                        configs.insert(workflow_name.clone(), agent_config);
-                    }
-                }
+                configs
+                    .entry(workflow_name.clone())
+                    .or_insert_with(|| Self::try_extract_config(config_value).unwrap_or_default());
             }
         }
 
         configs
     }
 
-    /// Set default variables if not already set
-    ///
-    /// This method sets default template variables including:
-    /// - "model": The model name based on the configured agent
-    /// - "working_directory": The fully qualified current working directory
-    /// - "cwd": Alias for the current working directory
-    ///
-    /// Model names are determined as follows:
-    /// - ClaudeCode: "Claude Code"
-    /// - LlamaAgent with HuggingFace model: the repository name
-    /// - LlamaAgent with Local model: the filename
-    /// - Unknown/Default: "Claude Code"
-    pub fn set_default_variables(&mut self) {
-        // Set model variable if not already provided by user
-        if self.get("model").is_none() {
-            let agent_config = self.get_agent_config(None);
-            let model_name = match &agent_config.executor {
-                crate::agent::AgentExecutorConfig::ClaudeCode(_) => "Claude Code".to_string(),
-                crate::agent::AgentExecutorConfig::LlamaAgent(llama_config) => {
-                    match &llama_config.model.source {
-                        crate::agent::ModelSource::HuggingFace { repo, .. } => repo.clone(),
-                        crate::agent::ModelSource::Local { filename, .. } => {
-                            filename.to_string_lossy().to_string()
-                        }
+    /// Resolve model name from agent configuration
+    fn resolve_model_name(&self) -> String {
+        let agent_config = self.get_agent_config(None);
+        match &agent_config.executor {
+            crate::model::ModelExecutorConfig::ClaudeCode(_) => "Claude Code".to_string(),
+            crate::model::ModelExecutorConfig::LlamaAgent(llama_config) => {
+                match &llama_config.model.source {
+                    crate::model::ModelSource::HuggingFace { repo, .. } => repo.clone(),
+                    crate::model::ModelSource::Local { filename, .. } => {
+                        filename.to_string_lossy().to_string()
                     }
                 }
-            };
+            }
+        }
+    }
 
+    /// Set model variable if not already provided by user
+    fn set_model_variable(&mut self) {
+        if self.get("model").is_none() {
+            let model_name = self.resolve_model_name();
             debug!("Setting default model variable to: {}", model_name);
             self.set("model".to_string(), Value::String(model_name));
         } else {
@@ -700,8 +682,10 @@ impl TemplateContext {
                 self.get("model")
             );
         }
+    }
 
-        // Set working directory variables if not already provided by user
+    /// Set working directory variables if not already provided by user
+    fn set_working_directory_variables(&mut self) {
         if self.get("working_directory").is_none() && self.get("cwd").is_none() {
             match std::env::current_dir() {
                 Ok(current_dir) => {
@@ -728,6 +712,23 @@ impl TemplateContext {
                 self.get("cwd")
             );
         }
+    }
+
+    /// Set default variables if not already set
+    ///
+    /// This method sets default template variables including:
+    /// - "model": The model name based on the configured agent
+    /// - "working_directory": The fully qualified current working directory
+    /// - "cwd": Alias for the current working directory
+    ///
+    /// Model names are determined as follows:
+    /// - ClaudeCode: "Claude Code"
+    /// - LlamaAgent with HuggingFace model: the repository name
+    /// - LlamaAgent with Local model: the filename
+    /// - Unknown/Default: "Claude Code"
+    pub fn set_default_variables(&mut self) {
+        self.set_model_variable();
+        self.set_working_directory_variables();
     }
 }
 
@@ -985,18 +986,18 @@ version = "1.0.0"
 
     #[test]
     fn test_get_agent_config_direct_agent_key() {
-        use crate::agent::{
-            AgentConfig, AgentExecutorConfig, LlamaAgentConfig, McpServerConfig, ModelConfig,
+        use crate::model::{
+            LlamaAgentConfig, LlmModelConfig, McpServerConfig, ModelConfig, ModelExecutorConfig,
             ModelSource,
         };
 
         let mut context = TemplateContext::new();
 
         // Set up agent config directly under the "agent" key (sah.yaml style)
-        let agent_config = AgentConfig {
+        let agent_config = ModelConfig {
             quiet: false,
-            executor: AgentExecutorConfig::LlamaAgent(LlamaAgentConfig {
-                model: ModelConfig {
+            executor: ModelExecutorConfig::LlamaAgent(LlamaAgentConfig {
+                model: LlmModelConfig {
                     source: ModelSource::HuggingFace {
                         repo: "unsloth/Qwen3-Coder-30B-A3B-Instruct-GGUF".to_string(),
                         filename: Some("Qwen3-Coder-30B-A3B-Instruct-UD-Q6_K_XL.gguf".to_string()),
@@ -1025,7 +1026,7 @@ version = "1.0.0"
 
         // Verify it's the correct config type and not the default
         match retrieved_config.executor {
-            AgentExecutorConfig::LlamaAgent(llama_config) => match &llama_config.model.source {
+            ModelExecutorConfig::LlamaAgent(llama_config) => match &llama_config.model.source {
                 ModelSource::HuggingFace { repo, filename, .. } => {
                     assert!(
                         repo.starts_with("unsloth/Qwen3"),
@@ -1223,7 +1224,7 @@ Generated for {{app.name}} by liquid templating engine.
         // Set Claude Code agent config
         context.set(
             "agent".to_string(),
-            serde_json::to_value(AgentConfig::claude_code()).unwrap(),
+            serde_json::to_value(ModelConfig::claude_code()).unwrap(),
         );
 
         // Set default variables
@@ -1242,8 +1243,8 @@ Generated for {{app.name}} by liquid templating engine.
 
     #[test]
     fn test_set_default_variables_llama_agent_huggingface() {
-        use crate::agent::{
-            AgentConfig, AgentExecutorConfig, LlamaAgentConfig, McpServerConfig, ModelConfig,
+        use crate::model::{
+            LlamaAgentConfig, LlmModelConfig, McpServerConfig, ModelConfig, ModelExecutorConfig,
             ModelSource,
         };
 
@@ -1251,7 +1252,7 @@ Generated for {{app.name}} by liquid templating engine.
 
         // Set LlamaAgent config with HuggingFace model
         let llama_config = LlamaAgentConfig {
-            model: ModelConfig {
+            model: LlmModelConfig {
                 source: ModelSource::HuggingFace {
                     repo: "microsoft/CodeT5-base".to_string(),
                     filename: Some("pytorch_model.bin".to_string()),
@@ -1268,9 +1269,9 @@ Generated for {{app.name}} by liquid templating engine.
             repetition_detection: Default::default(),
         };
 
-        let agent_config = AgentConfig {
+        let agent_config = ModelConfig {
             quiet: false,
-            executor: AgentExecutorConfig::LlamaAgent(llama_config),
+            executor: ModelExecutorConfig::LlamaAgent(llama_config),
         };
 
         context.set(
@@ -1291,8 +1292,8 @@ Generated for {{app.name}} by liquid templating engine.
 
     #[test]
     fn test_set_default_variables_llama_agent_local() {
-        use crate::agent::{
-            AgentConfig, AgentExecutorConfig, LlamaAgentConfig, McpServerConfig, ModelConfig,
+        use crate::model::{
+            LlamaAgentConfig, LlmModelConfig, McpServerConfig, ModelConfig, ModelExecutorConfig,
             ModelSource,
         };
         use std::path::PathBuf;
@@ -1301,7 +1302,7 @@ Generated for {{app.name}} by liquid templating engine.
 
         // Set LlamaAgent config with Local model
         let llama_config = LlamaAgentConfig {
-            model: ModelConfig {
+            model: LlmModelConfig {
                 source: ModelSource::Local {
                     filename: PathBuf::from("/path/to/model.gguf"),
                     folder: None,
@@ -1317,9 +1318,9 @@ Generated for {{app.name}} by liquid templating engine.
             repetition_detection: Default::default(),
         };
 
-        let agent_config = AgentConfig {
+        let agent_config = ModelConfig {
             quiet: false,
-            executor: AgentExecutorConfig::LlamaAgent(llama_config),
+            executor: ModelExecutorConfig::LlamaAgent(llama_config),
         };
 
         context.set(

@@ -59,7 +59,8 @@ async fn test_hello_world_all_actions_parse() -> Result<()> {
     let context = HashMap::new();
 
     // Start action should parse successfully
-    let start_action = parse_action_from_description_with_context(&start_state.description, &context)?;
+    let start_action =
+        parse_action_from_description_with_context(&start_state.description, &context)?;
     assert!(
         start_action.is_some(),
         "Start action should parse successfully: '{}'",
@@ -67,7 +68,8 @@ async fn test_hello_world_all_actions_parse() -> Result<()> {
     );
 
     // Greeting action should parse successfully
-    let greeting_action = parse_action_from_description_with_context(&greeting_state.description, &context)?;
+    let greeting_action =
+        parse_action_from_description_with_context(&greeting_state.description, &context)?;
     assert!(
         greeting_action.is_some(),
         "Greeting action should parse successfully: '{}'",
@@ -76,7 +78,8 @@ async fn test_hello_world_all_actions_parse() -> Result<()> {
 
     // Complete action should parse successfully
     // Note: This may contain variable interpolation, but the action keyword should still be recognized
-    let complete_action = parse_action_from_description_with_context(&complete_state.description, &context)?;
+    let complete_action =
+        parse_action_from_description_with_context(&complete_state.description, &context)?;
     assert!(
         complete_action.is_some(),
         "Complete action should parse successfully: '{}'",
@@ -112,7 +115,10 @@ async fn test_hello_world_execution_without_claude() -> Result<()> {
     let result = executor.execute_single_cycle(&mut run).await;
 
     // The execution should succeed without parse errors
-    assert!(result.is_ok(), "Complete state should execute without errors");
+    assert!(
+        result.is_ok(),
+        "Complete state should execute without errors"
+    );
 
     Ok(())
 }

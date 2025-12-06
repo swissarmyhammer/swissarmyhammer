@@ -283,16 +283,16 @@ fn handle_cwd_flag(args: &[String]) {
     }
 }
 
-/// Extract --agent flag from command-line arguments
+/// Extract --model flag from command-line arguments
 ///
-/// This function checks for the --agent flag and extracts its value.
+/// This function checks for the --model flag and extracts its value.
 /// Returns None if the flag is not present.
-fn extract_agent_flag(args: &[String]) -> Option<String> {
+fn extract_model_flag(args: &[String]) -> Option<String> {
     args.iter()
-        .position(|arg| arg == "--agent")
-        .and_then(|agent_index| {
-            args.get(agent_index + 1)
-                .map(|agent_name| agent_name.to_string())
+        .position(|arg| arg == "--model")
+        .and_then(|model_index| {
+            args.get(model_index + 1)
+                .map(|model_name| model_name.to_string())
         })
 }
 
@@ -302,15 +302,15 @@ fn extract_agent_flag(args: &[String]) -> Option<String> {
 ///
 /// # Arguments
 ///
-/// * `agent_override` - Optional agent name to use for all use cases
+/// * `model_override` - Optional model name to use for all use cases
 ///
 /// # Returns
 ///
 /// Arc to the initialized CliToolContext
-async fn initialize_tool_context(agent_override: Option<&str>) -> Arc<CliToolContext> {
+async fn initialize_tool_context(model_override: Option<&str>) -> Arc<CliToolContext> {
     let current_dir = unwrap_or_exit(std::env::current_dir(), "Failed to get current directory");
     let context = unwrap_or_exit(
-        CliToolContext::new_with_config(&current_dir, agent_override).await,
+        CliToolContext::new_with_config(&current_dir, model_override).await,
         "Failed to initialize tool context",
     );
     Arc::new(context)
@@ -325,6 +325,30 @@ fn initialize_workflow_storage() -> Option<swissarmyhammer_workflow::WorkflowSto
         Err(e) => {
             tracing::warn!("Failed to initialize workflow storage: {}", e);
             None
+        }
+    }
+}
+
+/// Handle CLI parse errors and exit appropriately
+///
+/// This function handles different types of clap parsing errors,
+/// exiting with appropriate status codes for each error kind.
+///
+/// # Arguments
+/// * `error` - The clap error to handle
+///
+/// # Returns
+/// Never returns - always exits the process
+fn handle_cli_parse_error(error: clap::Error) -> ! {
+    use clap::error::ErrorKind;
+    match error.kind() {
+        ErrorKind::DisplayHelp | ErrorKind::DisplayVersion => {
+            print!("{}", error);
+            process::exit(EXIT_SUCCESS);
+        }
+        _ => {
+            eprintln!("{}", error);
+            process::exit(EXIT_ERROR);
         }
     }
 }
@@ -345,38 +369,26 @@ fn build_and_parse_cli(
     // Parse arguments with dynamic CLI
     match dynamic_cli.try_get_matches() {
         Ok(matches) => matches,
-        Err(e) => {
-            use clap::error::ErrorKind;
-            match e.kind() {
-                ErrorKind::DisplayHelp | ErrorKind::DisplayVersion => {
-                    print!("{}", e);
-                    process::exit(EXIT_SUCCESS);
-                }
-                _ => {
-                    eprintln!("{}", e);
-                    process::exit(EXIT_ERROR);
-                }
-            }
-        }
+        Err(e) => handle_cli_parse_error(e),
     }
 }
 
 #[tokio::main]
 async fn main() {
-    // Parse CLI early to check for --cwd and --agent flags BEFORE doing anything else
+    // Parse CLI early to check for --cwd and --model flags BEFORE doing anything else
     let args: Vec<String> = std::env::args().collect();
 
     // Check for --cwd flag and change directory FIRST
     handle_cwd_flag(&args);
 
-    // Extract --agent flag for global override
-    let agent_override = extract_agent_flag(&args);
+    // Extract --model flag for global override
+    let model_override = extract_model_flag(&args);
 
     // Load configuration early for CLI operations
     let template_context = load_cli_configuration();
 
-    // Initialize tool context and registry for dynamic CLI with agent override
-    let cli_tool_context = initialize_tool_context(agent_override.as_deref()).await;
+    // Initialize tool context and registry for dynamic CLI with model override
+    let cli_tool_context = initialize_tool_context(model_override.as_deref()).await;
 
     let tool_registry = cli_tool_context.get_tool_registry_arc();
     let cli_builder = CliBuilder::new(tool_registry);
@@ -543,12 +555,54 @@ async fn route_subcommand(context: &CliContext, cli_tool_context: Arc<CliToolCon
             handle_flow_command(sub_matches, context, cli_tool_context.clone()).await
         }
         Some(("validate", sub_matches)) => handle_validate_command(sub_matches, context).await,
-        Some(("agent", sub_matches)) => handle_agent_command(sub_matches, context).await,
+        Some(("model", sub_matches)) => handle_model_command(sub_matches, context).await,
         Some((category, sub_matches)) => {
             route_category_command(category, sub_matches, context, cli_tool_context).await
         }
         None => report_error_and_exit("No command specified. Use --help for usage information."),
     }
+}
+
+/// Route MCP tool commands
+///
+/// Handles MCP tool commands with the pattern: `sah <category> <tool_name> [args...]`
+///
+/// # Arguments
+/// * `category` - The tool category (e.g., "files")
+/// * `tool_name` - The specific tool within that category (e.g., "read")
+/// * `tool_matches` - The tool's specific arguments
+/// * `cli_tool_context` - The tool context for MCP tool execution
+///
+/// # Returns
+/// Exit code from the handler
+async fn route_mcp_tool_command(
+    category: &str,
+    tool_name: &str,
+    tool_matches: &clap::ArgMatches,
+    cli_tool_context: Arc<CliToolContext>,
+) -> i32 {
+    handle_dynamic_tool_command(category, tool_name, tool_matches, cli_tool_context).await
+}
+
+/// Route workflow shortcut commands
+///
+/// Handles workflow shortcut commands with the pattern: `sah <workflow_name> [positional_args...] [flags...]`
+///
+/// # Arguments
+/// * `workflow_name` - The workflow name (e.g., "plan")
+/// * `sub_matches` - The workflow's positional arguments and flags
+/// * `context` - The CLI context
+/// * `cli_tool_context` - The tool context for MCP tool execution
+///
+/// # Returns
+/// Exit code from the handler
+async fn route_workflow_shortcut_command(
+    workflow_name: &str,
+    sub_matches: &clap::ArgMatches,
+    context: &CliContext,
+    cli_tool_context: Arc<CliToolContext>,
+) -> i32 {
+    handle_workflow_shortcut(workflow_name, sub_matches, context, cli_tool_context).await
 }
 
 /// Route category commands (MCP tools or workflow shortcuts)
@@ -568,7 +622,7 @@ async fn route_subcommand(context: &CliContext, cli_tool_context: Arc<CliToolCon
 ///      - `category` is the tool category (e.g., "files")
 ///      - `tool_name` is the specific tool within that category (e.g., "read")
 ///      - `tool_matches` contains the tool's specific arguments
-///    - Routes to: `handle_dynamic_tool_command()`
+///    - Routes to: `route_mcp_tool_command()`
 ///
 /// 2. **Workflow Shortcut Path** (without subcommand):
 ///    - Pattern: `sah <workflow_name> [positional_args...] [flags...]`
@@ -577,7 +631,7 @@ async fn route_subcommand(context: &CliContext, cli_tool_context: Arc<CliToolCon
 ///      a workflow shortcut where:
 ///      - `category` is actually the workflow name (e.g., "plan")
 ///      - `sub_matches` contains the workflow's positional arguments and flags
-///    - Routes to: `handle_workflow_shortcut()`
+///    - Routes to: `route_workflow_shortcut_command()`
 ///
 /// # Arguments
 /// * `category` - The category name (for MCP tools) or workflow name (for shortcuts)
@@ -595,12 +649,10 @@ async fn route_category_command(
 ) -> i32 {
     match sub_matches.subcommand() {
         Some((tool_name, tool_matches)) => {
-            // Path 1: MCP tool command with subcommand (category -> tool_name)
-            handle_dynamic_tool_command(category, tool_name, tool_matches, cli_tool_context).await
+            route_mcp_tool_command(category, tool_name, tool_matches, cli_tool_context).await
         }
         None => {
-            // Path 2: Workflow shortcut without subcommand (workflow_name -> args)
-            handle_workflow_shortcut(category, sub_matches, context, cli_tool_context).await
+            route_workflow_shortcut_command(category, sub_matches, context, cli_tool_context).await
         }
     }
 }
@@ -816,6 +868,30 @@ fn is_nullable(prop_schema: &serde_json::Value) -> bool {
     has_type(prop_schema, "null")
 }
 
+/// Extract a nullable boolean value from clap matches
+///
+/// This helper function handles the extraction of nullable boolean values,
+/// which have special handling compared to regular boolean flags.
+///
+/// # Arguments
+/// * `matches` - The clap ArgMatches
+/// * `prop_name` - The property name to extract
+///
+/// # Returns
+/// The extracted JSON boolean value or None if not present
+fn extract_nullable_boolean(
+    matches: &clap::ArgMatches,
+    prop_name: &str,
+) -> Option<serde_json::Value> {
+    matches
+        .get_one::<String>(prop_name)
+        .and_then(|s| match s.as_str() {
+            "true" => Some(serde_json::Value::Bool(true)),
+            "false" => Some(serde_json::Value::Bool(false)),
+            _ => None,
+        })
+}
+
 /// Value extraction strategies for different JSON schema types
 ///
 /// This enum provides a unified approach to extracting values from clap matches
@@ -864,13 +940,7 @@ impl ValueExtractor {
         match self {
             Self::Boolean { nullable } => {
                 if *nullable {
-                    matches
-                        .get_one::<String>(prop_name)
-                        .and_then(|s| match s.as_str() {
-                            "true" => Some(serde_json::Value::Bool(true)),
-                            "false" => Some(serde_json::Value::Bool(false)),
-                            _ => None,
-                        })
+                    extract_nullable_boolean(matches, prop_name)
                 } else if matches.get_flag(prop_name) {
                     Some(serde_json::Value::Bool(true))
                 } else {
@@ -1034,40 +1104,49 @@ async fn handle_validate_command(matches: &clap::ArgMatches, cli_context: &CliCo
     commands::validate::handle_command(workflow_dirs, validate_tools, cli_context).await
 }
 
-async fn handle_agent_command(matches: &clap::ArgMatches, context: &CliContext) -> i32 {
-    use crate::cli::{AgentSubcommand, OutputFormat};
+/// Parse output format from clap matches with fallback
+///
+/// This helper function extracts the output format from clap matches,
+/// providing a consistent fallback to Table format.
+///
+/// # Arguments
+/// * `matches` - The clap ArgMatches to extract from
+///
+/// # Returns
+/// The parsed OutputFormat, defaulting to Table if not found or invalid
+fn parse_output_format(matches: &clap::ArgMatches) -> crate::cli::OutputFormat {
+    use crate::cli::OutputFormat;
     use std::str::FromStr;
+
+    matches
+        .get_one::<String>("format")
+        .map(|s| OutputFormat::from_str(s).unwrap_or(OutputFormat::Table))
+        .unwrap_or(OutputFormat::Table)
+}
+
+async fn handle_model_command(matches: &clap::ArgMatches, context: &CliContext) -> i32 {
+    use crate::cli::ModelSubcommand;
 
     let subcommand = match matches.subcommand() {
         Some(("list", sub_matches)) => {
-            // Since we have default_value="table" and non-optional format,
-            // clap should always provide a value
-            let format = sub_matches
-                .get_one::<String>("format")
-                .map(|s| OutputFormat::from_str(s).unwrap_or(OutputFormat::Table))
-                .unwrap_or(OutputFormat::Table);
-
-            Some(AgentSubcommand::List { format })
+            let format = parse_output_format(sub_matches);
+            Some(ModelSubcommand::List { format })
         }
         Some(("show", sub_matches)) => {
-            let format = sub_matches
-                .get_one::<String>("format")
-                .map(|s| OutputFormat::from_str(s).unwrap_or(OutputFormat::Table))
-                .unwrap_or(OutputFormat::Table);
-
-            Some(AgentSubcommand::Show { format })
+            let format = parse_output_format(sub_matches);
+            Some(ModelSubcommand::Show { format })
         }
         Some(("use", sub_matches)) => {
             let first = sub_matches.get_one::<String>("first").cloned().unwrap();
             let second = sub_matches.get_one::<String>("second").cloned();
-            Some(AgentSubcommand::Use { first, second })
+            Some(ModelSubcommand::Use { first, second })
         }
         // Default to show when no subcommand is provided
         None => None,
         _ => return report_error_and_exit("Unknown agent subcommand"),
     };
 
-    commands::agent::handle_command(subcommand, context).await
+    commands::model::handle_command(subcommand, context).await
 }
 
 /// Determine the appropriate log level based on configuration flags

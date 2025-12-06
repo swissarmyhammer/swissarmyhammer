@@ -225,13 +225,19 @@ fn assert_item_before_first_category_if_present(
     item: Option<&str>,
     context_msg: &str,
 ) {
-    if let Some(item_str) = item {
-        if contains_if_present(&ctx.help, Some(item_str)) {
-            if let Some(first_category) = ctx.categories().into_iter().next() {
-                assert_help_position_before(&ctx.help, item_str, &first_category, context_msg);
-            }
-        }
+    let Some(item_str) = item else {
+        return;
+    };
+
+    if !contains_if_present(&ctx.help, Some(item_str)) {
+        return;
     }
+
+    let Some(first_category) = ctx.categories().into_iter().next() else {
+        return;
+    };
+
+    assert_help_position_before(&ctx.help, item_str, &first_category, context_msg);
 }
 
 /// Test case for validation statistics
@@ -255,6 +261,19 @@ struct ValidationTestCase {
     expected_summary_contains: Vec<&'static str>,
 }
 
+/// Helper to build expected summary items based on validation state
+fn build_summary_expectations(total: usize, invalid: usize, errors: usize) -> Vec<&'static str> {
+    if total == 0 {
+        return vec![];
+    }
+
+    if invalid == 0 && errors == 0 {
+        return vec!["✓", "All"];
+    }
+
+    vec!["⚠"]
+}
+
 /// Simplified helper to create validation test case with default expectations
 fn validation_test(
     description: &'static str,
@@ -270,14 +289,7 @@ fn validation_test(
         100.0
     };
 
-    let mut summary_contains = vec![];
-    if total > 0 {
-        if expected_all_valid {
-            summary_contains.extend_from_slice(&["✓", "All"]);
-        } else {
-            summary_contains.extend_from_slice(&["⚠"]);
-        }
-    }
+    let summary_contains = build_summary_expectations(total, invalid, errors);
 
     ValidationTestCaseBuilder::default()
         .description(description)
@@ -463,6 +475,46 @@ fn add_json_field_if_present<T: Into<serde_json::Value>>(
     }
 }
 
+/// Helper to build schema JSON from parameters
+fn build_schema_json(
+    arg_type: &'static str,
+    help: Option<&'static str>,
+    enum_values: Option<&Vec<&'static str>>,
+    default_value: Option<&'static str>,
+) -> serde_json::Value {
+    let mut schema_obj = json!({"type": arg_type});
+
+    add_json_field_if_present(&mut schema_obj, "description", help);
+    if let Some(e) = enum_values {
+        add_json_field_if_present(&mut schema_obj, "enum", Some(json!(e)));
+    }
+    add_json_field_if_present(&mut schema_obj, "default", default_value);
+
+    schema_obj
+}
+
+/// Helper to build argument properties from parameters
+fn build_arg_properties(
+    arg_type: &'static str,
+    required: bool,
+    help: Option<&'static str>,
+    enum_values: Option<&Vec<&'static str>>,
+    default_value: Option<&'static str>,
+) -> ArgProperties {
+    let mut builder = ArgPropertiesBuilder::default()
+        .arg_type(arg_type_from_string(arg_type))
+        .is_required(required);
+
+    setter!(builder, help, help, |h: &str| h.to_string());
+    setter!(builder, enum_values, possible_values, |v: &Vec<&str>| {
+        v.iter().map(|val| val.to_string()).collect::<Vec<_>>()
+    });
+    setter!(builder, default_value, default_value, |d: &str| d
+        .to_string());
+
+    builder.build().unwrap()
+}
+
 /// Helper function to create an argument test case from schema parameters
 fn create_arg_test_case(
     name: &'static str,
@@ -472,30 +524,14 @@ fn create_arg_test_case(
     enum_values: Option<Vec<&'static str>>,
     default_value: Option<&'static str>,
 ) -> ArgTestCase {
-    let mut schema_obj = json!({"type": arg_type});
-
-    // Add optional schema fields using helper
-    add_json_field_if_present(&mut schema_obj, "description", help);
-    if let Some(e) = enum_values.as_ref() {
-        add_json_field_if_present(&mut schema_obj, "enum", Some(json!(e)));
-    }
-    add_json_field_if_present(&mut schema_obj, "default", default_value);
-
-    // Build properties using derive_builder pattern with chained calls
-    let mut builder = ArgPropertiesBuilder::default()
-        .arg_type(arg_type_from_string(arg_type))
-        .is_required(required);
-
-    setter!(builder, help, help, |h: &str| h.to_string());
-    setter!(builder, enum_values.as_ref(), possible_values, |v: &Vec<
-        &str,
-    >| {
-        v.iter().map(|val| val.to_string()).collect::<Vec<_>>()
-    });
-    setter!(builder, default_value, default_value, |d: &str| d
-        .to_string());
-
-    let properties = builder.build().unwrap();
+    let schema_obj = build_schema_json(arg_type, help, enum_values.as_ref(), default_value);
+    let properties = build_arg_properties(
+        arg_type,
+        required,
+        help,
+        enum_values.as_ref(),
+        default_value,
+    );
 
     ArgTestCaseBuilder::default()
         .name(name)
@@ -565,7 +601,7 @@ fn test_build_cli_basic_structure() {
     // Note: plan and implement are now dynamic workflow shortcuts, not hardcoded commands
     // Note: rule command is now dynamically generated from rules_check MCP tool when tools are registered
     // This test uses an empty registry, so rule won't appear here
-    let expected_commands = ["serve", "doctor", "prompt", "flow", "validate", "agent"];
+    let expected_commands = ["serve", "doctor", "prompt", "flow", "validate", "model"];
     assert_commands_exist(&cli, &expected_commands);
 }
 

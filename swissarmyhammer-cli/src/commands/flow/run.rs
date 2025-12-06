@@ -3,7 +3,8 @@
 use super::params::{map_positional_to_params, merge_params, parse_param_pairs};
 use crate::context::CliContext;
 use serde_json::json;
-use swissarmyhammer::{Result, SwissArmyHammerError, WorkflowName};
+use std::collections::HashMap;
+use swissarmyhammer::{Result, SwissArmyHammerError, Workflow, WorkflowName};
 
 /// Configuration for running a workflow command
 pub struct RunCommandConfig {
@@ -25,57 +26,38 @@ pub async fn execute_run_command(
     run_workflow_command(config, context, cli_tool_context).await
 }
 
-/// Execute a workflow with given configuration
-pub async fn run_workflow_command(
-    config: RunCommandConfig,
-    context: &CliContext,
-    cli_tool_context: std::sync::Arc<crate::mcp_integration::CliToolContext>,
-) -> Result<()> {
-    let workflow_name_typed = WorkflowName::new(&config.workflow);
-    let workflow = context
-        .workflow_storage
-        .get_workflow(&workflow_name_typed)?;
+/// Display dry run information for a workflow
+fn display_dry_run_info(workflow: &Workflow, variables: &HashMap<String, serde_json::Value>) {
+    println!("🔍 Dry run mode - showing execution plan:");
+    println!("📋 Workflow: {}", workflow.name);
+    println!("🏁 Initial state: {}", workflow.initial_state);
+    println!("🔧 Variables: {variables:?}");
 
-    // Map positional arguments to required workflow parameters
-    let positional_params = map_positional_to_params(&workflow, config.positional_args)?;
+    println!("📊 States: {}", workflow.states.len());
+    println!("🔄 Transitions: {}", workflow.transitions.len());
 
-    // Parse --param key=value pairs
-    let param_pairs = parse_param_pairs(&config.params)?;
-
-    // Parse --var key=value pairs (deprecated but still supported)
-    let var_pairs = parse_param_pairs(&config.vars)?;
-
-    // Merge all parameter sources with proper precedence
-    let variables = merge_params(positional_params, param_pairs, var_pairs);
-
-    if config.dry_run {
-        println!("🔍 Dry run mode - showing execution plan:");
-        println!("📋 Workflow: {}", workflow.name);
-        println!("🏁 Initial state: {}", workflow.initial_state);
-        println!("🔧 Variables: {variables:?}");
-
-        println!("📊 States: {}", workflow.states.len());
-        println!("🔄 Transitions: {}", workflow.transitions.len());
-
-        // Show workflow structure
-        println!("\n📈 Workflow structure:");
-        for (state_id, state) in &workflow.states {
-            println!(
-                "  {} - {} {}",
-                state_id,
-                state.description,
-                if state.is_terminal { "(terminal)" } else { "" }
-            );
-        }
-
-        return Ok(());
+    // Show workflow structure
+    println!("\n📈 Workflow structure:");
+    for (state_id, state) in &workflow.states {
+        println!(
+            "  {} - {} {}",
+            state_id,
+            state.description,
+            if state.is_terminal { "(terminal)" } else { "" }
+        );
     }
+}
 
-    tracing::info!("🚀 Starting workflow: {}", workflow.name);
-
+/// Execute workflow via MCP tool and handle results
+async fn execute_workflow_via_mcp(
+    workflow_name: &str,
+    variables: HashMap<String, serde_json::Value>,
+    config: &RunCommandConfig,
+    cli_tool_context: &std::sync::Arc<crate::mcp_integration::CliToolContext>,
+) -> Result<()> {
     // Build arguments for MCP flow tool
     let mut tool_arguments = serde_json::Map::new();
-    tool_arguments.insert("flow_name".to_string(), json!(config.workflow));
+    tool_arguments.insert("flow_name".to_string(), json!(workflow_name));
     tool_arguments.insert("parameters".to_string(), json!(variables));
     tool_arguments.insert("interactive".to_string(), json!(config.interactive));
     tool_arguments.insert("dry_run".to_string(), json!(config.dry_run));
@@ -107,4 +89,37 @@ pub async fn run_workflow_command(
     }
 
     Ok(())
+}
+
+/// Execute a workflow with given configuration
+pub async fn run_workflow_command(
+    config: RunCommandConfig,
+    context: &CliContext,
+    cli_tool_context: std::sync::Arc<crate::mcp_integration::CliToolContext>,
+) -> Result<()> {
+    let workflow_name_typed = WorkflowName::new(&config.workflow);
+    let workflow = context
+        .workflow_storage
+        .get_workflow(&workflow_name_typed)?;
+
+    // Map positional arguments to required workflow parameters
+    let positional_params = map_positional_to_params(&workflow, config.positional_args.clone())?;
+
+    // Parse --param key=value pairs
+    let param_pairs = parse_param_pairs(&config.params)?;
+
+    // Parse --var key=value pairs (deprecated but still supported)
+    let var_pairs = parse_param_pairs(&config.vars)?;
+
+    // Merge all parameter sources with proper precedence
+    let variables = merge_params(positional_params, param_pairs, var_pairs);
+
+    if config.dry_run {
+        display_dry_run_info(&workflow, &variables);
+        return Ok(());
+    }
+
+    tracing::info!("🚀 Starting workflow: {}", workflow.name);
+
+    execute_workflow_via_mcp(&config.workflow, variables, &config, &cli_tool_context).await
 }

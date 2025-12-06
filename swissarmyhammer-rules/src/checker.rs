@@ -284,11 +284,45 @@ impl RuleChecker {
             rule.name
         );
 
-        // Read target file content
+        let (target_content, cache_key) = match self.prepare_file_for_checking(rule, target_path)? {
+            Some(result) => result,
+            None => return Ok(None),
+        };
+
+        if let Some(result) = self.check_cache_for_result(&cache_key, target_path, &rule.name)? {
+            return Ok(result);
+        }
+
+        let check_prompt_text = self.render_check_prompt(rule, target_path, &target_content)?;
+
+        let result = self
+            .execute_and_parse_check(
+                override_agent,
+                check_prompt_text,
+                rule,
+                target_path,
+                check_start,
+            )
+            .await?;
+
+        self.cache_check_result(&cache_key, &result);
+
+        Ok(result)
+    }
+
+    /// Prepare file for checking by reading content and parsing ignore directives
+    ///
+    /// Returns Ok(None) if the file should be skipped (binary file or rule is ignored)
+    /// Returns Ok(Some((content, cache_key))) if the file should be checked
+    /// Returns Err for actual I/O errors
+    fn prepare_file_for_checking(
+        &self,
+        rule: &Rule,
+        target_path: &Path,
+    ) -> Result<Option<(String, String)>> {
         let target_content = match std::fs::read_to_string(target_path) {
             Ok(content) => content,
             Err(e) => {
-                // Skip binary files or files with invalid UTF-8
                 if e.kind() == std::io::ErrorKind::InvalidData {
                     tracing::debug!(
                         "Skipping binary or non-UTF-8 file: {}",
@@ -305,7 +339,6 @@ impl RuleChecker {
             }
         };
 
-        // Check for ignore directives in the file
         let ignore_patterns = crate::ignore::parse_ignore_directives(&target_content);
         if crate::ignore::should_ignore_rule(&rule.name, &ignore_patterns) {
             tracing::debug!(
@@ -316,44 +349,64 @@ impl RuleChecker {
             return Ok(None);
         }
 
-        // Calculate cache key from file content + rule template + severity
         let cache_key =
             RuleCache::calculate_cache_key(&target_content, &rule.template, rule.severity);
 
-        // Check cache before proceeding with LLM evaluation
-        if let Some(cached_result) = self.cache.get(&cache_key)? {
+        Ok(Some((target_content, cache_key)))
+    }
+
+    /// Check cache for a previously computed result
+    fn check_cache_for_result(
+        &self,
+        cache_key: &str,
+        target_path: &Path,
+        rule_name: &str,
+    ) -> Result<Option<Option<RuleViolation>>> {
+        if let Some(cached_result) = self.cache.get(cache_key)? {
             tracing::debug!(
                 "Cache hit for {} against rule {} - skipping LLM call",
                 target_path.display(),
-                rule.name
+                rule_name
             );
-
-            return self.handle_cached_result(cached_result, target_path, &rule.name);
+            return Ok(Some(self.handle_cached_result(
+                cached_result,
+                target_path,
+                rule_name,
+            )?));
         }
 
         tracing::trace!(
             "Cache miss for {} against rule {} - proceeding with LLM check",
             target_path.display(),
-            rule.name
+            rule_name
         );
 
-        // Detect language from file extension/content
-        let language = detect_language(target_path, &target_content)?;
+        Ok(None)
+    }
+
+    /// Render the check prompt using two-stage rendering
+    fn render_check_prompt(
+        &self,
+        rule: &Rule,
+        target_path: &Path,
+        target_content: &str,
+    ) -> Result<String> {
+        let language = detect_language(target_path, target_content)?;
         tracing::debug!("Detected language: {}", language);
 
-        // STAGE 1: Render the rule template with context variables and partial support
         let mut rule_context = TemplateContext::new();
-        rule_context.set("target_content".to_string(), target_content.clone().into());
+        rule_context.set(
+            "target_content".to_string(),
+            target_content.to_string().into(),
+        );
         rule_context.set(
             "target_path".to_string(),
             target_path.display().to_string().into(),
         );
         rule_context.set("language".to_string(), language.clone().into());
 
-        // Create partial adapter from pre-loaded rule library
         let partial_adapter = crate::RulePartialAdapter::new(Arc::clone(&self.rule_library));
 
-        // Use Template::with_partials for rendering with partial support
         let template_with_partials =
             swissarmyhammer_templating::Template::with_partials(&rule.template, partial_adapter)
                 .map_err(|e| {
@@ -374,10 +427,12 @@ impl RuleChecker {
 
         tracing::debug!("Stage 1 complete: rule template rendered");
 
-        // STAGE 2: Render the .check prompt with rendered rule content
         let mut check_context = TemplateContext::new();
         check_context.set("rule_content".to_string(), rendered_rule.into());
-        check_context.set("target_content".to_string(), target_content.into());
+        check_context.set(
+            "target_content".to_string(),
+            target_content.to_string().into(),
+        );
         check_context.set(
             "target_path".to_string(),
             target_path.display().to_string().into(),
@@ -392,11 +447,21 @@ impl RuleChecker {
 
         tracing::debug!("Stage 2 complete: .check prompt rendered");
 
-        // Execute via agent (LLM) with tools enabled
-        // Use override agent if provided (for per-rule tool filtering)
+        Ok(check_prompt_text)
+    }
+
+    /// Execute the check via agent and parse the response
+    async fn execute_and_parse_check(
+        &self,
+        override_agent: Option<&Arc<dyn AgentExecutor>>,
+        check_prompt_text: String,
+        rule: &Rule,
+        target_path: &Path,
+        check_start: std::time::Instant,
+    ) -> Result<Option<RuleViolation>> {
         let agent = override_agent.unwrap_or(&self.agent);
 
-        let agent_config = swissarmyhammer_config::agent::AgentConfig::default();
+        let agent_config = swissarmyhammer_config::model::ModelConfig::default();
         let agent_context = AgentExecutionContext::new(&agent_config);
 
         let response = agent
@@ -406,16 +471,8 @@ impl RuleChecker {
 
         tracing::debug!("LLM execution complete");
 
-        // Parse result - check for PASS or VIOLATION
-        // The agent may return detailed analysis followed by PASS or VIOLATION
-        // We need to check both the beginning and end of the response
         let result_text = response.content.trim();
-
-        // Check if response contains PASS (with or without markdown formatting)
-        // Look for PASS at the start or end, ignoring markdown asterisks
         let normalized_text = result_text.trim_start_matches('*').trim_start();
-
-        // Strip trailing markdown formatting as well before checking
         let trimmed_end = result_text.trim_end_matches('*').trim_end();
         let ends_with_pass = trimmed_end.ends_with("PASS")
             || result_text.contains("**PASS**")
@@ -439,16 +496,9 @@ impl RuleChecker {
                 rule.name,
                 duration.as_secs_f64()
             );
-
-            // Cache the PASS result
-            let cached_result = CachedResult::Pass;
-            self.store_cached_result_with_logging(&cache_key, &cached_result);
-
             Ok(None)
         } else {
             let duration = check_start.elapsed();
-
-            // Violation found - create RuleViolation
             let violation = RuleViolation::new(
                 rule.name.clone(),
                 target_path.to_path_buf(),
@@ -456,7 +506,6 @@ impl RuleChecker {
                 response.content,
             );
 
-            // Log summary with timing at WARN level
             tracing::warn!(
                 "Violation found in {} against rule {} ({:?}) in {:.2}s",
                 target_path.display(),
@@ -465,17 +514,20 @@ impl RuleChecker {
                 duration.as_secs_f64()
             );
 
-            // Log full violation details at appropriate severity level
             Self::log_violation(&violation);
-
-            // Cache the VIOLATION result
-            let cached_result = CachedResult::Violation {
-                violation: violation.clone(),
-            };
-            self.store_cached_result_with_logging(&cache_key, &cached_result);
-
             Ok(Some(violation))
         }
+    }
+
+    /// Cache the check result
+    fn cache_check_result(&self, cache_key: &str, result: &Option<RuleViolation>) {
+        let cached_result = match result {
+            None => CachedResult::Pass,
+            Some(violation) => CachedResult::Violation {
+                violation: violation.clone(),
+            },
+        };
+        self.store_cached_result_with_logging(cache_key, &cached_result);
     }
 
     /// Check rules against files, streaming violations as they are discovered
@@ -545,7 +597,31 @@ impl RuleChecker {
     ) -> Result<impl Stream<Item = Result<RuleViolation>>> {
         tracing::info!("Starting rule check with filters (streaming mode)");
 
-        // Phase 1: Load all rules via RuleResolver
+        let rules = self.load_and_validate_rules()?;
+
+        let filtered_rules = self.apply_rule_filters(rules, &request)?;
+
+        if filtered_rules.is_empty() {
+            tracing::info!("No rules matched the filters");
+            return Ok(stream::iter(vec![]).boxed());
+        }
+
+        let target_files = self.expand_target_patterns(&request.patterns)?;
+
+        if target_files.is_empty() {
+            tracing::info!("No files matched the patterns");
+            return Ok(stream::iter(vec![]).boxed());
+        }
+
+        let work_items = self.build_work_queue(filtered_rules, target_files);
+
+        let stream = self.process_work_queue_stream(work_items, &request);
+
+        Ok(stream)
+    }
+
+    /// Load all rules and validate them
+    fn load_and_validate_rules(&self) -> Result<Vec<Rule>> {
         let mut rules = Vec::new();
         let mut resolver = crate::RuleResolver::new();
         resolver
@@ -555,7 +631,6 @@ impl RuleChecker {
         let total_files = rules.len();
         let partials_count = rules.iter().filter(|r| r.is_partial()).count();
 
-        // Filter out partials - they are not standalone rules
         rules.retain(|r| !r.is_partial());
 
         let rule_names: Vec<&str> = rules.iter().map(|r| r.name.as_str()).collect();
@@ -567,14 +642,21 @@ impl RuleChecker {
             rule_names
         );
 
-        // Phase 2: Validate all rules first (fail if any invalid)
         for rule in &rules {
             rule.validate().map_err(|e| {
                 RuleError::CheckError(format!("Rule validation failed for '{}': {}", rule.name, e))
             })?;
         }
 
-        // Phase 3: Apply filters
+        Ok(rules)
+    }
+
+    /// Apply filters to the rule list
+    fn apply_rule_filters(
+        &self,
+        mut rules: Vec<Rule>,
+        request: &RuleCheckRequest,
+    ) -> Result<Vec<Rule>> {
         if let Some(rule_names) = &request.rule_names {
             tracing::info!("Filtering by rule_names: {:?}", rule_names);
             tracing::info!(
@@ -593,44 +675,41 @@ impl RuleChecker {
             rules.retain(|r| r.category.as_ref() == Some(category));
         }
 
-        if rules.is_empty() {
-            tracing::info!("No rules matched the filters");
-            // Return empty stream
-            return Ok(stream::iter(vec![]).boxed());
-        }
+        Ok(rules)
+    }
 
-        // Phase 4: Expand glob patterns to get target files
-        // Note: .git and .swissarmyhammer directories are excluded by the WalkBuilder filter in glob_utils
+    /// Expand glob patterns to get target files
+    fn expand_target_patterns(&self, patterns: &[String]) -> Result<Vec<PathBuf>> {
         let config = GlobExpansionConfig::default();
 
-        let mut target_files = expand_glob_patterns(&request.patterns, &config)
+        let mut target_files = expand_glob_patterns(patterns, &config)
             .map_err(|e| RuleError::CheckError(format!("Failed to expand glob patterns: {}", e)))?;
 
-        // Sort target files for consistent ordering
         target_files.sort();
 
-        if target_files.is_empty() {
-            tracing::info!("No files matched the patterns");
-            // Return empty stream
-            return Ok(stream::iter(vec![]).boxed());
-        } else {
+        if !target_files.is_empty() {
             tracing::info!("Expanded patterns to {} target files", target_files.len());
         }
 
-        // Phase 5: Create flat work queue of (rule, file) pairs
-        // Filter by applies_to pattern if present
+        Ok(target_files)
+    }
+
+    /// Build work queue of (rule, file) pairs
+    fn build_work_queue(
+        &self,
+        rules: Vec<Rule>,
+        target_files: Vec<PathBuf>,
+    ) -> Vec<(Rule, PathBuf)> {
         let work_items: Vec<(Rule, PathBuf)> = rules
             .iter()
             .flat_map(|rule| {
                 target_files
                     .iter()
                     .filter(move |file| {
-                        // If rule has applies_to pattern, check if file matches
                         if let Some(ref pattern) = rule.applies_to {
                             if let Ok(glob_pattern) = glob::Pattern::new(pattern) {
                                 glob_pattern.matches_path(file)
                             } else {
-                                // Invalid pattern, skip this file for this rule
                                 tracing::warn!(
                                     "Invalid applies_to pattern '{}' in rule '{}', skipping",
                                     pattern,
@@ -639,7 +718,6 @@ impl RuleChecker {
                                 false
                             }
                         } else {
-                            // No applies_to pattern, include all files
                             true
                         }
                     })
@@ -649,7 +727,15 @@ impl RuleChecker {
 
         tracing::info!("Created work queue with {} check items", work_items.len());
 
-        // Wrap checker in Arc so it can be cloned for parallel execution
+        work_items
+    }
+
+    /// Process work queue as a stream with concurrency control
+    fn process_work_queue_stream(
+        &self,
+        work_items: Vec<(Rule, PathBuf)>,
+        request: &RuleCheckRequest,
+    ) -> std::pin::Pin<Box<dyn Stream<Item = Result<RuleViolation>> + Send>> {
         let checker = Arc::new(self.clone_for_streaming());
         let check_mode = request.check_mode;
         let max_errors = request.max_errors;
@@ -657,7 +743,6 @@ impl RuleChecker {
 
         tracing::debug!("Processing work queue with concurrency={}", concurrency);
 
-        // Process work queue in parallel using buffer_unordered
         let stream = stream::iter(work_items)
             .map(move |(rule, target)| {
                 let checker = Arc::clone(&checker);
@@ -669,23 +754,19 @@ impl RuleChecker {
                     Ok(Some(violation)) if violation.severity == Severity::Error => {
                         Some(Ok(violation))
                     }
-                    Ok(Some(_)) => None, // Non-error violations are logged but not yielded
-                    Ok(None) => None,    // PASS - no violation
-                    Err(e) => Some(Err(e)), // Propagate operational errors
+                    Ok(Some(_)) => None,
+                    Ok(None) => None,
+                    Err(e) => Some(Err(e)),
                 }
             });
 
-        // Apply limits based on check_mode and max_errors
-        // Priority: max_errors takes precedence if specified, otherwise use check_mode
-        let limited_stream = if let Some(limit) = max_errors {
+        if let Some(limit) = max_errors {
             stream.take(limit).boxed()
         } else if check_mode == CheckMode::FailFast {
             stream.take(1).boxed()
         } else {
             stream.boxed()
-        };
-
-        Ok(limited_stream)
+        }
     }
 
     /// Create a cloneable version of RuleChecker for streaming

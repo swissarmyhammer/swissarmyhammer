@@ -1,3 +1,5 @@
+//! sah rule ignore test_rule_with_allow
+//!
 //! Flow tool for MCP operations
 //!
 //! This module provides the FlowTool for executing workflows or listing available workflows
@@ -9,7 +11,7 @@ use async_trait::async_trait;
 use rmcp::model::CallToolResult;
 use rmcp::ErrorData as McpError;
 use swissarmyhammer_common::generate_monotonic_ulid_string;
-use swissarmyhammer_config::AgentUseCase;
+use swissarmyhammer_config::ModelUseCase;
 use swissarmyhammer_workflow::{MemoryWorkflowStorage, WorkflowResolver, WorkflowStorageBackend};
 
 /// Validate that all required parameters are provided
@@ -63,21 +65,21 @@ impl FlowTool {
         Ok((storage, resolver))
     }
 
-    /// List available workflows
-    async fn list_workflows(
-        &self,
-        request: &FlowToolRequest,
-    ) -> std::result::Result<CallToolResult, McpError> {
-        let (storage, resolver) = self
-            .load_workflows()
-            .map_err(|e| McpError::internal_error(e, None))?;
-
-        let workflows = storage.list_workflows().map_err(|e| {
-            McpError::internal_error(format!("Failed to list workflows: {}", e), None)
-        })?;
-
-        // Convert to metadata format
-        let metadata: Vec<WorkflowMetadata> = workflows
+    /// Convert workflows to metadata format
+    ///
+    /// # Arguments
+    ///
+    /// * `workflows` - List of workflows to convert
+    /// * `resolver` - Workflow resolver containing source information
+    ///
+    /// # Returns
+    ///
+    /// Vector of workflow metadata
+    fn convert_to_metadata(
+        workflows: &[swissarmyhammer_workflow::Workflow],
+        resolver: &WorkflowResolver,
+    ) -> Vec<WorkflowMetadata> {
+        workflows
             .iter()
             .map(|w| {
                 let source = resolver
@@ -104,24 +106,288 @@ impl FlowTool {
                     parameters,
                 }
             })
-            .collect();
+            .collect()
+    }
 
+    /// Format workflow list response according to requested format
+    ///
+    /// # Arguments
+    ///
+    /// * `response` - Workflow list response to format
+    /// * `format` - Optional format specifier (yaml, table, or json)
+    ///
+    /// # Returns
+    ///
+    /// Formatted string or error
+    fn format_workflow_list(
+        response: &WorkflowListResponse,
+        format: Option<&str>,
+    ) -> Result<String, McpError> {
+        match format {
+            Some("yaml") => serde_yaml::to_string(&response).map_err(|e| {
+                McpError::internal_error(format!("YAML serialization error: {}", e), None)
+            }),
+            Some("table") => Ok(format_table(response)),
+            _ => serde_json::to_string_pretty(&response).map_err(|e| {
+                McpError::internal_error(format!("JSON serialization error: {}", e), None)
+            }),
+        }
+    }
+
+    /// List available workflows
+    async fn list_workflows(
+        &self,
+        request: &FlowToolRequest,
+    ) -> std::result::Result<CallToolResult, McpError> {
+        let (storage, resolver) = self
+            .load_workflows()
+            .map_err(|e| McpError::internal_error(e, None))?;
+
+        let workflows = storage.list_workflows().map_err(|e| {
+            McpError::internal_error(format!("Failed to list workflows: {}", e), None)
+        })?;
+
+        let metadata = Self::convert_to_metadata(&workflows, &resolver);
         let response = WorkflowListResponse {
             workflows: metadata,
         };
 
-        // Format based on request
-        let formatted = match request.format.as_deref() {
-            Some("yaml") => serde_yaml::to_string(&response).map_err(|e| {
-                McpError::internal_error(format!("YAML serialization error: {}", e), None)
-            })?,
-            Some("table") => format_table(&response),
-            _ => serde_json::to_string_pretty(&response).map_err(|e| {
-                McpError::internal_error(format!("JSON serialization error: {}", e), None)
-            })?,
-        };
+        let formatted = Self::format_workflow_list(&response, request.format.as_deref())?;
 
         Ok(BaseToolImpl::create_success_response(formatted))
+    }
+
+    /// Load and validate a workflow
+    ///
+    /// # Arguments
+    ///
+    /// * `workflow_name` - Name of the workflow to load
+    /// * `parameters` - Parameters to validate against workflow requirements
+    ///
+    /// # Returns
+    ///
+    /// Ok with the loaded workflow, or Err with MCP error
+    fn load_and_validate_workflow(
+        &self,
+        workflow_name: &str,
+        parameters: &serde_json::Map<String, serde_json::Value>,
+    ) -> Result<swissarmyhammer_workflow::Workflow, McpError> {
+        let (storage, _resolver) = self.load_workflows().map_err(|e| {
+            tracing::error!("❌ Failed to load workflows: {}", e);
+            McpError::internal_error(e, None)
+        })?;
+
+        tracing::info!("📚 Workflows loaded successfully");
+
+        let wf_name = swissarmyhammer_workflow::WorkflowName::new(workflow_name.to_string());
+        let workflow = storage.get_workflow(&wf_name).map_err(|e| {
+            tracing::error!("❌ Failed to get workflow '{}': {}", workflow_name, e);
+            McpError::internal_error(
+                format!("Failed to load workflow '{}': {}", workflow_name, e),
+                None,
+            )
+        })?;
+
+        tracing::info!("✅ Workflow '{}' loaded", workflow_name);
+
+        validate_required_parameters(&workflow, parameters)
+            .map_err(|e| McpError::invalid_params(e, None))?;
+
+        Ok(workflow)
+    }
+
+    /// Setup workflow run context with parameters and configuration
+    ///
+    /// # Arguments
+    ///
+    /// * `workflow` - The workflow to setup
+    /// * `context` - Tool context with agent and configuration
+    /// * `request` - Request containing parameters
+    /// * `run_id` - Unique run identifier
+    ///
+    /// # Returns
+    ///
+    /// Tuple of (executor, workflow_run) ready for execution
+    async fn setup_workflow_run(
+        &self,
+        workflow: swissarmyhammer_workflow::Workflow,
+        context: &ToolContext,
+        request: &FlowToolRequest,
+        run_id: &str,
+    ) -> Result<
+        (
+            swissarmyhammer_workflow::WorkflowExecutor,
+            swissarmyhammer_workflow::WorkflowRun,
+        ),
+        McpError,
+    > {
+        let workflows_agent = context.get_agent_for_use_case(ModelUseCase::Workflows);
+        tracing::debug!(
+            "Using agent for Workflows use case: {:?}",
+            workflows_agent.executor_type()
+        );
+
+        let working_dir = context
+            .working_dir
+            .as_deref()
+            .unwrap_or_else(|| std::path::Path::new("."));
+
+        let mut executor = swissarmyhammer_workflow::WorkflowExecutor::with_working_dir_and_agent(
+            working_dir,
+            workflows_agent,
+        );
+
+        let mut run = executor.start_workflow(workflow).map_err(|e| {
+            McpError::internal_error(format!("Failed to start workflow: {}", e), None)
+        })?;
+
+        run.context
+            .set_workflow_var("__run_id__".to_string(), serde_json::json!(run_id));
+
+        {
+            let port_lock = context.mcp_server_port.read().await;
+            if let Some(port) = *port_lock {
+                run.context.insert(
+                    "_mcp_server_port".to_string(),
+                    serde_json::Value::Number(serde_json::Number::from(port)),
+                );
+                tracing::debug!("Set _mcp_server_port={} in workflow context", port);
+            }
+        }
+
+        for (key, value) in &request.parameters {
+            run.context.set_workflow_var(key.clone(), value.clone());
+        }
+
+        Ok((executor, run))
+    }
+
+    /// Send flow start notification
+    ///
+    /// # Arguments
+    ///
+    /// * `context` - Tool context with optional notification sender
+    /// * `run_id` - Unique run identifier
+    /// * `flow_name` - Name of the workflow
+    /// * `parameters` - Workflow parameters
+    /// * `initial_state` - Initial state identifier
+    fn send_flow_start_notification(
+        context: &ToolContext,
+        run_id: &str,
+        flow_name: &str,
+        parameters: serde_json::Value,
+        initial_state: &str,
+    ) {
+        if let Some(sender) = &context.notification_sender {
+            let _ = sender.send_flow_start(run_id, flow_name, parameters, initial_state);
+        }
+    }
+
+    /// Send flow complete notification
+    ///
+    /// # Arguments
+    ///
+    /// * `context` - Tool context with optional notification sender
+    /// * `run_id` - Unique run identifier
+    /// * `flow_name` - Name of the workflow
+    /// * `status` - Final workflow status
+    /// * `final_state` - Final state identifier
+    fn send_flow_complete_notification(
+        context: &ToolContext,
+        run_id: &str,
+        flow_name: &str,
+        status: &str,
+        final_state: &str,
+    ) {
+        if let Some(sender) = &context.notification_sender {
+            let _ = sender.send_flow_complete(run_id, flow_name, status, final_state);
+        }
+    }
+
+    /// Send flow error notification
+    ///
+    /// # Arguments
+    ///
+    /// * `context` - Tool context with optional notification sender
+    /// * `run_id` - Unique run identifier
+    /// * `flow_name` - Name of the workflow
+    /// * `status` - Final workflow status
+    /// * `error_state` - State where error occurred
+    /// * `error_message` - Error message
+    fn send_flow_error_notification(
+        context: &ToolContext,
+        run_id: &str,
+        flow_name: &str,
+        status: &str,
+        error_state: &str,
+        error_message: &str,
+    ) {
+        if let Some(sender) = &context.notification_sender {
+            let _ = sender.send_flow_error(run_id, flow_name, status, error_state, error_message);
+        }
+    }
+
+    /// Execute the workflow and handle the result
+    ///
+    /// # Arguments
+    ///
+    /// * `executor` - Workflow executor
+    /// * `run` - Workflow run to execute
+    /// * `run_id` - Unique run identifier
+    /// * `flow_name` - Name of the workflow
+    /// * `context` - Tool context with notification sender
+    ///
+    /// # Returns
+    ///
+    /// Success response with workflow status, or error
+    async fn run_and_handle_result(
+        &self,
+        mut executor: swissarmyhammer_workflow::WorkflowExecutor,
+        mut run: swissarmyhammer_workflow::WorkflowRun,
+        run_id: &str,
+        flow_name: &str,
+        context: &ToolContext,
+    ) -> std::result::Result<CallToolResult, McpError> {
+        let result = self
+            .execute_with_notifications(&mut executor, &mut run, run_id, flow_name, context)
+            .await;
+
+        match result {
+            Ok(()) => {
+                Self::send_flow_complete_notification(
+                    context,
+                    run_id,
+                    flow_name,
+                    &format!("{:?}", run.status),
+                    run.current_state.as_str(),
+                );
+
+                let output = serde_json::json!({
+                    "status": "completed",
+                    "workflow": flow_name,
+                    "final_status": format!("{:?}", run.status),
+                });
+                let formatted_output = serde_json::to_string_pretty(&output).map_err(|e| {
+                    McpError::internal_error(format!("Failed to serialize result: {}", e), None)
+                })?;
+                Ok(BaseToolImpl::create_success_response(formatted_output))
+            }
+            Err(e) => {
+                Self::send_flow_error_notification(
+                    context,
+                    run_id,
+                    flow_name,
+                    &format!("{:?}", run.status),
+                    run.current_state.as_str(),
+                    &e.to_string(),
+                );
+
+                Err(McpError::internal_error(
+                    format!("Workflow '{}' execution failed: {}", flow_name, e),
+                    None,
+                ))
+            }
+        }
     }
 
     /// Execute a workflow
@@ -138,141 +404,106 @@ impl FlowTool {
     ) -> std::result::Result<CallToolResult, McpError> {
         tracing::info!("🎯 execute_workflow STARTED for '{}'", request.flow_name);
 
-        let (storage, _resolver) = self
-            .load_workflows()
-            .map_err(|e| {
-                tracing::error!("❌ Failed to load workflows: {}", e);
-                McpError::internal_error(e, None)
-            })?;
+        let workflow = self.load_and_validate_workflow(&request.flow_name, &request.parameters)?;
 
-        tracing::info!("📚 Workflows loaded successfully");
-
-        // Get the workflow
-        let workflow_name = swissarmyhammer_workflow::WorkflowName::new(request.flow_name.clone());
-        let workflow = storage.get_workflow(&workflow_name).map_err(|e| {
-            tracing::error!("❌ Failed to get workflow '{}': {}", request.flow_name, e);
-            McpError::internal_error(
-                format!("Failed to load workflow '{}': {}", request.flow_name, e),
-                None,
-            )
-        })?;
-
-        tracing::info!("✅ Workflow '{}' loaded", request.flow_name);
-
-        // Validate required parameters
-        validate_required_parameters(&workflow, &request.parameters)
-            .map_err(|e| McpError::invalid_params(e, None))?;
-
-        // Generate unique run ID
         let run_id = generate_monotonic_ulid_string();
 
-        // Send flow start notification
+        Self::send_flow_start_notification(
+            context,
+            &run_id,
+            &request.flow_name,
+            serde_json::to_value(&request.parameters).unwrap_or(serde_json::json!({})),
+            workflow.initial_state.as_str(),
+        );
+
+        let (executor, run) = self
+            .setup_workflow_run(workflow, context, request, &run_id)
+            .await?;
+
+        self.run_and_handle_result(executor, run, &run_id, &request.flow_name, context)
+            .await
+    }
+
+    /// Calculate progress percentage based on executed states vs total states
+    ///
+    /// Progress calculation is approximate - based on executed states vs total states.
+    /// May not be accurate for workflows with loops or conditional branches.
+    ///
+    /// # Arguments
+    ///
+    /// * `executed_states` - Number of states that have been executed
+    /// * `total_states` - Total number of states in the workflow
+    ///
+    /// # Returns
+    ///
+    /// Progress percentage from 0-100
+    fn calculate_progress(executed_states: usize, total_states: usize) -> u32 {
+        if total_states > 0 {
+            ((executed_states * 100) / total_states).min(100) as u32
+        } else if executed_states > 0 {
+            100
+        } else {
+            0
+        }
+    }
+
+    /// Send state start notification
+    ///
+    /// # Arguments
+    ///
+    /// * `context` - Tool context with optional notification sender
+    /// * `run` - Current workflow run
+    /// * `run_id` - Unique run identifier
+    /// * `flow_name` - Name of the workflow
+    /// * `current_state` - State identifier that is starting
+    /// * `progress` - Current progress percentage
+    fn send_state_start_notification(
+        context: &ToolContext,
+        run: &swissarmyhammer_workflow::WorkflowRun,
+        run_id: &str,
+        flow_name: &str,
+        current_state: &swissarmyhammer_workflow::StateId,
+        progress: u32,
+    ) {
         if let Some(sender) = &context.notification_sender {
-            let _ = sender.send_flow_start(
-                &run_id,
-                &request.flow_name,
-                serde_json::to_value(&request.parameters).unwrap_or(serde_json::json!({})),
-                workflow.initial_state.as_str(),
-            );
-        }
-
-        // Get agent for Workflows use case
-        let workflows_agent = context.get_agent_for_use_case(AgentUseCase::Workflows);
-        tracing::debug!(
-            "Using agent for Workflows use case: {:?}",
-            workflows_agent.executor_type()
-        );
-
-        // Get working directory (fallback to current directory if not set in context)
-        let working_dir = context
-            .working_dir
-            .as_deref()
-            .unwrap_or_else(|| std::path::Path::new("."));
-
-        // Create workflow executor with agent
-        let mut executor = swissarmyhammer_workflow::WorkflowExecutor::with_working_dir_and_agent(
-            working_dir,
-            workflows_agent,
-        );
-
-        // Start the workflow
-        let mut run = executor.start_workflow(workflow).map_err(|e| {
-            McpError::internal_error(format!("Failed to start workflow: {}", e), None)
-        })?;
-
-        // Set run ID in context for potential use in workflow actions
-        run.context
-            .set_workflow_var("__run_id__".to_string(), serde_json::json!(run_id));
-
-        // Set MCP server port in workflow context if available
-        // This allows LlamaAgent executors in workflows to connect to the MCP server
-        {
-            let port_lock = context.mcp_server_port.read().await;
-            if let Some(port) = *port_lock {
-                run.context.insert(
-                    "_mcp_server_port".to_string(),
-                    serde_json::Value::Number(serde_json::Number::from(port)),
+            if let Some(state) = run.workflow.states.get(current_state) {
+                let _ = sender.send_state_start(
+                    run_id,
+                    flow_name,
+                    current_state.as_str(),
+                    &state.description,
+                    progress,
                 );
-                tracing::debug!("Set _mcp_server_port={} in workflow context", port);
             }
         }
+    }
 
-        // Set parameters from request into workflow context
-        for (key, value) in &request.parameters {
-            run.context.set_workflow_var(key.clone(), value.clone());
-        }
-
-        // Execute the workflow with progress tracking
-        let result = self
-            .execute_with_notifications(
-                &mut executor,
-                &mut run,
-                &run_id,
-                &request.flow_name,
-                context,
-            )
-            .await;
-
-        // Handle execution result
-        match result {
-            Ok(()) => {
-                // Send flow complete notification
-                if let Some(sender) = &context.notification_sender {
-                    let _ = sender.send_flow_complete(
-                        &run_id,
-                        &request.flow_name,
-                        &format!("{:?}", run.status),
-                        run.current_state.as_str(),
-                    );
-                }
-
-                let output = serde_json::json!({
-                    "status": "completed",
-                    "workflow": request.flow_name,
-                    "final_status": format!("{:?}", run.status),
-                });
-                let formatted_output = serde_json::to_string_pretty(&output).map_err(|e| {
-                    McpError::internal_error(format!("Failed to serialize result: {}", e), None)
-                })?;
-                Ok(BaseToolImpl::create_success_response(formatted_output))
-            }
-            Err(e) => {
-                // Send flow error notification
-                if let Some(sender) = &context.notification_sender {
-                    let _ = sender.send_flow_error(
-                        &run_id,
-                        &request.flow_name,
-                        &format!("{:?}", run.status),
-                        run.current_state.as_str(),
-                        &e.to_string(),
-                    );
-                }
-
-                Err(McpError::internal_error(
-                    format!("Workflow '{}' execution failed: {}", request.flow_name, e),
-                    None,
-                ))
-            }
+    /// Send state complete notification
+    ///
+    /// # Arguments
+    ///
+    /// * `context` - Tool context with optional notification sender
+    /// * `run_id` - Unique run identifier
+    /// * `flow_name` - Name of the workflow
+    /// * `current_state` - State identifier that completed
+    /// * `next_state` - Next state identifier if transition occurred
+    /// * `progress` - Current progress percentage
+    fn send_state_complete_notification(
+        context: &ToolContext,
+        run_id: &str,
+        flow_name: &str,
+        current_state: &swissarmyhammer_workflow::StateId,
+        next_state: Option<&str>,
+        progress: u32,
+    ) {
+        if let Some(sender) = &context.notification_sender {
+            let _ = sender.send_state_complete(
+                run_id,
+                flow_name,
+                current_state.as_str(),
+                next_state,
+                progress,
+            );
         }
     }
 
@@ -307,63 +538,59 @@ impl FlowTool {
         loop {
             let current_state = run.current_state.clone();
 
-            // Send state start notification
-            if let Some(sender) = &context.notification_sender {
-                if let Some(state) = run.workflow.states.get(&current_state) {
-                    // Progress calculation is approximate - based on executed states vs total states.
-                    // May not be accurate for workflows with loops or conditional branches.
-                    let progress = if total_states > 0 {
-                        ((executed_states * 100) / total_states) as u32
-                    } else {
-                        0
-                    };
+            let progress = Self::calculate_progress(executed_states, total_states);
+            Self::send_state_start_notification(
+                context,
+                run,
+                run_id,
+                flow_name,
+                &current_state,
+                progress,
+            );
 
-                    let _ = sender.send_state_start(
-                        run_id,
-                        flow_name,
-                        current_state.as_str(),
-                        &state.description,
-                        progress,
-                    );
-                }
-            }
-
-            // Execute single cycle
             let transition_performed = executor.execute_single_cycle(run).await?;
             executed_states += 1;
 
-            // Send state complete notification
-            if let Some(sender) = &context.notification_sender {
-                let next_state = if transition_performed {
-                    Some(run.current_state.as_str())
-                } else {
-                    None
-                };
+            let next_state = if transition_performed {
+                Some(run.current_state.as_str())
+            } else {
+                None
+            };
 
-                // Progress calculation is approximate - based on executed states vs total states.
-                // May not be accurate for workflows with loops or conditional branches.
-                let progress = if total_states > 0 {
-                    ((executed_states * 100) / total_states).min(100) as u32
-                } else {
-                    100
-                };
+            let progress = Self::calculate_progress(executed_states, total_states);
+            Self::send_state_complete_notification(
+                context,
+                run_id,
+                flow_name,
+                &current_state,
+                next_state,
+                progress,
+            );
 
-                let _ = sender.send_state_complete(
-                    run_id,
-                    flow_name,
-                    current_state.as_str(),
-                    next_state,
-                    progress,
-                );
-            }
-
-            // Check if workflow is finished
             if !transition_performed || executor.is_workflow_finished(run) {
                 break;
             }
         }
 
         Ok(())
+    }
+
+    /// Get available workflow names
+    ///
+    /// # Returns
+    ///
+    /// Vector of workflow names, or empty vector if loading fails
+    fn get_available_workflow_names(&self) -> Vec<String> {
+        self.load_workflows()
+            .ok()
+            .and_then(|(storage, _)| storage.list_workflows().ok())
+            .map(|workflows| {
+                workflows
+                    .iter()
+                    .map(|w| w.name.to_string())
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default()
     }
 }
 
@@ -408,19 +635,7 @@ impl McpTool for FlowTool {
     }
 
     fn schema(&self) -> serde_json::Value {
-        // Load available workflows dynamically
-        let workflow_names = self
-            .load_workflows()
-            .ok()
-            .and_then(|(storage, _)| storage.list_workflows().ok())
-            .map(|workflows| {
-                workflows
-                    .iter()
-                    .map(|w| w.name.to_string())
-                    .collect::<Vec<_>>()
-            })
-            .unwrap_or_default();
-
+        let workflow_names = self.get_available_workflow_names();
         generate_flow_tool_schema(workflow_names)
     }
 
@@ -429,22 +644,26 @@ impl McpTool for FlowTool {
         arguments: serde_json::Map<String, serde_json::Value>,
         context: &ToolContext,
     ) -> std::result::Result<CallToolResult, McpError> {
-        tracing::info!("🔧 FlowTool::execute called with arguments: {:?}", arguments);
+        tracing::info!(
+            "🔧 FlowTool::execute called with arguments: {:?}",
+            arguments
+        );
 
-        // Parse request
         let request: FlowToolRequest = BaseToolImpl::parse_arguments(arguments)?;
 
-        tracing::info!("📋 Flow tool request parsed: flow_name={}, parameters={:?}, is_list={}",
-            request.flow_name, request.parameters, request.is_list());
+        tracing::info!(
+            "📋 Flow tool request parsed: flow_name={}, parameters={:?}, is_list={}",
+            request.flow_name,
+            request.parameters,
+            request.is_list()
+        );
 
-        // Validate the request
         request
             .validate()
             .map_err(|e| McpError::invalid_params(e, None))?;
 
         tracing::info!("✅ Request validated successfully");
 
-        // Handle list vs execute
         if request.is_list() {
             tracing::info!("📜 Calling list_workflows");
             self.list_workflows(&request).await
@@ -457,13 +676,10 @@ impl McpTool for FlowTool {
     }
 
     fn cli_category(&self) -> Option<&'static str> {
-        // Flow command already exists as a static command
-        // Skip CLI generation to avoid duplicate
         None
     }
 
     fn cli_name(&self) -> &'static str {
-        // Not exposed as CLI command (static flow command exists)
         ""
     }
 }
@@ -491,13 +707,11 @@ mod tests {
         let tool = FlowTool::new();
         let schema = tool.schema();
 
-        // Verify schema structure
         assert_eq!(schema["type"], "object");
         assert!(schema["properties"]["flow_name"].is_object());
         assert!(schema["properties"]["parameters"].is_object());
         assert!(schema["required"].is_array());
 
-        // Verify flow_name enum includes "list"
         let flow_name_enum = schema["properties"]["flow_name"]["enum"]
             .as_array()
             .expect("flow_name should have enum");
@@ -507,7 +721,7 @@ mod tests {
     #[test]
     fn test_flow_tool_cli_integration() {
         let tool = FlowTool::new();
-        assert_eq!(tool.cli_category(), None); // Changed to None to avoid duplicate command
+        assert_eq!(tool.cli_category(), None);
         assert_eq!(tool.cli_name(), "");
     }
 
@@ -518,7 +732,6 @@ mod tests {
 
         let result = tool.list_workflows(&request).await;
 
-        // Should succeed even if no workflows are found
         assert!(result.is_ok());
     }
 
@@ -532,7 +745,6 @@ mod tests {
         assert!(result.is_ok());
         if let Ok(call_result) = result {
             let content = call_result.content.first().expect("should have content");
-            // YAML format should produce valid YAML
             if let rmcp::model::RawContent::Text(text_content) = &content.raw {
                 assert!(text_content.text.contains("workflows"));
             } else {
@@ -551,7 +763,6 @@ mod tests {
         assert!(result.is_ok());
         if let Ok(call_result) = result {
             let content = call_result.content.first().expect("should have content");
-            // Table format should have headers
             if let rmcp::model::RawContent::Text(text_content) = &content.raw {
                 assert!(
                     text_content.text.contains("Name") || text_content.text.contains("Available")
@@ -566,7 +777,6 @@ mod tests {
     fn test_load_workflows() {
         let tool = FlowTool::new();
 
-        // Should not error even if no workflows are found
         let result = tool.load_workflows();
         assert!(result.is_ok());
     }
@@ -606,14 +816,9 @@ mod tests {
 
         let table = format_table(&response);
 
-        // Should truncate to 47 chars + "..."
         assert!(table.contains("..."));
         assert!(!table.contains(&long_desc));
     }
-
-    // ============================================================================
-    // Parameter Validation Tests
-    // ============================================================================
 
     #[test]
     fn test_validate_required_parameters_success() {
@@ -727,10 +932,6 @@ mod tests {
         assert!(result.is_ok());
     }
 
-    // ============================================================================
-    // Workflow Execution Tests
-    // ============================================================================
-
     #[tokio::test]
     async fn test_execute_workflow_nonexistent() {
         let tool = FlowTool::new();
@@ -749,31 +950,26 @@ mod tests {
 
         let tool = FlowTool::new();
 
-        // Load actual workflows to find one with required parameters
         let (storage, _resolver) = tool.load_workflows().expect("Failed to load workflows");
         let workflows = storage.list_workflows().expect("Failed to list workflows");
 
-        // Find a workflow with at least one required parameter
         let workflow_with_required = workflows
             .iter()
             .find(|w| w.parameters.iter().any(|p| p.required));
 
         if let Some(workflow) = workflow_with_required {
-            // Create request without providing the required parameter
             let request = FlowToolRequest::new(workflow.name.to_string());
 
             let context = crate::test_utils::create_test_context().await;
 
             let result = tool.execute_workflow(&request, &context).await;
 
-            // Should fail with invalid_params error
             assert!(result.is_err());
             if let Err(e) = result {
                 assert_eq!(e.code, ErrorCode::INVALID_PARAMS);
                 assert!(e.message.contains("Missing required parameter"));
             }
         }
-        // If no workflows with required parameters exist, test passes (nothing to validate)
     }
 
     #[tokio::test]
@@ -787,11 +983,7 @@ mod tests {
             return;
         }
 
-        // Find a simple workflow without interactive prompts for testing
-        // We need to check the workflow content to avoid workflows with prompt actions
         let simple_workflow = workflows.iter().find(|w| {
-            // Look for workflows that don't have complex prompt actions
-            // Simple criteria: avoid workflows with "prompt" in their states
             let has_prompt = w.states.values().any(|state| {
                 state.description.to_lowercase().contains("prompt")
                     || state.description.to_lowercase().contains("ask")
@@ -800,7 +992,6 @@ mod tests {
         });
 
         if simple_workflow.is_none() {
-            // If no simple workflow found, skip the test rather than hanging
             return;
         }
 
@@ -825,19 +1016,6 @@ mod tests {
         }
     }
 
-    // ============================================================================
-    // Workflow Notification Tests
-    // ============================================================================
-
-    /// Find a simple test workflow suitable for notification testing
-    ///
-    /// Returns a workflow that:
-    /// - Has no interactive prompts (no "prompt" or "ask" in state descriptions)
-    /// - Has no required parameters
-    ///
-    /// # Returns
-    ///
-    /// Some(workflow) if a suitable workflow is found, None otherwise
     fn find_simple_test_workflow() -> Option<swissarmyhammer_workflow::Workflow> {
         let tool = FlowTool::new();
         let (storage, _) = tool.load_workflows().ok()?;
@@ -852,7 +1030,6 @@ mod tests {
         })
     }
 
-    /// Helper function to create a test context with notification support
     async fn create_test_context_with_notifications(
         notification_sender: crate::mcp::notifications::NotificationSender,
     ) -> ToolContext {
@@ -865,26 +1042,21 @@ mod tests {
     async fn test_workflow_sends_start_notification() {
         use crate::mcp::notifications::{FlowNotificationMetadata, NotificationSender};
 
-        // Find a simple test workflow
         let workflow = match find_simple_test_workflow() {
             Some(w) => w,
-            None => return, // Skip test if no suitable workflow found
+            None => return,
         };
 
-        // Create notification channel
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
         let sender = NotificationSender::new(tx);
 
-        // Create context with notification sender
         let context = create_test_context_with_notifications(sender).await;
 
         let tool = FlowTool::new();
         let request = FlowToolRequest::new(workflow.name.to_string());
 
-        // Execute workflow
         let _ = tool.execute_workflow(&request, &context).await;
 
-        // Verify flow_start notification was sent
         let notification = rx.recv().await.expect("Should receive notification");
         match notification.metadata {
             FlowNotificationMetadata::FlowStart { flow_name, .. } => {
@@ -898,32 +1070,26 @@ mod tests {
     async fn test_workflow_sends_state_notifications() {
         use crate::mcp::notifications::{FlowNotificationMetadata, NotificationSender};
 
-        // Find a simple test workflow
         let workflow = match find_simple_test_workflow() {
             Some(w) => w,
-            None => return, // Skip test if no suitable workflow found
+            None => return,
         };
 
-        // Create notification channel
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
         let sender = NotificationSender::new(tx);
 
-        // Create context with notification sender
         let context = create_test_context_with_notifications(sender).await;
 
         let tool = FlowTool::new();
         let request = FlowToolRequest::new(workflow.name.to_string());
 
-        // Execute workflow
         let _ = tool.execute_workflow(&request, &context).await;
 
-        // Collect all notifications
         let mut notifications = Vec::new();
         while let Ok(notif) = rx.try_recv() {
             notifications.push(notif);
         }
 
-        // Verify we received state notifications
         let state_start_count = notifications
             .iter()
             .filter(|n| matches!(n.metadata, FlowNotificationMetadata::StateStart { .. }))
@@ -934,7 +1100,6 @@ mod tests {
             .filter(|n| matches!(n.metadata, FlowNotificationMetadata::StateComplete { .. }))
             .count();
 
-        // Should have at least one state start and complete
         assert!(
             state_start_count > 0,
             "Expected at least one StateStart notification"
@@ -949,34 +1114,27 @@ mod tests {
     async fn test_workflow_sends_completion_notification() {
         use crate::mcp::notifications::{FlowNotificationMetadata, NotificationSender};
 
-        // Find a simple test workflow
         let workflow = match find_simple_test_workflow() {
             Some(w) => w,
-            None => return, // Skip test if no suitable workflow found
+            None => return,
         };
 
-        // Create notification channel
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
         let sender = NotificationSender::new(tx);
 
-        // Create context with notification sender
         let context = create_test_context_with_notifications(sender).await;
 
         let tool = FlowTool::new();
         let request = FlowToolRequest::new(workflow.name.to_string());
 
-        // Execute workflow
         let result = tool.execute_workflow(&request, &context).await;
 
-        // Only check for completion notification if workflow succeeded
         if result.is_ok() {
-            // Collect all notifications
             let mut notifications = Vec::new();
             while let Ok(notif) = rx.try_recv() {
                 notifications.push(notif);
             }
 
-            // Find completion notification
             let completion_notif = notifications
                 .iter()
                 .find(|n| matches!(n.metadata, FlowNotificationMetadata::FlowComplete { .. }));
@@ -996,42 +1154,27 @@ mod tests {
     async fn test_workflow_sends_error_notification() {
         use crate::mcp::notifications::{FlowNotificationMetadata, NotificationSender};
 
-        // Create notification channel
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
         let sender = NotificationSender::new(tx);
 
-        // Create context with notification sender
         let context = create_test_context_with_notifications(sender).await;
 
         let tool = FlowTool::new();
 
-        // Create a workflow with an invalid state reference to trigger an error
-        // We'll use a workflow name with required parameters but not provide them,
-        // which will cause a parameter validation error (not execution error).
-        // For a true execution error, we need the workflow to fail during execute_single_cycle.
-
-        // Instead, let's test that error notifications have the correct structure
-        // by examining what would happen if an error occurred.
-        // We verify that flow_start is sent, and if an error occurs, flow_error would be sent.
-
-        // Find any workflow to test notification structure
         let workflow = match find_simple_test_workflow() {
             Some(w) => w,
-            None => return, // Skip test if no suitable workflow found
+            None => return,
         };
 
         let request = FlowToolRequest::new(workflow.name.to_string());
 
-        // Execute workflow
         let result = tool.execute_workflow(&request, &context).await;
 
-        // Collect all notifications
         let mut notifications = Vec::new();
         while let Ok(notif) = rx.try_recv() {
             notifications.push(notif);
         }
 
-        // Should have at least flow_start notification
         let start_notif = notifications
             .iter()
             .find(|n| matches!(n.metadata, FlowNotificationMetadata::FlowStart { .. }));
@@ -1041,7 +1184,6 @@ mod tests {
             "Expected FlowStart notification even if workflow fails"
         );
 
-        // If workflow failed, verify error notification was sent
         if result.is_err() {
             let error_notif = notifications
                 .iter()
@@ -1052,7 +1194,6 @@ mod tests {
                 "Expected FlowError notification when workflow fails"
             );
 
-            // Verify error notification has None for progress
             if let Some(notif) = error_notif {
                 assert_eq!(
                     notif.progress, None,
@@ -1066,32 +1207,26 @@ mod tests {
     async fn test_progress_calculation() {
         use crate::mcp::notifications::{FlowNotificationMetadata, NotificationSender};
 
-        // Find a simple test workflow
         let workflow = match find_simple_test_workflow() {
             Some(w) => w,
-            None => return, // Skip test if no suitable workflow found
+            None => return,
         };
 
-        // Create notification channel
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
         let sender = NotificationSender::new(tx);
 
-        // Create context with notification sender
         let context = create_test_context_with_notifications(sender).await;
 
         let tool = FlowTool::new();
         let request = FlowToolRequest::new(workflow.name.to_string());
 
-        // Execute workflow
         let _ = tool.execute_workflow(&request, &context).await;
 
-        // Collect all notifications
         let mut notifications = Vec::new();
         while let Ok(notif) = rx.try_recv() {
             notifications.push(notif);
         }
 
-        // Verify progress values are reasonable
         for notif in &notifications {
             if let Some(progress) = notif.progress {
                 assert!(
@@ -1102,7 +1237,6 @@ mod tests {
             }
         }
 
-        // Verify flow_start has 0% progress
         if let Some(start_notif) = notifications
             .iter()
             .find(|n| matches!(n.metadata, FlowNotificationMetadata::FlowStart { .. }))

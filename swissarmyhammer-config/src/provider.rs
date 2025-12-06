@@ -27,6 +27,57 @@ impl FileProvider {
     }
 }
 
+impl FileProvider {
+    /// Validate and merge TOML configuration
+    fn validate_and_merge_toml(&self, figment: Figment) -> ConfigurationResult<Figment> {
+        let test_figment = Figment::new().merge(Toml::file(&self.path));
+        let _: Value = test_figment
+            .extract()
+            .map_err(|e| ConfigurationError::load(self.path.clone(), e))?;
+        Ok(figment.merge(Toml::file(&self.path)))
+    }
+
+    /// Validate and merge YAML configuration, checking for null/empty files
+    fn validate_and_merge_yaml(&self, figment: Figment) -> ConfigurationResult<Figment> {
+        let content = fs::read_to_string(&self.path).map_err(|e| {
+            ConfigurationError::load(
+                self.path.clone(),
+                figment::Error::from(format!("Failed to read YAML file: {}", e)),
+            )
+        })?;
+
+        let yaml_value: serde_yaml::Value = serde_yaml::from_str(&content).map_err(|e| {
+            ConfigurationError::load(
+                self.path.clone(),
+                figment::Error::from(format!("Failed to parse YAML: {}", e)),
+            )
+        })?;
+
+        if yaml_value.is_null() {
+            debug!(
+                "Skipping null/empty YAML configuration file: {}",
+                self.path.display()
+            );
+            return Ok(figment);
+        }
+
+        let test_figment = Figment::new().merge(Yaml::file(&self.path));
+        let _: Value = test_figment
+            .extract()
+            .map_err(|e| ConfigurationError::load(self.path.clone(), e))?;
+        Ok(figment.merge(Yaml::file(&self.path)))
+    }
+
+    /// Validate and merge JSON configuration
+    fn validate_and_merge_json(&self, figment: Figment) -> ConfigurationResult<Figment> {
+        let test_figment = Figment::new().merge(Json::file(&self.path));
+        let _: Value = test_figment
+            .extract()
+            .map_err(|e| ConfigurationError::load(self.path.clone(), e))?;
+        Ok(figment.merge(Json::file(&self.path)))
+    }
+}
+
 impl ConfigurationProvider for FileProvider {
     fn load_into(&self, figment: Figment) -> ConfigurationResult<Figment> {
         if !self.path.exists() {
@@ -36,7 +87,6 @@ impl ConfigurationProvider for FileProvider {
 
         debug!("Loading configuration from: {}", self.path.display());
 
-        // Read file to ensure it's readable (unused but validates file access)
         let _content = fs::read_to_string(&self.path).map_err(|e| {
             ConfigurationError::load(
                 self.path.clone(),
@@ -44,67 +94,15 @@ impl ConfigurationProvider for FileProvider {
             )
         })?;
 
-        // Validate parsing based on file extension before merging
-        let figment = match self.path.extension().and_then(|ext| ext.to_str()) {
-            Some("toml") => {
-                // Validate TOML parsing by attempting to merge and extract immediately
-                let test_figment = Figment::new().merge(Toml::file(&self.path));
-                let _: Value = test_figment
-                    .extract()
-                    .map_err(|e| ConfigurationError::load(self.path.clone(), e))?;
-                figment.merge(Toml::file(&self.path))
-            }
-            Some("yaml") | Some("yml") => {
-                // Check if YAML file contains only null before attempting to merge
-                let content = fs::read_to_string(&self.path).map_err(|e| {
-                    ConfigurationError::load(
-                        self.path.clone(),
-                        figment::Error::from(format!("Failed to read YAML file: {}", e)),
-                    )
-                })?;
-
-                // Parse YAML to check if it's null
-                let yaml_value: serde_yaml::Value =
-                    serde_yaml::from_str(&content).map_err(|e| {
-                        ConfigurationError::load(
-                            self.path.clone(),
-                            figment::Error::from(format!("Failed to parse YAML: {}", e)),
-                        )
-                    })?;
-
-                if yaml_value.is_null() {
-                    // Skip null/empty YAML files
-                    debug!(
-                        "Skipping null/empty YAML configuration file: {}",
-                        self.path.display()
-                    );
-                    return Ok(figment);
-                }
-
-                // Validate YAML parsing by attempting to merge and extract immediately
-                let test_figment = Figment::new().merge(Yaml::file(&self.path));
-                let _: Value = test_figment
-                    .extract()
-                    .map_err(|e| ConfigurationError::load(self.path.clone(), e))?;
-                figment.merge(Yaml::file(&self.path))
-            }
-            Some("json") => {
-                // Validate JSON parsing by attempting to merge and extract immediately
-                let test_figment = Figment::new().merge(Json::file(&self.path));
-                let _: Value = test_figment
-                    .extract()
-                    .map_err(|e| ConfigurationError::load(self.path.clone(), e))?;
-                figment.merge(Json::file(&self.path))
-            }
-            _ => {
-                return Err(ConfigurationError::load(
-                    self.path.clone(),
-                    figment::Error::from("Unsupported file extension".to_string()),
-                ));
-            }
-        };
-
-        Ok(figment)
+        match self.path.extension().and_then(|ext| ext.to_str()) {
+            Some("toml") => self.validate_and_merge_toml(figment),
+            Some("yaml") | Some("yml") => self.validate_and_merge_yaml(figment),
+            Some("json") => self.validate_and_merge_json(figment),
+            _ => Err(ConfigurationError::load(
+                self.path.clone(),
+                figment::Error::from("Unsupported file extension".to_string()),
+            )),
+        }
     }
 
     fn metadata(&self) -> Metadata {
@@ -134,6 +132,35 @@ impl EnvProvider {
 }
 
 impl EnvProvider {
+    /// Convert environment variable key to path parts (e.g., "DATABASE_HOST" -> ["database", "host"])
+    fn key_to_path_parts(key: &str) -> Vec<String> {
+        key.to_lowercase()
+            .split('_')
+            .map(|s| s.to_string())
+            .collect()
+    }
+
+    /// Parse environment variable value to appropriate JSON type
+    fn parse_env_value(value: &str) -> serde_json::Value {
+        // Try to parse as different types
+        if let Ok(bool_val) = value.parse::<bool>() {
+            return serde_json::Value::Bool(bool_val);
+        }
+
+        if let Ok(int_val) = value.parse::<i64>() {
+            return serde_json::Value::Number(serde_json::Number::from(int_val));
+        }
+
+        if let Ok(float_val) = value.parse::<f64>() {
+            if let Some(num) = serde_json::Number::from_f64(float_val) {
+                return serde_json::Value::Number(num);
+            }
+        }
+
+        serde_json::Value::String(value.to_string())
+    }
+
+    /// Insert a value into nested map structure using iterative approach
     fn insert_nested_value(
         map: &mut serde_json::Map<String, serde_json::Value>,
         path: &[String],
@@ -143,37 +170,49 @@ impl EnvProvider {
             return;
         }
 
+        let parsed_value = Self::parse_env_value(&value);
+
+        // Handle single-level path
         if path.len() == 1 {
-            // Base case: insert the value
-            let parsed_value = Self::parse_env_value(&value);
             map.insert(path[0].clone(), parsed_value);
-        } else {
-            // Recursive case: create or get the nested object
-            let key = &path[0];
-            let nested_map = map
+            return;
+        }
+
+        // Iteratively traverse/create nested structure
+        let mut current_map = map;
+        for (i, key) in path.iter().enumerate() {
+            let is_last = i == path.len() - 1;
+
+            if is_last {
+                current_map.insert(key.clone(), parsed_value);
+                break;
+            }
+
+            // Get or create nested object
+            let nested_value = current_map
                 .entry(key.clone())
                 .or_insert_with(|| serde_json::Value::Object(serde_json::Map::new()));
 
-            if let serde_json::Value::Object(ref mut nested) = nested_map {
-                Self::insert_nested_value(nested, &path[1..], value);
+            // Move to next level (we know it's an object because we just created it)
+            if let serde_json::Value::Object(ref mut nested_map) = nested_value {
+                current_map = nested_map;
+            } else {
+                // If there's already a non-object value, we can't nest further
+                break;
             }
         }
     }
 
-    fn parse_env_value(value: &str) -> serde_json::Value {
-        // Try to parse as different types
-        if let Ok(bool_val) = value.parse::<bool>() {
-            serde_json::Value::Bool(bool_val)
-        } else if let Ok(int_val) = value.parse::<i64>() {
-            serde_json::Value::Number(serde_json::Number::from(int_val))
-        } else if let Ok(float_val) = value.parse::<f64>() {
-            if let Some(num) = serde_json::Number::from_f64(float_val) {
-                serde_json::Value::Number(num)
-            } else {
-                serde_json::Value::String(value.to_string())
-            }
-        } else {
-            serde_json::Value::String(value.to_string())
+    /// Process a single environment variable and insert into config map
+    fn process_env_var(
+        &self,
+        env_config: &mut serde_json::Map<String, serde_json::Value>,
+        key: String,
+        value: String,
+    ) {
+        if let Some(stripped_key) = key.strip_prefix(&self.prefix) {
+            let path_parts = Self::key_to_path_parts(stripped_key);
+            Self::insert_nested_value(env_config, &path_parts, value);
         }
     }
 }
@@ -185,25 +224,15 @@ impl ConfigurationProvider for EnvProvider {
         let mut env_config = serde_json::Map::new();
 
         for (key, value) in std::env::vars() {
-            if let Some(stripped_key) = key.strip_prefix(&self.prefix) {
-                // Convert UPPER_CASE to lower case and split by underscores
-                let path_parts: Vec<String> = stripped_key
-                    .to_lowercase()
-                    .split('_')
-                    .map(|s| s.to_string())
-                    .collect();
-
-                // Insert the value into the nested structure
-                Self::insert_nested_value(&mut env_config, &path_parts, value);
-            }
+            self.process_env_var(&mut env_config, key, value);
         }
 
-        if !env_config.is_empty() {
-            let config_value = serde_json::Value::Object(env_config);
-            Ok(figment.merge(Serialized::defaults(config_value)))
-        } else {
-            Ok(figment)
+        if env_config.is_empty() {
+            return Ok(figment);
         }
+
+        let config_value = serde_json::Value::Object(env_config);
+        Ok(figment.merge(Serialized::defaults(config_value)))
     }
 
     fn metadata(&self) -> Metadata {

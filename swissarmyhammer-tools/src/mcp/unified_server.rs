@@ -5,6 +5,8 @@
 //! - Supports both stdio and HTTP transport modes
 //! - Returns clear connection information for each mode
 //! - Eliminates fragmented implementations across multiple crates
+//!
+//! sah rule ignore test_rule_with_allow
 
 use rmcp::serve_server;
 use rmcp::transport::io::stdio;
@@ -102,6 +104,91 @@ impl std::io::Write for FileWriterGuard {
 /// Global flag to ensure MCP logging is configured only once per process
 static MCP_LOGGING_INIT: Once = Once::new();
 
+/// Ensure log directory exists, creating it if necessary
+///
+/// # Arguments
+/// * `log_dir` - Path to the log directory
+///
+/// # Returns
+/// * `Result<()>` - Ok if directory exists or was created successfully
+fn ensure_log_directory(log_dir: &std::path::Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(log_dir).map_err(|e| {
+        let error_context = match e.kind() {
+            std::io::ErrorKind::PermissionDenied => {
+                "Permission denied - check directory permissions"
+            }
+            std::io::ErrorKind::AlreadyExists => {
+                "Directory creation conflict - this shouldn't happen with create_dir_all"
+            }
+            _ => "Unknown filesystem error - check disk space and parent directory permissions",
+        };
+        eprintln!(
+            "Warning: Could not create MCP log directory {}: {} ({})",
+            log_dir.display(),
+            e,
+            error_context
+        );
+        e
+    })
+}
+
+/// Create log file in the specified directory
+///
+/// # Arguments
+/// * `log_dir` - Path to the log directory
+///
+/// # Returns
+/// * `Result<(std::fs::File, std::path::PathBuf)>` - The created file and its path
+fn create_log_file(
+    log_dir: &std::path::Path,
+) -> std::io::Result<(std::fs::File, std::path::PathBuf)> {
+    let log_file_name =
+        std::env::var("SWISSARMYHAMMER_LOG_FILE").unwrap_or_else(|_| "mcp.log".to_string());
+    let log_file_path = log_dir.join(log_file_name);
+    let file = std::fs::File::create(&log_file_path)?;
+    Ok((file, log_file_path))
+}
+
+/// Setup tracing subscriber with file output
+///
+/// # Arguments
+/// * `file` - The log file to write to
+/// * `filter` - The tracing filter to apply
+/// * `log_file_path` - Path to the log file for cleanup if needed
+///
+/// # Returns
+/// * `bool` - True if subscriber was set successfully, false otherwise
+fn setup_tracing_subscriber(
+    file: std::fs::File,
+    log_file_path: &std::path::Path,
+    filter: tracing_subscriber::EnvFilter,
+) -> bool {
+    use tracing_subscriber::{fmt, prelude::*, registry};
+
+    let shared_file = Arc::new(Mutex::new(file));
+    let shared_file_for_cleanup = shared_file.clone();
+
+    let subscriber = registry().with(filter).with(
+        fmt::layer()
+            .with_writer(move || {
+                let file = shared_file.clone();
+                Box::new(FileWriterGuard::new(file)) as Box<dyn std::io::Write>
+            })
+            .with_ansi(false),
+    );
+
+    if tracing::subscriber::set_global_default(subscriber).is_err() {
+        tracing::debug!(
+            "Global tracing subscriber already set - MCP logging configuration skipped"
+        );
+        drop(shared_file_for_cleanup);
+        let _ = std::fs::remove_file(log_file_path);
+        return false;
+    }
+
+    true
+}
+
 /// Configure MCP logging to write to `.swissarmyhammer/` directory
 ///
 /// This function sets up file-based logging similar to what `sah serve` does,
@@ -124,57 +211,28 @@ static MCP_LOGGING_INIT: Once = Once::new();
 /// - File creation failures: Falls back gracefully to stderr with warning message
 /// - Global subscriber conflicts: Handles gracefully when already set (e.g., in tests)
 pub fn configure_mcp_logging(log_filter: Option<&str>) {
-    use tracing_subscriber::{fmt, prelude::*, registry, EnvFilter};
+    use tracing_subscriber::EnvFilter;
 
     MCP_LOGGING_INIT.call_once(|| {
         let filter_str = log_filter.unwrap_or("rmcp=warn,debug");
         let filter = EnvFilter::new(filter_str);
 
-        // Create .swissarmyhammer directory for logs
         let log_dir = std::path::PathBuf::from(".swissarmyhammer");
-        if let Err(e) = std::fs::create_dir_all(&log_dir) {
-            let error_context = match e.kind() {
-                std::io::ErrorKind::PermissionDenied => {
-                    "Permission denied - check directory permissions"
-                }
-                std::io::ErrorKind::AlreadyExists => {
-                    "Directory creation conflict - this shouldn't happen with create_dir_all"
-                }
-                _ => "Unknown filesystem error - check disk space and parent directory permissions"
-            };
-            eprintln!("Warning: Could not create MCP log directory {}: {} ({})",
-                     log_dir.display(), e, error_context);
+
+        if ensure_log_directory(&log_dir).is_err() {
             return;
         }
 
-        let log_file_name = std::env::var("SWISSARMYHAMMER_LOG_FILE").unwrap_or_else(|_| "mcp.log".to_string());
-        let log_file_path = log_dir.join(log_file_name);
-        match std::fs::File::create(&log_file_path) {
-            Ok(file) => {
-                let shared_file = Arc::new(Mutex::new(file));
-                let shared_file_for_cleanup = shared_file.clone();
-                // Try to set global subscriber, handle case where it's already set (e.g., in tests)
-                let subscriber = registry()
-                    .with(filter)
-                    .with(
-                        fmt::layer()
-                            .with_writer(move || {
-                                let file = shared_file.clone();
-                                Box::new(FileWriterGuard::new(file)) as Box<dyn std::io::Write>
-                            })
-                            .with_ansi(false) // No color codes in file
-                    );
-
-                if tracing::subscriber::set_global_default(subscriber).is_err() {
-                    // This can happen in test environments where global subscriber is already set
-                    tracing::debug!("Global tracing subscriber already set - MCP logging configuration skipped");
-
-                    // If we can't set the subscriber, we should clean up the file we created
-                    drop(shared_file_for_cleanup);
-                    let _ = std::fs::remove_file(&log_file_path);
-                }
+        match create_log_file(&log_dir) {
+            Ok((file, log_file_path)) => {
+                let _success = setup_tracing_subscriber(file, &log_file_path, filter);
+                // Subscriber setup result is logged by setup_tracing_subscriber
             }
             Err(e) => {
+                let log_file_path = log_dir.join(
+                    std::env::var("SWISSARMYHAMMER_LOG_FILE")
+                        .unwrap_or_else(|_| "mcp.log".to_string()),
+                );
                 eprintln!(
                     "Warning: Could not create MCP log file {}: {}. MCP server will use existing logging configuration.",
                     log_file_path.display(), e
@@ -345,7 +403,7 @@ impl McpServerHandle {
 ///
 /// * `mode` - The transport mode (stdio or HTTP)
 /// * `library` - Optional prompt library (creates new if None)
-/// * `agent_override` - Optional agent name to override all use case assignments
+/// * `model_override` - Optional model name to override all use case assignments
 ///
 /// # Returns
 ///
@@ -353,7 +411,7 @@ impl McpServerHandle {
 pub async fn start_mcp_server(
     mode: McpServerMode,
     library: Option<PromptLibrary>,
-    agent_override: Option<String>,
+    model_override: Option<String>,
 ) -> Result<McpServerHandle> {
     // Configure MCP logging to match sah serve behavior
     // NOTE: Skip logging configuration when called from CLI as main.rs already handles it
@@ -362,110 +420,159 @@ pub async fn start_mcp_server(
         configure_mcp_logging(None);
     }
     match mode {
-        McpServerMode::Stdio => start_stdio_server(library, agent_override).await,
-        McpServerMode::Http { port } => start_http_server(port, library, agent_override).await,
+        McpServerMode::Stdio => start_stdio_server(library, model_override).await,
+        McpServerMode::Http { port } => start_http_server(port, library, model_override).await,
     }
 }
 
-/// Start MCP server with stdio transport
+/// Resolve port by either using the provided port or finding an available random port
 ///
-/// This function starts both:
-/// 1. Stdio transport for client communication (Claude Code)
-/// 2. HTTP server on random localhost port for workflows to execute Claude prompts
-async fn start_stdio_server(
-    library: Option<PromptLibrary>,
-    agent_override: Option<String>,
-) -> Result<McpServerHandle> {
-    let library = library.unwrap_or_default();
-    let work_dir = std::env::current_dir().unwrap_or_else(|_| std::env::temp_dir());
-    let server = McpServer::new_with_work_dir(library, work_dir, agent_override).await?;
-    server.initialize().await?;
+/// # Arguments
+/// * `port` - Optional port number (if None, finds random available port)
+///
+/// # Returns
+/// * `Result<u16>` - The resolved port number
+async fn resolve_port(port: Option<u16>) -> Result<u16> {
+    if let Some(bind_port) = port {
+        return Ok(bind_port);
+    }
 
-    tracing::info!("Starting unified MCP server in stdio mode");
+    let temp_listener =
+        TcpListener::bind("127.0.0.1:0")
+            .await
+            .map_err(|e| SwissArmyHammerError::Other {
+                message: format!("Failed to bind to random port: {}", e),
+            })?;
 
-    // Find available random port for HTTP server (for workflow support)
-    tracing::debug!("Finding available random port for HTTP server");
-    let temp_listener = TcpListener::bind("127.0.0.1:0").await.map_err(|e| {
-        swissarmyhammer_common::SwissArmyHammerError::Other {
-            message: format!("Failed to bind to random port: {}", e),
-        }
-    })?;
-
-    let http_port = temp_listener
+    let port = temp_listener
         .local_addr()
-        .map_err(|e| swissarmyhammer_common::SwissArmyHammerError::Other {
+        .map_err(|e| SwissArmyHammerError::Other {
             message: format!("Failed to get local address: {}", e),
         })?
         .port();
 
-    drop(temp_listener); // Release the port for HTTP server to use
-    tracing::info!("Will start HTTP server on port {} for workflow support", http_port);
+    drop(temp_listener);
+    Ok(port)
+}
 
-    // Set the server port in the tool context so workflows can access it
-    server.set_server_port(http_port).await;
-    tracing::info!("Set MCP server port {} in tool context for workflows", http_port);
+/// Initialize MCP server with the given configuration
+///
+/// # Arguments
+/// * `library` - Optional prompt library (creates default if None)
+/// * `port` - Server port to set in tool context
+/// * `model_override` - Optional model name to override use case assignments
+///
+/// # Returns
+/// * `Result<Arc<McpServer>>` - Initialized server with self-reference configured
+async fn initialize_mcp_server(
+    library: Option<PromptLibrary>,
+    port: u16,
+    model_override: Option<String>,
+) -> Result<Arc<McpServer>> {
+    let library = library.unwrap_or_default();
+    let work_dir = std::env::current_dir().unwrap_or_else(|_| std::env::temp_dir());
+    let server = McpServer::new_with_work_dir(library, work_dir, model_override).await?;
+    server.initialize().await?;
+    server.set_server_port(port).await;
 
-    // Create shutdown channel for cleanup coordination
-    let (shutdown_tx, mut shutdown_rx) = oneshot::channel();
-
-    // Create completion channel to signal when server exits naturally
-    let (completion_tx, completion_rx) = oneshot::channel();
-
-    // Wrap server in Arc for sharing between handle and task
     let server_arc = Arc::new(server);
-
-    // Set self-reference in tool context (for per-rule tool filtering)
     server_arc
         .tool_context
         .set_mcp_server(server_arc.clone())
         .await;
-    tracing::debug!("Set MCP server self-reference in tool context (stdio)");
 
-    let server_clone = server_arc.clone();
-    let http_server_clone = server_arc.clone();
+    Ok(server_arc)
+}
 
-    // Start HTTP server for workflow support
-    let http_bind_addr = format!("127.0.0.1:{}", http_port);
-    let http_socket_addr: std::net::SocketAddr = http_bind_addr.parse().map_err(|e| {
-        swissarmyhammer_common::SwissArmyHammerError::Other {
-            message: format!("Failed to parse HTTP bind address {}: {}", http_bind_addr, e),
-        }
-    })?;
-
-    // Build HTTP service
+/// Create MCP router with HTTP service and health check endpoint
+///
+/// # Arguments
+/// * `server` - Arc reference to MCP server
+///
+/// # Returns
+/// * `axum::Router` - Configured router with MCP endpoints
+fn create_mcp_router(server: Arc<McpServer>) -> axum::Router {
     let http_service = StreamableHttpService::new(
-        move || Ok((*http_server_clone).clone()),
+        move || Ok((*server).clone()),
         LocalSessionManager::default().into(),
         Default::default(),
     );
 
-    let router = axum::Router::new()
+    axum::Router::new()
         .nest_service("/mcp", http_service)
-        .route("/health", axum::routing::get(health_check));
+        .route("/health", axum::routing::get(health_check))
+}
 
-    let http_listener = tokio::net::TcpListener::bind(http_socket_addr)
+/// Parse socket address from string with error handling
+///
+/// # Arguments
+/// * `bind_addr` - Address string to parse (e.g., "127.0.0.1:8080")
+///
+/// # Returns
+/// * `Result<std::net::SocketAddr>` - Parsed socket address
+fn parse_socket_addr(bind_addr: &str) -> Result<std::net::SocketAddr> {
+    bind_addr.parse().map_err(|e| SwissArmyHammerError::Other {
+        message: format!("Failed to parse bind address {}: {}", bind_addr, e),
+    })
+}
+
+/// Bind TCP listener to the specified socket address
+///
+/// # Arguments
+/// * `socket_addr` - Socket address to bind to
+///
+/// # Returns
+/// * `Result<TcpListener>` - Bound TCP listener
+async fn bind_tcp_listener(socket_addr: std::net::SocketAddr) -> Result<TcpListener> {
+    TcpListener::bind(socket_addr)
         .await
-        .map_err(|e| swissarmyhammer_common::SwissArmyHammerError::Other {
-            message: format!("Failed to bind HTTP server to {}: {}", http_socket_addr, e),
-        })?;
+        .map_err(|e| SwissArmyHammerError::Other {
+            message: format!("Failed to bind to {}: {}", socket_addr, e),
+        })
+}
 
-    tracing::info!("HTTP MCP server (for workflows) binding on http://127.0.0.1:{}/mcp", http_port);
+/// Setup HTTP server infrastructure for stdio mode workflow support
+///
+/// Finds an available port, creates the HTTP service, and binds the listener.
+/// Returns the port number, router, and listener.
+async fn setup_http_server_for_stdio(
+    server: Arc<McpServer>,
+) -> Result<(u16, axum::Router, tokio::net::TcpListener)> {
+    tracing::debug!("Finding available random port for HTTP server");
+    let http_port = resolve_port(None).await?;
 
-    // Spawn HTTP server task
-    let _http_task = tokio::spawn(async move {
-        if let Err(e) = axum::serve(http_listener, router).await {
-            tracing::error!("HTTP server error: {}", e);
-        }
-        tracing::info!("HTTP server task exiting");
-    });
+    tracing::info!(
+        "Will start HTTP server on port {} for workflow support",
+        http_port
+    );
 
-    // Spawn stdio server task
-    let server_task = tokio::spawn(async move {
-        match serve_server((*server_clone).clone(), stdio()).await {
+    let http_bind_addr = format!("127.0.0.1:{}", http_port);
+    let http_socket_addr = parse_socket_addr(&http_bind_addr)?;
+
+    let router = create_mcp_router(server);
+    let http_listener = bind_tcp_listener(http_socket_addr).await?;
+
+    tracing::info!(
+        "HTTP MCP server (for workflows) binding on http://127.0.0.1:{}/mcp",
+        http_port
+    );
+
+    Ok((http_port, router, http_listener))
+}
+
+/// Spawn stdio server task with shutdown and completion handling
+///
+/// Returns the spawned task handle that manages the stdio transport lifecycle.
+fn spawn_stdio_server_task(
+    server: Arc<McpServer>,
+    mut shutdown_rx: oneshot::Receiver<()>,
+    completion_tx: oneshot::Sender<()>,
+) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        match serve_server((*server).clone(), stdio()).await {
             Ok(running_service) => {
                 tracing::info!("MCP stdio server started successfully");
 
-                // Wait for either EOF on stdin or shutdown signal
                 tokio::select! {
                     result = running_service.waiting() => {
                         match result {
@@ -476,23 +583,74 @@ async fn start_stdio_server(
                                 tracing::error!("MCP stdio server task error: {}", e);
                             }
                         }
-                        // Signal completion on natural exit (EOF)
                         let _ = completion_tx.send(());
                     }
                     _ = &mut shutdown_rx => {
                         tracing::info!("MCP stdio server received shutdown signal");
-                        // Don't signal completion on manual shutdown
                     }
                 }
             }
             Err(e) => {
                 tracing::error!("Failed to start stdio server: {}", e);
-                // Signal completion even on error to unblock main task
                 let _ = completion_tx.send(());
             }
         }
         tracing::info!("MCP stdio server task exiting");
-    });
+    })
+}
+
+/// Spawn HTTP server task for workflow support
+///
+/// # Arguments
+/// * `http_listener` - TCP listener for HTTP server
+/// * `router` - Axum router with MCP endpoints
+///
+/// # Returns
+/// * Spawned task handle for HTTP server
+fn spawn_http_server_for_stdio(
+    http_listener: tokio::net::TcpListener,
+    router: axum::Router,
+) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        if let Err(e) = axum::serve(http_listener, router).await {
+            tracing::error!("HTTP server error: {}", e);
+        }
+        tracing::info!("HTTP server task exiting");
+    })
+}
+
+/// Start MCP server with stdio transport
+///
+/// This function starts both:
+/// 1. Stdio transport for client communication (Claude Code)
+/// 2. HTTP server on random localhost port for workflows to execute Claude prompts
+async fn start_stdio_server(
+    library: Option<PromptLibrary>,
+    model_override: Option<String>,
+) -> Result<McpServerHandle> {
+    tracing::info!("Starting unified MCP server in stdio mode");
+
+    let library = library.unwrap_or_default();
+    let work_dir = std::env::current_dir().unwrap_or_else(|_| std::env::temp_dir());
+    let temp_server =
+        McpServer::new_with_work_dir(library, work_dir, model_override.clone()).await?;
+    let temp_server_arc = Arc::new(temp_server);
+
+    let (http_port, router, http_listener) = setup_http_server_for_stdio(temp_server_arc).await?;
+
+    let server_arc = initialize_mcp_server(None, http_port, model_override).await?;
+    tracing::debug!("Set MCP server self-reference in tool context (stdio)");
+    tracing::info!(
+        "Set MCP server port {} in tool context for workflows",
+        http_port
+    );
+
+    spawn_http_server_for_stdio(http_listener, router);
+
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    let (completion_tx, completion_rx) = oneshot::channel();
+
+    let server_task = spawn_stdio_server_task(server_arc.clone(), shutdown_rx, completion_tx);
 
     let info = McpServerInfo {
         mode: McpServerMode::Stdio,
@@ -509,103 +667,17 @@ async fn start_stdio_server(
     }))
 }
 
-/// Start MCP server with HTTP transport using rmcp SseServer
-async fn start_http_server(
-    port: Option<u16>,
-    library: Option<PromptLibrary>,
-    agent_override: Option<String>,
-) -> Result<McpServerHandle> {
-    tracing::debug!("start_http_server called with port: {:?}", port);
-
-    // First resolve the port (random or fixed)
-    let actual_port = if let Some(bind_port) = port {
-        tracing::debug!("Using specified port: {}", bind_port);
-        bind_port
-    } else {
-        // Find available random port
-        tracing::debug!("Finding available random port");
-        let temp_listener = TcpListener::bind("127.0.0.1:0").await.map_err(|e| {
-            swissarmyhammer_common::SwissArmyHammerError::Other {
-                message: format!("Failed to bind to random port: {}", e),
-            }
-        })?;
-
-        let port = temp_listener
-            .local_addr()
-            .map_err(|e| swissarmyhammer_common::SwissArmyHammerError::Other {
-                message: format!("Failed to get local address: {}", e),
-            })?
-            .port();
-
-        drop(temp_listener); // Release the port for rmcp to use
-        tracing::debug!("Found random port: {}", port);
-        port
-    };
-
-    // Now set up the server with the resolved port
-    let bind_addr = format!("127.0.0.1:{}", actual_port);
-    let socket_addr: std::net::SocketAddr =
-        bind_addr
-            .parse()
-            .map_err(|e| swissarmyhammer_common::SwissArmyHammerError::Other {
-                message: format!("Failed to parse bind address {}: {}", bind_addr, e),
-            })?;
-
-    tracing::debug!("Parsed socket address: {}", socket_addr);
-
-    // Create and initialize MCP server
-    tracing::debug!("Creating MCP server");
-    let library = library.unwrap_or_default();
-    let work_dir = std::env::current_dir().unwrap_or_else(|_| std::env::temp_dir());
-    let server = McpServer::new_with_work_dir(library, work_dir, agent_override).await?;
-    tracing::debug!("Initializing MCP server");
-    server.initialize().await?;
-    tracing::debug!("MCP server initialized");
-
-    // Set the server port in the tool context so workflows can access it
-    server.set_server_port(actual_port).await;
-    tracing::debug!("Set MCP server port {} in tool context", actual_port);
-
-    // Wrap server in Arc for sharing between service and handle
-    let server_arc = Arc::new(server);
-
-    // Set self-reference in tool context (for per-rule tool filtering)
-    server_arc
-        .tool_context
-        .set_mcp_server(server_arc.clone())
-        .await;
-    tracing::debug!("Set MCP server self-reference in tool context");
-
-    let server_for_service = server_arc.clone();
-
-    // Use StreamableHttpService for /mcp endpoint (matches client example)
-    let service = StreamableHttpService::new(
-        move || Ok((*server_for_service).clone()),
-        LocalSessionManager::default().into(),
-        Default::default(),
-    );
-
-    let router = axum::Router::new()
-        .nest_service("/mcp", service)
-        .route("/health", axum::routing::get(health_check));
-    let listener = tokio::net::TcpListener::bind(socket_addr)
-        .await
-        .map_err(|e| swissarmyhammer_common::SwissArmyHammerError::Other {
-            message: format!("Failed to bind to {}: {}", socket_addr, e),
-        })?;
-
-    let connection_url = format!("http://127.0.0.1:{}/mcp", actual_port); // Full URL with /mcp
-    tracing::info!("Unified HTTP MCP server binding on {}", connection_url);
-
-    // Create shutdown channel for graceful shutdown
-    let (shutdown_tx, shutdown_rx) = oneshot::channel();
-
-    // Create readiness channel to signal when server is actually serving
+/// Spawn HTTP server task with graceful shutdown
+///
+/// Returns the spawned task handle and readiness receiver to confirm server startup.
+fn spawn_http_server_task(
+    listener: tokio::net::TcpListener,
+    router: axum::Router,
+    shutdown_rx: oneshot::Receiver<()>,
+) -> (tokio::task::JoinHandle<()>, oneshot::Receiver<()>) {
     let (ready_tx, ready_rx) = oneshot::channel();
 
-    // Start the server with graceful shutdown
     let server_task = tokio::spawn(async move {
-        // Signal readiness before serving (listener is already bound)
         let _ = ready_tx.send(());
         tracing::info!("HTTP MCP server task started and ready to serve");
 
@@ -627,23 +699,83 @@ async fn start_http_server(
         tracing::debug!("HTTP server task exiting");
     });
 
-    // Wait for server to signal readiness
-    ready_rx
-        .await
-        .map_err(|_| swissarmyhammer_common::SwissArmyHammerError::Other {
-            message: "Server task failed to signal readiness".to_string(),
-        })?;
+    (server_task, ready_rx)
+}
+
+/// Create TCP listener bound to the specified port
+///
+/// # Arguments
+/// * `port` - Port number to bind to
+///
+/// # Returns
+/// * `Result<(tokio::net::TcpListener, String)>` - Listener and connection URL
+async fn create_tcp_listener(port: u16) -> Result<(tokio::net::TcpListener, String)> {
+    let bind_addr = format!("127.0.0.1:{}", port);
+    let socket_addr = parse_socket_addr(&bind_addr)?;
+    tracing::debug!("Parsed socket address: {}", socket_addr);
+
+    let listener = bind_tcp_listener(socket_addr).await?;
+
+    let connection_url = format!("http://127.0.0.1:{}/mcp", port);
+    tracing::info!("Unified HTTP MCP server binding on {}", connection_url);
+
+    Ok((listener, connection_url))
+}
+
+/// Wait for HTTP server to signal readiness
+///
+/// # Arguments
+/// * `ready_rx` - Receiver that signals when server is ready
+///
+/// # Returns
+/// * `Result<()>` - Ok if server signaled readiness
+async fn wait_for_server_ready(ready_rx: oneshot::Receiver<()>) -> Result<()> {
+    ready_rx.await.map_err(|_| SwissArmyHammerError::Other {
+        message: "Server task failed to signal readiness".to_string(),
+    })
+}
+
+/// Start MCP server with HTTP transport using rmcp SseServer
+async fn start_http_server(
+    port: Option<u16>,
+    library: Option<PromptLibrary>,
+    model_override: Option<String>,
+) -> Result<McpServerHandle> {
+    tracing::debug!("start_http_server called with port: {:?}", port);
+
+    let actual_port = if let Some(bind_port) = port {
+        tracing::debug!("Using specified port: {}", bind_port);
+        bind_port
+    } else {
+        tracing::debug!("Finding available random port");
+        let resolved_port = resolve_port(None).await?;
+        tracing::debug!("Found random port: {}", resolved_port);
+        resolved_port
+    };
+
+    tracing::debug!("Creating MCP server");
+    let server_arc = initialize_mcp_server(library, actual_port, model_override).await?;
+    tracing::debug!("MCP server initialized");
+    tracing::debug!("Set MCP server port {} in tool context", actual_port);
+    tracing::debug!("Set MCP server self-reference in tool context");
+
+    let router = create_mcp_router(server_arc.clone());
+    let (listener, connection_url) = create_tcp_listener(actual_port).await?;
+
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    let (server_task, ready_rx) = spawn_http_server_task(listener, router, shutdown_rx);
+
+    wait_for_server_ready(ready_rx).await?;
     tracing::info!("HTTP MCP server confirmed ready on {}", connection_url);
 
     let info = McpServerInfo {
         mode: McpServerMode::Http {
             port: Some(actual_port),
         },
-        connection_url, // This now includes /mcp path
+        connection_url,
         port: Some(actual_port),
     };
 
-    // Return handle with server task for proper joining on shutdown
     let mut handle = McpServerHandle::new(info, shutdown_tx);
     handle.server_task = Some(server_task);
     handle.server = Some(server_arc);

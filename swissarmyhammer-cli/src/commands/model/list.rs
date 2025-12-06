@@ -4,7 +4,7 @@ use crate::cli::OutputFormat;
 use crate::context::CliContext;
 use anyhow::Result;
 use comfy_table::{presets::UTF8_FULL, Table};
-use swissarmyhammer_config::agent::{AgentManager, AgentSource};
+use swissarmyhammer_config::model::{ModelConfigSource, ModelManager};
 
 /// Execute the agent list command - shows all available agents
 pub async fn execute_list_command(
@@ -13,8 +13,8 @@ pub async fn execute_list_command(
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     tracing::debug!("Starting agent list command");
 
-    // Load all agents using AgentManager
-    let agents = match AgentManager::list_agents() {
+    // Load all agents using ModelManager
+    let agents = match ModelManager::list_agents() {
         Ok(agents) => agents,
         Err(e) => {
             tracing::error!("Failed to load agents: {}", e);
@@ -46,38 +46,56 @@ pub async fn execute_list_command(
 
 /// Display agent summary information followed by a table
 fn display_agent_summary_and_table(
-    agents: &[swissarmyhammer_config::agent::AgentInfo],
+    agents: &[swissarmyhammer_config::model::ModelInfo],
     verbose: bool,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    // Count agents by source
+    let (builtin_count, project_count, user_count) = count_agents_by_source(agents);
+    display_agent_counts(agents.len(), builtin_count, project_count, user_count);
+    display_agent_table(agents, verbose)?;
+    Ok(())
+}
+
+/// Count agents by source type
+fn count_agents_by_source(
+    agents: &[swissarmyhammer_config::model::ModelInfo],
+) -> (usize, usize, usize) {
     let mut builtin_count = 0;
     let mut project_count = 0;
     let mut user_count = 0;
 
     for agent in agents {
         match agent.source {
-            AgentSource::Builtin => builtin_count += 1,
-            AgentSource::Project => project_count += 1,
-            AgentSource::User => user_count += 1,
+            ModelConfigSource::Builtin => builtin_count += 1,
+            ModelConfigSource::Project => project_count += 1,
+            ModelConfigSource::User => user_count += 1,
         }
     }
 
-    // Display summary information that tests expect
-    println!("Agents: {}", agents.len());
+    (builtin_count, project_count, user_count)
+}
 
-    if builtin_count > 0 {
-        println!("Built-in: {}", builtin_count);
+/// Display agent count summary
+fn display_agent_counts(total: usize, builtin: usize, project: usize, user: usize) {
+    println!("Models: {}", total);
+
+    if builtin > 0 {
+        println!("Built-in: {}", builtin);
     }
-    if project_count > 0 {
-        println!("Project: {}", project_count);
+    if project > 0 {
+        println!("Project: {}", project);
     }
-    if user_count > 0 {
-        println!("User: {}", user_count);
+    if user > 0 {
+        println!("User: {}", user);
     }
 
     println!(); // Empty line before table
+}
 
-    // Display the table
+/// Display agent table based on display rows
+fn display_agent_table(
+    agents: &[swissarmyhammer_config::model::ModelInfo],
+    verbose: bool,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let display_rows = super::display::agents_to_display_rows(agents.to_vec(), verbose);
     match display_rows {
         super::display::DisplayRows::Standard(items) => {
@@ -139,6 +157,85 @@ fn capitalize_first(s: &str) -> String {
     }
 }
 
+/// Format a JSON value as a string
+fn format_json_value(v: &serde_json::Value) -> String {
+    match v {
+        serde_json::Value::String(s) => s.clone(),
+        serde_json::Value::Number(n) => n.to_string(),
+        serde_json::Value::Bool(b) => b.to_string(),
+        serde_json::Value::Null => "null".to_string(),
+        _ => v.to_string(),
+    }
+}
+
+/// Build a dynamic table from JSON items
+fn build_dynamic_table(
+    items: &serde_json::Value,
+) -> Result<Table, Box<dyn std::error::Error + Send + Sync>> {
+    let array = items.as_array().ok_or("Expected JSON array")?;
+
+    if array.is_empty() {
+        return Err("No items to display".into());
+    }
+
+    let first = array.first().ok_or("Array is empty")?;
+
+    let first_obj = first.as_object().ok_or("Expected JSON object")?;
+
+    let mut table = Table::new();
+    table.load_preset(UTF8_FULL);
+
+    // Add header row with capitalized keys
+    let headers: Vec<String> = first_obj.keys().map(|k| capitalize_first(k)).collect();
+    table.set_header(headers);
+
+    // Add data rows
+    for item in array {
+        let obj = item.as_object().ok_or("Expected JSON object in array")?;
+
+        let row: Vec<String> = obj.values().map(format_json_value).collect();
+        table.add_row(row);
+    }
+
+    Ok(table)
+}
+
+/// Display items as a table
+fn display_as_table<T>(items: &[T]) -> Result<(), Box<dyn std::error::Error + Send + Sync>>
+where
+    T: serde::Serialize,
+{
+    if items.is_empty() {
+        println!("No items to display");
+        return Ok(());
+    }
+
+    let json_items = serde_json::to_value(items)?;
+    let table = build_dynamic_table(&json_items)?;
+    println!("{table}");
+    Ok(())
+}
+
+/// Display items as JSON
+fn display_as_json<T>(items: &[T]) -> Result<(), Box<dyn std::error::Error + Send + Sync>>
+where
+    T: serde::Serialize,
+{
+    let json = serde_json::to_string_pretty(items)?;
+    println!("{}", json);
+    Ok(())
+}
+
+/// Display items as YAML
+fn display_as_yaml<T>(items: &[T]) -> Result<(), Box<dyn std::error::Error + Send + Sync>>
+where
+    T: serde::Serialize,
+{
+    let yaml = serde_yaml::to_string(items)?;
+    println!("{}", yaml);
+    Ok(())
+}
+
 /// Display items using the specified format (for JSON/YAML)
 fn display_items_with_format<T>(
     items: &[T],
@@ -148,55 +245,8 @@ where
     T: serde::Serialize,
 {
     match format {
-        OutputFormat::Table => {
-            if items.is_empty() {
-                println!("No items to display");
-            } else {
-                // Convert items to JSON for dynamic table building
-                let json_items = serde_json::to_value(items)?;
-
-                if let Some(array) = json_items.as_array() {
-                    if let Some(first) = array.first() {
-                        if let Some(obj) = first.as_object() {
-                            let mut table = Table::new();
-                            table.load_preset(UTF8_FULL);
-
-                            // Add header row with capitalized keys
-                            let headers: Vec<String> =
-                                obj.keys().map(|k| capitalize_first(k)).collect();
-                            table.set_header(headers);
-
-                            // Add data rows
-                            for item in array {
-                                if let Some(obj) = item.as_object() {
-                                    let row: Vec<String> = obj
-                                        .values()
-                                        .map(|v| match v {
-                                            serde_json::Value::String(s) => s.clone(),
-                                            serde_json::Value::Number(n) => n.to_string(),
-                                            serde_json::Value::Bool(b) => b.to_string(),
-                                            serde_json::Value::Null => "null".to_string(),
-                                            _ => v.to_string(),
-                                        })
-                                        .collect();
-                                    table.add_row(row);
-                                }
-                            }
-
-                            println!("{table}");
-                        }
-                    }
-                }
-            }
-        }
-        OutputFormat::Json => {
-            let json = serde_json::to_string_pretty(items)?;
-            println!("{}", json);
-        }
-        OutputFormat::Yaml => {
-            let yaml = serde_yaml::to_string(items)?;
-            println!("{}", yaml);
-        }
+        OutputFormat::Table => display_as_table(items),
+        OutputFormat::Json => display_as_json(items),
+        OutputFormat::Yaml => display_as_yaml(items),
     }
-    Ok(())
 }

@@ -3,6 +3,8 @@ title: test
 description: Iterate to correct test failures in the codebase.
 ---
 
+<!-- sah rule ignore test_rule_with_allow -->
+
 ## Goals
 
 The goal is to have:

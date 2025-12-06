@@ -4,14 +4,15 @@ use serde_json::Value;
 use std::collections::HashMap;
 use std::fs;
 use swissarmyhammer::PromptLibrary;
+use swissarmyhammer_common::test_utils::IsolatedTestEnvironment;
 use swissarmyhammer_config::TemplateContext;
-use tempfile::TempDir;
 
 #[tokio::test]
 async fn test_prompt_render_with_config_integration() {
     // Create temporary directory structure
-    let temp_dir = TempDir::new().unwrap();
-    let prompts_dir = temp_dir.path().join("prompts");
+    let _env = IsolatedTestEnvironment::new().expect("Failed to create test environment");
+    let temp_dir = _env.temp_dir();
+    let prompts_dir = &temp_dir.join("prompts");
     fs::create_dir_all(&prompts_dir).unwrap();
 
     // Create a test prompt
@@ -84,8 +85,9 @@ User: {{user_name}}"#;
 #[tokio::test]
 async fn test_prompt_render_with_env_and_context_integration() {
     // Create temporary directory structure
-    let temp_dir = TempDir::new().unwrap();
-    let prompts_dir = temp_dir.path().join("prompts");
+    let _env = IsolatedTestEnvironment::new().expect("Failed to create test environment");
+    let temp_dir = _env.temp_dir();
+    let prompts_dir = &temp_dir.join("prompts");
     fs::create_dir_all(&prompts_dir).unwrap();
 
     // Create a test prompt that uses environment variables

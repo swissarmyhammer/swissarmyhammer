@@ -1,5 +1,5 @@
 use serde_json::json;
-use swissarmyhammer_config::{AgentConfig, AgentExecutorType, LlamaAgentConfig, TemplateContext};
+use swissarmyhammer_config::{AgentExecutorType, LlamaAgentConfig, ModelConfig, TemplateContext};
 
 #[test]
 fn test_hierarchical_configuration_system_default() {
@@ -19,7 +19,7 @@ fn test_hierarchical_configuration_repo_default() {
     let mut context = TemplateContext::new();
 
     // Set repo default to LlamaAgent
-    let llama_config = AgentConfig::llama_agent(LlamaAgentConfig::default());
+    let llama_config = ModelConfig::llama_agent(LlamaAgentConfig::default());
     context.set(
         "agent.default".to_string(),
         serde_json::to_value(&llama_config).expect("Failed to serialize agent config"),
@@ -40,14 +40,14 @@ fn test_hierarchical_configuration_workflow_specific() {
     let mut context = TemplateContext::new();
 
     // Set repo default to LlamaAgent
-    let llama_config = AgentConfig::llama_agent(LlamaAgentConfig::default());
+    let llama_config = ModelConfig::llama_agent(LlamaAgentConfig::default());
     context.set(
         "agent.default".to_string(),
         serde_json::to_value(&llama_config).expect("Failed to serialize llama config"),
     );
 
     // Set workflow-specific config to Claude Code
-    let claude_config = AgentConfig::claude_code();
+    let claude_config = ModelConfig::claude_code();
     context.set(
         "agent.configs.test-workflow".to_string(),
         serde_json::to_value(&claude_config).expect("Failed to serialize claude config"),
@@ -73,18 +73,18 @@ fn test_hierarchical_configuration_workflow_specific() {
 }
 
 #[test]
-fn test_get_all_agent_configs_empty() {
+fn test_get_all_model_configs_empty() {
     let context = TemplateContext::new();
     let configs = context.get_all_agent_configs();
     assert!(configs.is_empty());
 }
 
 #[test]
-fn test_get_all_agent_configs_with_default() {
+fn test_get_all_model_configs_with_default() {
     let mut context = TemplateContext::new();
 
     // Set repo default
-    let llama_config = AgentConfig::llama_agent(LlamaAgentConfig::for_testing());
+    let llama_config = ModelConfig::llama_agent(LlamaAgentConfig::for_testing());
     context.set(
         "agent.default".to_string(),
         serde_json::to_value(&llama_config).expect("Failed to serialize config"),
@@ -102,19 +102,19 @@ fn test_get_all_agent_configs_with_default() {
 }
 
 #[test]
-fn test_get_all_agent_configs_with_workflows() {
+fn test_get_all_model_configs_with_workflows() {
     let mut context = TemplateContext::new();
 
     // Set repo default
-    let llama_config = AgentConfig::llama_agent(LlamaAgentConfig::default());
+    let llama_config = ModelConfig::llama_agent(LlamaAgentConfig::default());
     context.set(
         "agent.default".to_string(),
         serde_json::to_value(&llama_config).expect("Failed to serialize config"),
     );
 
     // Set workflow-specific configs
-    let claude_config = AgentConfig::claude_code();
-    let testing_config = AgentConfig::llama_agent(LlamaAgentConfig::for_testing());
+    let claude_config = ModelConfig::claude_code();
+    let testing_config = ModelConfig::llama_agent(LlamaAgentConfig::for_testing());
 
     context.set(
         "agent.configs.production".to_string(),
@@ -147,7 +147,7 @@ fn test_get_all_agent_configs_with_workflows() {
 }
 
 #[test]
-fn test_malformed_agent_config_falls_back() {
+fn test_malformed_model_config_falls_back() {
     let mut context = TemplateContext::new();
 
     // Set malformed agent config that can't be deserialized
@@ -171,7 +171,7 @@ fn test_quiet_mode_configuration() {
     let mut context = TemplateContext::new();
 
     // Create config with quiet mode enabled
-    let mut quiet_config = AgentConfig::claude_code();
+    let mut quiet_config = ModelConfig::claude_code();
     quiet_config.quiet = true;
 
     context.set(

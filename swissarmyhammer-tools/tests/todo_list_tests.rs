@@ -5,30 +5,33 @@
 //! - Sorting (incomplete first, then by ULID)
 //! - Edge cases (empty lists, all complete, all incomplete)
 //! - Count accuracy (total, completed, pending)
+//! sah rule ignore test_rule_with_allow
 
 use serde_json::json;
 use std::sync::Arc;
-use swissarmyhammer_config::agent::AgentConfig;
+use swissarmyhammer_common::test_utils::IsolatedTestEnvironment;
+use swissarmyhammer_config::ModelConfig;
 use swissarmyhammer_git::GitOperations;
 use swissarmyhammer_tools::mcp::tool_handlers::ToolHandlers;
 use swissarmyhammer_tools::mcp::tool_registry::{McpTool, ToolContext};
 use swissarmyhammer_tools::mcp::tools::todo::create::CreateTodoTool;
 use swissarmyhammer_tools::mcp::tools::todo::list::ListTodoTool;
 use swissarmyhammer_tools::mcp::tools::todo::mark_complete::MarkCompleteTodoTool;
-use tempfile::TempDir;
 
 /// Create a test context for MCP tools
-fn create_test_context(temp_dir: &TempDir) -> ToolContext {
+fn create_test_context(env: &IsolatedTestEnvironment) -> ToolContext {
+    let temp_path = env.temp_dir();
+
     // Create a .git directory to make it a Git repository
-    std::fs::create_dir_all(temp_dir.path().join(".git")).unwrap();
+    std::fs::create_dir_all(temp_path.join(".git")).unwrap();
 
     let git_ops: Arc<tokio::sync::Mutex<Option<GitOperations>>> =
         Arc::new(tokio::sync::Mutex::new(None));
 
     let tool_handlers = Arc::new(ToolHandlers::new());
 
-    ToolContext::new(tool_handlers, git_ops, Arc::new(AgentConfig::default()))
-        .with_working_dir(temp_dir.path().to_path_buf())
+    ToolContext::new(tool_handlers, git_ops, Arc::new(ModelConfig::default()))
+        .with_working_dir(temp_path)
 }
 
 /// Helper to extract text content from CallToolResult
@@ -60,18 +63,18 @@ fn extract_todo_id(result: &rmcp::model::CallToolResult) -> String {
     response["todo_item"]["id"].as_str().unwrap().to_string()
 }
 
-/// Helper to setup test with temp directory and context
-fn setup_test() -> (TempDir, ToolContext) {
-    let temp_dir = TempDir::new().unwrap();
-    let context = create_test_context(&temp_dir);
-    (temp_dir, context)
+/// Helper to setup test with isolated environment and context
+fn setup_test() -> (IsolatedTestEnvironment, ToolContext) {
+    let env = IsolatedTestEnvironment::new().expect("Failed to create test environment");
+    let context = create_test_context(&env);
+    (env, context)
 }
 
 /// Helper to setup test with todos
-async fn setup_with_todos(count: usize) -> (TempDir, ToolContext, Vec<String>) {
-    let (temp_dir, context) = setup_test();
+async fn setup_with_todos(count: usize) -> (IsolatedTestEnvironment, ToolContext, Vec<String>) {
+    let (env, context) = setup_test();
     let todo_ids = create_todos(&context, count).await;
-    (temp_dir, context, todo_ids)
+    (env, context, todo_ids)
 }
 
 /// Helper to create multiple todos with optional delay and return their IDs

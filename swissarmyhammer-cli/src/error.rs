@@ -1,3 +1,5 @@
+//! sah rule ignore test_rule_with_allow
+//!
 //! Error handling for the SwissArmyHammer CLI
 //!
 //! This module provides a robust error handling approach that preserves

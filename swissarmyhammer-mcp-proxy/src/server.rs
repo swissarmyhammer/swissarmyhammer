@@ -5,6 +5,66 @@ use rmcp::transport::StreamableHttpService;
 use std::sync::Arc;
 use tokio::net::TcpListener;
 
+/// Resolve the port to use for the server.
+///
+/// If a port is provided, use it. Otherwise, find an available random port.
+async fn resolve_port(port: Option<u16>) -> Result<u16, Box<dyn std::error::Error>> {
+    if let Some(bind_port) = port {
+        tracing::debug!("FilteringMcpProxy: Using specified port: {}", bind_port);
+        Ok(bind_port)
+    } else {
+        tracing::debug!("FilteringMcpProxy: Finding available random port");
+        let temp_listener = TcpListener::bind("127.0.0.1:0").await?;
+        let port = temp_listener.local_addr()?.port();
+        drop(temp_listener);
+        tracing::debug!("FilteringMcpProxy: Found random port: {}", port);
+        Ok(port)
+    }
+}
+
+/// Create the router with /mcp and /health endpoints.
+fn create_proxy_router(proxy: Arc<FilteringMcpProxy>) -> Router {
+    let service = StreamableHttpService::new(
+        move || Ok((*proxy).clone()),
+        Arc::new(LocalSessionManager::default()),
+        Default::default(),
+    );
+
+    Router::new()
+        .nest_service("/mcp", service)
+        .route("/health", axum::routing::get(health_check))
+}
+
+/// Spawn the server task.
+fn spawn_server_task(
+    listener: TcpListener,
+    router: Router,
+    port: u16,
+) -> tokio::task::JoinHandle<()> {
+    let connection_url = format!("http://127.0.0.1:{}/mcp", port);
+    tracing::info!(
+        "FilteringMcpProxy HTTP server listening on {}",
+        connection_url
+    );
+
+    tokio::spawn(async move {
+        tracing::info!("FilteringMcpProxy HTTP server task started");
+
+        let result = axum::serve(listener, router).await;
+
+        match result {
+            Ok(_) => {
+                tracing::info!("FilteringMcpProxy HTTP server completed successfully");
+            }
+            Err(e) => {
+                tracing::error!("FilteringMcpProxy HTTP server error: {}", e);
+            }
+        }
+
+        tracing::info!("FilteringMcpProxy HTTP server task exiting");
+    })
+}
+
 /// Start an HTTP server for the FilteringMcpProxy.
 ///
 /// # Arguments
@@ -43,20 +103,7 @@ pub async fn start_proxy_server(
     proxy: Arc<FilteringMcpProxy>,
     port: Option<u16>,
 ) -> Result<(u16, tokio::task::JoinHandle<()>), Box<dyn std::error::Error>> {
-    // Resolve the port (random or fixed)
-    let actual_port = if let Some(bind_port) = port {
-        tracing::debug!("FilteringMcpProxy: Using specified port: {}", bind_port);
-        bind_port
-    } else {
-        // Find available random port
-        tracing::debug!("FilteringMcpProxy: Finding available random port");
-        let temp_listener = TcpListener::bind("127.0.0.1:0").await?;
-        let port = temp_listener.local_addr()?.port();
-        drop(temp_listener); // Release the port for binding
-        tracing::debug!("FilteringMcpProxy: Found random port: {}", port);
-        port
-    };
-
+    let actual_port = resolve_port(port).await?;
     let bind_addr = format!("127.0.0.1:{}", actual_port);
     let socket_addr: std::net::SocketAddr = bind_addr.parse()?;
 
@@ -65,44 +112,9 @@ pub async fn start_proxy_server(
         socket_addr
     );
 
-    // Create StreamableHttpService for the proxy
-    let proxy_for_service = proxy.clone();
-    let service = StreamableHttpService::new(
-        move || Ok((*proxy_for_service).clone()),
-        Arc::new(LocalSessionManager::default()),
-        Default::default(),
-    );
-
-    // Create router with /mcp and /health endpoints
-    let router = Router::new()
-        .nest_service("/mcp", service)
-        .route("/health", axum::routing::get(health_check));
-
+    let router = create_proxy_router(proxy);
     let listener = TcpListener::bind(socket_addr).await?;
-
-    let connection_url = format!("http://127.0.0.1:{}/mcp", actual_port);
-    tracing::info!(
-        "FilteringMcpProxy HTTP server listening on {}",
-        connection_url
-    );
-
-    // Start the server task
-    let server_task = tokio::spawn(async move {
-        tracing::info!("FilteringMcpProxy HTTP server task started");
-
-        let result = axum::serve(listener, router).await;
-
-        match result {
-            Ok(_) => {
-                tracing::info!("FilteringMcpProxy HTTP server completed successfully");
-            }
-            Err(e) => {
-                tracing::error!("FilteringMcpProxy HTTP server error: {}", e);
-            }
-        }
-
-        tracing::info!("FilteringMcpProxy HTTP server task exiting");
-    });
+    let server_task = spawn_server_task(listener, router, actual_port);
 
     Ok((actual_port, server_task))
 }

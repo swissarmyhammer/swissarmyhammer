@@ -1,9 +1,11 @@
 //! Integration tests for per-file rule ignore directives
 
+use std::path::PathBuf;
 use swissarmyhammer_agent_executor::LlamaAgentExecutorWrapper;
+use swissarmyhammer_common::test_utils::IsolatedTestEnvironment;
+use swissarmyhammer_common::SwissArmyHammerError;
 use swissarmyhammer_config::LlamaAgentConfig;
-use swissarmyhammer_rules::{Rule, RuleChecker, Severity};
-use tempfile::TempDir;
+use swissarmyhammer_rules::{Rule, RuleChecker, RuleViolation, Severity};
 
 /// Create a test agent for integration tests
 fn create_test_agent() -> std::sync::Arc<dyn swissarmyhammer_agent_executor::AgentExecutor> {
@@ -16,118 +18,115 @@ fn create_test_agent() -> std::sync::Arc<dyn swissarmyhammer_agent_executor::Age
     std::sync::Arc::new(LlamaAgentExecutorWrapper::new(config, mcp_server))
 }
 
-#[tokio::test]
-async fn test_ignore_directive_single_rule() {
+/// Helper function to create a test environment with a file
+fn setup_test_with_file(
+    content: &str,
+    filename: &str,
+) -> (RuleChecker, IsolatedTestEnvironment, PathBuf) {
     let agent = create_test_agent();
     let checker = RuleChecker::new(agent).expect("Failed to create checker");
+    let env = IsolatedTestEnvironment::new().expect("Failed to create test environment");
+    let test_file = env.temp_dir().join(filename);
+    std::fs::write(&test_file, content).unwrap();
+    (checker, env, test_file)
+}
 
-    // Create a test rule
-    let rule = Rule::new(
-        "no-unwrap".to_string(),
-        "Check for unwrap() calls".to_string(),
+/// Helper function to create a test rule
+fn create_test_rule(name: &str, description: &str, severity: Severity) -> Rule {
+    Rule::new(name.to_string(), description.to_string(), severity)
+}
+
+/// Helper function to create an error severity test rule with a standard description
+fn create_error_rule(name: &str) -> Rule {
+    Rule::new(
+        name.to_string(),
+        format!("Check for {}", name),
         Severity::Error,
-    );
-
-    // Create a temp file with ignore directive
-    let temp_dir = TempDir::new().unwrap();
-    let test_file = temp_dir.path().join("test.rs");
-    std::fs::write(
-        &test_file,
-        "// sah rule ignore no-unwrap\nfn main() {\n    let x = Some(1).unwrap();\n}",
     )
-    .unwrap();
+}
 
-    // Check should pass because rule is ignored
-    let result = checker.check_file(&rule, &test_file, None).await;
+/// Helper function to assert that a rule check passed (no violation found)
+fn assert_rule_ignored(
+    result: Result<Option<RuleViolation>, SwissArmyHammerError>,
+    rule_name: &str,
+    context: &str,
+) {
     assert!(
         result.is_ok(),
-        "Check should pass when rule is ignored via file directive"
+        "{} should be ignored {}",
+        rule_name,
+        context
     );
+}
+
+/// Helper function to test ignore with multiple file variations
+async fn test_ignore_with_variations<F>(rule: &Rule, test_cases: &[(&str, &str)], assertion_msg: F)
+where
+    F: Fn(usize) -> String,
+{
+    let agent = create_test_agent();
+    let checker = RuleChecker::new(agent).expect("Failed to create checker");
+    let _env = IsolatedTestEnvironment::new().expect("Failed to create test environment");
+    let temp_dir = _env.temp_dir();
+
+    for (i, (filename, content)) in test_cases.iter().enumerate() {
+        let test_file = temp_dir.join(filename);
+        std::fs::write(&test_file, content).unwrap();
+        let result = checker.check_file(rule, &test_file, None).await;
+        assert!(result.is_ok(), "{}", assertion_msg(i));
+    }
+}
+
+#[tokio::test]
+async fn test_ignore_directive_single_rule() {
+    let rule = create_error_rule("no-unwrap");
+
+    let (checker, _temp_dir, test_file) = setup_test_with_file(
+        "// sah rule ignore no-unwrap\nfn main() {\n    let x = Some(1).unwrap();\n}",
+        "test.rs",
+    );
+
+    let result = checker.check_file(&rule, &test_file, None).await;
+    assert_rule_ignored(result, "no-unwrap", "via file directive");
 }
 
 #[tokio::test]
 async fn test_ignore_directive_glob_pattern() {
-    let agent = create_test_agent();
-    let checker = RuleChecker::new(agent).expect("Failed to create checker");
+    let rule1 = create_error_rule("no-unwrap");
+    let rule2 = create_error_rule("no-panic");
 
-    // Create test rules
-    let rule1 = Rule::new(
-        "no-unwrap".to_string(),
-        "Check for unwrap()".to_string(),
-        Severity::Error,
-    );
-    let rule2 = Rule::new(
-        "no-panic".to_string(),
-        "Check for panic()".to_string(),
-        Severity::Error,
-    );
-
-    // Create a temp file with glob pattern ignore
-    let temp_dir = TempDir::new().unwrap();
-    let test_file = temp_dir.path().join("test.rs");
-    std::fs::write(
-        &test_file,
+    let (checker, _temp_dir, test_file) = setup_test_with_file(
         "// sah rule ignore no-*\nfn main() {\n    panic!(\"test\");\n}",
-    )
-    .unwrap();
-
-    // Both rules starting with "no-" should be ignored
-    let result1 = checker.check_file(&rule1, &test_file, None).await;
-    assert!(
-        result1.is_ok(),
-        "no-unwrap should be ignored by glob pattern no-*"
+        "test.rs",
     );
+
+    let result1 = checker.check_file(&rule1, &test_file, None).await;
+    assert_rule_ignored(result1, "no-unwrap", "by glob pattern no-*");
 
     let result2 = checker.check_file(&rule2, &test_file, None).await;
-    assert!(
-        result2.is_ok(),
-        "no-panic should be ignored by glob pattern no-*"
-    );
+    assert_rule_ignored(result2, "no-panic", "by glob pattern no-*");
 }
 
 #[tokio::test]
 async fn test_ignore_directive_multiple_patterns() {
-    let agent = create_test_agent();
-    let checker = RuleChecker::new(agent).expect("Failed to create checker");
+    let rule1 = create_error_rule("no-unwrap");
+    let rule2 = create_test_rule("complexity-check", "Check complexity", Severity::Warning);
 
-    let rule1 = Rule::new(
-        "no-unwrap".to_string(),
-        "Check for unwrap()".to_string(),
-        Severity::Error,
-    );
-    let rule2 = Rule::new(
-        "complexity-check".to_string(),
-        "Check complexity".to_string(),
-        Severity::Warning,
-    );
-
-    // Create a temp file with multiple ignore directives
-    let temp_dir = TempDir::new().unwrap();
-    let test_file = temp_dir.path().join("test.rs");
-    std::fs::write(
-        &test_file,
+    let (checker, _temp_dir, test_file) = setup_test_with_file(
         "// sah rule ignore no-unwrap\n// sah rule ignore complexity-check\nfn main() {}",
-    )
-    .unwrap();
+        "test.rs",
+    );
 
-    // Both rules should be ignored
     let result1 = checker.check_file(&rule1, &test_file, None).await;
-    assert!(result1.is_ok(), "no-unwrap should be ignored");
+    assert_rule_ignored(result1, "no-unwrap", "");
 
     let result2 = checker.check_file(&rule2, &test_file, None).await;
-    assert!(result2.is_ok(), "complexity-check should be ignored");
+    assert_rule_ignored(result2, "complexity-check", "");
 }
 
 #[tokio::test]
 async fn test_ignore_directive_different_comment_styles() {
-    let agent = create_test_agent();
-    let checker = RuleChecker::new(agent).expect("Failed to create checker");
-
-    let rule = Rule::new(
-        "test-rule".to_string(),
-        "Test rule".to_string(),
-        Severity::Error,
-    );
+    let rule = create_test_rule("test-rule", "Test rule", Severity::Error);
 
     let test_cases = vec![
         ("test_line_comment.rs", "// sah rule ignore test-rule\n"),
@@ -139,37 +138,21 @@ async fn test_ignore_directive_different_comment_styles() {
         ),
     ];
 
-    let temp_dir = TempDir::new().unwrap();
-
-    for (filename, content) in test_cases {
-        let test_file = temp_dir.path().join(filename);
-        std::fs::write(&test_file, content).unwrap();
-
-        let result = checker.check_file(&rule, &test_file, None).await;
-        assert!(
-            result.is_ok(),
+    test_ignore_with_variations(&rule, &test_cases, |i| {
+        format!(
             "Rule should be ignored in file {} with comment style",
-            filename
-        );
-    }
+            test_cases[i].0
+        )
+    })
+    .await;
 }
 
 #[tokio::test]
 async fn test_ignore_directive_not_applied_to_different_rule() {
-    let agent = create_test_agent();
-    let checker = RuleChecker::new(agent).expect("Failed to create checker");
+    let rule = create_test_rule("other-rule", "Different rule", Severity::Error);
 
-    // Create a rule that is NOT ignored
-    let rule = Rule::new(
-        "other-rule".to_string(),
-        "Different rule".to_string(),
-        Severity::Error,
-    );
-
-    // Create a temp file with ignore for a different rule
-    let temp_dir = TempDir::new().unwrap();
-    let test_file = temp_dir.path().join("test.rs");
-    std::fs::write(&test_file, "// sah rule ignore no-unwrap\nfn main() {}").unwrap();
+    let (checker, _temp_dir, test_file) =
+        setup_test_with_file("// sah rule ignore no-unwrap\nfn main() {}", "test.rs");
 
     // This rule should NOT be ignored (it will actually run the check)
     // Since we're using a test agent, we can't predict the outcome,
@@ -181,19 +164,9 @@ async fn test_ignore_directive_not_applied_to_different_rule() {
 
 #[tokio::test]
 async fn test_ignore_directive_empty_file() {
-    let agent = create_test_agent();
-    let checker = RuleChecker::new(agent).expect("Failed to create checker");
+    let rule = create_test_rule("test-rule", "Test rule", Severity::Error);
 
-    let rule = Rule::new(
-        "test-rule".to_string(),
-        "Test rule".to_string(),
-        Severity::Error,
-    );
-
-    // Create an empty file (no ignore directives)
-    let temp_dir = TempDir::new().unwrap();
-    let test_file = temp_dir.path().join("empty.rs");
-    std::fs::write(&test_file, "").unwrap();
+    let (checker, _temp_dir, test_file) = setup_test_with_file("", "empty.rs");
 
     // Should proceed to normal checking (no ignores found)
     let _result = checker.check_file(&rule, &test_file, None).await;
@@ -202,67 +175,32 @@ async fn test_ignore_directive_empty_file() {
 
 #[tokio::test]
 async fn test_ignore_directive_suffix_glob() {
-    let agent = create_test_agent();
-    let checker = RuleChecker::new(agent).expect("Failed to create checker");
+    let rule = create_error_rule("allow-unwrap");
 
-    let rule = Rule::new(
-        "allow-unwrap".to_string(),
-        "Check for unwrap()".to_string(),
-        Severity::Error,
-    );
+    let (checker, _temp_dir, test_file) =
+        setup_test_with_file("// sah rule ignore *-unwrap\nfn main() {}", "test.rs");
 
-    // Create a temp file with suffix glob pattern
-    let temp_dir = TempDir::new().unwrap();
-    let test_file = temp_dir.path().join("test.rs");
-    std::fs::write(&test_file, "// sah rule ignore *-unwrap\nfn main() {}").unwrap();
-
-    // Rule ending with "-unwrap" should be ignored
     let result = checker.check_file(&rule, &test_file, None).await;
-    assert!(
-        result.is_ok(),
-        "allow-unwrap should be ignored by glob pattern *-unwrap"
-    );
+    assert_rule_ignored(result, "allow-unwrap", "by glob pattern *-unwrap");
 }
 
 #[tokio::test]
 async fn test_ignore_directive_question_mark_glob() {
-    let agent = create_test_agent();
-    let checker = RuleChecker::new(agent).expect("Failed to create checker");
+    let rule = create_test_rule("test-a-rule", "Test rule", Severity::Error);
 
-    let rule = Rule::new(
-        "test-a-rule".to_string(),
-        "Test rule".to_string(),
-        Severity::Error,
-    );
+    let (checker, _temp_dir, test_file) =
+        setup_test_with_file("// sah rule ignore test-?-rule\nfn main() {}", "test.rs");
 
-    // Create a temp file with ? glob pattern
-    let temp_dir = TempDir::new().unwrap();
-    let test_file = temp_dir.path().join("test.rs");
-    std::fs::write(&test_file, "// sah rule ignore test-?-rule\nfn main() {}").unwrap();
-
-    // Rule matching single character pattern should be ignored
     let result = checker.check_file(&rule, &test_file, None).await;
-    assert!(
-        result.is_ok(),
-        "test-a-rule should be ignored by glob pattern test-?-rule"
-    );
+    assert_rule_ignored(result, "test-a-rule", "by glob pattern test-?-rule");
 }
 
 #[tokio::test]
 async fn test_ignore_directive_case_sensitive() {
-    let agent = create_test_agent();
-    let checker = RuleChecker::new(agent).expect("Failed to create checker");
+    let rule = create_error_rule("no-unwrap");
 
-    let rule = Rule::new(
-        "no-unwrap".to_string(),
-        "Check for unwrap()".to_string(),
-        Severity::Error,
-    );
-
-    // Create a temp file with different case ignore (should NOT match)
-    let temp_dir = TempDir::new().unwrap();
-    let test_file = temp_dir.path().join("test.rs");
-    std::fs::write(&test_file, "// sah rule ignore No-Unwrap\nfn main() {}").unwrap();
+    let (checker, _temp_dir, test_file) =
+        setup_test_with_file("// sah rule ignore No-Unwrap\nfn main() {}", "test.rs");
 
     // Should NOT be ignored because rule names are case-sensitive
     let _result = checker.check_file(&rule, &test_file, None).await;
@@ -271,66 +209,45 @@ async fn test_ignore_directive_case_sensitive() {
 
 #[tokio::test]
 async fn test_ignore_directive_whitespace_handling() {
-    let agent = create_test_agent();
-    let checker = RuleChecker::new(agent).expect("Failed to create checker");
-
-    let rule = Rule::new(
-        "no-unwrap".to_string(),
-        "Check for unwrap()".to_string(),
-        Severity::Error,
-    );
+    let rule = create_error_rule("no-unwrap");
 
     let test_cases = [
-        "//sah rule ignore no-unwrap\n",      // No space after //
-        "//  sah  rule  ignore  no-unwrap\n", // Extra spaces
-        "// sah rule ignore no-unwrap  \n",   // Trailing spaces
-        "  // sah rule ignore no-unwrap\n",   // Leading spaces
+        ("test_0.rs", "//sah rule ignore no-unwrap\n"),
+        ("test_1.rs", "//  sah  rule  ignore  no-unwrap\n"),
+        ("test_2.rs", "// sah rule ignore no-unwrap  \n"),
+        ("test_3.rs", "  // sah rule ignore no-unwrap\n"),
     ];
 
-    let temp_dir = TempDir::new().unwrap();
-
-    for (i, content) in test_cases.iter().enumerate() {
-        let test_file = temp_dir.path().join(format!("test_{}.rs", i));
-        std::fs::write(&test_file, content).unwrap();
-
-        let result = checker.check_file(&rule, &test_file, None).await;
-        assert!(
-            result.is_ok(),
-            "Rule should be ignored with whitespace variation {}",
-            i
-        );
-    }
+    test_ignore_with_variations(&rule, &test_cases, |i| {
+        format!("Rule should be ignored with whitespace variation {}", i)
+    })
+    .await;
 }
 
 #[tokio::test]
 async fn test_ignore_directive_position_in_file() {
-    let agent = create_test_agent();
-    let checker = RuleChecker::new(agent).expect("Failed to create checker");
+    let rule = create_error_rule("no-unwrap");
 
-    let rule = Rule::new(
-        "no-unwrap".to_string(),
-        "Check for unwrap()".to_string(),
-        Severity::Error,
-    );
-
-    // Test ignore at different positions in file
-    let positions = [
-        "// sah rule ignore no-unwrap\nfn main() {}", // Top of file
-        "fn helper() {}\n// sah rule ignore no-unwrap\nfn main() {}", // Middle
-        "fn main() {}\n// sah rule ignore no-unwrap", // End of file
+    let test_cases = [
+        (
+            "position_test_0.rs",
+            "// sah rule ignore no-unwrap\nfn main() {}",
+        ),
+        (
+            "position_test_1.rs",
+            "fn helper() {}\n// sah rule ignore no-unwrap\nfn main() {}",
+        ),
+        (
+            "position_test_2.rs",
+            "fn main() {}\n// sah rule ignore no-unwrap",
+        ),
     ];
 
-    let temp_dir = TempDir::new().unwrap();
-
-    for (i, content) in positions.iter().enumerate() {
-        let test_file = temp_dir.path().join(format!("position_test_{}.rs", i));
-        std::fs::write(&test_file, content).unwrap();
-
-        let result = checker.check_file(&rule, &test_file, None).await;
-        assert!(
-            result.is_ok(),
+    test_ignore_with_variations(&rule, &test_cases, |i| {
+        format!(
             "Rule should be ignored regardless of position in file (test case {})",
             i
-        );
-    }
+        )
+    })
+    .await;
 }

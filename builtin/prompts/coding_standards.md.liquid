@@ -2,11 +2,10 @@
 
 ## Coding Standards
 
-Here are our general coding standards. Always follow ALL the rules.
-
-Different languages will have Language Specific Standards. Always follow ALL the rules.
-
-Individual projects will have Project Coding Standards that specify additional rules in CODING_STANDARDS.md. Always follow ALL the rules.
+Always follow ALL the rules from:
+1. General coding standards (below)
+2. Language Specific Standards (below)
+3. Project Coding Standards in CODING_STANDARDS.md (if present)
 
 ### Writing Code
 
@@ -51,21 +50,32 @@ Focus on understanding the problem requirements and coding tests that prove the 
     4. Run the test to confirm success
     5. Refactor if needed while keeping tests green
 
+### Component Architecture Pattern
+
+Many UI frameworks follow a Container/Presenter pattern:
+
+- **Containers**
+  - Maintain State
+  - Wrap Presenters
+  - Handle Events from Presenters
+- **Presenters**
+  - Are Stateless
+  - Present visual data
+  - Raise Events to Handlers
+
 ## Language Specific Standards
 
 ### Rust
 
 - Always compile and check your work with `cargo build` after an edit
 - There is no such thing as a 'cached compilation artifact'
-- Always format your files with `cargo fmt`
-  - Format all files with `cargo fmt --all`
+- Format with `cargo fmt` (or `cargo fmt --all` for all files)
 - Test with https://nexte.st
   - `cargo nextest run --fail-fast` is the way
   - do not use `--no-capture` unless you are debugging specific tests -- it is VERY SLOW
   - if `cargo nextest` is not available, install with `cargo install cargo-nextest`
 - *Important*: avoid using `cargo test` instead of `cargo nextest` -- `cargo test` is SLOW and does not parallelize tests
-- Always lint your files with `cargo clippy`
-  - All lint errors and warnings should be included as todo items in code review
+- Lint with `cargo clippy` - all lint errors and warnings should be included as todo items in code review
 - Use `tracing` not `eprintln`
 - When making functions, there are two preferred designs
   - A function takes a single parameter that is a structure or object
@@ -78,9 +88,8 @@ Focus on understanding the problem requirements and coding tests that prove the 
 ### React
 
 - Always use TypeScript with full type annotations
-- Always format your files with `npx prettier`
-  - Format all files with `npx prettier --write .`
-- Always lint your files with `npx eslint` and `npx tsc --noEmit`
+- Format with `npx prettier` (or `npx prettier --write .` for all files)
+- Lint with `npx eslint` and `npx tsc --noEmit`
 - If not otherwise specified, use vite.
 - If not otherwise specified, use MUI.
     - Style via sx prop using MUI or styled API; avoid inline styles.
@@ -91,14 +100,7 @@ Focus on understanding the problem requirements and coding tests that prove the 
 - Component guidelines
   - Always create functional components
   - Always use Hooks
-  - Containers
-    - Maintain State
-    - Wrap Presenters
-    - Handle Events from Presenters
-  - Presenters
-    - Are Stateless
-    - Present visual data
-    - Raise Events to Handlers
+  - Follow the Component Architecture Pattern (see above)
   - Create custom hooks as needed
   - Create Props interfaces separately, for example
 
@@ -137,14 +139,14 @@ Focus on understanding the problem requirements and coding tests that prove the 
   - Widgets need to `maybeInvoke` intents to allow optional handling
   - If you have an `on<Event>` type callback, you need a matching intent to allow Action handling
 - If you cannot find `flutter` use `fvm flutter` instead
-- `flutter analyze` before you commit code, fix all warnings and errors
-- `flutter test` before you commit code, fix all failing tests
+- Before committing code:
+  1. Run `flutter analyze` and fix all warnings and errors
+  2. Run `flutter test` and fix all failing tests
 - Create unit tests for Widgets
   - Test text display to make sure the Widget displays the correct text
   - Test Action/Intent to make sure the Widget behaves as expected
 - Create a Storybook story for Widget
 - Widget guidelines
-  - Containers maintain state and handle intents via Actions
-  - Presenters are stateless and present visual data and raise Intents
+  - Follow the Component Architecture Pattern (see above)
   - Use [flutter_hooks](https://pub.dev/packages/flutter_hooks), not StatefulWidget
   - Create custom hooks as needed

@@ -1,0 +1,11 @@
+---
+description: "Tiny Qwen 0.6B model for fast unit tests"
+---
+quiet: false
+executor:
+  type: llama-agent
+  config:
+    model:
+      source: !HuggingFace
+        repo: "unsloth/Qwen3-0.6B-GGUF"
+        filename: "Qwen3-0.6B-IQ4_NL.gguf"

@@ -15,7 +15,3 @@ Get the next incomplete todo item:
   "item": "next"
 }
 ```
-
-## Returns
-
-Returns the todo item as structured data and YAML with all fields.
