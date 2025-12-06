@@ -1,3 +1,6 @@
+---
+description: "480B MoE: Premier coding, 65K output"
+---
 quiet: false
 executor:
   type: llama-agent

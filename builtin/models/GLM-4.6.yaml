@@ -1,3 +1,6 @@
+---
+description: "357B MoE: Top coding, 200K context"
+---
 quiet: false
 executor:
   type: llama-agent

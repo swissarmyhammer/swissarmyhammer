@@ -1,3 +1,6 @@
+---
+description: "30B MoE: Fast coding, 3x speed boost"
+---
 quiet: false
 executor:
   type: llama-agent

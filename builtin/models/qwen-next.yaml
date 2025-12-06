@@ -1,3 +1,6 @@
+---
+description: "80B MoE: 256K context, fast inference"
+---
 quiet: false
 executor:
   type: llama-agent

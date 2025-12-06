@@ -1,3 +1,6 @@
+---
+description: "Claude Sonnet 4.5: 1M context, premium"
+---
 quiet: false
 executor:
   type: claude-code

@@ -1,3 +1,6 @@
+---
+description: "671B: Strong agents, MIT licensed"
+---
 quiet: false
 executor:
     type: llama-agent

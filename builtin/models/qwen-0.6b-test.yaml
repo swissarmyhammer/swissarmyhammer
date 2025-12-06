@@ -1,5 +1,5 @@
 ---
-description: "Tiny Qwen 0.6B model for fast unit tests"
+description: "0.6B: Fast unit testing model"
 ---
 quiet: false
 executor:

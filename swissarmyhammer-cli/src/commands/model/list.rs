@@ -137,9 +137,48 @@ fn create_table<'a, T, F>(items: &'a [T], headers: Vec<&str>, row_mapper: F) -> 
 where
     F: Fn(&'a T) -> Vec<&'a str>,
 {
+    use comfy_table::*;
+
     let mut table = Table::new();
     table.load_preset(UTF8_FULL);
-    table.set_header(headers);
+    table.set_header(headers.clone());
+
+    // Set column widths based on header count
+    // Standard view: Name (25), Description (40), Source (10)
+    // Verbose view: Name (25), Description (40), Source (10), Content Size (12)
+    if headers.len() == 3 {
+        table.set_width(80);
+        table
+            .column_mut(0)
+            .expect("Column 0 exists")
+            .set_constraint(ColumnConstraint::LowerBoundary(Width::Fixed(25)));
+        table
+            .column_mut(1)
+            .expect("Column 1 exists")
+            .set_constraint(ColumnConstraint::UpperBoundary(Width::Fixed(40)));
+        table
+            .column_mut(2)
+            .expect("Column 2 exists")
+            .set_constraint(ColumnConstraint::LowerBoundary(Width::Fixed(10)));
+    } else if headers.len() == 4 {
+        table.set_width(90);
+        table
+            .column_mut(0)
+            .expect("Column 0 exists")
+            .set_constraint(ColumnConstraint::LowerBoundary(Width::Fixed(25)));
+        table
+            .column_mut(1)
+            .expect("Column 1 exists")
+            .set_constraint(ColumnConstraint::UpperBoundary(Width::Fixed(40)));
+        table
+            .column_mut(2)
+            .expect("Column 2 exists")
+            .set_constraint(ColumnConstraint::LowerBoundary(Width::Fixed(10)));
+        table
+            .column_mut(3)
+            .expect("Column 3 exists")
+            .set_constraint(ColumnConstraint::LowerBoundary(Width::Fixed(12)));
+    }
 
     for item in items {
         table.add_row(row_mapper(item));
