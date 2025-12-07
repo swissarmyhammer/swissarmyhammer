@@ -1370,62 +1370,75 @@ mod tests {
     ///
     /// Provides a fluent interface for constructing and executing git commands,
     /// eliminating duplication in git repository setup.
-    struct GitCommand<'a> {
-        repo_path: &'a Path,
-        command: Vec<String>,
-    }
-
-    impl<'a> GitCommand<'a> {
-        /// Creates a new git command builder for a subcommand
-        fn new(repo_path: &'a Path, subcommand: &str) -> Self {
-            Self {
-                repo_path,
-                command: vec![subcommand.to_string()],
-            }
-        }
-
-        /// Adds arguments to the command
-        fn args(mut self, args: &[&str]) -> Self {
-            self.command.extend(args.iter().map(|s| s.to_string()));
-            self
-        }
-
-        /// Executes the git command
-        fn execute(self) -> std::io::Result<()> {
-            use std::process::Command;
-            let args: Vec<&str> = self.command.iter().map(|s| s.as_str()).collect();
-            Command::new("git")
-                .args(&args)
-                .current_dir(self.repo_path)
-                .output()?;
-            Ok(())
-        }
-    }
-
     /// Consolidates git command execution patterns for testing
     ///
     /// This helper eliminates duplication in git repository setup
-    /// by providing a unified interface for common git operations.
+    /// by providing a unified interface for common git operations using git2.
     struct GitTestHelper;
 
     impl GitTestHelper {
         /// Configures git user for a repository
-        fn configure_user(repo_path: &Path) -> std::io::Result<()> {
-            GitCommand::new(repo_path, "config")
-                .args(&["user.email", "test@example.com"])
-                .execute()?;
-            GitCommand::new(repo_path, "config")
-                .args(&["user.name", "Test User"])
-                .execute()?;
+        fn configure_user(repo: &git2::Repository) -> std::io::Result<()> {
+            let mut config = repo
+                .config()
+                .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+            config
+                .set_str("user.email", "test@example.com")
+                .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+            config
+                .set_str("user.name", "Test User")
+                .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
             Ok(())
         }
 
         /// Adds and commits files to the repository
-        fn add_and_commit(repo_path: &Path, message: &str) -> std::io::Result<()> {
-            GitCommand::new(repo_path, "add").args(&["."]).execute()?;
-            GitCommand::new(repo_path, "commit")
-                .args(&["-m", message])
-                .execute()?;
+        fn add_and_commit(repo: &git2::Repository, message: &str) -> std::io::Result<()> {
+            let mut index = repo
+                .index()
+                .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+            index
+                .add_all(["."].iter(), git2::IndexAddOption::DEFAULT, None)
+                .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+            index
+                .write()
+                .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+
+            let tree_id = index
+                .write_tree()
+                .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+            let tree = repo
+                .find_tree(tree_id)
+                .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+
+            let signature = git2::Signature::now("Test User", "test@example.com")
+                .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+
+            let parent_commit = match repo.head() {
+                Ok(head) => {
+                    let parent_oid = head.target().ok_or_else(|| {
+                        std::io::Error::new(std::io::ErrorKind::Other, "Failed to get head target")
+                    })?;
+                    Some(
+                        repo.find_commit(parent_oid)
+                            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?,
+                    )
+                }
+                Err(_) => None,
+            };
+
+            let parents: Vec<&git2::Commit> =
+                parent_commit.as_ref().map(|c| vec![c]).unwrap_or_default();
+
+            repo.commit(
+                Some("HEAD"),
+                &signature,
+                &signature,
+                message,
+                &tree,
+                &parents,
+            )
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+
             Ok(())
         }
 
@@ -1435,13 +1448,14 @@ mod tests {
             filename: &str,
             content: &str,
         ) -> std::io::Result<()> {
-            GitCommand::new(repo_path, "init").execute()?;
-            Self::configure_user(repo_path)?;
+            let repo = git2::Repository::init(repo_path)
+                .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+            Self::configure_user(&repo)?;
 
             let file_path = repo_path.join(filename);
             std::fs::write(&file_path, content)?;
 
-            Self::add_and_commit(repo_path, "Initial commit")?;
+            Self::add_and_commit(&repo, "Initial commit")?;
 
             Ok(())
         }
@@ -2036,8 +2050,8 @@ fn example() {
         let repo_path = temp_dir.path();
 
         // Initialize git repo
-        GitCommand::new(repo_path, "init").execute().unwrap();
-        GitTestHelper::configure_user(repo_path).unwrap();
+        let repo = git2::Repository::init(repo_path).unwrap();
+        GitTestHelper::configure_user(&repo).unwrap();
 
         // Create .gitignore file
         fs::write(repo_path.join(".gitignore"), "ignored.rs\n").unwrap();
@@ -2055,7 +2069,7 @@ fn example() {
         .unwrap();
 
         // Commit everything so git tracks .gitignore
-        GitTestHelper::add_and_commit(repo_path, "Initial commit").unwrap();
+        GitTestHelper::add_and_commit(&repo, "Initial commit").unwrap();
 
         // Create context with git operations
         let context = create_git_context(repo_path).await;

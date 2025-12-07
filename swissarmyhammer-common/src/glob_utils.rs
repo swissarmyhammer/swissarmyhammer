@@ -572,16 +572,10 @@ mod tests {
 
     #[test]
     fn test_expand_glob_patterns_respects_gitignore() {
-        use std::process::Command;
-
         let temp_dir = TempDir::new().unwrap();
 
         // Initialize git repo for gitignore to work
-        Command::new("git")
-            .args(["init"])
-            .current_dir(temp_dir.path())
-            .output()
-            .unwrap();
+        git2::Repository::init(temp_dir.path()).unwrap();
 
         fs::write(temp_dir.path().join(".gitignore"), "ignored.rs\n").unwrap();
         fs::write(temp_dir.path().join("included.rs"), "fn main() {}").unwrap();

@@ -124,15 +124,10 @@ mod tests {
 
     #[test]
     fn test_expand_files_for_rules_respects_gitignore() {
-        use std::process::Command;
-
         let temp_dir = TempDir::new().unwrap();
 
-        Command::new("git")
-            .args(["init"])
-            .current_dir(temp_dir.path())
-            .output()
-            .unwrap();
+        // Initialize git repository using git2
+        git2::Repository::init(temp_dir.path()).unwrap();
 
         fs::write(temp_dir.path().join(".gitignore"), "ignored.rs\n").unwrap();
         fs::write(temp_dir.path().join("included.rs"), "fn main() {}").unwrap();
