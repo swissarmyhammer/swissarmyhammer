@@ -476,9 +476,8 @@ async fn initialize_mcp_server(
     working_dir: Option<std::path::PathBuf>,
 ) -> Result<Arc<McpServer>> {
     let library = library.unwrap_or_default();
-    let work_dir = working_dir.unwrap_or_else(|| {
-        std::env::current_dir().unwrap_or_else(|_| std::env::temp_dir())
-    });
+    let work_dir = working_dir
+        .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| std::env::temp_dir()));
     let server = McpServer::new_with_work_dir(library, work_dir, model_override).await?;
     server.initialize().await?;
     server.set_server_port(port).await;
@@ -766,7 +765,8 @@ async fn start_http_server(
     };
 
     tracing::debug!("Creating MCP server");
-    let server_arc = initialize_mcp_server(library, actual_port, model_override, working_dir).await?;
+    let server_arc =
+        initialize_mcp_server(library, actual_port, model_override, working_dir).await?;
     tracing::debug!("MCP server initialized");
     tracing::debug!("Set MCP server port {} in tool context", actual_port);
     tracing::debug!("Set MCP server self-reference in tool context");
@@ -922,7 +922,9 @@ mod tests {
     async fn test_server_info_consistency() {
         // Test that server info remains consistent
         let mode = McpServerMode::Http { port: Some(18083) };
-        let mut server = start_mcp_server(mode.clone(), None, None, None).await.unwrap();
+        let mut server = start_mcp_server(mode.clone(), None, None, None)
+            .await
+            .unwrap();
 
         let info1 = server.info();
         let info2 = server.info();

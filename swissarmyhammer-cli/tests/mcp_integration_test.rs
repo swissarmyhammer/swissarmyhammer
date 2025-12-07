@@ -59,9 +59,14 @@ async fn test_mcp_server_prompt_loading() {
     let library = PromptLibrary::default();
 
     // Start in-process MCP server with the prompt library
-    let mut server = start_mcp_server(McpServerMode::Http { port: None }, Some(library), None, None)
-        .await
-        .expect("Failed to start in-process MCP server");
+    let mut server = start_mcp_server(
+        McpServerMode::Http { port: None },
+        Some(library),
+        None,
+        None,
+    )
+    .await
+    .expect("Failed to start in-process MCP server");
 
     // Create RMCP client
     let client = create_test_client(server.url()).await;

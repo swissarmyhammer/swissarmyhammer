@@ -93,7 +93,10 @@ async fn test_greeting_workflow_parameter_migration() -> Result<()> {
     )
     .await?;
 
-    assert!(success, "Hello-world workflow should accept --var parameters");
+    assert!(
+        success,
+        "Hello-world workflow should accept --var parameters"
+    );
     Ok(())
 }
 

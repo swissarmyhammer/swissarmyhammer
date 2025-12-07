@@ -755,7 +755,8 @@ impl RuleChecker {
                 let completed = Arc::clone(&completed_count);
                 let start = start_time;
                 async move {
-                    let completed_so_far = completed.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    let completed_so_far =
+                        completed.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                     let remaining = total_items.saturating_sub(completed_so_far + 1);
 
                     // Calculate time estimate

@@ -103,10 +103,8 @@ async fn test_hello_world_execution_without_claude() -> Result<()> {
     let mut run = WorkflowRun::new(workflow);
 
     // Set person_name in context to test variable interpolation
-    run.context.insert(
-        "person_name".to_string(),
-        serde_json::json!("World"),
-    );
+    run.context
+        .insert("person_name".to_string(), serde_json::json!("World"));
 
     // Start from the farewell state to test the log action with variable interpolation
     run.current_state = StateId::new("farewell");
@@ -130,10 +128,7 @@ async fn test_hello_world_log_with_interpolation() -> Result<()> {
     use swissarmyhammer_workflow::{Action, LogAction, LogLevel, WorkflowTemplateContext};
 
     // Create a log action with variable interpolation
-    let log_action = LogAction::new(
-        "Goodbye, {{ person_name }}!".to_string(),
-        LogLevel::Info,
-    );
+    let log_action = LogAction::new("Goodbye, {{ person_name }}!".to_string(), LogLevel::Info);
 
     // Create context with the person_name
     let workflow_vars = HashMap::from([(

@@ -133,9 +133,10 @@ mod tests {
     #[tokio::test]
     async fn test_start_proxy_server_with_random_port() {
         // Start upstream MCP server
-        let upstream_handle = start_mcp_server(McpServerMode::Http { port: None }, None, None, None)
-            .await
-            .unwrap();
+        let upstream_handle =
+            start_mcp_server(McpServerMode::Http { port: None }, None, None, None)
+                .await
+                .unwrap();
         let upstream_port = upstream_handle.info().port.unwrap();
         let upstream_url = format!("http://127.0.0.1:{}/mcp", upstream_port);
 
