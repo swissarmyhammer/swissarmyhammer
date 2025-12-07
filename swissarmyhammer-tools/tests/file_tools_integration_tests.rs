@@ -180,7 +180,10 @@ fn create_test_file(
 fn create_test_dir_with_git() -> (IsolatedTestEnvironment, std::path::PathBuf) {
     let env = IsolatedTestEnvironment::new().expect("Failed to create test environment");
     let temp_dir = env.temp_dir();
-    git2::Repository::init(&temp_dir).expect("Failed to initialize git repo");
+    let repo = git2::Repository::init(&temp_dir).expect("Failed to initialize git repo");
+    // Ensure initial branch is 'main' for consistency across environments
+    repo.set_head("refs/heads/main")
+        .expect("Failed to set HEAD to main");
     (env, temp_dir)
 }
 

@@ -34,6 +34,11 @@ impl TestGitRepo {
             .set_str("user.email", "test@example.com")
             .expect("Failed to set user.email");
 
+        // Ensure initial branch is 'main' for consistency across environments
+        // This handles cases where system default is 'master' or something else
+        repo.set_head("refs/heads/main")
+            .expect("Failed to set HEAD to main");
+
         Self {
             _temp_dir: temp_dir,
             path,

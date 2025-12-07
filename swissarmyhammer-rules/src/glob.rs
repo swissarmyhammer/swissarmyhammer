@@ -127,7 +127,9 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
 
         // Initialize git repository using git2
-        git2::Repository::init(temp_dir.path()).unwrap();
+        let repo = git2::Repository::init(temp_dir.path()).unwrap();
+        // Ensure initial branch is 'main' for consistency across environments
+        repo.set_head("refs/heads/main").unwrap();
 
         fs::write(temp_dir.path().join(".gitignore"), "ignored.rs\n").unwrap();
         fs::write(temp_dir.path().join("included.rs"), "fn main() {}").unwrap();
