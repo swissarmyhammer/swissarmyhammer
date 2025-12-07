@@ -83,7 +83,7 @@ async fn run_builtin_workflow_in_process(
 async fn test_greeting_workflow_parameter_migration() -> Result<()> {
     // Test that workflow accepts parameters via --var (current system)
     let success = run_builtin_workflow_in_process(
-        "greeting",
+        "hello-world",
         vec![
             "person_name=Alice".to_string(),
             "language=Spanish".to_string(),
@@ -93,7 +93,7 @@ async fn test_greeting_workflow_parameter_migration() -> Result<()> {
     )
     .await?;
 
-    assert!(success, "Greeting workflow should accept --var parameters");
+    assert!(success, "Hello-world workflow should accept --var parameters");
     Ok(())
 }
 
@@ -101,7 +101,7 @@ async fn test_greeting_workflow_parameter_migration() -> Result<()> {
 async fn test_greeting_workflow_backward_compatibility() -> Result<()> {
     // Test that --var arguments work
     let success = run_builtin_workflow_in_process(
-        "greeting",
+        "hello-world",
         vec![
             "person_name=John".to_string(),
             "language=English".to_string(),
@@ -112,7 +112,7 @@ async fn test_greeting_workflow_backward_compatibility() -> Result<()> {
 
     assert!(
         success,
-        "Greeting workflow should maintain backward compatibility"
+        "Hello-world workflow should maintain backward compatibility"
     );
     Ok(())
 }
@@ -121,7 +121,7 @@ async fn test_greeting_workflow_backward_compatibility() -> Result<()> {
 async fn test_greeting_workflow_interactive_prompting() -> Result<()> {
     // Test that workflow runs without parameters (should use defaults/prompts)
     let success = run_builtin_workflow_in_process(
-        "greeting",
+        "hello-world",
         vec![], // no parameters
         true,   // dry-run
     )
@@ -131,7 +131,7 @@ async fn test_greeting_workflow_interactive_prompting() -> Result<()> {
     // For now we test that it doesn't crash - both success and graceful failure are acceptable
     assert!(
         success,
-        "Greeting workflow should handle missing parameters gracefully"
+        "Hello-world workflow should handle missing parameters gracefully"
     );
     Ok(())
 }

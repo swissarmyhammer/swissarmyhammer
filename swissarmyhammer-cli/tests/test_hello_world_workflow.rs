@@ -28,9 +28,9 @@ async fn test_hello_world_workflow_loads() -> Result<()> {
     assert_eq!(workflow.name.as_str(), "hello-world");
 
     // Verify that all states exist
-    assert!(workflow.states.contains_key(&StateId::new("Start")));
-    assert!(workflow.states.contains_key(&StateId::new("Greeting")));
-    assert!(workflow.states.contains_key(&StateId::new("Complete")));
+    assert!(workflow.states.contains_key(&StateId::new("start")));
+    assert!(workflow.states.contains_key(&StateId::new("greet")));
+    assert!(workflow.states.contains_key(&StateId::new("farewell")));
 
     Ok(())
 }
@@ -44,19 +44,23 @@ async fn test_hello_world_all_actions_parse() -> Result<()> {
     let workflow = MermaidParser::parse(&workflow_content, "hello-world")?;
 
     // Check each state's action description can be parsed
-    let start_state = workflow.states.get(&StateId::new("Start")).unwrap();
-    let greeting_state = workflow.states.get(&StateId::new("Greeting")).unwrap();
-    let complete_state = workflow.states.get(&StateId::new("Complete")).unwrap();
+    let start_state = workflow.states.get(&StateId::new("start")).unwrap();
+    let greet_state = workflow.states.get(&StateId::new("greet")).unwrap();
+    let farewell_state = workflow.states.get(&StateId::new("farewell")).unwrap();
 
     println!("Start action: {}", start_state.description);
-    println!("Greeting action: {}", greeting_state.description);
-    println!("Complete action: {}", complete_state.description);
+    println!("Greet action: {}", greet_state.description);
+    println!("Farewell action: {}", farewell_state.description);
 
     // Try to parse each action
     use std::collections::HashMap;
     use swissarmyhammer_workflow::parse_action_from_description_with_context;
 
-    let context = HashMap::new();
+    // Create context with default parameter values for template rendering
+    let mut context = HashMap::new();
+    context.insert("person_name".to_string(), serde_json::json!("World"));
+    context.insert("language".to_string(), serde_json::json!("English"));
+    context.insert("enthusiastic".to_string(), serde_json::json!(false));
 
     // Start action should parse successfully
     let start_action =
@@ -67,23 +71,23 @@ async fn test_hello_world_all_actions_parse() -> Result<()> {
         start_state.description
     );
 
-    // Greeting action should parse successfully
-    let greeting_action =
-        parse_action_from_description_with_context(&greeting_state.description, &context)?;
+    // Greet action should parse successfully (after template rendering)
+    let greet_action =
+        parse_action_from_description_with_context(&greet_state.description, &context)?;
     assert!(
-        greeting_action.is_some(),
-        "Greeting action should parse successfully: '{}'",
-        greeting_state.description
+        greet_action.is_some(),
+        "Greet action should parse successfully: '{}'",
+        greet_state.description
     );
 
-    // Complete action should parse successfully
+    // Farewell action should parse successfully
     // Note: This may contain variable interpolation, but the action keyword should still be recognized
-    let complete_action =
-        parse_action_from_description_with_context(&complete_state.description, &context)?;
+    let farewell_action =
+        parse_action_from_description_with_context(&farewell_state.description, &context)?;
     assert!(
-        complete_action.is_some(),
-        "Complete action should parse successfully: '{}'",
-        complete_state.description
+        farewell_action.is_some(),
+        "Farewell action should parse successfully: '{}'",
+        farewell_state.description
     );
 
     Ok(())
@@ -98,26 +102,22 @@ async fn test_hello_world_execution_without_claude() -> Result<()> {
     let mut executor = WorkflowExecutor::new();
     let mut run = WorkflowRun::new(workflow);
 
-    // Mock the greeting result to avoid calling Claude
+    // Set person_name in context to test variable interpolation
     run.context.insert(
-        "greeting_output".to_string(),
-        serde_json::json!({
-            "content": "Hello, World! This is a test greeting.",
-            "metadata": null,
-            "response_type": "Success"
-        }),
+        "person_name".to_string(),
+        serde_json::json!("World"),
     );
 
-    // Start from the Complete state to test the log action with variable interpolation
-    run.current_state = StateId::new("Complete");
+    // Start from the farewell state to test the log action with variable interpolation
+    run.current_state = StateId::new("farewell");
 
-    // Execute the Complete state
+    // Execute the farewell state
     let result = executor.execute_single_cycle(&mut run).await;
 
     // The execution should succeed without parse errors
     assert!(
         result.is_ok(),
-        "Complete state should execute without errors"
+        "Farewell state should execute without errors"
     );
 
     Ok(())
@@ -131,18 +131,14 @@ async fn test_hello_world_log_with_interpolation() -> Result<()> {
 
     // Create a log action with variable interpolation
     let log_action = LogAction::new(
-        "Workflow completed! Greeting result: ${greeting_output.content}".to_string(),
+        "Goodbye, {{ person_name }}!".to_string(),
         LogLevel::Info,
     );
 
-    // Create context with the greeting result
+    // Create context with the person_name
     let workflow_vars = HashMap::from([(
-        "greeting_output".to_string(),
-        serde_json::json!({
-            "content": "Hello from Swiss Army Hammer!",
-            "metadata": null,
-            "response_type": "Success"
-        }),
+        "person_name".to_string(),
+        serde_json::json!("Swiss Army Hammer"),
     )]);
 
     let mut context = WorkflowTemplateContext::with_vars(HashMap::new()).unwrap();
