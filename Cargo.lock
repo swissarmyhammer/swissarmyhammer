@@ -10,9 +10,9 @@ checksum = "320119579fcad9c21884f5c4861d16174d0e06250625266f50fe6898340abefa"
 
 [[package]]
 name = "agent-client-protocol"
-version = "0.7.0"
+version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "525705e39c11cd73f7bc784e3681a9386aa30c8d0630808d3dc2237eb4f9cb1b"
+checksum = "3e639d6b544ad39f5b4e05802db5eb04e1518284eb05fda1839931003e0244c8"
 dependencies = [
  "agent-client-protocol-schema",
  "anyhow",
@@ -21,16 +21,15 @@ dependencies = [
  "derive_more 2.1.0",
  "futures",
  "log",
- "parking_lot",
  "serde",
  "serde_json",
 ]
 
 [[package]]
 name = "agent-client-protocol-schema"
-version = "0.6.3"
+version = "0.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "16d08d095e8069115774caa50392e9c818e3fb1c482ef4f3153d26b4595482f2"
+checksum = "f182f5e14bef8232b239719bd99166bb11e986c08fc211f28e392f880d3093ba"
 dependencies = [
  "anyhow",
  "derive_more 2.1.0",
@@ -3970,6 +3969,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "57c0d7b74b563b49d38dae00a0c37d4d6de9b432382b2892f0574ddcae73fd0a"
 
 [[package]]
+name = "pastey"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "57d6c094ee800037dff99e02cab0eaf3142826586742a270ab3d7a62656bd27a"
+
+[[package]]
 name = "pear"
 version = "0.2.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4903,10 +4908,11 @@ dependencies = [
 
 [[package]]
 name = "rmcp"
-version = "0.8.5"
+version = "0.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e5947688160b56fb6c827e3c20a72c90392a1d7e9dec74749197aa1780ac42ca"
+checksum = "38b18323edc657390a6ed4d7a9110b0dec2dc3ed128eb2a123edfbafabdbddc5"
 dependencies = [
+ "async-trait",
  "axum 0.8.7",
  "base64 0.22.1",
  "bytes",
@@ -4916,12 +4922,12 @@ dependencies = [
  "http-body 1.0.1",
  "http-body-util",
  "oauth2",
- "paste",
+ "pastey",
  "pin-project-lite",
  "process-wrap",
  "rand 0.9.2",
  "reqwest 0.12.24",
- "rmcp-macros 0.8.5",
+ "rmcp-macros 0.10.0",
  "schemars 1.1.0",
  "serde",
  "serde_json",
@@ -4951,9 +4957,9 @@ dependencies = [
 
 [[package]]
 name = "rmcp-macros"
-version = "0.8.5"
+version = "0.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "01263441d3f8635c628e33856c468b96ebbce1af2d3699ea712ca71432d4ee7a"
+checksum = "c75d0a62676bf8c8003c4e3c348e2ceb6a7b3e48323681aaf177fdccdac2ce50"
 dependencies = [
  "darling 0.21.3",
  "proc-macro2",
@@ -5661,7 +5667,7 @@ dependencies = [
  "rayon",
  "regex",
  "reqwest 0.12.24",
- "rmcp 0.8.5",
+ "rmcp 0.10.0",
  "rstest",
  "schemars 0.8.22",
  "serde",
@@ -5751,7 +5757,7 @@ dependencies = [
  "predicates",
  "regex",
  "reqwest 0.12.24",
- "rmcp 0.8.5",
+ "rmcp 0.10.0",
  "scopeguard",
  "serde",
  "serde_json",
@@ -5847,7 +5853,7 @@ dependencies = [
  "axum 0.7.9",
  "regex",
  "reqwest 0.12.24",
- "rmcp 0.8.5",
+ "rmcp 0.10.0",
  "serde",
  "serde_json",
  "swissarmyhammer-common",
@@ -6014,7 +6020,7 @@ dependencies = [
  "rand 0.8.5",
  "regex",
  "reqwest 0.12.24",
- "rmcp 0.8.5",
+ "rmcp 0.10.0",
  "schemars 0.8.22",
  "scraper",
  "serde",
@@ -6079,7 +6085,7 @@ dependencies = [
  "rayon",
  "regex",
  "reqwest 0.12.24",
- "rmcp 0.8.5",
+ "rmcp 0.10.0",
  "schemars 0.8.22",
  "serde",
  "serde_json",

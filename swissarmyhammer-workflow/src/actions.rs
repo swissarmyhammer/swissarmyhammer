@@ -783,11 +783,10 @@ impl PromptAction {
     fn create_mcp_server_config(&self, port: u16) -> agent_client_protocol::McpServer {
         tracing::info!("Creating executor with MCP server on port {}", port);
 
-        agent_client_protocol::McpServer::Http {
-            name: "swissarmyhammer".to_string(),
-            url: format!("http://127.0.0.1:{}/mcp", port),
-            headers: Vec::new(),
-        }
+        agent_client_protocol::McpServer::Http(agent_client_protocol::McpServerHttp::new(
+            "swissarmyhammer",
+            format!("http://127.0.0.1:{}/mcp", port),
+        ))
     }
 }
 

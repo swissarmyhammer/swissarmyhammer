@@ -84,7 +84,7 @@ owo-colors = "4"
 is-terminal = "0.4"
 which = "7.0"
 
-rmcp = { version = "0.8.4", features = [
+rmcp = { version = "0.10.0", features = [
     "server",
     "client",
     "macros",
@@ -99,6 +99,7 @@ rmcp = { version = "0.8.4", features = [
     "elicitation",
     "schemars",
 ] }
+agent-client-protocol = "0.8.0"
 dirs = "5"
 rust-embed = "8"
 comfy-table = "7"

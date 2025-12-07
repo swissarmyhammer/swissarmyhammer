@@ -124,7 +124,7 @@ indicatif = { workspace = true }
 clap = { workspace = true }
 dialoguer = { workspace = true }
 is-terminal = { workspace = true }
-agent-client-protocol = "0.7.0"
+agent-client-protocol = { workspace = true }
 
 
 # NEVER add features or feature flags to this Cargo.toml!

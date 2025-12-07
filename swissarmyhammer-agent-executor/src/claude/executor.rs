@@ -41,11 +41,16 @@ impl ClaudeCodeExecutor {
     /// Build MCP configuration JSON string for Claude CLI
     fn build_mcp_config(&self) -> ActionResult<String> {
         let (server_name, server_url) = match &self.mcp_server {
-            McpServer::Http { name, url, .. } => (name, url),
-            McpServer::Sse { name, url, .. } => (name, url),
-            McpServer::Stdio { .. } => {
+            McpServer::Http(http) => (&http.name, &http.url),
+            McpServer::Sse(sse) => (&sse.name, &sse.url),
+            McpServer::Stdio(_) => {
                 return Err(ActionError::ClaudeError(
                     "Claude executor requires HTTP MCP server, got Stdio".to_string(),
+                ))
+            }
+            _ => {
+                return Err(ActionError::ClaudeError(
+                    "Claude executor requires HTTP or SSE MCP server".to_string(),
                 ))
             }
         };

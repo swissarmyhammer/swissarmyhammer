@@ -56,7 +56,7 @@ serde_json = { workspace = true }
 tempfile = { workspace = true }
 tokio-test = "0.4"
 serial_test = "3.1"
-agent-client-protocol = "0.7.0"
+agent-client-protocol = { workspace = true }
 git2 = { workspace = true }
 
 # NEVER add features or feature flags to this Cargo.toml!

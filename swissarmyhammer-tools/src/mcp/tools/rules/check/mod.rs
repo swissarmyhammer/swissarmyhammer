@@ -61,11 +61,12 @@ async fn create_agent_from_config(
     })?;
 
     // Create McpServer configuration using agent-client-protocol types
-    let mcp_server = agent_client_protocol::McpServer::Http {
-        name: "swissarmyhammer".to_string(),
-        url: format!("http://127.0.0.1:{}/mcp", port),
-        headers: Vec::new(),
-    };
+    let mcp_server = agent_client_protocol::McpServer::Http(
+        agent_client_protocol::McpServerHttp::new(
+            "swissarmyhammer",
+            format!("http://127.0.0.1:{}/mcp", port),
+        ),
+    );
 
     tracing::info!("Creating agent executor with MCP server on port {}", port);
 
@@ -491,11 +492,12 @@ impl RuleCheckTool {
             proxy_url_for_agent
         );
 
-        let proxy_server = agent_client_protocol::McpServer::Http {
-            name: format!("sah-filtered-{}", rule.name.replace('/', "-")),
-            url: proxy_url_for_agent.clone(),
-            headers: vec![],
-        };
+        let proxy_server = agent_client_protocol::McpServer::Http(
+            agent_client_protocol::McpServerHttp::new(
+                format!("sah-filtered-{}", rule.name.replace('/', "-")),
+                proxy_url_for_agent.clone(),
+            ),
+        );
 
         let agent_config = context.get_agent_for_use_case(ModelUseCase::Rules);
         let filtered_agent = swissarmyhammer_agent_executor::AgentExecutorFactory::create_executor(

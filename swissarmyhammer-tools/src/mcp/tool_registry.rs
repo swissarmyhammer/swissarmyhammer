@@ -938,6 +938,7 @@ impl ToolRegistry {
                     output_schema: None,
                     icons: None,
                     title: Some(tool.name().into()),
+                    meta: None,
                 }
             })
             .collect()

@@ -261,18 +261,20 @@ impl LlamaAgentExecutor {
     /// Helper: Extract URL from any McpServer variant
     fn get_mcp_server_url(mcp_server: &agent_client_protocol::McpServer) -> Option<String> {
         match mcp_server {
-            agent_client_protocol::McpServer::Http { url, .. }
-            | agent_client_protocol::McpServer::Sse { url, .. } => Some(url.clone()),
-            agent_client_protocol::McpServer::Stdio { .. } => None,
+            agent_client_protocol::McpServer::Http(http) => Some(http.url.clone()),
+            agent_client_protocol::McpServer::Sse(sse) => Some(sse.url.clone()),
+            agent_client_protocol::McpServer::Stdio(_) => None,
+            _ => None,
         }
     }
 
     /// Helper: Extract name from any McpServer variant
     fn get_mcp_server_name(mcp_server: &agent_client_protocol::McpServer) -> String {
         match mcp_server {
-            agent_client_protocol::McpServer::Http { name, .. }
-            | agent_client_protocol::McpServer::Sse { name, .. }
-            | agent_client_protocol::McpServer::Stdio { name, .. } => name.clone(),
+            agent_client_protocol::McpServer::Http(http) => http.name.clone(),
+            agent_client_protocol::McpServer::Sse(sse) => sse.name.clone(),
+            agent_client_protocol::McpServer::Stdio(stdio) => stdio.name.clone(),
+            _ => "unknown".to_string(),
         }
     }
 
