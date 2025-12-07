@@ -13,11 +13,9 @@ use swissarmyhammer_rules::{Rule, RuleChecker, Severity};
 /// Create a test agent with default configuration
 fn create_test_agent() -> Arc<LlamaAgentExecutorWrapper> {
     let config = LlamaAgentConfig::for_testing();
-    let mcp_server = agent_client_protocol::McpServer::Http {
-        name: "test".to_string(),
-        url: "http://localhost:8080/mcp".to_string(),
-        headers: Vec::new(),
-    };
+    let mcp_server = agent_client_protocol::McpServer::Http(
+        agent_client_protocol::McpServerHttp::new("test", "http://localhost:8080/mcp"),
+    );
     Arc::new(LlamaAgentExecutorWrapper::new(config, mcp_server))
 }
 

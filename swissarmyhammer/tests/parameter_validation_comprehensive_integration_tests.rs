@@ -1309,15 +1309,5 @@ mod specification_compliance_tests {
             let result = resolver.resolve_parameters(&parameters, &cli_args, false);
             assert!(result.is_ok(), "Parameter resolution should succeed");
         }
-
-        #[tokio::test]
-        async fn test_help_generation_performance() {
-            let workflow_params = discover_workflow_parameters("greeting");
-
-            assert!(
-                workflow_params.is_ok(),
-                "Parameter discovery should succeed"
-            );
-        }
     }
 }

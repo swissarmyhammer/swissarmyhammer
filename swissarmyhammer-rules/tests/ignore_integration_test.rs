@@ -10,11 +10,9 @@ use swissarmyhammer_rules::{Rule, RuleChecker, RuleViolation, Severity};
 /// Create a test agent for integration tests
 fn create_test_agent() -> std::sync::Arc<dyn swissarmyhammer_agent_executor::AgentExecutor> {
     let config = LlamaAgentConfig::for_testing();
-    let mcp_server = agent_client_protocol::McpServer::Http {
-        name: "test".to_string(),
-        url: "http://localhost:8080/mcp".to_string(),
-        headers: Vec::new(),
-    };
+    let mcp_server = agent_client_protocol::McpServer::Http(
+        agent_client_protocol::McpServerHttp::new("test", "http://localhost:8080/mcp"),
+    );
     std::sync::Arc::new(LlamaAgentExecutorWrapper::new(config, mcp_server))
 }
 

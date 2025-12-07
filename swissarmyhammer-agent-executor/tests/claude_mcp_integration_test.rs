@@ -11,11 +11,9 @@ async fn test_claude_mcp_config_argument_order() {
     // Test that verifies --mcp-config comes BEFORE --print in command args
     // This is critical: Claude CLI requires this specific order to parse correctly
 
-    let mcp_config = agent_client_protocol::McpServer::Http {
-        name: "test".to_string(),
-        url: "http://127.0.0.1:12345/mcp".to_string(),
-        headers: Vec::new(),
-    };
+    let mcp_config = agent_client_protocol::McpServer::Http(
+        agent_client_protocol::McpServerHttp::new("test", "http://127.0.0.1:12345/mcp"),
+    );
 
     let mut executor = ClaudeCodeExecutor::new(mcp_config);
 
@@ -52,11 +50,9 @@ async fn test_claude_executor_can_use_mcp_tools() {
     let port = mcp_server.info().port.expect("MCP server should have port");
 
     // Create McpServer configuration
-    let mcp_config = agent_client_protocol::McpServer::Http {
-        name: "test".to_string(),
-        url: format!("http://127.0.0.1:{}/mcp", port),
-        headers: Vec::new(),
-    };
+    let mcp_config = agent_client_protocol::McpServer::Http(
+        agent_client_protocol::McpServerHttp::new("test", format!("http://127.0.0.1:{}/mcp", port)),
+    );
 
     // Create and initialize ClaudeCode executor
     let mut executor = ClaudeCodeExecutor::new(mcp_config);

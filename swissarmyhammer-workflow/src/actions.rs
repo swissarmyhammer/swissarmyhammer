@@ -2325,11 +2325,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_claude_executor_initialization() {
-        let mcp_server = agent_client_protocol::McpServer::Http {
-            name: "test".to_string(),
-            url: "http://localhost:8080/mcp".to_string(),
-            headers: Vec::new(),
-        };
+        let mcp_server = agent_client_protocol::McpServer::Http(
+            agent_client_protocol::McpServerHttp::new("test", "http://localhost:8080/mcp"),
+        );
         let mut executor = ClaudeCodeExecutor::new(mcp_server);
 
         // Test initial state
