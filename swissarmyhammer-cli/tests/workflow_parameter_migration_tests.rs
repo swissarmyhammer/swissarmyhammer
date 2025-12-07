@@ -76,7 +76,13 @@ async fn run_builtin_workflow_in_process(
     )
     .await;
 
-    Ok(result.is_ok())
+    match &result {
+        Ok(_) => Ok(true),
+        Err(e) => {
+            eprintln!("Workflow execution failed: {:?}", e);
+            Ok(false)
+        }
+    }
 }
 
 #[tokio::test]
@@ -101,7 +107,7 @@ async fn test_greeting_workflow_parameter_migration() -> Result<()> {
 }
 
 #[tokio::test]
-async fn test_greeting_workflow_backward_compatibility() -> Result<()> {
+async fn test_hello_world_workflow_backward_compatibility() -> Result<()> {
     // Test that --var arguments work
     let success = run_builtin_workflow_in_process(
         "hello-world",
@@ -121,7 +127,7 @@ async fn test_greeting_workflow_backward_compatibility() -> Result<()> {
 }
 
 #[tokio::test]
-async fn test_greeting_workflow_interactive_prompting() -> Result<()> {
+async fn test_hello_world_workflow_interactive_prompting() -> Result<()> {
     // Test that workflow runs without parameters (should use defaults/prompts)
     let success = run_builtin_workflow_in_process(
         "hello-world",
@@ -191,7 +197,7 @@ async fn test_plan_workflow_legacy_behavior() -> Result<()> {
 async fn test_mixed_parameter_resolution_precedence() -> Result<()> {
     // Test precedence when multiple --var are used
     let success = run_builtin_workflow_in_process(
-        "greeting",
+        "hello-world",
         vec![
             "person_name=Alice".to_string(), // First var value
             "person_name=Bob".to_string(),   // Later var value should take precedence
@@ -212,7 +218,7 @@ async fn test_mixed_parameter_resolution_precedence() -> Result<()> {
 async fn test_workflow_edge_cases() -> Result<()> {
     // Test with empty variable values
     let success1 = run_builtin_workflow_in_process(
-        "greeting",
+        "hello-world",
         vec![
             "person_name=".to_string(), // empty value
             "language=English".to_string(),
@@ -225,7 +231,7 @@ async fn test_workflow_edge_cases() -> Result<()> {
 
     // Test with special characters in values
     let success2 = run_builtin_workflow_in_process(
-        "greeting",
+        "hello-world",
         vec![
             "person_name=José María".to_string(), // Special characters
             "language=Español".to_string(),
@@ -243,14 +249,14 @@ async fn test_workflow_edge_cases() -> Result<()> {
 
 // Keep a few slow CLI integration tests for end-to-end verification
 #[tokio::test]
-async fn test_cli_integration_greeting_workflow() -> Result<()> {
+async fn test_cli_integration_hello_world_workflow() -> Result<()> {
     // Run from repo root where builtin workflows are located
     let repo_root = get_repo_root();
     std::env::set_current_dir(&repo_root).unwrap();
 
     let result = run_sah_command_in_process(&[
         "flow",
-        "greeting",
+        "hello-world",
         "--var",
         "person_name=Integration Test",
         "--var",
@@ -261,7 +267,7 @@ async fn test_cli_integration_greeting_workflow() -> Result<()> {
 
     assert_eq!(result.exit_code, 0);
     assert!(result.stdout.contains("🔍 Dry run mode"));
-    assert!(result.stdout.contains("greeting"));
+    assert!(result.stdout.contains("hello-world"));
     Ok(())
 }
 

@@ -1,2 +1,3 @@
 [profile.default]
 slow-timeout = "5s"
+status-level = "slow"
