@@ -1166,12 +1166,10 @@ mod specification_compliance_tests {
         let parameters: Vec<_> = workflow_params.into_iter().collect();
 
         // Test with valid optional parameters
-        let cli_args: HashMap<String, String> = [
-            ("language".to_string(), "Spanish".to_string()),
-        ]
-        .iter()
-        .cloned()
-        .collect();
+        let cli_args: HashMap<String, String> = [("language".to_string(), "Spanish".to_string())]
+            .iter()
+            .cloned()
+            .collect();
 
         let result = resolver.resolve_parameters(&parameters, &cli_args, false);
         assert!(
@@ -1180,12 +1178,10 @@ mod specification_compliance_tests {
         );
 
         // Test with invalid choice value for choice parameter
-        let cli_args: HashMap<String, String> = [
-            ("language".to_string(), "Klingon".to_string()),
-        ]
-        .iter()
-        .cloned()
-        .collect();
+        let cli_args: HashMap<String, String> = [("language".to_string(), "Klingon".to_string())]
+            .iter()
+            .cloned()
+            .collect();
 
         let _result = resolver.resolve_parameters(&parameters, &cli_args, false);
         // Note: Choice validation is currently handled at a different layer

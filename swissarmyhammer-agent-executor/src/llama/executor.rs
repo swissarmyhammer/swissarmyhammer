@@ -922,9 +922,10 @@ mod tests {
 
     /// Test utility: Create a test MCP server configuration
     fn create_test_mcp_server(port: u16) -> agent_client_protocol::McpServer {
-        agent_client_protocol::McpServer::Http(
-            agent_client_protocol::McpServerHttp::new("test", format!("http://127.0.0.1:{}/mcp", port)),
-        )
+        agent_client_protocol::McpServer::Http(agent_client_protocol::McpServerHttp::new(
+            "test",
+            format!("http://127.0.0.1:{}/mcp", port),
+        ))
     }
 
     /// Test utility: Start MCP server and return handle with port
