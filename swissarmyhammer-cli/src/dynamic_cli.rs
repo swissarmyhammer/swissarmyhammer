@@ -913,7 +913,7 @@ impl CliBuilder {
         registry: &ToolRegistry,
         builder: &CliBuilder,
         init: T,
-        mut folder: F,
+        folder: F,
     ) -> T
     where
         F: FnMut(T, Result<(), Vec<ValidationError>>) -> T,
@@ -926,7 +926,7 @@ impl CliBuilder {
 
         validation_results
             .into_iter()
-            .fold(init, |acc, result| folder(acc, result))
+            .fold(init, folder)
     }
 
     /// Validate a single tool for CLI compatibility
