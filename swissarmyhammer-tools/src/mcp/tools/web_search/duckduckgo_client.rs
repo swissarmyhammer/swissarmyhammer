@@ -198,7 +198,21 @@ impl DuckDuckGoClient {
         )
         .await
         .map_err(|e| {
-            DuckDuckGoError::Browser(Box::new(e))
+            let error_msg = e.to_string();
+            // Provide helpful error message when Chrome/Chromium is not installed
+            if error_msg.contains("No such file or directory")
+                || error_msg.contains("cannot find")
+                || error_msg.contains("not found")
+            {
+                DuckDuckGoError::Browser(Box::new(CdpError::Io(std::io::Error::new(
+                    std::io::ErrorKind::NotFound,
+                    "Chrome/Chromium browser not found. Web search requires Chrome or Chromium to be installed. \
+                     Install via: 'brew install chromium' (macOS), 'apt install chromium-browser' (Ubuntu), \
+                     or download from https://www.chromium.org/getting-involved/download-chromium/",
+                ))))
+            } else {
+                DuckDuckGoError::Browser(Box::new(e))
+            }
         })?;
 
         // Spawn handler task with better error handling for CDP message deserialization

@@ -650,8 +650,16 @@ mod tests {
             notifications.push(notif);
         }
 
-        // The test should verify notifications are sent even if search fails
-        // (e.g., in CI environments without network access)
+        // If search failed due to missing Chrome, skip the test with clear message
+        if let Err(ref e) = result {
+            let error_text = e.to_string();
+            if error_text.contains("Chrome/Chromium browser not found") {
+                eprintln!("Skipping test: {}", error_text);
+                return;
+            }
+        }
+
+        // The test should verify notifications are sent
         if !notifications.is_empty() {
             // First notification should be the start notification with 0% progress
             assert_eq!(
@@ -679,11 +687,9 @@ mod tests {
             );
         }
 
-        // If the search succeeded, verify result structure
-        if result.is_ok() {
-            let call_result = result.unwrap();
-            assert_eq!(call_result.is_error, Some(false));
-            assert!(!call_result.content.is_empty());
-        }
+        // Verify result structure
+        let call_result = result.expect("Search should succeed when Chrome is available");
+        assert_eq!(call_result.is_error, Some(false));
+        assert!(!call_result.content.is_empty());
     }
 }
