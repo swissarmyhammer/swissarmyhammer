@@ -924,9 +924,7 @@ impl CliBuilder {
             validation_results.push(builder.validate_single_tool(tool));
         });
 
-        validation_results
-            .into_iter()
-            .fold(init, folder)
+        validation_results.into_iter().fold(init, folder)
     }
 
     /// Validate a single tool for CLI compatibility

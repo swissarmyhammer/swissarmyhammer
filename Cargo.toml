@@ -18,6 +18,7 @@ members = [
     "swissarmyhammer-rules",
     "swissarmyhammer-workflow",
     "swissarmyhammer-mcp-proxy",
+    "markdowndown",
 ]
 resolver = "2"
 
@@ -123,7 +124,9 @@ csv = "1.3"
 rand = "0.8"
 syntect = "5.2"
 once_cell = "1.19"
-html2text = "0.12"
+html2text = "0.16"
+bytes = "1.0"
+futures = "0.3"
 
 # HTTP server dependencies
 axum = "0.7"
@@ -132,7 +135,7 @@ tower-http = "0.5"
 hyper = "1.0"
 
 # Web fetch dependencies
-markdowndown = { git = "https://github.com/swissarmyhammer/markdowndown" }
+markdowndown = { path = "markdowndown" }
 llama-agent = { git = "https://github.com/swissarmyhammer/llama-agent" }
 
 # Additional common dependencies
