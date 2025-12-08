@@ -962,6 +962,9 @@ mod tests {
 
         // Initialize repository
         let repo = Repository::init(repo_path).expect("Failed to init repository");
+        // Ensure initial branch is 'main' for consistency across environments
+        repo.set_head("refs/heads/main")
+            .expect("Failed to set HEAD to main");
         let mut config = repo.config().expect("Failed to get config");
         config
             .set_str("user.name", "Test User")
