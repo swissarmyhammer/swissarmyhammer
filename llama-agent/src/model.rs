@@ -325,7 +325,7 @@ impl ModelManager {
         }
 
         let context_params = LlamaContextParams::default()
-            .with_n_ctx(Some(std::num::NonZero::new(n_ctx as u32).unwrap()))
+            .with_n_ctx(Some(std::num::NonZeroU32::new(n_ctx as u32).unwrap()))
             .with_n_batch(n_batch)
             .with_n_ubatch(n_ubatch)
             .with_n_threads(self.config.n_threads)
