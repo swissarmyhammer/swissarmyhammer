@@ -1,0 +1,46 @@
+[
+  {
+    "update_type": "AgentMessageChunk",
+    "content": {
+      "Text": {
+        "text": "I'll use the Read tool to read the Cargo.toml file.",
+        "annotations": null,
+        "meta": null
+      }
+    }
+  },
+  {
+    "update_type": "ToolCall",
+    "id": {"0": "toolu_01ToolCallFlowTest"},
+    "title": "Read",
+    "kind": "Read",
+    "status": "Pending",
+    "content": [],
+    "locations": [],
+    "raw_input": {
+      "file_path": "/Users/wballard/github/hence/claude-agent/Cargo.toml"
+    },
+    "raw_output": null,
+    "meta": null
+  },
+  {
+    "update_type": "UserMessageChunk",
+    "content": {
+      "Text": {
+        "text": "[Tool result with Cargo.toml content]",
+        "annotations": null,
+        "meta": null
+      }
+    }
+  },
+  {
+    "update_type": "AgentMessageChunk",
+    "content": {
+      "Text": {
+        "text": "The package name is claude-agent.",
+        "annotations": null,
+        "meta": null
+      }
+    }
+  }
+]

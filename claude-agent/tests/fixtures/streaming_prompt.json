@@ -1,0 +1,19 @@
+{
+  "exchanges": [
+    {
+      "input": "{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"init\"}}",
+      "outputs": [
+        "{\"type\":\"system\",\"message\":\"init\",\"slash_commands\":[{\"name\":\"compact\",\"description\":\"Compact conversation history\"}]}"
+      ]
+    },
+    {
+      "input": "{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"Tell me a story\"}}",
+      "outputs": [
+        "{\"type\":\"assistant\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"Once upon a time\"}]}}",
+        "{\"type\":\"assistant\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\", in a land far away\"}]}}",
+        "{\"type\":\"assistant\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\", there lived a brave knight.\"}]}}",
+        "{\"type\":\"result\",\"status\":\"success\",\"stop_reason\":\"end_turn\",\"meta\":{\"streaming\":true}}"
+      ]
+    }
+  ]
+}

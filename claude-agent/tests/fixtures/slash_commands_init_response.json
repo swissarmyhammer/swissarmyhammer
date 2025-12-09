@@ -1,0 +1,37 @@
+[
+  {
+    "update_type": "AvailableCommandsUpdate",
+    "available_commands": [
+      {
+        "name": "compact",
+        "description": "Switch to compact mode",
+        "meta": {
+          "source": "claude_cli"
+        }
+      },
+      {
+        "name": "context",
+        "description": "Show context information",
+        "meta": {
+          "source": "claude_cli"
+        }
+      },
+      {
+        "name": "mcp__sah__test",
+        "description": "Run tests using the SAH MCP server",
+        "meta": {
+          "source": "claude_cli",
+          "mcp_server": "sah"
+        }
+      },
+      {
+        "name": "mcp__sah__commit",
+        "description": "Create a git commit",
+        "meta": {
+          "source": "claude_cli",
+          "mcp_server": "sah"
+        }
+      }
+    ]
+  }
+]

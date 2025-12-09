@@ -1,0 +1,17 @@
+{
+  "exchanges": [
+    {
+      "input": "{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"init\"}}",
+      "outputs": [
+        "{\"type\":\"system\",\"message\":\"init\",\"slash_commands\":[{\"name\":\"compact\",\"description\":\"Compact conversation history\"},{\"name\":\"context\",\"description\":\"Show context window usage\"}]}"
+      ]
+    },
+    {
+      "input": "{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"Test protocol flow\"}}",
+      "outputs": [
+        "{\"type\":\"assistant\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"This is a complete protocol flow test, demonstrating initialization, session creation, and prompt handling.\"}]}}",
+        "{\"type\":\"result\",\"status\":\"success\",\"stop_reason\":\"end_turn\"}"
+      ]
+    }
+  ]
+}

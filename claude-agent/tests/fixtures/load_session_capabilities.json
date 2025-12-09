@@ -1,0 +1,10 @@
+{
+  "exchanges": [
+    {
+      "input": "{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"init\"}}",
+      "outputs": [
+        "{\"type\":\"system\",\"message\":\"init\",\"slash_commands\":[{\"name\":\"compact\",\"description\":\"Compact conversation history\"}],\"meta\":{\"load_session_capability\":true}}"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,24 @@
+{
+  "exchanges": [
+    {
+      "input": "{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"init\"}}",
+      "outputs": [
+        "{\"type\":\"system\",\"message\":\"init\",\"slash_commands\":[{\"name\":\"compact\",\"description\":\"Compact conversation history\"}]}"
+      ]
+    },
+    {
+      "input": "{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"My name is Alice\"}}",
+      "outputs": [
+        "{\"type\":\"assistant\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"Nice to meet you, Alice! How can I help you today?\"}]}}",
+        "{\"type\":\"result\",\"status\":\"success\",\"stop_reason\":\"end_turn\"}"
+      ]
+    },
+    {
+      "input": "{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"What is my name?\"}}",
+      "outputs": [
+        "{\"type\":\"assistant\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"Your name is Alice, as you just told me.\"}]}}",
+        "{\"type\":\"result\",\"status\":\"success\",\"stop_reason\":\"end_turn\"}"
+      ]
+    }
+  ]
+}
