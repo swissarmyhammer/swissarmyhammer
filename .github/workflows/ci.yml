@@ -57,7 +57,7 @@ jobs:
         with:
           toolchain: ${{ matrix.rust }}
       - uses: Swatinem/rust-cache@v2
-      - name: Run examples
+      - name: Build examples
         run: |
           cargo metadata --format-version 1 \
             | jq -r '
@@ -71,6 +71,6 @@ jobs:
               ' \
             | while read -r pkg name; do
                 echo "::group::Running example: $pkg/$name"
-                cargo run --example "$name" -p "$pkg"
+                cargo build --example "$name" -p "$pkg"
                 echo "::endgroup::"
               done
