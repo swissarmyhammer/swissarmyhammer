@@ -1128,6 +1128,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "colored"
+version = "3.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fde0e0ec90c9dfb3b4b1a0891a7dcd0e2bffde2f7efed5fe7c9bb00e5bfb915e"
+dependencies = [
+ "windows-sys 0.59.0",
+]
+
+[[package]]
 name = "combine"
 version = "4.6.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3404,8 +3413,9 @@ dependencies = [
 
 [[package]]
 name = "llama-cpp-2"
-version = "0.1.123"
-source = "git+https://github.com/swissarmyhammer/llama-cpp-rs#6f4e114a918653cd109e79adfca410205b91dffe"
+version = "0.1.129"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "edeaf79ca398bd899ef31d57f5b7c888727ec44ed875478185f9dea451fae4c3"
 dependencies = [
  "enumflags2",
  "llama-cpp-sys-2",
@@ -3416,8 +3426,9 @@ dependencies = [
 
 [[package]]
 name = "llama-cpp-sys-2"
-version = "0.1.123"
-source = "git+https://github.com/swissarmyhammer/llama-cpp-rs#6f4e114a918653cd109e79adfca410205b91dffe"
+version = "0.1.129"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "85182a2831f6809f6c7cef123b9471e75ac04378f29364eaa43bb30d1ee398bd"
 dependencies = [
  "bindgen",
  "cc",
@@ -3668,7 +3679,7 @@ checksum = "7e0603425789b4a70fcc4ac4f5a46a566c116ee3e2a6b768dc623f7719c611de"
 dependencies = [
  "assert-json-diff",
  "bytes",
- "colored",
+ "colored 3.0.0",
  "futures-core",
  "http 1.4.0",
  "http-body 1.0.1",
@@ -5046,11 +5057,10 @@ dependencies = [
 
 [[package]]
 name = "reqwest"
-version = "0.12.24"
+version = "0.12.25"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9d0946410b9f7b082a427e4ef5c8ff541a88b357bc6c637c40db3a68ac70a36f"
+checksum = "b6eff9328d40131d43bd911d42d79eb6a47312002a4daefc9e37f17e74a7701a"
 dependencies = [
- "async-compression",
  "base64 0.22.1",
  "bytes",
  "cookie",
@@ -6028,7 +6038,7 @@ dependencies = [
  "atty",
  "clap",
  "clap_complete",
- "colored",
+ "colored 2.2.0",
  "comfy-table",
  "derive_builder",
  "dialoguer",
@@ -6931,13 +6941,18 @@ version = "0.6.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d4e6559d53cc268e5031cd8429d05415bc4cb4aefc4aa5d6cc35fbf5b924a1f8"
 dependencies = [
+ "async-compression",
  "bitflags 2.10.0",
  "bytes",
+ "futures-core",
  "futures-util",
  "http 1.4.0",
  "http-body 1.0.1",
+ "http-body-util",
  "iri-string",
  "pin-project-lite",
+ "tokio",
+ "tokio-util",
  "tower",
  "tower-layer",
  "tower-service",

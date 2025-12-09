@@ -99,7 +99,7 @@ impl ModelManager {
             // Try to initialize the backend
             let new_backend = match LlamaBackend::init() {
                 Ok(backend) => Arc::new(backend),
-                Err(llama_cpp_2::LLamaCppError::BackendAlreadyInitialized) => {
+                Err(llama_cpp_2::LlamaCppError::BackendAlreadyInitialized) => {
                     // Backend was already initialized but we don't have a reference
                     // This is a limitation of llama-cpp-2 - we can't get a reference to an existing backend
                     // For now, we'll work around this by skipping backend initialization in tests
