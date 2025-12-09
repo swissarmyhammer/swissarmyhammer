@@ -2188,13 +2188,13 @@ mod tests {
 
         /// Assert that the command executed successfully
         fn assert_success(&self) {
-            assert_eq!(self.success, true);
+            assert!(self.success);
             assert_eq!(self.exit_code, 0);
         }
 
         /// Assert that the command failed with expected exit code
         fn assert_failure(&self, expected_exit_code: i64) {
-            assert_eq!(self.success, false);
+            assert!(!self.success);
             assert_eq!(self.exit_code, expected_exit_code);
         }
 

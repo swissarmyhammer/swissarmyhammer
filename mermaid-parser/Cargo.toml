@@ -1,0 +1,68 @@
+[package]
+name = "mermaid-parser"
+version = "0.1.0"
+authors = ["William Ballard <wballard@mailbox.org>"]
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "A fast, reliable parser for Mermaid diagram syntax with comprehensive diagram type support"
+repository = "https://github.com/wballard/mermaid-parser"
+homepage = "https://github.com/wballard/mermaid-parser"
+documentation = "https://docs.rs/mermaid-parser"
+readme = "README.md"
+keywords = ["mermaid", "parser", "diagram", "visualization", "graph"]
+categories = ["parser-implementations", "visualization", "text-processing"]
+rust-version = "1.70.0"
+
+[badges]
+maintenance = { status = "actively-developed" }
+
+[dependencies]
+chumsky = "0.10.1"
+
+[dev-dependencies]
+rstest = "0.21"
+
+# Examples
+[[example]]
+name = "basic_parsing"
+path = "examples/basic_parsing.rs"
+
+[[example]]
+name = "detect_type"
+path = "examples/detect_type.rs"
+
+[[example]]
+name = "parse_all_types"
+path = "examples/parse_all_types.rs"
+
+[[example]]
+name = "mermaid_error_handling"
+path = "examples/mermaid_error_handling.rs"
+
+[[example]]
+name = "ast_analysis"
+path = "examples/ast_analysis.rs"
+
+[[example]]
+name = "validation"
+path = "examples/validation.rs"
+
+[[example]]
+name = "mermaid_batch_processing"
+path = "examples/mermaid_batch_processing.rs"
+
+[lints.clippy]
+# Strict linting configuration
+# Note: The codebase needs gradual cleanup to comply with all rules
+# Start with basic rules and gradually enable stricter ones
+all = { level = "warn", priority = -1 }
+# pedantic = "warn"  # TODO: Enable after codebase cleanup
+# nursery = "warn"   # TODO: Enable after codebase cleanup
+# cargo = "warn"     # TODO: Enable after codebase cleanup
+
+# Allows
+missing_docs_in_private_items = "allow"
+module_name_repetitions = "allow"
+must_use_candidate = "allow"
+expect_used = "allow"
+unwrap_used = "allow"  # in tests only

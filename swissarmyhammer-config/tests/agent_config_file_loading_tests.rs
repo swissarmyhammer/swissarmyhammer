@@ -21,7 +21,7 @@ impl TempTestDir {
         fs::create_dir(&config_dir).unwrap();
 
         let original_dir = std::env::current_dir().unwrap();
-        std::env::set_current_dir(&env.temp_dir()).unwrap();
+        std::env::set_current_dir(env.temp_dir()).unwrap();
 
         Self {
             _env: env,

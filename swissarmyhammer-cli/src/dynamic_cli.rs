@@ -15,23 +15,114 @@ use swissarmyhammer_tools::mcp::tool_registry::{McpTool, ToolRegistry};
 use swissarmyhammer_workflow::WorkflowStorage;
 use tokio::sync::RwLock;
 
-/// Global string cache to prevent memory leaks from Box::leak
-/// Strings are interned once and reused, satisfying clap's 'static lifetime requirement
+/// Multiplier for converting decimal ratios to percentage values (0.0-1.0 → 0.0-100.0)
+const PERCENTAGE_MULTIPLIER: f64 = 100.0;
+
+/// Default HTTP port used when no environment variable is set
+const DEFAULT_HTTP_PORT: &str = "8000";
+
+/// Default HTTP host used when no environment variable is set
+const DEFAULT_HTTP_HOST: &str = "127.0.0.1";
+
+/// Get default configuration from environment variables with fallback chain
+///
+/// Checks both SAH_* and SWISSARMYHAMMER_* prefixed environment variables,
+/// falling back to the provided default if neither is set.
+///
+/// # Arguments
+///
+/// * `primary_env` - Primary environment variable name (e.g., "SAH_HTTP_PORT")
+/// * `fallback_env` - Fallback environment variable name (e.g., "SWISSARMYHAMMER_HTTP_PORT")
+/// * `default` - Default value if neither environment variable is set
+fn get_default_config(primary_env: &str, fallback_env: &str, default: &str) -> String {
+    std::env::var(primary_env)
+        .or_else(|_| std::env::var(fallback_env))
+        .unwrap_or_else(|_| default.to_string())
+}
+
+/// Get the default HTTP port from environment or use fallback
+///
+/// Checks SAH_HTTP_PORT and SWISSARMYHAMMER_HTTP_PORT environment variables,
+/// falling back to DEFAULT_HTTP_PORT if not set.
+fn get_default_http_port() -> String {
+    get_default_config(
+        "SAH_HTTP_PORT",
+        "SWISSARMYHAMMER_HTTP_PORT",
+        DEFAULT_HTTP_PORT,
+    )
+}
+
+/// Get the default HTTP host from environment or use fallback
+///
+/// Checks SAH_HTTP_HOST and SWISSARMYHAMMER_HTTP_HOST environment variables,
+/// falling back to DEFAULT_HTTP_HOST if not set.
+fn get_default_http_host() -> String {
+    get_default_config(
+        "SAH_HTTP_HOST",
+        "SWISSARMYHAMMER_HTTP_HOST",
+        DEFAULT_HTTP_HOST,
+    )
+}
+
+/// Global string cache for interning strings to satisfy clap's 'static lifetime requirement.
+///
+/// # Design Trade-off
+///
+/// This uses `Box::leak` to create 'static string references, which intentionally leaks memory.
+/// This is an acceptable trade-off because:
+///
+/// 1. **Clap Requirement**: Clap requires 'static lifetimes for command/arg names and help text
+/// 2. **Bounded Growth**: The cache only grows with unique CLI commands/args, not unbounded
+/// 3. **One-time Cost**: Strings are interned once at CLI build time, not per-invocation
+/// 4. **Deduplication**: The HashSet ensures each unique string is only leaked once
+///
+/// Alternative approaches considered:
+/// - `Arc<str>`: Cannot satisfy 'static lifetime requirement without unsafe transmutation
+/// - `string-interner` crate: Adds dependency and still requires similar memory management
+/// - Regenerating on each CLI build: Would require complex lifetime management across registry
+///
+/// The memory footprint is negligible (typically <1KB for all CLI metadata) and acceptable
+/// for a CLI application that runs once per invocation.
 static STRING_CACHE: Lazy<Mutex<HashSet<&'static str>>> = Lazy::new(|| Mutex::new(HashSet::new()));
 
-/// Check if a JSON schema contains a specific type name
-/// Handles both string and array type specifications
-fn schema_has_type(schema: &Value, type_name: &str) -> bool {
+/// Check if a JSON schema contains a specific type name.
+///
+/// Handles both string type specifications (e.g., `"type": "string"`)
+/// and array type specifications (e.g., `"type": ["string", "null"]`).
+///
+/// # Arguments
+///
+/// * `schema` - The JSON schema to check
+/// * `type_name` - The type name to search for (e.g., "string", "boolean")
+///
+/// # Returns
+///
+/// `true` if the schema contains the specified type, `false` otherwise
+pub fn schema_has_type(schema: &Value, type_name: &str) -> bool {
     match schema.get("type") {
-        Some(Value::String(t)) => t == type_name,
+        Some(Value::String(t)) => t.as_str() == type_name,
         Some(Value::Array(types)) => types.iter().any(|t| t.as_str() == Some(type_name)),
         _ => false,
     }
 }
 
-/// Intern a string into the global cache, returning a 'static reference
-/// This ensures each unique string is only leaked once, preventing unbounded memory growth
-fn intern_string(s: String) -> &'static str {
+/// Intern a string into the global cache, returning a 'static reference.
+///
+/// This ensures each unique string is only leaked once, preventing unbounded
+/// memory growth while satisfying clap's requirement for 'static string lifetimes.
+///
+/// # Arguments
+///
+/// * `s` - The string to intern
+///
+/// # Returns
+///
+/// A 'static reference to the interned string
+///
+/// # Thread Safety
+///
+/// This function is thread-safe and uses a mutex-protected cache
+pub fn intern_string(s: String) -> &'static str {
     let mut cache = STRING_CACHE.lock().unwrap();
 
     // Check if we already have this string cached
@@ -76,11 +167,612 @@ enum ArgType {
     Array,
 }
 
+impl ArgType {
+    /// Apply this type's configuration to an ArgBuilder
+    ///
+    /// Uses the strategy pattern to let each type configure itself,
+    /// reducing cognitive complexity in the builder.
+    fn apply_to_builder(self, builder: ArgBuilder, is_required: bool) -> ArgBuilder {
+        match self {
+            ArgType::Boolean => builder.build_boolean(),
+            ArgType::NullableBoolean => builder.build_nullable_boolean(),
+            ArgType::Integer => builder.build_integer(is_required),
+            ArgType::Float => builder.build_float(is_required),
+            ArgType::Array => builder.build_array(is_required),
+            ArgType::String => builder.build_string(is_required),
+        }
+    }
+}
+
 /// Configuration for building a command with documentation
 struct CommandConfig {
     name: &'static str,
     about: &'static str,
     long_about: &'static str,
+}
+
+/// Specification for building an argument declaratively
+#[derive(Clone)]
+struct ArgSpec {
+    name: &'static str,
+    long: Option<&'static str>,
+    short: Option<char>,
+    help: &'static str,
+    action: ArgSpecAction,
+    value_name: Option<&'static str>,
+    default_value: Option<String>,
+    value_parser: Option<ArgSpecValueParser>,
+    hide: bool,
+    required: bool,
+}
+
+/// Action type for argument specification
+#[derive(Clone)]
+enum ArgSpecAction {
+    Set,
+    SetTrue,
+    Append,
+}
+
+/// Value parser type for argument specification
+#[derive(Clone)]
+enum ArgSpecValueParser {
+    Strings(Vec<&'static str>),
+    U16,
+}
+
+impl ArgSpec {
+    /// Create a new argument specification with minimal required fields
+    fn new(name: &'static str, help: &'static str) -> Self {
+        Self {
+            name,
+            long: None,
+            short: None,
+            help,
+            action: ArgSpecAction::Set,
+            value_name: None,
+            default_value: None,
+            value_parser: None,
+            hide: false,
+            required: false,
+        }
+    }
+
+    /// Set the long flag name
+    fn long(mut self, long: &'static str) -> Self {
+        self.long = Some(long);
+        self
+    }
+
+    /// Set the short flag character
+    fn short(mut self, short: char) -> Self {
+        self.short = Some(short);
+        self
+    }
+
+    /// Set the action type
+    fn action(mut self, action: ArgSpecAction) -> Self {
+        self.action = action;
+        self
+    }
+
+    /// Set the value name
+    fn value_name(mut self, value_name: &'static str) -> Self {
+        self.value_name = Some(value_name);
+        self
+    }
+
+    /// Set the default value
+    fn default_value(mut self, default_value: String) -> Self {
+        self.default_value = Some(default_value);
+        self
+    }
+
+    /// Set the value parser
+    fn value_parser(mut self, parser: ArgSpecValueParser) -> Self {
+        self.value_parser = Some(parser);
+        self
+    }
+
+    /// Set whether to hide the argument
+    fn hide(mut self, hide: bool) -> Self {
+        self.hide = hide;
+        self
+    }
+
+    /// Set whether the argument is required
+    fn required(mut self, required: bool) -> Self {
+        self.required = required;
+        self
+    }
+
+    // Note: Builder methods intentionally use explicit implementations rather than macros
+    // to maintain clarity and allow for future per-method customization without complexity.
+
+    /// Build a clap Arg from this specification
+    fn build(self) -> Arg {
+        let mut arg = Arg::new(self.name).help(self.help);
+
+        if let Some(long) = self.long {
+            arg = arg.long(long);
+        }
+
+        if let Some(short) = self.short {
+            arg = arg.short(short);
+        }
+
+        arg = match self.action {
+            ArgSpecAction::Set => arg,
+            ArgSpecAction::SetTrue => arg.action(ArgAction::SetTrue),
+            ArgSpecAction::Append => arg.action(ArgAction::Append),
+        };
+
+        if let Some(value_name) = self.value_name {
+            arg = arg.value_name(value_name);
+        }
+
+        if let Some(default_value) = self.default_value {
+            arg = arg.default_value(intern_string(default_value));
+        }
+
+        if let Some(parser) = self.value_parser {
+            arg = match parser {
+                ArgSpecValueParser::Strings(values) => {
+                    arg.value_parser(clap::builder::PossibleValuesParser::new(values))
+                }
+                ArgSpecValueParser::U16 => arg.value_parser(clap::value_parser!(u16)),
+            };
+        }
+
+        if self.hide {
+            arg = arg.hide(true);
+        }
+
+        if self.required {
+            arg = arg.required(true);
+        }
+
+        arg
+    }
+}
+
+/// Specification for building a subcommand declaratively
+struct SubcommandSpec {
+    name: &'static str,
+    about: &'static str,
+    long_about: Option<&'static str>,
+    args: Vec<ArgSpec>,
+}
+
+impl SubcommandSpec {
+    /// Create a new subcommand specification
+    fn new(name: &'static str, about: &'static str) -> Self {
+        Self {
+            name,
+            about,
+            long_about: None,
+            args: Vec::new(),
+        }
+    }
+
+    /// Set the long about text
+    fn long_about(mut self, long_about: &'static str) -> Self {
+        self.long_about = Some(long_about);
+        self
+    }
+
+    /// Set the argument specifications
+    fn args(mut self, args: Vec<ArgSpec>) -> Self {
+        self.args = args;
+        self
+    }
+
+    /// Build a clap Command from this specification
+    fn build(self) -> Command {
+        let mut cmd = Command::new(self.name).about(self.about);
+
+        if let Some(long_about) = self.long_about {
+            cmd = cmd.long_about(long_about);
+        }
+
+        for arg_spec in self.args {
+            cmd = cmd.arg(arg_spec.build());
+        }
+
+        cmd
+    }
+}
+
+/// Schema parser for extracting fields from JSON schemas
+///
+/// Encapsulates schema field extraction logic to reduce cognitive complexity
+/// in argument preprocessing functions.
+struct SchemaParser;
+
+impl SchemaParser {
+    /// Extract a string field from a JSON schema
+    fn parse_string(schema: &Value, field: &str) -> Option<String> {
+        schema.get(field).and_then(|v| v.as_str()).map(String::from)
+    }
+
+    /// Extract enum values from a JSON schema
+    fn parse_enum(schema: &Value) -> Option<Vec<String>> {
+        schema.get("enum").and_then(|v| v.as_array()).map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect()
+        })
+    }
+
+    /// Extract the description from a schema
+    fn parse_description(schema: &Value) -> Option<String> {
+        Self::parse_string(schema, "description")
+    }
+
+    /// Extract the default value from a schema
+    fn parse_default(schema: &Value) -> Option<String> {
+        Self::parse_string(schema, "default")
+    }
+
+    /// Parse argument data from a schema
+    fn parse_arg_data(name: &str, schema: &Value, is_required: bool) -> ArgData {
+        ArgData {
+            name: name.to_string(),
+            help: Self::parse_description(schema),
+            is_required,
+            arg_type: Self::parse_type(schema),
+            default_value: Self::parse_default(schema),
+            possible_values: Self::parse_enum(schema),
+        }
+    }
+
+    /// Determine the argument type from a JSON schema
+    fn parse_type(schema: &Value) -> ArgType {
+        match (
+            Self::is_nullable_boolean(schema),
+            Self::get_primary_type(schema),
+        ) {
+            (true, _) => ArgType::NullableBoolean,
+            (false, Some("boolean")) => ArgType::Boolean,
+            (false, Some("integer")) => ArgType::Integer,
+            (false, Some("number")) => ArgType::Float,
+            (false, Some("array")) => ArgType::Array,
+            _ => ArgType::String,
+        }
+    }
+
+    /// Check if schema represents a nullable boolean
+    fn is_nullable_boolean(schema: &Value) -> bool {
+        schema_has_type(schema, "boolean") && schema_has_type(schema, "null")
+    }
+
+    /// Get the primary type from a schema
+    fn get_primary_type(schema: &Value) -> Option<&str> {
+        match schema.get("type") {
+            Some(Value::String(t)) => Some(t.as_str()),
+            Some(Value::Array(types)) => types
+                .iter()
+                .find_map(|t| t.as_str().filter(|s| *s != "null")),
+            _ => None,
+        }
+    }
+}
+
+/// Tool validator for checking CLI compatibility
+///
+/// Encapsulates validation logic with clean error propagation using the ? operator.
+struct ToolValidator<'a> {
+    tool: &'a dyn McpTool,
+}
+
+impl<'a> ToolValidator<'a> {
+    fn new(tool: &'a dyn McpTool) -> Self {
+        Self { tool }
+    }
+
+    /// Validate all aspects of the tool
+    fn validate(&self) -> Result<(), Vec<ValidationError>> {
+        let mut errors = Vec::new();
+
+        if let Err(e) = self.check_schema() {
+            errors.push(e);
+        }
+
+        if !self.tool.hidden_from_cli() {
+            if let Err(e) = self.check_cli_category() {
+                errors.push(e);
+            }
+            if let Err(e) = self.check_cli_name() {
+                errors.push(e);
+            }
+        }
+
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(errors)
+        }
+    }
+
+    /// Validate the tool's JSON schema
+    fn check_schema(&self) -> Result<(), ValidationError> {
+        let schema = self.tool.schema();
+        SchemaValidator::validate_schema(&schema)
+    }
+
+    /// Check that CLI category is present
+    fn check_cli_category(&self) -> Result<(), ValidationError> {
+        match self.tool.cli_category() {
+            Some(_) => Ok(()),
+            None => Err(ValidationError::MissingSchemaField {
+                field: format!("CLI category for tool {}", self.tool.name()),
+            }),
+        }
+    }
+
+    /// Check that CLI name is valid
+    fn check_cli_name(&self) -> Result<(), ValidationError> {
+        let cli_name = self.tool.cli_name();
+        if cli_name.is_empty() {
+            Err(ValidationError::InvalidParameterName {
+                parameter: self.tool.name().to_string(),
+                reason: "CLI name cannot be empty".to_string(),
+            })
+        } else {
+            Ok(())
+        }
+    }
+}
+
+/// Builder for constructing clap arguments from ArgData
+///
+/// Provides an explicit, testable pipeline for argument construction.
+struct ArgBuilder {
+    arg: Arg,
+}
+
+impl ArgBuilder {
+    /// Create a new ArgBuilder from ArgData
+    fn new(arg_data: &ArgData) -> Self {
+        let name_static = intern_string(arg_data.name.clone());
+        let arg = Arg::new(name_static).long(name_static);
+        Self { arg }
+    }
+
+    /// Configure the argument with required flag
+    fn with_required(mut self, is_required: bool) -> Self {
+        if is_required {
+            self.arg = self.arg.required(true);
+        }
+        self
+    }
+
+    /// Configure the argument based on its type
+    fn with_type(self, arg_data: &ArgData) -> Self {
+        arg_data
+            .arg_type
+            .clone()
+            .apply_to_builder(self, arg_data.is_required)
+    }
+
+    /// Apply metadata (help text, enum values, default values)
+    fn with_metadata(mut self, arg_data: &ArgData) -> Self {
+        if let Some(help) = &arg_data.help {
+            self.arg = self.arg.help(intern_string(help.clone()));
+        }
+
+        if let Some(values) = &arg_data.possible_values {
+            let str_values: Vec<&'static str> =
+                values.iter().map(|s| intern_string(s.clone())).collect();
+            self.arg = self
+                .arg
+                .value_parser(clap::builder::PossibleValuesParser::new(str_values));
+        }
+
+        if let Some(default) = &arg_data.default_value {
+            self.arg = self.arg.default_value(intern_string(default.clone()));
+        }
+
+        self
+    }
+
+    /// Build the final Arg
+    fn build(self) -> Arg {
+        self.arg
+    }
+
+    /// Build a boolean argument
+    fn build_boolean(mut self) -> Self {
+        self.arg = self.arg.action(ArgAction::SetTrue);
+        self
+    }
+
+    /// Build a nullable boolean argument
+    fn build_nullable_boolean(mut self) -> Self {
+        self.arg = self
+            .arg
+            .value_parser(clap::builder::PossibleValuesParser::new(["true", "false"]))
+            .value_name("BOOL");
+        self
+    }
+
+    /// Build a numeric argument with a specific value parser
+    fn build_numeric(
+        mut self,
+        is_required: bool,
+        parser: impl clap::builder::IntoResettable<clap::builder::ValueParser>,
+    ) -> Self {
+        self.arg = self.arg.value_parser(parser);
+        if !is_required {
+            self.arg = self.arg.value_name("NUMBER");
+        }
+        self
+    }
+
+    /// Build an integer argument
+    fn build_integer(self, is_required: bool) -> Self {
+        self.build_numeric(is_required, clap::value_parser!(i64))
+    }
+
+    /// Build a float argument
+    fn build_float(self, is_required: bool) -> Self {
+        self.build_numeric(is_required, clap::value_parser!(f64))
+    }
+
+    /// Build an array argument
+    fn build_array(mut self, is_required: bool) -> Self {
+        self.arg = self.arg.action(ArgAction::Append);
+        if !is_required {
+            self.arg = self.arg.value_name("VALUE");
+        }
+        self
+    }
+
+    /// Build a string argument
+    fn build_string(mut self, is_required: bool) -> Self {
+        if !is_required {
+            self.arg = self.arg.value_name("TEXT");
+        }
+        self
+    }
+}
+
+/// Processor for workflow parameters
+///
+/// Handles the conversion of workflow parameter definitions into clap arguments.
+/// Separates the concern of parameter processing from command construction.
+struct WorkflowParameterProcessor;
+
+impl WorkflowParameterProcessor {
+    /// Add positional arguments for required workflow parameters
+    ///
+    /// Extracts required parameters and creates a multi-value positional argument.
+    fn add_required_positional_args(
+        cmd: Command,
+        workflow: &swissarmyhammer_workflow::Workflow,
+    ) -> Command {
+        let required_params: Vec<_> = workflow.parameters.iter().filter(|p| p.required).collect();
+
+        if required_params.is_empty() {
+            return cmd;
+        }
+
+        let value_names: Vec<&'static str> = required_params
+            .iter()
+            .map(|p| intern_string(p.name.clone()))
+            .collect();
+
+        cmd.arg(
+            Arg::new("positional")
+                .num_args(required_params.len())
+                .value_names(value_names)
+                .required(true)
+                .help("Required workflow parameters"),
+        )
+    }
+
+    /// Add the --param flag for optional workflow parameters
+    ///
+    /// Creates a repeatable flag for key=value parameter pairs.
+    fn add_optional_param_flag(cmd: Command) -> Command {
+        cmd.arg(
+            Arg::new("param")
+                .long("param")
+                .short('p')
+                .action(ArgAction::Append)
+                .value_name("KEY=VALUE")
+                .help("Optional workflow parameter"),
+        )
+    }
+
+    /// Apply all parameter processing to a command
+    ///
+    /// Adds both required positional arguments and optional --param flag.
+    fn process_parameters(cmd: Command, workflow: &swissarmyhammer_workflow::Workflow) -> Command {
+        let cmd = Self::add_required_positional_args(cmd, workflow);
+        Self::add_optional_param_flag(cmd)
+    }
+}
+
+/// Resolver for workflow command name conflicts
+///
+/// Ensures workflow shortcuts don't conflict with built-in commands by
+/// automatically prefixing conflicting names with an underscore.
+struct WorkflowCommandNameResolver;
+
+impl WorkflowCommandNameResolver {
+    /// Get reserved command names from actual static commands
+    ///
+    /// Dynamically generates the list of reserved names from the static commands,
+    /// ensuring the list stays in sync with the actual CLI structure.
+    fn get_reserved_names() -> Vec<String> {
+        // Build a temporary CLI with static commands to extract their names
+        let temp_cli = CliBuilder::add_static_commands(Command::new("temp"));
+
+        let mut reserved = Vec::new();
+        for subcommand in temp_cli.get_subcommands() {
+            reserved.push(subcommand.get_name().to_string());
+        }
+
+        // Add special flow subcommands that shouldn't conflict
+        reserved.push("list".to_string());
+
+        reserved
+    }
+
+    /// Resolve command name conflicts by prefixing with underscore if reserved
+    ///
+    /// # Examples
+    ///
+    /// - "list" -> "_list" (conflicts with flow list)
+    /// - "serve" -> "_serve" (conflicts with serve command)
+    /// - "deploy" -> "deploy" (no conflict)
+    fn resolve(workflow_name: &str) -> String {
+        let reserved_names = Self::get_reserved_names();
+        if reserved_names.iter().any(|name| name == workflow_name) {
+            format!("_{}", workflow_name)
+        } else {
+            workflow_name.to_string()
+        }
+    }
+}
+
+impl CliBuilder {
+    /// Build a vector of Args from argument specifications
+    ///
+    /// Consolidates the pattern of creating Vec<Arg> and building each arg
+    fn build_args_from_specs(specs: &[ArgSpec]) -> Vec<Arg> {
+        specs.iter().map(|spec| spec.clone().build()).collect()
+    }
+
+    /// Build a command with subcommands from a specification
+    ///
+    /// Consolidates the pattern of creating a command with docs and adding multiple subcommands
+    fn build_command_with_subcommands(config: CommandConfig, subcommands: Vec<Command>) -> Command {
+        let mut cmd = Self::build_command_with_docs(config);
+        for subcommand in subcommands {
+            cmd = cmd.subcommand(subcommand);
+        }
+        cmd
+    }
+
+    /// Build subcommands from declarative specifications
+    ///
+    /// Consolidates the pattern of building multiple similar subcommands
+    fn build_subcommands_from_specs(specs: &[SubcommandSpec]) -> Vec<Command> {
+        specs.iter().map(|spec| spec.clone().build()).collect()
+    }
+}
+
+impl Clone for SubcommandSpec {
+    fn clone(&self) -> Self {
+        Self {
+            name: self.name,
+            about: self.about,
+            long_about: self.long_about,
+            args: self.args.clone(),
+        }
+    }
 }
 
 // Documentation constants for commands
@@ -365,16 +1057,21 @@ Examples:
   sah model use workflows claude-code     # Use Claude for workflows
 ";
 
-/// Statistics about CLI tool validation
+/// Statistics about CLI tool validation results
 #[derive(Debug, Clone, Default)]
 pub struct CliValidationStats {
+    /// Total number of tools checked
     pub total_tools: usize,
+    /// Number of tools that passed validation
     pub valid_tools: usize,
+    /// Number of tools that failed validation
     pub invalid_tools: usize,
+    /// Total number of validation errors found
     pub validation_errors: usize,
 }
 
 impl CliValidationStats {
+    /// Create a new `CliValidationStats` with all counters initialized to zero
     pub fn new() -> Self {
         Self {
             total_tools: 0,
@@ -394,15 +1091,25 @@ impl CliValidationStats {
         self.invalid_tools == 0 && self.validation_errors == 0
     }
 
-    /// Calculate success rate percentage
+    /// Calculate the success rate as a percentage
+    ///
+    /// # Returns
+    ///
+    /// The percentage of valid tools (0.0 to 100.0). Returns 100.0 if no tools were checked.
     pub fn success_rate(&self) -> f64 {
         if self.has_no_tools() {
-            100.0
+            PERCENTAGE_MULTIPLIER
         } else {
-            (self.valid_tools as f64 / self.total_tools as f64) * 100.0
+            (self.valid_tools as f64 / self.total_tools as f64) * PERCENTAGE_MULTIPLIER
         }
     }
 
+    /// Generate a human-readable summary of validation results
+    ///
+    /// # Returns
+    ///
+    /// A formatted string with validation statistics, using colored output
+    /// for success (green ✓) or warnings (yellow ⚠)
     pub fn summary(&self) -> String {
         if self.is_all_valid() {
             format!(
@@ -426,14 +1133,18 @@ impl CliValidationStats {
 /// Type of iteration to perform over the tool registry
 enum RegistryIterType {
     AllTools,
-    ToolsInCategory(String),
 }
 
 /// Dynamic CLI builder that generates commands from MCP tool registry
+///
+/// Pre-computes all command and argument data at construction time to avoid
+/// runtime allocations and satisfy clap's 'static lifetime requirements.
 pub struct CliBuilder {
+    /// Shared reference to the tool registry
     tool_registry: Arc<RwLock<ToolRegistry>>,
-    // Pre-computed command data with owned strings
+    /// Pre-computed category command data
     category_commands: HashMap<String, CommandData>,
+    /// Pre-computed tool commands organized by category
     tool_commands: HashMap<String, HashMap<String, CommandData>>,
 }
 
@@ -473,9 +1184,6 @@ impl CliBuilder {
     {
         match iter_type {
             RegistryIterType::AllTools => Self::iter_all_categories(registry, f),
-            RegistryIterType::ToolsInCategory(category) => {
-                Self::iter_category_tools(registry, &category, f)
-            }
         }
     }
 
@@ -507,12 +1215,29 @@ impl CliBuilder {
         Self::iter_registry(registry, RegistryIterType::AllTools, f)
     }
 
+    /// Build a map from items using an iterator and key-value extraction function
+    ///
+    /// Generic helper that consolidates the pattern of creating a HashMap,
+    /// iterating over items, and inserting key-value pairs.
+    fn build_map_from_iter<K, V, I, F>(items: I, mut key_value_fn: F) -> HashMap<K, V>
+    where
+        K: std::hash::Hash + Eq,
+        I: Iterator,
+        F: FnMut(I::Item) -> Option<(K, V)>,
+    {
+        let mut map = HashMap::new();
+        for item in items {
+            if let Some((key, value)) = key_value_fn(item) {
+                map.insert(key, value);
+            }
+        }
+        map
+    }
+
     /// Pre-compute category command data
     fn precompute_category_commands(registry: &ToolRegistry) -> HashMap<String, CommandData> {
-        let mut category_commands = HashMap::new();
         let categories = registry.get_cli_categories();
-
-        for category in categories {
+        Self::build_map_from_iter(categories.into_iter(), |category| {
             let category_name = category.to_string();
             let category_cmd_data = CommandData {
                 name: category_name.clone(),
@@ -523,34 +1248,19 @@ impl CliBuilder {
                 long_about: None,
                 args: Vec::new(),
             };
-            category_commands.insert(category_name, category_cmd_data);
-        }
-
-        category_commands
-    }
-
-    /// Iterate through categories, applying a function to each
-    fn iter_categories<F>(registry: &ToolRegistry, mut f: F)
-    where
-        F: FnMut(&str),
-    {
-        for category in registry.get_cli_categories() {
-            f(&category);
-        }
+            Some((category_name, category_cmd_data))
+        })
     }
 
     /// Pre-compute tool command data
     fn precompute_tool_commands(
         registry: &ToolRegistry,
     ) -> HashMap<String, HashMap<String, CommandData>> {
-        let mut tool_commands = HashMap::new();
-
-        Self::iter_categories(registry, |category| {
-            let tools_in_category = Self::precompute_category_tool_commands(registry, category);
-            tool_commands.insert(category.to_string(), tools_in_category);
-        });
-
-        tool_commands
+        let categories = registry.get_cli_categories();
+        Self::build_map_from_iter(categories.into_iter(), |category| {
+            let tools_in_category = Self::precompute_category_tool_commands(registry, &category);
+            Some((category.to_string(), tools_in_category))
+        })
     }
 
     /// Pre-compute tool commands for a specific category
@@ -558,50 +1268,64 @@ impl CliBuilder {
         registry: &ToolRegistry,
         category: &str,
     ) -> HashMap<String, CommandData> {
-        let mut tools_in_category = HashMap::new();
-
-        Self::iter_tools_in_category(registry, category, |tool| {
-            if !tool.hidden_from_cli() {
-                if let Some(tool_cmd_data) = Self::precompute_tool_command(tool) {
-                    tools_in_category.insert(tool.cli_name().to_string(), tool_cmd_data);
-                }
+        let tools = registry.get_tools_for_category(category);
+        Self::build_map_from_iter(tools.into_iter(), |tool| {
+            if tool.hidden_from_cli() {
+                return None;
             }
-        });
-
-        tools_in_category
-    }
-
-    /// Iterate through tools in a category, applying a function to each
-    fn iter_tools_in_category<F>(registry: &ToolRegistry, category: &str, f: F)
-    where
-        F: FnMut(&dyn McpTool),
-    {
-        Self::iter_registry(
-            registry,
-            RegistryIterType::ToolsInCategory(category.to_string()),
-            f,
-        )
+            Self::precompute_tool_command(tool)
+                .map(|tool_cmd_data| (tool.cli_name().to_string(), tool_cmd_data))
+        })
     }
 
     /// Pre-compute command data for a tool with validation
+    ///
+    /// # Validation Flow
+    ///
+    /// This function is the entry point for converting MCP tools into CLI commands.
+    /// The validation and command creation follows this chain:
+    ///
+    /// 1. `precompute_tool_command` - Entry point, orchestrates validation and creation
+    /// 2. `validate_tool_schema_for_cli` - Validates schema structure using SchemaValidator
+    /// 3. `create_command_data_from_tool` - Creates CommandData from validated tool
+    /// 4. `precompute_args` - Extracts argument data from schema properties
+    /// 5. `SchemaParser::parse_arg_data` - Parses individual argument from schema
+    ///
+    /// Early returns are used throughout to skip invalid tools gracefully rather than
+    /// failing the entire CLI build. Invalid tools are logged and skipped.
     fn precompute_tool_command(tool: &dyn McpTool) -> Option<CommandData> {
         let schema = tool.schema();
 
-        // Validate schema before processing
-        if let Err(validation_error) = SchemaValidator::validate_schema(&schema) {
+        // Early return if schema validation fails
+        if !Self::validate_tool_schema_for_cli(tool, &schema) {
+            return None;
+        }
+
+        Self::create_command_data_from_tool(tool, &schema)
+    }
+
+    /// Validate tool schema for CLI integration
+    ///
+    /// Early return on validation failure with warning log.
+    fn validate_tool_schema_for_cli(tool: &dyn McpTool, schema: &Value) -> bool {
+        if let Err(validation_error) = SchemaValidator::validate_schema(schema) {
             tracing::warn!(
                 "Skipping tool '{}' from CLI due to schema validation error: {}",
                 tool.name(),
                 validation_error
             );
-            return None;
+            return false;
         }
+        true
+    }
 
+    /// Create command data from validated tool
+    fn create_command_data_from_tool(tool: &dyn McpTool, schema: &Value) -> Option<CommandData> {
         Some(CommandData {
             name: tool.cli_name().to_string(),
             about: tool.cli_about().map(|s| s.to_string()),
             long_about: Some(tool.description().to_string()),
-            args: Self::precompute_args(&schema),
+            args: Self::precompute_args(schema),
         })
     }
 
@@ -647,65 +1371,9 @@ impl CliBuilder {
             .unwrap_or_default()
     }
 
-    /// Extract a string field from a JSON schema
-    fn extract_schema_string(schema: &Value, field: &str) -> Option<String> {
-        schema.get(field).and_then(|v| v.as_str()).map(String::from)
-    }
-
-    /// Extract enum values from a JSON schema
-    fn extract_enum_values(schema: &Value) -> Option<Vec<String>> {
-        schema.get("enum").and_then(|v| v.as_array()).map(|arr| {
-            arr.iter()
-                .filter_map(|v| v.as_str().map(String::from))
-                .collect()
-        })
-    }
-
     /// Pre-compute data for a single argument
     fn precompute_arg_data(name: &str, schema: &Value, is_required: bool) -> ArgData {
-        let arg_type = Self::determine_arg_type(schema);
-
-        ArgData {
-            name: name.to_string(),
-            help: Self::extract_schema_string(schema, "description"),
-            is_required,
-            arg_type,
-            default_value: Self::extract_schema_string(schema, "default"),
-            possible_values: Self::extract_enum_values(schema),
-        }
-    }
-
-    /// Determine the argument type from a JSON schema
-    fn determine_arg_type(schema: &Value) -> ArgType {
-        // Check for nullable boolean first (both types must be present)
-        if Self::is_nullable_boolean(schema) {
-            return ArgType::NullableBoolean;
-        }
-
-        // Match on primary type
-        match Self::get_primary_type(schema) {
-            Some("boolean") => ArgType::Boolean,
-            Some("integer") => ArgType::Integer,
-            Some("number") => ArgType::Float,
-            Some("array") => ArgType::Array,
-            Some("string") | _ => ArgType::String,
-        }
-    }
-
-    /// Check if schema represents a nullable boolean
-    fn is_nullable_boolean(schema: &Value) -> bool {
-        schema_has_type(schema, "boolean") && schema_has_type(schema, "null")
-    }
-
-    /// Get the primary type from a schema
-    fn get_primary_type(schema: &Value) -> Option<&str> {
-        match schema.get("type") {
-            Some(Value::String(t)) => Some(t.as_str()),
-            Some(Value::Array(types)) => types
-                .iter()
-                .find_map(|t| t.as_str().filter(|s| *s != "null")),
-            _ => None,
-        }
+        SchemaParser::parse_arg_data(name, schema, is_required)
     }
 
     /// Build the complete CLI with dynamic commands generated from MCP tools
@@ -715,18 +1383,52 @@ impl CliBuilder {
     /// * `workflow_storage` - Optional workflow storage for generating shortcut commands.
     ///   If None, shortcuts will not be generated.
     pub fn build_cli(&self, workflow_storage: Option<&WorkflowStorage>) -> Command {
-        let mut cli = Self::build_base_cli();
+        let cli = Self::build_base_cli();
+        let cli = Self::add_core_commands(cli);
+        let cli = self.build_with_workflow_shortcuts(cli, workflow_storage);
+        self.add_tool_category_commands(cli)
+    }
 
-        // Add static commands (serve, doctor, prompt, flow, validate, model)
-        cli = Self::add_static_commands(cli);
+    /// Build CLI with workflow shortcuts integrated
+    ///
+    /// Extracts the workflow shortcuts logic to reduce complexity in build_cli.
+    /// This method encapsulates the conditional workflow shortcut generation.
+    ///
+    /// # Parameters
+    ///
+    /// * `cli` - Base CLI command to extend
+    /// * `workflow_storage` - Optional workflow storage for generating shortcut commands
+    ///
+    /// # Returns
+    ///
+    /// CLI command with workflow shortcuts added (if storage was provided)
+    fn build_with_workflow_shortcuts(
+        &self,
+        cli: Command,
+        workflow_storage: Option<&WorkflowStorage>,
+    ) -> Command {
+        match workflow_storage {
+            Some(storage) => self.add_workflow_shortcuts_from_storage(cli, storage),
+            None => cli,
+        }
+    }
 
-        // Add workflow shortcuts if storage is provided
-        cli = self.add_workflow_shortcuts_to_cli(cli, workflow_storage);
-
-        // Add dynamic MCP tool commands using pre-computed data
-        cli = self.add_tool_category_commands(cli);
-
+    /// Add workflow shortcuts from storage to CLI
+    fn add_workflow_shortcuts_from_storage(
+        &self,
+        mut cli: Command,
+        storage: &WorkflowStorage,
+    ) -> Command {
+        let shortcuts = Self::get_sorted_workflow_shortcuts(storage);
+        for shortcut in shortcuts {
+            cli = cli.subcommand(shortcut);
+        }
         cli
+    }
+
+    /// Add core static commands to the CLI
+    fn add_core_commands(cli: Command) -> Command {
+        Self::add_static_commands(cli)
     }
 
     /// Build the base CLI command with global arguments
@@ -741,6 +1443,12 @@ impl CliBuilder {
 
     /// Add global arguments to the base CLI command
     fn add_global_arguments(cmd: Command) -> Command {
+        let cmd = Self::add_output_control_args(cmd);
+        Self::add_runtime_control_args(cmd)
+    }
+
+    /// Add output control arguments (logging and formatting)
+    fn add_output_control_args(cmd: Command) -> Command {
         cmd.arg(Self::create_flag_arg(
             "verbose",
             "verbose",
@@ -753,7 +1461,23 @@ impl CliBuilder {
             Some('d'),
             "Enable debug logging",
         ))
+        .arg(Self::create_flag_arg(
+            "quiet",
+            "quiet",
+            Some('q'),
+            "Suppress all output except errors",
+        ))
         .arg(
+            Arg::new("format")
+                .long("format")
+                .help("Global output format")
+                .value_parser(["table", "json", "yaml"]),
+        )
+    }
+
+    /// Add runtime control arguments (cwd, model, validate-tools)
+    fn add_runtime_control_args(cmd: Command) -> Command {
+        cmd.arg(
             Arg::new("cwd")
                 .long("cwd")
                 .help("Set working directory before executing command")
@@ -762,23 +1486,11 @@ impl CliBuilder {
                 .value_parser(clap::value_parser!(std::path::PathBuf)),
         )
         .arg(Self::create_flag_arg(
-            "quiet",
-            "quiet",
-            Some('q'),
-            "Suppress all output except errors",
-        ))
-        .arg(Self::create_flag_arg(
             "validate-tools",
             "validate-tools",
             None,
             "Validate all tool schemas and exit",
         ))
-        .arg(
-            Arg::new("format")
-                .long("format")
-                .help("Global output format")
-                .value_parser(["table", "json", "yaml"]),
-        )
         .arg(
             Arg::new("model")
                 .long("model")
@@ -786,21 +1498,6 @@ impl CliBuilder {
                 .value_name("MODEL")
                 .global(true),
         )
-    }
-
-    /// Add workflow shortcuts to the CLI if storage is provided
-    fn add_workflow_shortcuts_to_cli(
-        &self,
-        mut cli: Command,
-        workflow_storage: Option<&WorkflowStorage>,
-    ) -> Command {
-        if let Some(storage) = workflow_storage {
-            let shortcuts = Self::get_sorted_workflow_shortcuts(storage);
-            for shortcut in shortcuts {
-                cli = cli.subcommand(shortcut);
-            }
-        }
-        cli
     }
 
     /// Get sorted workflow shortcuts
@@ -815,8 +1512,7 @@ impl CliBuilder {
         let category_names = self.get_sorted_category_names();
 
         for category_name in category_names.iter() {
-            if let Some(category_data) = self.category_commands.get(category_name) {
-                let cmd = self.build_category_command_from_data(category_name, category_data);
+            if let Some(cmd) = self.build_category_with_tools(category_name) {
                 cli = cli.subcommand(cmd);
             }
         }
@@ -829,6 +1525,18 @@ impl CliBuilder {
         let mut category_names: Vec<String> = self.category_commands.keys().cloned().collect();
         category_names.sort();
         category_names
+    }
+
+    /// Build a category command with its tools
+    ///
+    /// Encapsulates the "get category data, build command, add tools" flow
+    /// to reduce complexity in add_tool_category_commands.
+    fn build_category_with_tools(&self, category_name: &str) -> Option<Command> {
+        self.category_commands
+            .get(category_name)
+            .map(|category_data| {
+                self.build_category_command_from_data(category_name, category_data)
+            })
     }
 
     /// Build CLI with warnings for validation issues (graceful degradation)
@@ -870,6 +1578,18 @@ impl CliBuilder {
     ///
     /// Vec of validation errors (empty if all tools are valid)
     pub fn validate_all_tools(&self) -> Vec<ValidationError> {
+        self.collect_all_errors()
+    }
+
+    /// Collect all validation errors from tools
+    ///
+    /// Concrete helper method that uses fold_validation_results internally
+    /// to collect all errors across all tools.
+    ///
+    /// # Returns
+    ///
+    /// Vec of all validation errors found
+    fn collect_all_errors(&self) -> Vec<ValidationError> {
         self.fold_validation_results(Vec::new(), |mut errors, result| {
             if let Err(tool_errors) = result {
                 errors.extend(tool_errors);
@@ -905,78 +1625,25 @@ impl CliBuilder {
             .try_read()
             .expect("ToolRegistry should not be locked");
 
-        Self::collect_and_fold_validation_results(&registry, self, init, folder)
+        let validation_results = self.collect_validation_results(&registry);
+        validation_results.into_iter().fold(init, folder)
     }
 
-    /// Collect validation results and fold them into an accumulator
-    fn collect_and_fold_validation_results<T, F>(
+    /// Collect validation results for all tools
+    fn collect_validation_results(
+        &self,
         registry: &ToolRegistry,
-        builder: &CliBuilder,
-        init: T,
-        folder: F,
-    ) -> T
-    where
-        F: FnMut(T, Result<(), Vec<ValidationError>>) -> T,
-    {
-        let mut validation_results = Vec::new();
-
+    ) -> Vec<Result<(), Vec<ValidationError>>> {
+        let mut results = Vec::new();
         Self::iter_all_tools(registry, |tool| {
-            validation_results.push(builder.validate_single_tool(tool));
+            results.push(self.validate_single_tool(tool));
         });
-
-        validation_results
-            .into_iter()
-            .fold(init, folder)
+        results
     }
 
     /// Validate a single tool for CLI compatibility
     fn validate_single_tool(&self, tool: &dyn McpTool) -> Result<(), Vec<ValidationError>> {
-        let mut errors = Vec::new();
-
-        // Validate schema
-        Self::validate_tool_schema(tool, &mut errors);
-
-        // Validate CLI integration requirements
-        if !tool.hidden_from_cli() {
-            Self::validate_tool_cli_requirements(tool, &mut errors);
-        }
-
-        if errors.is_empty() {
-            Ok(())
-        } else {
-            Err(errors)
-        }
-    }
-
-    /// Validate tool schema
-    fn validate_tool_schema(tool: &dyn McpTool, errors: &mut Vec<ValidationError>) {
-        if let Err(schema_error) = SchemaValidator::validate_schema(&tool.schema()) {
-            errors.push(schema_error);
-        }
-    }
-
-    /// Validate CLI integration requirements for a tool
-    fn validate_tool_cli_requirements(tool: &dyn McpTool, errors: &mut Vec<ValidationError>) {
-        // Check for CLI category
-        if tool.cli_category().is_none() {
-            errors.push(ValidationError::MissingSchemaField {
-                field: format!("CLI category for tool {}", tool.name()),
-            });
-        }
-
-        // Validate CLI name
-        Self::validate_tool_cli_name(tool, errors);
-    }
-
-    /// Validate tool CLI name
-    fn validate_tool_cli_name(tool: &dyn McpTool, errors: &mut Vec<ValidationError>) {
-        let cli_name = tool.cli_name();
-        if cli_name.is_empty() {
-            errors.push(ValidationError::InvalidParameterName {
-                parameter: tool.name().to_string(),
-                reason: "CLI name cannot be empty".to_string(),
-            });
-        }
+        ToolValidator::new(tool).validate()
     }
 
     /// Get validation warnings for all tools (non-failing validation)
@@ -1043,146 +1710,54 @@ impl CliBuilder {
     ) -> Command {
         let mut cmd = Self::build_command_base(category_data);
         cmd = cmd.subcommand_help_heading("Tools");
+        self.add_tool_subcommands_to_category(cmd, category_name)
+    }
 
-        // Add tool subcommands for this category
+    /// Add tool subcommands to a category command
+    fn add_tool_subcommands_to_category(&self, mut cmd: Command, category_name: &str) -> Command {
         if let Some(tools_in_category) = self.tool_commands.get(category_name) {
             for tool_data in tools_in_category.values() {
                 cmd = cmd.subcommand(self.build_tool_command_from_data(tool_data));
             }
         }
-
         cmd
     }
 
     /// Build a command for a specific MCP tool from pre-computed data
     fn build_tool_command_from_data(&self, tool_data: &CommandData) -> Command {
         let mut cmd = Self::build_command_base(tool_data);
-
-        // Add arguments from pre-computed data
-        for arg_data in &tool_data.args {
-            cmd = cmd.arg(self.build_arg_from_data(arg_data));
+        let args = self.build_args_for_command(&tool_data.args);
+        for arg in args {
+            cmd = cmd.arg(arg);
         }
-
         cmd
     }
 
-    /// Helper to apply optional argument configuration
+    /// Build arguments for a command from argument data
     ///
-    /// Reduces duplication in conditional argument chaining
-    fn apply_optional_arg_config<T>(
-        arg: Arg,
-        value: &Option<T>,
-        applier: impl FnOnce(Arg, &T) -> Arg,
-    ) -> Arg {
-        if let Some(val) = value {
-            applier(arg, val)
-        } else {
-            arg
-        }
+    /// Extracts the argument iteration and building logic to reduce complexity
+    /// in build_tool_command_from_data.
+    ///
+    /// # Parameters
+    ///
+    /// * `args` - Slice of ArgData to convert into clap Args
+    ///
+    /// # Returns
+    ///
+    /// Vec of built clap Args ready to add to a command
+    fn build_args_for_command(&self, args: &[ArgData]) -> Vec<Arg> {
+        args.iter()
+            .map(|arg_data| self.build_arg_from_data(arg_data))
+            .collect()
     }
 
     /// Build a clap argument from pre-computed data
     fn build_arg_from_data(&self, arg_data: &ArgData) -> Arg {
-        let name_static = intern_string(arg_data.name.clone());
-        let arg = Arg::new(name_static).long(name_static);
-
-        // Set as required if specified
-        let arg = if arg_data.is_required {
-            arg.required(true)
-        } else {
-            arg
-        };
-
-        // Configure based on type using strategy pattern
-        let arg = Self::build_typed_arg(arg, arg_data);
-
-        // Apply optional configurations (help, enum values, defaults)
-        Self::apply_arg_metadata(arg, arg_data)
-    }
-
-    /// Build typed argument by dispatching to type-specific builders
-    fn build_typed_arg(arg: Arg, arg_data: &ArgData) -> Arg {
-        match arg_data.arg_type {
-            ArgType::Boolean => Self::build_boolean_arg(arg),
-            ArgType::NullableBoolean => Self::build_nullable_boolean_arg(arg),
-            ArgType::Integer => Self::build_integer_arg(arg, arg_data.is_required),
-            ArgType::Float => Self::build_float_arg(arg, arg_data.is_required),
-            ArgType::Array => Self::build_array_arg(arg, arg_data.is_required),
-            ArgType::String => Self::build_string_arg(arg, arg_data.is_required),
-        }
-    }
-
-    /// Apply metadata configuration (help text, enum values, default values)
-    fn apply_arg_metadata(mut arg: Arg, arg_data: &ArgData) -> Arg {
-        // Set help text
-        arg = Self::apply_optional_arg_config(arg, &arg_data.help, |a, help| {
-            a.help(intern_string(help.clone()))
-        });
-
-        // Handle enum values
-        arg = Self::apply_optional_arg_config(arg, &arg_data.possible_values, |a, values| {
-            let str_values: Vec<&'static str> =
-                values.iter().map(|s| intern_string(s.clone())).collect();
-            a.value_parser(clap::builder::PossibleValuesParser::new(str_values))
-        });
-
-        // Handle default values
-        arg = Self::apply_optional_arg_config(arg, &arg_data.default_value, |a, default| {
-            a.default_value(intern_string(default.clone()))
-        });
-
-        arg
-    }
-
-    /// Build a boolean argument
-    fn build_boolean_arg(arg: Arg) -> Arg {
-        arg.action(ArgAction::SetTrue)
-    }
-
-    /// Build a nullable boolean argument
-    fn build_nullable_boolean_arg(arg: Arg) -> Arg {
-        arg.value_parser(clap::builder::PossibleValuesParser::new(["true", "false"]))
-            .value_name("BOOL")
-    }
-
-    /// Build an integer argument
-    fn build_integer_arg(arg: Arg, is_required: bool) -> Arg {
-        Self::build_numeric_arg(arg, is_required, clap::value_parser!(i64))
-    }
-
-    /// Build a float argument
-    fn build_float_arg(arg: Arg, is_required: bool) -> Arg {
-        Self::build_numeric_arg(arg, is_required, clap::value_parser!(f64))
-    }
-
-    /// Build a numeric argument with a specific value parser
-    fn build_numeric_arg(
-        arg: Arg,
-        is_required: bool,
-        parser: impl clap::builder::IntoResettable<clap::builder::ValueParser>,
-    ) -> Arg {
-        let arg = arg.value_parser(parser);
-        Self::add_optional_value_name(arg, is_required, "NUMBER")
-    }
-
-    /// Build an array argument
-    fn build_array_arg(arg: Arg, is_required: bool) -> Arg {
-        let arg = arg.action(ArgAction::Append);
-        Self::add_optional_value_name(arg, is_required, "VALUE")
-    }
-
-    /// Build a string argument
-    fn build_string_arg(arg: Arg, is_required: bool) -> Arg {
-        Self::add_optional_value_name(arg, is_required, "TEXT")
-    }
-
-    /// Add value_name to optional arguments
-    fn add_optional_value_name(arg: Arg, is_required: bool, name: &'static str) -> Arg {
-        if !is_required {
-            arg.value_name(name)
-        } else {
-            arg
-        }
+        ArgBuilder::new(arg_data)
+            .with_required(arg_data.is_required)
+            .with_type(arg_data)
+            .with_metadata(arg_data)
+            .build()
     }
 
     /// Create a flag argument (boolean with SetTrue action)
@@ -1239,20 +1814,32 @@ impl CliBuilder {
                 about: "Start HTTP MCP server",
                 long_about: SERVE_HTTP_LONG_ABOUT,
             },
-            vec![
-                Arg::new("port")
-                    .long("port")
-                    .short('p')
-                    .help("Port to bind to (use 0 for random port)")
-                    .default_value("8000")
-                    .value_parser(clap::value_parser!(u16)),
-                Arg::new("host")
-                    .long("host")
-                    .short('H')
-                    .help("Host to bind to")
-                    .default_value("127.0.0.1"),
-            ],
+            Self::create_http_server_args(),
         )
+    }
+
+    /// Create HTTP server arguments
+    fn create_http_server_args() -> Vec<Arg> {
+        let default_port = get_default_http_port();
+        let default_host = get_default_http_host();
+
+        Self::build_args_from_specs(&[
+            ArgSpec::new(
+                "port",
+                "Port to bind to (use 0 for random port, configurable via SAH_HTTP_PORT env var)",
+            )
+            .long("port")
+            .short('p')
+            .default_value(default_port)
+            .value_parser(ArgSpecValueParser::U16),
+            ArgSpec::new(
+                "host",
+                "Host to bind to (configurable via SAH_HTTP_HOST env var)",
+            )
+            .long("host")
+            .short('H')
+            .default_value(default_host),
+        ])
     }
 
     /// Build the serve command
@@ -1288,66 +1875,85 @@ impl CliBuilder {
 
     /// Create arguments for the validate command
     fn create_validate_command_args() -> Vec<Arg> {
-        vec![
-            Arg::new("quiet")
-                .short('q')
-                .long("quiet")
-                .help("Suppress all output except errors")
-                .action(ArgAction::SetTrue),
-            Arg::new("format")
-                .long("format")
-                .help("Output format")
-                .value_parser(["text", "json"])
-                .default_value("text"),
-            Arg::new("workflow-dirs")
-                .long("workflow-dir")
-                .help("[DEPRECATED] This parameter is ignored. Workflows are now only loaded from standard locations.")
-                .action(ArgAction::Append)
-                .hide(true),
-            Arg::new("validate-tools")
-                .long("validate-tools")
-                .help("Validate MCP tool schemas for CLI compatibility")
-                .action(ArgAction::SetTrue),
-        ]
+        let mut args = Self::create_validate_output_args();
+        args.extend(Self::create_validate_deprecated_args());
+        args
     }
 
-    /// Add static commands to the CLI (serve, doctor, prompt, flow, validate, model)
-    fn add_static_commands(mut cli: Command) -> Command {
-        // Add serve command
-        cli = cli.subcommand(Self::build_serve_command());
+    /// Create output control arguments for validate command
+    fn create_validate_output_args() -> Vec<Arg> {
+        Self::build_args_from_specs(&[
+            ArgSpec::new("quiet", "Suppress all output except errors")
+                .short('q')
+                .long("quiet")
+                .action(ArgSpecAction::SetTrue),
+            ArgSpec::new("format", "Output format")
+                .long("format")
+                .value_parser(ArgSpecValueParser::Strings(vec!["text", "json"]))
+                .default_value("text".to_string()),
+            ArgSpec::new(
+                "validate-tools",
+                "Validate MCP tool schemas for CLI compatibility",
+            )
+            .long("validate-tools")
+            .action(ArgSpecAction::SetTrue),
+        ])
+    }
 
-        // Add doctor command
-        cli = cli.subcommand(Self::build_doctor_command());
+    /// Create deprecated arguments for validate command
+    fn create_validate_deprecated_args() -> Vec<Arg> {
+        Self::build_args_from_specs(&[
+            ArgSpec::new("workflow-dirs", "[DEPRECATED] This parameter is ignored. Workflows are now only loaded from standard locations.")
+                .long("workflow-dir")
+                .action(ArgSpecAction::Append)
+                .hide(true),
+        ])
+    }
 
-        // Add prompt command with subcommands
-        cli = cli.subcommand(Self::build_prompt_command());
+    /// Add static commands to the CLI
+    ///
+    /// Commands are organized into semantic groups for maintainability:
+    /// - Server commands: serve, doctor, validate
+    /// - Content commands: prompt, model
+    /// - Workflow commands: flow
+    fn add_static_commands(cli: Command) -> Command {
+        let cli = Self::add_server_commands(cli);
+        let cli = Self::add_content_commands(cli);
+        Self::add_workflow_commands(cli)
+    }
 
-        // Add flow command with subcommands
-        cli = cli.subcommand(Self::build_flow_command());
+    /// Add server-related commands (serve, doctor, validate)
+    fn add_server_commands(cli: Command) -> Command {
+        cli.subcommand(Self::build_serve_command())
+            .subcommand(Self::build_doctor_command())
+            .subcommand(Self::build_validate_command())
+    }
 
-        // Add validate command
-        cli = cli.subcommand(Self::build_validate_command());
+    /// Add content management commands (prompt, model)
+    fn add_content_commands(cli: Command) -> Command {
+        cli.subcommand(Self::build_prompt_command())
+            .subcommand(Self::build_model_command())
+    }
 
-        // Add model command with subcommands
-        cli = cli.subcommand(Self::build_model_command());
-
-        // Add rule command with subcommands
-        // Rule command is now dynamically generated from rules_check MCP tool
-        // cli = cli.subcommand(Self::build_rule_command());
-
-        cli
+    /// Add workflow-related commands (flow)
+    fn add_workflow_commands(cli: Command) -> Command {
+        cli.subcommand(Self::build_flow_command())
     }
 
     /// Build the prompt command with all its subcommands
     fn build_prompt_command() -> Command {
-        Self::build_command_with_docs(CommandConfig {
-            name: "prompt",
-            about: "Manage and test prompts",
-            long_about: PROMPT_COMMAND_LONG_ABOUT,
-        })
-        .subcommand(Self::build_prompt_list_subcommand())
-        .subcommand(Self::build_prompt_test_subcommand())
-        .subcommand(Self::build_prompt_validate_subcommand())
+        Self::build_command_with_subcommands(
+            CommandConfig {
+                name: "prompt",
+                about: "Manage and test prompts",
+                long_about: PROMPT_COMMAND_LONG_ABOUT,
+            },
+            vec![
+                Self::build_prompt_list_subcommand(),
+                Self::build_prompt_test_subcommand(),
+                Self::build_prompt_validate_subcommand(),
+            ],
+        )
     }
 
     /// Build the prompt list subcommand
@@ -1359,52 +1965,58 @@ impl CliBuilder {
 
     /// Build the prompt test subcommand
     fn build_prompt_test_subcommand() -> Command {
-        Command::new("test")
+        let mut cmd = Command::new("test")
             .about("Test prompts interactively with sample arguments")
-            .long_about(PROMPT_TEST_LONG_ABOUT)
-            .arg(
-                Arg::new("prompt_name")
-                    .help("Prompt name to test")
-                    .value_name("PROMPT_NAME"),
-            )
-            .arg(
-                Arg::new("file")
-                    .short('f')
-                    .long("file")
-                    .help("Path to prompt file to test")
-                    .value_name("FILE"),
-            )
-            .arg(
-                Arg::new("vars")
-                    .long("var")
-                    .help("Variables as key=value pairs")
-                    .value_name("KEY=VALUE")
-                    .action(ArgAction::Append),
-            )
-            .arg(
-                Arg::new("raw")
-                    .long("raw")
-                    .help("Show raw output without formatting")
-                    .action(ArgAction::SetTrue),
-            )
-            .arg(
-                Arg::new("copy")
-                    .long("copy")
-                    .help("Copy rendered prompt to clipboard")
-                    .action(ArgAction::SetTrue),
-            )
-            .arg(
-                Arg::new("save")
-                    .long("save")
-                    .help("Save rendered prompt to file")
-                    .value_name("FILE"),
-            )
-            .arg(
-                Arg::new("debug")
-                    .long("debug")
-                    .help("Show debug information")
-                    .action(ArgAction::SetTrue),
-            )
+            .long_about(PROMPT_TEST_LONG_ABOUT);
+
+        for arg in Self::create_test_input_args() {
+            cmd = cmd.arg(arg);
+        }
+        for arg in Self::create_test_output_args() {
+            cmd = cmd.arg(arg);
+        }
+        for arg in Self::create_test_debug_args() {
+            cmd = cmd.arg(arg);
+        }
+
+        cmd
+    }
+
+    /// Create test input arguments (prompt_name, file, vars)
+    fn create_test_input_args() -> Vec<Arg> {
+        Self::build_args_from_specs(&[
+            ArgSpec::new("prompt_name", "Prompt name to test").value_name("PROMPT_NAME"),
+            ArgSpec::new("file", "Path to prompt file to test")
+                .short('f')
+                .long("file")
+                .value_name("FILE"),
+            ArgSpec::new("vars", "Variables as key=value pairs")
+                .long("var")
+                .value_name("KEY=VALUE")
+                .action(ArgSpecAction::Append),
+        ])
+    }
+
+    /// Create test output arguments (raw, copy, save)
+    fn create_test_output_args() -> Vec<Arg> {
+        Self::build_args_from_specs(&[
+            ArgSpec::new("raw", "Show raw output without formatting")
+                .long("raw")
+                .action(ArgSpecAction::SetTrue),
+            ArgSpec::new("copy", "Copy rendered prompt to clipboard")
+                .long("copy")
+                .action(ArgSpecAction::SetTrue),
+            ArgSpec::new("save", "Save rendered prompt to file")
+                .long("save")
+                .value_name("FILE"),
+        ])
+    }
+
+    /// Create test debug arguments (debug)
+    fn create_test_debug_args() -> Vec<Arg> {
+        Self::build_args_from_specs(&[ArgSpec::new("debug", "Show debug information")
+            .long("debug")
+            .action(ArgSpecAction::SetTrue)])
     }
 
     /// Build the prompt validate subcommand
@@ -1437,58 +2049,45 @@ impl CliBuilder {
     }
 
     /// Build the model command with all its subcommands
+    ///
+    /// Creates the 'model' command with subcommands for showing, listing,
+    /// and using models for different use cases.
+    ///
+    /// # Returns
+    ///
+    /// A configured `Command` for model management
     pub fn build_model_command() -> Command {
-        Self::build_command_with_docs(CommandConfig {
-            name: "model",
-            about: "Manage and interact with models",
-            long_about: MODEL_COMMAND_LONG_ABOUT,
-        })
-        .subcommand(Self::build_model_show_subcommand())
-        .subcommand(Self::build_model_list_subcommand())
-        .subcommand(Self::build_model_use_subcommand())
-    }
+        let format_arg = ArgSpec::new("format", "Output format")
+            .long("format")
+            .value_parser(ArgSpecValueParser::Strings(vec!["table", "json", "yaml"]))
+            .default_value("table".to_string());
 
-    /// Build the model show subcommand
-    fn build_model_show_subcommand() -> Command {
-        Command::new("show")
-            .about("Show current model use case assignments")
-            .arg(
-                Arg::new("format")
-                    .long("format")
-                    .help("Output format")
-                    .value_parser(["table", "json", "yaml"])
-                    .default_value("table"),
-            )
-    }
+        let subcommand_specs = vec![
+            SubcommandSpec::new("show", "Show current model use case assignments")
+                .args(vec![format_arg.clone()]),
+            SubcommandSpec::new("list", "List available models").args(vec![format_arg]),
+            SubcommandSpec::new("use", "Use a specific model for a use case")
+                .long_about(MODEL_USE_LONG_ABOUT)
+                .args(vec![
+                    ArgSpec::new("first", "Model name OR use case (root, rules, workflows)")
+                        .value_name("FIRST")
+                        .required(true),
+                    ArgSpec::new(
+                        "second",
+                        "Model name (required when first argument is a use case)",
+                    )
+                    .value_name("SECOND"),
+                ]),
+        ];
 
-    /// Build the model list subcommand
-    fn build_model_list_subcommand() -> Command {
-        Command::new("list").about("List available models").arg(
-            Arg::new("format")
-                .long("format")
-                .help("Output format")
-                .value_parser(["table", "json", "yaml"])
-                .default_value("table"),
+        Self::build_command_with_subcommands(
+            CommandConfig {
+                name: "model",
+                about: "Manage and interact with models",
+                long_about: MODEL_COMMAND_LONG_ABOUT,
+            },
+            Self::build_subcommands_from_specs(&subcommand_specs),
         )
-    }
-
-    /// Build the model use subcommand
-    fn build_model_use_subcommand() -> Command {
-        Command::new("use")
-            .about("Use a specific model for a use case")
-            .long_about(MODEL_USE_LONG_ABOUT)
-            .arg(
-                Arg::new("first")
-                    .help("Model name OR use case (root, rules, workflows)")
-                    .value_name("FIRST")
-                    .required(true),
-            )
-            .arg(
-                Arg::new("second")
-                    .help("Model name (required when first argument is a use case)")
-                    .value_name("SECOND")
-                    .required(false),
-            )
     }
 
     /// Generate workflow shortcut commands dynamically
@@ -1537,30 +2136,40 @@ impl CliBuilder {
             .collect()
     }
 
-    /// Reserved command names that would conflict with top-level commands
-    const RESERVED_COMMAND_NAMES: &'static [&'static str] = &[
-        "serve", "doctor", "prompt", "rule", "flow", "model", "validate",
-        "list", // Special: flow subcommand that should not conflict
-    ];
-
-    /// Resolve command name conflicts by prefixing with underscore if reserved
-    fn resolve_command_name_conflict(workflow_name: &str) -> String {
-        if Self::RESERVED_COMMAND_NAMES.contains(&workflow_name) {
-            format!("_{}", workflow_name)
-        } else {
-            workflow_name.to_string()
-        }
-    }
-
     /// Create a single workflow shortcut command
     fn create_workflow_shortcut_command(workflow: swissarmyhammer_workflow::Workflow) -> Command {
         let workflow_name = workflow.name.to_string();
-        let command_name = Self::resolve_command_name_conflict(&workflow_name);
+        let command_name = WorkflowCommandNameResolver::resolve(&workflow_name);
 
         Self::build_shortcut_command(command_name, &workflow_name, &workflow)
     }
 
     /// Standard workflow execution flag definitions
+    ///
+    /// These flags are applied uniformly to all workflows by design, providing consistent
+    /// execution control across the workflow system. Each workflow inherits these flags
+    /// automatically when registered as a CLI command.
+    ///
+    /// # Design Rationale
+    ///
+    /// These flags are intentionally standardized rather than derived from workflow metadata because:
+    ///
+    /// 1. **Consistent UX**: Users expect the same execution controls across all workflows
+    /// 2. **Workflow Engine Contract**: These map to the core execution model defined in
+    ///    `RunCommandConfig` and used by all workflow execution paths
+    /// 3. **CLI Convention**: These are standard CLI patterns (--interactive, --dry-run, --quiet)
+    /// 4. **Composability**: Workflows shouldn't need to redefine common execution modes
+    /// 5. **Single Source of Truth**: The workflow engine's execution contract (RunCommandConfig)
+    ///    is the authoritative source - these CLI flags must match that contract exactly
+    ///
+    /// The flags defined here mirror the execution parameters in:
+    /// - `swissarmyhammer-cli/src/commands/flow/run.rs::RunCommandConfig`
+    /// - MCP flow tool parameters
+    /// - Workflow execution context variables (`_quiet`, etc.)
+    ///
+    /// If a workflow needs custom flags, those should be defined as workflow parameters
+    /// in the workflow definition itself, not as execution flags.
+    ///
     /// Format: (name, long, short, help)
     const WORKFLOW_FLAGS: &'static [(&'static str, &'static str, Option<char>, &'static str)] = &[
         (
@@ -1587,45 +2196,6 @@ impl CliBuilder {
             .fold(cmd, |cmd, (name, long, short, help)| {
                 cmd.arg(Self::create_flag_arg(name, long, *short, help))
             })
-    }
-
-    /// Create a workflow parameter argument
-    ///
-    /// Returns a pre-configured parameter argument for workflow commands
-    fn create_workflow_param_arg() -> Arg {
-        Arg::new("param")
-            .long("param")
-            .short('p')
-            .action(ArgAction::Append)
-            .value_name("KEY=VALUE")
-            .help("Optional workflow parameter")
-    }
-
-    /// Add positional arguments for required workflow parameters
-    ///
-    /// Helper to extract the logic of adding required parameter positional args
-    fn add_required_params_as_positional(
-        cmd: Command,
-        workflow: &swissarmyhammer_workflow::Workflow,
-    ) -> Command {
-        let required_params: Vec<_> = workflow.parameters.iter().filter(|p| p.required).collect();
-
-        if required_params.is_empty() {
-            return cmd;
-        }
-
-        let value_names: Vec<&'static str> = required_params
-            .iter()
-            .map(|p| intern_string(p.name.clone()))
-            .collect();
-
-        cmd.arg(
-            Arg::new("positional")
-                .num_args(required_params.len())
-                .value_names(value_names)
-                .required(true)
-                .help("Required workflow parameters"),
-        )
     }
 
     /// Build a single workflow shortcut command
@@ -1656,11 +2226,8 @@ impl CliBuilder {
             .about(intern_string(about_text))
             .subcommand_help_heading("Workflows");
 
-        // Add positional arguments for required parameters
-        cmd = Self::add_required_params_as_positional(cmd, workflow);
-
-        // Add --param flag for optional parameters
-        cmd = cmd.arg(Self::create_workflow_param_arg());
+        // Add workflow parameters using the processor
+        cmd = WorkflowParameterProcessor::process_parameters(cmd, workflow);
 
         // Add standard workflow execution flags
         cmd = Self::add_workflow_execution_flags(cmd);

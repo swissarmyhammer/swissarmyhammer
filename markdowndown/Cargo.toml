@@ -1,0 +1,47 @@
+[package]
+name = "markdowndown"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "HTML to Markdown converter with AI-optimized output"
+
+[lib]
+name = "markdowndown"
+crate-type = ["lib"]
+
+[dependencies]
+# Core serialization and error handling
+serde.workspace = true
+serde_json.workspace = true
+serde_yaml.workspace = true
+thiserror.workspace = true
+anyhow.workspace = true
+chrono.workspace = true
+
+# HTTP and web
+reqwest.workspace = true
+url.workspace = true
+bytes.workspace = true
+
+# HTML parsing and processing
+html2text.workspace = true
+regex.workspace = true
+
+# Async runtime
+tokio.workspace = true
+async-trait.workspace = true
+
+# Logging
+tracing.workspace = true
+
+# Utilities
+tempfile.workspace = true
+
+[dev-dependencies]
+tokio-test = "0.4"
+wiremock = "0.5"
+mockito = "1.2"
+proptest.workspace = true
+futures.workspace = true

@@ -80,7 +80,7 @@ fn test_library_with_directory() {
     let _env = IsolatedTestEnvironment::new().expect("Failed to create test environment");
     let temp_dir = _env.temp_dir();
     let prompts_dir = &temp_dir.join("prompts");
-    fs::create_dir(&prompts_dir).unwrap();
+    fs::create_dir(prompts_dir).unwrap();
 
     // Create a test prompt file
     let prompt_content = r#"---
@@ -100,7 +100,7 @@ Testing {{ subject }}!"#;
 
     // Load prompts from directory
     let mut library = PromptLibrary::new();
-    let count = library.add_directory(&prompts_dir).unwrap();
+    let count = library.add_directory(prompts_dir).unwrap();
     assert_eq!(count, 1);
 
     // Get the prompt
@@ -206,7 +206,7 @@ fn test_prompt_loader() {
     let _env = IsolatedTestEnvironment::new().expect("Failed to create test environment");
     let temp_dir = _env.temp_dir();
     let prompts_dir = &temp_dir.join("prompts");
-    fs::create_dir(&prompts_dir).unwrap();
+    fs::create_dir(prompts_dir).unwrap();
 
     // Create multiple test prompt files
     for i in 1..=3 {
@@ -222,7 +222,7 @@ This is test prompt {i}!"#
 
     // Load all prompts
     let loader = PromptLoader::new();
-    let prompts = loader.load_directory(&prompts_dir).unwrap();
+    let prompts = loader.load_directory(prompts_dir).unwrap();
     assert_eq!(prompts.len(), 3);
 
     // Check that all prompts were loaded correctly
@@ -293,7 +293,7 @@ This is the main content."#;
 
     // Load prompts from directory
     let mut library = PromptLibrary::new();
-    let count = library.add_directory(&prompts_dir).unwrap();
+    let count = library.add_directory(prompts_dir).unwrap();
     assert!(count > 0);
 
     // Debug: show what partials are available
@@ -326,7 +326,7 @@ fn test_partial_rendering_with_md_extension() {
     let _env = IsolatedTestEnvironment::new().expect("Failed to create test environment");
     let temp_dir = _env.temp_dir();
     let prompts_dir = &temp_dir.join("prompts");
-    fs::create_dir_all(&prompts_dir).unwrap();
+    fs::create_dir_all(prompts_dir).unwrap();
 
     // Create a partial template with .md extension
     let partial_content = r#"---
@@ -348,7 +348,7 @@ Main content here.
 
     // Load prompts from directory
     let mut library = PromptLibrary::new();
-    library.add_directory(&prompts_dir).unwrap();
+    library.add_directory(prompts_dir).unwrap();
 
     // Get and render the main template with partial support
     let mut args_map = HashMap::new();
@@ -365,7 +365,7 @@ fn test_liquid_file_extension_loading() {
     let _env = IsolatedTestEnvironment::new().expect("Failed to create test environment");
     let temp_dir = _env.temp_dir();
     let prompts_dir = &temp_dir.join("prompts");
-    fs::create_dir_all(&prompts_dir).unwrap();
+    fs::create_dir_all(prompts_dir).unwrap();
 
     // Create files with different extensions
     let liquid_md_content = r#"---
@@ -383,7 +383,7 @@ This is a regular md file"#;
 
     // Load prompts from directory
     let mut library = PromptLibrary::new();
-    let count = library.add_directory(&prompts_dir).unwrap();
+    let count = library.add_directory(prompts_dir).unwrap();
 
     println!("Loaded {count} prompts");
 
@@ -445,7 +445,7 @@ After partial"#;
 
     // Load prompts from directory
     let mut library = PromptLibrary::new();
-    library.add_directory(&prompts_dir).unwrap();
+    library.add_directory(prompts_dir).unwrap();
 
     // Debug: List what prompts were loaded
     let prompts = library.list().unwrap();
@@ -472,7 +472,7 @@ fn test_partial_rendering_without_variables() {
     let _env = IsolatedTestEnvironment::new().expect("Failed to create test environment");
     let temp_dir = _env.temp_dir();
     let prompts_dir = &temp_dir.join("prompts");
-    fs::create_dir_all(&prompts_dir).unwrap();
+    fs::create_dir_all(prompts_dir).unwrap();
 
     // Create a partial template without variables
     let partial_content = r#"---
@@ -494,7 +494,7 @@ After partial"#;
 
     // Load prompts from directory
     let mut library = PromptLibrary::new();
-    library.add_directory(&prompts_dir).unwrap();
+    library.add_directory(prompts_dir).unwrap();
 
     // Get and render the main template with partial support
     let template_context = TemplateContext::new(); // No variables needed

@@ -5,6 +5,7 @@
 //! - Sorting (incomplete first, then by ULID)
 //! - Edge cases (empty lists, all complete, all incomplete)
 //! - Count accuracy (total, completed, pending)
+//!
 //! sah rule ignore test_rule_with_allow
 
 use serde_json::json;

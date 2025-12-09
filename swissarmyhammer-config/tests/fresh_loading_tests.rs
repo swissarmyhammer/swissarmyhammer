@@ -286,7 +286,7 @@ fn test_concurrent_fresh_loading() {
     use std::sync::{Arc, Barrier};
     use std::thread;
 
-    let test = Arc::new(IsolatedFreshLoadTest::new());
+    let test = IsolatedFreshLoadTest::new();
     let config_dir = test.project_config_dir();
     let config_file = config_dir.join("sah.toml");
 

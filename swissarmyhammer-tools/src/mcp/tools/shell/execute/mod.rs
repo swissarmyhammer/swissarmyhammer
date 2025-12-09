@@ -11,7 +11,7 @@ use rmcp::ErrorData as McpError;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::fmt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 use swissarmyhammer_common::{ErrorSeverity, Severity};
 // Replaced sah_config with local defaults for shell configuration
@@ -981,6 +981,7 @@ async fn collect_remaining_output(
 }
 
 /// Stream output until process completes or buffer limit reached
+#[allow(clippy::too_many_arguments)]
 async fn stream_output_until_complete(
     stdout_reader: &mut tokio::io::Lines<BufReader<tokio::process::ChildStdout>>,
     stderr_reader: &mut tokio::io::Lines<BufReader<tokio::process::ChildStderr>>,
@@ -1164,6 +1165,7 @@ async fn process_child_output_with_limits(
 /// - **Binary Detection**: Binary content is safely formatted as descriptive text
 /// - **Streaming Processing**: Output is processed in real-time, not buffered entirely
 /// - **Metadata**: Results include truncation status, binary detection, and byte counts
+///
 /// Validate and prepare working directory
 fn prepare_working_directory(working_directory: Option<PathBuf>) -> Result<PathBuf, ShellError> {
     let work_dir = working_directory
@@ -1209,7 +1211,7 @@ fn prepare_shell_command(
 fn spawn_command_process(
     mut cmd: Command,
     command: &str,
-    work_dir: &PathBuf,
+    work_dir: &Path,
 ) -> Result<Child, ShellError> {
     tracing::info!(
         "Executing shell command: '{}' in directory: {}",

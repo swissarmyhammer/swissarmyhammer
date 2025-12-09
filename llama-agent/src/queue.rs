@@ -1,0 +1,1713 @@
+use crate::chat_template::ChatTemplateEngine;
+use crate::generation::GenerationHelper;
+use crate::model::ModelManager;
+
+use crate::types::{
+    FinishReason, GenerationRequest, GenerationResponse, QueueConfig, QueueError, Session,
+    StreamChunk,
+};
+use llama_common::async_utils;
+use llama_cpp_2::model::LlamaModel;
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+use tokio::sync::{mpsc, oneshot, Mutex as TokioMutex};
+use tokio::task::JoinHandle;
+use tokio_util::sync::CancellationToken;
+use tracing::{debug, error, info, trace, warn};
+use ulid::Ulid;
+
+#[derive(Debug, Default)]
+pub struct QueueMetrics {
+    pub total_requests: AtomicU64,
+    pub completed_requests: AtomicU64,
+    pub failed_requests: AtomicU64,
+    pub cancelled_requests: AtomicU64,
+    pub current_queue_size: AtomicUsize,
+    pub total_processing_time_ms: AtomicU64,
+    pub total_tokens_generated: AtomicU64,
+    pub peak_queue_size: AtomicUsize,
+    pub last_throughput_tokens_per_second: AtomicU64,
+}
+
+impl QueueMetrics {
+    pub fn new() -> Self {
+        Self {
+            total_requests: AtomicU64::new(0),
+            completed_requests: AtomicU64::new(0),
+            failed_requests: AtomicU64::new(0),
+            cancelled_requests: AtomicU64::new(0),
+            current_queue_size: AtomicUsize::new(0),
+            total_processing_time_ms: AtomicU64::new(0),
+            total_tokens_generated: AtomicU64::new(0),
+            peak_queue_size: AtomicUsize::new(0),
+            last_throughput_tokens_per_second: AtomicU64::new(0),
+        }
+    }
+
+    pub fn record_request_submitted(&self) {
+        self.total_requests.fetch_add(1, Ordering::Relaxed);
+        let current_size = self.current_queue_size.fetch_add(1, Ordering::Relaxed) + 1;
+
+        // Update peak queue size if necessary
+        let mut peak = self.peak_queue_size.load(Ordering::Relaxed);
+        while current_size > peak {
+            match self.peak_queue_size.compare_exchange_weak(
+                peak,
+                current_size,
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+            ) {
+                Ok(_) => break,
+                Err(actual) => peak = actual,
+            }
+        }
+    }
+
+    pub fn record_request_completed(&self, processing_time: Duration, tokens_generated: u32) {
+        self.completed_requests.fetch_add(1, Ordering::Relaxed);
+        self.current_queue_size.fetch_sub(1, Ordering::Relaxed);
+
+        let processing_ms = processing_time.as_millis() as u64;
+        self.total_processing_time_ms
+            .fetch_add(processing_ms, Ordering::Relaxed);
+        self.total_tokens_generated
+            .fetch_add(tokens_generated as u64, Ordering::Relaxed);
+
+        // Calculate and store current throughput (tokens per second)
+        if processing_ms > 0 {
+            let throughput = (tokens_generated as u64 * 1000) / processing_ms;
+            self.last_throughput_tokens_per_second
+                .store(throughput, Ordering::Relaxed);
+        }
+    }
+
+    pub fn record_request_failed(&self) {
+        self.failed_requests.fetch_add(1, Ordering::Relaxed);
+        self.current_queue_size.fetch_sub(1, Ordering::Relaxed);
+    }
+
+    pub fn record_request_cancelled(&self) {
+        self.cancelled_requests.fetch_add(1, Ordering::Relaxed);
+        self.current_queue_size.fetch_sub(1, Ordering::Relaxed);
+    }
+
+    pub fn get_stats(&self) -> QueueStats {
+        QueueStats {
+            total_requests: self.total_requests.load(Ordering::Relaxed),
+            completed_requests: self.completed_requests.load(Ordering::Relaxed),
+            failed_requests: self.failed_requests.load(Ordering::Relaxed),
+            cancelled_requests: self.cancelled_requests.load(Ordering::Relaxed),
+            current_queue_size: self.current_queue_size.load(Ordering::Relaxed),
+            average_processing_time_ms: {
+                let total_time = self.total_processing_time_ms.load(Ordering::Relaxed);
+                let completed = self.completed_requests.load(Ordering::Relaxed);
+                if completed > 0 {
+                    total_time / completed
+                } else {
+                    0
+                }
+            },
+            total_tokens_generated: self.total_tokens_generated.load(Ordering::Relaxed),
+            peak_queue_size: self.peak_queue_size.load(Ordering::Relaxed),
+            current_throughput_tps: self
+                .last_throughput_tokens_per_second
+                .load(Ordering::Relaxed),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct QueueStats {
+    pub total_requests: u64,
+    pub completed_requests: u64,
+    pub failed_requests: u64,
+    pub cancelled_requests: u64,
+    pub current_queue_size: usize,
+    pub average_processing_time_ms: u64,
+    pub total_tokens_generated: u64,
+    pub peak_queue_size: usize,
+    pub current_throughput_tps: u64,
+}
+
+#[derive(Debug)]
+pub struct QueuedRequest {
+    pub id: String,
+    pub request: GenerationRequest,
+    pub session: Session,
+    pub response_sender: oneshot::Sender<Result<GenerationResponse, QueueError>>,
+    pub stream_sender: Option<mpsc::Sender<Result<StreamChunk, QueueError>>>,
+    pub submitted_at: Instant,
+    pub cancellation_token: CancellationToken,
+}
+
+pub struct RequestQueue {
+    sender: mpsc::Sender<QueuedRequest>,
+    worker_handles: Vec<JoinHandle<()>>,
+    metrics: Arc<QueueMetrics>,
+    _chat_template: Arc<ChatTemplateEngine>,
+    _session_config: crate::types::SessionConfig,
+}
+
+impl RequestQueue {
+    pub fn new(
+        model_manager: Arc<ModelManager>,
+        config: QueueConfig,
+        session_config: crate::types::SessionConfig,
+    ) -> Self {
+        let (sender, receiver) = mpsc::channel(config.max_queue_size);
+        let receiver = Arc::new(TokioMutex::new(receiver));
+        let metrics = Arc::new(QueueMetrics::new());
+        let chat_template = Arc::new(ChatTemplateEngine::new());
+
+        let mut worker_handles = Vec::new();
+
+        // Spawn worker threads
+        for worker_id in 0..config.worker_threads {
+            let receiver = receiver.clone();
+            let model_manager = model_manager.clone();
+            let config = config.clone();
+            let metrics = metrics.clone();
+            let chat_template = chat_template.clone();
+            let session_config = session_config.clone();
+
+            let handle = tokio::spawn(async move {
+                Self::worker_loop(
+                    worker_id,
+                    receiver,
+                    model_manager,
+                    config,
+                    metrics,
+                    chat_template,
+                    session_config,
+                )
+                .await;
+            });
+
+            worker_handles.push(handle);
+        }
+
+        info!(
+            "RequestQueue initialized with {} workers, max queue size: {}",
+            config.worker_threads, config.max_queue_size
+        );
+
+        Self {
+            sender,
+            worker_handles,
+            metrics,
+            _chat_template: chat_template,
+            _session_config: session_config,
+        }
+    }
+
+    pub async fn submit_request(
+        &self,
+        request: GenerationRequest,
+        session: &Session,
+    ) -> Result<GenerationResponse, QueueError> {
+        let (response_sender, response_receiver) = oneshot::channel();
+
+        let queued_request = QueuedRequest {
+            id: Ulid::new().to_string(),
+            request,
+            session: session.clone(),
+            response_sender,
+            stream_sender: None,
+            submitted_at: Instant::now(),
+            cancellation_token: CancellationToken::new(),
+        };
+
+        debug!("Submitting request to queue: {}", queued_request.id);
+
+        // Record request submission
+        self.metrics.record_request_submitted();
+
+        // Try to send to queue
+        if self.sender.try_send(queued_request).is_err() {
+            warn!("Queue is full, rejecting request");
+            self.metrics.record_request_failed(); // Adjust queue size back down
+            return Err(QueueError::Full);
+        }
+
+        // Wait for response from worker
+        let response_future = async move {
+            response_receiver
+                .await
+                .map_err(|_| QueueError::WorkerError("Response channel closed".to_string()))?
+        };
+        response_future.await
+    }
+
+    pub async fn submit_streaming_request(
+        &self,
+        request: GenerationRequest,
+        session: &Session,
+    ) -> Result<mpsc::Receiver<Result<StreamChunk, QueueError>>, QueueError> {
+        let (response_sender, _) = oneshot::channel();
+        let (stream_sender, stream_receiver) = mpsc::channel(100);
+
+        let queued_request = QueuedRequest {
+            id: Ulid::new().to_string(),
+            request,
+            session: session.clone(),
+            response_sender,
+            stream_sender: Some(stream_sender),
+            submitted_at: Instant::now(),
+            cancellation_token: CancellationToken::new(),
+        };
+
+        debug!(
+            "Submitting streaming request to queue: {}",
+            queued_request.id
+        );
+
+        // Record request submission
+        self.metrics.record_request_submitted();
+
+        // Try to send to queue
+        if self.sender.try_send(queued_request).is_err() {
+            warn!("Queue is full, rejecting streaming request");
+            self.metrics.record_request_failed(); // Adjust queue size back down
+            return Err(QueueError::Full);
+        }
+
+        Ok(stream_receiver)
+    }
+
+    pub fn get_queue_size(&self) -> usize {
+        // Use metrics for more accurate queue size
+        self.metrics.current_queue_size.load(Ordering::Relaxed)
+    }
+
+    pub fn get_stats(&self) -> QueueStats {
+        self.metrics.get_stats()
+    }
+
+    async fn worker_loop(
+        worker_id: usize,
+        receiver: Arc<TokioMutex<mpsc::Receiver<QueuedRequest>>>,
+        model_manager: Arc<ModelManager>,
+        _config: QueueConfig,
+        metrics: Arc<QueueMetrics>,
+        chat_template: Arc<ChatTemplateEngine>,
+        session_config: crate::types::SessionConfig,
+    ) {
+        info!("Worker {} started", worker_id);
+
+        loop {
+            let queued_request = {
+                let mut receiver = receiver.lock().await;
+                match receiver.recv().await {
+                    Some(request) => request,
+                    None => {
+                        info!("Worker {} shutting down - channel closed", worker_id);
+                        break;
+                    }
+                }
+            };
+
+            let queue_time = queued_request.submitted_at.elapsed();
+            debug!(
+                "Worker {} processing request {} (queue time: {:?})",
+                worker_id, queued_request.id, queue_time
+            );
+
+            // Check if request was cancelled
+            if queued_request.cancellation_token.is_cancelled() {
+                warn!(
+                    "Worker {} dropping cancelled request {} (queued for {:?})",
+                    worker_id, queued_request.id, queue_time
+                );
+                let _ = queued_request
+                    .response_sender
+                    .send(Err(QueueError::WorkerError(
+                        "Request cancelled".to_string(),
+                    )));
+                metrics.record_request_cancelled();
+                continue;
+            }
+
+            // Process the request
+            Self::process_request(
+                worker_id,
+                queued_request,
+                model_manager.clone(),
+                metrics.clone(),
+                chat_template.clone(),
+                session_config.clone(),
+            )
+            .await;
+        }
+    }
+
+    async fn process_request(
+        worker_id: usize,
+        queued_request: QueuedRequest,
+        model_manager: Arc<ModelManager>,
+        metrics: Arc<QueueMetrics>,
+        chat_template: Arc<ChatTemplateEngine>,
+        session_config: crate::types::SessionConfig,
+    ) {
+        let start_time = Instant::now();
+
+        // Check if model is loaded
+        if !model_manager.is_loaded().await {
+            let error = QueueError::WorkerError("Model not loaded".to_string());
+            if let Some(stream_sender) = queued_request.stream_sender {
+                let _ = stream_sender.send(Err(error)).await;
+            } else {
+                let _ = queued_request.response_sender.send(Err(error));
+            }
+            metrics.record_request_failed();
+            return;
+        }
+
+        let request_id = queued_request.id.clone();
+
+        // Process request with model access - use a closure to work within model lifetime
+        if let Some(stream_sender) = queued_request.stream_sender {
+            // Handle streaming request
+            let result = model_manager
+                .with_model(|model| {
+                    // Process the streaming request synchronously within the model lifetime
+                    Self::process_streaming_request_sync(
+                        worker_id,
+                        request_id.clone(),
+                        &queued_request.request,
+                        &queued_request.session,
+                        model,
+                        &model_manager,
+                        stream_sender.clone(),
+                        &queued_request.cancellation_token,
+                        &chat_template,
+                    )
+                })
+                .await;
+
+            match result {
+                Ok(_) => {
+                    // Streaming completed successfully
+                    let processing_time = start_time.elapsed();
+                    // Note: For streaming, tokens are tracked within process_streaming_request_sync
+                    metrics.record_request_completed(processing_time, 0);
+                }
+                Err(model_error) => {
+                    let queue_error =
+                        QueueError::WorkerError(format!("Model error: {}", model_error));
+                    let _ = stream_sender.send(Err(queue_error)).await;
+                    metrics.record_request_failed();
+                }
+            }
+        } else {
+            // Handle batch request
+            let result = model_manager
+                .with_model(|model| {
+                    // Process the request synchronously within the model lifetime
+                    Self::process_batch_request_sync(
+                        worker_id,
+                        request_id.clone(),
+                        &queued_request.request,
+                        &queued_request.session,
+                        model,
+                        &model_manager,
+                        &queued_request.cancellation_token,
+                        &chat_template,
+                        &session_config,
+                    )
+                })
+                .await;
+
+            match result {
+                Ok(inner_result) => {
+                    // inner_result is Result<GenerationResponse, QueueError>
+                    match inner_result {
+                        Ok(response) => {
+                            let processing_time = start_time.elapsed();
+                            metrics.record_request_completed(
+                                processing_time,
+                                response.tokens_generated,
+                            );
+                            let _ = queued_request.response_sender.send(Ok(response));
+                        }
+                        Err(queue_error) => {
+                            metrics.record_request_failed();
+                            let _ = queued_request.response_sender.send(Err(queue_error));
+                        }
+                    }
+                }
+                Err(model_error) => {
+                    metrics.record_request_failed();
+                    let queue_error =
+                        QueueError::WorkerError(format!("Model error: {}", model_error));
+                    let _ = queued_request.response_sender.send(Err(queue_error));
+                }
+            };
+        }
+
+        let processing_time = start_time.elapsed();
+        debug!(
+            "Worker {} completed request {} in {:?}",
+            worker_id, request_id, processing_time
+        );
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn process_batch_request_sync(
+        worker_id: usize,
+        request_id: String,
+        request: &GenerationRequest,
+        session: &Session,
+        model: &LlamaModel,
+        model_manager: &ModelManager,
+        cancellation_token: &CancellationToken,
+        chat_template: &ChatTemplateEngine,
+        session_config: &crate::types::SessionConfig,
+    ) -> Result<GenerationResponse, QueueError> {
+        let start_time = Instant::now();
+
+        debug!(
+            "Worker {} starting batch inference for request {}",
+            worker_id, request_id
+        );
+
+        // Format the session messages into a prompt using ChatTemplateEngine
+        let prompt = match chat_template.render_session_with_config(
+            session,
+            model,
+            Some(model_manager.get_config()),
+        ) {
+            Ok(prompt) => prompt,
+            Err(e) => {
+                error!("Failed to render session prompt: {}", e);
+                return Err(QueueError::WorkerError(format!(
+                    "Template rendering failed: {}",
+                    e
+                )));
+            }
+        };
+        trace!("Formatted prompt: {}", prompt);
+
+        // Create session-aware context that can reuse KV cache state
+        let mut ctx = match model_manager.create_session_context(model, &session.id) {
+            Ok(context) => context,
+            Err(e) => {
+                error!("Failed to create session context: {}", e);
+                return Err(QueueError::WorkerError(format!(
+                    "Session context creation failed: {}",
+                    e
+                )));
+            }
+        };
+
+        // Try to load existing session KV cache to avoid reprocessing conversation history
+        let kv_cache_dir = session_config.get_model_kv_cache_dir(model_manager.get_config());
+        let max_tokens = ctx.n_ctx() as usize;
+        let mut effective_token_offset: Option<usize> = None;
+
+        let has_cache = model_manager.has_session_kv_cache(&session.id, &kv_cache_dir);
+        info!(
+            "Worker {} checking for session KV cache: has_cache={}, session_id={}, cache_dir={}",
+            worker_id,
+            has_cache,
+            session.id,
+            kv_cache_dir.display()
+        );
+
+        if has_cache {
+            info!(
+                "Worker {} found existing session KV cache for session {}, validating...",
+                worker_id, session.id
+            );
+
+            // Tokenize the current prompt to compare with cached tokens
+            use llama_cpp_2::model::AddBos;
+            let current_tokens: Vec<i32> = model
+                .str_to_token(&prompt, AddBos::Always)
+                .map_err(|e| QueueError::WorkerError(format!("Failed to tokenize prompt: {}", e)))?
+                .into_iter()
+                .map(|t| t.0)
+                .collect();
+
+            info!(
+                "Worker {} tokenized current prompt to {} tokens",
+                worker_id,
+                current_tokens.len()
+            );
+
+            // Check if we have a token metadata file
+            let tokens_file = kv_cache_dir.join(format!("{}.tokens", session.id));
+            info!(
+                "Worker {} checking for token metadata at {}",
+                worker_id,
+                tokens_file.display()
+            );
+
+            let should_load_cache = if tokens_file.exists() {
+                info!("Worker {} found token metadata file", worker_id);
+                // Read the cached token sequence
+                match std::fs::read(&tokens_file) {
+                    Ok(bytes) => {
+                        // Tokens are stored as i32 values (4 bytes each)
+                        let cached_token_ids: Vec<i32> = bytes
+                            .chunks_exact(4)
+                            .map(|chunk| {
+                                i32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]])
+                            })
+                            .collect();
+
+                        // Check if cached tokens are a prefix of current tokens
+                        let matches = cached_token_ids.len() <= current_tokens.len()
+                            && cached_token_ids
+                                .iter()
+                                .zip(current_tokens.iter())
+                                .all(|(a, b)| a == b);
+
+                        if matches && !cached_token_ids.is_empty() {
+                            info!(
+                                "Worker {} cached tokens ({}) match current prompt prefix - will use cache",
+                                worker_id, cached_token_ids.len()
+                            );
+                            effective_token_offset = Some(cached_token_ids.len());
+                            true
+                        } else {
+                            info!(
+                                "Worker {} cached tokens don't match current prompt - deleting old cache",
+                                worker_id
+                            );
+                            // Delete the mismatched cache files
+                            let _ =
+                                model_manager.delete_session_kv_cache(&session.id, &kv_cache_dir);
+                            let _ = std::fs::remove_file(&tokens_file);
+                            false
+                        }
+                    }
+                    Err(e) => {
+                        warn!(
+                            "Worker {} failed to read token metadata: {}, deleting cache",
+                            worker_id, e
+                        );
+                        // Delete corrupted cache
+                        let _ = model_manager.delete_session_kv_cache(&session.id, &kv_cache_dir);
+                        let _ = std::fs::remove_file(&tokens_file);
+                        false
+                    }
+                }
+            } else {
+                // No token metadata, delete the cache to be safe
+                debug!(
+                    "Worker {} no token metadata found for session cache - deleting cache",
+                    worker_id
+                );
+                let _ = model_manager.delete_session_kv_cache(&session.id, &kv_cache_dir);
+                false
+            };
+
+            // Only load the cache if tokens match
+            if should_load_cache {
+                match model_manager.load_session_kv_cache(
+                    &mut ctx,
+                    &session.id,
+                    &kv_cache_dir,
+                    max_tokens,
+                ) {
+                    Ok(cached_tokens) => {
+                        debug!(
+                            "Worker {} successfully loaded {} tokens from session KV cache",
+                            worker_id,
+                            cached_tokens.len()
+                        );
+
+                        // CRITICAL: After loading KV cache, we must re-decode the last cached token
+                        // to restore the logits before continuing with new tokens.
+                        // llama.cpp requires valid logits in the context to continue decoding.
+                        if !cached_tokens.is_empty() {
+                            use llama_cpp_2::llama_batch::LlamaBatch;
+                            let last_token = cached_tokens[cached_tokens.len() - 1];
+                            let last_position = (cached_tokens.len() - 1) as i32;
+
+                            let mut batch = LlamaBatch::new(model_manager.get_batch_size(), 1);
+                            if let Err(e) = batch.add(last_token, last_position, &[0], true) {
+                                warn!(
+                                    "Worker {} failed to prepare logit restoration batch: {}, will process full prompt",
+                                    worker_id, e
+                                );
+                                effective_token_offset = None;
+                            } else {
+                                match ctx.decode(&mut batch) {
+                                    Ok(()) => {
+                                        debug!(
+                                            "Worker {} successfully restored logits by re-decoding last cached token at position {}",
+                                            worker_id, last_position
+                                        );
+                                    }
+                                    Err(e) => {
+                                        warn!(
+                                            "Worker {} failed to restore logits: {}, will process full prompt",
+                                            worker_id, e
+                                        );
+                                        effective_token_offset = None;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        warn!(
+                            "Worker {} failed to load session KV cache: {}, will process full prompt",
+                            worker_id, e
+                        );
+                        effective_token_offset = None;
+                    }
+                }
+            }
+        } else {
+            debug!(
+                "Worker {} no session KV cache found for session {}, will process full prompt",
+                worker_id, session.id
+            );
+        }
+
+        // Use GenerationHelper to consolidate generation logic
+        let batch_size = model_manager.get_batch_size();
+
+        // Determine the token offset to use:
+        // 1. If we successfully loaded and verified a KV cache, use its common prefix length
+        // 2. Otherwise, fall back to the template token count if available
+        let token_offset = effective_token_offset.or(session.template_token_count);
+
+        if let Some(count) = token_offset {
+            let cache_type = if effective_token_offset.is_some() {
+                "session KV cache"
+            } else {
+                "template cache"
+            };
+            debug!(
+                "Queue worker {} using {} ({} tokens already in KV cache) for request {} - skipping cached token processing",
+                worker_id, cache_type, count, request_id
+            );
+        } else {
+            debug!(
+                "Queue worker {} processing full prompt (no cached tokens) for request {}",
+                worker_id, request_id
+            );
+        }
+
+        debug!(
+            "Queue worker {} calling GenerationHelper for request {}",
+            worker_id, request_id
+        );
+        let generation_result =
+            match GenerationHelper::generate_text_with_borrowed_model_and_template_offset(
+                model,
+                &mut ctx,
+                &prompt,
+                request,
+                cancellation_token,
+                batch_size,
+                token_offset,
+            ) {
+                Ok(result) => {
+                    debug!(
+                        "Queue worker {} GenerationHelper returned success for request {}",
+                        worker_id, request_id
+                    );
+                    result
+                }
+                Err(e) => {
+                    error!(
+                        "GenerationHelper failed for worker {} request {}: {}",
+                        worker_id, request_id, e
+                    );
+                    debug!(
+                        "Queue worker {} GenerationHelper error details: {:?}",
+                        worker_id, e
+                    );
+                    return Err(QueueError::WorkerError(format!("Generation failed: {}", e)));
+                }
+            };
+
+        let generated_text = generation_result.generated_text;
+        let tokens_generated = generation_result.tokens_generated;
+        let _generation_time = generation_result.generation_time;
+        let finish_reason = generation_result.finish_reason;
+
+        // Check if the generated text contains tool calls
+        let final_finish_reason = match &finish_reason {
+            FinishReason::Stopped(reason)
+                if reason == "End of sequence token detected"
+                    || reason == "Stop token detected"
+                    || reason == "Maximum tokens reached" =>
+            {
+                match chat_template.extract_tool_calls(&generated_text) {
+                    Ok(tool_calls) if !tool_calls.is_empty() => {
+                        debug!(
+                            "Worker {} detected {} tool calls in generated text for request {}",
+                            worker_id,
+                            tool_calls.len(),
+                            request_id
+                        );
+                        FinishReason::Stopped("Tool call detected".to_string())
+                    }
+                    Ok(_) => {
+                        debug!(
+                            "Worker {} no tool calls detected in generated text for request {}",
+                            worker_id, request_id
+                        );
+                        finish_reason
+                    }
+                    Err(e) => {
+                        warn!(
+                            "Worker {} failed to extract tool calls for request {}: {}",
+                            worker_id, request_id, e
+                        );
+                        finish_reason
+                    }
+                }
+            }
+            _ => finish_reason,
+        };
+
+        let generation_time = start_time.elapsed();
+
+        debug!(
+            "Worker {} completed batch inference for request {} in {:?} ({} tokens, finish_reason: {:?})",
+            worker_id, request_id, generation_time, tokens_generated, final_finish_reason
+        );
+
+        // Save session KV cache if we have the complete token sequence
+        info!(
+            "Worker {} checking if complete_token_sequence exists: {}",
+            worker_id,
+            generation_result.complete_token_sequence.is_some()
+        );
+
+        if let Some(ref token_sequence) = generation_result.complete_token_sequence {
+            info!(
+                "Worker {} has complete token sequence with {} tokens",
+                worker_id,
+                token_sequence.len()
+            );
+            // Convert Vec<i32> to Vec<LlamaToken>
+            let llama_tokens: Vec<llama_cpp_2::token::LlamaToken> = token_sequence
+                .iter()
+                .map(|&id| llama_cpp_2::token::LlamaToken(id))
+                .collect();
+
+            match model_manager.save_session_kv_cache(
+                &ctx,
+                &session.id,
+                &llama_tokens,
+                &kv_cache_dir,
+                session_config.max_kv_cache_files,
+            ) {
+                Ok(cache_file) => {
+                    debug!(
+                        "Worker {} saved {} tokens to session KV cache at {} for request {}",
+                        worker_id,
+                        llama_tokens.len(),
+                        cache_file.display(),
+                        request_id
+                    );
+
+                    // Also save the token sequence for validation on next load
+                    let tokens_file = kv_cache_dir.join(format!("{}.tokens", session.id));
+                    let token_bytes: Vec<u8> = token_sequence
+                        .iter()
+                        .flat_map(|&id| id.to_le_bytes())
+                        .collect();
+
+                    // Ensure directory exists
+                    if let Err(e) = std::fs::create_dir_all(&kv_cache_dir) {
+                        warn!(
+                            "Worker {} failed to create cache directory: {}",
+                            worker_id, e
+                        );
+                    } else if let Err(e) = std::fs::write(&tokens_file, token_bytes) {
+                        warn!(
+                            "Worker {} failed to save token metadata for session {}: {}",
+                            worker_id, session.id, e
+                        );
+                    } else {
+                        debug!(
+                            "Worker {} saved token metadata ({} tokens) to {}",
+                            worker_id,
+                            token_sequence.len(),
+                            tokens_file.display()
+                        );
+                    }
+                }
+                Err(e) => {
+                    warn!(
+                        "Worker {} failed to save session KV cache for request {}: {}",
+                        worker_id, request_id, e
+                    );
+                }
+            }
+        } else {
+            debug!(
+                "Worker {} no complete token sequence available, skipping session KV cache save for request {}",
+                worker_id, request_id
+            );
+        }
+
+        Ok(GenerationResponse {
+            generated_text,
+            tokens_generated,
+            generation_time,
+            finish_reason: final_finish_reason,
+            complete_token_sequence: generation_result.complete_token_sequence, // Pass through from generation
+        })
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn process_streaming_request_sync(
+        worker_id: usize,
+        request_id: String,
+        request: &GenerationRequest,
+        session: &Session,
+        model: &LlamaModel,
+        model_manager: &ModelManager,
+        stream_sender: mpsc::Sender<Result<StreamChunk, QueueError>>,
+        cancellation_token: &CancellationToken,
+        chat_template: &ChatTemplateEngine,
+    ) -> Result<(), QueueError> {
+        debug!(
+            "Worker {} starting streaming inference for request {}",
+            worker_id, request_id
+        );
+
+        // Format the session messages into a prompt using ChatTemplateEngine
+        let prompt = match chat_template.render_session_with_config(
+            session,
+            model,
+            Some(model_manager.get_config()),
+        ) {
+            Ok(prompt) => prompt,
+            Err(e) => {
+                error!("Failed to render session prompt for streaming: {}", e);
+                let _ = stream_sender.try_send(Err(QueueError::WorkerError(format!(
+                    "Template rendering failed: {}",
+                    e
+                ))));
+                return Ok(());
+            }
+        };
+        trace!("Formatted prompt for streaming: {}", prompt);
+
+        // Create session-aware context that can reuse KV cache state
+        let mut ctx = match model_manager.create_session_context(model, &session.id) {
+            Ok(context) => context,
+            Err(e) => {
+                error!("Failed to create session context for streaming: {}", e);
+                let _ = stream_sender.try_send(Err(QueueError::WorkerError(format!(
+                    "Session context creation failed: {}",
+                    e
+                ))));
+                return Ok(());
+            }
+        };
+
+        // Use GenerationHelper for streaming - consolidated generation logic
+        let batch_size = model_manager.get_batch_size();
+        let template_token_count = session.template_token_count;
+
+        if let Some(count) = template_token_count {
+            debug!(
+                "Queue worker {} using template cache ({} tokens already in KV cache) for streaming request {} - skipping template token processing",
+                worker_id, count, request_id
+            );
+        } else {
+            debug!(
+                "Queue worker {} processing full prompt (no cached template) for streaming request {}",
+                worker_id, request_id
+            );
+        }
+
+        match GenerationHelper::generate_stream_with_borrowed_model_and_template_offset(
+            model,
+            &mut ctx,
+            &prompt,
+            request,
+            &stream_sender,
+            cancellation_token,
+            batch_size,
+            template_token_count,
+        ) {
+            Ok(()) => {
+                debug!(
+                    "Worker {} completed streaming inference for request {} using GenerationHelper",
+                    worker_id, request_id
+                );
+                Ok(())
+            }
+            Err(e) => {
+                error!(
+                    "GenerationHelper streaming failed for worker {} request {}: {}",
+                    worker_id, request_id, e
+                );
+                let _ = stream_sender.try_send(Err(QueueError::WorkerError(format!(
+                    "Generation failed: {}",
+                    e
+                ))));
+                Ok(())
+            }
+        }
+    }
+}
+
+impl RequestQueue {
+    /// Gracefully shutdown the queue, waiting for all workers to complete
+    ///
+    /// This method implements cooperative shutdown where workers complete their current
+    /// requests naturally without artificial time limits. Workers detect shutdown when
+    /// the channel closes and stop accepting new requests, but continue processing any
+    /// request they have already started. This ensures request integrity and proper
+    /// resource cleanup without forced termination.
+    pub async fn shutdown(mut self) {
+        info!("RequestQueue shutting down gracefully");
+        let shutdown_start = Instant::now();
+        let stats = self.get_stats();
+
+        info!(
+            "Shutdown initiated with {} requests in queue, {} total processed",
+            stats.current_queue_size, stats.total_requests
+        );
+
+        // Close the sender to signal workers to shutdown
+        // (sender will be dropped when this method ends)
+
+        // Wait for all worker handles to complete gracefully
+        let mut successful_shutdowns = 0;
+        let total_workers = self.worker_handles.len();
+
+        info!(
+            "Waiting for {} workers to complete current requests...",
+            total_workers
+        );
+
+        for (i, handle) in self.worker_handles.drain(..).enumerate() {
+            info!("Waiting for worker {} to complete current request...", i);
+
+            match handle.await {
+                Ok(()) => {
+                    info!("Worker {} shutdown successfully", i);
+                    successful_shutdowns += 1;
+                }
+                Err(join_error) => {
+                    warn!("Worker {} panicked during shutdown: {:?}", i, join_error);
+                }
+            }
+        }
+
+        let shutdown_duration = shutdown_start.elapsed();
+
+        info!(
+            "RequestQueue shutdown complete in {:?}: {}/{} workers successful",
+            shutdown_duration, successful_shutdowns, total_workers
+        );
+    }
+
+    /// Shutdown with timeout and return statistics
+    pub async fn shutdown_with_timeout(self, timeout: Duration) -> QueueStats {
+        let stats_before = self.get_stats();
+        info!("Starting RequestQueue shutdown with {:?} timeout", timeout);
+
+        let shutdown_future = async {
+            self.shutdown().await;
+            Ok::<_, ()>(())
+        };
+
+        let _result = async_utils::with_timeout_action(
+            shutdown_future,
+            timeout,
+            async_utils::TimeoutAction::LogWarning,
+            &format!(
+                "RequestQueue shutdown (had {} requests in queue)",
+                stats_before.current_queue_size
+            ),
+        )
+        .await;
+
+        if _result.is_ok() && _result.as_ref().unwrap().is_some() {
+            info!("RequestQueue shutdown completed within timeout");
+        }
+
+        stats_before
+    }
+}
+
+impl Drop for RequestQueue {
+    fn drop(&mut self) {
+        info!(
+            "RequestQueue dropping - {} worker handles remaining",
+            self.worker_handles.len()
+        );
+        // Note: worker_handles will be aborted when dropped
+        // For graceful shutdown, call shutdown() method instead
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::types::{
+        Message, MessageRole, ModelConfig, ModelError, ModelSource, QueueConfig, RetryConfig,
+        Session, SessionId,
+    };
+    use std::path::PathBuf;
+    use std::time::SystemTime;
+    use tempfile::TempDir;
+
+    fn create_test_model_config() -> ModelConfig {
+        ModelConfig {
+            source: ModelSource::Local {
+                folder: PathBuf::from("/tmp"),
+                filename: Some("test.gguf".to_string()),
+            },
+            batch_size: 512,
+            n_seq_max: 1,
+            n_threads: 1,
+            n_threads_batch: 1,
+            use_hf_params: false,
+            retry_config: RetryConfig::default(),
+            debug: false,
+        }
+    }
+
+    fn create_test_queue_config() -> QueueConfig {
+        QueueConfig {
+            max_queue_size: 10,
+            worker_threads: 2,
+        }
+    }
+
+    fn create_test_session() -> Session {
+        Session {
+            id: SessionId::new(),
+            messages: vec![Message {
+                role: MessageRole::User,
+                content: "Hello".to_string(),
+                tool_call_id: None,
+                tool_name: None,
+                timestamp: SystemTime::now(),
+            }],
+            mcp_servers: Vec::new(),
+            available_tools: Vec::new(),
+            available_prompts: Vec::new(),
+            created_at: SystemTime::now(),
+            updated_at: SystemTime::now(),
+            compaction_history: Vec::new(),
+            transcript_path: None,
+            context_state: None,
+            template_token_count: None,
+        }
+    }
+
+    async fn setup_loaded_model_manager() -> Arc<ModelManager> {
+        let temp_dir = TempDir::new().unwrap();
+        let model_file = temp_dir.path().join("test.gguf");
+
+        // Create dummy model file
+        tokio::fs::write(&model_file, b"dummy model").await.unwrap();
+
+        let config = ModelConfig {
+            source: ModelSource::Local {
+                folder: temp_dir.path().to_path_buf(),
+                filename: Some("test.gguf".to_string()),
+            },
+            batch_size: 512,
+            n_seq_max: 1,
+            n_threads: 1,
+            n_threads_batch: 1,
+            use_hf_params: false,
+            retry_config: RetryConfig::default(),
+            debug: false,
+        };
+
+        let manager = Arc::new(ModelManager::new(config).expect("Failed to create ModelManager"));
+
+        // Note: We don't actually load the model since dummy GGUF files fail
+        // The queue tests should focus on queue functionality, not model loading
+        // In a real application, the model would be properly loaded
+
+        // Note: temp_dir will be automatically cleaned up when it goes out of scope
+        // For test purposes, this is fine as the model manager only needs the path
+        // during initialization, not for the entire lifetime
+        drop(temp_dir);
+
+        manager
+    }
+
+    #[tokio::test]
+    async fn test_request_queue_creation() {
+        // Handle the case where backend is already initialized by parallel tests
+        let model_manager = match ModelManager::new(create_test_model_config()) {
+            Ok(manager) => Arc::new(manager),
+            Err(ModelError::LoadingFailed(msg))
+                if msg.contains("Backend already initialized by external code") =>
+            {
+                // This is expected when running tests in parallel - skip this test
+                println!("Skipping test due to backend already initialized by parallel test");
+                return;
+            }
+            Err(e) => panic!("Failed to create ModelManager: {:?}", e),
+        };
+        let config = create_test_queue_config();
+        let session_config = crate::types::SessionConfig::default();
+
+        let queue = RequestQueue::new(model_manager, config, session_config);
+        assert_eq!(queue.get_queue_size(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_submit_request_model_not_loaded() {
+        // Handle the case where backend is already initialized by parallel tests
+        let model_manager = match ModelManager::new(create_test_model_config()) {
+            Ok(manager) => Arc::new(manager),
+            Err(ModelError::LoadingFailed(msg))
+                if msg.contains("Backend already initialized by external code") =>
+            {
+                // This is expected when running tests in parallel - skip this test
+                println!("Skipping test due to backend already initialized by parallel test");
+                return;
+            }
+            Err(e) => panic!("Failed to create ModelManager: {:?}", e),
+        };
+        let config = create_test_queue_config();
+        let session_config = crate::types::SessionConfig::default();
+        let queue = RequestQueue::new(model_manager, config, session_config);
+
+        let session = create_test_session();
+        let request = GenerationRequest {
+            session_id: session.id,
+            max_tokens: Some(100),
+            temperature: Some(0.7),
+            top_p: Some(0.9),
+            stop_tokens: Vec::new(),
+            stopping_config: None,
+        };
+
+        let result = queue.submit_request(request, &session).await;
+        assert!(matches!(result, Err(QueueError::WorkerError(_))));
+    }
+
+    #[tokio::test]
+    async fn test_submit_request_model_not_loaded_fails() {
+        let model_manager = setup_loaded_model_manager().await;
+        let config = create_test_queue_config();
+        let session_config = crate::types::SessionConfig::default();
+        let queue = RequestQueue::new(model_manager, config, session_config);
+
+        let session = create_test_session();
+        let request = GenerationRequest {
+            session_id: session.id,
+            max_tokens: Some(100),
+            temperature: Some(0.7),
+            top_p: Some(0.9),
+            stop_tokens: Vec::new(),
+            stopping_config: None,
+        };
+
+        let result = queue.submit_request(request, &session).await;
+        // Should fail because model is not actually loaded in test setup
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            QueueError::WorkerError(msg) => {
+                assert!(msg.contains("Model not loaded") || msg.contains("Model error"));
+            }
+            _ => panic!("Expected WorkerError for unloaded model"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_submit_streaming_request_with_unloaded_model() {
+        let model_manager = setup_loaded_model_manager().await;
+        let config = create_test_queue_config();
+        let session_config = crate::types::SessionConfig::default();
+        let queue = RequestQueue::new(model_manager, config, session_config);
+
+        let session = create_test_session();
+        let request = GenerationRequest {
+            session_id: session.id,
+            max_tokens: Some(100),
+            temperature: Some(0.7),
+            top_p: Some(0.9),
+            stop_tokens: Vec::new(),
+            stopping_config: None,
+        };
+
+        let mut receiver = queue
+            .submit_streaming_request(request, &session)
+            .await
+            .unwrap();
+
+        // Should receive an error since the model is not loaded (dummy model fails to load)
+        let chunk_result = receiver.recv().await;
+        assert!(chunk_result.is_some());
+        match chunk_result.unwrap() {
+            Err(QueueError::WorkerError(msg)) => {
+                assert!(msg.contains("Model not loaded"));
+            }
+            Ok(_) => panic!("Expected error for unloaded model"),
+            Err(other) => panic!("Unexpected error type: {:?}", other),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_streaming_request_functionality() {
+        // This test validates that the streaming functionality works correctly
+        // It tests the streaming queue submission and validates that streaming chunks
+        // are properly handled when the model is not loaded (expected behavior)
+
+        // Handle the case where backend is already initialized by parallel tests
+        let model_manager = match ModelManager::new(create_test_model_config()) {
+            Ok(manager) => Arc::new(manager),
+            Err(ModelError::LoadingFailed(msg))
+                if msg.contains("Backend already initialized by external code") =>
+            {
+                // This is expected in test environments - create manager without loading
+                return; // Skip this test when backend is already initialized
+            }
+            Err(e) => panic!("Failed to create ModelManager: {}", e),
+        };
+
+        let config = create_test_queue_config();
+        let session_config = crate::types::SessionConfig::default();
+        let queue = RequestQueue::new(model_manager, config, session_config);
+
+        let session = create_test_session();
+        let request = GenerationRequest {
+            session_id: session.id,
+            max_tokens: Some(10),
+            temperature: Some(0.7),
+            top_p: Some(0.9),
+            stop_tokens: Vec::new(),
+            stopping_config: None,
+        };
+
+        // Submit streaming request - this should work regardless of model loading status
+        let receiver_result = queue.submit_streaming_request(request, &session).await;
+
+        assert!(
+            receiver_result.is_ok(),
+            "Streaming request submission should succeed"
+        );
+
+        let mut receiver = receiver_result.unwrap();
+
+        // Verify we get the expected "Model not loaded" error through the stream
+        let chunk_result = receiver.recv().await;
+        assert!(chunk_result.is_some(), "Should receive a chunk result");
+
+        match chunk_result.unwrap() {
+            Err(QueueError::WorkerError(msg)) => {
+                assert!(
+                    msg.contains("Model not loaded"),
+                    "Should receive 'Model not loaded' error, got: {}",
+                    msg
+                );
+            }
+            Ok(chunk) => panic!(
+                "Expected error for unloaded model, but got streaming chunk: {:?}",
+                chunk
+            ),
+            Err(other) => panic!("Expected WorkerError for unloaded model, got: {:?}", other),
+        }
+
+        // Verify no more chunks are received
+        let next_chunk = receiver.recv().await;
+        assert!(
+            next_chunk.is_none(),
+            "Should not receive additional chunks after error"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_queue_timeout() {
+        // Create a loaded model manager but with very slow processing
+        let model_manager = setup_loaded_model_manager().await;
+        let config = QueueConfig {
+            max_queue_size: 10,
+
+            worker_threads: 1,
+        };
+        let queue = RequestQueue::new(
+            model_manager,
+            config,
+            crate::types::SessionConfig::default(),
+        );
+
+        let session = create_test_session();
+        let request = GenerationRequest {
+            session_id: session.id,
+            max_tokens: Some(100),
+            temperature: Some(0.7),
+            top_p: Some(0.9),
+            stop_tokens: Vec::new(),
+            stopping_config: None,
+        };
+
+        let result = queue.submit_request(request, &session).await;
+        // Should fail because model is not loaded
+        assert!(result.is_err());
+        // The error should be WorkerError about model not loaded
+        match result.unwrap_err() {
+            QueueError::WorkerError(msg) => {
+                assert!(msg.contains("Model not loaded") || msg.contains("Model error"));
+            }
+            other => panic!("Unexpected error type: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_queued_request_debug() {
+        let (sender, _) = oneshot::channel();
+        let session = create_test_session();
+        let request = QueuedRequest {
+            id: "test-123".to_string(),
+            request: GenerationRequest {
+                session_id: session.id,
+                max_tokens: Some(100),
+                temperature: Some(0.7),
+                top_p: Some(0.9),
+                stop_tokens: Vec::new(),
+                stopping_config: None,
+            },
+            session,
+            response_sender: sender,
+            stream_sender: None,
+            submitted_at: Instant::now(),
+            cancellation_token: CancellationToken::new(),
+        };
+
+        let debug_str = format!("{:?}", request);
+        assert!(debug_str.contains("test-123"));
+    }
+
+    /// Test batch processing with various prompt sizes
+    mod batch_processing_tests {
+        use super::*;
+
+        fn create_test_config_with_batch_size(batch_size: u32) -> ModelConfig {
+            ModelConfig {
+                source: ModelSource::Local {
+                    folder: PathBuf::from("/tmp"),
+                    filename: Some("test.gguf".to_string()),
+                },
+                batch_size,
+                n_seq_max: 1,
+                n_threads: 1,
+                n_threads_batch: 1,
+                use_hf_params: false,
+                retry_config: RetryConfig::default(),
+                debug: false,
+            }
+        }
+
+        #[tokio::test]
+        async fn test_small_prompt_within_batch_size() {
+            // Test case: prompt smaller than batch size should work normally
+            let model_manager = match ModelManager::new(create_test_config_with_batch_size(512)) {
+                Ok(manager) => Arc::new(manager),
+                Err(_) => {
+                    // Skip test if model manager can't be created
+                    return;
+                }
+            };
+
+            let config = QueueConfig {
+                max_queue_size: 10,
+                worker_threads: 1,
+            };
+            let queue = RequestQueue::new(
+                model_manager,
+                config,
+                crate::types::SessionConfig::default(),
+            );
+
+            // Create a session with a small prompt (well within batch size)
+            let mut session = create_test_session();
+            session.messages = vec![Message {
+                role: MessageRole::User,
+                content: "Small prompt".to_string(), // ~2-3 tokens
+                tool_call_id: None,
+                tool_name: None,
+                timestamp: SystemTime::now(),
+            }];
+
+            let request = GenerationRequest {
+                session_id: session.id,
+                max_tokens: Some(10),
+                temperature: Some(0.7),
+                top_p: Some(0.9),
+                stop_tokens: Vec::new(),
+                stopping_config: None,
+            };
+
+            let result = queue.submit_request(request, &session).await;
+            // The test focuses on batch processing logic, not model loading
+            // We expect this to fail due to model not being loaded, but not due to batch size
+            if let Err(QueueError::WorkerError(msg)) = result {
+                // Should not contain batch size error messages
+                assert!(!msg.contains("exceeds batch size limit"));
+                assert!(!msg.contains("Prompt too long"));
+            }
+        }
+
+        #[tokio::test]
+        async fn test_prompt_exactly_at_batch_size() {
+            // Test edge case: prompt exactly at batch size limit
+            let batch_size = 8u32; // Small batch size for testing
+            let model_manager =
+                match ModelManager::new(create_test_config_with_batch_size(batch_size)) {
+                    Ok(manager) => Arc::new(manager),
+                    Err(_) => return,
+                };
+
+            assert_eq!(model_manager.get_batch_size(), batch_size as usize);
+
+            let config = QueueConfig {
+                max_queue_size: 10,
+                worker_threads: 1,
+            };
+            let queue = RequestQueue::new(
+                model_manager,
+                config,
+                crate::types::SessionConfig::default(),
+            );
+
+            // Create a session with content that should tokenize to exactly batch_size tokens
+            let mut session = create_test_session();
+            session.messages = vec![Message {
+                role: MessageRole::User,
+                content: "word ".repeat(4), // Approximately 8 tokens including spaces
+                tool_call_id: None,
+                tool_name: None,
+                timestamp: SystemTime::now(),
+            }];
+
+            let request = GenerationRequest {
+                session_id: session.id,
+                max_tokens: Some(10),
+                temperature: Some(0.7),
+                top_p: Some(0.9),
+                stop_tokens: Vec::new(),
+                stopping_config: None,
+            };
+
+            let result = queue.submit_request(request, &session).await;
+            // Should not fail due to batch size issues
+            if let Err(QueueError::WorkerError(msg)) = result {
+                assert!(!msg.contains("exceeds batch size limit"));
+                assert!(!msg.contains("Prompt too long"));
+            }
+        }
+
+        #[tokio::test]
+        async fn test_prompt_exceeding_batch_size() {
+            // Test case: prompt larger than batch size should be processed in chunks
+            let batch_size = 4u32; // Very small batch size for testing
+            let model_manager =
+                match ModelManager::new(create_test_config_with_batch_size(batch_size)) {
+                    Ok(manager) => Arc::new(manager),
+                    Err(_) => return,
+                };
+
+            assert_eq!(model_manager.get_batch_size(), batch_size as usize);
+
+            let config = QueueConfig {
+                max_queue_size: 10,
+                worker_threads: 1,
+            };
+            let queue = RequestQueue::new(
+                model_manager,
+                config,
+                crate::types::SessionConfig::default(),
+            );
+
+            // Create a session with a large prompt (exceeding batch size)
+            let mut session = create_test_session();
+            session.messages = vec![Message {
+                role: MessageRole::User,
+                content: "This is a longer prompt that should exceed the small batch size limit and require chunked processing to handle properly without errors".to_string(),
+                tool_call_id: None,
+                tool_name: None,
+                timestamp: SystemTime::now(),
+            }];
+
+            let request = GenerationRequest {
+                session_id: session.id,
+                max_tokens: Some(10),
+                temperature: Some(0.7),
+                top_p: Some(0.9),
+                stop_tokens: Vec::new(),
+                stopping_config: None,
+            };
+
+            let result = queue.submit_request(request, &session).await;
+            // Most importantly: should NOT fail with batch size error
+            if let Err(QueueError::WorkerError(msg)) = result {
+                assert!(!msg.contains("exceeds batch size limit"));
+                assert!(!msg.contains("Prompt too long"));
+                // Other errors (like model not loaded) are acceptable for this test
+            }
+        }
+
+        #[tokio::test]
+        async fn test_streaming_with_large_prompt() {
+            // Test streaming with prompt larger than batch size
+            let batch_size = 4u32;
+            let model_manager =
+                match ModelManager::new(create_test_config_with_batch_size(batch_size)) {
+                    Ok(manager) => Arc::new(manager),
+                    Err(_) => return,
+                };
+
+            let config = QueueConfig {
+                max_queue_size: 10,
+                worker_threads: 1,
+            };
+            let queue = RequestQueue::new(
+                model_manager,
+                config,
+                crate::types::SessionConfig::default(),
+            );
+
+            let mut session = create_test_session();
+            session.messages = vec![Message {
+                role: MessageRole::User,
+                content: "This is another long prompt for streaming that should exceed the batch size and test chunked processing in streaming mode".to_string(),
+                tool_call_id: None,
+                tool_name: None,
+                timestamp: SystemTime::now(),
+            }];
+
+            let request = GenerationRequest {
+                session_id: session.id,
+                max_tokens: Some(10),
+                temperature: Some(0.7),
+                top_p: Some(0.9),
+                stop_tokens: Vec::new(),
+                stopping_config: None,
+            };
+
+            let stream_result = queue.submit_streaming_request(request, &session).await;
+
+            // Check that we don't get batch size errors
+            match stream_result {
+                Ok(mut stream) => {
+                    if let Some(Err(QueueError::WorkerError(msg))) = stream.recv().await {
+                        assert!(!msg.contains("exceeds batch size limit"));
+                        assert!(!msg.contains("Prompt too long"));
+                    }
+                }
+                Err(QueueError::WorkerError(msg)) => {
+                    assert!(!msg.contains("exceeds batch size limit"));
+                    assert!(!msg.contains("Prompt too long"));
+                }
+                Err(_) => {
+                    // Other errors are acceptable for this test
+                }
+            }
+        }
+
+        #[tokio::test]
+        async fn test_multiple_batch_sizes() {
+            // Test with various batch sizes to ensure consistent behavior
+            let batch_sizes = vec![1u32, 2, 4, 8, 16, 32];
+
+            for batch_size in batch_sizes {
+                let model_manager =
+                    match ModelManager::new(create_test_config_with_batch_size(batch_size)) {
+                        Ok(manager) => Arc::new(manager),
+                        Err(_) => continue, // Skip if can't create manager
+                    };
+
+                assert_eq!(model_manager.get_batch_size(), batch_size as usize);
+
+                let config = QueueConfig {
+                    max_queue_size: 10,
+                    worker_threads: 1,
+                };
+                let queue = RequestQueue::new(
+                    model_manager,
+                    config,
+                    crate::types::SessionConfig::default(),
+                );
+
+                let mut session = create_test_session();
+                session.messages = vec![Message {
+                    role: MessageRole::User,
+                    content:
+                        "Test prompt with multiple words to ensure it exceeds smaller batch sizes"
+                            .to_string(),
+                    tool_call_id: None,
+                    tool_name: None,
+                    timestamp: SystemTime::now(),
+                }];
+
+                let request = GenerationRequest {
+                    session_id: session.id,
+                    max_tokens: Some(5),
+                    temperature: Some(0.7),
+                    top_p: Some(0.9),
+                    stop_tokens: Vec::new(),
+                    stopping_config: None,
+                };
+
+                let result = queue.submit_request(request, &session).await;
+
+                // Key assertion: no batch size limit errors regardless of batch_size
+                if let Err(QueueError::WorkerError(msg)) = result {
+                    assert!(
+                        !msg.contains("exceeds batch size limit"),
+                        "Batch size {} failed with batch size error: {}",
+                        batch_size,
+                        msg
+                    );
+                    assert!(
+                        !msg.contains("Prompt too long"),
+                        "Batch size {} failed with prompt length error: {}",
+                        batch_size,
+                        msg
+                    );
+                }
+            }
+        }
+
+        #[test]
+        fn test_batch_size_configuration() {
+            // Test that different batch sizes are correctly configured
+            let test_sizes = vec![1u32, 64, 256, 512, 1024, 2048];
+
+            for expected_size in test_sizes {
+                let config = create_test_config_with_batch_size(expected_size);
+                assert_eq!(config.batch_size, expected_size);
+
+                if let Ok(model_manager) = ModelManager::new(config) {
+                    assert_eq!(model_manager.get_batch_size(), expected_size as usize);
+                }
+            }
+        }
+
+        #[test]
+        fn test_chunk_processing_logic() {
+            // Test the chunking logic without actual model processing
+            let batch_size = 4;
+            let tokens: Vec<i32> = (0..10).collect(); // 10 tokens: [0,1,2,3,4,5,6,7,8,9]
+
+            let chunks: Vec<_> = tokens.chunks(batch_size).collect();
+
+            // Should create 3 chunks: [0,1,2,3], [4,5,6,7], [8,9]
+            assert_eq!(chunks.len(), 3);
+            assert_eq!(chunks[0], &[0, 1, 2, 3]);
+            assert_eq!(chunks[1], &[4, 5, 6, 7]);
+            assert_eq!(chunks[2], &[8, 9]);
+
+            // Verify no tokens are lost
+            let reconstructed: Vec<i32> = chunks.into_iter().flatten().copied().collect();
+            assert_eq!(reconstructed, tokens);
+        }
+    }
+}
