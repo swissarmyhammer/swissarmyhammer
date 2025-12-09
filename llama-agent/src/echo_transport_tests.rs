@@ -132,7 +132,7 @@ mod tests {
         // Start the real echo_stdio server
         let mut child = Command::new("cargo")
             .args(&["run", "--example", "echo_stdio"])
-            .current_dir("/Users/wballard/github/llama-agent/llama-agent")
+            .current_dir(env!("CARGO_MANIFEST_DIR"))
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())

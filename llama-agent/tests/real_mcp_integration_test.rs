@@ -61,7 +61,7 @@ impl RealEchoServerFixture {
 
         let server_process = Command::new("cargo")
             .args(["run", "--example", &format!("echo_{}", transport_name)])
-            .current_dir("/Users/wballard/github/llama-agent/llama-agent")
+            .current_dir(env!("CARGO_MANIFEST_DIR"))
             .stdin(if matches!(transport_type, TransportType::Stdio) {
                 Stdio::piped()
             } else {
