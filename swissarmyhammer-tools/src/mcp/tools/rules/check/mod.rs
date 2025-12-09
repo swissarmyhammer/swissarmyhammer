@@ -661,11 +661,42 @@ impl RuleCheckTool {
         filtered_rules: &[swissarmyhammer_rules::Rule],
         file_patterns: &[String],
         context: &ToolContext,
+        progress_token: &str,
     ) -> Result<Vec<RuleViolation>, McpError> {
         let mut violations = Vec::new();
         let upstream_url = Self::get_upstream_url(context).await?;
+        let total_rules = filtered_rules.len();
+        let start_time = Instant::now();
 
-        for rule in filtered_rules {
+        for (index, rule) in filtered_rules.iter().enumerate() {
+            let current = index + 1;
+
+            // Calculate progress percentage and ETA
+            let progress_pct = ((current as f64 / total_rules as f64) * 100.0) as u32;
+            let elapsed = start_time.elapsed();
+            let avg_time_per_rule = elapsed.as_secs_f64() / (index + 1) as f64;
+            let remaining_rules = total_rules - current;
+            let eta_secs = (avg_time_per_rule * remaining_rules as f64) as u64;
+
+            let progress_msg = format!(
+                "Checking rule {} of {} ({}) - ETA: {}s",
+                current, total_rules, rule.name, eta_secs
+            );
+
+            tracing::info!("{}", progress_msg);
+            send_progress(
+                context,
+                progress_token,
+                Some(progress_pct),
+                progress_msg,
+                json!({
+                    "current": current,
+                    "total": total_rules,
+                    "rule_name": rule.name,
+                    "eta_seconds": eta_secs
+                }),
+            );
+
             let rule_violations =
                 Self::check_single_filtered_rule(rule, file_patterns, &upstream_url, context)
                     .await?;
@@ -879,7 +910,7 @@ impl RuleCheckTool {
                     filtered_rules.len()
                 );
                 all_violations.extend(
-                    self.check_filtered_rules(filtered_rules, patterns, context)
+                    self.check_filtered_rules(filtered_rules, patterns, context, progress_token)
                         .await?,
                 );
             }
