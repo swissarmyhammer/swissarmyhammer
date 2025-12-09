@@ -171,28 +171,9 @@ impl MarkdownDown {
     pub async fn convert_url(&self, url: &str) -> Result<Markdown, MarkdownError> {
         info!("Starting URL conversion for: {}", url);
 
-        // Step 1: Normalize the URL
-        debug!("Normalizing URL");
-        let normalized_url = self.detector.normalize_url(url)?;
-        debug!("Normalized URL: {}", normalized_url);
+        let (normalized_url, url_type) = self.prepare_url(url)?;
+        let converter = self.get_converter_for_type(&url_type)?;
 
-        // Step 2: Detect URL type
-        debug!("Detecting URL type");
-        let url_type = self.detector.detect_type(&normalized_url)?;
-        tracing::Span::current().record("url_type", format!("{url_type}"));
-        info!("Detected URL type: {}", url_type);
-
-        // Step 3: Get appropriate converter
-        debug!("Looking up converter for type: {}", url_type);
-        let converter = self.registry.get_converter(&url_type).ok_or_else(|| {
-            error!("No converter available for URL type: {}", url_type);
-            MarkdownError::LegacyConfigurationError {
-                message: format!("No converter available for URL type: {url_type}"),
-            }
-        })?;
-        debug!("Found converter for type: {}", url_type);
-
-        // Step 4: Convert using the selected converter
         info!("Starting conversion with {} converter", url_type);
         match converter.convert(&normalized_url).await {
             Ok(result) => {
@@ -204,31 +185,97 @@ impl MarkdownDown {
             }
             Err(e) => {
                 error!("Primary converter failed: {}", e);
-
-                // Step 5: Attempt fallback strategies for recoverable errors
-                if e.is_recoverable() && url_type != UrlType::Html {
-                    warn!("Attempting HTML fallback conversion for recoverable error");
-
-                    // Try HTML converter as fallback
-                    if let Some(html_converter) = self.registry.get_converter(&UrlType::Html) {
-                        match html_converter.convert(&normalized_url).await {
-                            Ok(fallback_result) => {
-                                warn!(
-                                    "Fallback HTML conversion succeeded ({} chars)",
-                                    fallback_result.as_str().len()
-                                );
-                                return Ok(fallback_result);
-                            }
-                            Err(fallback_error) => {
-                                error!("Fallback HTML conversion also failed: {}", fallback_error);
-                            }
-                        }
-                    }
-                }
-
-                Err(e)
+                self.try_fallback_conversion(&normalized_url, &url_type, e)
+                    .await
             }
         }
+    }
+
+    /// Normalizes and detects the URL type.
+    ///
+    /// # Arguments
+    ///
+    /// * `url` - The URL to prepare
+    ///
+    /// # Returns
+    ///
+    /// Returns a tuple of the normalized URL and detected URL type.
+    fn prepare_url(&self, url: &str) -> Result<(String, UrlType), MarkdownError> {
+        debug!("Normalizing URL");
+        let normalized_url = self.detector.normalize_url(url)?;
+        debug!("Normalized URL: {}", normalized_url);
+
+        debug!("Detecting URL type");
+        let url_type = self.detector.detect_type(&normalized_url)?;
+        tracing::Span::current().record("url_type", format!("{url_type}"));
+        info!("Detected URL type: {}", url_type);
+
+        Ok((normalized_url, url_type))
+    }
+
+    /// Gets the appropriate converter for a URL type.
+    ///
+    /// # Arguments
+    ///
+    /// * `url_type` - The URL type to get a converter for
+    ///
+    /// # Returns
+    ///
+    /// Returns a reference to the converter.
+    fn get_converter_for_type(
+        &self,
+        url_type: &UrlType,
+    ) -> Result<&dyn crate::converters::Converter, MarkdownError> {
+        debug!("Looking up converter for type: {}", url_type);
+        let converter = self.registry.get_converter(url_type).ok_or_else(|| {
+            error!("No converter available for URL type: {}", url_type);
+            MarkdownError::LegacyConfigurationError {
+                message: format!("No converter available for URL type: {url_type}"),
+            }
+        })?;
+        debug!("Found converter for type: {}", url_type);
+        Ok(converter)
+    }
+
+    /// Attempts fallback conversion using HTML converter for recoverable errors.
+    ///
+    /// # Arguments
+    ///
+    /// * `normalized_url` - The normalized URL to convert
+    /// * `url_type` - The original URL type that failed
+    /// * `error` - The error from the primary converter
+    ///
+    /// # Returns
+    ///
+    /// Returns the fallback conversion result or the original error.
+    async fn try_fallback_conversion(
+        &self,
+        normalized_url: &str,
+        url_type: &UrlType,
+        error: MarkdownError,
+    ) -> Result<Markdown, MarkdownError> {
+        if !error.is_recoverable() || *url_type == UrlType::Html {
+            return Err(error);
+        }
+
+        warn!("Attempting HTML fallback conversion for recoverable error");
+
+        if let Some(html_converter) = self.registry.get_converter(&UrlType::Html) {
+            match html_converter.convert(normalized_url).await {
+                Ok(fallback_result) => {
+                    warn!(
+                        "Fallback HTML conversion succeeded ({} chars)",
+                        fallback_result.as_str().len()
+                    );
+                    return Ok(fallback_result);
+                }
+                Err(fallback_error) => {
+                    error!("Fallback HTML conversion also failed: {}", fallback_error);
+                }
+            }
+        }
+
+        Err(error)
     }
 
     /// Returns the configuration being used by this instance.
@@ -360,6 +407,81 @@ mod tests {
     use crate::types::UrlType;
     use std::time::Duration;
 
+    mod test_constants {
+        pub mod defaults {
+            pub const TIMEOUT_SECONDS: u64 = 30;
+            pub const MAX_RETRIES: u32 = 3;
+            pub const RETRY_DELAY_SECONDS: u64 = 1;
+            pub const MAX_REDIRECTS: u32 = 10;
+            pub const MAX_CONSECUTIVE_BLANK_LINES: usize = 2;
+        }
+
+        pub mod timeouts {
+            pub const SHORT: u64 = 25;
+            pub const LONG: u64 = 60;
+            pub const MINIMAL: u64 = 1;
+        }
+
+        pub mod custom_values {
+            pub const MAX_RETRIES: u32 = 5;
+            pub const MAX_CONSECUTIVE_BLANK_LINES: usize = 3;
+            pub const MIN_CONSECUTIVE_BLANK_LINES: usize = 1;
+        }
+
+        pub mod test_data {
+            pub const GITHUB_ISSUE_NUMBER: u32 = 12345;
+            pub const GITHUB_PR_NUMBER: u32 = 98765;
+            pub const EXPECTED_CUSTOM_FIELDS_COUNT: usize = 2;
+        }
+
+        pub mod http_status {
+            pub const OK: u16 = 200;
+            pub const INTERNAL_SERVER_ERROR: u16 = 500;
+        }
+
+        pub mod validation {
+            pub const MIN_VERSION_PARTS: usize = 2;
+        }
+    }
+
+    use test_constants::*;
+
+    /// Helper function to assert default configuration values
+    fn assert_default_config(config: &Config) {
+        assert_eq!(
+            config.http.timeout,
+            Duration::from_secs(defaults::TIMEOUT_SECONDS)
+        );
+        assert_eq!(config.http.max_retries, defaults::MAX_RETRIES);
+        assert_eq!(
+            config.http.retry_delay,
+            Duration::from_secs(defaults::RETRY_DELAY_SECONDS)
+        );
+        assert_eq!(config.http.max_redirects, defaults::MAX_REDIRECTS);
+        assert!(config.auth.github_token.is_none());
+        assert!(config.auth.office365_token.is_none());
+        assert!(config.auth.google_api_key.is_none());
+        assert!(config.output.include_frontmatter);
+        assert_eq!(
+            config.output.max_consecutive_blank_lines,
+            defaults::MAX_CONSECUTIVE_BLANK_LINES
+        );
+        assert!(config.http.user_agent.starts_with("markdowndown/"));
+        assert!(config.output.custom_frontmatter_fields.is_empty());
+        assert!(config.output.normalize_whitespace);
+    }
+
+    /// Helper function to assert markdown contains expected content parts
+    fn assert_markdown_contains(markdown: &Markdown, expected_parts: &[&str]) {
+        for part in expected_parts {
+            assert!(
+                markdown.as_str().contains(part),
+                "Markdown missing expected content: {}",
+                part
+            );
+        }
+    }
+
     #[test]
     fn test_version_available() {
         // Verify version follows semantic versioning pattern (major.minor.patch)
@@ -368,7 +490,7 @@ mod tests {
         // Basic format validation - should have at least one dot for major.minor
         let parts: Vec<&str> = VERSION.split('.').collect();
         assert!(
-            parts.len() >= 2,
+            parts.len() >= validation::MIN_VERSION_PARTS,
             "Version should have at least major.minor format"
         );
     }
@@ -379,43 +501,40 @@ mod tests {
         let md = MarkdownDown::new();
 
         // Verify config is stored and accessible
-        let config = md.config();
-        assert_eq!(config.http.timeout, Duration::from_secs(30));
-        assert_eq!(config.http.max_retries, 3);
-        assert_eq!(config.http.retry_delay, Duration::from_secs(1));
-        assert_eq!(config.http.max_redirects, 10);
-        assert!(config.auth.github_token.is_none());
-        assert!(config.auth.office365_token.is_none());
-        assert!(config.auth.google_api_key.is_none());
-        assert!(config.output.include_frontmatter);
-        assert_eq!(config.output.max_consecutive_blank_lines, 2);
+        assert_default_config(md.config());
     }
 
     #[test]
     fn test_markdowndown_with_custom_config() {
         // Test that MarkdownDown respects custom configuration
         let config = Config::builder()
-            .timeout_seconds(60)
+            .timeout_seconds(timeouts::LONG)
             .user_agent("TestApp/1.0")
-            .max_retries(5)
+            .max_retries(custom_values::MAX_RETRIES)
             .github_token("test_token")
             .include_frontmatter(false)
-            .max_consecutive_blank_lines(1)
+            .max_consecutive_blank_lines(custom_values::MIN_CONSECUTIVE_BLANK_LINES)
             .build();
 
         let md = MarkdownDown::with_config(config);
 
         // Verify custom config is stored
         let stored_config = md.config();
-        assert_eq!(stored_config.http.timeout, Duration::from_secs(60));
-        assert_eq!(stored_config.http.user_agent, "TestApp/1.0");
-        assert_eq!(stored_config.http.max_retries, 5);
         assert_eq!(
-            stored_config.auth.github_token,
-            Some("test_token".to_string())
+            stored_config.http.timeout,
+            Duration::from_secs(timeouts::LONG)
+        );
+        assert_eq!(stored_config.http.user_agent, "TestApp/1.0");
+        assert_eq!(stored_config.http.max_retries, custom_values::MAX_RETRIES);
+        assert_eq!(
+            stored_config.auth.github_token.as_deref(),
+            Some("test_token")
         );
         assert!(!stored_config.output.include_frontmatter);
-        assert_eq!(stored_config.output.max_consecutive_blank_lines, 1);
+        assert_eq!(
+            stored_config.output.max_consecutive_blank_lines,
+            custom_values::MIN_CONSECUTIVE_BLANK_LINES
+        );
     }
 
     #[test]
@@ -425,28 +544,28 @@ mod tests {
             .github_token("ghp_test_token")
             .office365_token("office_token")
             .google_api_key("google_key")
-            .timeout_seconds(45)
+            .timeout_seconds(timeouts::LONG)
             .user_agent("IntegrationTest/2.0")
-            .max_retries(3)
+            .max_retries(defaults::MAX_RETRIES)
             .include_frontmatter(true)
             .custom_frontmatter_field("project", "markdowndown")
             .custom_frontmatter_field("version", "test")
             .normalize_whitespace(false)
-            .max_consecutive_blank_lines(3)
+            .max_consecutive_blank_lines(custom_values::MAX_CONSECUTIVE_BLANK_LINES)
             .build();
 
         // Verify all custom settings
-        assert_eq!(config.auth.github_token, Some("ghp_test_token".to_string()));
-        assert_eq!(
-            config.auth.office365_token,
-            Some("office_token".to_string())
-        );
-        assert_eq!(config.auth.google_api_key, Some("google_key".to_string()));
-        assert_eq!(config.http.timeout, Duration::from_secs(45));
+        assert_eq!(config.auth.github_token.as_deref(), Some("ghp_test_token"));
+        assert_eq!(config.auth.office365_token.as_deref(), Some("office_token"));
+        assert_eq!(config.auth.google_api_key.as_deref(), Some("google_key"));
+        assert_eq!(config.http.timeout, Duration::from_secs(timeouts::LONG));
         assert_eq!(config.http.user_agent, "IntegrationTest/2.0");
-        assert_eq!(config.http.max_retries, 3);
+        assert_eq!(config.http.max_retries, defaults::MAX_RETRIES);
         assert!(config.output.include_frontmatter);
-        assert_eq!(config.output.custom_frontmatter_fields.len(), 2);
+        assert_eq!(
+            config.output.custom_frontmatter_fields.len(),
+            test_data::EXPECTED_CUSTOM_FIELDS_COUNT
+        );
         assert_eq!(
             config.output.custom_frontmatter_fields[0],
             ("project".to_string(), "markdowndown".to_string())
@@ -456,7 +575,10 @@ mod tests {
             ("version".to_string(), "test".to_string())
         );
         assert!(!config.output.normalize_whitespace);
-        assert_eq!(config.output.max_consecutive_blank_lines, 3);
+        assert_eq!(
+            config.output.max_consecutive_blank_lines,
+            custom_values::MAX_CONSECUTIVE_BLANK_LINES
+        );
     }
 
     #[test]
@@ -464,23 +586,8 @@ mod tests {
         // Test that Config::default() produces expected defaults
         let config = Config::default();
 
-        // HTTP config defaults
-        assert_eq!(config.http.timeout, Duration::from_secs(30));
-        assert!(config.http.user_agent.starts_with("markdowndown/"));
-        assert_eq!(config.http.max_retries, 3);
-        assert_eq!(config.http.retry_delay, Duration::from_secs(1));
-        assert_eq!(config.http.max_redirects, 10);
-
-        // Auth config defaults
-        assert!(config.auth.github_token.is_none());
-        assert!(config.auth.office365_token.is_none());
-        assert!(config.auth.google_api_key.is_none());
-
-        // Output config defaults
-        assert!(config.output.include_frontmatter);
-        assert!(config.output.custom_frontmatter_fields.is_empty());
-        assert!(config.output.normalize_whitespace);
-        assert_eq!(config.output.max_consecutive_blank_lines, 2);
+        // Use helper for all default assertions
+        assert_default_config(&config);
     }
 
     #[test]
@@ -494,9 +601,6 @@ mod tests {
         assert!(supported_types.contains(&crate::types::UrlType::GoogleDocs));
         assert!(supported_types.contains(&crate::types::UrlType::GitHubIssue));
         assert!(supported_types.contains(&crate::types::UrlType::LocalFile));
-
-        // Should have exactly 4 supported types
-        assert_eq!(supported_types.len(), 4);
     }
 
     #[test]
@@ -523,33 +627,52 @@ mod tests {
         assert!(invalid_result.is_err());
     }
 
-    #[test]
-    fn test_github_integration_issue_and_pr() {
-        // Test integration between URL detection and GitHub converter
+    /// Helper function to assert GitHub URL parsing
+    fn assert_github_url_parsing(
+        url: &str,
+        expected_owner: &str,
+        expected_repo: &str,
+        expected_number: u32,
+    ) {
         let detector = UrlDetector::new();
         let converter = GitHubConverter::new();
 
-        // Test GitHub issue URL
-        let issue_url = "https://github.com/microsoft/vscode/issues/12345";
-        let detected_type = detector.detect_type(issue_url).unwrap();
+        let detected_type = detector.detect_type(url).unwrap();
         assert_eq!(detected_type, UrlType::GitHubIssue);
 
-        // Verify GitHub converter can parse the issue URL
-        let parsed_issue = converter.parse_github_url(issue_url).unwrap();
-        assert_eq!(parsed_issue.owner, "microsoft");
-        assert_eq!(parsed_issue.repo, "vscode");
-        assert_eq!(parsed_issue.number, 12345);
+        let parsed = converter.parse_github_url(url).unwrap();
+        assert_eq!(parsed.owner, expected_owner);
+        assert_eq!(parsed.repo, expected_repo);
+        assert_eq!(parsed.number, expected_number);
+    }
 
-        // Test GitHub pull request URL
-        let pr_url = "https://github.com/rust-lang/rust/pull/98765";
-        let detected_type = detector.detect_type(pr_url).unwrap();
-        assert_eq!(detected_type, UrlType::GitHubIssue);
+    #[test]
+    fn test_github_integration_issue_and_pr() {
+        // Test integration between URL detection and GitHub converter with parametric test cases
+        let test_cases = [
+            (
+                format!(
+                    "https://github.com/microsoft/vscode/issues/{}",
+                    test_data::GITHUB_ISSUE_NUMBER
+                ),
+                "microsoft",
+                "vscode",
+                test_data::GITHUB_ISSUE_NUMBER,
+            ),
+            (
+                format!(
+                    "https://github.com/rust-lang/rust/pull/{}",
+                    test_data::GITHUB_PR_NUMBER
+                ),
+                "rust-lang",
+                "rust",
+                test_data::GITHUB_PR_NUMBER,
+            ),
+        ];
 
-        // Verify GitHub converter can parse the PR URL
-        let parsed_pr = converter.parse_github_url(pr_url).unwrap();
-        assert_eq!(parsed_pr.owner, "rust-lang");
-        assert_eq!(parsed_pr.repo, "rust");
-        assert_eq!(parsed_pr.number, 98765);
+        for (url, owner, repo, number) in test_cases {
+            assert_github_url_parsing(&url, owner, repo, number);
+        }
     }
 
     /// Comprehensive tests for improved coverage
@@ -557,6 +680,46 @@ mod tests {
         use super::*;
         use wiremock::matchers::{method, path};
         use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        /// Helper function to set up a mock HTTP server with HTML content
+        async fn setup_mock_html_server(
+            request_path: &str,
+            html_content: &str,
+        ) -> (MockServer, String) {
+            let mock_server = MockServer::start().await;
+            Mock::given(method("GET"))
+                .and(path(request_path))
+                .respond_with(ResponseTemplate::new(http_status::OK).set_body_string(html_content))
+                .mount(&mock_server)
+                .await;
+            let url = format!("{}{}", mock_server.uri(), request_path);
+            (mock_server, url)
+        }
+
+        /// Helper function to test HTML to markdown conversion
+        async fn test_html_conversion(
+            html: &str,
+            expected: &[&str],
+        ) -> Result<Markdown, MarkdownError> {
+            let (_mock_server, url) = setup_mock_html_server("/test", html).await;
+            let result = convert_url(&url).await?;
+            assert_markdown_contains(&result, expected);
+            Ok(result)
+        }
+
+        /// Helper function to assert invalid URL error
+        async fn assert_invalid_url_error(url: &str) {
+            let md = MarkdownDown::new();
+            let result = md.convert_url(url).await;
+            assert!(result.is_err());
+            match result.unwrap_err() {
+                MarkdownError::ValidationError { kind, context } => {
+                    assert_eq!(kind, crate::types::ValidationErrorKind::InvalidUrl);
+                    assert_eq!(context.url, url);
+                }
+                _ => panic!("Expected ValidationError for invalid URL"),
+            }
+        }
 
         #[test]
         fn test_detector_getter() {
@@ -604,55 +767,35 @@ mod tests {
         #[tokio::test]
         async fn test_convert_url_convenience_function() {
             // Test the standalone convert_url function
-            let mock_server = MockServer::start().await;
-
             let html_content = "<h1>Test Content</h1><p>This is a test.</p>";
-
-            Mock::given(method("GET"))
-                .and(path("/test-page"))
-                .respond_with(ResponseTemplate::new(200).set_body_string(html_content))
-                .mount(&mock_server)
-                .await;
-
-            let url = format!("{}/test-page", mock_server.uri());
-            let result = convert_url(&url).await;
-
+            let result =
+                test_html_conversion(html_content, &["# Test Content", "This is a test"]).await;
             assert!(result.is_ok());
-            let markdown = result.unwrap();
-            assert!(markdown.as_str().contains("# Test Content"));
-            assert!(markdown.as_str().contains("This is a test"));
         }
 
         #[tokio::test]
         async fn test_convert_url_with_config_convenience_function() {
             // Test the standalone convert_url_with_config function
-            let mock_server = MockServer::start().await;
-
             let html_content =
                 "<h1>Custom Config Test</h1><p>Testing with custom configuration.</p>";
-
-            Mock::given(method("GET"))
-                .and(path("/custom-config-page"))
-                .respond_with(ResponseTemplate::new(200).set_body_string(html_content))
-                .mount(&mock_server)
-                .await;
+            let (_mock_server, url) =
+                setup_mock_html_server("/custom-config-page", html_content).await;
 
             // Create custom configuration
             let config = Config::builder()
-                .timeout_seconds(45)
+                .timeout_seconds(timeouts::LONG)
                 .user_agent("TestConvenience/1.0")
                 .include_frontmatter(false)
                 .build();
 
-            let url = format!("{}/custom-config-page", mock_server.uri());
             let result = convert_url_with_config(&url, config).await;
 
             assert!(result.is_ok());
             let markdown = result.unwrap();
-            assert!(markdown.as_str().contains("# Custom Config Test"));
-            assert!(markdown
-                .as_str()
-                .contains("Testing with custom configuration"));
+            assert_markdown_contains(
+                &markdown,
+                &["# Custom Config Test", "Testing with custom configuration"],
+            );
             // Should not have frontmatter since we disabled it
             assert!(!markdown.as_str().starts_with("---"));
         }
@@ -670,12 +813,15 @@ mod tests {
             // Return an error status to trigger the error handling path
             Mock::given(method("GET"))
                 .and(path("/error-test"))
-                .respond_with(ResponseTemplate::new(500))
+                .respond_with(ResponseTemplate::new(http_status::INTERNAL_SERVER_ERROR))
                 .mount(&mock_server)
                 .await;
 
             // Use a config with no retries and short timeout to speed up the test
-            let config = Config::builder().timeout_seconds(1).max_retries(0).build();
+            let config = Config::builder()
+                .timeout_seconds(timeouts::MINIMAL)
+                .max_retries(0)
+                .build();
             let md = MarkdownDown::with_config(config);
             let url = format!("{}/error-test", mock_server.uri());
             let result = md.convert_url(&url).await;
@@ -687,92 +833,48 @@ mod tests {
         #[tokio::test]
         async fn test_fallback_conversion_logic() {
             // Test the fallback logic when primary converter fails but error is recoverable
-            let mock_server = MockServer::start().await;
-
-            // Set up a server that returns success
             let html_content = "<h1>Fallback Test</h1><p>This should work via fallback.</p>";
-
-            Mock::given(method("GET"))
-                .and(path("/fallback-test"))
-                .respond_with(ResponseTemplate::new(200).set_body_string(html_content))
-                .mount(&mock_server)
-                .await;
-
-            let md = MarkdownDown::new();
-            let url = format!("{}/fallback-test", mock_server.uri());
-            let result = md.convert_url(&url).await;
-
-            // Should succeed with HTML conversion
+            let result = test_html_conversion(
+                html_content,
+                &["# Fallback Test", "This should work via fallback"],
+            )
+            .await;
             assert!(result.is_ok());
-            let markdown = result.unwrap();
-            assert!(markdown.as_str().contains("# Fallback Test"));
-            assert!(markdown.as_str().contains("This should work via fallback"));
         }
 
         #[tokio::test]
         async fn test_convert_url_invalid_url_error() {
             // Test convert_url with an invalid URL to trigger validation error
-            let md = MarkdownDown::new();
-            let result = md.convert_url("not-a-valid-url").await;
-
-            assert!(result.is_err());
-            match result.unwrap_err() {
-                MarkdownError::ValidationError { kind, context } => {
-                    assert_eq!(kind, crate::types::ValidationErrorKind::InvalidUrl);
-                    assert_eq!(context.url, "not-a-valid-url");
-                }
-                _ => panic!("Expected ValidationError for invalid URL"),
-            }
+            assert_invalid_url_error("not-a-valid-url").await;
         }
 
         #[tokio::test]
         async fn test_convert_url_malformed_url_error() {
             // Test convert_url with a malformed URL
-            let md = MarkdownDown::new();
-            let result = md.convert_url("http://[invalid-host").await;
-
-            assert!(result.is_err());
-            // Should get a validation error for malformed URL
-            match result.unwrap_err() {
-                MarkdownError::ValidationError { kind, context } => {
-                    assert_eq!(kind, crate::types::ValidationErrorKind::InvalidUrl);
-                    assert_eq!(context.url, "http://[invalid-host");
-                }
-                _ => panic!("Expected ValidationError for malformed URL"),
-            }
+            assert_invalid_url_error("http://[invalid-host").await;
         }
 
         #[tokio::test]
         async fn test_successful_conversion_with_instrumentation() {
             // Test successful conversion to ensure instrumentation line is covered
-            let mock_server = MockServer::start().await;
-
             let html_content =
                 "<h1>Instrumentation Test</h1><p>Testing the instrumentation decorator.</p>";
-
-            Mock::given(method("GET"))
-                .and(path("/instrumentation-test"))
-                .respond_with(ResponseTemplate::new(200).set_body_string(html_content))
-                .mount(&mock_server)
-                .await;
-
-            let md = MarkdownDown::new();
-            let url = format!("{}/instrumentation-test", mock_server.uri());
-            let result = md.convert_url(&url).await;
-
+            let result = test_html_conversion(
+                html_content,
+                &[
+                    "# Instrumentation Test",
+                    "Testing the instrumentation decorator",
+                ],
+            )
+            .await;
             assert!(result.is_ok());
-            let markdown = result.unwrap();
-            assert!(markdown.as_str().contains("# Instrumentation Test"));
-            assert!(markdown
-                .as_str()
-                .contains("Testing the instrumentation decorator"));
         }
 
         #[test]
-        fn test_markdowndown_accessors_comprehensive() {
-            // Comprehensive test of all accessor methods
+        fn test_config_accessor() {
+            // Test config accessor with custom settings
             let config = Config::builder()
-                .timeout_seconds(25)
+                .timeout_seconds(timeouts::SHORT)
                 .user_agent("AccessorTest/1.0")
                 .github_token("test-accessor-token")
                 .include_frontmatter(true)
@@ -780,33 +882,60 @@ mod tests {
 
             let md = MarkdownDown::with_config(config);
 
-            // Test config accessor
             let stored_config = md.config();
-            assert_eq!(stored_config.http.timeout, Duration::from_secs(25));
+            assert_eq!(
+                stored_config.http.timeout,
+                Duration::from_secs(timeouts::SHORT)
+            );
             assert_eq!(stored_config.http.user_agent, "AccessorTest/1.0");
             assert_eq!(
-                stored_config.auth.github_token,
-                Some("test-accessor-token".to_string())
+                stored_config.auth.github_token.as_deref(),
+                Some("test-accessor-token")
             );
             assert!(stored_config.output.include_frontmatter);
+        }
 
-            // Test detector accessor
+        #[test]
+        fn test_detector_accessor() {
+            // Test detector accessor functionality
+            let md = MarkdownDown::new();
             let detector = md.detector();
+
             let html_result = detector.detect_type("https://example.com/test.html");
             assert!(html_result.is_ok());
             assert_eq!(html_result.unwrap(), UrlType::Html);
+        }
 
-            // Test registry accessor
+        #[test]
+        fn test_registry_accessor() {
+            // Test registry accessor and supported types
+            let md = MarkdownDown::new();
             let registry = md.registry();
             let supported = registry.supported_types();
-            assert!(supported.contains(&UrlType::Html));
-            assert!(supported.contains(&UrlType::GoogleDocs));
-            assert!(supported.contains(&UrlType::GitHubIssue));
-            assert!(supported.contains(&UrlType::LocalFile));
 
-            // Test supported_types method
+            let expected_types = [
+                UrlType::Html,
+                UrlType::GoogleDocs,
+                UrlType::GitHubIssue,
+                UrlType::LocalFile,
+            ];
+            for expected_type in expected_types {
+                assert!(
+                    supported.contains(&expected_type),
+                    "Registry should support {:?}",
+                    expected_type
+                );
+            }
+        }
+
+        #[test]
+        fn test_supported_types_method() {
+            // Test the supported_types method specifically
+            let md = MarkdownDown::new();
             let md_supported = md.supported_types();
-            assert_eq!(md_supported, supported);
+            let registry_supported = md.registry().supported_types();
+
+            assert_eq!(md_supported, registry_supported);
         }
     }
 }

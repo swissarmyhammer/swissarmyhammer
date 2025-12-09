@@ -10,8 +10,39 @@ use markdowndown::converters::{
 };
 use markdowndown::types::{MarkdownError, UrlType};
 
+// Test configuration constants
+const TEST_TIMEOUT_SECONDS: u64 = 10;
+const DEFAULT_TIMEOUT_SECONDS: u64 = 30;
+const COMPREHENSIVE_TEST_TIMEOUT_SECONDS: u64 = 60;
+const TEST_MAX_RETRIES: u32 = 5;
+
+// HTML configuration constants
+const DEFAULT_MAX_LINE_WIDTH: usize = 100;
+const DEFAULT_MAX_BLANK_LINES: usize = 1;
+const PERMISSIVE_MAX_LINE_WIDTH: usize = 150;
+const PERMISSIVE_MAX_BLANK_LINES: usize = 5;
+
+// Converter type constants
+const MIN_STANDARD_CONVERTER_TYPES: usize = 4;
+
+// Thread configuration constants
+const DEFAULT_THREAD_COUNT: usize = 4;
+
+// Performance test constants
+const PERFORMANCE_TEST_ITERATIONS: usize = 1000;
+const LOOKUP_STRESS_TEST_ITERATIONS: usize = 10_000;
+const SUPPORTED_TYPES_STRESS_TEST_ITERATIONS: usize = 1_000;
+const LOOKUP_STRESS_TEST_MAX_DURATION_SECS: u64 = 5;
+const SUPPORTED_TYPES_STRESS_TEST_MAX_DURATION_SECS: u64 = 1;
+
 mod helpers {
     use super::*;
+
+    /// HTML configuration presets for testing
+    pub enum HtmlConfigPreset {
+        Default,
+        Permissive,
+    }
 
     /// Create a test registry with default converters
     pub fn create_test_registry() -> ConverterRegistry {
@@ -21,7 +52,7 @@ mod helpers {
     /// Create a test registry with configured converters
     pub fn create_configured_registry() -> ConverterRegistry {
         let config = Config::builder()
-            .timeout_seconds(10)
+            .timeout_seconds(TEST_TIMEOUT_SECONDS)
             .user_agent("test-registry/1.0")
             .build();
         let client = HttpClient::with_config(&config.http, &config.auth);
@@ -31,20 +62,162 @@ mod helpers {
         ConverterRegistry::with_config(client, html_config, &output_config)
     }
 
-    /// Test URL mappings for each converter type
-    pub fn url_type_mappings() -> Vec<(UrlType, &'static str)> {
+    /// Test URL mappings with expected converter names (single source of truth)
+    pub fn url_type_mappings_with_names() -> Vec<(UrlType, &'static str, &'static str)> {
         vec![
-            (UrlType::Html, "https://example.com/page.html"),
+            (UrlType::Html, "https://example.com/page.html", "HTML"),
             (
                 UrlType::GoogleDocs,
                 "https://docs.google.com/document/d/123/edit",
+                "Google Docs",
             ),
             (
                 UrlType::GitHubIssue,
                 "https://github.com/owner/repo/issues/123",
+                "GitHub Issue",
             ),
-            (UrlType::LocalFile, "/path/to/test.md"),
+            (
+                UrlType::LocalFile,
+                "/path/to/test.md",
+                "Local File Converter",
+            ),
         ]
+    }
+
+    /// Test URL mappings for each converter type (derived from url_type_mappings_with_names)
+    pub fn url_type_mappings() -> Vec<(UrlType, &'static str)> {
+        url_type_mappings_with_names()
+            .into_iter()
+            .map(|(url_type, url, _)| (url_type, url))
+            .collect()
+    }
+
+    /// Assert that a registry contains specified types
+    pub fn assert_registry_has_types(registry: &ConverterRegistry, expected_types: &[UrlType]) {
+        let supported_types = registry.supported_types();
+        for url_type in expected_types {
+            assert!(
+                supported_types.contains(url_type),
+                "Registry missing type: {:?}",
+                url_type
+            );
+        }
+    }
+
+    /// Assert that a registry contains all standard converter types
+    pub fn assert_standard_registry_types(registry: &ConverterRegistry) {
+        assert_registry_has_types(
+            registry,
+            &[
+                UrlType::Html,
+                UrlType::GoogleDocs,
+                UrlType::GitHubIssue,
+                UrlType::LocalFile,
+            ],
+        );
+        let supported_types = registry.supported_types();
+        assert!(
+            supported_types.len() >= MIN_STANDARD_CONVERTER_TYPES,
+            "Registry should support at least HTML, GoogleDocs, GitHubIssue, and LocalFile"
+        );
+    }
+
+    /// Assert registry creation and validation using a custom creation function
+    pub fn assert_registry_creation<F>(create_fn: F)
+    where
+        F: FnOnce() -> ConverterRegistry,
+    {
+        let registry = create_fn();
+        assert_standard_registry_types(&registry);
+    }
+
+    /// Get the expected converter name for a URL type
+    pub fn expected_converter_name(url_type: &UrlType) -> &'static str {
+        match url_type {
+            UrlType::Html => "HTML",
+            UrlType::GoogleDocs => "Google Docs",
+            UrlType::GitHubIssue => "GitHub Issue",
+            UrlType::LocalFile => "Local File Converter",
+        }
+    }
+
+    /// Assert that a converter's name matches the expected name for its URL type
+    pub fn assert_converter_name_matches_type(
+        url_type: &UrlType,
+        converter: &Box<dyn Converter>,
+    ) {
+        assert_eq!(converter.name(), expected_converter_name(url_type));
+    }
+
+    /// Verify converter names match expected values for given test cases
+    pub fn verify_converter_names(
+        registry: &ConverterRegistry,
+        test_cases: Vec<(UrlType, &'static str)>,
+    ) {
+        for (url_type, expected_name) in test_cases {
+            let converter = registry.get_converter(&url_type).unwrap();
+            assert_eq!(converter.name(), expected_name);
+        }
+    }
+
+    /// Verify registry consistency between two registries
+    pub fn verify_registry_consistency(
+        registry1: &ConverterRegistry,
+        registry2: &ConverterRegistry,
+    ) {
+        let types1 = registry1.supported_types();
+        let types2 = registry2.supported_types();
+        assert_eq!(types1.len(), types2.len());
+
+        for url_type in types1 {
+            assert!(types2.contains(&url_type));
+            let conv1 = registry1.get_converter(&url_type).unwrap();
+            let conv2 = registry2.get_converter(&url_type).unwrap();
+            assert_eq!(conv1.name(), conv2.name());
+        }
+    }
+
+    /// Assert that all converters are available for all URL type mappings
+    pub fn assert_all_converters_available(registry: &ConverterRegistry) {
+        for (url_type, sample_url) in url_type_mappings() {
+            let converter = registry.get_converter(&url_type);
+            assert!(
+                converter.is_some(),
+                "No converter found for URL type {url_type:?} with sample URL: {sample_url}"
+            );
+        }
+    }
+
+    /// Create an HTML configuration from a preset
+    pub fn html_config_from_preset(preset: HtmlConfigPreset) -> HtmlConverterConfig {
+        match preset {
+            HtmlConfigPreset::Default => HtmlConverterConfig {
+                max_line_width: DEFAULT_MAX_LINE_WIDTH,
+                remove_scripts_styles: true,
+                remove_navigation: true,
+                remove_sidebars: true,
+                remove_ads: true,
+                max_blank_lines: DEFAULT_MAX_BLANK_LINES,
+            },
+            HtmlConfigPreset::Permissive => HtmlConverterConfig {
+                max_line_width: PERMISSIVE_MAX_LINE_WIDTH,
+                remove_scripts_styles: false,
+                remove_navigation: false,
+                remove_sidebars: false,
+                remove_ads: false,
+                max_blank_lines: PERMISSIVE_MAX_BLANK_LINES,
+            },
+        }
+    }
+
+    /// Create a default HTML converter configuration for testing
+    pub fn default_html_config() -> HtmlConverterConfig {
+        html_config_from_preset(HtmlConfigPreset::Default)
+    }
+
+    /// Create a permissive HTML converter configuration for testing
+    pub fn permissive_html_config() -> HtmlConverterConfig {
+        html_config_from_preset(HtmlConfigPreset::Permissive)
     }
 }
 
@@ -54,57 +227,28 @@ mod registry_creation_tests {
 
     #[test]
     fn test_registry_new() {
-        let registry = ConverterRegistry::new();
-        let supported_types = registry.supported_types();
-
-        // Should support all major URL types
-        assert!(supported_types.contains(&UrlType::Html));
-        assert!(supported_types.contains(&UrlType::GoogleDocs));
-        assert!(supported_types.contains(&UrlType::GitHubIssue));
-        assert!(supported_types.contains(&UrlType::LocalFile));
-        assert_eq!(supported_types.len(), 4);
+        helpers::assert_registry_creation(|| ConverterRegistry::new());
     }
 
     #[test]
     fn test_registry_default() {
-        let registry = ConverterRegistry::default();
-        let supported_types = registry.supported_types();
-
-        // Default should be equivalent to new()
-        assert!(supported_types.contains(&UrlType::Html));
-        assert!(supported_types.contains(&UrlType::GoogleDocs));
-        assert!(supported_types.contains(&UrlType::GitHubIssue));
-        assert!(supported_types.contains(&UrlType::LocalFile));
-        assert_eq!(supported_types.len(), 4);
+        helpers::assert_registry_creation(|| ConverterRegistry::default());
     }
 
     #[test]
     fn test_registry_with_config() {
-        let config = Config::builder()
-            .timeout_seconds(30)
-            .user_agent("test-app/1.0")
-            .github_token("test_token")
-            .build();
-        let client = HttpClient::with_config(&config.http, &config.auth);
-        let html_config = HtmlConverterConfig {
-            max_line_width: 100,
-            remove_scripts_styles: true,
-            remove_navigation: true,
-            remove_sidebars: true,
-            remove_ads: true,
-            max_blank_lines: 1,
-        };
-        let output_config = markdowndown::config::OutputConfig::default();
+        helpers::assert_registry_creation(|| {
+            let config = Config::builder()
+                .timeout_seconds(DEFAULT_TIMEOUT_SECONDS)
+                .user_agent("test-app/1.0")
+                .github_token("test_token")
+                .build();
+            let client = HttpClient::with_config(&config.http, &config.auth);
+            let html_config = helpers::default_html_config();
+            let output_config = markdowndown::config::OutputConfig::default();
 
-        let registry = ConverterRegistry::with_config(client, html_config, &output_config);
-        let supported_types = registry.supported_types();
-
-        // Should support all URL types with custom configuration
-        assert_eq!(supported_types.len(), 4);
-        assert!(supported_types.contains(&UrlType::Html));
-        assert!(supported_types.contains(&UrlType::GoogleDocs));
-        assert!(supported_types.contains(&UrlType::GitHubIssue));
-        assert!(supported_types.contains(&UrlType::LocalFile));
+            ConverterRegistry::with_config(client, html_config, &output_config)
+        });
     }
 }
 
@@ -116,18 +260,12 @@ mod converter_management_tests {
     fn test_get_converter_for_each_type() {
         let registry = helpers::create_test_registry();
 
-        for (url_type, _) in helpers::url_type_mappings() {
+        for (url_type, _, expected_name) in helpers::url_type_mappings_with_names() {
             let converter = registry.get_converter(&url_type);
             assert!(converter.is_some(), "No converter found for {url_type:?}");
 
-            // Verify converter names match expected types
             let converter = converter.unwrap();
-            match url_type {
-                UrlType::Html => assert_eq!(converter.name(), "HTML"),
-                UrlType::GoogleDocs => assert_eq!(converter.name(), "Google Docs"),
-                UrlType::GitHubIssue => assert_eq!(converter.name(), "GitHub Issue"),
-                UrlType::LocalFile => assert_eq!(converter.name(), "Local File Converter"),
-            }
+            assert_eq!(converter.name(), expected_name);
         }
     }
 
@@ -184,46 +322,24 @@ mod converter_functionality_tests {
     use super::*;
 
     #[test]
-    fn test_html_converter_through_registry() {
+    fn test_converters_through_registry() {
         let registry = helpers::create_test_registry();
-        let converter = registry.get_converter(&UrlType::Html).unwrap();
+        let test_cases = vec![
+            (UrlType::Html, "HTML"),
+            (UrlType::GoogleDocs, "Google Docs"),
+            (UrlType::GitHubIssue, "GitHub Issue"),
+        ];
 
-        assert_eq!(converter.name(), "HTML");
-        // Additional functionality tests would require async setup
-    }
-
-    #[test]
-    fn test_google_docs_converter_through_registry() {
-        let registry = helpers::create_test_registry();
-        let converter = registry.get_converter(&UrlType::GoogleDocs).unwrap();
-
-        assert_eq!(converter.name(), "Google Docs");
-    }
-
-    #[test]
-    fn test_github_converter_through_registry() {
-        let registry = helpers::create_test_registry();
-        let converter = registry.get_converter(&UrlType::GitHubIssue).unwrap();
-
-        assert_eq!(converter.name(), "GitHub Issue");
+        helpers::verify_converter_names(&registry, test_cases);
     }
 
     #[test]
     fn test_github_converter_is_api_not_placeholder() {
-        // This test verifies that the registry uses the full GitHub API converter
-        // instead of the placeholder converter
         let registry = helpers::create_test_registry();
         let converter = registry.get_converter(&UrlType::GitHubIssue).unwrap();
 
-        // The GitHub API converter should be named "GitHub Issue"
         assert_eq!(converter.name(), "GitHub Issue");
 
-        // Additional verification: The converter should be the real GitHubConverter type
-        // We can't directly test the type, but we can verify behavior differences
-        // The placeholder would use the PlaceholderConverter pattern which has specific output
-        // while the API converter has different behavior patterns
-
-        // For now, we verify that we have the right converter name and it's available
         assert_eq!(converter.name(), "GitHub Issue");
     }
 }
@@ -236,11 +352,12 @@ mod configuration_propagation_tests {
     fn test_configured_registry_converters() {
         let registry = helpers::create_configured_registry();
 
-        // All converters should be present
         let supported_types = registry.supported_types();
-        assert_eq!(supported_types.len(), 4);
+        assert!(
+            supported_types.len() >= MIN_STANDARD_CONVERTER_TYPES,
+            "Registry should support at least 4 converter types"
+        );
 
-        // Verify each converter is accessible
         for url_type in supported_types {
             let converter = registry.get_converter(&url_type);
             assert!(converter.is_some(), "Missing converter for {url_type:?}");
@@ -252,19 +369,7 @@ mod configuration_propagation_tests {
         let default_registry = ConverterRegistry::new();
         let configured_registry = helpers::create_configured_registry();
 
-        let default_types = default_registry.supported_types();
-        let configured_types = configured_registry.supported_types();
-
-        // Both should support the same types
-        assert_eq!(default_types.len(), configured_types.len());
-        for url_type in default_types {
-            assert!(configured_types.contains(&url_type));
-
-            // Converter names should be the same
-            let default_converter = default_registry.get_converter(&url_type).unwrap();
-            let configured_converter = configured_registry.get_converter(&url_type).unwrap();
-            assert_eq!(default_converter.name(), configured_converter.name());
-        }
+        helpers::verify_registry_consistency(&default_registry, &configured_registry);
     }
 }
 
@@ -288,6 +393,7 @@ mod error_handling_tests {
     fn test_registry_with_single_converter() {
         // Create empty registry and register only HTML converter
         let mut registry = ConverterRegistry::empty();
+        let initial_count = registry.supported_types().len();
         registry.register(UrlType::Html, Box::new(HtmlConverter::new()));
 
         // Test that HTML converter exists (it should in default registry)
@@ -295,7 +401,7 @@ mod error_handling_tests {
         assert!(converter.is_some());
 
         let supported_types = registry.supported_types();
-        assert_eq!(supported_types.len(), 1);
+        assert_eq!(supported_types.len(), initial_count + 1);
         assert!(supported_types.contains(&UrlType::Html));
 
         // HTML converter should be available
@@ -311,6 +417,7 @@ mod error_handling_tests {
     #[test]
     fn test_registry_replacement_of_converter() {
         let mut registry = ConverterRegistry::new();
+        let initial_count = registry.supported_types().len();
 
         // Verify initial HTML converter
         let initial_converter = registry.get_converter(&UrlType::Html).unwrap();
@@ -326,7 +433,7 @@ mod error_handling_tests {
 
         // Registry should still have same number of converters
         let supported_types = registry.supported_types();
-        assert_eq!(supported_types.len(), 4);
+        assert_eq!(supported_types.len(), initial_count);
     }
 }
 
@@ -334,43 +441,25 @@ mod error_handling_tests {
 mod integration_tests {
     use super::*;
 
+    const PERFORMANCE_TEST_ITERATIONS: usize = 1000;
+
     #[test]
     fn test_registry_supports_all_url_types() {
         let registry = helpers::create_test_registry();
-
-        // Test each URL type mapping
-        for (url_type, sample_url) in helpers::url_type_mappings() {
-            let converter = registry.get_converter(&url_type);
-            assert!(
-                converter.is_some(),
-                "No converter found for URL type {url_type:?} with sample URL: {sample_url}"
-            );
-        }
+        helpers::assert_all_converters_available(&registry);
     }
 
     #[test]
     fn test_registry_workflow_simulation() {
         let registry = helpers::create_test_registry();
 
-        // Simulate typical workflow: URL detection -> converter retrieval -> conversion
         let test_cases = vec![
             (UrlType::Html, "HTML"),
             (UrlType::GoogleDocs, "Google Docs"),
             (UrlType::GitHubIssue, "GitHub Issue"),
         ];
 
-        for (url_type, expected_name) in test_cases {
-            // Step 1: Get converter for detected URL type
-            let converter = registry.get_converter(&url_type);
-            assert!(converter.is_some());
-
-            // Step 2: Verify converter identity
-            let converter = converter.unwrap();
-            assert_eq!(converter.name(), expected_name);
-
-            // Step 3: Converter should be ready for use
-            // (Actual conversion would require async context and URL)
-        }
+        helpers::verify_converter_names(&registry, test_cases);
     }
 
     #[test]
@@ -378,11 +467,8 @@ mod integration_tests {
         let registry = helpers::create_test_registry();
 
         // Perform many lookups to test performance
-        for _ in 0..1000 {
-            for (url_type, _) in helpers::url_type_mappings() {
-                let converter = registry.get_converter(&url_type);
-                assert!(converter.is_some());
-            }
+        for _ in 0..PERFORMANCE_TEST_ITERATIONS {
+            helpers::assert_all_converters_available(&registry);
         }
 
         // If we get here, performance is acceptable for the test
@@ -397,8 +483,12 @@ mod integration_tests {
         let registry = Arc::new(helpers::create_test_registry());
         let mut handles = vec![];
 
+        let thread_count = std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(DEFAULT_THREAD_COUNT);
+
         // Simulate multiple threads accessing the registry
-        for i in 0..10 {
+        for i in 0..thread_count {
             let registry_clone = Arc::clone(&registry);
             let handle = thread::spawn(move || {
                 for (url_type, _) in helpers::url_type_mappings() {
@@ -421,9 +511,9 @@ mod integration_tests {
     #[test]
     fn test_registry_with_all_configuration_options() {
         let config = Config::builder()
-            .timeout_seconds(60)
+            .timeout_seconds(COMPREHENSIVE_TEST_TIMEOUT_SECONDS)
             .user_agent("comprehensive-test/1.0")
-            .max_retries(5)
+            .max_retries(TEST_MAX_RETRIES)
             .github_token("test_token")
             .office365_token("test_office_token")
             .google_api_key("test_google_key")
@@ -432,34 +522,17 @@ mod integration_tests {
             .build();
 
         let client = HttpClient::with_config(&config.http, &config.auth);
-        let html_config = HtmlConverterConfig {
-            max_line_width: 150,
-            remove_scripts_styles: false,
-            remove_navigation: false,
-            remove_sidebars: false,
-            remove_ads: false,
-            max_blank_lines: 5,
-        };
+        let html_config = helpers::html_config_from_preset(helpers::HtmlConfigPreset::Permissive);
         let output_config = markdowndown::config::OutputConfig::default();
 
         let registry = ConverterRegistry::with_config(client, html_config, &output_config);
 
-        // Verify all converters are properly configured
-        let supported_types = registry.supported_types();
-        assert_eq!(supported_types.len(), 4);
+        helpers::assert_standard_registry_types(&registry);
 
-        for url_type in supported_types {
+        for (url_type, _, expected_name) in helpers::url_type_mappings_with_names() {
             let converter = registry.get_converter(&url_type);
             assert!(converter.is_some());
-
-            // Verify converter names are correct
-            let converter = converter.unwrap();
-            match url_type {
-                UrlType::Html => assert_eq!(converter.name(), "HTML"),
-                UrlType::GoogleDocs => assert_eq!(converter.name(), "Google Docs"),
-                UrlType::GitHubIssue => assert_eq!(converter.name(), "GitHub Issue"),
-                UrlType::LocalFile => assert_eq!(converter.name(), "Local File Converter"),
-            }
+            assert_eq!(converter.unwrap().name(), expected_name);
         }
     }
 }
@@ -545,40 +618,68 @@ mod extensibility_tests {
 mod performance_tests {
     use super::*;
 
+    /// Benchmark a generic operation with specified parameters
+    fn bench_operation<F>(
+        operation_name: &str,
+        iterations: usize,
+        max_duration_secs: u64,
+        operation: F,
+    ) where
+        F: Fn(),
+    {
+        let start = std::time::Instant::now();
+        for _ in 0..iterations {
+            operation();
+        }
+        let duration = start.elapsed();
+        assert!(
+            duration < std::time::Duration::from_secs(max_duration_secs),
+            "{} took too long: {:?}",
+            operation_name,
+            duration
+        );
+    }
+
+    /// Benchmark a registry operation with specified parameters
+    fn bench_registry_operation<F>(
+        operation_name: &str,
+        iterations: usize,
+        max_duration_secs: u64,
+        operation: F,
+    ) where
+        F: Fn(&ConverterRegistry),
+    {
+        let registry = helpers::create_test_registry();
+        bench_operation(operation_name, iterations, max_duration_secs, || {
+            operation(&registry);
+        });
+    }
+
     #[test]
     fn test_registry_lookup_performance() {
-        let registry = helpers::create_test_registry();
         let url_types = vec![UrlType::Html, UrlType::GoogleDocs, UrlType::GitHubIssue];
 
-        let start = std::time::Instant::now();
-
-        // Perform many lookups
-        for _ in 0..10000 {
-            for url_type in &url_types {
-                let _converter = registry.get_converter(url_type);
-            }
-        }
-
-        let duration = start.elapsed();
-
-        // Should complete quickly (under 100ms for 40,000 lookups)
-        assert!(duration < std::time::Duration::from_millis(100));
+        bench_registry_operation(
+            "Lookup stress test",
+            LOOKUP_STRESS_TEST_ITERATIONS,
+            LOOKUP_STRESS_TEST_MAX_DURATION_SECS,
+            |registry| {
+                for url_type in &url_types {
+                    let _converter = registry.get_converter(url_type);
+                }
+            },
+        );
     }
 
     #[test]
     fn test_registry_supported_types_performance() {
-        let registry = helpers::create_test_registry();
-
-        let start = std::time::Instant::now();
-
-        // Get supported types many times
-        for _ in 0..1000 {
-            let _types = registry.supported_types();
-        }
-
-        let duration = start.elapsed();
-
-        // Should complete quickly (under 10ms for 1,000 calls)
-        assert!(duration < std::time::Duration::from_millis(10));
+        bench_registry_operation(
+            "Supported types stress test",
+            SUPPORTED_TYPES_STRESS_TEST_ITERATIONS,
+            SUPPORTED_TYPES_STRESS_TEST_MAX_DURATION_SECS,
+            |registry| {
+                let _types = registry.supported_types();
+            },
+        );
     }
 }

@@ -272,6 +272,7 @@ where
 }
 
 /// Create a stress test operation that writes, reads, and edits a file
+#[allow(clippy::type_complexity)]
 fn create_stress_test_operation(
     temp_dir_arc: Arc<std::path::PathBuf>,
 ) -> impl Fn(
@@ -965,7 +966,7 @@ async fn test_read_tool_handles_large_files_safely() {
     for i in 1..=1000 {
         large_content.push_str(&format!("Line {} content\n", i));
     }
-    fs::write(&test_file, &large_content).unwrap();
+    fs::write(test_file, &large_content).unwrap();
 
     // Test reading large file with limit
     let mut arguments = read_args(&test_file.to_string_lossy());
@@ -1159,7 +1160,7 @@ async fn test_read_tool_large_file_handling() {
     for i in 0..1000 {
         large_content.push_str(&format!("This is line number {}\n", i + 1));
     }
-    fs::write(&test_file, &large_content).unwrap();
+    fs::write(test_file, &large_content).unwrap();
 
     // Test reading with limit to avoid reading the entire large file
     let mut arguments = read_args(&test_file.to_string_lossy());
@@ -1197,7 +1198,7 @@ async fn test_read_tool_edge_cases() {
     let _env = IsolatedTestEnvironment::new().expect("Failed to create test environment");
     let temp_dir = _env.temp_dir();
     let empty_file = &temp_dir.join("empty.txt");
-    fs::write(&empty_file, "").unwrap();
+    fs::write(empty_file, "").unwrap();
 
     let arguments = read_args(&empty_file.to_string_lossy());
 
@@ -1206,7 +1207,7 @@ async fn test_read_tool_edge_cases() {
 
     // Test file with only whitespace
     let whitespace_file = &temp_dir.join("whitespace.txt");
-    fs::write(&whitespace_file, "   \n\t\n   \n").unwrap();
+    fs::write(whitespace_file, "   \n\t\n   \n").unwrap();
 
     let arguments = read_args(&whitespace_file.to_string_lossy());
 
@@ -1215,7 +1216,7 @@ async fn test_read_tool_edge_cases() {
 
     // Test file with mixed line endings
     let mixed_endings_file = &temp_dir.join("mixed_endings.txt");
-    fs::write(&mixed_endings_file, "Line 1\nLine 2\r\nLine 3\rLine 4").unwrap();
+    fs::write(mixed_endings_file, "Line 1\nLine 2\r\nLine 3\rLine 4").unwrap();
 
     let arguments = read_args(&mixed_endings_file.to_string_lossy());
 
@@ -1259,12 +1260,12 @@ async fn test_glob_tool_basic_pattern_matching() {
         "README.md",
     ];
 
-    for file_path in &test_files {
+    for file_path in test_files {
         let full_path = &temp_dir.join(file_path);
         if let Some(parent) = full_path.parent() {
             fs::create_dir_all(parent).unwrap();
         }
-        fs::write(&full_path, format!("Content of {}", file_path)).unwrap();
+        fs::write(full_path, format!("Content of {}", file_path)).unwrap();
     }
 
     // Test basic glob pattern
@@ -1297,7 +1298,7 @@ async fn test_glob_tool_advanced_gitignore_integration() {
 
     // Write .gitignore file
     let gitignore_content = "*.log\n/build/\ntemp_*\n!important.log\n";
-    fs::write(&temp_dir.join(".gitignore"), gitignore_content).unwrap();
+    fs::write(temp_dir.join(".gitignore"), gitignore_content).unwrap();
 
     let test_files = vec![
         "src/main.rs",
@@ -1308,12 +1309,12 @@ async fn test_glob_tool_advanced_gitignore_integration() {
         "normal.txt",       // Should be included
     ];
 
-    for file_path in &test_files {
+    for file_path in test_files {
         let full_path = &temp_dir.join(file_path);
         if let Some(parent) = full_path.parent() {
             fs::create_dir_all(parent).unwrap();
         }
-        fs::write(&full_path, format!("Content of {}", file_path)).unwrap();
+        fs::write(full_path, format!("Content of {}", file_path)).unwrap();
     }
 
     // Test with advanced gitignore
@@ -1376,9 +1377,9 @@ async fn test_glob_tool_case_sensitivity() {
     // Use different filenames to avoid filesystem case issues
     let test_files = vec!["Test.TXT", "other.txt", "README.md", "readme.MD"];
 
-    for file_path in &test_files {
+    for file_path in test_files {
         let full_path = &temp_dir.join(file_path);
-        fs::write(&full_path, format!("Content of {}", file_path)).unwrap();
+        fs::write(full_path, format!("Content of {}", file_path)).unwrap();
     }
 
     // Test case insensitive (default) - use basic glob to avoid filesystem case issues
@@ -1423,13 +1424,13 @@ async fn test_glob_tool_modification_time_sorting() {
     let (_env, temp_dir) = create_test_dir_with_git();
 
     let file1 = &temp_dir.join("old_file.txt");
-    fs::write(&file1, "Old content").unwrap();
+    fs::write(file1, "Old content").unwrap();
 
     // Sleep to ensure different modification times
     std::thread::sleep(std::time::Duration::from_millis(100));
 
     let file2 = &temp_dir.join("new_file.txt");
-    fs::write(&file2, "New content").unwrap();
+    fs::write(file2, "New content").unwrap();
 
     // Test that files are sorted by modification time (recent first)
     let mut arguments = glob_args("*.txt");
@@ -1470,7 +1471,7 @@ async fn test_glob_tool_no_matches() {
     // Create test directory with no matching files
     let (_env, temp_dir) = create_test_dir_with_git();
 
-    fs::write(&temp_dir.join("test.txt"), "content").unwrap();
+    fs::write(temp_dir.join("test.txt"), "content").unwrap();
 
     // Search for pattern that won't match
     let mut arguments = glob_args("*.nonexistent");
@@ -1503,12 +1504,12 @@ async fn test_glob_tool_recursive_patterns() {
         "docs/readme.md",
     ];
 
-    for file_path in &test_files {
+    for file_path in test_files {
         let full_path = &temp_dir.join(file_path);
         if let Some(parent) = full_path.parent() {
             fs::create_dir_all(parent).unwrap();
         }
-        fs::write(&full_path, format!("Content of {}", file_path)).unwrap();
+        fs::write(full_path, format!("Content of {}", file_path)).unwrap();
     }
 
     // Test recursive Rust file search
@@ -1572,12 +1573,12 @@ async fn test_grep_tool_basic_pattern_matching() {
         ("docs/guide.txt", "User guide:\n1. Run the program\n2. Check the output\n"),
     ];
 
-    for (file_path, content) in &test_files {
+    for (file_path, content) in test_files {
         let full_path = &temp_dir.join(file_path);
         if let Some(parent) = full_path.parent() {
             fs::create_dir_all(parent).unwrap();
         }
-        fs::write(&full_path, content).unwrap();
+        fs::write(full_path, content).unwrap();
     }
 
     // Test basic search for "function"
@@ -1616,9 +1617,9 @@ async fn test_grep_tool_file_type_filtering() {
         ("style.css", ".test {\n    color: red;\n}"),
     ];
 
-    for (file_path, content) in &test_files {
+    for (file_path, content) in test_files {
         let full_path = &temp_dir.join(file_path);
-        fs::write(&full_path, content).unwrap();
+        fs::write(full_path, content).unwrap();
     }
 
     // Test filtering by Rust files only
@@ -1660,12 +1661,12 @@ async fn test_grep_tool_glob_filtering() {
         ("examples/demo.rs", "const DEMO_VERSION: &str = \"1.0.0\";"),
     ];
 
-    for (file_path, content) in &test_files {
+    for (file_path, content) in test_files {
         let full_path = &temp_dir.join(file_path);
         if let Some(parent) = full_path.parent() {
             fs::create_dir_all(parent).unwrap();
         }
-        fs::write(&full_path, content).unwrap();
+        fs::write(full_path, content).unwrap();
     }
 
     // Test filtering by glob pattern - use a simpler glob that should work
@@ -1706,7 +1707,7 @@ async fn test_grep_tool_case_sensitivity() {
     let temp_dir = _env.temp_dir();
     let test_file = &temp_dir.join("test.txt");
     let content = "Hello World\nHELLO WORLD\nhello world\nGoodbye World";
-    fs::write(&test_file, content).unwrap();
+    fs::write(test_file, content).unwrap();
 
     // Test case sensitive search
     let mut arguments = glob_args("Hello");
@@ -1748,7 +1749,7 @@ async fn test_grep_tool_context_lines() {
     let temp_dir = _env.temp_dir();
     let test_file = &temp_dir.join("context.txt");
     let content = "Line 1\nLine 2\nMATCH HERE\nLine 4\nLine 5\nLine 6\nANOTHER MATCH\nLine 8";
-    fs::write(&test_file, content).unwrap();
+    fs::write(test_file, content).unwrap();
 
     // Test with context lines
     let mut arguments = glob_args("MATCH");
@@ -1785,9 +1786,9 @@ async fn test_grep_tool_output_modes() {
         ("file3.txt", "No matches in this file."),
     ];
 
-    for (file_path, content) in &test_files {
+    for (file_path, content) in test_files {
         let full_path = &temp_dir.join(file_path);
-        fs::write(&full_path, content).unwrap();
+        fs::write(full_path, content).unwrap();
     }
 
     // Test files_with_matches mode
@@ -1894,12 +1895,12 @@ async fn test_grep_tool_binary_file_exclusion() {
 
     // Create text file
     let text_file = &temp_dir.join("text.txt");
-    fs::write(&text_file, "This is searchable text content").unwrap();
+    fs::write(text_file, "This is searchable text content").unwrap();
 
     // Create binary-like file (simulated)
     let binary_file = &temp_dir.join("data.bin");
     let binary_content = vec![0u8, 1, 2, 3, 255, 254, 0, 127]; // Contains null bytes
-    fs::write(&binary_file, binary_content).unwrap();
+    fs::write(binary_file, binary_content).unwrap();
 
     // Test search - should find text file but skip binary
     let mut arguments = glob_args("searchable");
@@ -1992,12 +1993,12 @@ async fn test_grep_tool_single_file_vs_directory() {
         ("nested/deep.txt", "Another target file nested deeply"),
     ];
 
-    for (file_path, content) in &test_files {
+    for (file_path, content) in test_files {
         let full_path = &temp_dir.join(file_path);
         if let Some(parent) = full_path.parent() {
             fs::create_dir_all(parent).unwrap();
         }
-        fs::write(&full_path, content).unwrap();
+        fs::write(full_path, content).unwrap();
     }
 
     // Test searching entire directory
@@ -2070,7 +2071,7 @@ async fn test_write_tool_execution_success_cases() {
 
     // Verify the file was actually created with correct content
     assert!(test_file.exists());
-    let written_content = fs::read_to_string(&test_file).unwrap();
+    let written_content = fs::read_to_string(test_file).unwrap();
     assert_eq!(written_content, test_content);
 }
 
@@ -2085,7 +2086,7 @@ async fn test_write_tool_overwrite_existing_file() {
     let temp_dir = _env.temp_dir();
     let test_file = &temp_dir.join("test_overwrite.txt");
     let initial_content = "Initial content";
-    fs::write(&test_file, initial_content).unwrap();
+    fs::write(test_file, initial_content).unwrap();
 
     let new_content = "New overwritten content";
     let mut arguments = serde_json::Map::new();
@@ -2099,7 +2100,7 @@ async fn test_write_tool_overwrite_existing_file() {
     assert_eq!(call_result.is_error, Some(false));
 
     // Verify the file was overwritten
-    let written_content = fs::read_to_string(&test_file).unwrap();
+    let written_content = fs::read_to_string(test_file).unwrap();
     assert_eq!(written_content, new_content);
     assert_ne!(written_content, initial_content);
 }
@@ -2164,7 +2165,7 @@ async fn test_write_tool_unicode_content() {
     assert_eq!(call_result.is_error, Some(false));
 
     // Verify Unicode content was written correctly
-    let written_content = fs::read_to_string(&test_file).unwrap();
+    let written_content = fs::read_to_string(test_file).unwrap();
     assert_eq!(written_content, unicode_content);
 }
 
@@ -2188,7 +2189,7 @@ async fn test_write_tool_empty_content() {
 
     // Verify empty file was created
     assert!(test_file.exists());
-    let written_content = fs::read_to_string(&test_file).unwrap();
+    let written_content = fs::read_to_string(test_file).unwrap();
     assert_eq!(written_content, "");
 }
 
@@ -2258,7 +2259,7 @@ async fn test_edit_tool_single_replacement_success() {
     let temp_dir = _env.temp_dir();
     let test_file = &temp_dir.join("test_edit.txt");
     let initial_content = "Hello world! This is a test file with unique content.";
-    fs::write(&test_file, initial_content).unwrap();
+    fs::write(test_file, initial_content).unwrap();
 
     // Test single replacement
     let mut arguments = serde_json::Map::new();
@@ -2278,7 +2279,7 @@ async fn test_edit_tool_single_replacement_success() {
     assert_eq!(call_result.is_error, Some(false));
 
     // Verify the occurrence was replaced
-    let edited_content = fs::read_to_string(&test_file).unwrap();
+    let edited_content = fs::read_to_string(test_file).unwrap();
     assert_eq!(
         edited_content,
         "Hello universe! This is a test file with unique content."
@@ -2296,7 +2297,7 @@ async fn test_edit_tool_replace_all_success() {
     let temp_dir = _env.temp_dir();
     let test_file = &temp_dir.join("test_replace_all.txt");
     let initial_content = "test test test";
-    fs::write(&test_file, initial_content).unwrap();
+    fs::write(test_file, initial_content).unwrap();
 
     // Test replace all
     let mut arguments = serde_json::Map::new();
@@ -2312,7 +2313,7 @@ async fn test_edit_tool_replace_all_success() {
     assert_eq!(call_result.is_error, Some(false));
 
     // Verify all occurrences were replaced
-    let edited_content = fs::read_to_string(&test_file).unwrap();
+    let edited_content = fs::read_to_string(test_file).unwrap();
     assert_eq!(edited_content, "example example example");
 }
 
@@ -2327,7 +2328,7 @@ async fn test_edit_tool_string_not_found_error() {
     let temp_dir = _env.temp_dir();
     let test_file = &temp_dir.join("test_not_found.txt");
     let initial_content = "Hello world!";
-    fs::write(&test_file, initial_content).unwrap();
+    fs::write(test_file, initial_content).unwrap();
 
     // Try to replace non-existent string
     let mut arguments = serde_json::Map::new();
@@ -2355,7 +2356,7 @@ async fn test_edit_tool_multiple_occurrences_without_replace_all() {
     let temp_dir = _env.temp_dir();
     let test_file = &temp_dir.join("test_multiple.txt");
     let initial_content = "duplicate duplicate duplicate";
-    fs::write(&test_file, initial_content).unwrap();
+    fs::write(test_file, initial_content).unwrap();
 
     // Try single replacement on multiple occurrences (should fail)
     let mut arguments = serde_json::Map::new();
@@ -2371,7 +2372,7 @@ async fn test_edit_tool_multiple_occurrences_without_replace_all() {
     );
 
     // Verify only the first occurrence was replaced
-    let edited_content = fs::read_to_string(&test_file).unwrap();
+    let edited_content = fs::read_to_string(test_file).unwrap();
     assert_eq!(edited_content, "unique duplicate duplicate");
 }
 
@@ -2385,7 +2386,7 @@ async fn test_edit_tool_unicode_content() {
     let temp_dir = _env.temp_dir();
     let test_file = &temp_dir.join("unicode_edit.txt");
     let unicode_content = "Hello 🌍! Здравствуй мир! 你好世界!";
-    fs::write(&test_file, unicode_content).unwrap();
+    fs::write(test_file, unicode_content).unwrap();
 
     // Edit unicode content
     let mut arguments = serde_json::Map::new();
@@ -2401,7 +2402,7 @@ async fn test_edit_tool_unicode_content() {
     assert_eq!(call_result.is_error, Some(false));
 
     // Verify Unicode content was edited correctly
-    let edited_content = fs::read_to_string(&test_file).unwrap();
+    let edited_content = fs::read_to_string(test_file).unwrap();
     assert_eq!(edited_content, "Hello 🦀! Здравствуй мир! 你好世界!");
 }
 
@@ -2416,7 +2417,7 @@ async fn test_edit_tool_preserves_line_endings() {
     let test_file = &temp_dir.join("line_endings.txt");
     // Content with mixed line endings
     let content_with_crlf = "Line 1\r\nLine 2 with target\r\nLine 3\r\n";
-    fs::write(&test_file, content_with_crlf).unwrap();
+    fs::write(test_file, content_with_crlf).unwrap();
 
     // Edit while preserving line endings
     let mut arguments = serde_json::Map::new();
@@ -2432,7 +2433,7 @@ async fn test_edit_tool_preserves_line_endings() {
     );
 
     // Verify line endings were preserved
-    let edited_content = fs::read_to_string(&test_file).unwrap();
+    let edited_content = fs::read_to_string(test_file).unwrap();
     assert_eq!(
         edited_content,
         "Line 1\r\nLine 2 with replacement\r\nLine 3\r\n"
@@ -2559,7 +2560,7 @@ async fn test_write_then_edit_workflow() {
     assert_eq!(edit_call_result.is_error, Some(false));
 
     // Verify file was edited correctly
-    let final_content = fs::read_to_string(&test_file).unwrap();
+    let final_content = fs::read_to_string(test_file).unwrap();
     assert_eq!(final_content, "Updated content that needs updating");
 }
 
@@ -2574,7 +2575,7 @@ async fn test_read_then_edit_workflow() {
     let temp_dir = _env.temp_dir();
     let test_file = &temp_dir.join("read_edit_test.txt");
     let initial_content = "Function calculate_sum() {\n    return a + b;\n}";
-    fs::write(&test_file, initial_content).unwrap();
+    fs::write(test_file, initial_content).unwrap();
 
     // Step 1: Read the file to analyze content
     let read_args = read_args(&test_file.to_string_lossy());
@@ -2596,7 +2597,7 @@ async fn test_read_then_edit_workflow() {
     assert!(edit_result.is_ok(), "Edit should succeed");
 
     // Verify the edit was successful
-    let final_content = fs::read_to_string(&test_file).unwrap();
+    let final_content = fs::read_to_string(test_file).unwrap();
     assert_eq!(
         final_content,
         "Function add_numbers() {\n    return a + b;\n}"
@@ -2620,12 +2621,12 @@ async fn test_glob_then_grep_workflow() {
         ("README.md", "# My Project\n\nThis project has calculate functions.\n"),
     ];
 
-    for (file_path, content) in &test_files {
+    for (file_path, content) in test_files {
         let full_path = &temp_dir.join(file_path);
         if let Some(parent) = full_path.parent() {
             fs::create_dir_all(parent).unwrap();
         }
-        fs::write(&full_path, content).unwrap();
+        fs::write(full_path, content).unwrap();
     }
 
     // Step 1: Use glob to find all Rust files
@@ -2690,12 +2691,12 @@ async fn test_complex_file_workflow() {
         ),
     ];
 
-    for (file_path, content) in &test_files {
+    for (file_path, content) in test_files {
         let full_path = &temp_dir.join(file_path);
         if let Some(parent) = full_path.parent() {
             fs::create_dir_all(parent).unwrap();
         }
-        fs::write(&full_path, content).unwrap();
+        fs::write(full_path, content).unwrap();
     }
 
     // Step 1: Find all JSON files
@@ -2816,13 +2817,13 @@ async fn test_symlink_read_security() {
     let _env = IsolatedTestEnvironment::new().expect("Failed to create test environment");
     let temp_dir = _env.temp_dir();
     let normal_file = &temp_dir.join("normal.txt");
-    fs::write(&normal_file, "normal content").unwrap();
+    fs::write(normal_file, "normal content").unwrap();
 
     let symlink_file = &temp_dir.join("symlink.txt");
     #[cfg(unix)]
     {
         use std::os::unix::fs::symlink;
-        let _ = symlink("/etc/passwd", &symlink_file);
+        let _ = symlink("/etc/passwd", symlink_file);
     }
 
     if symlink_file.exists() {
@@ -2861,7 +2862,7 @@ async fn test_symlink_write_security() {
     #[cfg(unix)]
     {
         use std::os::unix::fs::symlink;
-        let _ = symlink("/etc/passwd", &symlink_file);
+        let _ = symlink("/etc/passwd", symlink_file);
     }
 
     if symlink_file.exists() {
@@ -3121,7 +3122,7 @@ async fn test_read_tool_excessive_parameters() {
     let _env = IsolatedTestEnvironment::new().expect("Failed to create test environment");
     let temp_dir = _env.temp_dir();
     let test_file = &temp_dir.join("test.txt");
-    fs::write(&test_file, "small content").unwrap();
+    fs::write(test_file, "small content").unwrap();
 
     let mut read_args = serde_json::Map::new();
     read_args.insert("path".to_string(), json!(test_file.to_string_lossy()));
@@ -3281,7 +3282,7 @@ async fn test_full_file_read_memory_usage() {
         "Creating {}MB file for memory profiling...",
         content.len() / 1024 / 1024
     );
-    let write_result = fs::write(&large_file, &content);
+    let write_result = fs::write(large_file, &content);
     if let Err(ref e) = write_result {
         println!("fs::write error: {:?}", e);
     }
@@ -3344,7 +3345,7 @@ async fn test_offset_limit_read_memory_usage() {
         content.push_str(&format!("Block {}: {}", i, chunk));
     }
 
-    fs::write(&large_file, &content).unwrap();
+    fs::write(large_file, &content).unwrap();
 
     let profiler = MemoryProfiler::new();
 
@@ -3431,7 +3432,7 @@ async fn test_large_file_write_memory_usage() {
 
     // Verify file was written correctly
     assert!(large_file.exists());
-    let written_size = fs::metadata(&large_file).unwrap().len() as usize;
+    let written_size = fs::metadata(large_file).unwrap().len() as usize;
     assert!(
         written_size >= content.len(),
         "Written file should match content size"
@@ -3491,7 +3492,7 @@ async fn test_large_file_edit_memory_usage() {
         );
 
         // Single edit should use reasonable memory
-        let file_size = fs::metadata(&large_file).unwrap().len() as usize;
+        let file_size = fs::metadata(large_file).unwrap().len() as usize;
         let max_expected_memory = file_size * 2; // Allow 2x file size
 
         assert!(
@@ -3526,7 +3527,7 @@ async fn test_large_file_edit_memory_usage() {
         );
 
         // Replace_all may use more memory but should still be reasonable
-        let file_size = fs::metadata(&large_file).unwrap().len() as usize;
+        let file_size = fs::metadata(large_file).unwrap().len() as usize;
         let max_expected_memory = file_size * 3; // Allow 3x file size for replace_all
 
         assert!(
@@ -3680,7 +3681,7 @@ async fn test_mixed_operation_concurrency_stress() {
     for i in 0..base_files {
         let file_path = &temp_dir.join(format!("base_file_{}.txt", i));
         let content = format!("Base content for file {} that can be edited\n", i).repeat(100);
-        std::fs::write(&file_path, content).unwrap();
+        std::fs::write(file_path, content).unwrap();
     }
 
     let start_time = std::time::Instant::now();
@@ -3744,7 +3745,7 @@ async fn test_concurrent_file_access_patterns() {
     println!("Testing concurrent access patterns to shared file...");
 
     let initial_content = "SHARED_FILE_CONTENT: initial data\n".repeat(1000);
-    std::fs::write(&shared_file, &initial_content).unwrap();
+    std::fs::write(shared_file, &initial_content).unwrap();
 
     let start_time = std::time::Instant::now();
     let mut join_set = tokio::task::JoinSet::new();
@@ -3800,7 +3801,7 @@ async fn test_concurrent_file_access_patterns() {
     );
 
     assert!(shared_file.exists());
-    let final_content = std::fs::read_to_string(&shared_file).unwrap();
+    let final_content = std::fs::read_to_string(shared_file).unwrap();
     assert!(
         !final_content.is_empty(),
         "Shared file should still have content"

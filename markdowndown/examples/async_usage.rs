@@ -4,9 +4,28 @@
 //! streaming results, and integration with async ecosystems.
 
 use futures::stream::{self, StreamExt};
-use markdowndown::{convert_url, Config, MarkdownDown};
+use markdowndown::{convert_url, types::Markdown, types::MarkdownError, Config, MarkdownDown};
 use std::time::{Duration, Instant};
 use tokio::time::{sleep, timeout};
+
+// Configuration constants
+const DEFAULT_TIMEOUT_SECONDS: u64 = 30;
+const DEFAULT_MAX_RETRIES: u32 = 2;
+
+// Processing delay constants
+const EXAMPLE_PROCESSING_DELAY_MS: u64 = 100;
+const STREAM_PROCESSING_DELAY_MS: u64 = 200;
+
+// Concurrency and channel constants
+const MAX_CONCURRENT_CONVERSIONS: usize = 2;
+const WORKER_CHANNEL_SIZE: usize = 10;
+
+// Timeout constants
+const OPERATION_TIMEOUT_SECS: u64 = 5;
+const CANCELLATION_TIMEOUT_SECS: u64 = 2;
+
+// Rate limiting constants
+const RATE_LIMIT_DELAY_MS: u64 = 500;
 
 /// Simulated async workload that processes markdown content
 async fn process_markdown_content(markdown: &str, delay_ms: u64) -> String {
@@ -22,72 +41,99 @@ async fn process_markdown_content(markdown: &str, delay_ms: u64) -> String {
     )
 }
 
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    println!("🔄 markdowndown Async Usage Examples\n");
+/// Helper macro for printing example section headers
+macro_rules! example_section {
+    ($num:expr, $title:expr, $desc:expr) => {
+        println!("\n{}. {}", $num, $title);
+        println!("   {}...", $desc);
+    };
+}
 
-    // Setup configuration for async examples
-    let config = Config::builder()
-        .timeout_seconds(30)
-        .max_retries(2)
-        .user_agent("MarkdownDown-AsyncExample/1.0")
-        .build();
+/// Print conversion result with timing information
+fn print_conversion_result(url: &str, result: Result<Markdown, MarkdownError>, start: Instant) {
+    match result {
+        Ok(markdown) => {
+            println!(
+                "      ✅ {}: {} chars in {:?}",
+                url,
+                markdown.as_str().len(),
+                start.elapsed()
+            );
+        }
+        Err(e) => {
+            println!("      ❌ {}: {} in {:?}", url, e, start.elapsed());
+        }
+    }
+}
 
-    let md = MarkdownDown::with_config(config);
+/// Print results summary for a collection of conversion results
+fn print_results_summary(results: &[Result<Markdown, MarkdownError>], label: &str) {
+    for (i, result) in results.iter().enumerate() {
+        match result {
+            Ok(markdown) => {
+                println!(
+                    "      ✅ {} {}: {} chars",
+                    label,
+                    i + 1,
+                    markdown.as_str().len()
+                )
+            }
+            Err(e) => println!("      ❌ {} {}: {}", label, i + 1, e),
+        }
+    }
+}
 
-    // Example URLs for testing
-    let test_urls = vec![
-        "https://httpbin.org/html",
-        "https://httpbin.org/json",
-        "https://httpbin.org/xml",
-    ];
+/// Handle timeout result with standard formatting
+fn handle_timeout_result<T>(
+    result: Result<Result<T, MarkdownError>, tokio::time::error::Elapsed>,
+    operation: &str,
+    duration: Duration,
+) {
+    match result {
+        Ok(Ok(_)) => println!("      ✅ {} completed", operation),
+        Ok(Err(e)) => println!("      ❌ {} failed: {}", operation, e),
+        Err(_) => println!("      ⏰ {} timed out after {:?}", operation, duration),
+    }
+}
 
-    // Example 1: Basic async/await patterns
-    println!("1. Basic Async/Await Patterns");
-    println!("   Demonstrating fundamental async usage...");
+/// Example 1: Basic async/await patterns
+async fn example_basic_async_await(md: &MarkdownDown) -> Result<(), Box<dyn std::error::Error>> {
+    example_section!(
+        "1",
+        "Basic Async/Await Patterns",
+        "Demonstrating fundamental async usage"
+    );
 
     // Simple async conversion
     println!("   📥 Simple async conversion:");
     let start = Instant::now();
-    match convert_url("https://httpbin.org/html").await {
-        Ok(markdown) => {
-            println!(
-                "      ✅ Converted in {:?}: {} chars",
-                start.elapsed(),
-                markdown.as_str().len()
-            );
-        }
-        Err(e) => {
-            println!("      ❌ Failed in {:?}: {}", start.elapsed(), e);
-        }
-    }
+    let result = convert_url("https://httpbin.org/html").await;
+    print_conversion_result("Converted", result, start);
 
     // Async conversion with custom configuration
     println!("   🔧 Async with custom configuration:");
     let start = Instant::now();
-    match md.convert_url("https://httpbin.org/json").await {
-        Ok(markdown) => {
-            println!(
-                "      ✅ Converted in {:?}: {} chars",
-                start.elapsed(),
-                markdown.as_str().len()
-            );
-        }
-        Err(e) => {
-            println!("      ❌ Failed in {:?}: {}", start.elapsed(), e);
-        }
-    }
+    let result = md.convert_url("https://httpbin.org/json").await;
+    print_conversion_result("Converted", result, start);
     println!();
 
-    // Example 2: Async error handling patterns
-    println!("2. Async Error Handling Patterns");
-    println!("   Demonstrating proper async error handling...");
+    Ok(())
+}
+
+/// Example 2: Async error handling patterns
+async fn example_error_handling() -> Result<(), Box<dyn std::error::Error>> {
+    example_section!(
+        "2",
+        "Async Error Handling Patterns",
+        "Demonstrating proper async error handling"
+    );
 
     // Using Result chaining with async
     println!("   🔗 Result chaining:");
     let result = async {
         let markdown = convert_url("https://httpbin.org/html").await?;
-        let processed = process_markdown_content(markdown.as_str(), 100).await;
+        let processed =
+            process_markdown_content(markdown.as_str(), EXAMPLE_PROCESSING_DELAY_MS).await;
         Ok::<String, Box<dyn std::error::Error>>(processed)
     }
     .await;
@@ -116,9 +162,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     println!();
 
-    // Example 3: Concurrent async operations
-    println!("3. Concurrent Async Operations");
-    println!("   Running multiple async operations concurrently...");
+    Ok(())
+}
+
+/// Example 3: Concurrent async operations
+async fn example_concurrent_operations(
+    test_urls: &[&str],
+) -> Result<(), Box<dyn std::error::Error>> {
+    example_section!(
+        "3",
+        "Concurrent Async Operations",
+        "Running multiple async operations concurrently"
+    );
 
     // Using join! for concurrent execution
     println!("   ⚡ Concurrent with join!:");
@@ -134,12 +189,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("      ⏱️  All three completed in {duration:?}");
 
     let results = vec![result1, result2, result3];
-    for (i, result) in results.iter().enumerate() {
-        match result {
-            Ok(markdown) => println!("      ✅ URL {}: {} chars", i + 1, markdown.as_str().len()),
-            Err(e) => println!("      ❌ URL {}: {}", i + 1, e),
-        }
-    }
+    print_results_summary(&results, "URL");
 
     // Using try_join! for fail-fast behavior
     println!("   🚨 Fail-fast with try_join!:");
@@ -168,12 +218,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     println!();
 
-    // Example 4: Async streams and iterators
-    println!("4. Async Streams and Processing");
-    println!("   Using streams for async data processing...");
+    Ok(())
+}
+
+/// Example 4: Async streams and processing
+async fn example_streams_processing(test_urls: &[&str]) -> Result<(), Box<dyn std::error::Error>> {
+    example_section!(
+        "4",
+        "Async Streams and Processing",
+        "Using streams for async data processing"
+    );
 
     // Create a stream of URLs
-    let url_stream = stream::iter(&test_urls);
+    let url_stream = stream::iter(test_urls);
 
     // Process URLs as a stream with concurrency limit
     println!("   🌊 Stream processing with concurrency limit:");
@@ -184,13 +241,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let start = Instant::now();
             match convert_url(url).await {
                 Ok(markdown) => {
-                    let processing_result = process_markdown_content(markdown.as_str(), 200).await;
+                    let processing_result =
+                        process_markdown_content(markdown.as_str(), STREAM_PROCESSING_DELAY_MS)
+                            .await;
                     Ok((url, processing_result, start.elapsed()))
                 }
                 Err(e) => Err((url, e, start.elapsed())),
             }
         })
-        .buffer_unordered(2) // Process up to 2 URLs concurrently
+        .buffer_unordered(MAX_CONCURRENT_CONVERSIONS) // Process up to 2 URLs concurrently
         .collect()
         .await;
 
@@ -209,28 +268,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     println!();
 
-    // Example 5: Async with timeouts and cancellation
-    println!("5. Async Timeouts and Cancellation");
-    println!("   Demonstrating timeout handling and cancellation...");
+    Ok(())
+}
+
+/// Example 5: Async with timeouts and cancellation
+async fn example_timeouts_cancellation() -> Result<(), Box<dyn std::error::Error>> {
+    example_section!(
+        "5",
+        "Async Timeouts and Cancellation",
+        "Demonstrating timeout handling and cancellation"
+    );
 
     // Using timeout wrapper
     println!("   ⏰ Individual operation timeout:");
-    let timeout_duration = Duration::from_secs(5);
+    let timeout_duration = Duration::from_secs(OPERATION_TIMEOUT_SECS);
 
-    match timeout(timeout_duration, convert_url("https://httpbin.org/delay/2")).await {
-        Ok(Ok(markdown)) => {
-            println!(
-                "      ✅ Completed within timeout: {} chars",
-                markdown.as_str().len()
-            );
-        }
-        Ok(Err(e)) => {
-            println!("      ❌ Failed within timeout: {e}");
-        }
-        Err(_) => {
-            println!("      ⏰ Operation timed out after {timeout_duration:?}");
-        }
-    }
+    let result = timeout(timeout_duration, convert_url("https://httpbin.org/delay/2")).await;
+    handle_timeout_result(result, "Conversion", timeout_duration);
 
     // Cancellation with select!
     println!("   🛑 Cancellation with select!:");
@@ -243,7 +297,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 Err(e) => println!("      ❌ Conversion failed: {e}"),
             }
         }
-        _ = sleep(Duration::from_secs(2)) => {
+        _ = sleep(Duration::from_secs(CANCELLATION_TIMEOUT_SECS)) => {
             println!("      🛑 Cancelled after 2 seconds (simulated user cancellation)");
         }
     }
@@ -251,13 +305,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("      ⏱️  Select completed in {:?}", start.elapsed());
     println!();
 
-    // Example 6: Async integration patterns
-    println!("6. Async Integration Patterns");
-    println!("   Common patterns for integrating with async applications...");
+    Ok(())
+}
+
+/// Example 6: Async integration patterns
+async fn example_integration_patterns(
+    test_urls: &[&str],
+) -> Result<(), Box<dyn std::error::Error>> {
+    example_section!(
+        "6",
+        "Async Integration Patterns",
+        "Common patterns for integrating with async applications"
+    );
 
     // Background task pattern
     println!("   🔄 Background task pattern:");
-    let (tx, mut rx) = tokio::sync::mpsc::channel::<String>(10);
+    let (tx, mut rx) = tokio::sync::mpsc::channel::<String>(WORKER_CHANNEL_SIZE);
 
     // Spawn a background worker
     let worker_handle = tokio::spawn(async move {
@@ -285,7 +348,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     });
 
     // Send some work to the background worker
-    for url in &test_urls {
+    for url in test_urls {
         tx.send(url.to_string()).await?;
     }
     drop(tx); // Close the channel
@@ -296,7 +359,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Rate-limited processing pattern
     println!("   🐌 Rate-limited processing:");
-    let rate_limit = Duration::from_millis(500); // 2 requests per second
+    let rate_limit = Duration::from_millis(RATE_LIMIT_DELAY_MS); // 2 requests per second
 
     for (i, url) in test_urls.iter().enumerate() {
         if i > 0 {
@@ -304,25 +367,41 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
 
         let start = Instant::now();
-        match convert_url(url).await {
-            Ok(markdown) => {
-                println!(
-                    "      ✅ Rate-limited conversion {}: {} chars in {:?}",
-                    i + 1,
-                    markdown.as_str().len(),
-                    start.elapsed()
-                );
-            }
-            Err(e) => {
-                println!(
-                    "      ❌ Rate-limited conversion {} failed in {:?}: {}",
-                    i + 1,
-                    start.elapsed(),
-                    e
-                );
-            }
-        }
+        let result = convert_url(url).await;
+        let label = format!("Rate-limited conversion {}", i + 1);
+        print_conversion_result(&label, result, start);
     }
+
+    Ok(())
+}
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    println!("🔄 markdowndown Async Usage Examples\n");
+
+    // Setup configuration for async examples
+    let config = Config::builder()
+        .timeout_seconds(DEFAULT_TIMEOUT_SECONDS)
+        .max_retries(DEFAULT_MAX_RETRIES)
+        .user_agent("MarkdownDown-AsyncExample/1.0")
+        .build();
+
+    let md = MarkdownDown::with_config(config);
+
+    // Example URLs for testing
+    let test_urls = vec![
+        "https://httpbin.org/html",
+        "https://httpbin.org/json",
+        "https://httpbin.org/xml",
+    ];
+
+    // Run all examples
+    example_basic_async_await(&md).await?;
+    example_error_handling().await?;
+    example_concurrent_operations(&test_urls).await?;
+    example_streams_processing(&test_urls).await?;
+    example_timeouts_cancellation().await?;
+    example_integration_patterns(&test_urls).await?;
 
     println!("\n🎉 Async usage examples completed!");
     println!("\n💡 Key Async Patterns:");

@@ -5,7 +5,8 @@
 
 use crate::config::{AuthConfig, HttpConfig};
 use crate::types::{
-    AuthErrorKind, ErrorContext, MarkdownError, NetworkErrorKind, ValidationErrorKind,
+    converter_types, operations, AuthErrorKind, ErrorContext, MarkdownError, NetworkErrorKind,
+    ValidationErrorKind,
 };
 use bytes::Bytes;
 use reqwest::{Client, Response};
@@ -14,6 +15,15 @@ use std::time::Duration;
 use tokio::time::sleep;
 use tracing::{debug, error, info, instrument};
 use url::Url;
+
+// HTTP status code constants
+const HTTP_UNAUTHORIZED: u16 = 401;
+const HTTP_FORBIDDEN: u16 = 403;
+const HTTP_NOT_FOUND: u16 = 404;
+const HTTP_TOO_MANY_REQUESTS: u16 = 429;
+
+// Exponential backoff constant
+const BACKOFF_MULTIPLIER: u32 = 2;
 
 /// HTTP client configuration with retry logic and error handling.
 #[derive(Debug, Clone)]
@@ -67,6 +77,33 @@ impl HttpClient {
         }
     }
 
+    /// Generic helper to fetch content with a transformation function.
+    ///
+    /// # Arguments
+    ///
+    /// * `url` - The URL to fetch content from
+    /// * `headers` - Custom headers to include in the request
+    /// * `transform` - Async function to transform the response into the desired type
+    ///
+    /// # Returns
+    ///
+    /// Returns the transformed response body on success, or a MarkdownError on failure.
+    async fn fetch_with_transform<T, F, Fut>(
+        &self,
+        url: &str,
+        headers: &HashMap<String, String>,
+        transform: F,
+    ) -> Result<T, MarkdownError>
+    where
+        F: FnOnce(Response) -> Fut,
+        Fut: std::future::Future<Output = Result<T, reqwest::Error>>,
+    {
+        let response = self.retry_request(url, headers).await?;
+        transform(response)
+            .await
+            .map_err(|e| self.create_read_body_error(url, e))
+    }
+
     /// Fetches text content from a URL with retry logic.
     ///
     /// # Arguments
@@ -85,19 +122,12 @@ impl HttpClient {
     #[instrument(skip(self))]
     pub async fn get_text(&self, url: &str) -> Result<String, MarkdownError> {
         debug!("Fetching text content from URL");
-        let response = self.retry_request(url).await?;
-
-        debug!("Reading response body as text");
-        let text = response.text().await.map_err(|e| {
-            error!("Failed to read response body: {}", e);
-            let context = ErrorContext::new(url, "Read response body", "HttpClient")
-                .with_info(format!("Error: {e}"));
-            MarkdownError::EnhancedNetworkError {
-                kind: NetworkErrorKind::ConnectionFailed,
-                context,
-            }
-        })?;
-
+        let text = self
+            .fetch_with_transform(url, &HashMap::new(), |response| async move {
+                debug!("Reading response body as text");
+                response.text().await
+            })
+            .await?;
         info!("Successfully fetched text content ({} chars)", text.len());
         Ok(text)
     }
@@ -118,16 +148,10 @@ impl HttpClient {
     /// * `MarkdownError::NetworkError` - For network-related failures
     /// * `MarkdownError::AuthError` - For authentication failures (401, 403)
     pub async fn get_bytes(&self, url: &str) -> Result<Bytes, MarkdownError> {
-        let response = self.retry_request(url).await?;
-        let bytes = response.bytes().await.map_err(|e| {
-            let context = ErrorContext::new(url, "Read response body", "HttpClient")
-                .with_info(format!("Error: {e}"));
-            MarkdownError::EnhancedNetworkError {
-                kind: NetworkErrorKind::ConnectionFailed,
-                context,
-            }
-        })?;
-        Ok(bytes)
+        self.fetch_with_transform(url, &HashMap::new(), |response| async move {
+            response.bytes().await
+        })
+        .await
     }
 
     /// Fetches text content from a URL with custom headers and retry logic.
@@ -151,286 +175,461 @@ impl HttpClient {
         url: &str,
         headers: &HashMap<String, String>,
     ) -> Result<String, MarkdownError> {
-        let response = self.retry_request_with_headers(url, headers).await?;
-        let text = response.text().await.map_err(|e| {
-            let context = ErrorContext::new(url, "Read response body", "HttpClient")
-                .with_info(format!("Error: {e}"));
-            MarkdownError::EnhancedNetworkError {
-                kind: NetworkErrorKind::ConnectionFailed,
-                context,
-            }
-        })?;
-        Ok(text)
+        self.fetch_with_transform(
+            url,
+            headers,
+            |response| async move { response.text().await },
+        )
+        .await
     }
 
-    /// Internal method to perform HTTP requests with retry logic and custom headers.
+    /// Validates URL format and scheme.
     ///
-    /// Implements exponential backoff for transient failures.
-    async fn retry_request_with_headers(
-        &self,
-        url: &str,
-        headers: &HashMap<String, String>,
-    ) -> Result<Response, MarkdownError> {
-        // Validate URL format
+    /// # Arguments
+    ///
+    /// * `url` - The URL string to validate
+    ///
+    /// # Returns
+    ///
+    /// Returns the parsed URL on success, or a MarkdownError on failure.
+    fn validate_url(&self, url: &str) -> Result<Url, MarkdownError> {
         let parsed_url = Url::parse(url).map_err(|_| {
-            let context = ErrorContext::new(url, "URL validation", "HttpClient");
+            error!("Invalid URL format: {}", url);
+            let context = ErrorContext::new(
+                url,
+                operations::URL_VALIDATION,
+                converter_types::HTTP_CLIENT,
+            );
             MarkdownError::ValidationError {
                 kind: ValidationErrorKind::InvalidUrl,
                 context,
             }
         })?;
 
-        // Ensure URL uses HTTP or HTTPS
         match parsed_url.scheme() {
-            "http" | "https" => {}
-            _ => {
-                let context = ErrorContext::new(url, "URL scheme validation", "HttpClient")
-                    .with_info(format!("Unsupported scheme: {}", parsed_url.scheme()));
-                return Err(MarkdownError::ValidationError {
+            "http" | "https" => {
+                debug!("URL scheme validated: {}", parsed_url.scheme());
+                Ok(parsed_url)
+            }
+            scheme => {
+                error!("Unsupported URL scheme: {}", scheme);
+                let context = ErrorContext::new(
+                    url,
+                    operations::URL_SCHEME_VALIDATION,
+                    converter_types::HTTP_CLIENT,
+                )
+                .with_info(format!("Unsupported scheme: {scheme}"));
+                Err(MarkdownError::ValidationError {
                     kind: ValidationErrorKind::InvalidUrl,
                     context,
-                });
+                })
             }
         }
+    }
 
-        let mut last_error = None;
+    /// Adds authentication headers to a request based on URL domain.
+    ///
+    /// # Arguments
+    ///
+    /// * `request` - The request builder to add headers to
+    /// * `url` - The parsed URL being requested
+    ///
+    /// # Returns
+    ///
+    /// Returns the request builder with authentication headers added.
+    fn add_auth_headers(
+        &self,
+        mut request: reqwest::RequestBuilder,
+        url: &Url,
+    ) -> reqwest::RequestBuilder {
+        request = self.add_github_auth(request, url);
+        request = self.add_office365_auth(request, url);
+        request = self.add_google_auth(request, url);
+        request
+    }
 
-        for attempt in 0..=self.max_retries {
-            let mut request = self.client.get(url);
-
-            // Add custom headers individually, which should override defaults
-            for (key, value) in headers {
-                request = request.header(key, value);
+    /// Generic helper to add conditional authentication headers.
+    ///
+    /// # Arguments
+    ///
+    /// * `request` - The request builder to add headers to
+    /// * `url` - The URL being requested
+    /// * `token` - Optional authentication token
+    /// * `url_check` - Predicate function to check if URL matches auth provider
+    /// * `format_header` - Function to format the authorization header value
+    ///
+    /// # Returns
+    ///
+    /// Returns the request builder with authentication headers added if applicable.
+    fn add_conditional_auth(
+        &self,
+        request: reqwest::RequestBuilder,
+        url: &Url,
+        token: &Option<String>,
+        url_check: impl Fn(&Url) -> bool,
+        format_header: impl Fn(&str) -> String,
+    ) -> reqwest::RequestBuilder {
+        if let Some(token) = token {
+            if url_check(url) {
+                return request.header("Authorization", format_header(token));
             }
+        }
+        request
+    }
 
-            match request.send().await {
-                Ok(response) => {
-                    let status = response.status();
+    /// Adds GitHub authentication headers if applicable.
+    fn add_github_auth(
+        &self,
+        mut request: reqwest::RequestBuilder,
+        url: &Url,
+    ) -> reqwest::RequestBuilder {
+        request = self.add_conditional_auth(
+            request,
+            url,
+            &self.auth.github_token,
+            |u| self.is_github_url(u),
+            |token| format!("token {token}"),
+        );
 
-                    // Check if this is a success or non-retryable error
-                    if status.is_success() {
-                        return Ok(response);
-                    } else if status == 401 || status == 403 {
-                        // Auth errors - don't retry
-                        let auth_kind = if status == 401 {
-                            AuthErrorKind::MissingToken
-                        } else {
-                            AuthErrorKind::PermissionDenied
-                        };
-                        let context = ErrorContext::new(url, "HTTP request", "HttpClient")
-                            .with_info(format!("HTTP status: {status}"));
-                        return Err(MarkdownError::AuthenticationError {
-                            kind: auth_kind,
-                            context,
-                        });
-                    } else if status == 404 {
-                        // Not found - don't retry
-                        let context = ErrorContext::new(url, "HTTP request", "HttpClient")
-                            .with_info(format!("HTTP status: {status}"));
-                        return Err(MarkdownError::EnhancedNetworkError {
-                            kind: NetworkErrorKind::ServerError(status.as_u16()),
-                            context,
-                        });
-                    } else if status.is_server_error() || status == 429 {
-                        // Server errors and rate limiting - these are retryable
-                        if attempt == self.max_retries {
-                            let network_kind = if status == 429 {
-                                NetworkErrorKind::RateLimited
-                            } else {
-                                NetworkErrorKind::ServerError(status.as_u16())
-                            };
-                            let context = ErrorContext::new(url, "HTTP request", "HttpClient")
-                                .with_info(format!(
-                                    "HTTP status: {} after {} attempts",
-                                    status,
-                                    self.max_retries + 1
-                                ));
-                            return Err(MarkdownError::EnhancedNetworkError {
-                                kind: network_kind,
-                                context,
-                            });
-                        }
-                        // Fall through to retry logic
-                    } else {
-                        // Other client errors - don't retry
-                        let context = ErrorContext::new(url, "HTTP request", "HttpClient")
-                            .with_info(format!("HTTP status: {status}"));
-                        return Err(MarkdownError::EnhancedNetworkError {
-                            kind: NetworkErrorKind::ServerError(status.as_u16()),
-                            context,
-                        });
-                    }
-                }
-                Err(e) => {
-                    last_error = Some(e);
-
-                    // Don't retry on the last attempt
-                    if attempt == self.max_retries {
-                        break;
-                    }
-                }
-            }
-
-            // Calculate delay with exponential backoff
-            let delay = self.base_delay * 2_u32.pow(attempt);
-            sleep(delay).await;
+        // Add GitHub-specific Accept header for repo paths
+        if self.auth.github_token.is_some()
+            && self.is_github_url(url)
+            && url.path().starts_with("/repos/")
+        {
+            request = request.header("Accept", "application/vnd.github.v3+json");
         }
 
-        // If we reach here, all attempts failed with network errors
-        let error = last_error.unwrap();
-        Err(self.map_reqwest_error(error, url))
+        request
+    }
+
+    /// Checks if the URL is a GitHub URL.
+    fn is_github_url(&self, url: &Url) -> bool {
+        url.host_str().is_some_and(|host| {
+            host.contains("github") || host.starts_with("127.0.0.1") || host == "localhost"
+        })
+    }
+
+    /// Adds Office365 authentication headers if applicable.
+    fn add_office365_auth(
+        &self,
+        request: reqwest::RequestBuilder,
+        url: &Url,
+    ) -> reqwest::RequestBuilder {
+        self.add_conditional_auth(
+            request,
+            url,
+            &self.auth.office365_token,
+            |u| self.is_office365_url(u),
+            |token| format!("Bearer {token}"),
+        )
+    }
+
+    /// Checks if the URL is an Office365 URL.
+    fn is_office365_url(&self, url: &Url) -> bool {
+        url.host_str().is_some_and(|host| {
+            host.contains("office.com")
+                || host.contains("sharepoint.com")
+                || host.contains("onedrive.com")
+        })
+    }
+
+    /// Adds Google authentication headers if applicable.
+    fn add_google_auth(
+        &self,
+        request: reqwest::RequestBuilder,
+        url: &Url,
+    ) -> reqwest::RequestBuilder {
+        self.add_conditional_auth(
+            request,
+            url,
+            &self.auth.google_api_key,
+            |u| self.is_google_url(u),
+            |token| format!("Bearer {token}"),
+        )
+    }
+
+    /// Checks if the URL is a Google API URL.
+    fn is_google_url(&self, url: &Url) -> bool {
+        url.host_str()
+            .is_some_and(|host| host.contains("googleapis.com"))
+    }
+
+    /// Handles HTTP response status codes and returns appropriate errors.
+    ///
+    /// # Arguments
+    ///
+    /// * `status` - The HTTP status code
+    /// * `url` - The URL being requested
+    /// * `attempt` - The current retry attempt number
+    ///
+    /// # Returns
+    ///
+    /// Returns Ok(()) for success, or an appropriate error for failure cases.
+    fn handle_response_status(
+        &self,
+        status: reqwest::StatusCode,
+        url: &str,
+        attempt: u32,
+    ) -> Result<(), MarkdownError> {
+        if status.is_success() {
+            info!("HTTP request successful: {}", status);
+            return Ok(());
+        }
+
+        if status == HTTP_UNAUTHORIZED {
+            return self.handle_unauthorized_error(url);
+        }
+
+        if status == HTTP_FORBIDDEN {
+            return self.handle_forbidden_error(url);
+        }
+
+        if status == HTTP_NOT_FOUND {
+            return self.handle_not_found_error(url, status);
+        }
+
+        if status.is_server_error() || status == HTTP_TOO_MANY_REQUESTS {
+            return self.handle_server_error(status, url, attempt);
+        }
+
+        self.handle_generic_error(status, url)
+    }
+
+    /// Generic helper to create HTTP status errors.
+    ///
+    /// # Arguments
+    ///
+    /// * `url` - The URL being requested
+    /// * `status` - The HTTP status code
+    /// * `error_factory` - Function to create the specific error variant from context
+    ///
+    /// # Returns
+    ///
+    /// Returns an error result with the appropriate error type.
+    fn create_http_status_error(
+        &self,
+        url: &str,
+        status: u16,
+        error_factory: impl FnOnce(ErrorContext) -> MarkdownError,
+    ) -> Result<(), MarkdownError> {
+        let context =
+            ErrorContext::new(url, operations::HTTP_REQUEST, converter_types::HTTP_CLIENT)
+                .with_info(format!("HTTP status: {status}"));
+        Err(error_factory(context))
+    }
+
+    /// Handles 401 Unauthorized errors.
+    fn handle_unauthorized_error(&self, url: &str) -> Result<(), MarkdownError> {
+        self.create_http_status_error(url, HTTP_UNAUTHORIZED, |context| {
+            MarkdownError::AuthenticationError {
+                kind: AuthErrorKind::MissingToken,
+                context,
+            }
+        })
+    }
+
+    /// Handles 403 Forbidden errors.
+    fn handle_forbidden_error(&self, url: &str) -> Result<(), MarkdownError> {
+        self.create_http_status_error(url, HTTP_FORBIDDEN, |context| {
+            MarkdownError::AuthenticationError {
+                kind: AuthErrorKind::PermissionDenied,
+                context,
+            }
+        })
+    }
+
+    /// Handles 404 Not Found errors.
+    fn handle_not_found_error(
+        &self,
+        url: &str,
+        status: reqwest::StatusCode,
+    ) -> Result<(), MarkdownError> {
+        self.create_http_status_error(url, status.as_u16(), |context| {
+            MarkdownError::EnhancedNetworkError {
+                kind: NetworkErrorKind::ServerError(status.as_u16()),
+                context,
+            }
+        })
+    }
+
+    /// Handles server errors (5xx) and rate limiting (429).
+    fn handle_server_error(
+        &self,
+        status: reqwest::StatusCode,
+        url: &str,
+        attempt: u32,
+    ) -> Result<(), MarkdownError> {
+        if attempt == self.max_retries {
+            let network_kind = if status == HTTP_TOO_MANY_REQUESTS {
+                NetworkErrorKind::RateLimited
+            } else {
+                NetworkErrorKind::ServerError(status.as_u16())
+            };
+            let context =
+                ErrorContext::new(url, operations::HTTP_REQUEST, converter_types::HTTP_CLIENT)
+                    .with_info(format!(
+                        "HTTP status: {} after {} attempts",
+                        status,
+                        self.max_retries + 1
+                    ));
+            Err(MarkdownError::EnhancedNetworkError {
+                kind: network_kind,
+                context,
+            })
+        } else {
+            // Indicate retry is needed
+            Ok(())
+        }
+    }
+
+    /// Handles generic HTTP errors.
+    fn handle_generic_error(
+        &self,
+        status: reqwest::StatusCode,
+        url: &str,
+    ) -> Result<(), MarkdownError> {
+        let context =
+            ErrorContext::new(url, operations::HTTP_REQUEST, converter_types::HTTP_CLIENT)
+                .with_info(format!("HTTP status: {status}"));
+        Err(MarkdownError::EnhancedNetworkError {
+            kind: NetworkErrorKind::ServerError(status.as_u16()),
+            context,
+        })
+    }
+
+    /// Creates an error for response body reading failures.
+    ///
+    /// # Arguments
+    ///
+    /// * `url` - The URL being requested
+    /// * `error` - The reqwest error that occurred
+    ///
+    /// # Returns
+    ///
+    /// Returns a MarkdownError with appropriate context.
+    fn create_read_body_error(&self, url: &str, error: reqwest::Error) -> MarkdownError {
+        error!("Failed to read response body: {}", error);
+        let context = ErrorContext::new(
+            url,
+            operations::READ_RESPONSE_BODY,
+            converter_types::HTTP_CLIENT,
+        )
+        .with_info(format!("Error: {error}"));
+        MarkdownError::EnhancedNetworkError {
+            kind: NetworkErrorKind::ConnectionFailed,
+            context,
+        }
+    }
+
+    /// Builds an HTTP request with authentication and custom headers.
+    ///
+    /// # Arguments
+    ///
+    /// * `url` - The URL to request
+    /// * `parsed_url` - The parsed URL for auth header logic
+    /// * `custom_headers` - Custom headers to include in the request
+    ///
+    /// # Returns
+    ///
+    /// Returns a configured request builder.
+    fn build_request(
+        &self,
+        url: &str,
+        parsed_url: &Url,
+        custom_headers: &HashMap<String, String>,
+    ) -> reqwest::RequestBuilder {
+        let mut request = self.client.get(url);
+        request = self.add_auth_headers(request, parsed_url);
+        for (key, value) in custom_headers {
+            request = request.header(key, value);
+        }
+        request
+    }
+
+    /// Executes a single HTTP request attempt.
+    ///
+    /// # Arguments
+    ///
+    /// * `url` - The URL being requested
+    /// * `parsed_url` - The parsed URL for building the request
+    /// * `custom_headers` - Custom headers to include
+    /// * `attempt` - The current attempt number
+    ///
+    /// # Returns
+    ///
+    /// Returns Ok(Some(response)) for success, Ok(None) for retryable errors,
+    /// or Err for non-retryable errors.
+    async fn execute_request_attempt(
+        &self,
+        url: &str,
+        parsed_url: &Url,
+        custom_headers: &HashMap<String, String>,
+        attempt: u32,
+    ) -> Result<Option<Response>, MarkdownError> {
+        debug!("Attempt {} of {}", attempt + 1, self.max_retries + 1);
+
+        let request = self.build_request(url, parsed_url, custom_headers);
+        let response = match request.send().await {
+            Ok(r) => r,
+            Err(e) if attempt == self.max_retries => return Err(self.map_reqwest_error(e, url)),
+            Err(_) => return Ok(None), // Retry needed
+        };
+
+        let status = response.status();
+        debug!("Received HTTP response: {}", status);
+
+        match self.handle_response_status(status, url, attempt) {
+            Ok(()) if status.is_success() => Ok(Some(response)),
+            Ok(()) => Ok(None), // Retry needed
+            Err(e) => Err(e),
+        }
     }
 
     /// Internal method to perform HTTP requests with retry logic.
     ///
     /// Implements exponential backoff for transient failures.
+    ///
+    /// # Arguments
+    ///
+    /// * `url` - The URL to fetch
+    /// * `custom_headers` - Optional custom headers to include in the request
     #[instrument(skip(self), fields(attempt, max_retries = self.max_retries))]
-    async fn retry_request(&self, url: &str) -> Result<Response, MarkdownError> {
+    async fn retry_request(
+        &self,
+        url: &str,
+        custom_headers: &HashMap<String, String>,
+    ) -> Result<Response, MarkdownError> {
         debug!("Starting HTTP request with retry logic");
 
-        // Validate URL format
-        let parsed_url = Url::parse(url).map_err(|_| {
-            error!("Invalid URL format: {}", url);
-            let context = ErrorContext::new(url, "URL validation", "HttpClient");
-            MarkdownError::ValidationError {
-                kind: ValidationErrorKind::InvalidUrl,
-                context,
-            }
-        })?;
-
-        // Ensure URL uses HTTP or HTTPS
-        match parsed_url.scheme() {
-            "http" | "https" => {
-                debug!("URL scheme validated: {}", parsed_url.scheme());
-            }
-            scheme => {
-                error!("Unsupported URL scheme: {}", scheme);
-                let context = ErrorContext::new(url, "URL scheme validation", "HttpClient")
-                    .with_info(format!("Unsupported scheme: {scheme}"));
-                return Err(MarkdownError::ValidationError {
-                    kind: ValidationErrorKind::InvalidUrl,
-                    context,
-                });
-            }
-        }
-
-        let mut last_error = None;
+        let parsed_url = self.validate_url(url)?;
 
         for attempt in 0..=self.max_retries {
             tracing::Span::current().record("attempt", attempt);
-            debug!("Attempt {} of {}", attempt + 1, self.max_retries + 1);
-            let mut request = self.client.get(url);
 
-            // Add authentication headers based on URL domain
-            if let Some(github_token) = &self.auth.github_token {
-                if parsed_url.host_str().is_some_and(|host| {
-                    host.contains("github") || host.starts_with("127.0.0.1") || host == "localhost"
-                }) {
-                    request = request.header("Authorization", format!("token {github_token}"));
-                    // Add GitHub API Accept header if this looks like an API request
-                    if parsed_url.path().starts_with("/repos/") {
-                        request = request.header("Accept", "application/vnd.github.v3+json");
+            match self
+                .execute_request_attempt(url, &parsed_url, custom_headers, attempt)
+                .await?
+            {
+                Some(response) => return Ok(response),
+                None => {
+                    // Need to retry
+                    if attempt < self.max_retries {
+                        let delay = self.base_delay * BACKOFF_MULTIPLIER.pow(attempt);
+                        sleep(delay).await;
                     }
                 }
             }
-
-            if let Some(office365_token) = &self.auth.office365_token {
-                if parsed_url.host_str().is_some_and(|host| {
-                    host.contains("office.com")
-                        || host.contains("sharepoint.com")
-                        || host.contains("onedrive.com")
-                }) {
-                    request = request.header("Authorization", format!("Bearer {office365_token}"));
-                }
-            }
-
-            if let Some(google_api_key) = &self.auth.google_api_key {
-                if parsed_url
-                    .host_str()
-                    .is_some_and(|host| host.contains("googleapis.com"))
-                {
-                    request = request.header("Authorization", format!("Bearer {google_api_key}"));
-                }
-            }
-
-            match request.send().await {
-                Ok(response) => {
-                    let status = response.status();
-                    debug!("Received HTTP response: {}", status);
-
-                    // Check if this is a success or non-retryable error
-                    if status.is_success() {
-                        info!("HTTP request successful: {}", status);
-                        return Ok(response);
-                    } else if status == 401 || status == 403 {
-                        // Auth errors - don't retry
-                        let auth_kind = if status == 401 {
-                            AuthErrorKind::MissingToken
-                        } else {
-                            AuthErrorKind::PermissionDenied
-                        };
-                        let context = ErrorContext::new(url, "HTTP request", "HttpClient")
-                            .with_info(format!("HTTP status: {status}"));
-                        return Err(MarkdownError::AuthenticationError {
-                            kind: auth_kind,
-                            context,
-                        });
-                    } else if status == 404 {
-                        // Not found - don't retry
-                        let context = ErrorContext::new(url, "HTTP request", "HttpClient")
-                            .with_info(format!("HTTP status: {status}"));
-                        return Err(MarkdownError::EnhancedNetworkError {
-                            kind: NetworkErrorKind::ServerError(status.as_u16()),
-                            context,
-                        });
-                    } else if status.is_server_error() || status == 429 {
-                        // Server errors and rate limiting - these are retryable
-                        if attempt == self.max_retries {
-                            let network_kind = if status == 429 {
-                                NetworkErrorKind::RateLimited
-                            } else {
-                                NetworkErrorKind::ServerError(status.as_u16())
-                            };
-                            let context = ErrorContext::new(url, "HTTP request", "HttpClient")
-                                .with_info(format!(
-                                    "HTTP status: {} after {} attempts",
-                                    status,
-                                    self.max_retries + 1
-                                ));
-                            return Err(MarkdownError::EnhancedNetworkError {
-                                kind: network_kind,
-                                context,
-                            });
-                        }
-                        // Fall through to retry logic
-                    } else {
-                        // Other client errors - don't retry
-                        let context = ErrorContext::new(url, "HTTP request", "HttpClient")
-                            .with_info(format!("HTTP status: {status}"));
-                        return Err(MarkdownError::EnhancedNetworkError {
-                            kind: NetworkErrorKind::ServerError(status.as_u16()),
-                            context,
-                        });
-                    }
-                }
-                Err(e) => {
-                    last_error = Some(e);
-
-                    // Don't retry on the last attempt
-                    if attempt == self.max_retries {
-                        break;
-                    }
-                }
-            }
-
-            // Calculate delay with exponential backoff
-            let delay = self.base_delay * 2_u32.pow(attempt);
-            sleep(delay).await;
         }
 
-        // If we reach here, all attempts failed with network errors
-        let error = last_error.unwrap();
-        Err(self.map_reqwest_error(error, url))
+        // This should never be reached due to the logic in execute_request_attempt
+        // but we need to satisfy the type system
+        let context =
+            ErrorContext::new(url, operations::HTTP_REQUEST, converter_types::HTTP_CLIENT)
+                .with_info("Max retries exceeded");
+        Err(MarkdownError::EnhancedNetworkError {
+            kind: NetworkErrorKind::ConnectionFailed,
+            context,
+        })
     }
 
     /// Maps reqwest errors to MarkdownError variants with context.
@@ -441,35 +640,94 @@ impl HttpClient {
             .unwrap_or_else(|| url.to_string());
 
         if error.is_timeout() {
-            let context = ErrorContext::new(&url_from_error, "HTTP request", "HttpClient")
-                .with_info("Request timeout");
-            MarkdownError::EnhancedNetworkError {
+            return self.create_timeout_error(&url_from_error);
+        }
+
+        if error.is_connect() {
+            return self.create_connection_error(&url_from_error, &error);
+        }
+
+        if error.is_request() {
+            return self.create_validation_error(&url_from_error, &error);
+        }
+
+        self.create_generic_request_error(&url_from_error, &error)
+    }
+
+    /// Generic helper to create network-related errors.
+    ///
+    /// # Arguments
+    ///
+    /// * `url` - The URL being requested
+    /// * `operation` - The operation that failed
+    /// * `info` - Additional error information
+    /// * `error_factory` - Function to create the specific error variant from context
+    ///
+    /// # Returns
+    ///
+    /// Returns a MarkdownError with the appropriate type and context.
+    fn create_network_error(
+        &self,
+        url: &str,
+        operation: &str,
+        info: String,
+        error_factory: impl FnOnce(ErrorContext) -> MarkdownError,
+    ) -> MarkdownError {
+        let context =
+            ErrorContext::new(url, operation, converter_types::HTTP_CLIENT).with_info(info);
+        error_factory(context)
+    }
+
+    /// Creates a timeout error.
+    fn create_timeout_error(&self, url: &str) -> MarkdownError {
+        self.create_network_error(
+            url,
+            operations::HTTP_REQUEST,
+            "Request timeout".to_string(),
+            |context| MarkdownError::EnhancedNetworkError {
                 kind: NetworkErrorKind::Timeout,
                 context,
-            }
-        } else if error.is_connect() {
-            let context = ErrorContext::new(&url_from_error, "HTTP request", "HttpClient")
-                .with_info(format!("Connection error: {error}"));
-            MarkdownError::EnhancedNetworkError {
+            },
+        )
+    }
+
+    /// Creates a connection error.
+    fn create_connection_error(&self, url: &str, error: &reqwest::Error) -> MarkdownError {
+        self.create_network_error(
+            url,
+            operations::HTTP_REQUEST,
+            format!("Connection error: {error}"),
+            |context| MarkdownError::EnhancedNetworkError {
                 kind: NetworkErrorKind::ConnectionFailed,
                 context,
-            }
-        } else if error.is_request() {
-            let context =
-                ErrorContext::new(&url_from_error, "HTTP request validation", "HttpClient")
-                    .with_info(format!("Request error: {error}"));
-            MarkdownError::ValidationError {
+            },
+        )
+    }
+
+    /// Creates a validation error for request failures.
+    fn create_validation_error(&self, url: &str, error: &reqwest::Error) -> MarkdownError {
+        self.create_network_error(
+            url,
+            operations::HTTP_REQUEST_VALIDATION,
+            format!("Request error: {error}"),
+            |context| MarkdownError::ValidationError {
                 kind: ValidationErrorKind::InvalidUrl,
                 context,
-            }
-        } else {
-            let context = ErrorContext::new(&url_from_error, "HTTP request", "HttpClient")
-                .with_info(format!("Request failed: {error}"));
-            MarkdownError::EnhancedNetworkError {
+            },
+        )
+    }
+
+    /// Creates a generic request error.
+    fn create_generic_request_error(&self, url: &str, error: &reqwest::Error) -> MarkdownError {
+        self.create_network_error(
+            url,
+            operations::HTTP_REQUEST,
+            format!("Request failed: {error}"),
+            |context| MarkdownError::EnhancedNetworkError {
                 kind: NetworkErrorKind::ConnectionFailed,
                 context,
-            }
-        }
+            },
+        )
     }
 }
 
@@ -1106,16 +1364,13 @@ mod tests {
             let result = client.get_text("https://httpbin.org/delay/2").await;
 
             // Should produce a timeout error that gets mapped correctly
-            if let Err(error) = result {
-                // Verify it's the type of error we expect for timeouts
-                if let MarkdownError::EnhancedNetworkError { kind, context } = error {
-                    // Should be either timeout or connection failed
-                    assert!(matches!(
-                        kind,
-                        NetworkErrorKind::Timeout | NetworkErrorKind::ConnectionFailed
-                    ));
-                    assert_eq!(context.url, "https://httpbin.org/delay/2");
-                }
+            if let Err(MarkdownError::EnhancedNetworkError { kind, context }) = result {
+                // Should be either timeout or connection failed
+                assert!(matches!(
+                    kind,
+                    NetworkErrorKind::Timeout | NetworkErrorKind::ConnectionFailed
+                ));
+                assert_eq!(context.url, "https://httpbin.org/delay/2");
             }
             // Test passes regardless of actual network conditions
         }
@@ -1133,18 +1388,16 @@ mod tests {
             let result = client.get_text("http://127.0.0.1:1").await;
 
             // Should produce a connection error that gets mapped correctly
-            if let Err(error) = result {
-                if let MarkdownError::EnhancedNetworkError { kind, context } = error {
-                    // Should be connection failed or timeout
-                    assert!(matches!(
-                        kind,
-                        NetworkErrorKind::ConnectionFailed | NetworkErrorKind::Timeout
-                    ));
-                    // URL might have trailing slash added by reqwest
-                    assert!(
-                        context.url == "http://127.0.0.1:1" || context.url == "http://127.0.0.1:1/"
-                    );
-                }
+            if let Err(MarkdownError::EnhancedNetworkError { kind, context }) = result {
+                // Should be connection failed or timeout
+                assert!(matches!(
+                    kind,
+                    NetworkErrorKind::ConnectionFailed | NetworkErrorKind::Timeout
+                ));
+                // URL might have trailing slash added by reqwest
+                assert!(
+                    context.url == "http://127.0.0.1:1" || context.url == "http://127.0.0.1:1/"
+                );
             }
             // Test passes regardless of actual connection behavior
         }

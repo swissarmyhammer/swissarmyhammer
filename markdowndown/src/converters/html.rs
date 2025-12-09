@@ -169,13 +169,63 @@ impl HtmlConverter {
     /// Extracts the title from HTML content.
     fn extract_title(&self, html: &str) -> Option<String> {
         // Simple regex to extract title from HTML
-        if let Some(start) = html.find("<title>") {
-            if let Some(end) = html[start + 7..].find("</title>") {
-                let title = &html[start + 7..start + 7 + end];
+        const TITLE_OPEN_TAG: &str = "<title>";
+        if let Some(start) = html.find(TITLE_OPEN_TAG) {
+            let title_start = start + TITLE_OPEN_TAG.len();
+            if let Some(end) = html[title_start..].find("</title>") {
+                let title = &html[title_start..title_start + end];
                 return Some(title.trim().to_string());
             }
         }
         None
+    }
+
+    /// Generates frontmatter for the markdown document.
+    ///
+    /// # Arguments
+    ///
+    /// * `url` - The source URL of the HTML document
+    /// * `html_content` - The original HTML content
+    /// * `markdown_content` - The converted markdown content
+    ///
+    /// # Returns
+    ///
+    /// Returns the markdown content with frontmatter prepended, or a `MarkdownError` on failure.
+    fn generate_frontmatter(
+        &self,
+        url: &str,
+        html_content: &str,
+        markdown_content: &str,
+    ) -> Result<String, MarkdownError> {
+        let now = Utc::now();
+        let mut builder = FrontmatterBuilder::new(url.to_string())
+            .exporter(format!("markdowndown-html-{}", env!("CARGO_PKG_VERSION")))
+            .download_date(now);
+
+        // Add default fields
+        let mut default_fields = vec![
+            ("converted_at", now.to_rfc3339()),
+            ("conversion_type", "html".to_string()),
+            ("url", url.to_string()),
+        ];
+
+        // Try to extract title from HTML
+        if let Some(title) = self.extract_title(html_content) {
+            default_fields.push(("title", title));
+        }
+
+        // Add all default fields
+        for (key, value) in default_fields {
+            builder = builder.additional_field(key.to_string(), value);
+        }
+
+        // Add custom frontmatter fields from configuration
+        for (key, value) in &self.output_config.custom_frontmatter_fields {
+            builder = builder.additional_field(key.clone(), value.clone());
+        }
+
+        let frontmatter = builder.build()?;
+        Ok(format!("{frontmatter}\n{markdown_content}"))
     }
 }
 
@@ -201,37 +251,13 @@ impl Converter for HtmlConverter {
         };
 
         // Only generate frontmatter if configured to include it
-        if self.output_config.include_frontmatter {
-            // Generate frontmatter
-            let now = Utc::now();
-            let mut builder = FrontmatterBuilder::new(url.to_string())
-                .exporter(format!("markdowndown-html-{}", env!("CARGO_PKG_VERSION")))
-                .download_date(now)
-                .additional_field("converted_at".to_string(), now.to_rfc3339())
-                .additional_field("conversion_type".to_string(), "html".to_string())
-                .additional_field("url".to_string(), url.to_string());
-
-            // Try to extract title from HTML
-            if let Some(title) = self.extract_title(&html_content) {
-                builder = builder.additional_field("title".to_string(), title);
-            }
-
-            // Add custom frontmatter fields from configuration
-            for (key, value) in &self.output_config.custom_frontmatter_fields {
-                builder = builder.additional_field(key.clone(), value.clone());
-            }
-
-            let frontmatter = builder.build()?;
-
-            // Combine frontmatter with content
-            let markdown_with_frontmatter = format!("{frontmatter}\n{markdown_content}");
-
-            // Wrap in Markdown type with validation
-            Markdown::new(markdown_with_frontmatter)
+        let final_content = if self.output_config.include_frontmatter {
+            self.generate_frontmatter(url, &html_content, &markdown_content)?
         } else {
-            // No frontmatter - just return the markdown content
-            Markdown::new(markdown_content)
-        }
+            markdown_content
+        };
+
+        Markdown::new(final_content)
     }
 
     /// Returns the name of this converter.
@@ -251,52 +277,111 @@ mod tests {
     use super::*;
     use crate::config::{AuthConfig, HttpConfig, OutputConfig};
     use std::time::Duration;
-    use wiremock::matchers::{method, path};
+    use wiremock::matchers::{method, path as path_matcher};
     use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    // Test configuration constants
+    const DEFAULT_LINE_WIDTH: usize = 120;
+    const CUSTOM_LINE_WIDTH: usize = 80;
+    const TEST_LINE_WIDTH: usize = 100;
+    const NARROW_LINE_WIDTH: usize = 50;
+    const HTTP_TIMEOUT_SECS: u64 = 30;
+    const HTTP_RETRY_DELAY_SECS: u64 = 1;
+    const MAX_RETRY_ATTEMPTS: u32 = 3;
+    const MAX_REDIRECTS: u32 = 10;
+    const MAX_BLANK_LINES: usize = 3;
+    const MAX_CONSECUTIVE_BLANK_LINES: usize = 2;
+    const HTTP_STATUS_OK: u16 = 200;
+
+    // Helper function to create a test converter
+    fn create_test_converter() -> HtmlConverter {
+        HtmlConverter::new()
+    }
+
+    // Helper function to setup mock server with HTML content
+    async fn setup_mock_server_with_html(path: &str, html: &str) -> (MockServer, String) {
+        let mock_server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path_matcher(path))
+            .respond_with(ResponseTemplate::new(HTTP_STATUS_OK).set_body_string(html))
+            .mount(&mock_server)
+            .await;
+        let url = format!("{}{}", mock_server.uri(), path);
+        (mock_server, url)
+    }
+
+    // Helper function to assert ParseError with expected message fragment
+    fn assert_parse_error_contains(result: Result<String, MarkdownError>, expected_fragment: &str) {
+        assert!(result.is_err());
+        if let Err(MarkdownError::ParseError { message }) = result {
+            assert!(message.contains(expected_fragment));
+        } else {
+            panic!(
+                "Expected ParseError with message containing '{}'",
+                expected_fragment
+            );
+        }
+    }
+
+    // Helper function to test converter with frontmatter setting
+    async fn test_converter_with_frontmatter_setting(
+        include_frontmatter: bool,
+        html: &str,
+        path: &str,
+        custom_fields: Vec<(String, String)>,
+    ) -> Result<Markdown, MarkdownError> {
+        let (_mock_server, url) = setup_mock_server_with_html(path, html).await;
+        let output_config = OutputConfig {
+            include_frontmatter,
+            custom_frontmatter_fields: custom_fields,
+            ..Default::default()
+        };
+
+        let converter = HtmlConverter::with_config(
+            HttpClient::new(),
+            HtmlConverterConfig::default(),
+            output_config,
+        );
+        converter.convert(&url).await
+    }
 
     #[test]
     fn test_html_converter_new() {
-        let converter = HtmlConverter::new();
-        assert_eq!(converter.config.max_line_width, 120);
+        let converter = create_test_converter();
+        assert_eq!(converter.config.max_line_width, DEFAULT_LINE_WIDTH);
         assert!(converter.config.remove_scripts_styles);
     }
 
     #[test]
     fn test_html_converter_with_config() {
         let config = HtmlConverterConfig {
-            max_line_width: 80,
+            max_line_width: CUSTOM_LINE_WIDTH,
             remove_scripts_styles: false,
             ..Default::default()
         };
 
         let converter = HtmlConverter::with_config_only(config);
-        assert_eq!(converter.config.max_line_width, 80);
+        assert_eq!(converter.config.max_line_width, CUSTOM_LINE_WIDTH);
         assert!(!converter.config.remove_scripts_styles);
     }
 
     #[test]
     fn test_convert_empty_html_error() {
-        let converter = HtmlConverter::new();
+        let converter = create_test_converter();
         let result = converter.convert_html("");
-        assert!(result.is_err());
-
-        if let Err(MarkdownError::ParseError { message }) = result {
-            assert!(message.contains("HTML content cannot be empty"));
-        } else {
-            panic!("Expected ParseError with specific message");
-        }
+        assert_parse_error_contains(result, "HTML content cannot be empty");
     }
 
     #[test]
     fn test_convert_whitespace_only_html_error() {
-        let converter = HtmlConverter::new();
+        let converter = create_test_converter();
         let result = converter.convert_html("   \n\t  ");
         assert!(result.is_err());
     }
 
     #[test]
     fn test_convert_basic_html_success() {
-        let converter = HtmlConverter::new();
+        let converter = create_test_converter();
         let html = "<p>Hello, world!</p>";
         let result = converter.convert_html(html);
         assert!(result.is_ok());
@@ -322,11 +407,11 @@ mod tests {
         fn test_html_converter_with_full_config() {
             // Test `with_config` method (covers constructor path)
             let http_config = HttpConfig {
-                timeout: Duration::from_secs(30),
+                timeout: Duration::from_secs(HTTP_TIMEOUT_SECS),
                 user_agent: "test-agent".to_string(),
-                max_retries: 3,
-                retry_delay: Duration::from_secs(1),
-                max_redirects: 10,
+                max_retries: MAX_RETRY_ATTEMPTS,
+                retry_delay: Duration::from_secs(HTTP_RETRY_DELAY_SECS),
+                max_redirects: MAX_REDIRECTS,
             };
             let auth_config = AuthConfig {
                 github_token: None,
@@ -336,12 +421,12 @@ mod tests {
             let client = HttpClient::with_config(&http_config, &auth_config);
 
             let html_config = HtmlConverterConfig {
-                max_line_width: 100,
+                max_line_width: TEST_LINE_WIDTH,
                 remove_scripts_styles: true,
                 remove_navigation: false,
                 remove_sidebars: true,
                 remove_ads: false,
-                max_blank_lines: 3,
+                max_blank_lines: MAX_BLANK_LINES,
             };
 
             let output_config = OutputConfig {
@@ -351,22 +436,22 @@ mod tests {
                     "custom_value".to_string(),
                 )],
                 normalize_whitespace: true,
-                max_consecutive_blank_lines: 2,
+                max_consecutive_blank_lines: MAX_CONSECUTIVE_BLANK_LINES,
             };
 
             let converter =
                 HtmlConverter::with_config(client, html_config.clone(), output_config.clone());
 
-            assert_eq!(converter.config.max_line_width, 100);
+            assert_eq!(converter.config.max_line_width, TEST_LINE_WIDTH);
             assert!(!converter.config.remove_navigation);
             assert!(!converter.config.remove_ads);
-            assert_eq!(converter.config.max_blank_lines, 3);
+            assert_eq!(converter.config.max_blank_lines, MAX_BLANK_LINES);
             assert_eq!(converter.output_config.custom_frontmatter_fields.len(), 1);
         }
 
         #[test]
         fn test_extract_title_with_title_tag() {
-            let converter = HtmlConverter::new();
+            let converter = create_test_converter();
             let html = "<html><head><title>Test Page Title</title></head><body><p>Content</p></body></html>";
 
             let title = converter.extract_title(html);
@@ -376,7 +461,7 @@ mod tests {
 
         #[test]
         fn test_extract_title_no_title_tag() {
-            let converter = HtmlConverter::new();
+            let converter = create_test_converter();
             let html = "<html><head></head><body><p>Content without title</p></body></html>";
 
             let title = converter.extract_title(html);
@@ -385,7 +470,7 @@ mod tests {
 
         #[test]
         fn test_extract_title_malformed_tag() {
-            let converter = HtmlConverter::new();
+            let converter = create_test_converter();
             let html = "<html><head><title>Incomplete title tag";
 
             let title = converter.extract_title(html);
@@ -394,7 +479,7 @@ mod tests {
 
         #[test]
         fn test_extract_title_with_whitespace() {
-            let converter = HtmlConverter::new();
+            let converter = create_test_converter();
             let html = "<title>   Trimmed Title   </title>";
 
             let title = converter.extract_title(html);
@@ -405,32 +490,20 @@ mod tests {
         #[tokio::test]
         async fn test_converter_async_with_frontmatter() {
             // Test the async convert method with frontmatter enabled
-            let mock_server = MockServer::start().await;
-
             let html_content = r#"<html><head><title>Test Document</title></head><body><h1>Main Heading</h1><p>This is test content.</p></body></html>"#;
 
-            Mock::given(method("GET"))
-                .and(path("/test-page"))
-                .respond_with(ResponseTemplate::new(200).set_body_string(html_content))
-                .mount(&mock_server)
-                .await;
-
-            // Create converter with frontmatter enabled
-            let mut output_config = OutputConfig::default();
-            output_config.include_frontmatter = true;
-            output_config.custom_frontmatter_fields = vec![
+            let custom_fields = vec![
                 ("author".to_string(), "test-author".to_string()),
                 ("category".to_string(), "test-category".to_string()),
             ];
 
-            let converter = HtmlConverter::with_config(
-                HttpClient::new(),
-                HtmlConverterConfig::default(),
-                output_config,
-            );
-
-            let url = format!("{}/test-page", mock_server.uri());
-            let result = converter.convert(&url).await;
+            let result = test_converter_with_frontmatter_setting(
+                true,
+                html_content,
+                "/test-page",
+                custom_fields,
+            )
+            .await;
 
             assert!(result.is_ok());
             let markdown = result.unwrap();
@@ -452,28 +525,15 @@ mod tests {
         #[tokio::test]
         async fn test_converter_async_without_frontmatter() {
             // Test the async convert method with frontmatter disabled
-            let mock_server = MockServer::start().await;
-
             let html_content = "<h1>Simple Test</h1><p>Basic content.</p>";
 
-            Mock::given(method("GET"))
-                .and(path("/simple-page"))
-                .respond_with(ResponseTemplate::new(200).set_body_string(html_content))
-                .mount(&mock_server)
-                .await;
-
-            // Create converter with frontmatter disabled
-            let mut output_config = OutputConfig::default();
-            output_config.include_frontmatter = false;
-
-            let converter = HtmlConverter::with_config(
-                HttpClient::new(),
-                HtmlConverterConfig::default(),
-                output_config,
-            );
-
-            let url = format!("{}/simple-page", mock_server.uri());
-            let result = converter.convert(&url).await;
+            let result = test_converter_with_frontmatter_setting(
+                false,
+                html_content,
+                "/simple-page",
+                vec![],
+            )
+            .await;
 
             assert!(result.is_ok());
             let markdown = result.unwrap();
@@ -492,16 +552,9 @@ mod tests {
         #[tokio::test]
         async fn test_converter_async_empty_html_response() {
             // Test handling of empty HTML response from server
-            let mock_server = MockServer::start().await;
+            let (_mock_server, url) = setup_mock_server_with_html("/empty-page", "").await;
 
-            Mock::given(method("GET"))
-                .and(path("/empty-page"))
-                .respond_with(ResponseTemplate::new(200).set_body_string(""))
-                .mount(&mock_server)
-                .await;
-
-            let converter = HtmlConverter::new();
-            let url = format!("{}/empty-page", mock_server.uri());
+            let converter = create_test_converter();
             let result = converter.convert(&url).await;
 
             // Should fail because empty HTML content is invalid
@@ -519,18 +572,12 @@ mod tests {
         #[tokio::test]
         async fn test_converter_async_whitespace_html_to_minimal_content() {
             // Test handling of mostly empty HTML that results in empty markdown
-            let mock_server = MockServer::start().await;
-
             let minimal_html = "<html><body>  </body></html>";
 
-            Mock::given(method("GET"))
-                .and(path("/minimal-page"))
-                .respond_with(ResponseTemplate::new(200).set_body_string(minimal_html))
-                .mount(&mock_server)
-                .await;
+            let (_mock_server, url) =
+                setup_mock_server_with_html("/minimal-page", minimal_html).await;
 
-            let converter = HtmlConverter::new();
-            let url = format!("{}/minimal-page", mock_server.uri());
+            let converter = create_test_converter();
             let result = converter.convert(&url).await;
 
             assert!(result.is_ok());
@@ -543,14 +590,14 @@ mod tests {
 
         #[test]
         fn test_converter_name() {
-            let converter = HtmlConverter::new();
+            let converter = create_test_converter();
             assert_eq!(converter.name(), "HTML");
         }
 
         #[test]
         fn test_html_to_markdown_direct() {
             // Test the html_to_markdown method directly
-            let converter = HtmlConverter::new();
+            let converter = create_test_converter();
             let html = "<h1>Direct Test</h1><p>Testing html_to_markdown method.</p>";
 
             let result = converter.html_to_markdown(html);
@@ -564,19 +611,15 @@ mod tests {
         #[tokio::test]
         async fn test_converter_async_no_title_tag() {
             // Test async conversion with HTML that has no title tag
-            let mock_server = MockServer::start().await;
-
             let html_content = "<h1>No Title Tag</h1><p>Content without title tag.</p>";
 
-            Mock::given(method("GET"))
-                .and(path("/no-title"))
-                .respond_with(ResponseTemplate::new(200).set_body_string(html_content))
-                .mount(&mock_server)
-                .await;
+            let (_mock_server, url) = setup_mock_server_with_html("/no-title", html_content).await;
 
             // Create converter with frontmatter enabled to test title extraction path
-            let mut output_config = OutputConfig::default();
-            output_config.include_frontmatter = true;
+            let output_config = OutputConfig {
+                include_frontmatter: true,
+                ..Default::default()
+            };
 
             let converter = HtmlConverter::with_config(
                 HttpClient::new(),
@@ -584,7 +627,6 @@ mod tests {
                 output_config,
             );
 
-            let url = format!("{}/no-title", mock_server.uri());
             let result = converter.convert(&url).await;
 
             assert!(result.is_ok());
@@ -602,7 +644,7 @@ mod tests {
         fn test_convert_html_with_custom_line_width() {
             // Test HTML conversion with custom line width configuration
             let config = HtmlConverterConfig {
-                max_line_width: 50,
+                max_line_width: NARROW_LINE_WIDTH,
                 ..Default::default()
             };
 

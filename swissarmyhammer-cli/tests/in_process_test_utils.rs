@@ -240,10 +240,7 @@ fn is_prompt_command(args: &[&str]) -> bool {
 }
 
 /// Determine working directory based on command type
-fn determine_working_dir<'a>(
-    args: &[&str],
-    default_dir: &'a std::path::Path,
-) -> std::path::PathBuf {
+fn determine_working_dir(args: &[&str], default_dir: &std::path::Path) -> std::path::PathBuf {
     if is_prompt_command(args) {
         let repo_root = env!("CARGO_MANIFEST_DIR")
             .replace("/swissarmyhammer-cli", "")

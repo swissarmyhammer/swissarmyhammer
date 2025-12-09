@@ -8,11 +8,23 @@ use markdowndown::converters::{
 use markdowndown::types::UrlType;
 use std::time::Duration;
 
+/// Test HTTP client retry delay in milliseconds
+const TEST_RETRY_DELAY_MS: u64 = 10;
+
+/// Test HTTP client timeout in seconds
+const TEST_TIMEOUT_SECS: u64 = 2;
+
+/// Test converter registry timeout in seconds
+const TEST_REGISTRY_TIMEOUT_SECS: u64 = 10;
+
+/// Test converter registry max retries
+const TEST_MAX_RETRIES: u32 = 2;
+
 /// Create a test HTTP client with fast settings for testing
 pub fn create_test_http_client() -> HttpClient {
     let config = Config::builder()
-        .retry_delay(Duration::from_millis(10))
-        .timeout(Duration::from_secs(2))
+        .retry_delay(Duration::from_millis(TEST_RETRY_DELAY_MS))
+        .timeout(Duration::from_secs(TEST_TIMEOUT_SECS))
         .build();
     HttpClient::with_config(&config.http, &config.auth)
 }
@@ -41,7 +53,10 @@ pub fn create_converter_registry() -> ConverterRegistry {
 
 /// Create a configured converter registry for testing
 pub fn create_configured_converter_registry() -> ConverterRegistry {
-    let config = Config::builder().timeout_seconds(10).max_retries(2).build();
+    let config = Config::builder()
+        .timeout_seconds(TEST_REGISTRY_TIMEOUT_SECS)
+        .max_retries(TEST_MAX_RETRIES)
+        .build();
     let http_client = HttpClient::with_config(&config.http, &config.auth);
     let html_config = HtmlConverterConfig::default();
     let output_config = markdowndown::config::OutputConfig::default();

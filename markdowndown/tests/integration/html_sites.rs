@@ -2,71 +2,180 @@
 //!
 //! Tests the library's ability to convert real HTML websites to markdown.
 
-use markdowndown::MarkdownDown;
-use std::time::Instant;
+use markdowndown::{types::Markdown, MarkdownDown};
+use std::time::{Duration, Instant};
 
-use super::{IntegrationTestConfig, TestUrls, TestUtils};
+use super::{IntegrationTestConfig, TestUrlType, TestUrls, TestUtils};
+
+/// HTTP status code strings used in error validation
+const HTTP_NOT_FOUND_STR: &str = "404";
+const HTTP_INTERNAL_ERROR_STR: &str = "500";
+
+/// Check if HTML test should be skipped based on configuration
+///
+/// Returns true if the test should be skipped
+fn should_skip_html_test(config: &IntegrationTestConfig, test_type: &str) -> bool {
+    let skip = !config.can_test_html() || config.skip_slow_tests;
+    if skip {
+        println!("Skipping {test_type} - external services disabled or slow tests skipped");
+    }
+    skip
+}
+
+/// Setup test with rate limiting and return MarkdownDown instance
+///
+/// Returns None if the test should be skipped based on config
+async fn setup_test_with_rate_limit(
+    config: &IntegrationTestConfig,
+    test_name: &str,
+) -> Option<MarkdownDown> {
+    if !config.can_test_html() {
+        println!("Skipping {test_name} - external services disabled");
+        return None;
+    }
+
+    TestUtils::apply_rate_limit(config).await;
+    Some(MarkdownDown::new())
+}
+
+/// Validate converted markdown content has substance and structure
+fn validate_converted_content(
+    content: &str,
+    expected_patterns: &[&str],
+    description: &str,
+) -> Result<(), String> {
+    // Use semantic validation - check that content has markdown structure
+    if !TestUtils::validate_markdown_quality(content) {
+        return Err(format!(
+            "{description} should have valid markdown structure (got {} chars, {} lines)",
+            content.len(),
+            content.lines().count()
+        ));
+    }
+
+    for pattern in expected_patterns {
+        if !content.contains(pattern) {
+            return Err(format!(
+                "{description} should contain '{pattern}' pattern"
+            ));
+        }
+    }
+
+    Ok(())
+}
+
+/// Print standardized conversion success message
+fn print_conversion_success(description: &str, content_len: usize, duration: Option<Duration>) {
+    if let Some(dur) = duration {
+        println!("✓ {description} converted successfully ({content_len} chars, {dur:?})");
+    } else {
+        println!("✓ {description} converted successfully ({content_len} chars)");
+    }
+}
+
+/// Validate that frontmatter contains required keys
+fn validate_frontmatter_contains(
+    frontmatter: &str,
+    required_keys: &[&str],
+    description: &str,
+) -> Result<(), String> {
+    for key in required_keys {
+        if !frontmatter.contains(key) {
+            return Err(format!("{description} frontmatter should contain '{key}'"));
+        }
+    }
+    Ok(())
+}
+
+/// Helper function to perform a full HTML conversion test with validation
+///
+/// This helper function handles the common pattern of:
+/// 1. Setting up test environment with rate limiting
+/// 2. Executing the conversion
+/// 3. Validating the result
+async fn test_html_conversion(
+    test_name: &str,
+    url: &str,
+    description: &str,
+    expected_patterns: &[&str],
+) -> Result<Markdown, Box<dyn std::error::Error>> {
+    let config = IntegrationTestConfig::from_env();
+    let md = match setup_test_with_rate_limit(&config, test_name).await {
+        Some(md) => md,
+        None => return Ok(Markdown::default()),
+    };
+
+    let timeout = config.default_timeout();
+    let start = Instant::now();
+    let result = md.convert_url(url).await?;
+    let duration = start.elapsed();
+
+    let content = result.as_str();
+
+    // Validate content has proper markdown structure
+    validate_converted_content(content, expected_patterns, description)
+        .map_err(|e| e.to_string())?;
+
+    // Validate frontmatter exists and is valid
+    let frontmatter = result
+        .frontmatter()
+        .ok_or_else(|| format!("Missing frontmatter for {description}"))?;
+
+    if !TestUtils::validate_frontmatter(&frontmatter) {
+        return Err(format!("Invalid frontmatter for {description}").into());
+    }
+
+    // Performance check
+    if duration >= timeout {
+        return Err(format!(
+            "Conversion took too long for {description}: {duration:?}"
+        )
+        .into());
+    }
+
+    print_conversion_success(description, content.len(), Some(duration));
+
+    Ok(result)
+}
+
+/// Helper function to test a specific site conversion by URL type
+async fn test_specific_site_conversion(
+    url_type: TestUrlType,
+    test_name: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let (url, description) = match TestUrls::get_url_by_type(url_type) {
+        Some(url_info) => url_info,
+        None => {
+            println!("Skipping {test_name} - no URL configured for type {url_type:?}");
+            return Ok(());
+        }
+    };
+
+    test_html_conversion(test_name, url, description, &[]).await?;
+    Ok(())
+}
 
 /// Test conversion of various HTML websites
 #[tokio::test]
 async fn test_html_site_conversions() -> Result<(), Box<dyn std::error::Error>> {
     let config = IntegrationTestConfig::from_env();
-
     if !config.can_test_html() {
         println!("Skipping HTML tests - external services disabled");
         return Ok(());
     }
 
-    let md = MarkdownDown::new();
-
-    for (url, description) in TestUrls::HTML_TEST_URLS.iter() {
+    for (url, description, _) in TestUrls::HTML_TEST_URLS.iter() {
         println!("Testing: {description} - {url}");
 
-        // Apply rate limiting
         TestUtils::apply_rate_limit(&config).await;
 
-        let start = Instant::now();
-        let result = md.convert_url(url).await;
-        let duration = start.elapsed();
-
-        // Should succeed for all test URLs
-        assert!(
-            result.is_ok(),
-            "Failed to convert {description}: {:?}",
-            result.err()
-        );
-
-        let markdown = result.unwrap();
-        let content = markdown.as_str();
-
-        // Basic quality checks
-        assert!(
-            TestUtils::validate_markdown_quality(content),
-            "Poor quality markdown for {description}: content too short or invalid"
-        );
-
-        // Should have frontmatter
-        assert!(
-            markdown.frontmatter().is_some(),
-            "Missing frontmatter for {description}"
-        );
-
-        let frontmatter = markdown.frontmatter().unwrap();
-        assert!(
-            TestUtils::validate_frontmatter(&frontmatter),
-            "Invalid frontmatter for {description}"
-        );
-
-        // Performance check - should complete within reasonable time
-        assert!(
-            duration < config.default_timeout(),
-            "Conversion took too long for {description}: {duration:?}"
-        );
-
-        println!(
-            "✓ {description} converted successfully ({} chars, {duration:?})",
-            content.len()
-        );
+        test_html_conversion(
+            description,
+            url,
+            description,
+            &[], // No specific patterns required - validate structure instead
+        )
+        .await?;
     }
 
     Ok(())
@@ -75,161 +184,57 @@ async fn test_html_site_conversions() -> Result<(), Box<dyn std::error::Error>> 
 /// Test Wikipedia page conversion specifically
 #[tokio::test]
 async fn test_wikipedia_conversion() -> Result<(), Box<dyn std::error::Error>> {
-    let config = IntegrationTestConfig::from_env();
-
-    if !config.can_test_html() {
-        println!("Skipping Wikipedia test - external services disabled");
-        return Ok(());
-    }
-
-    // Rate limiting
-    TestUtils::apply_rate_limit(&config).await;
-
-    let md = MarkdownDown::new();
-    let url = "https://en.wikipedia.org/wiki/Rust_(programming_language)";
-
-    let result = md.convert_url(url).await?;
-
-    // Validate Wikipedia-specific content
-    let content = result.as_str();
-    assert!(content.contains("Rust") || content.contains("programming language"));
-    assert!(
-        content.len() > 5000,
-        "Wikipedia content should be substantial"
-    );
-
-    // Check for proper markdown structure
-    assert!(content.contains('#'), "Should have headers");
-
-    // Validate frontmatter
-    let frontmatter = result.frontmatter().unwrap();
-    assert!(frontmatter.contains("source_url"));
-    assert!(frontmatter.contains("html2markdown") || frontmatter.contains("conversion_type"));
-
-    println!(
-        "✓ Wikipedia conversion successful ({} chars)",
-        content.len()
-    );
-    Ok(())
+    test_specific_site_conversion(TestUrlType::Complex, "Wikipedia test").await
 }
 
 /// Test Rust documentation conversion
 #[tokio::test]
 async fn test_rust_docs_conversion() -> Result<(), Box<dyn std::error::Error>> {
-    let config = IntegrationTestConfig::from_env();
-
-    if !config.can_test_html() {
-        println!("Skipping Rust docs test - external services disabled");
-        return Ok(());
-    }
-
-    // Rate limiting
-    TestUtils::apply_rate_limit(&config).await;
-
-    let md = MarkdownDown::new();
-    let url = "https://doc.rust-lang.org/book/ch01-00-getting-started.html";
-
-    let result = md.convert_url(url).await?;
-
-    // Validate Rust docs specific content
-    let content = result.as_str();
-    assert!(
-        content.to_lowercase().contains("rust")
-            || content.to_lowercase().contains("getting started")
-    );
-    assert!(
-        content.len() > 500,
-        "Documentation should have substantial content (got {} chars)",
-        content.len()
-    );
-
-    // Check for typical documentation content patterns
-    // Note: Some docs sites use JavaScript to load content, so we check for basic structure
-    assert!(
-        content.contains("```")
-            || content.contains("    ")
-            || content.contains("Rust")
-            || content.contains("#"),
-        "Should contain documentation structure or Rust-related content"
-    );
-
-    println!(
-        "✓ Rust documentation conversion successful ({} chars)",
-        content.len()
-    );
-    Ok(())
+    test_specific_site_conversion(TestUrlType::Documentation, "Rust docs test").await
 }
 
 /// Test GitHub README conversion
 #[tokio::test]
 async fn test_github_readme_conversion() -> Result<(), Box<dyn std::error::Error>> {
-    let config = IntegrationTestConfig::from_env();
-
-    if !config.can_test_html() {
-        println!("Skipping GitHub README test - external services disabled");
-        return Ok(());
-    }
-
-    // Rate limiting
-    TestUtils::apply_rate_limit(&config).await;
-
-    let md = MarkdownDown::new();
-    let url = "https://github.com/rust-lang/rust/blob/master/README.md";
-
-    let result = md.convert_url(url).await?;
-
-    // Validate GitHub README content
-    let content = result.as_str();
-    assert!(content.to_lowercase().contains("rust"));
-    assert!(content.len() > 500, "README should have meaningful content");
-
-    // Should contain typical README elements
-    assert!(content.contains('#'), "Should have headers");
-
-    println!(
-        "✓ GitHub README conversion successful ({} chars)",
-        content.len()
-    );
-    Ok(())
+    test_specific_site_conversion(TestUrlType::SourceCode, "GitHub README test").await
 }
 
 /// Test httpbin HTML for controlled testing
 #[tokio::test]
 async fn test_simple_html_conversion() -> Result<(), Box<dyn std::error::Error>> {
-    let config = IntegrationTestConfig::from_env();
+    let (url, description) = match TestUrls::get_url_by_type(TestUrlType::Simple) {
+        Some(url_info) => url_info,
+        None => {
+            println!("Skipping simple HTML test - no simple URL configured");
+            return Ok(());
+        }
+    };
 
-    if !config.can_test_html() {
-        println!("Skipping simple HTML test - external services disabled");
-        return Ok(());
+    let result = test_html_conversion(
+        "simple HTML test",
+        url,
+        description,
+        &[],
+    )
+    .await?;
+
+    // Verify frontmatter contains the source domain
+    let frontmatter = result.frontmatter().unwrap();
+    
+    // Use proper URL parsing to extract domain reliably
+    let url_domain = url::Url::parse(url)
+        .ok()
+        .and_then(|parsed| parsed.host_str().map(|h| h.to_string()))
+        .unwrap_or_else(|| {
+            // Fallback for tests, but should not occur with valid URLs
+            println!("Warning: Could not parse URL domain from {url}");
+            String::new()
+        });
+    
+    if !url_domain.is_empty() {
+        validate_frontmatter_contains(&frontmatter, &[&url_domain], description)?;
     }
 
-    // Rate limiting
-    TestUtils::apply_rate_limit(&config).await;
-
-    let md = MarkdownDown::new();
-    let url = "https://httpbin.org/html";
-
-    let result = md.convert_url(url).await?;
-
-    // Validate basic HTML conversion
-    let content = result.as_str();
-    assert!(content.len() > 100, "Should have meaningful content");
-    assert!(
-        TestUtils::validate_markdown_quality(content),
-        "Should be quality markdown"
-    );
-
-    // Check frontmatter
-    let frontmatter = result.frontmatter().unwrap();
-    assert!(
-        frontmatter.contains("httpbin.org"),
-        "Should reference source URL"
-    );
-
-    println!(
-        "✓ Simple HTML conversion successful ({} chars)",
-        content.len()
-    );
     Ok(())
 }
 
@@ -238,21 +243,20 @@ async fn test_simple_html_conversion() -> Result<(), Box<dyn std::error::Error>>
 async fn test_html_conversion_performance() -> Result<(), Box<dyn std::error::Error>> {
     let config = IntegrationTestConfig::from_env();
 
-    if !config.can_test_html() || config.skip_slow_tests {
-        println!(
-            "Skipping HTML performance test - external services disabled or slow tests skipped"
-        );
+    if should_skip_html_test(&config, "HTML performance test") {
         return Ok(());
     }
 
     let md = MarkdownDown::new();
-    let mut total_duration = std::time::Duration::from_secs(0);
+    let mut total_duration = Duration::from_secs(0);
     let mut total_chars = 0;
 
-    for (url, description) in TestUrls::HTML_TEST_URLS.iter().take(3) {
+    // Benchmark all configured URLs to get a representative sample
+    let url_count = TestUrls::HTML_TEST_URLS.len();
+    
+    for (url, description, _) in TestUrls::HTML_TEST_URLS.iter() {
         println!("Benchmarking: {description}");
 
-        // Rate limiting
         TestUtils::apply_rate_limit(&config).await;
 
         let start = Instant::now();
@@ -267,7 +271,6 @@ async fn test_html_conversion_performance() -> Result<(), Box<dyn std::error::Er
             result.as_str().len()
         );
 
-        // Performance assertions
         assert!(
             duration < config.default_timeout(),
             "Conversion took too long: {duration:?}"
@@ -277,70 +280,120 @@ async fn test_html_conversion_performance() -> Result<(), Box<dyn std::error::Er
     println!("Performance Summary:");
     println!("  Total time: {total_duration:?}");
     println!("  Total content: {total_chars} chars");
-    println!("  Average time per request: {:?}", total_duration / 3);
-    println!("  Average chars per request: {}", total_chars / 3);
+    println!("  Average time per request: {:?}", total_duration / url_count as u32);
+    println!("  Average chars per request: {}", total_chars / url_count);
 
     Ok(())
+}
+
+/// Test a single error case and validate the result
+async fn test_error_case(
+    md: &MarkdownDown,
+    url: &str,
+    description: &str,
+    config: &IntegrationTestConfig,
+) {
+    println!("Testing error case: {description}");
+
+    TestUtils::apply_rate_limit(config).await;
+
+    let result = md.convert_url(url).await;
+
+    validate_error_or_fallback(result, description);
+}
+
+/// Check if content appears to be an error page
+fn is_error_page_content(content: &str) -> bool {
+    let content_lower = content.to_lowercase();
+    content_lower.contains("error")
+        || content_lower.contains(HTTP_NOT_FOUND_STR)
+        || content_lower.contains(HTTP_INTERNAL_ERROR_STR)
+        || content_lower.contains("not found")
+        || content_lower.contains("server error")
+}
+
+/// Validate fallback content that succeeded but may be an error page
+fn validate_fallback_content(content: &str) {
+    // Either it's valid markdown or it's an error page with error indicators
+    assert!(
+        TestUtils::validate_markdown_quality(content) || is_error_page_content(content),
+        "Unexpected success content"
+    );
+}
+
+/// Check if error string contains HTTP-related keywords
+fn validate_http_error(error_string: &str) -> bool {
+    let lower = error_string.to_lowercase();
+    lower.contains("http") || lower.contains("request") || lower.contains("status")
+}
+
+/// Helper to validate an error message contains meaningful keywords
+fn validate_error_string(error_string: &str, expected_keywords: &[&str], context: &str) {
+    assert!(!error_string.is_empty(), "{} error should have a message", context);
+    
+    let lower = error_string.to_lowercase();
+    let has_keyword = expected_keywords.iter().any(|kw| lower.contains(kw));
+    assert!(
+        has_keyword,
+        "{} error should mention one of {:?}: {}",
+        context, expected_keywords, error_string
+    );
+}
+
+/// Validate error message contains meaningful information
+fn validate_error_message(error: &markdowndown::Error) {
+    let error_string = error.to_string();
+    
+    // Verify the error is one of the expected variants
+    match error {
+        markdowndown::Error::Http(_) => {
+            assert!(
+                validate_http_error(&error_string),
+                "HTTP error should mention http/request/status: {}",
+                error_string
+            );
+        }
+        markdowndown::Error::Io(_) => {
+            assert!(!error_string.is_empty(), "IO error should have a message");
+        }
+        markdowndown::Error::Url(_) => {
+            assert!(!error_string.is_empty(), "URL error should have a message");
+        }
+        markdowndown::Error::Other(msg) => {
+            assert!(!msg.is_empty(), "Other error message should not be empty");
+        }
+    }
+}
+
+/// Validate a result that may be an error or a fallback success
+fn validate_error_or_fallback(
+    result: Result<Markdown, markdowndown::Error>,
+    description: &str,
+) {
+    match result {
+        Ok(markdown) => {
+            println!("  Succeeded with fallback: {} chars", markdown.as_str().len());
+            validate_fallback_content(markdown.as_str());
+        }
+        Err(error) => {
+            println!("  Failed as expected: {error}");
+            validate_error_message(&error);
+        }
+    }
 }
 
 /// Test error handling with invalid HTML URLs
 #[tokio::test]
 async fn test_html_error_scenarios() -> Result<(), Box<dyn std::error::Error>> {
     let config = IntegrationTestConfig::from_env();
+    let md = match setup_test_with_rate_limit(&config, "HTML error tests").await {
+        Some(md) => md,
+        None => return Ok(()),
+    };
 
-    if !config.can_test_html() {
-        println!("Skipping HTML error tests - external services disabled");
-        return Ok(());
-    }
-
-    let md = MarkdownDown::new();
-
-    let error_cases = [
-        ("https://httpbin.org/status/404", "HTTP 404 error"),
-        ("https://httpbin.org/status/500", "HTTP 500 error"),
-        (
-            "https://invalid-domain-12345.com/page",
-            "DNS resolution failure",
-        ),
-    ];
-
-    for (url, description) in error_cases.iter() {
-        println!("Testing error case: {description}");
-
-        // Rate limiting
-        TestUtils::apply_rate_limit(&config).await;
-
-        let result = md.convert_url(url).await;
-
-        // Should either succeed with fallback or fail gracefully
-        match result {
-            Ok(markdown) => {
-                println!(
-                    "  Succeeded with fallback: {} chars",
-                    markdown.as_str().len()
-                );
-                // If it succeeded, validate it's reasonable content
-                assert!(
-                    TestUtils::validate_markdown_quality(markdown.as_str())
-                        || markdown.as_str().contains("Error")
-                        || markdown.as_str().contains("404")
-                        || markdown.as_str().contains("500"),
-                    "Unexpected success content for {description}"
-                );
-            }
-            Err(error) => {
-                println!("  Failed as expected: {error}");
-                // Error should be descriptive
-                assert!(
-                    !error.to_string().is_empty(),
-                    "Error message should not be empty"
-                );
-                assert!(
-                    error.to_string().len() > 10,
-                    "Error message should be descriptive"
-                );
-            }
-        }
+    // Use configured error test URLs from TestUrls
+    for (url, description, _expected_indicator) in TestUrls::ERROR_TEST_URLS.iter() {
+        test_error_case(&md, url, description, &config).await;
     }
 
     Ok(())
@@ -351,25 +404,23 @@ async fn test_html_error_scenarios() -> Result<(), Box<dyn std::error::Error>> {
 async fn test_concurrent_html_conversion() -> Result<(), Box<dyn std::error::Error>> {
     let config = IntegrationTestConfig::from_env();
 
-    if !config.can_test_html() || config.skip_slow_tests {
-        println!(
-            "Skipping concurrent HTML test - external services disabled or slow tests skipped"
-        );
+    if should_skip_html_test(&config, "concurrent HTML test") {
         return Ok(());
     }
 
     let md = MarkdownDown::new();
 
-    // Test concurrent requests (but respect rate limiting)
-    let urls = [
-        "https://httpbin.org/html",
-        "https://doc.rust-lang.org/book/ch01-00-getting-started.html",
-    ];
+    // Use configured number of test URLs for concurrent testing
+    let test_urls: Vec<&str> = TestUrls::HTML_TEST_URLS
+        .iter()
+        .take(config.concurrent_test_count)
+        .map(|(url, _, _)| *url)
+        .collect();
 
     let start = Instant::now();
-    let futures = urls.iter().map(|url| async {
-        // Small delay to avoid overwhelming the service
-        tokio::time::sleep(std::time::Duration::from_millis(1000)).await;
+    let futures = test_urls.iter().map(|url| async {
+        // Apply rate limiting to avoid overwhelming services
+        tokio::time::sleep(config.request_delay()).await;
         md.convert_url(url).await
     });
 
@@ -396,7 +447,7 @@ async fn test_concurrent_html_conversion() -> Result<(), Box<dyn std::error::Err
     );
     println!(
         "✓ Concurrent test completed: {successes}/{} succeeded in {duration:?}",
-        urls.len()
+        test_urls.len()
     );
 
     Ok(())

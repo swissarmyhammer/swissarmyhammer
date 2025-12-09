@@ -80,36 +80,47 @@ impl<'a> HtmlPreprocessor<'a> {
         let mut result = html.to_string();
 
         while let Some(class_pos) = result.find(&pattern) {
-            // Find the start of the tag containing this class
-            let tag_start = result[..class_pos].rfind('<').unwrap_or(0);
-
-            // Find the end of the opening tag
-            if let Some(tag_end) = result[tag_start..].find('>') {
-                let tag_end_pos = tag_start + tag_end + 1;
-
-                // Extract tag name to find closing tag
-                let tag_content = &result[tag_start..tag_end_pos];
-                if let Some(space_pos) = tag_content[1..].find(' ') {
-                    let tag_name = &tag_content[1..space_pos + 1];
-                    let closing_tag = format!("</{tag_name}>");
-
-                    if let Some(close_pos) = result[tag_end_pos..].find(&closing_tag) {
-                        let close_end = tag_end_pos + close_pos + closing_tag.len();
-                        result.replace_range(tag_start..close_end, "");
-                    } else {
-                        // Just remove the opening tag if no closing tag
-                        result.replace_range(tag_start..tag_end_pos, "");
-                    }
-                } else {
-                    // Remove just the opening tag
-                    result.replace_range(tag_start..tag_end_pos, "");
-                }
+            if let Some((start, end)) = self.find_and_remove_tag(&result, class_pos) {
+                result.replace_range(start..end, "");
             } else {
                 break;
             }
         }
 
         result
+    }
+
+    /// Finds the boundaries of a tag containing the class at the given position.
+    /// Returns (tag_start, tag_end) or None if the tag cannot be found.
+    fn find_and_remove_tag(&self, html: &str, class_pos: usize) -> Option<(usize, usize)> {
+        let tag_start = html[..class_pos].rfind('<')?;
+        let tag_end_offset = html[tag_start..].find('>')?;
+        let tag_end_pos = tag_start + tag_end_offset + 1;
+
+        let tag_name = self.extract_tag_name(&html[tag_start..tag_end_pos])?;
+        let closing_tag = format!("</{tag_name}>");
+
+        if let Some(close_offset) = html[tag_end_pos..].find(&closing_tag) {
+            let close_end = tag_end_pos + close_offset + closing_tag.len();
+            Some((tag_start, close_end))
+        } else {
+            Some((tag_start, tag_end_pos))
+        }
+    }
+
+    /// Extracts the tag name from the opening tag content.
+    /// Returns None if the tag name cannot be extracted.
+    fn extract_tag_name(&self, tag_content: &str) -> Option<String> {
+        let content = tag_content.strip_prefix('<')?.trim();
+        let space_pos = content.find(' ').unwrap_or(content.len());
+        let tag_name = &content[..space_pos];
+        let tag_name = tag_name.trim_end_matches('>');
+
+        if tag_name.is_empty() {
+            None
+        } else {
+            Some(tag_name.to_string())
+        }
     }
 
     /// Removes script and style tags and their content.
@@ -119,43 +130,39 @@ impl<'a> HtmlPreprocessor<'a> {
         result
     }
 
-    /// Removes navigation elements.
-    fn remove_navigation_elements(&self, html: &str) -> String {
-        let mut result = self.remove_elements_by_tag(html, "nav");
+    /// Generic helper to remove elements by optional tag name and list of class names.
+    fn remove_elements_by_tag_and_classes(
+        &self,
+        html: &str,
+        tag: Option<&str>,
+        classes: &[&str],
+    ) -> String {
+        let mut result = if let Some(tag_name) = tag {
+            self.remove_elements_by_tag(html, tag_name)
+        } else {
+            html.to_string()
+        };
 
-        // Remove elements with nav-related classes
-        let nav_classes = ["nav", "navigation"];
-        for class in nav_classes {
+        for class in classes {
             result = self.remove_elements_by_class(&result, class);
         }
 
         result
+    }
+
+    /// Removes navigation elements.
+    fn remove_navigation_elements(&self, html: &str) -> String {
+        self.remove_elements_by_tag_and_classes(html, Some("nav"), &["nav", "navigation"])
     }
 
     /// Removes sidebar elements.
     fn remove_sidebar_elements(&self, html: &str) -> String {
-        let mut result = self.remove_elements_by_tag(html, "aside");
-
-        // Remove elements with sidebar-related classes
-        let sidebar_classes = ["sidebar", "side-bar"];
-        for class in sidebar_classes {
-            result = self.remove_elements_by_class(&result, class);
-        }
-
-        result
+        self.remove_elements_by_tag_and_classes(html, Some("aside"), &["sidebar", "side-bar"])
     }
 
     /// Removes advertisement elements.
     fn remove_advertisement_elements(&self, html: &str) -> String {
-        let mut result = html.to_string();
-
-        // Remove elements with advertisement-related classes
-        let ad_classes = ["ad", "ads", "advertisement"];
-        for class in ad_classes {
-            result = self.remove_elements_by_class(&result, class);
-        }
-
-        result
+        self.remove_elements_by_tag_and_classes(html, None, &["ad", "ads", "advertisement"])
     }
 }
 

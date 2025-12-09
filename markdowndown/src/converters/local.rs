@@ -26,6 +26,19 @@ impl LocalFileConverter {
         LocalFileConverter
     }
 
+    /// Helper method to create content errors with consistent context.
+    fn create_content_error(
+        &self,
+        kind: ContentErrorKind,
+        url: &str,
+        operation: &str,
+        info: impl Into<String>,
+    ) -> MarkdownError {
+        let context =
+            ErrorContext::new(url, operation, "LocalFileConverter").with_info(info.into());
+        MarkdownError::ContentError { kind, context }
+    }
+
     /// Converts a file path or file:// URL to a standard file path.
     ///
     /// # Arguments
@@ -36,19 +49,11 @@ impl LocalFileConverter {
     ///
     /// Returns the normalized file path as a string.
     fn normalize_path(&self, input: &str) -> String {
-        // Handle file:// URLs by stripping the protocol
-        if input.starts_with("file://") {
-            let path_part = input.strip_prefix("file://").unwrap();
-
-            // Handle file:///absolute/path case (three slashes for absolute paths)
-            if input.starts_with("file:///") {
-                format!("/{}", input.strip_prefix("file:///").unwrap()) // Remove "file:///" and keep the leading /
-            } else {
-                // Handle file://./relative or file://../relative
-                path_part.to_string()
-            }
+        if let Some(path_part) = input.strip_prefix("file:///") {
+            format!("/{path_part}")
+        } else if let Some(path_part) = input.strip_prefix("file://") {
+            path_part.to_string()
         } else {
-            // Regular file path - use as-is
             input.to_string()
         }
     }
@@ -59,22 +64,22 @@ impl LocalFileConverter {
 
         // Check if file exists
         if !path_obj.exists() {
-            let context = ErrorContext::new(path, "File validation", "LocalFileConverter")
-                .with_info("File does not exist");
-            return Err(MarkdownError::ContentError {
-                kind: ContentErrorKind::EmptyContent,
-                context,
-            });
+            return Err(self.create_content_error(
+                ContentErrorKind::EmptyContent,
+                path,
+                "File validation",
+                "File does not exist",
+            ));
         }
 
         // Check if it's a file (not a directory)
         if !path_obj.is_file() {
-            let context = ErrorContext::new(path, "File validation", "LocalFileConverter")
-                .with_info("Path is not a file");
-            return Err(MarkdownError::ContentError {
-                kind: ContentErrorKind::UnsupportedFormat,
-                context,
-            });
+            return Err(self.create_content_error(
+                ContentErrorKind::UnsupportedFormat,
+                path,
+                "File validation",
+                "Path is not a file",
+            ));
         }
 
         Ok(())
@@ -82,28 +87,13 @@ impl LocalFileConverter {
 
     /// Reads the file content as a UTF-8 string.
     async fn read_file_content(&self, path: &str) -> Result<String, MarkdownError> {
-        match fs::read_to_string(path).await {
-            Ok(content) => Ok(content),
-            Err(e) => {
-                let context = ErrorContext::new(path, "File reading", "LocalFileConverter")
-                    .with_info(format!("IO error: {e}"));
-
-                match e.kind() {
-                    std::io::ErrorKind::NotFound => Err(MarkdownError::ContentError {
-                        kind: ContentErrorKind::EmptyContent,
-                        context,
-                    }),
-                    std::io::ErrorKind::PermissionDenied => Err(MarkdownError::ContentError {
-                        kind: ContentErrorKind::ParsingFailed,
-                        context,
-                    }),
-                    _ => Err(MarkdownError::ContentError {
-                        kind: ContentErrorKind::ParsingFailed,
-                        context,
-                    }),
-                }
-            }
-        }
+        fs::read_to_string(path).await.map_err(|e| {
+            let kind = match e.kind() {
+                std::io::ErrorKind::NotFound => ContentErrorKind::EmptyContent,
+                _ => ContentErrorKind::ParsingFailed,
+            };
+            self.create_content_error(kind, path, "File reading", format!("IO error: {e}"))
+        })
     }
 }
 
@@ -137,24 +127,23 @@ impl super::Converter for LocalFileConverter {
 
         // Validate content is not empty
         if content.trim().is_empty() {
-            let context = ErrorContext::new(&file_path, "Content validation", "LocalFileConverter")
-                .with_info("File content is empty");
-            return Err(MarkdownError::ContentError {
-                kind: ContentErrorKind::EmptyContent,
-                context,
-            });
+            return Err(self.create_content_error(
+                ContentErrorKind::EmptyContent,
+                &file_path,
+                "Content validation",
+                "File content is empty",
+            ));
         }
 
         // Create validated Markdown instance
         debug!("Creating validated markdown instance");
         let markdown = Markdown::new(content).map_err(|e| {
-            let context =
-                ErrorContext::new(&file_path, "Markdown validation", "LocalFileConverter")
-                    .with_info(format!("Validation error: {e}"));
-            MarkdownError::ContentError {
-                kind: ContentErrorKind::ParsingFailed,
-                context,
-            }
+            self.create_content_error(
+                ContentErrorKind::ParsingFailed,
+                &file_path,
+                "Markdown validation",
+                format!("Validation error: {e}"),
+            )
         })?;
 
         info!(
@@ -175,6 +164,13 @@ mod tests {
     use crate::converters::converter::Converter;
     use std::io::Write;
     use tempfile::NamedTempFile;
+
+    /// No file permissions (used for testing permission denied scenarios)
+    const NO_PERMISSIONS: u32 = 0o000;
+    /// Standard read/write permissions (owner read/write, group/others read)
+    const READ_WRITE_PERMISSIONS: u32 = 0o644;
+    /// Minimum expected content length for converted markdown files
+    const MIN_EXPECTED_CONTENT_LENGTH: usize = 50;
 
     #[test]
     fn test_normalize_path_regular_path() {
@@ -347,13 +343,13 @@ mod tests {
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            let permissions = std::fs::Permissions::from_mode(0o000); // No permissions
+            let permissions = std::fs::Permissions::from_mode(NO_PERMISSIONS);
             std::fs::set_permissions(&file_path, permissions).unwrap();
 
             let result = converter.convert(&file_path).await;
 
             // Restore permissions for cleanup
-            let restore_permissions = std::fs::Permissions::from_mode(0o644);
+            let restore_permissions = std::fs::Permissions::from_mode(READ_WRITE_PERMISSIONS);
             let _ = std::fs::set_permissions(&file_path, restore_permissions);
 
             assert!(result.is_err());
@@ -483,7 +479,7 @@ mod tests {
             .contains("This file should convert successfully"));
 
         // Verify the markdown content length is tracked correctly
-        assert!(markdown.as_str().len() > 50); // Should have substantial content
+        assert!(markdown.as_str().len() > MIN_EXPECTED_CONTENT_LENGTH); // Should have substantial content
     }
 
     #[tokio::test]

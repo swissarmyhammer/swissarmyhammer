@@ -316,10 +316,10 @@ async fn test_large_model_list_performance() -> Result<()> {
     let project_root = &temp_dir.join("project");
 
     let (user_agents, project_agents) =
-        setup_large_agent_test_environment(&temp_home, &project_root)?;
+        setup_large_agent_test_environment(temp_home, project_root)?;
 
     let original_home = env::var("HOME").ok();
-    env::set_var("HOME", &temp_home);
+    env::set_var("HOME", temp_home);
 
     let _cleanup = scopeguard::guard((), |_| {
         if let Some(home) = original_home {
@@ -333,7 +333,7 @@ async fn test_large_model_list_performance() -> Result<()> {
 
     let list_output = run_sah_command_with_timeout(
         &["model", "list", "--format", "json"],
-        Some(&project_root),
+        Some(project_root),
         30,
     )
     .await?;
@@ -642,7 +642,7 @@ async fn test_invalid_yaml_recovery() -> Result<()> {
     let invalid_files = create_invalid_agent_files(&user_agents_dir)?;
 
     let original_home = env::var("HOME").ok();
-    env::set_var("HOME", &temp_home);
+    env::set_var("HOME", temp_home);
 
     let _cleanup = scopeguard::guard((), |_| {
         if let Some(home) = original_home {
@@ -873,10 +873,10 @@ async fn test_memory_usage_with_large_datasets() -> Result<()> {
     let temp_home = &temp_dir.join("home");
     let project_root = &temp_dir.join("project");
 
-    let (user_agents, project_agents) = setup_large_dataset_environment(&temp_home, &project_root)?;
+    let (user_agents, project_agents) = setup_large_dataset_environment(temp_home, project_root)?;
 
     let original_home = env::var("HOME").ok();
-    env::set_var("HOME", &temp_home);
+    env::set_var("HOME", temp_home);
 
     let _cleanup = scopeguard::guard((), |_| {
         if let Some(home) = original_home {
@@ -890,7 +890,7 @@ async fn test_memory_usage_with_large_datasets() -> Result<()> {
 
     let list_output = run_sah_command_with_timeout(
         &["model", "list", "--format", "json"],
-        Some(&project_root),
+        Some(project_root),
         60,
     )
     .await?;

@@ -519,7 +519,7 @@ async fn test_custom_model_workflow() -> Result<()> {
     let project_root = &temp_dir.join("project");
 
     let original_home = env::var("HOME").ok();
-    env::set_var("HOME", &home_dir);
+    env::set_var("HOME", home_dir);
 
     let _cleanup = scopeguard::guard((), |_| {
         if let Some(home) = original_home {
@@ -530,7 +530,7 @@ async fn test_custom_model_workflow() -> Result<()> {
     });
 
     let list_output =
-        run_sah_command(&["model", "list", "--format", "json"], Some(&project_root)).await?;
+        run_sah_command(&["model", "list", "--format", "json"], Some(project_root)).await?;
     assert!(
         list_output.status.success(),
         "Should list all models including custom"
@@ -539,8 +539,8 @@ async fn test_custom_model_workflow() -> Result<()> {
     let models_json = parse_agent_list_json(&String::from_utf8_lossy(&list_output.stdout))?;
     verify_custom_models_listed(&models_json)?;
 
-    use_and_verify_custom_model("test-user-agent", &project_root, "custom-agent").await?;
-    use_and_verify_custom_model("project-dev", &project_root, "project-dev").await?;
+    use_and_verify_custom_model("test-user-agent", project_root, "custom-agent").await?;
+    use_and_verify_custom_model("project-dev", project_root, "project-dev").await?;
 
     Ok(())
 }
@@ -809,7 +809,7 @@ async fn test_complete_development_workflow() -> Result<()> {
     let project_root = &temp_dir.join("project");
 
     let original_home = env::var("HOME").ok();
-    env::set_var("HOME", &home_dir);
+    env::set_var("HOME", home_dir);
 
     let _cleanup = scopeguard::guard((), |_| {
         if let Some(home) = original_home {
@@ -819,9 +819,9 @@ async fn test_complete_development_workflow() -> Result<()> {
         }
     });
 
-    test_project_initialization_workflow(&project_root).await?;
-    test_model_switching_workflow(&project_root).await?;
-    test_final_verification_workflow(&project_root).await?;
+    test_project_initialization_workflow(project_root).await?;
+    test_model_switching_workflow(project_root).await?;
+    test_final_verification_workflow(project_root).await?;
 
     Ok(())
 }

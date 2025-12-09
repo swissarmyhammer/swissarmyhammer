@@ -44,6 +44,12 @@ use crate::types::{Frontmatter, MarkdownError, Url};
 use chrono::{DateTime, Utc};
 use std::collections::HashMap;
 
+/// Length of the opening YAML frontmatter delimiter "---\n"
+const YAML_DELIMITER_LENGTH: usize = 4;
+
+/// Length of the closing YAML frontmatter delimiter "\n---\n"
+const CLOSING_DELIMITER_LENGTH: usize = 5;
+
 /// Builder for constructing YAML frontmatter with validation and flexibility.
 ///
 /// This builder provides a fluent interface for creating frontmatter with required
@@ -282,7 +288,7 @@ pub fn extract_frontmatter(markdown: &str) -> Option<Frontmatter> {
     }
 
     // Find the closing delimiter
-    let content_after_start = &markdown[4..]; // Skip "---\n"
+    let content_after_start = &markdown[YAML_DELIMITER_LENGTH..];
     if let Some(end_pos) = content_after_start.find("\n---\n") {
         let yaml_content = &content_after_start[..end_pos];
 
@@ -319,9 +325,9 @@ pub fn strip_frontmatter(markdown: &str) -> String {
     }
 
     // Find the closing delimiter
-    let content_after_start = &markdown[4..]; // Skip "---\n"
+    let content_after_start = &markdown[YAML_DELIMITER_LENGTH..];
     if let Some(end_pos) = content_after_start.find("\n---\n") {
-        let content_start = 4 + end_pos + 5; // Skip "---\n" + content + "\n---\n"
+        let content_start = YAML_DELIMITER_LENGTH + end_pos + CLOSING_DELIMITER_LENGTH;
         if content_start < markdown.len() {
             // Skip any leading newlines from the combination
             let remaining = &markdown[content_start..];
@@ -436,7 +442,7 @@ mod tests {
 
         assert!(result.is_some());
         let frontmatter = result.unwrap();
-        assert_eq!(frontmatter.source_url.as_str(), "https://example.com");
+        assert_eq!(frontmatter.source_url, "https://example.com");
         assert_eq!(frontmatter.exporter, "markdowndown");
     }
 
@@ -496,10 +502,7 @@ mod tests {
         assert!(extracted.is_some());
 
         let extracted_frontmatter = extracted.unwrap();
-        assert_eq!(
-            extracted_frontmatter.source_url.as_str(),
-            "https://example.com"
-        );
+        assert_eq!(extracted_frontmatter.source_url, "https://example.com");
         assert_eq!(extracted_frontmatter.exporter, "test-exporter");
         assert_eq!(extracted_frontmatter.date_downloaded, original_date);
 

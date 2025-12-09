@@ -5,7 +5,10 @@
 
 use markdowndown::client::HttpClient;
 use markdowndown::config::Config;
-use markdowndown::types::{AuthErrorKind, MarkdownError, NetworkErrorKind, ValidationErrorKind};
+use markdowndown::types::{
+    converter_types, operations, AuthErrorKind, MarkdownError, NetworkErrorKind,
+    ValidationErrorKind,
+};
 use mockito::Server;
 use std::collections::HashMap;
 use std::time::Duration;
@@ -15,59 +18,173 @@ use tokio::time::timeout;
 const DEFAULT_TEST_RETRY_DELAY_MS: u64 = 10;
 const DEFAULT_TEST_TIMEOUT_SECS: u64 = 2;
 
+/// Test data size constants
+const TEST_LARGE_RESPONSE_SIZE: usize = 100_000;
+
+/// Test timeout and delay constants
+const TEST_RETRY_AFTER_SECONDS: u64 = 60;
+const TEST_VERY_SHORT_TIMEOUT_MS: u64 = 100;
+const TEST_SLOW_RESPONSE_DELAY_SECS: u64 = 3;
+const TEST_OUTER_TIMEOUT_SECS: u64 = 5;
+
+/// Test URL and concurrency constants
+const TEST_VERY_LONG_PATH_LENGTH: usize = 2000;
+const TEST_CONCURRENT_REQUEST_COUNT: usize = 5;
+
+/// HTTP status code constants
+const HTTP_OK: u16 = 200;
+const HTTP_FOUND: u16 = 302;
+const HTTP_BAD_REQUEST: u16 = 400;
+const HTTP_UNAUTHORIZED: u16 = 401;
+const HTTP_FORBIDDEN: u16 = 403;
+const HTTP_NOT_FOUND: u16 = 404;
+const HTTP_METHOD_NOT_ALLOWED: u16 = 405;
+const HTTP_NOT_ACCEPTABLE: u16 = 406;
+const HTTP_CONFLICT: u16 = 409;
+const HTTP_GONE: u16 = 410;
+const HTTP_UNPROCESSABLE_ENTITY: u16 = 422;
+const HTTP_TOO_MANY_REQUESTS: u16 = 429;
+const HTTP_INTERNAL_SERVER_ERROR: u16 = 500;
+const HTTP_BAD_GATEWAY: u16 = 502;
+const HTTP_SERVICE_UNAVAILABLE: u16 = 503;
+const HTTP_GATEWAY_TIMEOUT: u16 = 504;
+
+/// Macro to parse environment variable durations with less boilerplate
+macro_rules! env_duration {
+    ($var:expr, $default:expr, $converter:expr) => {
+        std::env::var($var)
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .map($converter)
+            .unwrap_or($default)
+    };
+}
+
 fn get_test_retry_delay() -> Duration {
-    let delay_ms = std::env::var("TEST_RETRY_DELAY_MS")
-        .ok()
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(DEFAULT_TEST_RETRY_DELAY_MS);
-    Duration::from_millis(delay_ms)
+    env_duration!(
+        "TEST_RETRY_DELAY_MS",
+        Duration::from_millis(DEFAULT_TEST_RETRY_DELAY_MS),
+        Duration::from_millis
+    )
 }
 
 fn get_test_timeout() -> Duration {
-    let timeout_secs = std::env::var("TEST_TIMEOUT_SECS")
-        .ok()
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(DEFAULT_TEST_TIMEOUT_SECS);
-    Duration::from_secs(timeout_secs)
+    env_duration!(
+        "TEST_TIMEOUT_SECS",
+        Duration::from_secs(DEFAULT_TEST_TIMEOUT_SECS),
+        Duration::from_secs
+    )
 }
 
 mod helpers {
     use super::*;
 
+    /// Create a test HTTP client with optional authentication configuration
+    fn create_client_with_config(
+        github_token: Option<&str>,
+        office365_token: Option<&str>,
+        google_api_key: Option<&str>,
+    ) -> HttpClient {
+        let mut builder = Config::builder()
+            .retry_delay(get_test_retry_delay())
+            .timeout(get_test_timeout());
+
+        if let Some(token) = github_token {
+            builder = builder.github_token(token);
+        }
+        if let Some(token) = office365_token {
+            builder = builder.office365_token(token);
+        }
+        if let Some(key) = google_api_key {
+            builder = builder.google_api_key(key);
+        }
+
+        let config = builder.build();
+        HttpClient::with_config(&config.http, &config.auth)
+    }
+
     /// Create a test HTTP client with configurable delays for testing
     pub fn create_test_client() -> HttpClient {
-        let config = Config::builder()
-            .retry_delay(get_test_retry_delay())
-            .timeout(get_test_timeout())
-            .build();
-
-        HttpClient::with_config(&config.http, &config.auth)
+        create_client_with_config(None, None, None)
     }
 
     /// Create a test HTTP client with authentication tokens
     pub fn create_auth_client() -> HttpClient {
-        let config = Config::builder()
-            .retry_delay(get_test_retry_delay())
-            .timeout(get_test_timeout())
-            .github_token("test_github_token")
-            .office365_token("test_office365_token")
-            .google_api_key("test_google_api_key")
-            .build();
+        create_client_with_config(
+            Some("test_github_token"),
+            Some("test_office365_token"),
+            Some("test_google_api_key"),
+        )
+    }
 
-        HttpClient::with_config(&config.http, &config.auth)
+    /// Test configuration builder for common test scenarios
+    pub struct TestConfigBuilder {
+        timeout: Option<Duration>,
+        retry_delay: Option<Duration>,
+        max_retries: Option<usize>,
+    }
+
+    impl TestConfigBuilder {
+        pub fn new() -> Self {
+            Self {
+                timeout: None,
+                retry_delay: None,
+                max_retries: None,
+            }
+        }
+
+        pub fn with_short_timeout(mut self) -> Self {
+            self.timeout = Some(Duration::from_millis(TEST_VERY_SHORT_TIMEOUT_MS));
+            self
+        }
+
+        pub fn with_fast_retry(mut self) -> Self {
+            self.retry_delay = Some(Duration::from_millis(1));
+            self
+        }
+
+        pub fn with_no_retry(mut self) -> Self {
+            self.max_retries = Some(0);
+            self
+        }
+
+        pub fn build(self) -> HttpClient {
+            let timeout = self.timeout.unwrap_or_else(get_test_timeout);
+            let retry_delay = self.retry_delay.unwrap_or_else(get_test_retry_delay);
+
+            let mut builder = Config::builder()
+                .timeout(timeout)
+                .retry_delay(retry_delay);
+
+            if let Some(retries) = self.max_retries {
+                builder = builder.max_retries(retries);
+            }
+
+            let config = builder.build();
+            HttpClient::with_config(&config.http, &config.auth)
+        }
+    }
+
+    /// Generic helper to assert error types with custom matcher
+    pub fn assert_error_matches<F>(result: Result<String, MarkdownError>, matcher: F)
+    where
+        F: FnOnce(&MarkdownError),
+    {
+        assert!(result.is_err());
+        matcher(&result.unwrap_err());
     }
 
     /// Assert that a result contains a ValidationError with InvalidUrl kind
     pub fn assert_validation_error(result: Result<String, MarkdownError>, expected_url: &str) {
-        match result.unwrap_err() {
+        assert_error_matches(result, |err| match err {
             MarkdownError::ValidationError { kind, context } => {
-                assert_eq!(kind, ValidationErrorKind::InvalidUrl);
+                assert_eq!(*kind, ValidationErrorKind::InvalidUrl);
                 assert_eq!(context.url, expected_url);
-                assert_eq!(context.operation, "URL validation");
-                assert_eq!(context.converter_type, "HttpClient");
+                assert_eq!(context.operation, operations::URL_VALIDATION);
+                assert_eq!(context.converter_type, converter_types::HTTP_CLIENT);
             }
-            err => panic!("Expected ValidationError, got: {err:?}"),
-        }
+            _ => panic!("Expected ValidationError, got: {err:?}"),
+        });
     }
 
     /// Assert that a URL is rejected with a ValidationError
@@ -75,11 +192,285 @@ mod helpers {
         let result = client.get_text(url).await;
         assert!(result.is_err(), "Should reject URL: {url}");
 
-        match result.unwrap_err() {
+        assert_error_matches(result, |err| match err {
             MarkdownError::ValidationError { kind, .. } => {
-                assert_eq!(kind, ValidationErrorKind::InvalidUrl);
+                assert_eq!(*kind, ValidationErrorKind::InvalidUrl);
             }
-            err => panic!("Expected ValidationError for URL: {url}, got: {err:?}"),
+            _ => panic!("Expected ValidationError for URL: {url}, got: {err:?}"),
+        });
+    }
+
+    /// Assert that a result contains a ServerError with the expected status code
+    pub fn assert_server_error(
+        result: Result<String, MarkdownError>,
+        expected_status: u16,
+        should_contain: &str,
+    ) {
+        assert_error_matches(result, |err| match err {
+            MarkdownError::EnhancedNetworkError { kind, context } => {
+                match kind {
+                    NetworkErrorKind::ServerError(status) => {
+                        assert_eq!(*status, expected_status);
+                        assert!(context
+                            .additional_info
+                            .as_ref()
+                            .unwrap()
+                            .contains(should_contain));
+                    }
+                    _ => panic!("Expected ServerError({expected_status}), got: {kind:?}"),
+                }
+            }
+            _ => panic!("Expected EnhancedNetworkError, got: {err:?}"),
+        });
+    }
+
+    /// Assert that a result contains a NetworkError with the expected kind
+    pub fn assert_network_error(
+        result: Result<String, MarkdownError>,
+        expected_kind: NetworkErrorKind,
+    ) {
+        assert_error_matches(result, |err| match err {
+            MarkdownError::EnhancedNetworkError { kind, .. } => {
+                assert_eq!(
+                    std::mem::discriminant(kind),
+                    std::mem::discriminant(&expected_kind)
+                );
+            }
+            _ => panic!("Expected EnhancedNetworkError, got: {err:?}"),
+        });
+    }
+
+    /// Generic helper to verify server error with expected status code
+    pub fn verify_server_error(err: &MarkdownError, expected_status: u16) {
+        match err {
+            MarkdownError::EnhancedNetworkError { kind, context } => {
+                match kind {
+                    NetworkErrorKind::ServerError(status) => {
+                        assert_eq!(*status, expected_status);
+                    }
+                    _ => panic!("Expected ServerError({expected_status}), got: {kind:?}"),
+                }
+                assert!(context
+                    .additional_info
+                    .as_ref()
+                    .unwrap()
+                    .contains(&expected_status.to_string()));
+            }
+            _ => panic!("Expected EnhancedNetworkError, got: {err:?}"),
+        }
+    }
+
+    /// Verify authentication error with expected kind
+    pub fn verify_auth_error(err: &MarkdownError, expected_kind: AuthErrorKind, expected_status: u16) {
+        match err {
+            MarkdownError::AuthenticationError { kind, context } => {
+                assert_eq!(*kind, expected_kind);
+                assert!(context
+                    .additional_info
+                    .as_ref()
+                    .unwrap()
+                    .contains(&expected_status.to_string()));
+            }
+            _ => panic!("Expected AuthenticationError, got: {err:?}"),
+        }
+    }
+
+    /// Verify rate limited error
+    pub fn verify_rate_limited_error(err: &MarkdownError) {
+        match err {
+            MarkdownError::EnhancedNetworkError { kind, context } => {
+                match kind {
+                    NetworkErrorKind::RateLimited => {
+                        assert!(context
+                            .additional_info
+                            .as_ref()
+                            .unwrap()
+                            .contains("429"));
+                    }
+                    _ => panic!("Expected RateLimited error, got: {kind:?}"),
+                }
+            }
+            _ => panic!("Expected EnhancedNetworkError, got: {err:?}"),
+        }
+    }
+
+    /// Verify status code error with retry information
+    pub fn verify_status_code_error(
+        result: Result<String, MarkdownError>,
+        expected_status: u16,
+        should_retry: bool,
+        expected_attempts: usize,
+    ) {
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            MarkdownError::EnhancedNetworkError { kind, context } => {
+                match kind {
+                    NetworkErrorKind::ServerError(code) => {
+                        assert_eq!(code, expected_status);
+                        let info = context.additional_info.unwrap();
+                        assert!(info.contains(&expected_status.to_string()));
+                        if should_retry {
+                            assert!(info.contains(&format!("{expected_attempts} attempts")));
+                        }
+                    }
+                    _ => panic!("Expected ServerError({expected_status}), got: {kind:?}"),
+                }
+            }
+            _ => panic!("Expected EnhancedNetworkError"),
+        }
+    }
+
+    /// Add headers to a mock endpoint
+    fn add_headers_to_mock(
+        mut mock: mockito::Mock,
+        headers: Option<HashMap<String, String>>,
+    ) -> mockito::Mock {
+        if let Some(headers) = headers {
+            for (key, value) in headers {
+                mock = mock.match_header(key.as_str(), value.as_str());
+            }
+        }
+        mock
+    }
+
+    /// Setup a mock endpoint with configurable parameters
+    pub async fn setup_mock_endpoint(
+        server: &mut Server,
+        path: &str,
+        status: usize,
+        body: &str,
+        expect_calls: usize,
+        match_headers: Option<HashMap<String, String>>,
+    ) -> mockito::Mock {
+        let mock = server.mock("GET", path).with_status(status).with_body(body);
+        let mock = add_headers_to_mock(mock, match_headers);
+        mock.expect(expect_calls).create_async().await
+    }
+
+    /// Reusable test fixture for mock server tests
+    pub struct MockTestFixture {
+        pub server: Server,
+        pub client: HttpClient,
+    }
+
+    impl MockTestFixture {
+        pub async fn new() -> Self {
+            Self {
+                server: Server::new_async().await,
+                client: create_test_client(),
+            }
+        }
+
+        pub fn url(&self, path: &str) -> String {
+            format!("{}{}", self.server.url(), path)
+        }
+
+        pub fn mock_endpoint_builder(&mut self, path: &str) -> MockEndpointBuilder {
+            MockEndpointBuilder::new(&mut self.server, path)
+        }
+
+        pub async fn mock_endpoint(
+            &mut self,
+            path: &str,
+            status: usize,
+            body: &str,
+        ) -> mockito::Mock {
+            self.mock_endpoint_builder(path)
+                .with_status(status)
+                .with_body(body)
+                .create()
+                .await
+        }
+
+        pub async fn mock_endpoint_with_headers(
+            &mut self,
+            path: &str,
+            status: usize,
+            body: &str,
+            headers: HashMap<&str, &str>,
+        ) -> mockito::Mock {
+            self.mock_endpoint_builder(path)
+                .with_status(status)
+                .with_body(body)
+                .with_headers(headers)
+                .create()
+                .await
+        }
+
+        pub async fn mock_endpoint_with_expect(
+            &mut self,
+            path: &str,
+            status: usize,
+            body: &str,
+            expect_calls: usize,
+        ) -> mockito::Mock {
+            self.mock_endpoint_builder(path)
+                .with_status(status)
+                .with_body(body)
+                .expect(expect_calls)
+                .create()
+                .await
+        }
+    }
+
+    /// Builder for mock endpoints with fluent API
+    pub struct MockEndpointBuilder<'a> {
+        server: &'a mut Server,
+        path: String,
+        status: usize,
+        body: String,
+        headers: HashMap<&'a str, &'a str>,
+        expect_calls: Option<usize>,
+    }
+
+    impl<'a> MockEndpointBuilder<'a> {
+        pub fn new(server: &'a mut Server, path: &str) -> Self {
+            Self {
+                server,
+                path: path.to_string(),
+                status: HTTP_OK as usize,
+                body: String::new(),
+                headers: HashMap::new(),
+                expect_calls: None,
+            }
+        }
+
+        pub fn with_status(mut self, status: usize) -> Self {
+            self.status = status;
+            self
+        }
+
+        pub fn with_body(mut self, body: &str) -> Self {
+            self.body = body.to_string();
+            self
+        }
+
+        pub fn with_headers(mut self, headers: HashMap<&'a str, &'a str>) -> Self {
+            self.headers = headers;
+            self
+        }
+
+        pub fn expect(mut self, count: usize) -> Self {
+            self.expect_calls = Some(count);
+            self
+        }
+
+        pub async fn create(self) -> mockito::Mock {
+            let mut mock = self
+                .server
+                .mock("GET", self.path.as_str())
+                .with_status(self.status)
+                .with_body(self.body);
+
+            for (key, value) in self.headers {
+                mock = mock.match_header(key, value);
+            }
+
+            if let Some(count) = self.expect_calls {
+                mock = mock.expect(count);
+            }
+
+            mock.create_async().await
         }
     }
 }
@@ -123,20 +514,20 @@ mod success_tests {
 
     #[tokio::test]
     async fn test_get_text_success() {
-        let mut server = Server::new_async().await;
+        let mut fixture = helpers::MockTestFixture::new().await;
         let expected_body = "Hello, World! This is test content.";
 
-        let mock = server
+        let mock = fixture
+            .server
             .mock("GET", "/test")
-            .with_status(200)
+            .with_status(HTTP_OK as usize)
             .with_header("content-type", "text/plain")
             .with_body(expected_body)
             .create_async()
             .await;
 
-        let client = helpers::create_test_client();
-        let url = format!("{}/test", server.url());
-        let result = client.get_text(&url).await;
+        let url = fixture.url("/test");
+        let result = fixture.client.get_text(&url).await;
 
         mock.assert_async().await;
         assert!(result.is_ok());
@@ -145,20 +536,20 @@ mod success_tests {
 
     #[tokio::test]
     async fn test_get_bytes_success() {
-        let mut server = Server::new_async().await;
+        let mut fixture = helpers::MockTestFixture::new().await;
         let expected_body = b"Binary data content";
 
-        let mock = server
+        let mock = fixture
+            .server
             .mock("GET", "/binary")
-            .with_status(200)
+            .with_status(HTTP_OK as usize)
             .with_header("content-type", "application/octet-stream")
             .with_body(expected_body)
             .create_async()
             .await;
 
-        let client = helpers::create_test_client();
-        let url = format!("{}/binary", server.url());
-        let result = client.get_bytes(&url).await;
+        let url = fixture.url("/binary");
+        let result = fixture.client.get_bytes(&url).await;
 
         mock.assert_async().await;
         assert!(result.is_ok());
@@ -167,26 +558,26 @@ mod success_tests {
 
     #[tokio::test]
     async fn test_get_text_with_headers() {
-        let mut server = Server::new_async().await;
+        let mut fixture = helpers::MockTestFixture::new().await;
         let expected_body = "Content with custom headers";
 
-        let mock = server
+        let mock = fixture
+            .server
             .mock("GET", "/with-headers")
             .match_header("X-Custom-Header", "test-value")
             .match_header("User-Agent", "test-agent/1.0")
-            .with_status(200)
+            .with_status(HTTP_OK as usize)
             .with_body(expected_body)
             .create_async()
             .await;
 
-        let client = helpers::create_test_client();
-        let url = format!("{}/with-headers", server.url());
+        let url = fixture.url("/with-headers");
 
         let mut headers = HashMap::new();
         headers.insert("X-Custom-Header".to_string(), "test-value".to_string());
         headers.insert("User-Agent".to_string(), "test-agent/1.0".to_string());
 
-        let result = client.get_text_with_headers(&url, &headers).await;
+        let result = fixture.client.get_text_with_headers(&url, &headers).await;
 
         mock.assert_async().await;
         assert!(result.is_ok());
@@ -195,24 +586,24 @@ mod success_tests {
 
     #[tokio::test]
     async fn test_large_response_handling() {
-        let mut server = Server::new_async().await;
-        let large_content = "A".repeat(100_000); // 100KB of data
+        let mut fixture = helpers::MockTestFixture::new().await;
+        let large_content = "A".repeat(TEST_LARGE_RESPONSE_SIZE); // 100KB of data
 
-        let mock = server
+        let mock = fixture
+            .server
             .mock("GET", "/large")
-            .with_status(200)
+            .with_status(HTTP_OK)
             .with_header("content-type", "text/plain")
             .with_body(&large_content)
             .create_async()
             .await;
 
-        let client = helpers::create_test_client();
-        let url = format!("{}/large", server.url());
-        let result = client.get_text(&url).await;
+        let url = fixture.url("/large");
+        let result = fixture.client.get_text(&url).await;
 
         mock.assert_async().await;
         assert!(result.is_ok());
-        assert_eq!(result.unwrap().len(), 100_000);
+        assert_eq!(result.unwrap().len(), TEST_LARGE_RESPONSE_SIZE);
     }
 }
 
@@ -254,176 +645,78 @@ mod url_validation_tests {
 mod http_error_tests {
     use super::*;
 
-    #[tokio::test]
-    async fn test_http_404_not_found() {
-        let mut server = Server::new_async().await;
-
-        let mock = server
-            .mock("GET", "/notfound")
-            .with_status(404)
-            .with_body("Not Found")
-            .create_async()
-            .await;
-
-        let client = helpers::create_test_client();
-        let url = format!("{}/notfound", server.url());
-        let result = client.get_text(&url).await;
-
-        mock.assert_async().await;
-        assert!(result.is_err());
-        match result.unwrap_err() {
-            MarkdownError::EnhancedNetworkError { kind, context } => {
-                match kind {
-                    NetworkErrorKind::ServerError(status) => {
-                        assert_eq!(status, 404);
-                    }
-                    _ => panic!("Expected ServerError(404)"),
-                }
-                assert!(context.additional_info.unwrap().contains("404"));
-            }
-            _ => panic!("Expected EnhancedNetworkError"),
-        }
+    struct HttpErrorTestCase {
+        status: u16,
+        path: &'static str,
+        body: &'static str,
+        expect_calls: usize,
+        verify_fn: fn(&MarkdownError),
     }
 
     #[tokio::test]
-    async fn test_http_401_unauthorized() {
-        let mut server = Server::new_async().await;
-
-        let mock = server
-            .mock("GET", "/secure")
-            .with_status(401)
-            .with_header("content-type", "application/json")
-            .with_body(r#"{"error": "Unauthorized"}"#)
-            .create_async()
-            .await;
-
-        let client = helpers::create_test_client();
-        let url = format!("{}/secure", server.url());
-        let result = client.get_text(&url).await;
-
-        mock.assert_async().await;
-        assert!(result.is_err());
-        match result.unwrap_err() {
-            MarkdownError::AuthenticationError { kind, context } => {
-                assert_eq!(kind, AuthErrorKind::MissingToken);
-                assert!(context.additional_info.unwrap().contains("401"));
-            }
-            _ => panic!("Expected AuthenticationError"),
-        }
-    }
-
-    #[tokio::test]
-    async fn test_http_403_forbidden() {
-        let mut server = Server::new_async().await;
-
-        let mock = server
-            .mock("GET", "/forbidden")
-            .with_status(403)
-            .with_body("Forbidden")
-            .create_async()
-            .await;
-
-        let client = helpers::create_test_client();
-        let url = format!("{}/forbidden", server.url());
-        let result = client.get_text(&url).await;
-
-        mock.assert_async().await;
-        assert!(result.is_err());
-        match result.unwrap_err() {
-            MarkdownError::AuthenticationError { kind, context } => {
-                assert_eq!(kind, AuthErrorKind::PermissionDenied);
-                assert!(context.additional_info.unwrap().contains("403"));
-            }
-            _ => panic!("Expected AuthenticationError"),
-        }
-    }
-
-    #[tokio::test]
-    async fn test_http_429_rate_limited() {
-        let mut server = Server::new_async().await;
-
-        let _mock = server
-            .mock("GET", "/rate-limited")
-            .with_status(429)
-            .with_header("Retry-After", "60")
-            .with_body("Too Many Requests")
-            .create_async()
-            .await;
-
-        let client = helpers::create_test_client();
-        let url = format!("{}/rate-limited", server.url());
-        let result = client.get_text(&url).await;
-
-        // Should retry and eventually fail
-        assert!(result.is_err());
-        match result.unwrap_err() {
-            MarkdownError::EnhancedNetworkError { kind, context } => match kind {
-                NetworkErrorKind::RateLimited => {
-                    assert!(context.additional_info.unwrap().contains("429"));
-                }
-                _ => panic!("Expected RateLimited error, got: {kind:?}"),
+    async fn test_http_error_responses() {
+        let test_cases = [
+            HttpErrorTestCase {
+                status: HTTP_NOT_FOUND,
+                path: "/notfound",
+                body: "Not Found",
+                expect_calls: 1,
+                verify_fn: |err| helpers::verify_server_error(err, HTTP_NOT_FOUND),
             },
-            _ => panic!("Expected EnhancedNetworkError"),
-        }
-    }
-
-    #[tokio::test]
-    async fn test_http_500_server_error() {
-        let mut server = Server::new_async().await;
-
-        let _mock = server
-            .mock("GET", "/server-error")
-            .with_status(500)
-            .with_body("Internal Server Error")
-            .create_async()
-            .await;
-
-        let client = helpers::create_test_client();
-        let url = format!("{}/server-error", server.url());
-        let result = client.get_text(&url).await;
-
-        // Should retry and eventually fail
-        assert!(result.is_err());
-        match result.unwrap_err() {
-            MarkdownError::EnhancedNetworkError { kind, context } => {
-                match kind {
-                    NetworkErrorKind::ServerError(status) => {
-                        assert_eq!(status, 500);
-                    }
-                    _ => panic!("Expected ServerError(500)"),
-                }
-                assert!(context.additional_info.unwrap().contains("500"));
-            }
-            _ => panic!("Expected EnhancedNetworkError"),
-        }
-    }
-
-    #[tokio::test]
-    async fn test_client_error_no_retry() {
-        let mut server = Server::new_async().await;
-
-        let mock = server
-            .mock("GET", "/bad-request")
-            .with_status(400)
-            .with_body("Bad Request")
-            .expect(1) // Should only be called once (no retry)
-            .create_async()
-            .await;
-
-        let client = helpers::create_test_client();
-        let url = format!("{}/bad-request", server.url());
-        let result = client.get_text(&url).await;
-
-        mock.assert_async().await;
-        assert!(result.is_err());
-        match result.unwrap_err() {
-            MarkdownError::EnhancedNetworkError { kind, .. } => match kind {
-                NetworkErrorKind::ServerError(status) => {
-                    assert_eq!(status, 400);
-                }
-                _ => panic!("Expected ServerError(400)"),
+            HttpErrorTestCase {
+                status: HTTP_UNAUTHORIZED,
+                path: "/secure",
+                body: r#"{"error": "Unauthorized"}"#,
+                expect_calls: 1,
+                verify_fn: |err| helpers::verify_auth_error(err, AuthErrorKind::MissingToken, HTTP_UNAUTHORIZED),
             },
-            _ => panic!("Expected EnhancedNetworkError"),
+            HttpErrorTestCase {
+                status: HTTP_FORBIDDEN,
+                path: "/forbidden",
+                body: "Forbidden",
+                expect_calls: 1,
+                verify_fn: |err| helpers::verify_auth_error(err, AuthErrorKind::PermissionDenied, HTTP_FORBIDDEN),
+            },
+            HttpErrorTestCase {
+                status: HTTP_TOO_MANY_REQUESTS,
+                path: "/rate-limited",
+                body: "Too Many Requests",
+                expect_calls: 4,
+                verify_fn: |err| helpers::verify_rate_limited_error(err),
+            },
+            HttpErrorTestCase {
+                status: HTTP_INTERNAL_SERVER_ERROR,
+                path: "/server-error",
+                body: "Internal Server Error",
+                expect_calls: 4,
+                verify_fn: |err| helpers::verify_server_error(err, HTTP_INTERNAL_SERVER_ERROR),
+            },
+            HttpErrorTestCase {
+                status: HTTP_BAD_REQUEST,
+                path: "/bad-request",
+                body: "Bad Request",
+                expect_calls: 1,
+                verify_fn: |err| helpers::verify_server_error(err, HTTP_BAD_REQUEST),
+            },
+        ];
+
+        for test_case in test_cases {
+            let mut server = Server::new_async().await;
+            let mock = server
+                .mock("GET", test_case.path)
+                .with_status(test_case.status as usize)
+                .with_body(test_case.body)
+                .expect(test_case.expect_calls)
+                .create_async()
+                .await;
+
+            let client = helpers::create_test_client();
+            let url = format!("{}{}", server.url(), test_case.path);
+            let result = client.get_text(&url).await;
+
+            mock.assert_async().await;
+            assert!(result.is_err());
+            (test_case.verify_fn)(&result.unwrap_err());
         }
     }
 }
@@ -432,65 +725,63 @@ mod http_error_tests {
 mod retry_logic_tests {
     use super::*;
 
+    async fn test_retry_scenario(
+        path: &str,
+        fail_count: usize,
+        fail_status: u16,
+        should_succeed: bool,
+        expected_body: Option<&str>,
+    ) {
+        let mut fixture = helpers::MockTestFixture::new().await;
+
+        if fail_count > 0 {
+            let _failing_mock = fixture
+                .mock_endpoint_with_expect(path, fail_status as usize, "Error", fail_count)
+                .await;
+        }
+
+        if should_succeed {
+            let success_body = expected_body.unwrap_or("Success after retries!");
+            let _success_mock = fixture
+                .mock_endpoint_with_expect(path, HTTP_OK as usize, success_body, 1)
+                .await;
+        }
+
+        let url = fixture.url(path);
+        let result = fixture.client.get_text(&url).await;
+
+        if should_succeed {
+            assert!(result.is_ok());
+            assert_eq!(result.unwrap(), expected_body.unwrap_or("Success after retries!"));
+        } else {
+            assert!(result.is_err());
+            match result.unwrap_err() {
+                MarkdownError::EnhancedNetworkError { kind, context } => {
+                    match kind {
+                        NetworkErrorKind::ServerError(status) => {
+                            assert_eq!(status, fail_status);
+                        }
+                        _ => panic!("Expected ServerError({fail_status})"),
+                    }
+                    let total_attempts = fail_count;
+                    assert!(context
+                        .additional_info
+                        .unwrap()
+                        .contains(&format!("{total_attempts} attempts")));
+                }
+                _ => panic!("Expected EnhancedNetworkError"),
+            }
+        }
+    }
+
     #[tokio::test]
     async fn test_retry_success_after_failures() {
-        let mut server = Server::new_async().await;
-
-        // First two requests fail, third succeeds
-        let failing_mock = server
-            .mock("GET", "/flaky")
-            .with_status(500)
-            .expect(2)
-            .create_async()
-            .await;
-
-        let success_mock = server
-            .mock("GET", "/flaky")
-            .with_status(200)
-            .with_body("Success after retries!")
-            .expect(1)
-            .create_async()
-            .await;
-
-        let client = helpers::create_test_client();
-        let url = format!("{}/flaky", server.url());
-        let result = client.get_text(&url).await;
-
-        failing_mock.assert_async().await;
-        success_mock.assert_async().await;
-        assert!(result.is_ok());
-        assert_eq!(result.unwrap(), "Success after retries!");
+        test_retry_scenario("/flaky", 2, HTTP_INTERNAL_SERVER_ERROR, true, Some("Success after retries!")).await;
     }
 
     #[tokio::test]
     async fn test_retry_max_attempts_exceeded() {
-        let mut server = Server::new_async().await;
-
-        let mock = server
-            .mock("GET", "/always-fails")
-            .with_status(502)
-            .expect(4) // 1 initial + 3 retries
-            .create_async()
-            .await;
-
-        let client = helpers::create_test_client();
-        let url = format!("{}/always-fails", server.url());
-        let result = client.get_text(&url).await;
-
-        mock.assert_async().await;
-        assert!(result.is_err());
-        match result.unwrap_err() {
-            MarkdownError::EnhancedNetworkError { kind, context } => {
-                match kind {
-                    NetworkErrorKind::ServerError(status) => {
-                        assert_eq!(status, 502);
-                    }
-                    _ => panic!("Expected ServerError(502)"),
-                }
-                assert!(context.additional_info.unwrap().contains("4 attempts"));
-            }
-            _ => panic!("Expected EnhancedNetworkError"),
-        }
+        test_retry_scenario("/always-fails", 4, HTTP_BAD_GATEWAY, false, None).await;
     }
 
     #[tokio::test]
@@ -499,7 +790,7 @@ mod retry_logic_tests {
 
         let mock = server
             .mock("GET", "/unauthorized")
-            .with_status(401)
+            .with_status(HTTP_UNAUTHORIZED as usize)
             .expect(1) // Should only be called once (no retry)
             .create_async()
             .await;
@@ -524,7 +815,7 @@ mod retry_logic_tests {
 
         let mock = server
             .mock("GET", "/backoff-test")
-            .with_status(503)
+            .with_status(HTTP_SERVICE_UNAVAILABLE as usize)
             .expect(4) // 1 initial + 3 retries
             .create_async()
             .await;
@@ -563,91 +854,58 @@ mod retry_logic_tests {
 mod authentication_tests {
     use super::*;
 
-    #[tokio::test]
-    async fn test_github_authentication() {
-        let mut server = Server::new_async().await;
-
-        let mock = server
-            .mock("GET", "/github-api")
-            .match_header("Authorization", "token test_github_token")
-            .with_status(200)
-            .with_body("GitHub API response")
-            .create_async()
-            .await;
-
-        let client = helpers::create_auth_client();
-
-        let url = format!("{}/github-api", server.url());
-
-        // Since we can't mock domain detection easily, let's test the header logic
-        // by manually adding the expected authorization header
-        let mut headers = HashMap::new();
-        headers.insert(
-            "Authorization".to_string(),
-            "token test_github_token".to_string(),
-        );
-
-        let result = client.get_text_with_headers(&url, &headers).await;
-
-        mock.assert_async().await;
-        assert!(result.is_ok());
-        assert_eq!(result.unwrap(), "GitHub API response");
+    struct AuthTestCase {
+        auth_header_value: &'static str,
+        path: &'static str,
+        expected_body: &'static str,
     }
 
     #[tokio::test]
-    async fn test_office365_authentication() {
-        let mut server = Server::new_async().await;
+    async fn test_authentication_headers() {
+        let test_cases = vec![
+            AuthTestCase {
+                auth_header_value: "token test_github_token",
+                path: "/github-api",
+                expected_body: "GitHub API response",
+            },
+            AuthTestCase {
+                auth_header_value: "Bearer test_office365_token",
+                path: "/office365-api",
+                expected_body: "Office 365 API response",
+            },
+            AuthTestCase {
+                auth_header_value: "Bearer test_google_api_key",
+                path: "/google-api",
+                expected_body: "Google API response",
+            },
+        ];
 
-        let mock = server
-            .mock("GET", "/office365-api")
-            .match_header("Authorization", "Bearer test_office365_token")
-            .with_status(200)
-            .with_body("Office 365 API response")
-            .create_async()
-            .await;
+        for test_case in test_cases {
+            let mut server = Server::new_async().await;
 
-        let client = helpers::create_auth_client();
-        let url = format!("{}/office365-api", server.url());
+            let mock = server
+                .mock("GET", test_case.path)
+                .match_header("Authorization", test_case.auth_header_value)
+                .with_status(HTTP_OK as usize)
+                .with_body(test_case.expected_body)
+                .create_async()
+                .await;
 
-        let mut headers = HashMap::new();
-        headers.insert(
-            "Authorization".to_string(),
-            "Bearer test_office365_token".to_string(),
-        );
+            let client = helpers::create_auth_client();
+            let url = format!("{}{}", server.url(), test_case.path);
 
-        let result = client.get_text_with_headers(&url, &headers).await;
+            let mut headers = HashMap::new();
+            headers.insert(
+                "Authorization".to_string(),
+                test_case.auth_header_value.to_string(),
+            );
 
-        mock.assert_async().await;
-        assert!(result.is_ok());
-        assert_eq!(result.unwrap(), "Office 365 API response");
-    }
+            let result = client.get_text_with_headers(&url, &headers).await;
 
-    #[tokio::test]
-    async fn test_google_api_authentication() {
-        let mut server = Server::new_async().await;
-
-        let mock = server
-            .mock("GET", "/google-api")
-            .match_header("Authorization", "Bearer test_google_api_key")
-            .with_status(200)
-            .with_body("Google API response")
-            .create_async()
-            .await;
-
-        let client = helpers::create_auth_client();
-        let url = format!("{}/google-api", server.url());
-
-        let mut headers = HashMap::new();
-        headers.insert(
-            "Authorization".to_string(),
-            "Bearer test_google_api_key".to_string(),
-        );
-
-        let result = client.get_text_with_headers(&url, &headers).await;
-
-        mock.assert_async().await;
-        assert!(result.is_ok());
-        assert_eq!(result.unwrap(), "Google API response");
+            mock.assert_async().await;
+            assert!(result.is_ok());
+            assert_eq!(result.unwrap(), test_case.expected_body);
+        }
     }
 }
 
@@ -662,25 +920,24 @@ mod timeout_tests {
         // Create a mock that simulates a slow response
         let _mock = server
             .mock("GET", "/slow")
-            .with_status(200)
+            .with_status(HTTP_OK as usize)
             .with_body("Slow response")
             .with_chunked_body(|w| {
                 // Sleep longer than the client timeout
-                std::thread::sleep(Duration::from_secs(3));
+                std::thread::sleep(Duration::from_secs(TEST_SLOW_RESPONSE_DELAY_SECS));
                 w.write_all(b"Too late!")
             })
             .create_async()
             .await;
 
-        let config = Config::builder()
-            .timeout(Duration::from_millis(100)) // Very short timeout
-            .retry_delay(Duration::from_millis(10))
+        let client = helpers::TestConfigBuilder::new()
+            .with_short_timeout()
+            .with_fast_retry()
             .build();
 
-        let client = HttpClient::with_config(&config.http, &config.auth);
         let url = format!("{}/slow", server.url());
 
-        let result = timeout(Duration::from_secs(5), client.get_text(&url)).await;
+        let result = timeout(Duration::from_secs(TEST_OUTER_TIMEOUT_SECS), client.get_text(&url)).await;
 
         assert!(result.is_ok()); // The timeout wrapper shouldn't timeout
         let inner_result = result.unwrap();
@@ -714,7 +971,7 @@ mod edge_case_tests {
 
         let _mock = server
             .mock("GET", "/empty")
-            .with_status(200)
+            .with_status(HTTP_OK as usize)
             .with_body("")
             .create_async()
             .await;
@@ -735,7 +992,7 @@ mod edge_case_tests {
 
         let mock = server
             .mock("GET", "/binary")
-            .with_status(200)
+            .with_status(HTTP_OK as usize)
             .with_header("content-type", "application/octet-stream")
             .with_body(binary_data)
             .create_async()
@@ -757,7 +1014,7 @@ mod edge_case_tests {
         let client = helpers::create_test_client();
 
         // Create a very long but valid URL
-        let long_path = "a".repeat(2000);
+        let long_path = "a".repeat(TEST_VERY_LONG_PATH_LENGTH);
         let long_url = format!("https://example.com/{long_path}");
 
         let result = client.get_text(&long_url).await;
@@ -793,14 +1050,14 @@ mod edge_case_tests {
 
         let redirect_mock = server
             .mock("GET", "/redirect-source")
-            .with_status(302)
+            .with_status(HTTP_FOUND as usize)
             .with_header("Location", &format!("{}/redirect-target", server.url()))
             .create_async()
             .await;
 
         let target_mock = server
             .mock("GET", "/redirect-target")
-            .with_status(200)
+            .with_status(HTTP_OK as usize)
             .with_body("Redirected content")
             .create_async()
             .await;
@@ -820,77 +1077,70 @@ mod edge_case_tests {
 mod response_body_error_tests {
     use super::*;
 
+    enum BodyReadTestType {
+        Text,
+        Bytes,
+        WithHeaders,
+    }
+
+    async fn test_body_read_scenario(test_type: BodyReadTestType) {
+        let mut server = Server::new_async().await;
+        let client = helpers::create_test_client();
+
+        match test_type {
+            BodyReadTestType::Text => {
+                let mock = server
+                    .mock("GET", "/body-error")
+                    .with_status(HTTP_OK as usize)
+                    .with_body(b"Some content that should be readable")
+                    .create_async()
+                    .await;
+                let url = format!("{}/body-error", server.url());
+                let result = client.get_text(&url).await;
+                mock.assert_async().await;
+                assert!(result.is_ok());
+            }
+            BodyReadTestType::Bytes => {
+                let mock = server
+                    .mock("GET", "/bytes-error")
+                    .with_status(HTTP_OK as usize)
+                    .with_body(b"Binary content")
+                    .create_async()
+                    .await;
+                let url = format!("{}/bytes-error", server.url());
+                let result = client.get_bytes(&url).await;
+                mock.assert_async().await;
+                assert!(result.is_ok());
+            }
+            BodyReadTestType::WithHeaders => {
+                let mock = server
+                    .mock("GET", "/headers-body-error")
+                    .with_status(HTTP_OK as usize)
+                    .with_body("Header content")
+                    .create_async()
+                    .await;
+                let url = format!("{}/headers-body-error", server.url());
+                let headers = HashMap::from([("Custom".to_string(), "value".to_string())]);
+                let result = client.get_text_with_headers(&url, &headers).await;
+                mock.assert_async().await;
+                assert!(result.is_ok());
+            }
+        }
+    }
+
     #[tokio::test]
     async fn test_simulated_response_body_read_failure() {
-        // Test error path when response.text() fails (covers lines 91-97)
-        let mut server = Server::new_async().await;
-
-        // Create a response that will be readable initially but cause issues
-        let mock = server
-            .mock("GET", "/body-error")
-            .with_status(200)
-            .with_body("Some content that should be readable")
-            .create_async()
-            .await;
-
-        let client = helpers::create_test_client();
-        let url = format!("{}/body-error", server.url());
-
-        // This test verifies the error path exists, though it's hard to force
-        // response.text() to fail in a controlled way. The error handling code
-        // is there for network interruptions during body reading.
-        let result = client.get_text(&url).await;
-
-        mock.assert_async().await;
-        // In normal cases this succeeds, but the error handling code (lines 91-97)
-        // is present for when reqwest's text() method fails
-        assert!(result.is_ok());
+        test_body_read_scenario(BodyReadTestType::Text).await;
     }
 
     #[tokio::test]
     async fn test_simulated_bytes_body_read_failure() {
-        // Test error path when response.bytes() fails (covers lines 123-127)
-        let mut server = Server::new_async().await;
-
-        let mock = server
-            .mock("GET", "/bytes-error")
-            .with_status(200)
-            .with_body(b"Binary content")
-            .create_async()
-            .await;
-
-        let client = helpers::create_test_client();
-        let url = format!("{}/bytes-error", server.url());
-
-        // Similar to above - this tests that the error path exists for bytes()
-        let result = client.get_bytes(&url).await;
-
-        mock.assert_async().await;
-        // Error handling code (lines 123-127) is present for when bytes() fails
-        assert!(result.is_ok());
+        test_body_read_scenario(BodyReadTestType::Bytes).await;
     }
 
     #[tokio::test]
     async fn test_simulated_headers_body_read_failure() {
-        // Test error path when response.text() fails in get_text_with_headers (covers lines 154-160)
-        let mut server = Server::new_async().await;
-
-        let mock = server
-            .mock("GET", "/headers-body-error")
-            .with_status(200)
-            .with_body("Header content")
-            .create_async()
-            .await;
-
-        let client = helpers::create_test_client();
-        let url = format!("{}/headers-body-error", server.url());
-        let headers = HashMap::from([("Custom".to_string(), "value".to_string())]);
-
-        // Error handling code (lines 154-160) is present for text() failures
-        let result = client.get_text_with_headers(&url, &headers).await;
-
-        mock.assert_async().await;
-        assert!(result.is_ok());
+        test_body_read_scenario(BodyReadTestType::WithHeaders).await;
     }
 }
 
@@ -905,7 +1155,7 @@ mod domain_auth_tests {
         let mock = server
             .mock("GET", "/github-endpoint")
             .match_header("Authorization", "token test_github_token")
-            .with_status(200)
+            .with_status(HTTP_OK as usize)
             .with_body("GitHub content")
             .create_async()
             .await;
@@ -932,7 +1182,7 @@ mod domain_auth_tests {
             .mock("GET", "/repos/user/repo")
             .match_header("Authorization", "token test_github_token")
             .match_header("Accept", "application/vnd.github.v3+json")
-            .with_status(200)
+            .with_status(HTTP_OK as usize)
             .with_body("GitHub API response")
             .create_async()
             .await;
@@ -952,44 +1202,14 @@ mod domain_auth_tests {
     }
 
     #[tokio::test]
-    async fn test_office365_domain_auth_injection() {
-        // Test Office 365 authentication configuration (covers lines 337-344)
+    async fn test_office365_services_auth_injection() {
+        // Test Office 365, SharePoint, and OneDrive all use the same config
         let config = Config::builder()
             .office365_token("test_office365_token")
             .build();
         let _client = HttpClient::with_config(&config.http, &config.auth);
 
-        // Verify config was set correctly
-        assert_eq!(
-            config.auth.office365_token,
-            Some("test_office365_token".to_string())
-        );
-    }
-
-    #[tokio::test]
-    async fn test_sharepoint_domain_auth_injection() {
-        // Test SharePoint authentication configuration (covers lines 338-344)
-        let config = Config::builder()
-            .office365_token("test_office365_token")
-            .build();
-        let _client = HttpClient::with_config(&config.http, &config.auth);
-
-        // Verify config was set correctly
-        assert_eq!(
-            config.auth.office365_token,
-            Some("test_office365_token".to_string())
-        );
-    }
-
-    #[tokio::test]
-    async fn test_onedrive_domain_auth_injection() {
-        // Test OneDrive authentication configuration (covers lines 338-344)
-        let config = Config::builder()
-            .office365_token("test_office365_token")
-            .build();
-        let _client = HttpClient::with_config(&config.http, &config.auth);
-
-        // Verify config was set correctly
+        // Verify config was set correctly for all Office365 services
         assert_eq!(
             config.auth.office365_token,
             Some("test_office365_token".to_string())
@@ -1017,7 +1237,7 @@ mod domain_auth_tests {
 
         let mock = server
             .mock("GET", "/endpoint")
-            .with_status(200)
+            .with_status(HTTP_OK as usize)
             .with_body("Public content")
             .create_async()
             .await;
@@ -1039,30 +1259,45 @@ mod error_mapping_tests {
     use super::*;
     use std::time::Duration;
 
-    #[tokio::test]
-    async fn test_timeout_error_mapping() {
-        // Create a client with very short timeout
-        let config = Config::builder()
-            .timeout(Duration::from_millis(1)) // Extremely short timeout
-            .max_retries(0) // No retries to speed up test
-            .build();
-
-        let client = HttpClient::with_config(&config.http, &config.auth);
-
-        // Try to connect to a non-routable address to trigger timeout
-        let result = client.get_text("http://10.255.255.1/timeout-test").await;
-
+    async fn assert_network_error_mapping(
+        client: &HttpClient,
+        url: &str,
+        expected_kinds: &[NetworkErrorKind],
+    ) {
+        let result = client.get_text(url).await;
         assert!(result.is_err());
+        
         match result.unwrap_err() {
-            MarkdownError::EnhancedNetworkError { kind, context } => match kind {
-                NetworkErrorKind::Timeout | NetworkErrorKind::ConnectionFailed => {
-                    assert_eq!(context.operation, "HTTP request");
-                    assert_eq!(context.converter_type, "HttpClient");
-                }
-                _ => panic!("Expected Timeout or ConnectionFailed error, got: {kind:?}"),
-            },
+            MarkdownError::EnhancedNetworkError { kind, context } => {
+                let matches = expected_kinds.iter().any(|expected| {
+                    std::mem::discriminant(&kind) == std::mem::discriminant(expected)
+                });
+                assert!(
+                    matches,
+                    "Expected one of {:?}, got: {:?}",
+                    expected_kinds, kind
+                );
+                assert_eq!(context.operation, "HTTP request");
+                assert_eq!(context.converter_type, "HttpClient");
+            }
             _ => panic!("Expected EnhancedNetworkError"),
         }
+    }
+
+    #[tokio::test]
+    async fn test_timeout_error_mapping() {
+        let client = helpers::TestConfigBuilder::new()
+            .with_short_timeout()
+            .with_no_retry()
+            .build();
+
+        // Try to connect to a non-routable address to trigger timeout
+        assert_network_error_mapping(
+            &client,
+            "http://10.255.255.1/timeout-test",
+            &[NetworkErrorKind::Timeout, NetworkErrorKind::ConnectionFailed],
+        )
+        .await;
     }
 
     #[tokio::test]
@@ -1070,80 +1305,51 @@ mod error_mapping_tests {
         let client = helpers::create_test_client();
 
         // Try to connect to a non-existent host
-        let result = client
-            .get_text("http://non-existent-host-12345.invalid/test")
-            .await;
-
-        assert!(result.is_err());
-        match result.unwrap_err() {
-            MarkdownError::EnhancedNetworkError { kind, context } => match kind {
-                NetworkErrorKind::ConnectionFailed => {
-                    assert_eq!(context.operation, "HTTP request");
-                    assert_eq!(context.converter_type, "HttpClient");
-                }
-                _ => panic!("Expected ConnectionFailed error, got: {kind:?}"),
-            },
-            _ => panic!("Expected EnhancedNetworkError"),
-        }
+        assert_network_error_mapping(
+            &client,
+            "http://non-existent-host-12345.invalid/test",
+            &[NetworkErrorKind::ConnectionFailed],
+        )
+        .await;
     }
 }
 
 /// Tests for additional error mapping functionality
 mod additional_error_mapping_tests {
     use super::*;
+    use super::error_mapping_tests::assert_network_error_mapping;
 
     #[tokio::test]
     async fn test_timeout_error_mapping_detailed() {
-        // Test timeout error mapping (covers lines 443-444)
-        let client = HttpClient::with_config(
-            &Config::builder()
-                .timeout(Duration::from_millis(1)) // Very short timeout to force timeout
-                .max_retries(0) // No retries to get immediate timeout
-                .build()
-                .http,
-            &Config::default().auth,
-        );
+        let client = helpers::TestConfigBuilder::new()
+            .with_short_timeout()
+            .with_no_retry()
+            .build();
 
         // Use a URL that will timeout due to very short timeout
-        let result = client.get_text("https://httpbin.org/delay/1").await;
-
-        assert!(result.is_err());
-        match result.unwrap_err() {
-            MarkdownError::EnhancedNetworkError { kind, context } => match kind {
-                NetworkErrorKind::Timeout => {
-                    assert_eq!(context.operation, "HTTP request");
-                    assert_eq!(context.converter_type, "HttpClient");
-                }
-                _ => panic!("Expected Timeout error, got {kind:?}"),
-            },
-            _ => panic!("Expected EnhancedNetworkError"),
-        }
+        assert_network_error_mapping(
+            &client,
+            "https://httpbin.org/delay/1",
+            &[NetworkErrorKind::Timeout],
+        )
+        .await;
     }
 
     #[tokio::test]
     async fn test_connection_refused_error_mapping() {
-        // Test connection error mapping (covers lines 450-452)
         let client = helpers::create_test_client();
 
         // Use a port that should be closed to force connection failure
-        let result = client.get_text("http://127.0.0.1:9999/nonexistent").await;
-
-        assert!(result.is_err());
-        match result.unwrap_err() {
-            MarkdownError::EnhancedNetworkError { kind, context } => match kind {
-                NetworkErrorKind::ConnectionFailed => {
-                    assert_eq!(context.operation, "HTTP request");
-                    assert_eq!(context.converter_type, "HttpClient");
-                }
-                _ => panic!("Expected ConnectionFailed error, got {kind:?}"),
-            },
-            _ => panic!("Expected EnhancedNetworkError"),
-        }
+        assert_network_error_mapping(
+            &client,
+            "http://127.0.0.1:9999/nonexistent",
+            &[NetworkErrorKind::ConnectionFailed],
+        )
+        .await;
     }
 
     #[tokio::test]
     async fn test_invalid_domain_error_mapping() {
-        // Test request error mapping (covers lines 457-460)
         let client = helpers::create_test_client();
 
         // Use an invalid domain that should cause DNS resolution failure
@@ -1155,11 +1361,9 @@ mod additional_error_mapping_tests {
         // This should trigger either connection failure or request error mapping
         match result.unwrap_err() {
             MarkdownError::EnhancedNetworkError { kind: _, context } => {
-                // Could be ConnectionFailed or other network error
                 assert_eq!(context.converter_type, "HttpClient");
             }
             MarkdownError::ValidationError { kind, context } => {
-                // Could also be mapped as validation error
                 assert_eq!(kind, ValidationErrorKind::InvalidUrl);
                 assert_eq!(context.converter_type, "HttpClient");
             }
@@ -1174,26 +1378,17 @@ mod additional_retry_logic_tests {
 
     #[tokio::test]
     async fn test_server_error_retry_logic_exhausted() {
-        // Test server error retry exhaustion (covers lines 236-250)
         let mut server = Server::new_async().await;
 
         let mock = server
             .mock("GET", "/always-500")
-            .with_status(500)
+            .with_status(HTTP_INTERNAL_SERVER_ERROR as usize)
             .with_body("Internal Server Error")
             .expect(4) // 1 initial + 3 retries = 4 total attempts
             .create_async()
             .await;
 
-        let client = HttpClient::with_config(
-            &Config::builder()
-                .retry_delay(Duration::from_millis(1)) // Very fast retry for testing
-                .max_retries(3)
-                .timeout(Duration::from_secs(5))
-                .build()
-                .http,
-            &Config::default().auth,
-        );
+        let client = helpers::TestConfigBuilder::new().with_fast_retry().build();
 
         let url = format!("{}/always-500", server.url());
         let result = client.get_text(&url).await;
@@ -1204,8 +1399,7 @@ mod additional_retry_logic_tests {
             MarkdownError::EnhancedNetworkError { kind, context } => {
                 match kind {
                     NetworkErrorKind::ServerError(status) => {
-                        assert_eq!(status, 500);
-                        // Should mention retry attempts in the error context
+                        assert_eq!(status, HTTP_INTERNAL_SERVER_ERROR);
                         assert!(context.additional_info.unwrap().contains("4 attempts"));
                     }
                     _ => panic!("Expected ServerError(500), got {kind:?}"),
@@ -1217,27 +1411,18 @@ mod additional_retry_logic_tests {
 
     #[tokio::test]
     async fn test_rate_limiting_retry_logic() {
-        // Test 429 rate limiting retry logic (covers lines 236-250)
         let mut server = Server::new_async().await;
 
         let mock = server
             .mock("GET", "/rate-limited")
-            .with_status(429)
-            .with_header("Retry-After", "1")
+            .with_status(HTTP_TOO_MANY_REQUESTS as usize)
+            .with_header("Retry-After", &TEST_RETRY_AFTER_SECONDS.to_string())
             .with_body("Rate Limited")
             .expect(4) // 1 initial + 3 retries = 4 total attempts
             .create_async()
             .await;
 
-        let client = HttpClient::with_config(
-            &Config::builder()
-                .retry_delay(Duration::from_millis(1)) // Very fast retry for testing
-                .max_retries(3)
-                .timeout(Duration::from_secs(5))
-                .build()
-                .http,
-            &Config::default().auth,
-        );
+        let client = helpers::TestConfigBuilder::new().with_fast_retry().build();
 
         let url = format!("{}/rate-limited", server.url());
         let result = client.get_text(&url).await;
@@ -1248,7 +1433,6 @@ mod additional_retry_logic_tests {
             MarkdownError::EnhancedNetworkError { kind, context } => {
                 match kind {
                     NetworkErrorKind::RateLimited => {
-                        // Should mention retry attempts in the error context
                         assert!(context.additional_info.unwrap().contains("4 attempts"));
                     }
                     _ => panic!("Expected RateLimited error, got {kind:?}"),
@@ -1260,16 +1444,7 @@ mod additional_retry_logic_tests {
 
     #[tokio::test]
     async fn test_connection_failure_during_retry() {
-        // Test connection failure handling during retry (covers lines 264-269, 275, 280)
-        let client = HttpClient::with_config(
-            &Config::builder()
-                .retry_delay(Duration::from_millis(1)) // Very fast retry for testing
-                .max_retries(2)
-                .timeout(Duration::from_secs(1))
-                .build()
-                .http,
-            &Config::default().auth,
-        );
+        let client = helpers::TestConfigBuilder::new().with_fast_retry().build();
 
         // Use a port that should be closed to force connection failure
         let result = client.get_text("http://127.0.0.1:9998/test").await;
@@ -1376,85 +1551,85 @@ mod url_validation_edge_cases {
 mod additional_error_tests {
     use super::*;
 
-    #[tokio::test]
-    async fn test_client_error_codes() {
-        let mut server = Server::new_async().await;
-
-        let client_errors = [
-            (400, "Bad Request"),
-            (405, "Method Not Allowed"),
-            (406, "Not Acceptable"),
-            (409, "Conflict"),
-            (410, "Gone"),
-            (422, "Unprocessable Entity"),
-        ];
-
-        for (status_code, _description) in client_errors {
-            let path = format!("/error-{status_code}");
-            let mock = server
-                .mock("GET", path.as_str())
-                .with_status(status_code)
-                .with_body("Client error")
-                .expect(1) // Should not retry client errors
-                .create_async()
-                .await;
-
-            let client = helpers::create_test_client();
-            let url = format!("{}/error-{}", server.url(), status_code);
-            let result = client.get_text(&url).await;
-
-            mock.assert_async().await;
-            assert!(result.is_err());
-
-            match result.unwrap_err() {
-                MarkdownError::EnhancedNetworkError { kind, context } => match kind {
-                    NetworkErrorKind::ServerError(code) => {
-                        assert_eq!(code, status_code as u16);
-                        assert!(context
-                            .additional_info
-                            .unwrap()
-                            .contains(&status_code.to_string()));
-                    }
-                    _ => panic!("Expected ServerError({status_code}) for status {status_code}"),
-                },
-                _ => panic!("Expected EnhancedNetworkError for status {status_code}"),
-            }
-        }
+    struct StatusCodeTestCase {
+        status_code: u16,
+        should_retry: bool,
+        expected_attempts: usize,
     }
 
     #[tokio::test]
-    async fn test_retryable_server_errors() {
+    async fn test_status_code_handling() {
+        let test_cases = vec![
+            StatusCodeTestCase {
+                status_code: HTTP_BAD_REQUEST,
+                should_retry: false,
+                expected_attempts: 1,
+            },
+            StatusCodeTestCase {
+                status_code: HTTP_METHOD_NOT_ALLOWED,
+                should_retry: false,
+                expected_attempts: 1,
+            },
+            StatusCodeTestCase {
+                status_code: HTTP_NOT_ACCEPTABLE,
+                should_retry: false,
+                expected_attempts: 1,
+            },
+            StatusCodeTestCase {
+                status_code: HTTP_CONFLICT,
+                should_retry: false,
+                expected_attempts: 1,
+            },
+            StatusCodeTestCase {
+                status_code: HTTP_GONE,
+                should_retry: false,
+                expected_attempts: 1,
+            },
+            StatusCodeTestCase {
+                status_code: HTTP_UNPROCESSABLE_ENTITY,
+                should_retry: false,
+                expected_attempts: 1,
+            },
+            StatusCodeTestCase {
+                status_code: HTTP_BAD_GATEWAY,
+                should_retry: true,
+                expected_attempts: 4,
+            },
+            StatusCodeTestCase {
+                status_code: HTTP_SERVICE_UNAVAILABLE,
+                should_retry: true,
+                expected_attempts: 4,
+            },
+            StatusCodeTestCase {
+                status_code: HTTP_GATEWAY_TIMEOUT,
+                should_retry: true,
+                expected_attempts: 4,
+            },
+        ];
+
         let mut server = Server::new_async().await;
 
-        let retryable_errors = [502, 503, 504];
-
-        for status_code in retryable_errors {
-            let path = format!("/retryable-{status_code}");
+        for test_case in test_cases {
+            let path = format!("/error-{}", test_case.status_code);
             let mock = server
                 .mock("GET", path.as_str())
-                .with_status(status_code)
-                .with_body("Server error")
-                .expect(4) // 1 initial + 3 retries
+                .with_status(test_case.status_code as usize)
+                .with_body("Error response")
+                .expect(test_case.expected_attempts)
                 .create_async()
                 .await;
 
             let client = helpers::create_test_client();
-            let url = format!("{}/retryable-{}", server.url(), status_code);
+            let url = format!("{}{}", server.url(), path);
             let result = client.get_text(&url).await;
 
             mock.assert_async().await;
-            assert!(result.is_err());
-
-            match result.unwrap_err() {
-                MarkdownError::EnhancedNetworkError { kind, context } => match kind {
-                    NetworkErrorKind::ServerError(code) => {
-                        assert_eq!(code, status_code as u16);
-                        assert!(context.additional_info.unwrap().contains("4 attempts"));
-                    }
-                    _ => panic!("Expected ServerError({status_code}) for status {status_code}"),
-                },
-                _ => panic!("Expected EnhancedNetworkError for status {status_code}"),
-            }
+            helpers::verify_status_code_error(
+                result,
+                test_case.status_code,
+                test_case.should_retry,
+                test_case.expected_attempts,
+            );
         }
     }
 }
@@ -1463,149 +1638,181 @@ mod additional_error_tests {
 mod integration_tests {
     use super::*;
 
+    fn assert_is_auth_error(result: Result<String, MarkdownError>) {
+        match result.unwrap_err() {
+            MarkdownError::AuthenticationError { .. } => {},
+            err => panic!("Expected AuthenticationError, got: {err:?}"),
+        }
+    }
+
     #[tokio::test]
-    async fn test_complete_workflow_with_retries_and_auth() {
+    async fn test_service_recovery_after_failures() {
         let mut server = Server::new_async().await;
 
-        // Simulate a service that's initially down, then requires auth, then works
         let failing_mock = server
-            .mock("GET", "/api/data")
-            .with_status(503)
-            .expect(2) // Fail twice
+            .mock("GET", "/api/recovery")
+            .with_status(HTTP_SERVICE_UNAVAILABLE as usize)
+            .expect(4) // 1 initial + 3 retries
             .create_async()
             .await;
+
+        let client = helpers::create_test_client();
+        let url = format!("{}/api/recovery", server.url());
+
+        let result = client.get_text(&url).await;
+        assert!(result.is_err());
+
+        failing_mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn test_auth_required_after_recovery() {
+        let mut server = Server::new_async().await;
 
         let auth_required_mock = server
-            .mock("GET", "/api/data")
-            .with_status(401)
-            .expect(2) // Auth error may be hit during retries
+            .mock("GET", "/api/auth-check")
+            .with_status(HTTP_UNAUTHORIZED as usize)
+            .expect(1)
             .create_async()
             .await;
 
+        let client = helpers::create_test_client();
+        let url = format!("{}/api/auth-check", server.url());
+
+        let result = client.get_text(&url).await;
+        assert_is_auth_error(result);
+
+        auth_required_mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn test_successful_auth_request() {
+        let mut server = Server::new_async().await;
+
         let success_mock = server
-            .mock("GET", "/api/data")
+            .mock("GET", "/api/protected")
             .match_header("Authorization", "Bearer custom-token")
-            .with_status(200)
+            .with_status(HTTP_OK as usize)
             .with_body("Protected data")
             .expect(1)
             .create_async()
             .await;
 
         let client = helpers::create_test_client();
-        let url = format!("{}/api/data", server.url());
+        let url = format!("{}/api/protected", server.url());
 
-        // First attempt should fail with retries
-        let result1 = client.get_text(&url).await;
-        assert!(result1.is_err());
-
-        // Second attempt should fail with auth error (no retries)
-        let result2 = client.get_text(&url).await;
-        assert!(result2.is_err());
-        match result2.unwrap_err() {
-            MarkdownError::AuthenticationError { .. } => {
-                // Expected auth error
-            }
-            _ => panic!("Expected AuthenticationError"),
-        }
-
-        // Third attempt with proper auth header should succeed
         let mut headers = HashMap::new();
         headers.insert(
             "Authorization".to_string(),
             "Bearer custom-token".to_string(),
         );
-        let result3 = client.get_text_with_headers(&url, &headers).await;
+        let result = client.get_text_with_headers(&url, &headers).await;
 
-        failing_mock.assert_async().await;
-        auth_required_mock.assert_async().await;
         success_mock.assert_async().await;
-        assert!(result3.is_ok());
-        assert_eq!(result3.unwrap(), "Protected data");
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), "Protected data");
+    }
+
+    async fn run_concurrent_requests<F>(
+        count: usize,
+        request_fn: F,
+    ) -> Vec<Result<String, MarkdownError>>
+    where
+        F: Fn() -> std::pin::Pin<
+                Box<dyn std::future::Future<Output = Result<String, MarkdownError>> + Send>,
+            > + Clone
+            + Send
+            + 'static,
+    {
+        let mut handles = Vec::new();
+        for _ in 0..count {
+            let request_fn_clone = request_fn.clone();
+            let handle = tokio::spawn(async move { request_fn_clone().await });
+            handles.push(handle);
+        }
+
+        let mut results = Vec::new();
+        for handle in handles {
+            results.push(handle.await.unwrap());
+        }
+        results
     }
 
     #[tokio::test]
     async fn test_concurrent_requests() {
-        let mut server = Server::new_async().await;
+        let mut fixture = helpers::MockTestFixture::new().await;
 
-        let mock = server
-            .mock("GET", "/concurrent")
-            .with_status(200)
-            .with_body("Concurrent response")
-            .expect(5) // Expect 5 concurrent requests
-            .create_async()
+        let mock = fixture
+            .mock_endpoint_with_expect(
+                "/concurrent",
+                HTTP_OK as usize,
+                "Concurrent response",
+                TEST_CONCURRENT_REQUEST_COUNT,
+            )
             .await;
 
-        let _client = helpers::create_test_client();
-        let url = format!("{}/concurrent", server.url());
+        let url = fixture.url("/concurrent");
 
-        // Launch 5 concurrent requests
-        let mut handles = Vec::new();
-        for i in 0..5 {
-            let client_clone = helpers::create_test_client();
-            let url_clone = url.clone();
-            let handle = tokio::spawn(async move {
-                let result = client_clone.get_text(&url_clone).await;
-                (i, result)
-            });
-            handles.push(handle);
-        }
-
-        // Wait for all requests to complete
-        let mut results = Vec::new();
-        for handle in handles {
-            let (i, result) = handle.await.unwrap();
-            results.push((i, result));
-        }
+        let results = run_concurrent_requests(TEST_CONCURRENT_REQUEST_COUNT, {
+            let url = url.clone();
+            move || {
+                let client = helpers::create_test_client();
+                let url = url.clone();
+                Box::pin(async move { client.get_text(&url).await })
+            }
+        })
+        .await;
 
         mock.assert_async().await;
 
         // All requests should succeed
-        for (i, result) in results {
-            assert!(result.is_ok(), "Request {} failed: {:?}", i, result.err());
-            assert_eq!(result.unwrap(), "Concurrent response");
+        for (i, result) in results.iter().enumerate() {
+            assert!(result.is_ok(), "Request {} failed: {:?}", i, result);
+            assert_eq!(result.as_ref().unwrap(), "Concurrent response");
         }
     }
 
     #[tokio::test]
-    async fn test_mixed_success_failure_scenarios() {
+    async fn test_successful_request_handling() {
         let mut server = Server::new_async().await;
 
-        // Set up multiple endpoints with different behaviors
         let success_mock = server
             .mock("GET", "/success")
-            .with_status(200)
+            .with_status(HTTP_OK as usize)
             .with_body("Success")
             .create_async()
             .await;
 
+        let client = helpers::create_test_client();
+        let url = format!("{}/success", server.url());
+
+        let result = client.get_text(&url).await;
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), "Success");
+
+        success_mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn test_404_error_no_retry() {
+        let mut server = Server::new_async().await;
+
         let not_found_mock = server
             .mock("GET", "/not-found")
-            .with_status(404)
-            .create_async()
-            .await;
-
-        let server_error_mock = server
-            .mock("GET", "/server-error")
-            .with_status(500)
-            .expect(4) // 1 initial + 3 retries
+            .with_status(HTTP_NOT_FOUND as usize)
+            .expect(1)
             .create_async()
             .await;
 
         let client = helpers::create_test_client();
-        let base_url = server.url();
+        let url = format!("{}/not-found", server.url());
 
-        // Test successful request
-        let success_result = client.get_text(&format!("{base_url}/success")).await;
-        assert!(success_result.is_ok());
-        assert_eq!(success_result.unwrap(), "Success");
-
-        // Test 404 error (no retry)
-        let not_found_result = client.get_text(&format!("{base_url}/not-found")).await;
-        assert!(not_found_result.is_err());
-        match not_found_result.unwrap_err() {
+        let result = client.get_text(&url).await;
+        assert!(result.is_err());
+        match result.unwrap_err() {
             MarkdownError::EnhancedNetworkError { kind, .. } => {
                 match kind {
-                    NetworkErrorKind::ServerError(404) => {
+                    NetworkErrorKind::ServerError(status) if status == HTTP_NOT_FOUND => {
                         // Expected
                     }
                     _ => panic!("Expected ServerError(404)"),
@@ -1614,13 +1821,29 @@ mod integration_tests {
             _ => panic!("Expected EnhancedNetworkError"),
         }
 
-        // Test 500 error (with retries)
-        let server_error_result = client.get_text(&format!("{base_url}/server-error")).await;
-        assert!(server_error_result.is_err());
-        match server_error_result.unwrap_err() {
+        not_found_mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn test_500_error_with_retries() {
+        let mut server = Server::new_async().await;
+
+        let server_error_mock = server
+            .mock("GET", "/server-error")
+            .with_status(HTTP_INTERNAL_SERVER_ERROR as usize)
+            .expect(4) // 1 initial + 3 retries
+            .create_async()
+            .await;
+
+        let client = helpers::create_test_client();
+        let url = format!("{}/server-error", server.url());
+
+        let result = client.get_text(&url).await;
+        assert!(result.is_err());
+        match result.unwrap_err() {
             MarkdownError::EnhancedNetworkError { kind, .. } => {
                 match kind {
-                    NetworkErrorKind::ServerError(500) => {
+                    NetworkErrorKind::ServerError(status) if status == HTTP_INTERNAL_SERVER_ERROR => {
                         // Expected after retries
                     }
                     _ => panic!("Expected ServerError(500)"),
@@ -1629,8 +1852,6 @@ mod integration_tests {
             _ => panic!("Expected EnhancedNetworkError"),
         }
 
-        success_mock.assert_async().await;
-        not_found_mock.assert_async().await;
         server_error_mock.assert_async().await;
     }
 }

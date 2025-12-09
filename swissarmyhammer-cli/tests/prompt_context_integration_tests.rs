@@ -13,7 +13,7 @@ async fn test_prompt_render_with_config_integration() {
     let _env = IsolatedTestEnvironment::new().expect("Failed to create test environment");
     let temp_dir = _env.temp_dir();
     let prompts_dir = &temp_dir.join("prompts");
-    fs::create_dir_all(&prompts_dir).unwrap();
+    fs::create_dir_all(prompts_dir).unwrap();
 
     // Create a test prompt
     let prompt_content = r#"---
@@ -41,7 +41,7 @@ User: {{user_name}}"#;
 
     // Add the test prompts directory to the library
     let loader = swissarmyhammer::PromptLoader::new();
-    let prompts = loader.load_directory(&prompts_dir).unwrap();
+    let prompts = loader.load_directory(prompts_dir).unwrap();
     for prompt in prompts {
         library.add(prompt).unwrap();
     }
@@ -88,7 +88,7 @@ async fn test_prompt_render_with_env_and_context_integration() {
     let _env = IsolatedTestEnvironment::new().expect("Failed to create test environment");
     let temp_dir = _env.temp_dir();
     let prompts_dir = &temp_dir.join("prompts");
-    fs::create_dir_all(&prompts_dir).unwrap();
+    fs::create_dir_all(prompts_dir).unwrap();
 
     // Create a test prompt that uses environment variables
     let prompt_content = r#"---
@@ -118,7 +118,7 @@ Current User: {{USER}}"#;
     // Load prompts
     let mut library = PromptLibrary::new();
     let loader = swissarmyhammer::PromptLoader::new();
-    let prompts = loader.load_directory(&prompts_dir).unwrap();
+    let prompts = loader.load_directory(prompts_dir).unwrap();
     for prompt in prompts {
         library.add(prompt).unwrap();
     }

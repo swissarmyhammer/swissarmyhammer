@@ -126,11 +126,80 @@ use serde::{Deserialize, Serialize};
 use std::fmt;
 use thiserror::Error;
 
+/// Constants for operation names used in error contexts
+pub mod operations {
+    /// URL validation operation
+    pub const URL_VALIDATION: &str = "URL validation";
+    /// URL scheme validation operation
+    pub const URL_SCHEME_VALIDATION: &str = "URL scheme validation";
+    /// HTTP request operation
+    pub const HTTP_REQUEST: &str = "HTTP request";
+    /// HTTP request validation operation
+    pub const HTTP_REQUEST_VALIDATION: &str = "HTTP request validation";
+    /// Read response body operation
+    pub const READ_RESPONSE_BODY: &str = "Read response body";
+}
+
+/// Constants for converter type names used in error contexts
+pub mod converter_types {
+    /// HttpClient converter type
+    pub const HTTP_CLIENT: &str = "HttpClient";
+    /// Url::new converter type
+    pub const URL_NEW: &str = "Url::new";
+    /// validate_url converter type
+    pub const VALIDATE_URL: &str = "validate_url";
+}
+
+/// Trait for types that can provide error recovery suggestions.
+/// Trait for types that can provide error recovery suggestions.
+///
+/// Implementors should provide user-friendly, actionable suggestions
+/// for resolving the error condition.
+trait ErrorSuggestions {
+    /// Returns user-friendly suggestions for resolving this error.
+    fn suggestions(&self) -> Vec<String>;
+}
+
+/// Trait for errors that support retry and recovery logic.
+trait RetryableError {
+    /// Returns true if this error is potentially retryable.
+    fn is_retryable(&self) -> bool;
+
+    /// Returns true if recovery strategies should be attempted.
+    fn is_recoverable(&self) -> bool;
+}
+
+/// Macro to implement PartialEq for newtype wrappers around String.
+macro_rules! impl_partial_eq_for_newtype {
+    ($type:ty) => {
+        impl PartialEq<&str> for $type {
+            fn eq(&self, other: &&str) -> bool {
+                self.0 == *other
+            }
+        }
+
+        impl PartialEq<String> for $type {
+            fn eq(&self, other: &String) -> bool {
+                &self.0 == other
+            }
+        }
+    };
+}
+
 /// A newtype wrapper for markdown content with validation and conversion methods.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Markdown(String);
 
 impl Markdown {
+    /// Frontmatter opening delimiter string
+    const FRONTMATTER_OPENING_DELIMITER: &'static str = "---\n";
+    /// Frontmatter closing delimiter string
+    const FRONTMATTER_CLOSING_DELIMITER: &'static str = "\n---\n";
+    /// Length of the frontmatter opening delimiter "---\n" (3 chars for "---" + 1 for newline)
+    const FRONTMATTER_OPENING_DELIMITER_LEN: usize = Self::FRONTMATTER_OPENING_DELIMITER.len();
+    /// Length of the frontmatter closing delimiter "\n---\n" (1 leading newline + 3 chars for "---" + 1 trailing newline)
+    const FRONTMATTER_CLOSING_DELIMITER_LEN: usize = Self::FRONTMATTER_CLOSING_DELIMITER.len();
+
     /// Creates a new Markdown instance with validation.
     ///
     /// # Errors
@@ -186,6 +255,59 @@ impl Markdown {
         Markdown(combined_content)
     }
 
+    /// Checks if the content starts with frontmatter delimiters.
+    fn has_frontmatter_start(&self) -> bool {
+        self.0.starts_with(Self::FRONTMATTER_OPENING_DELIMITER)
+    }
+
+    /// Extracts YAML content between frontmatter delimiters.
+    fn extract_yaml_content(&self, _content_after_start: &str, end_pos: usize) -> &str {
+        &self.0[Self::FRONTMATTER_OPENING_DELIMITER_LEN
+            ..Self::FRONTMATTER_OPENING_DELIMITER_LEN + end_pos]
+    }
+
+    /// Validates that YAML content has proper structure.
+    fn validate_yaml_structure(yaml_content: &str) -> bool {
+        // Check for malformed frontmatter patterns
+        if yaml_content.trim_start().starts_with("---") {
+            return false;
+        }
+
+        // Validate that it's parseable as YAML
+        serde_yaml::from_str::<serde_yaml::Value>(yaml_content).is_ok()
+    }
+
+    /// Extracts YAML section from content.
+    fn extract_yaml_section(&self) -> Option<(&str, usize)> {
+        if !self.has_frontmatter_start() {
+            return None;
+        }
+
+        let content_after_start = &self.0[Self::FRONTMATTER_OPENING_DELIMITER_LEN..];
+        let end_pos = content_after_start.find(Self::FRONTMATTER_CLOSING_DELIMITER)?;
+        let yaml_content = self.extract_yaml_content(content_after_start, end_pos);
+
+        Some((yaml_content, end_pos))
+    }
+
+    /// Finds the start and end positions of the frontmatter block.
+    ///
+    /// Returns `Some((start, end))` where start is the position after the opening "---\n"
+    /// and end is the position of the start of the closing "\n---\n", or `None` if no
+    /// valid frontmatter is found.
+    fn find_frontmatter_boundaries(&self) -> Option<(usize, usize)> {
+        let (yaml_content, end_pos) = self.extract_yaml_section()?;
+
+        if !Self::validate_yaml_structure(yaml_content) {
+            return None;
+        }
+
+        Some((
+            Self::FRONTMATTER_OPENING_DELIMITER_LEN,
+            Self::FRONTMATTER_OPENING_DELIMITER_LEN + end_pos,
+        ))
+    }
+
     /// Extracts the frontmatter from the markdown content if present.
     ///
     /// # Returns
@@ -206,34 +328,82 @@ impl Markdown {
     /// assert!(frontmatter.unwrap().contains("source_url"));
     /// ```
     pub fn frontmatter(&self) -> Option<String> {
-        // Check if content starts with frontmatter delimiters
-        if !self.0.starts_with("---\n") {
-            return None;
+        self.find_frontmatter_boundaries().map(|(_start, end)| {
+            let full_frontmatter = &self.0[..end + Self::FRONTMATTER_CLOSING_DELIMITER_LEN];
+            full_frontmatter.to_string()
+        })
+    }
+
+    /// Finds the line index of the frontmatter closing delimiter.
+    fn find_frontmatter_end_line(lines: &[&str]) -> Option<usize> {
+        lines.iter().position(|line| line.trim() == "---")
+    }
+
+    /// Calculates the byte position after the frontmatter closing delimiter.
+    fn calculate_content_start_position(lines: &[&str], end_line_idx: usize) -> usize {
+        let mut content_start = Self::FRONTMATTER_OPENING_DELIMITER_LEN;
+        for line in lines.iter().take(end_line_idx + 1) {
+            content_start += line.len() + 1; // Add line length plus newline
+        }
+        content_start
+    }
+
+    /// Skips malformed delimiter lines (extra "---" lines) and returns the actual content start index.
+    fn skip_malformed_delimiters(lines: &[&str]) -> usize {
+        lines
+            .iter()
+            .position(|line| line.trim() != "---")
+            .unwrap_or(lines.len())
+    }
+
+    /// Gets remaining content after a start position.
+    fn get_remaining_content(content: &str, start_pos: usize) -> &str {
+        if start_pos >= content.len() {
+            return "";
+        }
+        content[start_pos..]
+            .strip_prefix('\n')
+            .unwrap_or(&content[start_pos..])
+    }
+
+    /// Joins content lines preserving trailing newlines.
+    fn join_content_lines(lines: &[&str]) -> String {
+        if lines.is_empty() {
+            return String::new();
         }
 
-        // Find the closing delimiter
-        let content_after_start = &self.0[4..]; // Skip "---\n"
-        if let Some(end_pos) = content_after_start.find("\n---\n") {
-            let full_frontmatter = &self.0[..4 + end_pos + 5]; // Include both delimiters
-
-            // Extract just the YAML content (without delimiters) for validation
-            let yaml_content = &self.0[4..4 + end_pos]; // Content between delimiters
-
-            // Check for malformed frontmatter patterns
-            // Frontmatter should not start with "---" (which would indicate nested delimiters)
-            if yaml_content.trim_start().starts_with("---") {
-                return None; // Malformed frontmatter with nested delimiters
-            }
-
-            // Validate that it's parseable as YAML
-            if serde_yaml::from_str::<serde_yaml::Value>(yaml_content).is_ok() {
-                Some(full_frontmatter.to_string())
-            } else {
-                None // Invalid YAML, treat as regular content
-            }
-        } else {
-            None
+        let mut result = lines.join("\n");
+        if lines.last() == Some(&"") {
+            result.push('\n');
         }
+        result
+    }
+
+    /// Extracts content after frontmatter with proper line ending handling.
+    fn extract_content_after_frontmatter(content: &str, start_pos: usize) -> String {
+        let remaining = Self::get_remaining_content(content, start_pos);
+        if remaining.is_empty() {
+            return String::new();
+        }
+
+        let lines: Vec<&str> = remaining.lines().collect();
+        let content_start_idx = Self::skip_malformed_delimiters(&lines);
+
+        Self::join_content_lines(&lines[content_start_idx..])
+    }
+
+    /// Finds the end line of frontmatter and calculates content position.
+    fn find_end_line(&self) -> Option<usize> {
+        let content_after_start = &self.0[Self::FRONTMATTER_OPENING_DELIMITER_LEN..];
+        let lines: Vec<&str> = content_after_start.lines().collect();
+        Self::find_frontmatter_end_line(&lines)
+    }
+
+    /// Calculates the byte position where content starts after frontmatter.
+    fn calculate_content_position(&self, end_line_idx: usize) -> usize {
+        let content_after_start = &self.0[Self::FRONTMATTER_OPENING_DELIMITER_LEN..];
+        let lines: Vec<&str> = content_after_start.lines().collect();
+        Self::calculate_content_start_position(&lines, end_line_idx)
     }
 
     /// Returns only the content portion of the markdown, stripping any frontmatter.
@@ -254,74 +424,16 @@ impl Markdown {
     /// assert_eq!(content_only, "# Hello World\n\nContent here.");
     /// ```
     pub fn content_only(&self) -> String {
-        // Check if content starts with frontmatter delimiters
-        if !self.0.starts_with("---\n") {
+        if self.find_frontmatter_boundaries().is_none() {
             return self.0.clone();
         }
 
-        // If frontmatter parsing fails, treat the whole thing as content
-        if self.frontmatter().is_none() {
+        let Some(end_line_idx) = self.find_end_line() else {
             return self.0.clone();
-        }
+        };
 
-        // Find the closing delimiter - look for proper frontmatter end
-        // We need to find a line that contains only "---"
-        let content_after_start = &self.0[4..]; // Skip "---\n"
-        let lines: Vec<&str> = content_after_start.lines().collect();
-        let mut frontmatter_end_idx = None;
-
-        for (i, line) in lines.iter().enumerate() {
-            if line.trim() == "---" {
-                // This could be the end of frontmatter
-                frontmatter_end_idx = Some(i);
-                break;
-            }
-        }
-
-        if let Some(end_line_idx) = frontmatter_end_idx {
-            // Calculate byte position of the content after frontmatter
-            let mut content_start = 4; // Start after "---\n"
-                                       // Add bytes for all lines up to and including the closing "---"
-            for line in lines.iter().take(end_line_idx + 1) {
-                content_start += line.len();
-                content_start += 1; // Add newline character
-            }
-
-            if content_start < self.0.len() {
-                // Skip any leading newlines and additional --- lines from malformed frontmatter
-                let mut remaining = &self.0[content_start..];
-                remaining = remaining.strip_prefix('\n').unwrap_or(remaining);
-
-                // Keep stripping lines that contain only "---"
-                let remaining_lines: Vec<&str> = remaining.lines().collect();
-                let mut actual_content_start = 0;
-                for (i, line) in remaining_lines.iter().enumerate() {
-                    if line.trim() != "---" {
-                        actual_content_start = i;
-                        break;
-                    }
-                }
-
-                if actual_content_start < remaining_lines.len() {
-                    let content_lines = &remaining_lines[actual_content_start..];
-                    // Join with newlines and add a final newline if there was one originally
-                    let mut result = content_lines.join("\n");
-                    // If the last element is empty, it means there was a trailing newline
-                    if content_lines.last() == Some(&"") {
-                        result.push('\n');
-                    }
-                    result
-                } else {
-                    String::new()
-                }
-            } else {
-                String::new()
-            }
-        } else {
-            // No proper closing delimiter found, treat as malformed frontmatter
-            // Return the original content unchanged
-            self.0.clone()
-        }
+        let content_start = self.calculate_content_position(end_line_idx);
+        Self::extract_content_after_frontmatter(&self.0, content_start)
     }
 }
 
@@ -357,35 +469,77 @@ impl fmt::Display for Markdown {
     }
 }
 
+impl_partial_eq_for_newtype!(Markdown);
+
+/// Internal enum for URL validation results.
+enum UrlValidation {
+    ValidWeb,
+    ValidLocal,
+    Invalid,
+}
+
 /// A newtype wrapper for URLs with validation.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Url(String);
 
 impl Url {
+    /// HTTP protocol string
+    const HTTP_PROTOCOL: &'static str = "http://";
+    /// HTTPS protocol string
+    const HTTPS_PROTOCOL: &'static str = "https://";
+    /// Minimum length for a valid "http://" URL (7 chars for "http://" + at least 1 char for domain)
+    const HTTP_PROTOCOL_MIN_LEN: usize = Self::HTTP_PROTOCOL.len();
+    /// Minimum length for a valid "https://" URL (8 chars for "https://" + at least 1 char for domain)
+    const HTTPS_PROTOCOL_MIN_LEN: usize = Self::HTTPS_PROTOCOL.len();
+
+    /// Checks if a URL has a valid protocol with minimum length.
+    fn is_valid_protocol(url: &str, protocol: &str, min_len: usize) -> bool {
+        url.starts_with(protocol) && url.len() > min_len
+    }
+
+    /// Checks if a string is a valid HTTP URL.
+    fn is_valid_http_url(url: &str) -> bool {
+        Self::is_valid_protocol(url, Self::HTTP_PROTOCOL, Self::HTTP_PROTOCOL_MIN_LEN)
+    }
+
+    /// Checks if a string is a valid HTTPS URL.
+    fn is_valid_https_url(url: &str) -> bool {
+        Self::is_valid_protocol(url, Self::HTTPS_PROTOCOL, Self::HTTPS_PROTOCOL_MIN_LEN)
+    }
+
+    /// Checks if a string is a valid web URL (http:// or https://).
+    fn is_valid_web_url(url: &str) -> bool {
+        Self::is_valid_http_url(url) || Self::is_valid_https_url(url)
+    }
+
+    /// Validates the URL type.
+    fn validate_url_type(url: &str) -> UrlValidation {
+        if Self::is_valid_web_url(url) {
+            return UrlValidation::ValidWeb;
+        }
+        if crate::utils::is_local_file_path(url) {
+            return UrlValidation::ValidLocal;
+        }
+        UrlValidation::Invalid
+    }
+
     /// Creates a new URL instance with basic validation.
     ///
     /// # Errors
     ///
     /// Returns a `MarkdownError::InvalidUrl` if the URL format is invalid.
     pub fn new(url: String) -> Result<Self, MarkdownError> {
-        // Check for HTTP/HTTPS URLs
-        if (url.starts_with("http://") && url.len() > 7)
-            || (url.starts_with("https://") && url.len() > 8)
-        {
-            return Ok(Url(url));
+        match Self::validate_url_type(&url) {
+            UrlValidation::ValidWeb | UrlValidation::ValidLocal => Ok(Url(url)),
+            UrlValidation::Invalid => {
+                let context =
+                    ErrorContext::new(&url, operations::URL_VALIDATION, converter_types::URL_NEW);
+                Err(MarkdownError::ValidationError {
+                    kind: ValidationErrorKind::InvalidUrl,
+                    context,
+                })
+            }
         }
-
-        // Check for local file paths
-        if crate::utils::is_local_file_path(&url) {
-            return Ok(Url(url));
-        }
-
-        // If neither web URL nor local file path, it's invalid
-        let context = ErrorContext::new(&url, "URL validation", "Url::new");
-        Err(MarkdownError::ValidationError {
-            kind: ValidationErrorKind::InvalidUrl,
-            context,
-        })
     }
 
     /// Returns the URL as a string slice.
@@ -415,6 +569,8 @@ impl<'de> Deserialize<'de> for Url {
         Url::new(s).map_err(serde::de::Error::custom)
     }
 }
+
+impl_partial_eq_for_newtype!(Url);
 
 /// Enumeration of supported URL types for content extraction.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -486,6 +642,24 @@ pub enum ValidationErrorKind {
     MissingParameter,
 }
 
+impl ErrorSuggestions for ValidationErrorKind {
+    fn suggestions(&self) -> Vec<String> {
+        match self {
+            ValidationErrorKind::InvalidUrl => vec![
+                "Ensure the URL starts with http:// or https://".to_string(),
+                "Check that the URL is complete and properly formatted".to_string(),
+                "Try copying the URL directly from your browser".to_string(),
+            ],
+            ValidationErrorKind::InvalidFormat => {
+                vec!["Verify the input format matches the expected pattern".to_string()]
+            }
+            ValidationErrorKind::MissingParameter => {
+                vec!["Check that all required parameters are provided".to_string()]
+            }
+        }
+    }
+}
+
 /// Network error kinds for connection and communication failures.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum NetworkErrorKind {
@@ -494,6 +668,95 @@ pub enum NetworkErrorKind {
     DnsResolution,
     RateLimited,
     ServerError(u16),
+}
+
+impl NetworkErrorKind {
+    /// HTTP status code for Unauthorized
+    const HTTP_UNAUTHORIZED: u16 = 401;
+    /// HTTP status code for Forbidden
+    const HTTP_FORBIDDEN: u16 = 403;
+    /// HTTP status code for Not Found
+    const HTTP_NOT_FOUND: u16 = 404;
+    /// HTTP status code for Too Many Requests (rate limiting)
+    const HTTP_TOO_MANY_REQUESTS: u16 = 429;
+    /// HTTP status code for Internal Server Error
+    const HTTP_INTERNAL_SERVER_ERROR: u16 = 500;
+    /// HTTP status code for Service Unavailable
+    const HTTP_SERVICE_UNAVAILABLE: u16 = 503;
+    /// HTTP status code for Gateway Timeout
+    const HTTP_GATEWAY_TIMEOUT: u16 = 504;
+
+    /// Checks if status is in server error range (500-503).
+    fn is_server_error_range(status: u16) -> bool {
+        (Self::HTTP_INTERNAL_SERVER_ERROR..=Self::HTTP_SERVICE_UNAVAILABLE).contains(&status)
+    }
+
+    /// Checks if status is a rate limit error (429).
+    fn is_rate_limit_error(status: u16) -> bool {
+        status == Self::HTTP_TOO_MANY_REQUESTS
+    }
+
+    /// Checks if status is gateway timeout or above (504+).
+    fn is_gateway_error_or_above(status: u16) -> bool {
+        status >= Self::HTTP_GATEWAY_TIMEOUT
+    }
+
+    /// Checks if an HTTP status code indicates a recoverable error.
+    fn is_status_code_recoverable(status: u16) -> bool {
+        Self::is_server_error_range(status)
+            || Self::is_rate_limit_error(status)
+            || Self::is_gateway_error_or_above(status)
+    }
+}
+
+impl RetryableError for NetworkErrorKind {
+    fn is_retryable(&self) -> bool {
+        match self {
+            NetworkErrorKind::Timeout => true,
+            NetworkErrorKind::ConnectionFailed => true,
+            NetworkErrorKind::DnsResolution => false,
+            NetworkErrorKind::RateLimited => true,
+            NetworkErrorKind::ServerError(status) => *status >= Self::HTTP_INTERNAL_SERVER_ERROR,
+        }
+    }
+
+    fn is_recoverable(&self) -> bool {
+        match self {
+            NetworkErrorKind::Timeout
+            | NetworkErrorKind::ConnectionFailed
+            | NetworkErrorKind::RateLimited => true,
+            NetworkErrorKind::DnsResolution => false,
+            NetworkErrorKind::ServerError(status) => Self::is_status_code_recoverable(*status),
+        }
+    }
+}
+
+impl ErrorSuggestions for NetworkErrorKind {
+    fn suggestions(&self) -> Vec<String> {
+        match self {
+            NetworkErrorKind::Timeout => vec![
+                "Check your internet connection".to_string(),
+                "Try again in a few minutes".to_string(),
+                "Consider increasing the timeout in configuration".to_string(),
+            ],
+            NetworkErrorKind::ConnectionFailed => vec![
+                "Verify the server is accessible".to_string(),
+                "Check if you're behind a firewall or proxy".to_string(),
+            ],
+            NetworkErrorKind::DnsResolution => vec![
+                "Check that the domain name is correct".to_string(),
+                "Try using a different DNS server".to_string(),
+            ],
+            NetworkErrorKind::RateLimited => vec![
+                "Wait before making additional requests".to_string(),
+                "Consider authenticating to increase rate limits".to_string(),
+            ],
+            NetworkErrorKind::ServerError(_) => vec![
+                "The server is experiencing issues".to_string(),
+                "Try again later".to_string(),
+            ],
+        }
+    }
 }
 
 /// Authentication error kinds for authorization failures.
@@ -505,12 +768,63 @@ pub enum AuthErrorKind {
     TokenExpired,
 }
 
+impl RetryableError for AuthErrorKind {
+    fn is_retryable(&self) -> bool {
+        matches!(self, AuthErrorKind::TokenExpired)
+    }
+
+    fn is_recoverable(&self) -> bool {
+        true // All auth errors are potentially recoverable
+    }
+}
+
+impl ErrorSuggestions for AuthErrorKind {
+    fn suggestions(&self) -> Vec<String> {
+        match self {
+            AuthErrorKind::MissingToken => vec![
+                "Set up authentication credentials".to_string(),
+                "Check the documentation for authentication requirements".to_string(),
+            ],
+            AuthErrorKind::InvalidToken => vec![
+                "Verify your authentication token is correct".to_string(),
+                "Generate a new token if the current one is invalid".to_string(),
+            ],
+            AuthErrorKind::PermissionDenied => vec![
+                "Ensure you have permission to access this resource".to_string(),
+                "Check that your token has the required scopes".to_string(),
+            ],
+            AuthErrorKind::TokenExpired => {
+                vec!["Refresh or regenerate your authentication token".to_string()]
+            }
+        }
+    }
+}
+
 /// Content error kinds for data processing failures.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ContentErrorKind {
     EmptyContent,
     UnsupportedFormat,
     ParsingFailed,
+}
+
+impl ErrorSuggestions for ContentErrorKind {
+    fn suggestions(&self) -> Vec<String> {
+        match self {
+            ContentErrorKind::EmptyContent => vec![
+                "Verify the source contains actual content".to_string(),
+                "Check if the URL is publicly accessible".to_string(),
+            ],
+            ContentErrorKind::UnsupportedFormat => vec![
+                "Try using a different converter for this content type".to_string(),
+                "Check if the content format is supported".to_string(),
+            ],
+            ContentErrorKind::ParsingFailed => vec![
+                "The content format may be corrupted or unsupported".to_string(),
+                "Try accessing the content directly to verify it's valid".to_string(),
+            ],
+        }
+    }
 }
 
 /// Converter error kinds for external tool and processing failures.
@@ -521,12 +835,50 @@ pub enum ConverterErrorKind {
     UnsupportedOperation,
 }
 
+impl ErrorSuggestions for ConverterErrorKind {
+    fn suggestions(&self) -> Vec<String> {
+        match self {
+            ConverterErrorKind::ExternalToolFailed => vec![
+                "Check that required external tools are installed".to_string(),
+                "Verify tool dependencies and PATH configuration".to_string(),
+            ],
+            ConverterErrorKind::ProcessingError => vec![
+                "Try again with different converter settings".to_string(),
+                "Check if the input format is supported".to_string(),
+            ],
+            ConverterErrorKind::UnsupportedOperation => vec![
+                "This operation is not supported for this content type".to_string(),
+                "Try using a different converter or approach".to_string(),
+            ],
+        }
+    }
+}
+
 /// Configuration error kinds for setup and configuration failures.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ConfigErrorKind {
     InvalidConfig,
     MissingDependency,
     InvalidValue,
+}
+
+impl ErrorSuggestions for ConfigErrorKind {
+    fn suggestions(&self) -> Vec<String> {
+        match self {
+            ConfigErrorKind::InvalidConfig => vec![
+                "Check your configuration file for syntax errors".to_string(),
+                "Verify all configuration values are valid".to_string(),
+            ],
+            ConfigErrorKind::MissingDependency => vec![
+                "Install the required dependencies".to_string(),
+                "Check the documentation for setup requirements".to_string(),
+            ],
+            ConfigErrorKind::InvalidValue => vec![
+                "Check that configuration values are within valid ranges".to_string(),
+                "Refer to documentation for valid configuration options".to_string(),
+            ],
+        }
+    }
 }
 
 /// Error types for the markdowndown library.
@@ -596,7 +948,58 @@ pub enum MarkdownError {
     LegacyConfigurationError { message: String },
 }
 
+/// Macro to generate legacy error suggestion helper methods.
+macro_rules! legacy_suggestions {
+    ($($name:ident => [$($suggestion:expr),+ $(,)?]),+ $(,)?) => {
+        $(
+            fn $name() -> Vec<String> {
+                vec![$($suggestion.to_string()),+]
+            }
+        )+
+    };
+}
+
 impl MarkdownError {
+    legacy_suggestions! {
+        legacy_network_suggestions => [
+            "Check your internet connection",
+            "Try again in a few minutes",
+            "The server may be experiencing issues"
+        ],
+        legacy_parse_suggestions => [
+            "Verify the content format is supported",
+            "Check if the source content is valid"
+        ],
+        legacy_invalid_url_suggestions => [
+            "Ensure the URL starts with http:// or https://",
+            "Check that the URL is complete and properly formatted",
+            "Try copying the URL directly from your browser"
+        ],
+        legacy_auth_suggestions => [
+            "Check your authentication credentials",
+            "Verify that your token has the required permissions",
+            "Consider regenerating your authentication token"
+        ],
+        legacy_config_suggestions => [
+            "Check your configuration file for errors",
+            "Verify all configuration values are valid"
+        ],
+    }
+
+    /// Helper method to check if an error matches a specific HTTP status code or legacy message patterns.
+    fn check_status_or_message(&self, status_code: u16, legacy_patterns: &[&str]) -> bool {
+        match self {
+            MarkdownError::EnhancedNetworkError {
+                kind: NetworkErrorKind::ServerError(status),
+                ..
+            } if *status == status_code => true,
+            MarkdownError::NetworkError { message } | MarkdownError::AuthError { message } => {
+                legacy_patterns.iter().any(|p| message.contains(p))
+            }
+            _ => false,
+        }
+    }
+
     /// Returns the error context if available.
     pub fn context(&self) -> Option<&ErrorContext> {
         match self {
@@ -613,17 +1016,8 @@ impl MarkdownError {
     /// Returns true if this error is potentially retryable.
     pub fn is_retryable(&self) -> bool {
         match self {
-            MarkdownError::EnhancedNetworkError { kind, .. } => match kind {
-                NetworkErrorKind::Timeout => true,
-                NetworkErrorKind::ConnectionFailed => true,
-                NetworkErrorKind::DnsResolution => false,
-                NetworkErrorKind::RateLimited => true,
-                NetworkErrorKind::ServerError(status) => *status >= 500,
-            },
-            MarkdownError::AuthenticationError {
-                kind: AuthErrorKind::TokenExpired,
-                ..
-            } => true,
+            MarkdownError::EnhancedNetworkError { kind, .. } => kind.is_retryable(),
+            MarkdownError::AuthenticationError { kind, .. } => kind.is_retryable(),
             // Legacy network errors - use simple heuristics based on message content
             MarkdownError::NetworkError { message } => {
                 message.contains("timeout")
@@ -634,156 +1028,94 @@ impl MarkdownError {
         }
     }
 
+    /// Checks if a content error is recoverable.
+    fn is_content_error_recoverable(kind: &ContentErrorKind) -> bool {
+        matches!(kind, ContentErrorKind::UnsupportedFormat)
+    }
+
+    /// Checks if a legacy error is recoverable.
+    fn is_legacy_error_recoverable(error: &MarkdownError) -> bool {
+        matches!(
+            error,
+            MarkdownError::NetworkError { .. } | MarkdownError::AuthError { .. }
+        )
+    }
+
     /// Returns true if recovery strategies should be attempted.
     pub fn is_recoverable(&self) -> bool {
         match self {
-            MarkdownError::EnhancedNetworkError { kind, .. } => match kind {
-                NetworkErrorKind::Timeout => true,
-                NetworkErrorKind::ConnectionFailed => true,
-                NetworkErrorKind::DnsResolution => false,
-                NetworkErrorKind::RateLimited => true,
-                NetworkErrorKind::ServerError(status) => match status {
-                    500..=503 | 429 => true, // Server errors and rate limiting
-                    400..=499 => false,      // Client errors (including 400 Bad Request)
-                    _ => true,               // Other status codes default to recoverable
-                },
-            },
-            MarkdownError::AuthenticationError { .. } => true,
+            MarkdownError::EnhancedNetworkError { kind, .. } => kind.is_recoverable(),
+            MarkdownError::AuthenticationError { kind, .. } => kind.is_recoverable(),
             MarkdownError::ConverterError { .. } => true,
-            MarkdownError::ContentError {
-                kind: ContentErrorKind::UnsupportedFormat,
-                ..
-            } => true,
-            // Legacy errors are considered recoverable for network and auth issues
-            MarkdownError::NetworkError { .. } => true,
-            MarkdownError::AuthError { .. } => true,
-            _ => false,
+            MarkdownError::ContentError { kind, .. } => Self::is_content_error_recoverable(kind),
+            _ => Self::is_legacy_error_recoverable(self),
+        }
+    }
+
+    /// Returns suggestions for legacy errors.
+    fn legacy_suggestions(&self) -> Vec<String> {
+        match self {
+            MarkdownError::NetworkError { .. } => Self::legacy_network_suggestions(),
+            MarkdownError::ParseError { .. } => Self::legacy_parse_suggestions(),
+            MarkdownError::InvalidUrl { .. } => Self::legacy_invalid_url_suggestions(),
+            MarkdownError::AuthError { .. } => Self::legacy_auth_suggestions(),
+            MarkdownError::LegacyConfigurationError { .. } => Self::legacy_config_suggestions(),
+            _ => vec![],
         }
     }
 
     /// Returns user-friendly suggestions for resolving this error.
     pub fn suggestions(&self) -> Vec<String> {
         match self {
-            MarkdownError::ValidationError { kind, .. } => match kind {
-                ValidationErrorKind::InvalidUrl => vec![
-                    "Ensure the URL starts with http:// or https://".to_string(),
-                    "Check that the URL is complete and properly formatted".to_string(),
-                    "Try copying the URL directly from your browser".to_string(),
-                ],
-                ValidationErrorKind::InvalidFormat => {
-                    vec!["Verify the input format matches the expected pattern".to_string()]
-                }
-                ValidationErrorKind::MissingParameter => {
-                    vec!["Check that all required parameters are provided".to_string()]
-                }
-            },
-            MarkdownError::EnhancedNetworkError { kind, .. } => match kind {
-                NetworkErrorKind::Timeout => vec![
-                    "Check your internet connection".to_string(),
-                    "Try again in a few minutes".to_string(),
-                    "Consider increasing the timeout in configuration".to_string(),
-                ],
-                NetworkErrorKind::ConnectionFailed => vec![
-                    "Verify the server is accessible".to_string(),
-                    "Check if you're behind a firewall or proxy".to_string(),
-                ],
-                NetworkErrorKind::DnsResolution => vec![
-                    "Check that the domain name is correct".to_string(),
-                    "Try using a different DNS server".to_string(),
-                ],
-                NetworkErrorKind::RateLimited => vec![
-                    "Wait before making additional requests".to_string(),
-                    "Consider authenticating to increase rate limits".to_string(),
-                ],
-                NetworkErrorKind::ServerError(_) => vec![
-                    "The server is experiencing issues".to_string(),
-                    "Try again later".to_string(),
-                ],
-            },
-            MarkdownError::AuthenticationError { kind, .. } => match kind {
-                AuthErrorKind::MissingToken => vec![
-                    "Set up authentication credentials".to_string(),
-                    "Check the documentation for authentication requirements".to_string(),
-                ],
-                AuthErrorKind::InvalidToken => vec![
-                    "Verify your authentication token is correct".to_string(),
-                    "Generate a new token if the current one is invalid".to_string(),
-                ],
-                AuthErrorKind::PermissionDenied => vec![
-                    "Ensure you have permission to access this resource".to_string(),
-                    "Check that your token has the required scopes".to_string(),
-                ],
-                AuthErrorKind::TokenExpired => {
-                    vec!["Refresh or regenerate your authentication token".to_string()]
-                }
-            },
-            MarkdownError::ContentError { kind, .. } => match kind {
-                ContentErrorKind::EmptyContent => vec![
-                    "Verify the source contains actual content".to_string(),
-                    "Check if the URL is publicly accessible".to_string(),
-                ],
-                ContentErrorKind::UnsupportedFormat => vec![
-                    "Try using a different converter for this content type".to_string(),
-                    "Check if the content format is supported".to_string(),
-                ],
-                ContentErrorKind::ParsingFailed => vec![
-                    "The content format may be corrupted or unsupported".to_string(),
-                    "Try accessing the content directly to verify it's valid".to_string(),
-                ],
-            },
-            MarkdownError::ConverterError { kind, .. } => match kind {
-                ConverterErrorKind::ExternalToolFailed => vec![
-                    "Check that required external tools are installed".to_string(),
-                    "Verify tool dependencies and PATH configuration".to_string(),
-                ],
-                ConverterErrorKind::ProcessingError => vec![
-                    "Try again with different converter settings".to_string(),
-                    "Check if the input format is supported".to_string(),
-                ],
-                ConverterErrorKind::UnsupportedOperation => vec![
-                    "This operation is not supported for this content type".to_string(),
-                    "Try using a different converter or approach".to_string(),
-                ],
-            },
-            MarkdownError::ConfigurationError { kind, .. } => match kind {
-                ConfigErrorKind::InvalidConfig => vec![
-                    "Check your configuration file for syntax errors".to_string(),
-                    "Verify all configuration values are valid".to_string(),
-                ],
-                ConfigErrorKind::MissingDependency => vec![
-                    "Install the required dependencies".to_string(),
-                    "Check the documentation for setup requirements".to_string(),
-                ],
-                ConfigErrorKind::InvalidValue => vec![
-                    "Check that configuration values are within valid ranges".to_string(),
-                    "Refer to documentation for valid configuration options".to_string(),
-                ],
-            },
-            // Legacy error suggestions
-            MarkdownError::NetworkError { .. } => vec![
-                "Check your internet connection".to_string(),
-                "Try again in a few minutes".to_string(),
-                "The server may be experiencing issues".to_string(),
-            ],
-            MarkdownError::ParseError { .. } => vec![
-                "Verify the content format is supported".to_string(),
-                "Check if the source content is valid".to_string(),
-            ],
-            MarkdownError::InvalidUrl { .. } => vec![
-                "Ensure the URL starts with http:// or https://".to_string(),
-                "Check that the URL is complete and properly formatted".to_string(),
-                "Try copying the URL directly from your browser".to_string(),
-            ],
-            MarkdownError::AuthError { .. } => vec![
-                "Check your authentication credentials".to_string(),
-                "Verify that your token has the required permissions".to_string(),
-                "Consider regenerating your authentication token".to_string(),
-            ],
-            MarkdownError::LegacyConfigurationError { .. } => vec![
-                "Check your configuration file for errors".to_string(),
-                "Verify all configuration values are valid".to_string(),
-            ],
+            MarkdownError::ValidationError { kind, .. } => kind.suggestions(),
+            MarkdownError::EnhancedNetworkError { kind, .. } => kind.suggestions(),
+            MarkdownError::AuthenticationError { kind, .. } => kind.suggestions(),
+            MarkdownError::ContentError { kind, .. } => kind.suggestions(),
+            MarkdownError::ConverterError { kind, .. } => kind.suggestions(),
+            MarkdownError::ConfigurationError { kind, .. } => kind.suggestions(),
+            _ => self.legacy_suggestions(),
         }
+    }
+
+    /// Checks if this error is a rate limit error.
+    pub fn is_rate_limit(&self) -> bool {
+        match self {
+            MarkdownError::EnhancedNetworkError {
+                kind: NetworkErrorKind::RateLimited,
+                ..
+            } => true,
+            MarkdownError::NetworkError { message } | MarkdownError::AuthError { message } => {
+                message.to_lowercase().contains("rate limit")
+            }
+            _ => false,
+        }
+    }
+
+    /// Checks if this error is a forbidden (403) error.
+    pub fn is_forbidden(&self) -> bool {
+        match self {
+            MarkdownError::AuthenticationError {
+                kind: AuthErrorKind::PermissionDenied,
+                ..
+            } => true,
+            _ => self.check_status_or_message(NetworkErrorKind::HTTP_FORBIDDEN, &["403"]),
+        }
+    }
+
+    /// Checks if this error is an unauthorized (401) error.
+    pub fn is_unauthorized(&self) -> bool {
+        match self {
+            MarkdownError::AuthenticationError {
+                kind: AuthErrorKind::InvalidToken | AuthErrorKind::MissingToken,
+                ..
+            } => true,
+            _ => self.check_status_or_message(NetworkErrorKind::HTTP_UNAUTHORIZED, &["401"]),
+        }
+    }
+
+    /// Checks if this error is a not found (404) error.
+    pub fn is_not_found(&self) -> bool {
+        self.check_status_or_message(NetworkErrorKind::HTTP_NOT_FOUND, &["404", "not found"])
     }
 }
 
@@ -801,6 +1133,36 @@ pub struct Frontmatter {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Test constants for magic number elimination
+    /// Number of repetitions for Unicode whitespace testing
+    const WHITESPACE_REPETITION_COUNT: usize = 5;
+    /// Maximum acceptable timestamp difference in milliseconds for timestamp validation tests
+    const MAX_TIMESTAMP_DIFF_MS: i64 = 1000;
+    /// Maximum acceptable timestamp difference in seconds for timestamp validation tests
+    const MAX_TIMESTAMP_DIFF_SECONDS: i64 = 5;
+
+    // HTTP status codes for testing
+    /// HTTP 400 Bad Request - for testing client error handling
+    const TEST_HTTP_BAD_REQUEST: u16 = 400;
+    /// HTTP 401 Unauthorized - for testing authentication error handling
+    const TEST_HTTP_UNAUTHORIZED: u16 = 401;
+    /// HTTP 404 Not Found - for testing not found error handling
+    const TEST_HTTP_NOT_FOUND: u16 = 404;
+    /// HTTP 429 Too Many Requests - for testing rate limiting
+    const TEST_HTTP_TOO_MANY_REQUESTS: u16 = 429;
+    /// HTTP 500 Internal Server Error - for testing server error handling
+    const TEST_HTTP_INTERNAL_SERVER_ERROR: u16 = 500;
+    /// HTTP 501 Not Implemented - for testing unimplemented feature handling
+    const TEST_HTTP_NOT_IMPLEMENTED: u16 = 501;
+    /// HTTP 502 Bad Gateway - for testing gateway error handling
+    const TEST_HTTP_BAD_GATEWAY: u16 = 502;
+    /// HTTP 503 Service Unavailable - for testing service availability
+    const TEST_HTTP_SERVICE_UNAVAILABLE: u16 = 503;
+    /// HTTP 504 Gateway Timeout - for testing timeout handling
+    const TEST_HTTP_GATEWAY_TIMEOUT: u16 = 504;
+    /// HTTP 505 HTTP Version Not Supported - for testing version compatibility
+    const TEST_HTTP_VERSION_NOT_SUPPORTED: u16 = 505;
 
     #[test]
     fn test_markdown_creation_from_string() {
@@ -1134,7 +1496,7 @@ mod tests {
             ];
 
             for whitespace in unicode_whitespace_chars {
-                let only_whitespace = whitespace.repeat(5);
+                let only_whitespace = whitespace.repeat(WHITESPACE_REPETITION_COUNT);
                 let markdown_result = Markdown::new(only_whitespace);
                 assert!(
                     markdown_result.is_err(),
@@ -1308,7 +1670,7 @@ mod tests {
                 // Timestamp should be recent (within last few seconds)
                 let now = Utc::now();
                 let diff = (now - context.timestamp).num_seconds();
-                assert!((0..5).contains(&diff));
+                assert!((0..MAX_TIMESTAMP_DIFF_SECONDS).contains(&diff));
             }
 
             #[test]
@@ -1378,13 +1740,13 @@ mod tests {
 
                 // Test server errors - 5xx should be retryable, 4xx should not
                 let server_error_500 = MarkdownError::EnhancedNetworkError {
-                    kind: NetworkErrorKind::ServerError(500),
+                    kind: NetworkErrorKind::ServerError(TEST_HTTP_INTERNAL_SERVER_ERROR),
                     context: context.clone(),
                 };
                 assert!(server_error_500.is_retryable());
 
                 let client_error_404 = MarkdownError::EnhancedNetworkError {
-                    kind: NetworkErrorKind::ServerError(404),
+                    kind: NetworkErrorKind::ServerError(TEST_HTTP_NOT_FOUND),
                     context,
                 };
                 assert!(!client_error_404.is_retryable());
@@ -1628,7 +1990,7 @@ mod tests {
                 let deserialized: ValidationErrorKind = serde_yaml::from_str(&yaml).unwrap();
                 assert_eq!(validation_kind, deserialized);
 
-                let network_kind = NetworkErrorKind::ServerError(500);
+                let network_kind = NetworkErrorKind::ServerError(TEST_HTTP_INTERNAL_SERVER_ERROR);
                 let yaml = serde_yaml::to_string(&network_kind).unwrap();
                 let deserialized: NetworkErrorKind = serde_yaml::from_str(&yaml).unwrap();
                 assert_eq!(network_kind, deserialized);
@@ -1928,16 +2290,16 @@ mod tests {
 
                 // Test boundary cases for server error recovery
                 let test_cases = [
-                    (400, false, false), // Bad Request - not retryable, not recoverable
-                    (401, false, false), // Unauthorized - not retryable, not recoverable
-                    (404, false, false), // Not Found - not retryable, not recoverable
-                    (429, false, true),  // Too Many Requests - not retryable but recoverable
-                    (500, true, true),   // Internal Server Error - retryable and recoverable
-                    (501, true, true),   // Not Implemented - retryable and recoverable
-                    (502, true, true),   // Bad Gateway - retryable and recoverable
-                    (503, true, true),   // Service Unavailable - retryable and recoverable
-                    (504, true, true),   // Gateway Timeout - retryable and recoverable
-                    (505, true, true),   // HTTP Version Not Supported - default to recoverable
+                    (TEST_HTTP_BAD_REQUEST, false, false), // Bad Request - not retryable, not recoverable
+                    (TEST_HTTP_UNAUTHORIZED, false, false), // Unauthorized - not retryable, not recoverable
+                    (TEST_HTTP_NOT_FOUND, false, false), // Not Found - not retryable, not recoverable
+                    (TEST_HTTP_TOO_MANY_REQUESTS, false, true), // Too Many Requests - not retryable but recoverable
+                    (TEST_HTTP_INTERNAL_SERVER_ERROR, true, true), // Internal Server Error - retryable and recoverable
+                    (TEST_HTTP_NOT_IMPLEMENTED, true, true), // Not Implemented - retryable and recoverable
+                    (TEST_HTTP_BAD_GATEWAY, true, true), // Bad Gateway - retryable and recoverable
+                    (TEST_HTTP_SERVICE_UNAVAILABLE, true, true), // Service Unavailable - retryable and recoverable
+                    (TEST_HTTP_GATEWAY_TIMEOUT, true, true), // Gateway Timeout - retryable and recoverable
+                    (TEST_HTTP_VERSION_NOT_SUPPORTED, true, true), // HTTP Version Not Supported - default to recoverable
                 ];
 
                 for (status_code, expected_retryable, expected_recoverable) in test_cases {
@@ -1959,29 +2321,35 @@ mod tests {
                 }
             }
 
+            /// Helper function to test error suggestions for a collection of error kinds
+            fn test_error_kind_suggestions<E, F>(error_kinds: &[E], create_error: F)
+            where
+                E: std::fmt::Debug + Clone,
+                F: Fn(E, ErrorContext) -> MarkdownError,
+            {
+                let context = ErrorContext::new("test-url", "test-op", "test-converter");
+                for kind in error_kinds {
+                    let error = create_error(kind.clone(), context.clone());
+                    let suggestions = error.suggestions();
+                    assert!(
+                        !suggestions.is_empty(),
+                        "Should have suggestions for {:?}",
+                        kind
+                    );
+                }
+            }
+
             #[test]
             fn test_error_suggestions_content_coverage() {
-                // Test that all error suggestion branches are covered
-                let context = ErrorContext::new("test-url", "test-op", "test-converter");
-
                 // Test all ValidationErrorKind variants
                 let validation_kinds = [
                     ValidationErrorKind::InvalidUrl,
                     ValidationErrorKind::InvalidFormat,
                     ValidationErrorKind::MissingParameter,
                 ];
-
-                for kind in validation_kinds {
-                    let error = MarkdownError::ValidationError {
-                        kind: kind.clone(),
-                        context: context.clone(),
-                    };
-                    let suggestions = error.suggestions();
-                    assert!(
-                        !suggestions.is_empty(),
-                        "Should have suggestions for {kind:?}"
-                    );
-                }
+                test_error_kind_suggestions(&validation_kinds, |kind, context| {
+                    MarkdownError::ValidationError { kind, context }
+                });
 
                 // Test all NetworkErrorKind variants
                 let network_kinds = [
@@ -1989,20 +2357,11 @@ mod tests {
                     NetworkErrorKind::ConnectionFailed,
                     NetworkErrorKind::DnsResolution,
                     NetworkErrorKind::RateLimited,
-                    NetworkErrorKind::ServerError(500),
+                    NetworkErrorKind::ServerError(TEST_HTTP_INTERNAL_SERVER_ERROR),
                 ];
-
-                for kind in network_kinds {
-                    let error = MarkdownError::EnhancedNetworkError {
-                        kind: kind.clone(),
-                        context: context.clone(),
-                    };
-                    let suggestions = error.suggestions();
-                    assert!(
-                        !suggestions.is_empty(),
-                        "Should have suggestions for {kind:?}"
-                    );
-                }
+                test_error_kind_suggestions(&network_kinds, |kind, context| {
+                    MarkdownError::EnhancedNetworkError { kind, context }
+                });
 
                 // Test all AuthErrorKind variants
                 let auth_kinds = [
@@ -2011,18 +2370,9 @@ mod tests {
                     AuthErrorKind::PermissionDenied,
                     AuthErrorKind::TokenExpired,
                 ];
-
-                for kind in auth_kinds {
-                    let error = MarkdownError::AuthenticationError {
-                        kind: kind.clone(),
-                        context: context.clone(),
-                    };
-                    let suggestions = error.suggestions();
-                    assert!(
-                        !suggestions.is_empty(),
-                        "Should have suggestions for {kind:?}"
-                    );
-                }
+                test_error_kind_suggestions(&auth_kinds, |kind, context| {
+                    MarkdownError::AuthenticationError { kind, context }
+                });
 
                 // Test all ContentErrorKind variants
                 let content_kinds = [
@@ -2030,18 +2380,9 @@ mod tests {
                     ContentErrorKind::UnsupportedFormat,
                     ContentErrorKind::ParsingFailed,
                 ];
-
-                for kind in content_kinds {
-                    let error = MarkdownError::ContentError {
-                        kind: kind.clone(),
-                        context: context.clone(),
-                    };
-                    let suggestions = error.suggestions();
-                    assert!(
-                        !suggestions.is_empty(),
-                        "Should have suggestions for {kind:?}"
-                    );
-                }
+                test_error_kind_suggestions(&content_kinds, |kind, context| {
+                    MarkdownError::ContentError { kind, context }
+                });
 
                 // Test all ConverterErrorKind variants
                 let converter_kinds = [
@@ -2049,18 +2390,9 @@ mod tests {
                     ConverterErrorKind::ProcessingError,
                     ConverterErrorKind::UnsupportedOperation,
                 ];
-
-                for kind in converter_kinds {
-                    let error = MarkdownError::ConverterError {
-                        kind: kind.clone(),
-                        context: context.clone(),
-                    };
-                    let suggestions = error.suggestions();
-                    assert!(
-                        !suggestions.is_empty(),
-                        "Should have suggestions for {kind:?}"
-                    );
-                }
+                test_error_kind_suggestions(&converter_kinds, |kind, context| {
+                    MarkdownError::ConverterError { kind, context }
+                });
 
                 // Test all ConfigErrorKind variants
                 let config_kinds = [
@@ -2068,18 +2400,9 @@ mod tests {
                     ConfigErrorKind::MissingDependency,
                     ConfigErrorKind::InvalidValue,
                 ];
-
-                for kind in config_kinds {
-                    let error = MarkdownError::ConfigurationError {
-                        kind: kind.clone(),
-                        context: context.clone(),
-                    };
-                    let suggestions = error.suggestions();
-                    assert!(
-                        !suggestions.is_empty(),
-                        "Should have suggestions for {kind:?}"
-                    );
-                }
+                test_error_kind_suggestions(&config_kinds, |kind, context| {
+                    MarkdownError::ConfigurationError { kind, context }
+                });
             }
 
             #[test]
@@ -2225,6 +2548,18 @@ mod tests {
                 }
             }
 
+            /// Helper function to test serialization roundtrip for a given variant
+            fn test_serialization_roundtrip<T, S, D>(variant: &T, serialize: S, deserialize: D)
+            where
+                T: PartialEq + std::fmt::Debug,
+                S: Fn(&T) -> Result<String, Box<dyn std::error::Error>>,
+                D: Fn(&str) -> Result<T, Box<dyn std::error::Error>>,
+            {
+                let serialized = serialize(variant).unwrap();
+                let deserialized = deserialize(&serialized).unwrap();
+                assert_eq!(*variant, deserialized);
+            }
+
             #[test]
             fn test_urltype_serialization_all_variants() {
                 // Test serialization/deserialization for all UrlType variants
@@ -2237,14 +2572,18 @@ mod tests {
 
                 for variant in variants {
                     // Test YAML serialization roundtrip
-                    let yaml = serde_yaml::to_string(&variant).unwrap();
-                    let deserialized: UrlType = serde_yaml::from_str(&yaml).unwrap();
-                    assert_eq!(variant, deserialized);
+                    test_serialization_roundtrip(
+                        &variant,
+                        |v| serde_yaml::to_string(v).map_err(Into::into),
+                        |s| serde_yaml::from_str(s).map_err(Into::into),
+                    );
 
                     // Test JSON serialization roundtrip
-                    let json = serde_json::to_string(&variant).unwrap();
-                    let deserialized: UrlType = serde_json::from_str(&json).unwrap();
-                    assert_eq!(variant, deserialized);
+                    test_serialization_roundtrip(
+                        &variant,
+                        |v| serde_json::to_string(v).map_err(Into::into),
+                        |s| serde_json::from_str(s).map_err(Into::into),
+                    );
                 }
             }
         }
@@ -2439,7 +2778,10 @@ Final paragraph with émojis 🚀 and Unicode characters: café, naïve, résum�
 
                 // Should be very recent (within 1 second)
                 let diff = (after - context.timestamp).num_milliseconds();
-                assert!(diff < 1000, "Timestamp should be within 1 second: {diff}ms");
+                assert!(
+                    diff < MAX_TIMESTAMP_DIFF_MS,
+                    "Timestamp should be within 1 second: {diff}ms"
+                );
             }
 
             #[test]
@@ -2462,9 +2804,9 @@ Final paragraph with émojis 🚀 and Unicode characters: café, naïve, résum�
                     // Note: The actual validation depends on the utils::is_local_file_path implementation
                     // This test covers the integration point even if some cases might fail
                     // depending on the utils implementation
-                    if url_result.is_err() {
+                    if let Err(error) = url_result {
                         // If it fails, it should be a ValidationError with InvalidUrl kind
-                        match url_result.unwrap_err() {
+                        match error {
                             MarkdownError::ValidationError { kind, context } => {
                                 assert_eq!(kind, ValidationErrorKind::InvalidUrl);
                                 assert_eq!(context.url, file_path);

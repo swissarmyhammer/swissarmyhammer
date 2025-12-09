@@ -38,6 +38,13 @@
 use crate::converters::html::HtmlConverterConfig;
 use std::time::Duration;
 
+// Default configuration constants
+const DEFAULT_TIMEOUT_SECONDS: u64 = 30;
+const DEFAULT_MAX_RETRIES: u32 = 3;
+const DEFAULT_RETRY_DELAY_SECONDS: u64 = 1;
+const DEFAULT_MAX_REDIRECTS: u32 = 10;
+const DEFAULT_MAX_CONSECUTIVE_BLANK_LINES: usize = 2;
+
 /// Main configuration struct for the markdowndown library.
 ///
 /// This struct contains all configuration options for HTTP client settings,
@@ -99,7 +106,7 @@ impl Default for OutputConfig {
             include_frontmatter: true,
             custom_frontmatter_fields: Vec::new(),
             normalize_whitespace: true,
-            max_consecutive_blank_lines: 2,
+            max_consecutive_blank_lines: DEFAULT_MAX_CONSECUTIVE_BLANK_LINES,
         }
     }
 }
@@ -195,11 +202,11 @@ impl ConfigBuilder {
     pub fn new() -> Self {
         Self {
             http: HttpConfig {
-                timeout: Duration::from_secs(30),
+                timeout: Duration::from_secs(DEFAULT_TIMEOUT_SECONDS),
                 user_agent: format!("markdowndown/{}", env!("CARGO_PKG_VERSION")),
-                max_retries: 3,
-                retry_delay: Duration::from_secs(1),
-                max_redirects: 10,
+                max_retries: DEFAULT_MAX_RETRIES,
+                retry_delay: Duration::from_secs(DEFAULT_RETRY_DELAY_SECONDS),
+                max_redirects: DEFAULT_MAX_REDIRECTS,
             },
             auth: AuthConfig {
                 github_token: None,
@@ -211,7 +218,7 @@ impl ConfigBuilder {
                 include_frontmatter: true,
                 custom_frontmatter_fields: Vec::new(),
                 normalize_whitespace: true,
-                max_consecutive_blank_lines: 2,
+                max_consecutive_blank_lines: DEFAULT_MAX_CONSECUTIVE_BLANK_LINES,
             },
         }
     }
@@ -463,8 +470,11 @@ mod tests {
     #[test]
     fn test_config_builder_new() {
         let builder = ConfigBuilder::new();
-        assert_eq!(builder.http.timeout, Duration::from_secs(30));
-        assert_eq!(builder.http.max_retries, 3);
+        assert_eq!(
+            builder.http.timeout,
+            Duration::from_secs(DEFAULT_TIMEOUT_SECONDS)
+        );
+        assert_eq!(builder.http.max_retries, DEFAULT_MAX_RETRIES);
         assert!(builder.auth.github_token.is_none());
         assert!(builder.output.include_frontmatter);
     }
@@ -525,8 +535,11 @@ mod tests {
     #[test]
     fn test_config_default() {
         let config = Config::default();
-        assert_eq!(config.http.timeout, Duration::from_secs(30));
-        assert_eq!(config.http.max_retries, 3);
+        assert_eq!(
+            config.http.timeout,
+            Duration::from_secs(DEFAULT_TIMEOUT_SECONDS)
+        );
+        assert_eq!(config.http.max_retries, DEFAULT_MAX_RETRIES);
         assert!(config.auth.github_token.is_none());
         assert!(config.output.include_frontmatter);
     }
@@ -553,15 +566,241 @@ mod tests {
     #[test]
     fn test_config_from_env_no_vars() {
         // Test with no environment variables set
+        // Clear any variables that might be set
+        std::env::remove_var("GITHUB_TOKEN");
+        std::env::remove_var("MARKDOWNDOWN_TIMEOUT");
+        std::env::remove_var("MARKDOWNDOWN_USER_AGENT");
+        std::env::remove_var("MARKDOWNDOWN_MAX_RETRIES");
+
         let config = Config::from_env();
 
         // Should have default values
-        assert_eq!(config.http.timeout, Duration::from_secs(30));
-        assert_eq!(config.http.max_retries, 3);
+        assert_eq!(
+            config.http.timeout,
+            Duration::from_secs(DEFAULT_TIMEOUT_SECONDS)
+        );
+        assert_eq!(config.http.max_retries, DEFAULT_MAX_RETRIES);
         assert!(config.auth.github_token.is_none());
     }
 
-    // Note: Testing actual environment variables would require setting them,
-    // which could interfere with other tests. In practice, these would be
-    // integration tests or tested with environment variable mocking.
+    #[test]
+    fn test_config_from_env_github_token() {
+        // Set GITHUB_TOKEN environment variable
+        std::env::set_var("GITHUB_TOKEN", "ghp_test_token_from_env");
+
+        let config = Config::from_env();
+
+        assert_eq!(
+            config.auth.github_token,
+            Some("ghp_test_token_from_env".to_string())
+        );
+
+        // Clean up
+        std::env::remove_var("GITHUB_TOKEN");
+    }
+
+    #[test]
+    fn test_config_from_env_github_token_empty() {
+        // Set GITHUB_TOKEN to empty string - should be ignored
+        std::env::set_var("GITHUB_TOKEN", "   ");
+
+        let config = Config::from_env();
+
+        // Empty/whitespace-only tokens should be ignored
+        assert!(config.auth.github_token.is_none());
+
+        // Clean up
+        std::env::remove_var("GITHUB_TOKEN");
+    }
+
+    #[test]
+    fn test_config_from_env_timeout() {
+        // Set MARKDOWNDOWN_TIMEOUT environment variable
+        std::env::set_var("MARKDOWNDOWN_TIMEOUT", "120");
+
+        let config = Config::from_env();
+
+        assert_eq!(config.http.timeout, Duration::from_secs(120));
+
+        // Clean up
+        std::env::remove_var("MARKDOWNDOWN_TIMEOUT");
+    }
+
+    #[test]
+    fn test_config_from_env_timeout_invalid() {
+        // Set MARKDOWNDOWN_TIMEOUT to invalid value - should use default
+        std::env::set_var("MARKDOWNDOWN_TIMEOUT", "not_a_number");
+
+        let config = Config::from_env();
+
+        // Should fall back to default
+        assert_eq!(
+            config.http.timeout,
+            Duration::from_secs(DEFAULT_TIMEOUT_SECONDS)
+        );
+
+        // Clean up
+        std::env::remove_var("MARKDOWNDOWN_TIMEOUT");
+    }
+
+    #[test]
+    fn test_config_from_env_user_agent() {
+        // Set MARKDOWNDOWN_USER_AGENT environment variable
+        std::env::set_var("MARKDOWNDOWN_USER_AGENT", "CustomAgent/2.0");
+
+        let config = Config::from_env();
+
+        assert_eq!(config.http.user_agent, "CustomAgent/2.0");
+
+        // Clean up
+        std::env::remove_var("MARKDOWNDOWN_USER_AGENT");
+    }
+
+    #[test]
+    fn test_config_from_env_user_agent_empty() {
+        // Set MARKDOWNDOWN_USER_AGENT to empty string - should use default
+        std::env::set_var("MARKDOWNDOWN_USER_AGENT", "  ");
+
+        let config = Config::from_env();
+
+        // Empty/whitespace-only user agents should be ignored, using default
+        assert_eq!(
+            config.http.user_agent,
+            format!("markdowndown/{}", env!("CARGO_PKG_VERSION"))
+        );
+
+        // Clean up
+        std::env::remove_var("MARKDOWNDOWN_USER_AGENT");
+    }
+
+    #[test]
+    fn test_config_from_env_max_retries() {
+        // Set MARKDOWNDOWN_MAX_RETRIES environment variable
+        std::env::set_var("MARKDOWNDOWN_MAX_RETRIES", "10");
+
+        let config = Config::from_env();
+
+        assert_eq!(config.http.max_retries, 10);
+
+        // Clean up
+        std::env::remove_var("MARKDOWNDOWN_MAX_RETRIES");
+    }
+
+    #[test]
+    fn test_config_from_env_max_retries_invalid() {
+        // Set MARKDOWNDOWN_MAX_RETRIES to invalid value - should use default
+        std::env::set_var("MARKDOWNDOWN_MAX_RETRIES", "invalid");
+
+        let config = Config::from_env();
+
+        // Should fall back to default
+        assert_eq!(config.http.max_retries, DEFAULT_MAX_RETRIES);
+
+        // Clean up
+        std::env::remove_var("MARKDOWNDOWN_MAX_RETRIES");
+    }
+
+    #[test]
+    fn test_config_from_env_all_vars() {
+        // Set all environment variables
+        std::env::set_var("GITHUB_TOKEN", "ghp_full_test_token");
+        std::env::set_var("MARKDOWNDOWN_TIMEOUT", "90");
+        std::env::set_var("MARKDOWNDOWN_USER_AGENT", "TestApp/3.0");
+        std::env::set_var("MARKDOWNDOWN_MAX_RETRIES", "7");
+
+        let config = Config::from_env();
+
+        // Verify all values were loaded correctly
+        assert_eq!(
+            config.auth.github_token,
+            Some("ghp_full_test_token".to_string())
+        );
+        assert_eq!(config.http.timeout, Duration::from_secs(90));
+        assert_eq!(config.http.user_agent, "TestApp/3.0");
+        assert_eq!(config.http.max_retries, 7);
+
+        // Clean up
+        std::env::remove_var("GITHUB_TOKEN");
+        std::env::remove_var("MARKDOWNDOWN_TIMEOUT");
+        std::env::remove_var("MARKDOWNDOWN_USER_AGENT");
+        std::env::remove_var("MARKDOWNDOWN_MAX_RETRIES");
+    }
+
+    #[test]
+    fn test_config_builder_office365_token() {
+        let config = ConfigBuilder::new()
+            .office365_token("o365_test_token")
+            .build();
+
+        assert_eq!(
+            config.auth.office365_token,
+            Some("o365_test_token".to_string())
+        );
+    }
+
+    #[test]
+    fn test_config_builder_google_api_key() {
+        let config = ConfigBuilder::new()
+            .google_api_key("google_test_key")
+            .build();
+
+        assert_eq!(
+            config.auth.google_api_key,
+            Some("google_test_key".to_string())
+        );
+    }
+
+    #[test]
+    fn test_config_builder_timeout_duration() {
+        let config = ConfigBuilder::new()
+            .timeout(Duration::from_secs(90))
+            .build();
+
+        assert_eq!(config.http.timeout, Duration::from_secs(90));
+    }
+
+    #[test]
+    fn test_config_builder_retry_delay() {
+        let config = ConfigBuilder::new()
+            .retry_delay(Duration::from_secs(5))
+            .build();
+
+        assert_eq!(config.http.retry_delay, Duration::from_secs(5));
+    }
+
+    #[test]
+    fn test_config_builder_max_redirects() {
+        let config = ConfigBuilder::new().max_redirects(20).build();
+
+        assert_eq!(config.http.max_redirects, 20);
+    }
+
+    #[test]
+    fn test_config_builder_html_config() {
+        let html_config = HtmlConverterConfig::default();
+        let config = ConfigBuilder::new()
+            .html_config(html_config.clone())
+            .build();
+
+        // Verify that html config was set - comparing some fields from HtmlConverterConfig
+        assert_eq!(config.html.max_line_width, html_config.max_line_width);
+        assert_eq!(
+            config.html.remove_scripts_styles,
+            html_config.remove_scripts_styles
+        );
+    }
+
+    #[test]
+    fn test_config_builder_normalize_whitespace() {
+        let config = ConfigBuilder::new().normalize_whitespace(false).build();
+
+        assert!(!config.output.normalize_whitespace);
+    }
+
+    #[test]
+    fn test_config_builder_max_consecutive_blank_lines() {
+        let config = ConfigBuilder::new().max_consecutive_blank_lines(5).build();
+
+        assert_eq!(config.output.max_consecutive_blank_lines, 5);
+    }
 }

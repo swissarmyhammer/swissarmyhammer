@@ -33,6 +33,70 @@ use crate::types::{Markdown, MarkdownError};
 use async_trait::async_trait;
 use chrono::Utc;
 
+/// Default export formats in preference order.
+///
+/// These formats are tried in sequence when exporting Google Docs:
+/// 1. `md` - Google's native markdown export (best quality, cleanest output)
+/// 2. `txt` - Plain text fallback (simple but loses formatting)
+/// 3. `html` - HTML fallback (most reliable, always available)
+///
+/// This order is based on Google's export API behavior where markdown
+/// provides the cleanest output but may not be available for all documents,
+/// text is universally supported but loses formatting, and HTML is the
+/// ultimate fallback that works for all public documents.
+const DEFAULT_EXPORT_FORMATS: &[&str] = &["md", "txt", "html"];
+
+/// Common error indicators found in Google's error pages.
+///
+/// These strings are checked to detect when Google returns an error page
+/// instead of document content. This list is based on observed Google error
+/// responses and may need updates if Google changes their error page formats.
+///
+/// Note: This approach is complementary to HTTP status code checking and
+/// helps catch cases where Google returns 200 OK with an error page body.
+const UNIVERSAL_ERROR_INDICATORS: &[&str] = &[
+    "sorry, the file you have requested does not exist",
+    "access denied",
+    "permission denied",
+    "file not found",
+    "error 404",
+    "error 403",
+];
+
+/// HTML document type indicators
+const HTML_TAGS: &[&str] = &["<!doctype", "<html"];
+
+/// Length of the "/document/d/" prefix in Google Docs URLs
+const DOCUMENT_D_PREFIX_LENGTH: usize = "/document/d/".len();
+
+/// Length of the "/file/d/" prefix in Google Drive file URLs
+const FILE_D_PREFIX_LENGTH: usize = "/file/d/".len();
+
+/// Length of the "id=" parameter prefix in Google Drive open URLs
+const ID_PARAM_LENGTH: usize = "id=".len();
+
+/// Minimum reasonable length for Google Docs document IDs.
+///
+/// Google Docs IDs are base64url-encoded and typically at least this length
+/// based on observed patterns in Google's ID generation system.
+const MIN_DOCUMENT_ID_LENGTH: usize = 25;
+
+/// Maximum reasonable length for Google Docs document IDs.
+///
+/// Upper bound for Google Docs ID length based on observed patterns.
+/// This helps detect malformed URLs while allowing flexibility for
+/// potential future changes to Google's ID format.
+const MAX_DOCUMENT_ID_LENGTH: usize = 100;
+
+/// Maximum number of consecutive blank lines allowed in processed content.
+///
+/// This limit is based on markdown best practices where:
+/// - 1 blank line separates paragraphs
+/// - 2 blank lines provide section separation
+///
+/// More than 2 consecutive blank lines is typically excessive and reduces readability.
+const MAX_CONSECUTIVE_BLANK_LINES: usize = 2;
+
 /// Google Docs to markdown converter with intelligent URL handling.
 ///
 /// This converter handles various Google Docs URL formats and converts them
@@ -63,11 +127,10 @@ impl GoogleDocsConverter {
     pub fn new() -> Self {
         Self {
             client: HttpClient::new(),
-            export_formats: vec![
-                "md".to_string(),   // Markdown (preferred)
-                "txt".to_string(),  // Plain text (fallback)
-                "html".to_string(), // HTML (can be converted)
-            ],
+            export_formats: DEFAULT_EXPORT_FORMATS
+                .iter()
+                .map(|s| s.to_string())
+                .collect(),
         }
     }
 
@@ -91,11 +154,10 @@ impl GoogleDocsConverter {
     pub fn with_client(client: HttpClient) -> Self {
         Self {
             client,
-            export_formats: vec![
-                "md".to_string(),   // Markdown (preferred)
-                "txt".to_string(),  // Plain text (fallback)
-                "html".to_string(), // HTML (can be converted)
-            ],
+            export_formats: DEFAULT_EXPORT_FORMATS
+                .iter()
+                .map(|s| s.to_string())
+                .collect(),
         }
     }
 
@@ -159,18 +221,7 @@ impl GoogleDocsConverter {
         let processed_content = self.post_process_content(&content)?;
 
         // Step 5: Generate frontmatter
-        let now = Utc::now();
-        let frontmatter = FrontmatterBuilder::new(url.to_string())
-            .exporter(format!(
-                "markdowndown-googledocs-{}",
-                env!("CARGO_PKG_VERSION")
-            ))
-            .download_date(now)
-            .additional_field("converted_at".to_string(), now.to_rfc3339())
-            .additional_field("conversion_type".to_string(), "google_docs".to_string())
-            .additional_field("document_id".to_string(), document_id)
-            .additional_field("document_type".to_string(), "google_docs".to_string())
-            .build()?;
+        let frontmatter = self.generate_frontmatter(url, document_id)?;
 
         // Step 6: Combine frontmatter with content
         let markdown_with_frontmatter = format!("{frontmatter}\n{processed_content}");
@@ -195,18 +246,7 @@ impl GoogleDocsConverter {
         let processed_content = self.post_process_content(&content)?;
 
         // Generate frontmatter
-        let now = Utc::now();
-        let frontmatter = FrontmatterBuilder::new(url.to_string())
-            .exporter(format!(
-                "markdowndown-googledocs-{}",
-                env!("CARGO_PKG_VERSION")
-            ))
-            .download_date(now)
-            .additional_field("converted_at".to_string(), now.to_rfc3339())
-            .additional_field("conversion_type".to_string(), "google_docs".to_string())
-            .additional_field("document_id".to_string(), document_id)
-            .additional_field("document_type".to_string(), "google_docs".to_string())
-            .build()?;
+        let frontmatter = self.generate_frontmatter(url, document_id)?;
 
         // Combine frontmatter with content
         let markdown_with_frontmatter = format!("{frontmatter}\n{processed_content}");
@@ -248,24 +288,24 @@ impl GoogleDocsConverter {
     pub fn extract_document_id(&self, url: &str) -> Result<String, MarkdownError> {
         let url = url.trim();
 
-        // Pattern 1: docs.google.com/document/d/{id}/...
-        if let Some(docs_match) = self.extract_from_docs_url(url) {
-            return Ok(docs_match);
+        // Define URL patterns with their extraction parameters
+        const URL_PATTERNS: &[(&str, usize, Option<char>)] = &[
+            ("/document/d/", DOCUMENT_D_PREFIX_LENGTH, Some('/')),
+            ("/file/d/", FILE_D_PREFIX_LENGTH, Some('/')),
+        ];
+
+        // Try standard patterns
+        for (marker, offset, delimiter) in URL_PATTERNS {
+            if let Some(id) = self.extract_id_with_pattern(url, marker, *offset, *delimiter) {
+                return Ok(id);
+            }
         }
 
-        // Pattern 2: drive.google.com/file/d/{id}/...
-        if let Some(drive_file_match) = self.extract_from_drive_file_url(url) {
-            return Ok(drive_file_match);
-        }
-
-        // Pattern 3: drive.google.com/open?id={id}
-        if let Some(drive_open_match) = self.extract_from_drive_open_url(url) {
-            return Ok(drive_open_match);
-        }
-
-        // Pattern 4: Export URLs like /document/d/{id}/export or /file/d/{id}/export (for testing)
-        if let Some(export_match) = self.extract_from_export_url(url) {
-            return Ok(export_match);
+        // Handle drive open URL separately due to different pattern
+        if url.contains("drive.google.com/open") {
+            if let Some(id) = self.extract_id_with_pattern(url, "id=", ID_PARAM_LENGTH, Some('&')) {
+                return Ok(id);
+            }
         }
 
         Err(MarkdownError::InvalidUrl {
@@ -337,74 +377,100 @@ impl GoogleDocsConverter {
         &self,
         document_id: &str,
     ) -> Result<String, MarkdownError> {
-        let mut last_error = None;
-
         for format in &self.export_formats {
-            let export_url = self.build_export_url(document_id, format);
-
-            match self.client.get_text(&export_url).await {
-                Ok(content) => {
-                    // Verify we got actual content, not an error page
-                    if self.is_valid_content(&content, format) {
-                        return Ok(content);
-                    }
-                    // Continue to next format if content seems invalid
-                }
-                Err(e) => {
-                    last_error = Some(e);
-                    // Continue to next format
-                }
+            if let Some(content) = self.try_export_format(document_id, format).await {
+                return Ok(content);
             }
         }
 
-        // All formats failed
-        Err(last_error.unwrap_or_else(|| MarkdownError::NetworkError {
+        Err(MarkdownError::NetworkError {
             message: "All export formats failed to produce valid content".to_string(),
-        }))
+        })
+    }
+
+    /// Attempts to fetch content in a specific export format.
+    ///
+    /// Returns Some(content) if the format succeeds and produces valid content,
+    /// or None if the format fails or produces invalid content.
+    async fn try_export_format(&self, document_id: &str, format: &str) -> Option<String> {
+        let export_url = self.build_export_url(document_id, format);
+
+        match self.client.get_text(&export_url).await {
+            Ok(content) => {
+                if self.is_valid_content(&content, format) {
+                    Some(content)
+                } else {
+                    None
+                }
+            }
+            Err(_) => None,
+        }
+    }
+
+    /// Checks if content contains HTML tags.
+    fn contains_html_tags(&self, content_lower: &str) -> bool {
+        HTML_TAGS
+            .iter()
+            .any(|tag| content_lower.contains(tag) || content_lower.starts_with(tag))
+    }
+
+    /// Checks if content contains error indicators.
+    fn contains_error_indicators(&self, content_lower: &str) -> bool {
+        UNIVERSAL_ERROR_INDICATORS
+            .iter()
+            .any(|indicator| content_lower.contains(indicator))
+    }
+
+    /// Validates format-specific content requirements.
+    fn validate_format_specific(&self, content_lower: &str, format: &str) -> bool {
+        match format {
+            "md" => !self.contains_html_tags(content_lower),
+            "txt" => !self.contains_html_tags(content_lower),
+            "html" => self.contains_html_tags(content_lower),
+            _ => true, // Unknown format, assume valid
+        }
     }
 
     /// Validates that fetched content is actual document content, not an error page.
     fn is_valid_content(&self, content: &str, format: &str) -> bool {
         let content_lower = content.to_lowercase();
 
-        // Check for common error indicators (these are universal)
-        let universal_error_indicators = [
-            "sorry, the file you have requested does not exist",
-            "access denied",
-            "permission denied",
-            "file not found",
-            "error 404",
-            "error 403",
-        ];
-
-        for indicator in &universal_error_indicators {
-            if content_lower.contains(indicator) {
-                return false;
-            }
+        if self.contains_error_indicators(&content_lower) {
+            return false;
         }
 
-        // Format-specific validation
-        match format {
-            "md" => {
-                // Markdown should not be primarily HTML
-                // Also check for HTML error pages when expecting markdown
-                !content_lower.starts_with("<!doctype")
-                    && !content_lower.starts_with("<html")
-                    && !content_lower.contains("<!doctype html>") // HTML error pages
-            }
-            "txt" => {
-                // Plain text should not contain HTML tags
-                // Also check for HTML when expecting plain text
-                !content_lower.contains("<html>")
-                    && !content_lower.contains("<!doctype")
-                    && !content_lower.contains("<!doctype html>") // HTML error pages
-            }
-            "html" => {
-                // HTML should contain actual HTML structure
-                content_lower.contains("<html") || content_lower.starts_with("<!doctype")
-            }
-            _ => true, // Unknown format, assume valid
-        }
+        self.validate_format_specific(&content_lower, format)
+    }
+
+    /// Generates frontmatter for a converted document.
+    ///
+    /// # Arguments
+    ///
+    /// * `url` - The original URL of the document
+    /// * `document_id` - The extracted Google Docs document ID
+    ///
+    /// # Returns
+    ///
+    /// Returns the formatted frontmatter as a String, or a `MarkdownError` on failure.
+    fn generate_frontmatter(
+        &self,
+        url: &str,
+        document_id: String,
+    ) -> Result<String, MarkdownError> {
+        let now = Utc::now();
+        let frontmatter = FrontmatterBuilder::new(url.to_string())
+            .exporter(format!(
+                "markdowndown-googledocs-{}",
+                env!("CARGO_PKG_VERSION")
+            ))
+            .download_date(now)
+            .additional_field("converted_at".to_string(), now.to_rfc3339())
+            .additional_field("conversion_type".to_string(), "google_docs".to_string())
+            .additional_field("document_id".to_string(), document_id)
+            .additional_field("document_type".to_string(), "google_docs".to_string())
+            .build()?;
+
+        Ok(frontmatter)
     }
 
     /// Post-processes the fetched content to clean it up.
@@ -432,6 +498,15 @@ impl GoogleDocsConverter {
     }
 
     /// Normalizes blank lines to prevent excessive whitespace.
+    ///
+    /// This method limits consecutive blank lines to a maximum of 2, which follows
+    /// common markdown conventions where:
+    /// - 1 blank line separates paragraphs
+    /// - 2 blank lines provide stronger visual separation between sections
+    /// - More than 2 blank lines is typically excessive and distracting
+    ///
+    /// This limit is based on markdown best practices and improves readability
+    /// while preserving intentional document structure.
     fn normalize_blank_lines(&self, content: &str) -> String {
         let lines: Vec<&str> = content.split('\n').collect();
         let mut result = Vec::new();
@@ -440,8 +515,7 @@ impl GoogleDocsConverter {
         for line in lines {
             if line.trim().is_empty() {
                 consecutive_blanks += 1;
-                // Allow maximum of 2 consecutive blank lines
-                if consecutive_blanks <= 2 {
+                if consecutive_blanks <= MAX_CONSECUTIVE_BLANK_LINES {
                     result.push(line);
                 }
             } else {
@@ -453,93 +527,68 @@ impl GoogleDocsConverter {
         result.join("\n")
     }
 
-    /// Helper function to extract document ID from docs.google.com URLs.
-    fn extract_from_docs_url(&self, url: &str) -> Option<String> {
-        // Pattern: https://docs.google.com/document/d/{id}/...
-        if let Some(start) = url.find("/document/d/") {
-            let after_d = &url[start + 12..]; // "/document/d/" is 12 chars
-            if let Some(end) = after_d.find('/') {
-                let id = &after_d[..end];
-                if !id.is_empty() && self.is_valid_document_id(id) {
-                    return Some(id.to_string());
-                }
-            } else {
-                // Handle case where ID is at the end of URL
-                let id = after_d;
-                if !id.is_empty() && self.is_valid_document_id(id) {
-                    return Some(id.to_string());
-                }
-            }
-        }
-        None
-    }
-
-    /// Helper function to extract document ID from drive.google.com file URLs.
-    fn extract_from_drive_file_url(&self, url: &str) -> Option<String> {
-        // Pattern: https://drive.google.com/file/d/{id}/...
-        if let Some(start) = url.find("/file/d/") {
-            let after_d = &url[start + 8..]; // "/file/d/" is 8 chars
-            if let Some(end) = after_d.find('/') {
-                let id = &after_d[..end];
-                if !id.is_empty() && self.is_valid_document_id(id) {
-                    return Some(id.to_string());
-                }
-            }
-        }
-        None
-    }
-
-    /// Helper function to extract document ID from drive.google.com open URLs.
-    fn extract_from_drive_open_url(&self, url: &str) -> Option<String> {
-        // Pattern: https://drive.google.com/open?id={id}
-        if url.contains("drive.google.com/open") {
-            if let Some(id_start) = url.find("id=") {
-                let after_id = &url[id_start + 3..]; // "id=" is 3 chars
-                                                     // Find end of ID (next & or end of string)
-                let id_end = after_id.find('&').unwrap_or(after_id.len());
-                let id = &after_id[..id_end];
-                if !id.is_empty() && self.is_valid_document_id(id) {
-                    return Some(id.to_string());
-                }
-            }
-        }
-        None
-    }
-
-    /// Extracts document ID from export URLs (for testing).
+    /// Generic helper to extract document ID from URL using a pattern marker.
     ///
-    /// This method handles export URLs like:
-    /// - http://localhost:1234/document/d/{id}/export
-    /// - http://127.0.0.1:5678/file/d/{id}/export
-    fn extract_from_export_url(&self, url: &str) -> Option<String> {
-        // Pattern: .../document/d/{id}/export or .../file/d/{id}/export
-        if let Some(start) = url.find("/document/d/").or_else(|| url.find("/file/d/")) {
-            let path_start = if url[start..].starts_with("/document/d/") {
-                start + 12 // "/document/d/" is 12 chars
-            } else {
-                start + 8 // "/file/d/" is 8 chars
-            };
-            let after_d = &url[path_start..];
+    /// # Arguments
+    ///
+    /// * `url` - The URL to parse
+    /// * `marker` - The marker string to search for (e.g., "/document/d/")
+    /// * `offset` - Number of characters after the marker where the ID starts
+    /// * `delimiter` - Optional delimiter that marks the end of the ID (e.g., '/')
+    ///
+    /// # Returns
+    ///
+    /// Returns the document ID if found and valid, or None otherwise.
+    fn extract_id_with_pattern(
+        &self,
+        url: &str,
+        marker: &str,
+        offset: usize,
+        delimiter: Option<char>,
+    ) -> Option<String> {
+        if let Some(start) = url.find(marker) {
+            let after_marker = &url[start + offset..];
 
-            // Look for either '/' or '/export' to find the end of the ID
-            if let Some(end) = after_d.find('/') {
-                let id = &after_d[..end];
-                if !id.is_empty() && self.is_valid_document_id(id) {
-                    return Some(id.to_string());
+            let id = if let Some(delim) = delimiter {
+                if let Some(end) = after_marker.find(delim) {
+                    &after_marker[..end]
+                } else {
+                    // Handle case where ID is at the end of URL
+                    after_marker
                 }
+            } else {
+                after_marker
+            };
+
+            if !id.is_empty() && self.is_valid_document_id(id) {
+                return Some(id.to_string());
             }
         }
         None
     }
 
     /// Validates that a string looks like a valid Google Docs document ID.
+    ///
+    /// Google Docs document IDs are base64url-encoded strings that:
+    /// - Contain alphanumeric characters, hyphens, and underscores
+    /// - Are typically 33-44 characters long (based on observed IDs)
+    /// - Follow a specific encoding pattern used by Google's systems
+    ///
+    /// This validation is intentionally permissive to handle:
+    /// - Potential future changes to Google's ID format
+    /// - Edge cases in Google's ID generation
+    /// - Test scenarios with mock IDs
+    ///
+    /// The actual document validity is ultimately determined by Google's API.
+    /// This check primarily filters out obviously invalid inputs to provide
+    /// early feedback rather than enforcing exact ID specifications.
     fn is_valid_document_id(&self, id: &str) -> bool {
-        // Google Docs IDs are typically alphanumeric with some special chars
-        // They're usually quite long (40+ characters) and contain specific patterns
         !id.is_empty()
-            && id.len() >= 25  // Minimum reasonable length
-            && id.len() <= 100 // Maximum reasonable length
-            && id.chars().all(|c| c.is_alphanumeric() || matches!(c, '-' | '_'))
+            && id.len() >= MIN_DOCUMENT_ID_LENGTH
+            && id.len() <= MAX_DOCUMENT_ID_LENGTH
+            && id
+                .chars()
+                .all(|c| c.is_alphanumeric() || matches!(c, '-' | '_'))
     }
 }
 
@@ -567,53 +616,44 @@ mod tests {
     #[test]
     fn test_google_docs_converter_new() {
         let converter = GoogleDocsConverter::new();
-        assert_eq!(converter.export_formats.len(), 3);
+        assert_eq!(converter.export_formats.len(), DEFAULT_EXPORT_FORMATS.len());
         assert_eq!(converter.export_formats[0], "md");
         assert_eq!(converter.export_formats[1], "txt");
         assert_eq!(converter.export_formats[2], "html");
     }
 
     #[test]
-    fn test_extract_document_id_docs_edit() {
-        let converter = GoogleDocsConverter::new();
-        let url =
-            "https://docs.google.com/document/d/1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgvE2upms/edit";
-        let result = converter.extract_document_id(url).unwrap();
-        assert_eq!(result, "1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgvE2upms");
-    }
+    fn test_extract_document_id_valid_urls() {
+        let test_cases = vec![
+            (
+                "https://docs.google.com/document/d/1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgvE2upms/edit",
+                "docs_edit",
+            ),
+            (
+                "https://docs.google.com/document/d/1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgvE2upms/view",
+                "docs_view",
+            ),
+            (
+                "https://docs.google.com/document/d/1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgvE2upms/edit?usp=sharing",
+                "docs_share",
+            ),
+            (
+                "https://drive.google.com/file/d/1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgvE2upms/view",
+                "drive_file",
+            ),
+            (
+                "https://drive.google.com/open?id=1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgvE2upms",
+                "drive_open",
+            ),
+        ];
 
-    #[test]
-    fn test_extract_document_id_docs_view() {
         let converter = GoogleDocsConverter::new();
-        let url =
-            "https://docs.google.com/document/d/1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgvE2upms/view";
-        let result = converter.extract_document_id(url).unwrap();
-        assert_eq!(result, "1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgvE2upms");
-    }
+        let expected_id = "1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgvE2upms";
 
-    #[test]
-    fn test_extract_document_id_docs_share() {
-        let converter = GoogleDocsConverter::new();
-        let url = "https://docs.google.com/document/d/1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgvE2upms/edit?usp=sharing";
-        let result = converter.extract_document_id(url).unwrap();
-        assert_eq!(result, "1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgvE2upms");
-    }
-
-    #[test]
-    fn test_extract_document_id_drive_file() {
-        let converter = GoogleDocsConverter::new();
-        let url =
-            "https://drive.google.com/file/d/1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgvE2upms/view";
-        let result = converter.extract_document_id(url).unwrap();
-        assert_eq!(result, "1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgvE2upms");
-    }
-
-    #[test]
-    fn test_extract_document_id_drive_open() {
-        let converter = GoogleDocsConverter::new();
-        let url = "https://drive.google.com/open?id=1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgvE2upms";
-        let result = converter.extract_document_id(url).unwrap();
-        assert_eq!(result, "1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgvE2upms");
+        for (url, test_name) in test_cases {
+            let result = converter.extract_document_id(url).unwrap();
+            assert_eq!(result, expected_id, "Failed test case: {}", test_name);
+        }
     }
 
     #[test]
@@ -653,7 +693,8 @@ mod tests {
         assert!(!converter.is_valid_document_id("short"));
         assert!(!converter.is_valid_document_id("contains spaces"));
         assert!(!converter.is_valid_document_id("contains@special#chars"));
-        assert!(!converter.is_valid_document_id(&"a".repeat(200))); // Too long
+        assert!(!converter.is_valid_document_id(&"a".repeat(MAX_DOCUMENT_ID_LENGTH * 2)));
+        // Too long
     }
 
     #[test]
@@ -720,7 +761,7 @@ mod tests {
     #[test]
     fn test_default_implementation() {
         let converter = GoogleDocsConverter::default();
-        assert_eq!(converter.export_formats.len(), 3);
+        assert_eq!(converter.export_formats.len(), DEFAULT_EXPORT_FORMATS.len());
     }
 
     // Edge case tests for URL parsing
@@ -755,4 +796,100 @@ mod tests {
             assert!(result.is_err(), "Should fail for URL: {bad_url}");
         }
     }
+
+    #[test]
+    fn test_with_client() {
+        let custom_client = HttpClient::new();
+        let converter = GoogleDocsConverter::with_client(custom_client);
+        assert_eq!(converter.export_formats.len(), DEFAULT_EXPORT_FORMATS.len());
+        assert_eq!(converter.export_formats[0], "md");
+        assert_eq!(converter.export_formats[1], "txt");
+        assert_eq!(converter.export_formats[2], "html");
+    }
+
+    #[tokio::test]
+    async fn test_convert_success() {
+        use mockito::Server;
+
+        let mut server = Server::new_async().await;
+        let doc_id = "1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgvE2upms";
+        let test_content = "# Test Document\n\nThis is test content.";
+
+        let mock = server
+            .mock("GET", format!("/document/d/{}/export", doc_id).as_str())
+            .match_query(mockito::Matcher::UrlEncoded("format".into(), "txt".into()))
+            .with_status(200)
+            .with_header("content-type", "text/plain; charset=utf-8")
+            .with_body(test_content)
+            .create_async()
+            .await;
+
+        let converter = GoogleDocsConverter::new();
+        let export_url = format!("{}/document/d/{}/export?format=txt", server.url(), doc_id);
+        let result = converter.convert(&export_url).await;
+
+        mock.assert_async().await;
+        assert!(result.is_ok());
+
+        let markdown = result.unwrap();
+        let content = markdown.as_str();
+        assert!(content.contains("source_url:"));
+        assert!(content.contains("date_downloaded:"));
+        assert!(content.contains("# Test Document"));
+        assert!(content.contains("This is test content."));
+    }
+
+    #[tokio::test]
+    async fn test_convert_private_document() {
+        use mockito::Server;
+
+        let mut server = Server::new_async().await;
+        let doc_id = "1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgvE2upms";
+
+        let mock = server
+            .mock("GET", format!("/document/d/{}/export", doc_id).as_str())
+            .match_query(mockito::Matcher::UrlEncoded("format".into(), "txt".into()))
+            .with_status(403)
+            .with_header("content-type", "text/html; charset=utf-8")
+            .with_body("Access denied. You need permission to access this document.")
+            .create_async()
+            .await;
+
+        let converter = GoogleDocsConverter::new();
+        let export_url = format!("{}/document/d/{}/export?format=txt", server.url(), doc_id);
+        let result = converter.convert(&export_url).await;
+
+        mock.assert_async().await;
+        assert!(result.is_err());
+
+        match result.unwrap_err() {
+            MarkdownError::AuthenticationError { .. }
+            | MarkdownError::EnhancedNetworkError { .. } => {}
+            _ => panic!("Expected AuthenticationError or EnhancedNetworkError"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_validate_access_invalid_url() {
+        let converter = GoogleDocsConverter::new();
+        let invalid_url = "https://example.com/not-a-google-doc";
+        let result = converter.validate_access(invalid_url).await;
+
+        assert!(result.is_err());
+
+        match result.unwrap_err() {
+            MarkdownError::InvalidUrl { url } => {
+                assert_eq!(url, invalid_url);
+            }
+            _ => panic!("Expected InvalidUrl error"),
+        }
+    }
+
+    // Note: Network-related scenarios for validate_access() (successful validation,
+    // auth errors when document is private, and network failures) are tested indirectly
+    // through the convert() integration tests (test_convert_success and
+    // test_convert_private_document), which call validate_access() as part of their
+    // workflow. Direct unit testing of these scenarios would require making the Google
+    // Docs base URL configurable for testing purposes, which would add unnecessary
+    // complexity to the production code.
 }

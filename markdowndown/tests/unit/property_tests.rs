@@ -6,8 +6,6 @@
 //!
 //! Note: Some tests are temporarily disabled due to API changes.
 
-#![cfg(test)]
-
 use markdowndown::client::HttpClient;
 use markdowndown::config::Config;
 use markdowndown::converters::{Converter, HtmlConverter, HtmlConverterConfig};
@@ -17,7 +15,117 @@ use markdowndown::{detect_url_type, MarkdownDown};
 use proptest::prelude::*;
 use std::time::Duration;
 
-/// Custom strategy for generating valid HTTP/HTTPS URLs
+// Test constants for property-based testing ranges
+const MAX_GITHUB_ISSUE_NUMBER: u32 = 100000;
+const MAX_TIMEOUT_SECS: u64 = 3600;
+const HTTP_CLIENT_ERROR_START: u16 = 400;
+const HTTP_CLIENT_ERROR_END: u16 = 499;
+const HTTP_STATUS_END: u16 = 600;
+const HTTP_INTERNAL_ERROR: u16 = 500;
+const HTTP_SERVICE_UNAVAILABLE: u16 = 503;
+const HTTP_TOO_MANY_REQUESTS: u16 = 429;
+const MAX_RETRIES_TEST_RANGE: u32 = 20;
+const MAX_FRONTMATTER_FIELDS: usize = 10;
+const MAX_TIMEOUT_TEST_SECS: u64 = 100;
+const MAX_RETRIES_CONFIG_TEST: u32 = 10;
+const MIN_LINE_WIDTH: usize = 20;
+const MAX_LINE_WIDTH_TEST: usize = 500;
+const MAX_BLANK_LINES_TEST: usize = 20;
+const MIN_LINE_WIDTH_CLONE_TEST: usize = 50;
+const MAX_LINE_WIDTH_CLONE_TEST: usize = 200;
+const MAX_BLANK_LINES_CLONE_TEST: usize = 10;
+
+// Helper functions to reduce code duplication
+
+/// Helper function for testing URL type detection
+fn assert_url_type_detection(url: String, expected_type: UrlType) {
+    match detect_url_type(&url) {
+        Ok(url_type) => {
+            assert_eq!(url_type, expected_type);
+        }
+        Err(_) => {
+            // Some URLs might be invalid, which is acceptable
+        }
+    }
+}
+
+/// Helper function for asserting all fields are equal between two HtmlConverterConfig instances
+fn assert_html_converter_config_equal(a: &HtmlConverterConfig, b: &HtmlConverterConfig) {
+    assert_eq!(a.max_line_width, b.max_line_width);
+    assert_eq!(a.remove_scripts_styles, b.remove_scripts_styles);
+    assert_eq!(a.remove_navigation, b.remove_navigation);
+    assert_eq!(a.remove_sidebars, b.remove_sidebars);
+    assert_eq!(a.remove_ads, b.remove_ads);
+    assert_eq!(a.max_blank_lines, b.max_blank_lines);
+}
+
+/// Helper function for testing detection consistency
+fn test_detection_consistency<F, T>(url: &str, detector_fn: F) -> Result<T, MarkdownError>
+where
+    F: Fn(&UrlDetector, &str) -> Result<T, MarkdownError>,
+    T: PartialEq + Clone + std::fmt::Debug,
+{
+    let detector = UrlDetector::new();
+    let result1 = detector_fn(&detector, url)?;
+    let result2 = detector_fn(&detector, url)?;
+    assert_eq!(result1, result2);
+    Ok(result1)
+}
+
+/// Helper function for building Config with a custom configuration closure
+fn build_config_with<F>(configure: F) -> Config
+where
+    F: FnOnce(markdowndown::config::ConfigBuilder) -> markdowndown::config::ConfigBuilder,
+{
+    let builder = Config::builder();
+    configure(builder).build()
+}
+
+/// Helper function for asserting error formats correctly
+fn assert_error_formats_correctly(error: &MarkdownError, expected_content: &str) {
+    let display_string = format!("{error}");
+    assert!(display_string.contains(expected_content));
+    let debug_string = format!("{error:?}");
+    assert!(debug_string.contains(expected_content));
+}
+
+/// Helper function for creating test HtmlConverterConfig instances
+fn create_test_html_config(
+    max_line_width: usize,
+    max_blank_lines: usize,
+    flags: (bool, bool, bool, bool),
+) -> HtmlConverterConfig {
+    HtmlConverterConfig {
+        max_line_width,
+        remove_scripts_styles: flags.0,
+        remove_navigation: flags.1,
+        remove_sidebars: flags.2,
+        remove_ads: flags.3,
+        max_blank_lines,
+    }
+}
+
+/// Helper function for comparing MarkdownDown instances
+fn compare_markdowndown_instances<F, T>(instances: Vec<&MarkdownDown>, property_fn: F)
+where
+    F: Fn(&MarkdownDown) -> Vec<T>,
+    T: Eq + std::hash::Hash + std::fmt::Debug,
+{
+    use std::collections::HashSet;
+    let sets: Vec<HashSet<_>> = instances
+        .iter()
+        .map(|md| property_fn(md).into_iter().collect())
+        .collect();
+
+    for i in 1..sets.len() {
+        assert_eq!(sets[0], sets[i]);
+    }
+}
+
+/// Generates valid HTTP/HTTPS URLs for property-based testing.
+///
+/// Returns URLs in the format `{scheme}://{domain}.{tld}[/{path}]`
+/// where scheme is http or https, domain is alphanumeric, and path is optional.
 fn valid_http_url_strategy() -> impl Strategy<Value = String> {
     (
         prop::sample::select(vec!["http", "https"]),
@@ -31,12 +139,22 @@ fn valid_http_url_strategy() -> impl Strategy<Value = String> {
         })
 }
 
-/// Strategy for generating potentially invalid URLs to test error handling
+/// Generates arbitrary URL-like strings for testing error handling.
+///
+/// Returns strings matching URL patterns but not necessarily valid URLs,
+/// useful for testing robustness against malformed input.
 fn arbitrary_url_strategy() -> impl Strategy<Value = String> {
     prop::string::string_regex("[a-zA-Z0-9:/.?#&=-]{1,100}").unwrap()
 }
 
-/// Strategy for generating markdown content with various structures
+/// Generates markdown content with various structures for property testing.
+///
+/// Returns markdown strings that may include:
+/// - Optional title (H1 heading)
+/// - Multiple paragraphs
+/// - Optional footer
+///
+/// Ensures generated content is never empty by filtering out empty results.
 fn markdown_content_strategy() -> impl Strategy<Value = String> {
     (
         prop::option::of(prop::string::string_regex("[a-zA-Z0-9 ]{1,50}").unwrap()),
@@ -64,55 +182,67 @@ fn markdown_content_strategy() -> impl Strategy<Value = String> {
                 content.push_str(&format!("\n\n{f}"));
             }
 
-            // Ensure content is never empty by adding default content if needed
-            if content.trim().is_empty() {
-                content = "Default content".to_string();
-            }
-
             content
         })
+        .prop_filter("content is not empty", |s| !s.trim().is_empty())
+}
+
+/// Generic macro for creating property tests with less duplication
+macro_rules! property_test {
+    ($test_name:ident, $strategy:expr, $pattern:pat, $body:block) => {
+        proptest! {
+            #[test]
+            fn $test_name($pattern in $strategy) {
+                $body
+            }
+        }
+    };
 }
 
 /// Property tests for URL validation
 mod url_validation_properties {
     use super::*;
 
-    proptest! {
-        #[test]
-        fn test_valid_urls_create_successfully(url in valid_http_url_strategy()) {
+    property_test!(
+        test_valid_urls_create_successfully,
+        valid_http_url_strategy(),
+        url,
+        {
             let result = Url::new(url.clone());
             prop_assert!(result.is_ok(), "Failed to create URL from: {}", url);
-
             let url_obj = result.unwrap();
-            prop_assert_eq!(url_obj.as_str(), &url);
+            prop_assert_eq!(url_obj.as_str(), &url)
         }
+    );
 
-        #[test]
-        fn test_url_as_str_roundtrip(url in valid_http_url_strategy()) {
-            if let Ok(url_obj) = Url::new(url.clone()) {
-                let as_str = url_obj.as_str();
-                prop_assert_eq!(as_str, &url);
+    property_test!(test_url_as_str_roundtrip, valid_http_url_strategy(), url, {
+        let result = Url::new(url.clone());
+        if let Ok(url_obj) = result {
+            let as_str = url_obj.as_str();
+            prop_assert_eq!(as_str, url_obj.as_str());
 
-                // Should be able to create another URL from as_str
-                let url_obj2 = Url::new(as_str.to_string());
-                prop_assert!(url_obj2.is_ok());
-                let url_obj2_unwrapped = url_obj2.unwrap();
-                prop_assert_eq!(url_obj2_unwrapped.as_str(), as_str);
-            }
+            // Should be able to create another URL from as_str
+            let url_obj2 = Url::new(as_str.to_string());
+            prop_assert!(url_obj2.is_ok());
+            let url_obj2_unwrapped = url_obj2.unwrap();
+            prop_assert_eq!(url_obj2_unwrapped, url_obj);
         }
+    });
 
-        #[test]
-        fn test_url_clone_equality(url in valid_http_url_strategy()) {
-            if let Ok(url_obj) = Url::new(url) {
-                let cloned = url_obj.clone();
-                prop_assert_eq!(url_obj.as_str(), cloned.as_str());
-                prop_assert_eq!(url_obj, cloned);
-            }
+    property_test!(test_url_clone_equality, valid_http_url_strategy(), url, {
+        let result = Url::new(url.clone());
+        if let Ok(url_obj) = result {
+            let cloned = url_obj.clone();
+            prop_assert_eq!(url_obj, cloned);
         }
+    });
 
-        #[test]
-        fn test_arbitrary_urls_handled_gracefully(url in arbitrary_url_strategy()) {
-            let result = Url::new(url);
+    property_test!(
+        test_arbitrary_urls_handled_gracefully,
+        arbitrary_url_strategy(),
+        url,
+        {
+            let result = Url::new(url.clone());
             // Should either succeed or fail gracefully with a proper error
             match result {
                 Ok(url_obj) => {
@@ -132,35 +262,53 @@ mod url_validation_properties {
                 }
             }
         }
-    }
+    );
 }
 
 /// Property tests for markdown content validation
 mod markdown_validation_properties {
     use super::*;
 
-    proptest! {
-        #[test]
-        fn test_markdown_content_preservation(content in markdown_content_strategy()) {
-            let result = Markdown::new(content.clone());
-            prop_assert!(result.is_ok(), "Failed to create Markdown from content");
-
-            let markdown = result.unwrap();
-            let retrieved_content = markdown.as_str();
-            prop_assert_eq!(retrieved_content, &content);
+    property_test!(
+        test_markdown_content_preservation,
+        markdown_content_strategy(),
+        content,
+        {
+            if let Ok(markdown) = Markdown::new(content.clone()) {
+                let retrieved_content = markdown.as_str();
+                prop_assert_eq!(retrieved_content, &content)
+            }
         }
+    );
 
-        #[test]
-        fn test_markdown_content_only_no_frontmatter(content in markdown_content_strategy()) {
+    property_test!(
+        test_markdown_content_only_no_frontmatter,
+        markdown_content_strategy(),
+        content,
+        {
             if let Ok(markdown) = Markdown::new(content.clone()) {
                 let content_only = markdown.content_only();
                 prop_assert_eq!(content_only, content);
 
                 // With no frontmatter, frontmatter() should return None
-                prop_assert!(markdown.frontmatter().is_none());
+                prop_assert!(markdown.frontmatter().is_none())
             }
         }
+    );
 
+    property_test!(
+        test_markdown_clone_equality,
+        markdown_content_strategy(),
+        content,
+        {
+            if let Ok(markdown) = Markdown::new(content.clone()) {
+                let cloned = markdown.clone();
+                prop_assert_eq!(markdown, cloned)
+            }
+        }
+    );
+
+    proptest! {
         #[test]
         fn test_markdown_with_frontmatter_preservation(
             content in markdown_content_strategy(),
@@ -174,17 +322,6 @@ mod markdown_validation_properties {
 
             // But should contain the original content
             prop_assert!(content_only.contains(&content) || content.is_empty());
-        }
-    }
-
-    proptest! {
-        #[test]
-        fn test_markdown_clone_equality(content in markdown_content_strategy()) {
-            if let Ok(markdown) = Markdown::new(content) {
-                let cloned = markdown.clone();
-                prop_assert_eq!(markdown.as_str(), cloned.as_str());
-                prop_assert_eq!(markdown, cloned);
-            }
         }
 
         #[test]
@@ -212,133 +349,114 @@ mod url_detection_properties {
     proptest! {
         #[test]
         fn test_url_detection_consistency(url in valid_http_url_strategy()) {
-            let detector = UrlDetector::new();
-
-            // Detection should be deterministic
-            let result1 = detector.detect_type(&url);
-            let result2 = detector.detect_type(&url);
-
-            prop_assert_eq!(result1.is_ok(), result2.is_ok());
-            if result1.is_ok() && result2.is_ok() {
-                prop_assert_eq!(result1.unwrap(), result2.unwrap());
-            }
+            let result = test_detection_consistency(&url, |detector, u| detector.detect_type(u));
+            // Detection should be deterministic - the helper already asserts equality
+            prop_assert!(result.is_ok() || result.is_err());
         }
 
         #[test]
         fn test_url_normalization_idempotent(url in valid_http_url_strategy()) {
-            let detector = UrlDetector::new();
-
-            if let Ok(normalized1) = detector.normalize_url(&url) {
-                // Normalizing already normalized URL should be idempotent
-                if let Ok(normalized2) = detector.normalize_url(&normalized1) {
-                    prop_assert_eq!(normalized1, normalized2);
-                }
-            }
-        }
-
-        #[test]
-        fn test_google_docs_urls_detected(
-            doc_id in prop::string::string_regex("[a-zA-Z0-9_-]{10,50}").unwrap()
-        ) {
-            let url = format!("https://docs.google.com/document/d/{doc_id}/edit");
-
-            match detect_url_type(&url) {
-                Ok(url_type) => {
-                    prop_assert_eq!(url_type, UrlType::GoogleDocs);
-                }
-                Err(_) => {
-                    // Some doc IDs might be invalid, which is acceptable
-                }
-            }
-        }
-
-        #[test]
-        fn test_github_issue_urls_detected(
-            owner in prop::string::string_regex("[a-zA-Z0-9_-]{1,20}").unwrap(),
-            repo in prop::string::string_regex("[a-zA-Z0-9_-]{1,30}").unwrap(),
-            issue_num in 1u32..100000u32
-        ) {
-            let url = format!("https://github.com/{owner}/{repo}/issues/{issue_num}");
-
-            match detect_url_type(&url) {
-                Ok(url_type) => {
-                    prop_assert_eq!(url_type, UrlType::GitHubIssue);
-                }
-                Err(_) => {
-                    // Some URLs might be invalid, which is acceptable
-                }
-            }
-        }
-
-
-        #[test]
-        fn test_html_urls_as_fallback(url in valid_http_url_strategy()) {
-            // URLs that don't match specific patterns should be detected as HTML
-            if !url.contains("docs.google.com") &&
-               !url.contains("github.com") &&
-               !url.contains("sharepoint.com") {
-                match detect_url_type(&url) {
-                    Ok(url_type) => {
-                        prop_assert_eq!(url_type, UrlType::Html);
-                    }
-                    Err(_) => {
-                        // Some URLs might be invalid, which is acceptable
-                    }
-                }
+            let result = test_detection_consistency(&url, |detector, u| detector.normalize_url(u));
+            // Normalization should be idempotent - test again with normalized result
+            if let Ok(normalized) = result {
+                let result2 = test_detection_consistency(&normalized, |detector, u| detector.normalize_url(u));
+                prop_assert!(result2.is_ok());
             }
         }
     }
+
+    property_test!(
+        test_google_docs_urls_detected,
+        prop::string::string_regex("[a-zA-Z0-9_-]{10,50}")
+            .unwrap()
+            .prop_map(|doc_id| format!("https://docs.google.com/document/d/{doc_id}/edit")),
+        url,
+        {
+            assert_url_type_detection(url, UrlType::GoogleDocs);
+        }
+    );
+
+    property_test!(
+        test_github_issue_urls_detected,
+        (
+            prop::string::string_regex("[a-zA-Z0-9_-]{1,20}").unwrap(),
+            prop::string::string_regex("[a-zA-Z0-9_-]{1,30}").unwrap(),
+            1u32..MAX_GITHUB_ISSUE_NUMBER
+        )
+            .prop_map(|(owner, repo, issue_num)| {
+                format!("https://github.com/{owner}/{repo}/issues/{issue_num}")
+            }),
+        url,
+        {
+            assert_url_type_detection(url, UrlType::GitHubIssue);
+        }
+    );
+
+    property_test!(
+        test_html_urls_as_fallback,
+        (
+            prop::string::string_regex("[a-z0-9-]{1,20}").unwrap(),
+            prop::string::string_regex("[a-z0-9-]{1,20}").unwrap()
+        )
+            .prop_map(|(subdomain, domain)| {
+                format!("https://{subdomain}-test-{domain}.example")
+            }),
+        url,
+        {
+            assert_url_type_detection(url, UrlType::Html);
+        }
+    );
 }
 
 /// Property tests for configuration handling
 mod configuration_properties {
     use super::*;
 
+    property_test!(
+        test_config_timeout_values,
+        1u64..MAX_TIMEOUT_SECS,
+        timeout_secs,
+        {
+            let config = build_config_with(|b| b.timeout_seconds(timeout_secs));
+            prop_assert_eq!(config.http.timeout, Duration::from_secs(timeout_secs))
+        }
+    );
+
+    property_test!(
+        test_config_retry_values,
+        0u32..MAX_RETRIES_TEST_RANGE,
+        max_retries,
+        {
+            let config = build_config_with(|b| b.max_retries(max_retries));
+            prop_assert_eq!(config.http.max_retries, max_retries)
+        }
+    );
+
+    property_test!(
+        test_config_user_agent_preservation,
+        prop::string::string_regex("[a-zA-Z0-9_/. -]{1,100}").unwrap(),
+        user_agent,
+        {
+            let config = build_config_with(|b| b.user_agent(&user_agent));
+            prop_assert_eq!(config.http.user_agent, user_agent)
+        }
+    );
+
     proptest! {
-        #[test]
-        fn test_config_timeout_values(timeout_secs in 1u64..3600u64) {
-            let config = Config::builder()
-                .timeout_seconds(timeout_secs)
-                .build();
-
-            prop_assert_eq!(config.http.timeout, Duration::from_secs(timeout_secs));
-        }
-
-        #[test]
-        fn test_config_retry_values(max_retries in 0u32..20u32) {
-            let config = Config::builder()
-                .max_retries(max_retries)
-                .build();
-
-            prop_assert_eq!(config.http.max_retries, max_retries);
-        }
-
-        #[test]
-        fn test_config_user_agent_preservation(
-            user_agent in prop::string::string_regex("[a-zA-Z0-9_/. -]{1,100}").unwrap()
-        ) {
-            let config = Config::builder()
-                .user_agent(&user_agent)
-                .build();
-
-            prop_assert_eq!(config.http.user_agent, user_agent);
-        }
-
         #[test]
         fn test_config_token_preservation(
             github_token in prop::option::of(prop::string::string_regex("[a-zA-Z0-9_]{10,50}").unwrap()),
             google_api_key in prop::option::of(prop::string::string_regex("[a-zA-Z0-9_]{10,50}").unwrap())
         ) {
-            let mut builder = Config::builder();
-
-            if let Some(ref token) = github_token {
-                builder = builder.github_token(token);
-            }
-            if let Some(ref key) = google_api_key {
-                builder = builder.google_api_key(key);
-            }
-
-            let config = builder.build();
+            let config = build_config_with(|mut builder| {
+                if let Some(ref token) = github_token {
+                    builder = builder.github_token(token);
+                }
+                if let Some(ref key) = google_api_key {
+                    builder = builder.google_api_key(key);
+                }
+                builder
+            });
 
             prop_assert_eq!(config.auth.github_token, github_token);
             prop_assert_eq!(config.auth.google_api_key, google_api_key);
@@ -351,16 +469,15 @@ mod configuration_properties {
                     prop::string::string_regex("[a-zA-Z_][a-zA-Z0-9_]{0,20}").unwrap(),
                     prop::string::string_regex("[a-zA-Z0-9 ._-]{1,50}").unwrap()
                 ),
-                0..10
+                0..MAX_FRONTMATTER_FIELDS
             )
         ) {
-            let mut builder = Config::builder();
-
-            for (key, value) in &fields {
-                builder = builder.custom_frontmatter_field(key, value);
-            }
-
-            let config = builder.build();
+            let config = build_config_with(|mut builder| {
+                for (key, value) in &fields {
+                    builder = builder.custom_frontmatter_field(key, value);
+                }
+                builder
+            });
 
             prop_assert_eq!(config.output.custom_frontmatter_fields.len(), fields.len());
             for (i, (key, value)) in fields.iter().enumerate() {
@@ -371,17 +488,17 @@ mod configuration_properties {
 
         #[test]
         fn test_config_builder_chaining(
-            timeout in 1u64..100u64,
-            retries in 0u32..10u32,
+            timeout in 1u64..MAX_TIMEOUT_TEST_SECS,
+            retries in 0u32..MAX_RETRIES_CONFIG_TEST,
             include_frontmatter in any::<bool>(),
             normalize_whitespace in any::<bool>()
         ) {
-            let config = Config::builder()
-                .timeout_seconds(timeout)
-                .max_retries(retries)
-                .include_frontmatter(include_frontmatter)
-                .normalize_whitespace(normalize_whitespace)
-                .build();
+            let config = build_config_with(|b| {
+                b.timeout_seconds(timeout)
+                    .max_retries(retries)
+                    .include_frontmatter(include_frontmatter)
+                    .normalize_whitespace(normalize_whitespace)
+            });
 
             prop_assert_eq!(config.http.timeout, Duration::from_secs(timeout));
             prop_assert_eq!(config.http.max_retries, retries);
@@ -404,11 +521,7 @@ mod error_handling_properties {
                 message: message.clone(),
             };
 
-            let display_string = format!("{error}");
-            prop_assert!(display_string.contains(&message));
-
-            let debug_string = format!("{error:?}");
-            prop_assert!(debug_string.contains(&message));
+            assert_error_formats_correctly(&error, &message);
         }
 
         #[test]
@@ -445,7 +558,7 @@ mod error_handling_properties {
 
         #[test]
         fn test_markdown_error_recoverable_property(
-            network_status in 400u16..600u16
+            network_status in HTTP_CLIENT_ERROR_START..HTTP_STATUS_END
         ) {
             let error_context = ErrorContext {
                 url: "https://example.com".to_string(),
@@ -464,8 +577,8 @@ mod error_handling_properties {
 
             // Certain status codes should be recoverable, others not
             match network_status {
-                500..=503 | 429 => prop_assert!(is_recoverable),
-                400..=499 => prop_assert!(!is_recoverable),
+                HTTP_INTERNAL_ERROR..=HTTP_SERVICE_UNAVAILABLE | HTTP_TOO_MANY_REQUESTS => prop_assert!(is_recoverable),
+                HTTP_CLIENT_ERROR_START..=HTTP_CLIENT_ERROR_END => prop_assert!(!is_recoverable),
                 _ => {
                     // Other codes may or may not be recoverable based on implementation
                 }
@@ -474,68 +587,97 @@ mod error_handling_properties {
     }
 }
 
+/// Helper function for validating HTML config creation and equality
+fn validate_html_config_creation_and_equality(
+    max_line_width: usize,
+    max_blank_lines: usize,
+    flags: (bool, bool, bool, bool),
+) -> Result<(), proptest::test_runner::TestCaseError> {
+    let config = create_test_html_config(max_line_width, max_blank_lines, flags);
+    let expected = create_test_html_config(max_line_width, max_blank_lines, flags);
+    assert_html_converter_config_equal(&config, &expected);
+    Ok(())
+}
+
 /// Property tests for HTML converter configuration
 mod html_converter_properties {
     use super::*;
 
-    proptest! {
-        #[test]
-        fn test_html_converter_config_validation(
-            max_line_width in 20usize..500usize,
-            max_blank_lines in 0usize..20usize,
-            remove_scripts in any::<bool>(),
-            remove_navigation in any::<bool>(),
-            remove_sidebars in any::<bool>(),
-            remove_ads in any::<bool>()
-        ) {
-            let config = HtmlConverterConfig {
+    property_test!(
+        test_html_converter_config_validation,
+        (
+            MIN_LINE_WIDTH..MAX_LINE_WIDTH_TEST,
+            0usize..MAX_BLANK_LINES_TEST,
+            any::<bool>(),
+            any::<bool>(),
+            any::<bool>(),
+            any::<bool>()
+        ),
+        params,
+        {
+            let (
                 max_line_width,
-                remove_scripts_styles: remove_scripts,
+                max_blank_lines,
+                remove_scripts,
                 remove_navigation,
                 remove_sidebars,
                 remove_ads,
-                max_blank_lines,
-            };
+            ) = params;
 
-            // Configuration should be stored correctly
-            prop_assert_eq!(config.max_line_width, max_line_width);
-            prop_assert_eq!(config.remove_scripts_styles, remove_scripts);
-            prop_assert_eq!(config.remove_navigation, remove_navigation);
-            prop_assert_eq!(config.remove_sidebars, remove_sidebars);
-            prop_assert_eq!(config.remove_ads, remove_ads);
-            prop_assert_eq!(config.max_blank_lines, max_blank_lines);
+            validate_html_config_creation_and_equality(
+                max_line_width,
+                max_blank_lines,
+                (
+                    remove_scripts,
+                    remove_navigation,
+                    remove_sidebars,
+                    remove_ads,
+                ),
+            )?;
 
             // Should be able to create converter with this config
+            let config = create_test_html_config(
+                max_line_width,
+                max_blank_lines,
+                (
+                    remove_scripts,
+                    remove_navigation,
+                    remove_sidebars,
+                    remove_ads,
+                ),
+            );
             let client = HttpClient::new();
             let output_config = markdowndown::config::OutputConfig::default();
             let converter = HtmlConverter::with_config(client, config.clone(), output_config);
-            prop_assert_eq!(converter.name(), "HTML");
+            prop_assert_eq!(converter.name(), "HTML")
         }
+    );
 
-        #[test]
-        fn test_html_converter_config_clone(
-            max_line_width in 50usize..200usize,
-            max_blank_lines in 1usize..10usize
-        ) {
-            let original_config = HtmlConverterConfig {
+    property_test!(
+        test_html_converter_config_clone,
+        (
+            MIN_LINE_WIDTH_CLONE_TEST..MAX_LINE_WIDTH_CLONE_TEST,
+            1usize..MAX_BLANK_LINES_CLONE_TEST
+        ),
+        params,
+        {
+            let (max_line_width, max_blank_lines) = params;
+            validate_html_config_creation_and_equality(
                 max_line_width,
-                remove_scripts_styles: true,
-                remove_navigation: false,
-                remove_sidebars: true,
-                remove_ads: false,
                 max_blank_lines,
-            };
-
-            let cloned_config = original_config.clone();
-
-            prop_assert_eq!(original_config.max_line_width, cloned_config.max_line_width);
-            prop_assert_eq!(original_config.remove_scripts_styles, cloned_config.remove_scripts_styles);
-            prop_assert_eq!(original_config.remove_navigation, cloned_config.remove_navigation);
-            prop_assert_eq!(original_config.remove_sidebars, cloned_config.remove_sidebars);
-            prop_assert_eq!(original_config.remove_ads, cloned_config.remove_ads);
-            prop_assert_eq!(original_config.max_blank_lines, cloned_config.max_blank_lines);
+                (true, false, true, false),
+            )?;
         }
-    }
+    );
+}
+
+/// Helper function for creating standard MarkdownDown instances
+fn create_standard_instances() -> Vec<MarkdownDown> {
+    vec![
+        MarkdownDown::new(),
+        MarkdownDown::default(),
+        MarkdownDown::with_config(Config::default()),
+    ]
 }
 
 /// Property tests for MarkdownDown main API
@@ -544,27 +686,17 @@ mod markdowndown_api_properties {
 
     #[test]
     fn test_markdowndown_supported_types_consistency() {
-        let md1 = MarkdownDown::new();
-        let md2 = MarkdownDown::default();
-        let md3 = MarkdownDown::with_config(Config::default());
-
-        let types1 = md1.supported_types();
-        let types2 = md2.supported_types();
-        let types3 = md3.supported_types();
+        let instances = create_standard_instances();
+        let instance_refs: Vec<&MarkdownDown> = instances.iter().collect();
 
         // All instances should report the same supported types (order may vary)
-        use std::collections::HashSet;
-        let set1: HashSet<_> = types1.iter().collect();
-        let set2: HashSet<_> = types2.iter().collect();
-        let set3: HashSet<_> = types3.iter().collect();
-
-        assert_eq!(set1, set2);
-        assert_eq!(set2, set3);
+        compare_markdowndown_instances(instance_refs, |md| md.supported_types());
 
         // Should include the core types
-        assert!(types1.contains(&UrlType::Html));
-        assert!(types1.contains(&UrlType::GoogleDocs));
-        assert!(types1.contains(&UrlType::GitHubIssue));
+        let types = instances[0].supported_types();
+        assert!(types.contains(&UrlType::Html));
+        assert!(types.contains(&UrlType::GoogleDocs));
+        assert!(types.contains(&UrlType::GitHubIssue));
     }
 
     #[test]

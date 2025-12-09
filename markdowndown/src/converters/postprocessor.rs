@@ -3,6 +3,21 @@
 
 use super::config::HtmlConverterConfig;
 
+/// Maximum heading level in markdown (H1 through H6)
+const MAX_HEADING_LEVEL: usize = 6;
+
+/// Length of empty text link prefix "[](
+const EMPTY_TEXT_LINK_PREFIX_LEN: usize = 3;
+
+/// Length of inline link delimiter "]("
+const INLINE_LINK_DELIMITER_LEN: usize = 2;
+
+/// Length of reference link delimiter "]: "
+const REFERENCE_LINK_DELIMITER_LEN: usize = 3;
+
+/// Minimum characters in a reference name
+const MIN_REFERENCE_LENGTH: usize = 1;
+
 /// Markdown postprocessor that cleans up formatting and whitespace.
 pub struct MarkdownPostprocessor<'a> {
     config: &'a HtmlConverterConfig,
@@ -90,96 +105,102 @@ impl<'a> MarkdownPostprocessor<'a> {
 
     /// Cleans up malformed links in markdown.
     fn clean_malformed_links(&self, markdown: &str) -> String {
-        let result = markdown.to_string();
-
-        // Use a simpler approach with string replacement for common malformed patterns
-        let mut cleaned = result;
-
-        // Remove empty links with empty text: [](broken)
-        // Match links where text is empty and URL doesn't start with http
-        while let Some(start) = cleaned.find("[](") {
-            if let Some(end) = cleaned[start + 3..].find(')') {
-                let url_part = &cleaned[start + 3..start + 3 + end];
-                if !url_part.starts_with("http://") && !url_part.starts_with("https://") {
-                    // Remove this malformed link and the space after if any
-                    let full_end = start + 3 + end + 1;
-                    let mut remove_end = full_end;
-                    if cleaned.chars().nth(full_end) == Some(' ') {
-                        remove_end += 1;
-                    }
-                    cleaned.replace_range(start..remove_end, "");
-                } else {
-                    // Valid empty link, keep it and move past this occurrence
-                    break;
-                }
-            } else {
-                break;
-            }
-        }
-
-        // Remove links with text but empty URL: [text]()
-        while let Some(start) = cleaned.find("](") {
-            // Find the opening bracket for this link
-            if let Some(open_bracket) = cleaned[..start].rfind('[') {
-                let _text_part = &cleaned[open_bracket + 1..start];
-                if let Some(end) = cleaned[start + 2..].find(')') {
-                    let url_part = &cleaned[start + 2..start + 2 + end];
-                    if url_part.trim().is_empty() {
-                        // Remove this link with empty URL and space after if any
-                        let full_end = start + 2 + end + 1;
-                        let mut remove_end = full_end;
-                        if cleaned.chars().nth(full_end) == Some(' ') {
-                            remove_end += 1;
-                        }
-                        cleaned.replace_range(open_bracket..remove_end, "");
-                    } else {
-                        // This is a valid link, skip past it
-                        let temp = cleaned[start + 2 + end + 1..].to_string();
-                        cleaned = cleaned[..start + 2 + end + 1].to_string() + &temp;
-                        break;
-                    }
-                } else {
-                    break;
-                }
-            } else {
-                break;
-            }
-        }
-
+        let mut cleaned = markdown.to_string();
+        cleaned = self.remove_empty_text_links(cleaned);
+        cleaned = self.remove_empty_url_links(cleaned);
         cleaned
+    }
+
+    /// Removes links with empty text but broken URLs: [](broken)
+    fn remove_empty_text_links(&self, mut markdown: String) -> String {
+        while let Some(start) = markdown.find("[](") {
+            let Some(end) = markdown[start + EMPTY_TEXT_LINK_PREFIX_LEN..].find(')') else {
+                break;
+            };
+
+            let url_part = &markdown
+                [start + EMPTY_TEXT_LINK_PREFIX_LEN..start + EMPTY_TEXT_LINK_PREFIX_LEN + end];
+            let is_valid_url = url_part.starts_with("http://") || url_part.starts_with("https://");
+
+            if is_valid_url {
+                break;
+            }
+
+            let full_end = start + EMPTY_TEXT_LINK_PREFIX_LEN + end + 1;
+            Self::remove_with_trailing_space(&mut markdown, start, full_end);
+        }
+        markdown
+    }
+
+    /// Removes links with text but empty URLs: [text]()
+    fn remove_empty_url_links(&self, mut markdown: String) -> String {
+        while let Some(start) = markdown.find("](") {
+            let Some(open_bracket) = markdown[..start].rfind('[') else {
+                break;
+            };
+
+            let Some(end) = markdown[start + INLINE_LINK_DELIMITER_LEN..].find(')') else {
+                break;
+            };
+
+            let url_part = &markdown
+                [start + INLINE_LINK_DELIMITER_LEN..start + INLINE_LINK_DELIMITER_LEN + end];
+
+            if url_part.trim().is_empty() {
+                let full_end = start + INLINE_LINK_DELIMITER_LEN + end + 1;
+                Self::remove_with_trailing_space(&mut markdown, open_bracket, full_end);
+            } else {
+                break;
+            }
+        }
+        markdown
+    }
+
+    /// Helper to remove a range and trailing space if present
+    fn remove_with_trailing_space(text: &mut String, start: usize, end: usize) {
+        let mut remove_end = end;
+        if text.chars().nth(end) == Some(' ') {
+            remove_end += 1;
+        }
+        text.replace_range(start..remove_end, "");
+    }
+
+    /// Parses a reference definition line and returns the reference and URL if valid.
+    /// Reference definitions are in the format: [reference]: url
+    fn parse_reference_definition(line: &str) -> Option<(String, String)> {
+        let trimmed = line.trim();
+
+        if !trimmed.starts_with('[') {
+            return None;
+        }
+
+        let colon_pos = trimmed.find("]: ")?;
+        if colon_pos <= MIN_REFERENCE_LENGTH {
+            return None;
+        }
+
+        let reference = trimmed[1..colon_pos].to_string();
+        let url = trimmed[colon_pos + REFERENCE_LINK_DELIMITER_LEN..].to_string();
+        Some((reference, url))
     }
 
     /// Converts reference-style links to inline links.
     fn convert_reference_links_to_inline(&self, markdown: &str) -> String {
         use std::collections::HashMap;
 
-        let mut result = markdown.to_string();
         let mut reference_definitions = HashMap::new();
         let mut filtered_lines = Vec::new();
 
         // Process lines to collect reference definitions and filter them out
-        for line in result.split('\n') {
-            let trimmed = line.trim();
-
-            // Check if this is a reference definition like [1]: https://example.com
-            if let Some(colon_pos) = trimmed.find("]: ") {
-                if trimmed.starts_with('[') {
-                    let bracket_end = colon_pos;
-                    if bracket_end > 1 {
-                        let reference = &trimmed[1..bracket_end];
-                        let url = &trimmed[colon_pos + 3..];
-                        reference_definitions.insert(reference.to_string(), url.to_string());
-                        // Skip adding this line to filtered_lines (removes the reference definition)
-                        continue;
-                    }
-                }
+        for line in markdown.split('\n') {
+            if let Some((reference, url)) = Self::parse_reference_definition(line) {
+                reference_definitions.insert(reference, url);
+            } else {
+                filtered_lines.push(line);
             }
-
-            // Keep all non-reference-definition lines
-            filtered_lines.push(line);
         }
 
-        result = filtered_lines.join("\n");
+        let mut result = filtered_lines.join("\n");
 
         // Convert reference-style links to inline links
         for (reference, url) in reference_definitions {
@@ -200,49 +221,46 @@ impl<'a> MarkdownPostprocessor<'a> {
 
         for line in lines {
             let trimmed = line.trim();
-            if trimmed.starts_with('#') {
-                // Count the number of # characters
-                let hashes = trimmed.chars().take_while(|&c| c == '#').count();
-                if hashes > 0 && hashes <= 6 {
-                    // Extract the heading text (everything after the hashes and space)
-                    let heading_text = trimmed[hashes..].trim_start();
-
-                    // Determine the appropriate level
-                    let target_level = if current_level == 0 {
-                        // First heading - set reference and use H1
-                        reference_level = Some(hashes);
-                        1
-                    } else if let Some(ref_level) = reference_level {
-                        if hashes <= ref_level {
-                            // Same or higher level than reference - reset to H1
-                            1
-                        } else if hashes > current_level {
-                            // Going deeper - don't skip levels
-                            current_level + 1
-                        } else {
-                            // Going up but still below reference - use requested level
-                            hashes - ref_level + 1
-                        }
-                    } else {
-                        // Fallback
-                        1
-                    };
-
-                    current_level = target_level;
-
-                    // Create the corrected heading
-                    let corrected_heading =
-                        format!("{} {}", "#".repeat(target_level), heading_text);
-                    result.push(corrected_heading);
-                } else {
-                    result.push(line.to_string());
-                }
-            } else {
+            if !trimmed.starts_with('#') {
                 result.push(line.to_string());
+                continue;
             }
+
+            let hashes = trimmed.chars().take_while(|&c| c == '#').count();
+            if hashes == 0 || hashes > MAX_HEADING_LEVEL {
+                result.push(line.to_string());
+                continue;
+            }
+
+            let heading_text = trimmed[hashes..].trim_start();
+            let target_level = self.calculate_target_level(current_level, reference_level, hashes);
+
+            if current_level == 0 {
+                reference_level = Some(hashes);
+            }
+            current_level = target_level;
+
+            let corrected_heading = format!("{} {}", "#".repeat(target_level), heading_text);
+            result.push(corrected_heading);
         }
 
         result.join("\n")
+    }
+
+    /// Calculates the target heading level based on current state and input
+    fn calculate_target_level(
+        &self,
+        current_level: usize,
+        reference_level: Option<usize>,
+        hashes: usize,
+    ) -> usize {
+        match (current_level, reference_level) {
+            (0, _) => 1,
+            (_, None) => 1,
+            (_, Some(ref_level)) if hashes <= ref_level => 1,
+            (curr, Some(_)) if hashes > curr => curr + 1,
+            (_, Some(ref_level)) => hashes - ref_level + 1,
+        }
     }
 }
 
@@ -250,10 +268,14 @@ impl<'a> MarkdownPostprocessor<'a> {
 mod tests {
     use super::*;
 
+    fn setup_postprocessor() -> MarkdownPostprocessor<'static> {
+        let config = Box::leak(Box::new(HtmlConverterConfig::default()));
+        MarkdownPostprocessor::new(config)
+    }
+
     #[test]
     fn test_normalize_whitespace() {
-        let config = HtmlConverterConfig::default();
-        let postprocessor = MarkdownPostprocessor::new(&config);
+        let postprocessor = setup_postprocessor();
 
         let input = "This  has   multiple\t\tspaces\nAnd\ttabs";
         let result = postprocessor.normalize_whitespace(input);
@@ -263,8 +285,7 @@ mod tests {
 
     #[test]
     fn test_remove_excessive_blank_lines() {
-        let config = HtmlConverterConfig::default();
-        let postprocessor = MarkdownPostprocessor::new(&config);
+        let postprocessor = setup_postprocessor();
 
         let input = "Line 1\n\n\n\nLine 2\n\nLine 3";
         let result = postprocessor.remove_excessive_blank_lines(input);
@@ -275,8 +296,7 @@ mod tests {
 
     #[test]
     fn test_clean_malformed_links() {
-        let config = HtmlConverterConfig::default();
-        let postprocessor = MarkdownPostprocessor::new(&config);
+        let postprocessor = setup_postprocessor();
 
         let input = "Text [](broken) more text [good text]() end";
         let result = postprocessor.clean_malformed_links(input);
@@ -286,8 +306,7 @@ mod tests {
 
     #[test]
     fn test_fix_heading_hierarchy() {
-        let config = HtmlConverterConfig::default();
-        let postprocessor = MarkdownPostprocessor::new(&config);
+        let postprocessor = setup_postprocessor();
 
         let input = "### First heading\n##### Skipped level\n## Another";
         let result = postprocessor.fix_heading_hierarchy(input);

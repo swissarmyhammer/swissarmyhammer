@@ -1,11 +1,243 @@
 //! Utility functions shared across the codebase.
 
+/// Known URL schemes that are not file paths.
+const KNOWN_NON_FILE_SCHEMES: &[&str] = &[
+    "data:",
+    "javascript:",
+    "mailto:",
+    "ftp:",
+    "tel:",
+    "sms:",
+    "http:",
+    "https:",
+];
+
+/// Minimum length for Windows absolute paths (e.g., `C:\`).
+const MIN_WINDOWS_PATH_LEN: usize = 3;
+
+/// Index of the colon in Windows paths (e.g., `C:`).
+const WINDOWS_DRIVE_COLON_INDEX: usize = 1;
+
+/// Index of the path separator in Windows paths (e.g., `C:\` or `C:/`).
+const WINDOWS_PATH_SEPARATOR_INDEX: usize = 2;
+
+/// Number of parts in simple domains (e.g., `example.com`).
+const SIMPLE_DOMAIN_PARTS: usize = 2;
+
+/// Maximum number of dots allowed in filenames to avoid false positives with domain names.
+/// Increased to 4 to handle multi-level subdomains like "api.staging.example.com"
+const MAX_FILENAME_DOT_COUNT: usize = 4;
+
+/// Checks if a string starts with a known non-file URL scheme.
+fn has_url_scheme(input: &str) -> bool {
+    KNOWN_NON_FILE_SCHEMES
+        .iter()
+        .any(|&scheme| input.starts_with(scheme))
+}
+
+/// Checks if a string contains URL-like patterns.
+fn contains_url_patterns(input: &str) -> bool {
+    input.contains("://")
+        || input.contains("www.")
+        || input.starts_with("//")
+        || has_url_scheme(input)
+}
+
+/// Checks if a string is a Windows absolute path (e.g., C:\path or D:/path).
+fn is_windows_absolute_path(s: &str) -> bool {
+    s.len() >= MIN_WINDOWS_PATH_LEN
+        && s.chars().nth(WINDOWS_DRIVE_COLON_INDEX) == Some(':')
+        && matches!(
+            s.chars().nth(WINDOWS_PATH_SEPARATOR_INDEX),
+            Some('\\') | Some('/')
+        )
+        && s.chars().next().is_some_and(|c| c.is_ascii_alphabetic())
+}
+
+/// Checks if a string looks like a valid TLD using heuristic rules.
+///
+/// Valid TLDs according to ICANN rules:
+/// - Are 2-63 characters long
+/// - Contain only ASCII letters, digits, and hyphens
+/// - Do not start or end with a hyphen
+/// - Are typically lowercase or can be case-normalized
+///
+/// This heuristic approach avoids maintaining a hard-coded list while
+/// catching the vast majority of real TLDs and rejecting obvious non-TLDs.
+fn looks_like_valid_tld(s: &str) -> bool {
+    // TLDs must be between 2 and 63 characters (per RFC 1035)
+    if s.len() < 2 || s.len() > 63 {
+        return false;
+    }
+
+    // TLDs can only contain ASCII letters, digits, and hyphens
+    // They cannot start or end with a hyphen
+    let mut chars = s.chars();
+    if matches!(chars.next(), Some('-')) || matches!(s.chars().last(), Some('-')) {
+        return false;
+    }
+
+    // All characters must be alphanumeric or hyphens
+    // At least one character should be a letter (pure numbers aren't valid TLDs)
+    let has_letter = s.chars().any(|c| c.is_ascii_alphabetic());
+    let all_valid = s.chars().all(|c| c.is_ascii_alphanumeric() || c == '-');
+
+    all_valid && has_letter
+}
+
+/// Checks if a string ends with what looks like a valid top-level domain.
+fn ends_with_valid_tld(s: &str) -> bool {
+    let parts: Vec<&str> = s.split('.').collect();
+    parts.len() == SIMPLE_DOMAIN_PARTS && parts.last().is_some_and(|&tld| looks_like_valid_tld(tld))
+}
+
+/// Checks if a string is a well-known file without an extension.
+/// Uses pattern matching for common file naming conventions.
+fn is_well_known_file(s: &str) -> bool {
+    // Early returns for basic requirements
+    if s.is_empty() || s.contains('.') || s.contains(' ') {
+        return false;
+    }
+
+    // Check for common patterns in file names:
+    // 1. All caps names (common for documentation/configuration files)
+    let all_caps_patterns = [
+        "README",
+        "LICENSE",
+        "CHANGELOG",
+        "CONTRIBUTING",
+        "AUTHORS",
+        "CODEOWNERS",
+        "COPYING",
+        "INSTALL",
+        "NOTICE",
+        "PATENTS",
+        "SECURITY",
+        "SUPPORT",
+        "TODO",
+        "VERSION",
+    ];
+
+    if all_caps_patterns
+        .iter()
+        .any(|&pattern| s.eq_ignore_ascii_case(pattern))
+    {
+        return true;
+    }
+
+    // 2. Files ending with "file" (case-insensitive)
+    if s.len() >= 4 && s[s.len() - 4..].eq_ignore_ascii_case("file") {
+        return true;
+    }
+
+    // 3. Files ending with "rc" (configuration files)
+    if s.len() >= 2 && s[s.len() - 2..].eq_ignore_ascii_case("rc") {
+        return true;
+    }
+
+    // 4. Common build/config file names (mixed case)
+    let build_config_files = [
+        "jenkinsfile",
+        "rakefile",
+        "gemfile",
+        "podfile",
+        "brewfile",
+        "fastfile",
+        "snapfile",
+        "matchfile",
+        "scanfile",
+        "gymfile",
+    ];
+
+    build_config_files
+        .iter()
+        .any(|&pattern| s.eq_ignore_ascii_case(pattern))
+}
+
+/// Checks if a string looks like a domain name.
+fn looks_like_domain(input: &str, parts: &[&str]) -> bool {
+    // Reject obvious non-domains
+    if input.contains("..") {
+        return false;
+    }
+
+    // Domains typically have 2-3 parts (e.g., "example.com" or "docs.google.com")
+    // More than 3 parts suggests a file path or subdomain structure that's too complex
+    let dot_count = input.matches('.').count();
+    if !(1..=MAX_FILENAME_DOT_COUNT).contains(&dot_count) {
+        return false;
+    }
+
+    parts.last().is_some_and(|&last| looks_like_valid_tld(last))
+}
+
+/// Common file extensions that are clearly not TLDs.
+const KNOWN_FILE_EXTENSIONS: &[&str] = &[
+    "txt", "md", "json", "xml", "html", "htm", "css", "js", "ts", "jsx", "tsx", "py", "rs", "go",
+    "java", "c", "cpp", "h", "hpp", "cs", "php", "rb", "swift", "kt", "scala", "sh", "bash", "zsh",
+    "fish", "ps1", "bat", "cmd", "yml", "yaml", "toml", "ini", "cfg", "conf", "config", "log",
+    "out", "err", "tmp", "temp", "bak", "backup", "zip", "tar", "gz", "bz2", "xz", "rar", "7z",
+    "pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx", "jpg", "jpeg", "png", "gif", "svg", "bmp",
+    "ico", "webp", "mp3", "mp4", "wav", "avi", "mov", "mkv", "flac", "sql", "db", "sqlite", "mdb",
+];
+
+/// Checks if a string looks like a simple filename (without path separators).
+fn looks_like_simple_filename(input: &str) -> bool {
+    // Early return if it has URL-like patterns
+    if contains_url_patterns(input) {
+        return false;
+    }
+
+    // Check for well-known files without extensions
+    if is_well_known_file(input) {
+        return true;
+    }
+
+    // Must contain a dot and no spaces to be considered further
+    if !input.contains('.') || input.contains(' ') {
+        return false;
+    }
+
+    let parts: Vec<&str> = input.split('.').collect();
+
+    // Check if the last part is a known file extension
+    if let Some(&last_part) = parts.last() {
+        // If it's a known file extension, it's definitely a file
+        // This handles both simple cases like "test.md" and complex cases like "archive.com.txt"
+        if KNOWN_FILE_EXTENSIONS
+            .iter()
+            .any(|&ext| last_part.eq_ignore_ascii_case(ext))
+        {
+            return true;
+        }
+    }
+
+    // If it ends with a valid TLD and is a simple two-part name, it's probably a domain
+    if ends_with_valid_tld(input) && parts.len() == SIMPLE_DOMAIN_PARTS {
+        return false;
+    }
+
+    // Additional checks to avoid false positives for domain names
+    !looks_like_domain(input, &parts)
+}
+
+/// Checks if a string is a path with separators but no protocol.
+fn is_path_with_separators(trimmed: &str) -> bool {
+    // Must not have a protocol and must have path separators
+    if contains_url_patterns(trimmed) || !(trimmed.contains('/') || trimmed.contains('\\')) {
+        return false;
+    }
+
+    // Return true if it looks like a path (not a domain pattern)
+    trimmed.starts_with('.') || trimmed.contains('/') || trimmed.contains('\\')
+}
+
 /// Checks if a string represents a local file path or file:// URL.
 ///
 /// This function identifies various forms of local file paths:
 /// - Absolute Unix paths: `/path/to/file`
 /// - Relative paths: `./file`, `../file`
-/// - Windows absolute paths: `C:\path`, `D:/path`  
+/// - Windows absolute paths: `C:\path`, `D:/path`
 /// - File URLs: `file:///path/to/file`, `file://./relative.md`
 /// - Simple relative filenames: `file.md`, `document.txt`
 ///
@@ -34,154 +266,53 @@ pub fn is_local_file_path(input: &str) -> bool {
         return true;
     }
 
-    // Check for Windows-style absolute paths (C:\, D:\, etc.)
-    if trimmed.len() >= 3
-        && trimmed.chars().nth(1) == Some(':')
-        && (trimmed.chars().nth(2) == Some('\\') || trimmed.chars().nth(2) == Some('/'))
-        && trimmed
-            .chars()
-            .next()
-            .is_some_and(|c| c.is_ascii_alphabetic())
-    {
+    // Check for Windows-style absolute paths
+    if is_windows_absolute_path(trimmed) {
         return true;
     }
 
-    // Check for file paths that don't look like URLs (no protocol)
-    if !trimmed.contains("://") && (trimmed.contains('/') || trimmed.contains('\\')) {
-        // Don't treat protocol-relative URLs (starting with //) as local files
-        if trimmed.starts_with("//") {
-            return false;
-        }
-
-        // Don't treat URLs with known schemes as local files (excluding file: which we handled above)
-        let known_schemes = [
-            "data:",
-            "javascript:",
-            "mailto:",
-            "ftp:",
-            "tel:",
-            "sms:",
-            "http:",
-            "https:",
-        ];
-        for scheme in &known_schemes {
-            if trimmed.starts_with(scheme) {
-                return false;
-            }
-        }
-
-        // Don't treat domain-like patterns as local files unless they clearly look like paths
-        return !trimmed.starts_with("www.")
-            && !trimmed.contains("://")
-            && (trimmed.starts_with('.') || trimmed.contains('/') || trimmed.contains('\\'));
+    // Check for paths with separators but no protocol
+    if is_path_with_separators(trimmed) {
+        return true;
     }
 
-    // Check for simple relative filenames (no path separators but look like files)
-    if !trimmed.contains("://") && !trimmed.contains("www.") && !trimmed.starts_with("//") {
-        // Don't treat URLs with known schemes as local files
-        let known_schemes = [
-            "data:",
-            "javascript:",
-            "mailto:",
-            "ftp:",
-            "tel:",
-            "sms:",
-            "http:",
-            "https:",
-        ];
-        for scheme in &known_schemes {
-            if trimmed.starts_with(scheme) {
-                return false;
-            }
-        }
-
-        // Check if it looks like a filename with a clear file extension
-        if trimmed.contains('.') && !trimmed.contains(' ') {
-            // Don't treat common domain patterns as files
-            let common_tlds = ["com", "org", "net", "edu", "gov", "mil", "int", "io", "co"];
-            let parts: Vec<&str> = trimmed.split('.').collect();
-
-            // If it's a simple two-part name ending in a common TLD, it's probably a domain
-            if parts.len() == 2 && common_tlds.contains(&parts[1]) {
-                return false;
-            }
-
-            // If it has a clear file extension (common file extensions), treat as file
-            let file_extensions = [
-                "md", "txt", "json", "xml", "yaml", "yml", "toml", "ini", "cfg", "conf", "py",
-                "rs", "js", "ts", "html", "css", "java", "cpp", "c", "h", "pdf", "doc", "docx",
-                "png", "jpg", "jpeg", "gif", "svg",
-            ];
-            if let Some(extension) = parts.last() {
-                if file_extensions.contains(extension) {
-                    return true;
-                }
-            }
-
-            // Additional checks to avoid false positives for domain names
-            // Must not contain multiple dots in a row and should have reasonable structure
-            if !trimmed.contains("..") && trimmed.matches('.').count() <= 2 {
-                // If it doesn't end with a common TLD and has dots, might be a file
-                if let Some(last_part) = parts.last() {
-                    if !common_tlds.contains(last_part) {
-                        return true;
-                    }
-                }
-            }
-        }
-
-        // Accept well-known files without extensions (common in Unix-like systems)
-        if !trimmed.contains('.') && !trimmed.contains(' ') && !trimmed.is_empty() {
-            let known_files = [
-                "Makefile",
-                "README",
-                "LICENSE",
-                "CHANGELOG",
-                "CONTRIBUTING",
-                "Dockerfile",
-                "Vagrantfile",
-                "Cargo",
-                "package",
-            ];
-            if known_files.contains(&trimmed) {
-                return true;
-            }
-        }
-    }
-
-    false
+    // Check for simple relative filenames
+    looks_like_simple_filename(trimmed)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    /// Helper function to assert that all provided paths are recognized as local file paths.
+    fn assert_paths_are_local(paths: &[&str]) {
+        for path in paths {
+            assert!(
+                is_local_file_path(path),
+                "Expected {} to be local path",
+                path
+            );
+        }
+    }
+
     #[test]
     fn test_unix_absolute_paths() {
-        assert!(is_local_file_path("/path/to/file"));
-        assert!(is_local_file_path("/usr/local/bin"));
-        assert!(is_local_file_path("/file.txt"));
+        assert_paths_are_local(&["/path/to/file", "/usr/local/bin", "/file.txt"]);
     }
 
     #[test]
     fn test_relative_paths() {
-        assert!(is_local_file_path("./file.txt"));
-        assert!(is_local_file_path("../parent/file.txt"));
-        assert!(is_local_file_path("./"));
-        assert!(is_local_file_path("../"));
+        assert_paths_are_local(&["./file.txt", "../parent/file.txt", "./", "../"]);
     }
 
     #[test]
     fn test_windows_paths() {
-        assert!(is_local_file_path("C:\\path\\to\\file"));
-        assert!(is_local_file_path("D:/path/to/file"));
-        assert!(is_local_file_path("Z:\\file.txt"));
+        assert_paths_are_local(&["C:\\path\\to\\file", "D:/path/to/file", "Z:\\file.txt"]);
     }
 
     #[test]
     fn test_relative_file_paths() {
-        assert!(is_local_file_path("relative/path.txt"));
-        assert!(is_local_file_path("docs/README.md"));
+        assert_paths_are_local(&["relative/path.txt", "docs/README.md"]);
     }
 
     #[test]
@@ -198,26 +329,27 @@ mod tests {
 
     #[test]
     fn test_file_urls() {
-        assert!(is_local_file_path("file:///path/to/file"));
-        assert!(is_local_file_path("file://./relative.md"));
-        assert!(is_local_file_path("file://../parent.md"));
-        assert!(is_local_file_path("file:///Users/user/doc.md"));
+        assert_paths_are_local(&[
+            "file:///path/to/file",
+            "file://./relative.md",
+            "file://../parent.md",
+            "file:///Users/user/doc.md",
+        ]);
     }
 
     #[test]
     fn test_simple_relative_filenames() {
         // Should recognize common file extensions
-        assert!(is_local_file_path("test.md"));
-        assert!(is_local_file_path("document.txt"));
-        assert!(is_local_file_path("README.md"));
-        assert!(is_local_file_path("config.json"));
-        assert!(is_local_file_path("script.py"));
+        assert_paths_are_local(&[
+            "test.md",
+            "document.txt",
+            "README.md",
+            "config.json",
+            "script.py",
+        ]);
 
         // Should recognize well-known files without extensions
-        assert!(is_local_file_path("Makefile"));
-        assert!(is_local_file_path("README"));
-        assert!(is_local_file_path("LICENSE"));
-        assert!(is_local_file_path("Dockerfile"));
+        assert_paths_are_local(&["Makefile", "README", "LICENSE", "Dockerfile"]);
     }
 
     #[test]
@@ -230,8 +362,10 @@ mod tests {
         assert!(!is_local_file_path("university.edu"));
 
         // Should still recognize legitimate files with common TLD-like extensions
-        assert!(is_local_file_path("archive.com.txt")); // .txt extension makes it clear it's a file
-        assert!(is_local_file_path("backup.org.json")); // .json extension makes it clear it's a file
+        assert_paths_are_local(&[
+            "archive.com.txt", // .txt extension makes it clear it's a file
+            "backup.org.json", // .json extension makes it clear it's a file
+        ]);
     }
 
     #[test]

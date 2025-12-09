@@ -49,7 +49,7 @@ impl IsolatedEnvTest {
         let home_dir = env.temp_dir().join("home");
         fs::create_dir(&home_dir).expect("Failed to create home dir");
         env::set_var("HOME", &home_dir);
-        env::set_current_dir(&env.temp_dir()).expect("Failed to set current dir");
+        env::set_current_dir(env.temp_dir()).expect("Failed to set current dir");
 
         Self {
             _env: env,

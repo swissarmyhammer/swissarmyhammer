@@ -7,56 +7,286 @@ use markdowndown::detection::UrlDetector;
 use markdowndown::types::{MarkdownError, UrlType};
 use proptest::prelude::*;
 
+// Test configuration constants
+// Test with 2000 chars to verify handling of URLs near typical browser limits
+const TEST_VERY_LONG_PATH_LENGTH: usize = 2000;
+// DNS RFC 1035 allows max 63 chars, testing near that limit
+const MAX_DOMAIN_LABEL_LENGTH: usize = 61;
+// Minimum valid TLD length per IANA standards
+const MIN_TLD_LENGTH: usize = 2;
+// Typical maximum TLD length for testing (e.g., 'museum')
+const MAX_TLD_LENGTH: usize = 6;
+
+// Shared test URL constants to avoid duplication across tests
+const GOOGLE_DOCS_URLS: &[&str] = &[
+    "https://docs.google.com/document/d/1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgvE2upms/edit",
+    "https://docs.google.com/document/d/abc123def456/view",
+    "https://docs.google.com/document/d/test123/edit#heading=h.123",
+    "https://drive.google.com/file/d/1234567890abcdef/view",
+    "https://drive.google.com/file/d/xyz789/edit",
+];
+
+const GITHUB_ISSUE_URLS: &[&str] = &[
+    "https://github.com/owner/repo/issues/123",
+    "https://github.com/microsoft/vscode/issues/42",
+    "https://github.com/rust-lang/rust/issues/12345",
+    "https://github.com/owner/repo/pull/456",
+    "https://github.com/microsoft/vscode/pull/789",
+    "https://github.com/rust-lang/rust/pull/98765",
+    "https://github.com/owner/repo/issues/1",
+    "https://github.com/owner/repo/pull/999999",
+];
+
+const HTML_URLS: &[&str] = &[
+    "https://example.com",
+    "https://www.example.com/page.html",
+    "https://blog.example.com/post/123",
+    "https://news.example.org/article?id=456",
+    "https://www.wikipedia.org/wiki/Rust_(programming_language)",
+    "https://stackoverflow.com/questions/12345/how-to-do-something",
+    "https://reddit.com/r/rust/comments/abc123/title",
+    "https://github.com/owner/repo",
+    "https://github.com/owner/repo/commits",
+    "https://github.com/owner/repo/tree/main",
+];
+
+const VALID_TEST_URLS: &[&str] = &[
+    "https://example.com",
+    "http://example.com",
+    "https://www.example.com",
+    "https://subdomain.example.com",
+    "https://example.com/path",
+    "https://example.com/path/to/resource",
+    "https://example.com:8080",
+    "https://example.com:8080/path",
+    "https://example.com/path?query=value",
+    "https://example.com/path?query=value#fragment",
+    "https://192.168.1.1",
+    "https://localhost:3000",
+    "https://user:pass@example.com",
+    "https://example.com/path/with-dashes_and_underscores",
+];
+
+const INVALID_TEST_URLS: &[&str] = &[
+    "not-a-url",
+    "ftp://example.com",
+    "mailto:test@example.com",
+    "javascript:alert('xss')",
+    "data:text/html,<h1>Test</h1>",
+    "",
+    "   ",
+    "example.com",
+    "www.example.com",
+    "//example.com",
+    "https://",
+    "http://",
+];
+
 mod helpers {
     use super::*;
 
-    /// Create test URL detector instance
+    /// Creates a new URL detector instance for testing.
     pub fn create_detector() -> UrlDetector {
         UrlDetector::new()
     }
 
-    /// Sample URLs for each type for testing
+    /// Returns a collection of sample URLs grouped by their expected URL type for testing type detection.
     pub fn sample_urls_by_type() -> Vec<(UrlType, Vec<&'static str>)> {
         vec![
-            (
-                UrlType::GoogleDocs,
-                vec![
-                    "https://docs.google.com/document/d/1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgvE2upms/edit",
-                    "https://docs.google.com/document/d/abc123def456/view",
-                    "https://docs.google.com/document/d/test123/edit#heading=h.123",
-                    "https://drive.google.com/file/d/1234567890abcdef/view",
-                    "https://drive.google.com/file/d/xyz789/edit",
-                ],
-            ),
-            (
-                UrlType::GitHubIssue,
-                vec![
-                    "https://github.com/owner/repo/issues/123",
-                    "https://github.com/microsoft/vscode/issues/42",
-                    "https://github.com/rust-lang/rust/issues/12345",
-                    "https://github.com/owner/repo/pull/456",
-                    "https://github.com/microsoft/vscode/pull/789",
-                    "https://github.com/rust-lang/rust/pull/98765",
-                    "https://github.com/owner/repo/issues/1",
-                    "https://github.com/owner/repo/pull/999999",
-                ],
-            ),
-            (
-                UrlType::Html,
-                vec![
-                    "https://example.com",
-                    "https://www.example.com/page.html",
-                    "https://blog.example.com/post/123",
-                    "https://news.example.org/article?id=456",
-                    "https://www.wikipedia.org/wiki/Rust_(programming_language)",
-                    "https://stackoverflow.com/questions/12345/how-to-do-something",
-                    "https://reddit.com/r/rust/comments/abc123/title",
-                    "https://github.com/owner/repo", // Not an issue/PR, should be HTML
-                    "https://github.com/owner/repo/commits",
-                    "https://github.com/owner/repo/tree/main",
-                ],
-            ),
+            (UrlType::GoogleDocs, GOOGLE_DOCS_URLS.to_vec()),
+            (UrlType::GitHubIssue, GITHUB_ISSUE_URLS.to_vec()),
+            (UrlType::Html, HTML_URLS.to_vec()),
         ]
+    }
+
+    /// Asserts that all provided URLs are detected as the expected URL type.
+    ///
+    /// # Panics
+    ///
+    /// Panics if any URL doesn't match the expected type.
+    pub fn assert_urls_match_type(urls: &[&str], expected_type: UrlType) {
+        assert_urls_match_type_with_detector(&create_detector(), urls, expected_type);
+    }
+
+    /// Asserts that all provided URLs are detected as the expected URL type using a provided detector.
+    ///
+    /// # Panics
+    ///
+    /// Panics if any URL doesn't match the expected type.
+    pub fn assert_urls_match_type_with_detector(detector: &UrlDetector, urls: &[&str], expected_type: UrlType) {
+        for url in urls {
+            let result = detector.detect_type(url).unwrap();
+            assert_eq!(result, expected_type, "Failed for URL: {url}");
+        }
+    }
+
+    /// Asserts that URL normalization produces expected results for test cases.
+    ///
+    /// # Panics
+    ///
+    /// Panics if any normalization result doesn't match the expected value.
+    pub fn assert_normalization(test_cases: &[(&str, &str)]) {
+        assert_normalization_with_detector(&create_detector(), test_cases);
+    }
+
+    /// Asserts that URL normalization produces expected results for test cases using a provided detector.
+    ///
+    /// # Panics
+    ///
+    /// Panics if any normalization result doesn't match the expected value.
+    pub fn assert_normalization_with_detector(detector: &UrlDetector, test_cases: &[(&str, &str)]) {
+        for (input, expected) in test_cases {
+            let result = detector.normalize_url(input).unwrap();
+            assert_eq!(result, *expected, "Failed to normalize: {input}");
+        }
+    }
+
+    /// Asserts URL validation results using a custom validator function.
+    ///
+    /// # Panics
+    ///
+    /// Panics based on the validator function's assertions.
+    pub fn assert_urls_validation<F>(urls: &[&str], validator: F)
+    where
+        F: Fn(&str, Result<(), MarkdownError>),
+    {
+        let detector = create_detector();
+        for url in urls {
+            let result = detector.validate_url(url);
+            validator(url, result);
+        }
+    }
+
+    /// Asserts that all provided URLs pass validation.
+    ///
+    /// # Panics
+    ///
+    /// Panics if any URL fails validation.
+    pub fn assert_urls_valid(urls: &[&str]) {
+        assert_urls_validation(urls, |url, result| {
+            assert!(result.is_ok(), "Should validate URL: {url}");
+        });
+    }
+
+    /// Asserts that all provided URLs fail validation with InvalidUrl error.
+    ///
+    /// # Panics
+    ///
+    /// Panics if any URL passes validation or fails with a different error type.
+    pub fn assert_urls_invalid(urls: &[&str]) {
+        assert_urls_validation(urls, |url, result| {
+            assert!(result.is_err(), "Should reject URL: {url}");
+            match result.unwrap_err() {
+                MarkdownError::ValidationError { kind, .. } => {
+                    assert_eq!(kind, markdowndown::types::ValidationErrorKind::InvalidUrl);
+                }
+                _ => panic!("Expected InvalidUrl error for: {url}"),
+            }
+        });
+    }
+
+    /// Asserts that all provided URLs are detected as HTML type.
+    ///
+    /// # Panics
+    ///
+    /// Panics if any URL is not detected as HTML type.
+    pub fn assert_urls_are_html(urls: &[&str]) {
+        assert_urls_match_type(urls, UrlType::Html);
+    }
+
+    /// Tests URLs using a custom validator closure for type detection results.
+    ///
+    /// # Panics
+    ///
+    /// Panics based on the validator function's assertions.
+    pub fn test_urls_with<F>(urls: &[&str], validator: F)
+    where
+        F: Fn(&str, Result<UrlType, MarkdownError>),
+    {
+        let detector = create_detector();
+        for url in urls {
+            let result = detector.detect_type(url);
+            validator(url, result);
+        }
+    }
+
+    /// Asserts that URL normalization is idempotent (stable across multiple normalizations)
+    /// and that type detection remains consistent before and after normalization.
+    ///
+    /// # Panics
+    ///
+    /// Panics if normalization isn't stable or type detection changes.
+    pub fn assert_roundtrip_stable(url: &str, detector: &UrlDetector) {
+        let normalized1 = detector.normalize_url(url).unwrap();
+        let normalized2 = detector.normalize_url(&normalized1).unwrap();
+        let normalized3 = detector.normalize_url(&normalized2).unwrap();
+
+        assert_eq!(normalized1, normalized2);
+        assert_eq!(normalized2, normalized3);
+
+        let type1 = detector.detect_type(url).unwrap();
+        let type2 = detector.detect_type(&normalized1).unwrap();
+        let type3 = detector.detect_type(&normalized2).unwrap();
+
+        assert_eq!(type1, type2);
+        assert_eq!(type2, type3);
+    }
+
+    /// Asserts that query parameters in URLs match expected values.
+    ///
+    /// # Panics
+    ///
+    /// Panics if tracking parameters aren't removed or expected parameters don't match.
+    pub fn assert_query_params(result_url: &str, expected_url: &str) {
+        let result_parsed = url::Url::parse(result_url).unwrap();
+        let expected_parsed = url::Url::parse(expected_url).unwrap();
+        
+        // Verify tracking parameters are removed
+        for (key, _) in result_parsed.query_pairs() {
+            assert!(!key.starts_with("utm_"), "Tracking parameter not removed: {}", key);
+            assert!(key != "ref", "Tracking parameter 'ref' not removed");
+        }
+        
+        // Verify important parameters are preserved
+        let result_params: std::collections::HashMap<_, _> = result_parsed.query_pairs().collect();
+        let expected_params: std::collections::HashMap<_, _> = expected_parsed.query_pairs().collect();
+        
+        for (key, value) in expected_params {
+            assert_eq!(
+                result_params.get(&key),
+                Some(&value),
+                "Expected parameter '{}' with value '{}' not found",
+                key,
+                value
+            );
+        }
+    }
+
+    /// Tests URL type detection with extensions for multiple URL sets.
+    ///
+    /// # Panics
+    ///
+    /// Panics if any URL doesn't match the expected type.
+    pub fn test_url_type_with_extensions(
+        base_urls: &[&str],
+        extended_urls: &[&str],
+        expected_type: UrlType,
+    ) {
+        assert_urls_match_type(base_urls, expected_type);
+        assert_urls_match_type(extended_urls, expected_type);
+    }
+
+    /// Tests GitHub URL classification with table-driven approach.
+    ///
+    /// # Panics
+    ///
+    /// Panics if any URL doesn't match the expected type.
+    pub fn test_github_url_classification(test_cases: &[(&str, UrlType, &str)]) {
+        let detector = create_detector();
+        for (url, expected_type, description) in test_cases {
+            let result = detector.detect_type(url).unwrap();
+            assert_eq!(result, *expected_type, "{}: Failed for URL: {url}", description);
+        }
     }
 }
 
@@ -102,99 +332,49 @@ mod url_type_detection_tests {
     }
 
     #[test]
-    fn test_google_docs_document_detection() {
-        let detector = helpers::create_detector();
-
-        let google_docs_urls = [
-            "https://docs.google.com/document/d/1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgvE2upms/edit",
+    fn test_google_docs_url_detection() {
+        let extended_google_docs = [
             "https://docs.google.com/document/d/abc123/view",
             "https://docs.google.com/document/d/test_doc_id_123/edit#heading=h.xyz",
             "https://docs.google.com/document/d/short/copy",
             "https://docs.google.com/document/d/1234567890/edit?usp=sharing",
-        ];
-
-        for url in google_docs_urls {
-            let result = detector.detect_type(url).unwrap();
-            assert_eq!(result, UrlType::GoogleDocs, "Failed for URL: {url}");
-        }
-    }
-
-    #[test]
-    fn test_google_drive_file_detection() {
-        let detector = helpers::create_detector();
-
-        let drive_urls = [
-            "https://drive.google.com/file/d/1234567890abcdef/view",
-            "https://drive.google.com/file/d/xyz789/edit",
             "https://drive.google.com/file/d/test_file/preview",
             "https://drive.google.com/file/d/abc123def456/view?usp=sharing",
         ];
 
-        for url in drive_urls {
-            let result = detector.detect_type(url).unwrap();
-            assert_eq!(result, UrlType::GoogleDocs, "Failed for URL: {url}");
-        }
+        helpers::test_url_type_with_extensions(
+            GOOGLE_DOCS_URLS,
+            &extended_google_docs,
+            UrlType::GoogleDocs,
+        );
     }
 
     #[test]
-    fn test_github_issue_detection() {
-        let detector = helpers::create_detector();
-
-        let issue_urls = [
-            "https://github.com/owner/repo/issues/123",
-            "https://github.com/microsoft/vscode/issues/42",
-            "https://github.com/rust-lang/rust/issues/12345",
+    fn test_github_issue_url_detection() {
+        let extended_github_issues = [
             "https://github.com/facebook/react/issues/1",
             "https://github.com/nodejs/node/issues/999999",
-        ];
-
-        for url in issue_urls {
-            let result = detector.detect_type(url).unwrap();
-            assert_eq!(result, UrlType::GitHubIssue, "Failed for URL: {url}");
-        }
-    }
-
-    #[test]
-    fn test_github_pull_request_detection() {
-        let detector = helpers::create_detector();
-
-        let pr_urls = [
-            "https://github.com/owner/repo/pull/456",
-            "https://github.com/microsoft/vscode/pull/789",
-            "https://github.com/rust-lang/rust/pull/98765",
             "https://github.com/facebook/react/pull/1",
             "https://github.com/nodejs/node/pull/999999",
         ];
 
-        for url in pr_urls {
-            let result = detector.detect_type(url).unwrap();
-            assert_eq!(result, UrlType::GitHubIssue, "Failed for URL: {url}");
-        }
+        helpers::test_url_type_with_extensions(
+            GITHUB_ISSUE_URLS,
+            &extended_github_issues,
+            UrlType::GitHubIssue,
+        );
     }
 
     #[test]
-    fn test_html_fallback_detection() {
-        let detector = helpers::create_detector();
-
-        let html_urls = [
-            "https://example.com",
-            "https://www.example.com/page.html",
-            "https://blog.example.com/post/123",
-            "https://news.example.org/article?id=456",
+    fn test_html_url_detection() {
+        let extended_html = [
             "https://stackoverflow.com/questions/12345",
             "https://reddit.com/r/rust",
             "https://www.wikipedia.org/wiki/Main_Page",
-            // GitHub URLs that aren't issues/PRs should fall back to HTML
-            "https://github.com/owner/repo",
-            "https://github.com/owner/repo/commits",
-            "https://github.com/owner/repo/tree/main",
             "https://github.com/owner/repo/blob/main/README.md",
         ];
 
-        for url in html_urls {
-            let result = detector.detect_type(url).unwrap();
-            assert_eq!(result, UrlType::Html, "Failed for URL: {url}");
-        }
+        helpers::test_url_type_with_extensions(HTML_URLS, &extended_html, UrlType::Html);
     }
 }
 
@@ -203,132 +383,63 @@ mod github_edge_cases {
     use super::*;
 
     #[test]
-    fn test_github_issue_with_fragments() {
-        let detector = helpers::create_detector();
-
-        let urls_with_fragments = [
-            "https://github.com/owner/repo/issues/123#issuecomment-456789",
-            "https://github.com/microsoft/vscode/issues/42#event-123456",
-            "https://github.com/rust-lang/rust/pull/12345#pullrequestreview-789",
-            "https://github.com/owner/repo/pull/456#discussion_r123456789",
+    fn test_github_url_classification() {
+        let test_cases = [
+            // URLs with components (fragments and query parameters)
+            ("https://github.com/owner/repo/issues/123#issuecomment-456789", UrlType::GitHubIssue, "issue with comment fragment"),
+            ("https://github.com/microsoft/vscode/issues/42#event-123456", UrlType::GitHubIssue, "issue with event fragment"),
+            ("https://github.com/rust-lang/rust/pull/12345#pullrequestreview-789", UrlType::GitHubIssue, "pull with review fragment"),
+            ("https://github.com/owner/repo/pull/456#discussion_r123456789", UrlType::GitHubIssue, "pull with discussion fragment"),
+            ("https://github.com/owner/repo/issues/123?tab=timeline", UrlType::GitHubIssue, "issue with tab query param"),
+            ("https://github.com/microsoft/vscode/pull/456?diff=unified", UrlType::GitHubIssue, "pull with diff query param"),
+            ("https://github.com/rust-lang/rust/issues/789?q=is%3Aissue+is%3Aopen", UrlType::GitHubIssue, "issue with search query param"),
+            
+            // Non-issue/pull URLs
+            ("https://github.com/owner/repo", UrlType::Html, "repository home"),
+            ("https://github.com/owner/repo/issues", UrlType::Html, "issues list page"),
+            ("https://github.com/owner/repo/pull", UrlType::Html, "pulls list page"),
+            ("https://github.com/owner/repo/commits", UrlType::Html, "commits page"),
+            ("https://github.com/owner/repo/tree/main", UrlType::Html, "tree view"),
+            ("https://github.com/owner/repo/blob/main/README.md", UrlType::Html, "blob view"),
+            ("https://github.com/owner/repo/releases", UrlType::Html, "releases page"),
+            ("https://github.com/owner/repo/wiki", UrlType::Html, "wiki page"),
+            ("https://github.com/owner/repo/settings", UrlType::Html, "settings page"),
+            ("https://github.com/owner/repo/actions", UrlType::Html, "actions page"),
+            ("https://github.com/owner/repo/issues/abc", UrlType::Html, "issue with non-numeric id"),
+            ("https://github.com/owner/repo/pull/def", UrlType::Html, "pull with non-numeric id"),
+            ("https://github.com/owner/repo/issues/", UrlType::Html, "issue with empty id"),
+            ("https://github.com/owner/repo/pull/", UrlType::Html, "pull with empty id"),
+            
+            // Valid issue numbers
+            ("https://github.com/owner/repo/issues/1", UrlType::GitHubIssue, "issue with minimal id"),
+            ("https://github.com/owner/repo/issues/123", UrlType::GitHubIssue, "issue with medium id"),
+            ("https://github.com/owner/repo/issues/999999", UrlType::GitHubIssue, "issue with large id"),
+            ("https://github.com/owner/repo/pull/1", UrlType::GitHubIssue, "pull with minimal id"),
+            ("https://github.com/owner/repo/pull/123", UrlType::GitHubIssue, "pull with medium id"),
+            ("https://github.com/owner/repo/pull/999999", UrlType::GitHubIssue, "pull with large id"),
+            
+            // Invalid issue numbers
+            ("https://github.com/owner/repo/issues/123abc", UrlType::Html, "issue id with trailing letters"),
+            ("https://github.com/owner/repo/issues/abc123", UrlType::Html, "issue id with leading letters"),
+            ("https://github.com/owner/repo/pull/xyz", UrlType::Html, "pull id with only letters"),
+            ("https://github.com/owner/repo/pull/123xyz", UrlType::Html, "pull id with trailing letters"),
+            ("https://github.com/owner/repo/pull/xyz123", UrlType::Html, "pull id with leading letters"),
+            
+            // Valid path structures
+            ("https://github.com/a/b/issues/1", UrlType::GitHubIssue, "minimal owner and repo names"),
+            ("https://github.com/owner-name/repo-name/issues/123", UrlType::GitHubIssue, "names with dashes"),
+            ("https://github.com/org_name/repo.name/pull/456", UrlType::GitHubIssue, "names with underscores and dots"),
+            ("https://github.com/user123/project_name/issues/789", UrlType::GitHubIssue, "names with numbers and underscores"),
+            
+            // Invalid path structures
+            ("https://github.com/issues/123", UrlType::Html, "missing repo segment"),
+            ("https://github.com/owner/issues/123", UrlType::Html, "missing repo, direct to issues"),
+            ("https://github.com/owner/repo/123", UrlType::Html, "missing issues/pull segment"),
+            ("https://github.com//repo/issues/123", UrlType::Html, "empty owner segment"),
+            ("https://github.com/owner//issues/123", UrlType::Html, "empty repo segment"),
         ];
 
-        for url in urls_with_fragments {
-            let result = detector.detect_type(url).unwrap();
-            assert_eq!(result, UrlType::GitHubIssue, "Failed for URL: {url}");
-        }
-    }
-
-    #[test]
-    fn test_github_issue_with_query_params() {
-        let detector = helpers::create_detector();
-
-        let urls_with_params = [
-            "https://github.com/owner/repo/issues/123?tab=timeline",
-            "https://github.com/microsoft/vscode/pull/456?diff=unified",
-            "https://github.com/rust-lang/rust/issues/789?q=is%3Aissue+is%3Aopen",
-        ];
-
-        for url in urls_with_params {
-            let result = detector.detect_type(url).unwrap();
-            assert_eq!(result, UrlType::GitHubIssue, "Failed for URL: {url}");
-        }
-    }
-
-    #[test]
-    fn test_github_non_issue_urls() {
-        let detector = helpers::create_detector();
-
-        let non_issue_urls = [
-            "https://github.com/owner/repo",           // Repository home
-            "https://github.com/owner/repo/issues",    // Issues list
-            "https://github.com/owner/repo/pull",      // PRs list
-            "https://github.com/owner/repo/commits",   // Commits
-            "https://github.com/owner/repo/tree/main", // Tree view
-            "https://github.com/owner/repo/blob/main/README.md", // File view
-            "https://github.com/owner/repo/releases",  // Releases
-            "https://github.com/owner/repo/wiki",      // Wiki
-            "https://github.com/owner/repo/settings",  // Settings
-            "https://github.com/owner/repo/actions",   // Actions
-            "https://github.com/owner/repo/issues/abc", // Invalid issue number
-            "https://github.com/owner/repo/pull/def",  // Invalid PR number
-            "https://github.com/owner/repo/issues/",   // Missing number
-            "https://github.com/owner/repo/pull/",     // Missing number
-        ];
-
-        for url in non_issue_urls {
-            let result = detector.detect_type(url).unwrap();
-            assert_eq!(result, UrlType::Html, "Failed for URL: {url}");
-        }
-    }
-
-    #[test]
-    fn test_github_issue_number_validation() {
-        let detector = helpers::create_detector();
-
-        // Valid issue numbers
-        let valid_urls = [
-            "https://github.com/owner/repo/issues/1",
-            "https://github.com/owner/repo/issues/123",
-            "https://github.com/owner/repo/issues/999999",
-            "https://github.com/owner/repo/pull/1",
-            "https://github.com/owner/repo/pull/123",
-            "https://github.com/owner/repo/pull/999999",
-        ];
-
-        for url in valid_urls {
-            let result = detector.detect_type(url).unwrap();
-            assert_eq!(result, UrlType::GitHubIssue, "Failed for valid URL: {url}");
-        }
-
-        // Invalid issue numbers
-        let invalid_urls = [
-            "https://github.com/owner/repo/issues/abc",
-            "https://github.com/owner/repo/issues/123abc",
-            "https://github.com/owner/repo/issues/abc123",
-            "https://github.com/owner/repo/pull/xyz",
-            "https://github.com/owner/repo/pull/123xyz",
-            "https://github.com/owner/repo/pull/xyz123",
-            "https://github.com/owner/repo/issues/",
-            "https://github.com/owner/repo/pull/",
-        ];
-
-        for url in invalid_urls {
-            let result = detector.detect_type(url).unwrap();
-            assert_eq!(result, UrlType::Html, "Failed for invalid URL: {url}");
-        }
-    }
-
-    #[test]
-    fn test_github_path_structure() {
-        let detector = helpers::create_detector();
-
-        // URLs with correct structure
-        let correct_structure = [
-            "https://github.com/a/b/issues/1", // Minimal valid
-            "https://github.com/owner-name/repo-name/issues/123",
-            "https://github.com/org_name/repo.name/pull/456",
-            "https://github.com/user123/project_name/issues/789",
-        ];
-
-        for url in correct_structure {
-            let result = detector.detect_type(url).unwrap();
-            assert_eq!(result, UrlType::GitHubIssue, "Failed for URL: {url}");
-        }
-
-        // URLs with incorrect structure
-        let incorrect_structure = [
-            "https://github.com/issues/123",        // Missing repo
-            "https://github.com/owner/issues/123",  // Missing repo
-            "https://github.com/owner/repo/123",    // Missing type
-            "https://github.com//repo/issues/123",  // Empty owner
-            "https://github.com/owner//issues/123", // Empty repo
-        ];
-
-        for url in incorrect_structure {
-            let result = detector.detect_type(url).unwrap();
-            assert_eq!(result, UrlType::Html, "Failed for URL: {url}");
-        }
+        helpers::test_github_url_classification(&test_cases);
     }
 }
 
@@ -337,9 +448,7 @@ mod url_normalization_tests {
     use super::*;
 
     #[test]
-    fn test_normalize_removes_tracking_parameters() {
-        let detector = helpers::create_detector();
-
+    fn test_normalize_tracking_params() {
         let test_cases = [
             (
                 "https://example.com/page?utm_source=email&content=important&utm_medium=social",
@@ -359,27 +468,21 @@ mod url_normalization_tests {
             ),
         ];
 
-        for (input, expected) in test_cases {
-            let result = detector.normalize_url(input).unwrap();
-            assert_eq!(result, expected, "Failed to normalize: {input}");
-        }
+        helpers::assert_normalization(&test_cases);
     }
 
     #[test]
-    fn test_normalize_removes_all_tracking_parameters() {
-        let detector = helpers::create_detector();
+    fn test_normalize_all_tracking_params() {
+        let test_cases = [(
+            "https://example.com/page?utm_source=test&utm_medium=email&utm_campaign=launch&utm_term=keyword&utm_content=ad&ref=social&source=newsletter&campaign=promo&medium=banner&term=search&gclid=google&fbclid=facebook&msclkid=bing&_ga=analytics&_gid=analytics2&mc_cid=mailchimp&mc_eid=mailchimp2",
+            "https://example.com/page",
+        )];
 
-        let url = "https://example.com/page?utm_source=test&utm_medium=email&utm_campaign=launch&utm_term=keyword&utm_content=ad&ref=social&source=newsletter&campaign=promo&medium=banner&term=search&gclid=google&fbclid=facebook&msclkid=bing&_ga=analytics&_gid=analytics2&mc_cid=mailchimp&mc_eid=mailchimp2";
-        let expected = "https://example.com/page";
-
-        let result = detector.normalize_url(url).unwrap();
-        assert_eq!(result, expected);
+        helpers::assert_normalization(&test_cases);
     }
 
     #[test]
-    fn test_normalize_preserves_important_parameters() {
-        let detector = helpers::create_detector();
-
+    fn test_normalize_preserved_params() {
         let test_cases = [
             (
                 "https://docs.google.com/document/d/123/edit?usp=sharing&utm_source=email",
@@ -395,10 +498,7 @@ mod url_normalization_tests {
             ),
         ];
 
-        for (input, expected) in test_cases {
-            let result = detector.normalize_url(input).unwrap();
-            assert_eq!(result, expected, "Failed to normalize: {input}");
-        }
+        helpers::assert_normalization(&test_cases);
     }
 
     #[test]
@@ -416,23 +516,14 @@ mod url_normalization_tests {
             ),
         ];
 
-        for (input, _expected) in test_cases {
+        for (input, expected) in test_cases {
             let result = detector.normalize_url(input).unwrap();
-            // The exact format might vary, but tracking params should be removed
-            assert!(!result.contains("utm_source"));
-            assert!(!result.contains("utm_medium"));
-            assert!(
-                result.contains("flag")
-                    || result.contains("empty=")
-                    || result.contains("keep=value")
-            );
+            helpers::assert_query_params(&result, expected);
         }
     }
 
     #[test]
-    fn test_normalize_trims_whitespace() {
-        let detector = helpers::create_detector();
-
+    fn test_normalize_whitespace_handling() {
         let test_cases = [
             ("  https://example.com/page  ", "https://example.com/page"),
             (
@@ -445,10 +536,7 @@ mod url_normalization_tests {
             ),
         ];
 
-        for (input, expected) in test_cases {
-            let result = detector.normalize_url(input).unwrap();
-            assert_eq!(result, expected, "Failed to normalize: {input}");
-        }
+        helpers::assert_normalization(&test_cases);
     }
 
     #[test]
@@ -456,7 +544,7 @@ mod url_normalization_tests {
         let detector = helpers::create_detector();
 
         let test_cases = [
-            ("https://example.com", "https://example.com"),
+            ("https://example.com", "https://example.com/"),
             ("https://example.com/", "https://example.com/"),
             ("https://example.com/page", "https://example.com/page"),
             (
@@ -465,21 +553,17 @@ mod url_normalization_tests {
             ),
         ];
 
-        for (input, expected_base) in test_cases {
+        for (input, expected) in test_cases {
             let result = detector.normalize_url(input).unwrap();
-            // URL normalization might add trailing slash, so be flexible
-            assert!(
-                result == expected_base
-                    || result == format!("{}/", expected_base.trim_end_matches('/')),
-                "URL normalization failed for: {input} -> {result}"
+            assert_eq!(
+                result, expected,
+                "URL normalization failed for: {input} -> {result}, expected: {expected}"
             );
         }
     }
 
     #[test]
     fn test_normalize_handles_fragment_identifiers() {
-        let detector = helpers::create_detector();
-
         let test_cases = [
             (
                 "https://example.com/page?utm_source=test#section",
@@ -491,10 +575,7 @@ mod url_normalization_tests {
             ),
         ];
 
-        for (input, expected) in test_cases {
-            let result = detector.normalize_url(input).unwrap();
-            assert_eq!(result, expected, "Failed to normalize: {input}");
-        }
+        helpers::assert_normalization(&test_cases);
     }
 }
 
@@ -504,61 +585,12 @@ mod url_validation_tests {
 
     #[test]
     fn test_validate_valid_urls() {
-        let detector = helpers::create_detector();
-
-        let valid_urls = [
-            "https://example.com",
-            "http://example.com",
-            "https://www.example.com",
-            "https://subdomain.example.com",
-            "https://example.com/path",
-            "https://example.com/path/to/resource",
-            "https://example.com:8080",
-            "https://example.com:8080/path",
-            "https://example.com/path?query=value",
-            "https://example.com/path?query=value#fragment",
-            "https://192.168.1.1",
-            "https://localhost:3000",
-            "https://user:pass@example.com",
-            "https://example.com/path/with-dashes_and_underscores",
-        ];
-
-        for url in valid_urls {
-            let result = detector.validate_url(url);
-            assert!(result.is_ok(), "Should validate URL: {url}");
-        }
+        helpers::assert_urls_valid(VALID_TEST_URLS);
     }
 
     #[test]
     fn test_validate_invalid_urls() {
-        let detector = helpers::create_detector();
-
-        let invalid_urls = [
-            "not-a-url",
-            "ftp://example.com",
-            "mailto:test@example.com",
-            "javascript:alert('xss')",
-            "data:text/html,<h1>Test</h1>",
-            "",
-            "   ",
-            "example.com",     // Missing protocol
-            "www.example.com", // Missing protocol
-            "//example.com",   // Missing protocol
-            "https://",        // Incomplete
-            "http://",         // Incomplete
-        ];
-
-        for url in invalid_urls {
-            let result = detector.validate_url(url);
-            assert!(result.is_err(), "Should reject URL: {url}");
-
-            match result.unwrap_err() {
-                MarkdownError::ValidationError { kind, .. } => {
-                    assert_eq!(kind, markdowndown::types::ValidationErrorKind::InvalidUrl);
-                }
-                _ => panic!("Expected InvalidUrl error for: {url}"),
-            }
-        }
+        helpers::assert_urls_invalid(INVALID_TEST_URLS);
     }
 
     #[test]
@@ -587,8 +619,6 @@ mod edge_case_tests {
 
     #[test]
     fn test_detect_type_with_malformed_urls() {
-        let detector = helpers::create_detector();
-
         // Test clearly invalid URLs that should fail
         let invalid_urls = [
             "not-a-url",
@@ -600,17 +630,15 @@ mod edge_case_tests {
             "//example.com",   // Missing protocol
         ];
 
-        for url in invalid_urls {
-            let result = detector.detect_type(url);
+        helpers::test_urls_with(&invalid_urls, |url, result| {
             assert!(result.is_err(), "Should fail for invalid URL: {url}");
-        }
+        });
 
         // Test URLs that might be parsed differently by the URL library
         // but should still be handled gracefully
         let potentially_problematic = ["https://", "http://", "https:///path"];
 
-        for url in potentially_problematic {
-            let result = detector.detect_type(url);
+        helpers::test_urls_with(&potentially_problematic, |_url, result| {
             // Don't assert failure - just ensure it doesn't panic
             // Some of these might actually be parsed successfully by the URL library
             match result {
@@ -621,7 +649,7 @@ mod edge_case_tests {
                     // If it fails, that's also fine - it's a malformed URL
                 }
             }
-        }
+        });
     }
 
     #[test]
@@ -638,8 +666,6 @@ mod edge_case_tests {
 
     #[test]
     fn test_international_domain_names() {
-        let detector = helpers::create_detector();
-
         // These might not work in all environments, but should not panic
         let idn_urls = [
             "https://例え.テスト/path",
@@ -647,8 +673,7 @@ mod edge_case_tests {
             "https://test.中国/resource",
         ];
 
-        for url in idn_urls {
-            let result = detector.detect_type(url);
+        helpers::test_urls_with(&idn_urls, |_url, result| {
             // We don't assert success/failure as IDN support varies,
             // but it should not panic
             match result {
@@ -660,30 +685,24 @@ mod edge_case_tests {
                     // Also acceptable - IDN parsing might fail
                 }
             }
-        }
+        });
     }
 
     #[test]
     fn test_very_long_urls() {
+        let long_path = "a".repeat(TEST_VERY_LONG_PATH_LENGTH);
+        let long_urls = [format!("https://example.com/{long_path}")];
+        
+        helpers::assert_urls_are_html(&long_urls.iter().map(|s| s.as_str()).collect::<Vec<_>>());
+        
+        // Test normalization works too
         let detector = helpers::create_detector();
-
-        // Create a very long but valid URL
-        let long_path = "a".repeat(2000);
-        let long_url = format!("https://example.com/{long_path}");
-
-        let result = detector.detect_type(&long_url);
-        assert!(result.is_ok());
-        assert_eq!(result.unwrap(), UrlType::Html);
-
-        // Test normalization too
-        let normalized = detector.normalize_url(&long_url);
+        let normalized = detector.normalize_url(&long_urls[0]);
         assert!(normalized.is_ok());
     }
 
     #[test]
     fn test_urls_with_special_characters() {
-        let detector = helpers::create_detector();
-
         let special_char_urls = [
             "https://example.com/path%20with%20spaces",
             "https://example.com/path?query=value%20with%20spaces",
@@ -694,14 +713,7 @@ mod edge_case_tests {
             "https://example.com/path?query=value&other=test%26encoded",
         ];
 
-        for url in special_char_urls {
-            let result = detector.detect_type(url);
-            assert!(
-                result.is_ok(),
-                "Should handle special characters in URL: {url}"
-            );
-            assert_eq!(result.unwrap(), UrlType::Html);
-        }
+        helpers::assert_urls_are_html(&special_char_urls);
     }
 
     #[test]
@@ -744,8 +756,6 @@ mod wildcard_domain_tests {
 
     #[test]
     fn test_non_matching_domains() {
-        let detector = helpers::create_detector();
-
         // These should NOT match the wildcard patterns
         let non_matching_domains = [
             "https://notsharepoint.com/sites/team", // Doesn't end with .sharepoint.com
@@ -755,14 +765,7 @@ mod wildcard_domain_tests {
             "https://outlook.example.com/mail",     // Contains outlook but wrong domain
         ];
 
-        for url in non_matching_domains {
-            let result = detector.detect_type(url).unwrap();
-            assert_eq!(
-                result,
-                UrlType::Html,
-                "Should not match Office365 pattern: {url}"
-            );
-        }
+        helpers::assert_urls_are_html(&non_matching_domains);
     }
 }
 
@@ -772,48 +775,34 @@ mod property_tests {
 
     proptest! {
         #[test]
-        fn test_detect_type_never_panics(url in ".*") {
+        fn test_all_methods_never_panic(url in ".*") {
             let detector = helpers::create_detector();
-            let _result = detector.detect_type(&url);
-            // Should never panic regardless of input
+            let _ = detector.detect_type(&url);
+            let _ = detector.normalize_url(&url);
+            let _ = detector.validate_url(&url);
         }
-
-        #[test]
-        fn test_normalize_url_never_panics(url in ".*") {
-            let detector = helpers::create_detector();
-            let _result = detector.normalize_url(&url);
-            // Should never panic regardless of input
-        }
-
-        #[test]
-        fn test_validate_url_never_panics(url in ".*") {
-            let detector = helpers::create_detector();
-            let _result = detector.validate_url(&url);
-            // Should never panic regardless of input
-        }
+    }
 
         #[test]
         fn test_valid_http_urls_detected(
-            domain in r"[a-zA-Z0-9][a-zA-Z0-9\-]{0,61}[a-zA-Z0-9]",
-            tld in r"[a-zA-Z]{2,6}",
+            domain in format!(r"[a-zA-Z0-9][a-zA-Z0-9\-]{{0,{}}}[a-zA-Z0-9]", MAX_DOMAIN_LABEL_LENGTH).as_str(),
+            tld in format!(r"[a-zA-Z]{{{},{}}}",  MIN_TLD_LENGTH, MAX_TLD_LENGTH).as_str(),
             path in r"/[a-zA-Z0-9\-._~!$&'()*+,;=:@]*"
         ) {
             let url = format!("https://{domain}.{tld}{path}");
             let detector = helpers::create_detector();
 
             let result = detector.detect_type(&url);
-            // Should successfully detect some type (at minimum HTML)
-            if result.is_ok() {
-                let url_type = result.unwrap();
-                // Should be one of the supported types
-                assert!(matches!(url_type, UrlType::Html | UrlType::GoogleDocs | UrlType::GitHubIssue));
-            }
+            // Should successfully detect a valid type for well-formed URLs
+            // We verify detection succeeded without enumerating specific types
+            // so this test remains valid when new URL types are added
+            assert!(result.is_ok(), "Should successfully detect type for valid URL: {}", url);
         }
 
         #[test]
         fn test_normalization_preserves_scheme_and_host(
             scheme in r"https?",
-            host in r"[a-zA-Z0-9][a-zA-Z0-9\-]{0,61}[a-zA-Z0-9]\.[a-zA-Z]{2,6}"
+            host in format!(r"[a-zA-Z0-9][a-zA-Z0-9\-]{{0,{}}}[a-zA-Z0-9]\.[a-zA-Z]{{{},{}}}", MAX_DOMAIN_LABEL_LENGTH, MIN_TLD_LENGTH, MAX_TLD_LENGTH).as_str()
         ) {
             let url = format!("{scheme}://{host}");
             let detector = helpers::create_detector();
@@ -907,21 +896,7 @@ mod integration_tests {
         ];
 
         for url in test_urls {
-            // Multiple normalizations should be stable
-            let normalized1 = detector.normalize_url(url).unwrap();
-            let normalized2 = detector.normalize_url(&normalized1).unwrap();
-            let normalized3 = detector.normalize_url(&normalized2).unwrap();
-
-            assert_eq!(normalized1, normalized2);
-            assert_eq!(normalized2, normalized3);
-
-            // Type detection should be stable too
-            let type1 = detector.detect_type(url).unwrap();
-            let type2 = detector.detect_type(&normalized1).unwrap();
-            let type3 = detector.detect_type(&normalized2).unwrap();
-
-            assert_eq!(type1, type2);
-            assert_eq!(type2, type3);
+            helpers::assert_roundtrip_stable(url, &detector);
         }
     }
 }

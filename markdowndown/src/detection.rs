@@ -44,6 +44,17 @@ use crate::types::{MarkdownError, UrlType};
 use std::collections::HashSet;
 use url::Url as ParsedUrl;
 
+// GitHub URL structure constants
+const GITHUB_WEB_MIN_PATH_SEGMENTS: usize = 4;
+const GITHUB_WEB_RESOURCE_TYPE_INDEX: usize = 2;
+const GITHUB_API_MIN_PATH_SEGMENTS: usize = 5;
+const GITHUB_API_RESOURCE_TYPE_INDEX: usize = 3;
+const GITHUB_RESOURCE_NUMBER_OFFSET: usize = 1;
+
+// Wildcard pattern constants
+const WILDCARD_PATTERN_PARTS: usize = 2;
+const WILDCARD_PREFIX_LEN: usize = 2;
+
 /// URL pattern configuration for different URL types.
 #[derive(Debug, Clone)]
 struct Pattern {
@@ -91,36 +102,51 @@ impl Pattern {
     /// Checks if a domain matches the pattern (supports wildcards).
     fn matches_domain(&self, host: &str) -> bool {
         if self.domain_pattern.starts_with("*.") {
-            // Wildcard subdomain matching
-            let base_domain = &self.domain_pattern[2..];
-            host == base_domain || host.ends_with(&format!(".{base_domain}"))
+            self.matches_wildcard_subdomain(host)
         } else {
-            // Exact domain matching
             host == self.domain_pattern
         }
+    }
+
+    /// Checks if a host matches a wildcard subdomain pattern.
+    fn matches_wildcard_subdomain(&self, host: &str) -> bool {
+        let base_domain = &self.domain_pattern[WILDCARD_PREFIX_LEN..];
+        host == base_domain || self.is_subdomain_match(host, base_domain)
+    }
+
+    /// Checks if a host is a subdomain of a base domain.
+    fn is_subdomain_match(&self, host: &str, base_domain: &str) -> bool {
+        host.ends_with(base_domain)
+            && host.len() > base_domain.len()
+            && host.as_bytes()[host.len() - base_domain.len() - 1] == b'.'
     }
 
     /// Checks if a path matches the pattern.
     fn matches_path(&self, path: &str, pattern: &str) -> bool {
         if pattern.contains("*") {
-            // Simple wildcard matching
-            if let Some(prefix) = pattern.strip_suffix("*") {
-                path.starts_with(prefix)
-            } else if let Some(suffix) = pattern.strip_prefix("*") {
-                path.ends_with(suffix)
-            } else {
-                // Pattern contains * in the middle - basic implementation
-                let parts: Vec<&str> = pattern.split('*').collect();
-                if parts.len() == 2 {
-                    path.starts_with(parts[0]) && path.ends_with(parts[1])
-                } else {
-                    false
-                }
-            }
+            self.matches_wildcard_path(path, pattern)
         } else {
-            // Exact path matching
             path.starts_with(pattern)
         }
+    }
+
+    /// Checks if a path matches a wildcard pattern.
+    fn matches_wildcard_path(&self, path: &str, pattern: &str) -> bool {
+        if let Some(prefix) = pattern.strip_suffix("*") {
+            return path.starts_with(prefix);
+        }
+        if let Some(suffix) = pattern.strip_prefix("*") {
+            return path.ends_with(suffix);
+        }
+        self.matches_middle_wildcard(path, pattern)
+    }
+
+    /// Checks if a path matches a pattern with wildcard in the middle.
+    fn matches_middle_wildcard(&self, path: &str, pattern: &str) -> bool {
+        let parts: Vec<&str> = pattern.split('*').collect();
+        parts.len() == WILDCARD_PATTERN_PARTS
+            && path.starts_with(parts[0])
+            && path.ends_with(parts[1])
     }
 }
 
@@ -196,27 +222,26 @@ impl UrlDetector {
     pub fn detect_type(&self, url: &str) -> Result<UrlType, MarkdownError> {
         let trimmed = url.trim();
 
-        // Check for local file paths first (before trying to parse as URL)
         if crate::utils::is_local_file_path(trimmed) {
             return Ok(UrlType::LocalFile);
         }
 
-        // Try to parse as URL for web-based sources
         let parsed_url = self.parse_url(url)?;
+        self.classify_web_url(&parsed_url)
+    }
 
-        // Special handling for GitHub issues (more complex pattern)
-        if self.is_github_issue_url(&parsed_url) {
+    /// Classifies a web URL by matching it against known patterns.
+    fn classify_web_url(&self, parsed_url: &ParsedUrl) -> Result<UrlType, MarkdownError> {
+        if self.is_github_issue_url(parsed_url) {
             return Ok(UrlType::GitHubIssue);
         }
 
-        // Check each pattern to find a match
         for pattern in &self.patterns {
-            if pattern.matches(&parsed_url) {
+            if pattern.matches(parsed_url) {
                 return Ok(pattern.url_type.clone());
             }
         }
 
-        // Default to HTML for any other HTTP/HTTPS URLs
         Ok(UrlType::Html)
     }
 
@@ -238,39 +263,52 @@ impl UrlDetector {
     pub fn normalize_url(&self, url: &str) -> Result<String, MarkdownError> {
         let trimmed = url.trim();
 
-        // Handle local file paths separately (no URL parsing needed)
         if crate::utils::is_local_file_path(trimmed) {
             return Ok(trimmed.to_string());
         }
 
-        // Parse as URL for web-based sources
         let mut parsed_url = self.parse_url(trimmed)?;
+        self.remove_tracking_params(&mut parsed_url);
+        Ok(parsed_url.to_string())
+    }
 
-        // Remove tracking parameters
-        let query_pairs: Vec<(String, String)> = parsed_url
+    /// Removes tracking parameters from a parsed URL.
+    fn remove_tracking_params(&self, parsed_url: &mut ParsedUrl) {
+        let query_pairs = self.get_non_tracking_params(parsed_url);
+        self.set_cleaned_query(parsed_url, query_pairs);
+    }
+
+    /// Extracts query parameters that are not tracking parameters.
+    fn get_non_tracking_params(&self, parsed_url: &ParsedUrl) -> Vec<(String, String)> {
+        parsed_url
             .query_pairs()
             .filter(|(key, _)| !self.tracking_params.contains(key.as_ref()))
             .map(|(k, v)| (k.to_string(), v.to_string()))
-            .collect();
+            .collect()
+    }
 
-        // Clear existing query and rebuild without tracking params
+    /// Sets the cleaned query string on a parsed URL.
+    fn set_cleaned_query(&self, parsed_url: &mut ParsedUrl, query_pairs: Vec<(String, String)>) {
         parsed_url.set_query(None);
         if !query_pairs.is_empty() {
-            let query_string = query_pairs
-                .iter()
-                .map(|(k, v)| {
-                    if v.is_empty() {
-                        k.clone()
-                    } else {
-                        format!("{k}={v}")
-                    }
-                })
-                .collect::<Vec<_>>()
-                .join("&");
+            let query_string = self.build_query_string(&query_pairs);
             parsed_url.set_query(Some(&query_string));
         }
+    }
 
-        Ok(parsed_url.to_string())
+    /// Builds a query string from key-value pairs.
+    fn build_query_string(&self, pairs: &[(String, String)]) -> String {
+        pairs
+            .iter()
+            .map(|(k, v)| {
+                if v.is_empty() {
+                    k.clone()
+                } else {
+                    format!("{k}={v}")
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("&")
     }
 
     /// Validates a URL without normalization.
@@ -334,54 +372,80 @@ impl UrlDetector {
         })
     }
 
-    /// Checks if a URL matches a GitHub issue or pull request pattern.
-    fn is_github_issue_url(&self, parsed_url: &ParsedUrl) -> bool {
-        let host = parsed_url.host_str();
-        if host != Some("github.com") && host != Some("api.github.com") {
+    /// Validates GitHub path segments for issue/PR patterns.
+    fn validate_github_path_segments(
+        segments: &[&str],
+        expected_len: usize,
+        expected_pos: usize,
+    ) -> bool {
+        if segments.len() < expected_len {
             return false;
         }
 
-        let path = parsed_url.path();
-        let path_segments: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
+        let Some(resource) = segments.get(expected_pos) else {
+            return false;
+        };
+        let Some(number) = segments.get(expected_pos + GITHUB_RESOURCE_NUMBER_OFFSET) else {
+            return false;
+        };
 
-        match host {
-            Some("github.com") => {
-                // GitHub issue/PR URLs have the pattern: /{owner}/{repo}/issues/{number} or /{owner}/{repo}/pull/{number}
-                // Need exactly 4 or more segments: owner, repo, "issues"/"pull", number
-                if path_segments.len() >= 4 {
-                    if let (Some(resource_segment), Some(number_segment)) =
-                        (path_segments.get(2), path_segments.get(3))
-                    {
-                        if (*resource_segment == "issues" || *resource_segment == "pull")
-                            && number_segment.parse::<u32>().is_ok()
-                        {
-                            return true;
-                        }
-                    }
-                }
-            }
-            Some("api.github.com") => {
-                // GitHub API URLs have the pattern: /repos/{owner}/{repo}/issues/{number} or /repos/{owner}/{repo}/pulls/{number}
-                // Need exactly 5 or more segments: "repos", owner, repo, "issues"/"pulls", number
-                if path_segments.len() >= 5 {
-                    if let (Some(repos_segment), Some(resource_segment), Some(number_segment)) = (
-                        path_segments.first(),
-                        path_segments.get(3),
-                        path_segments.get(4),
-                    ) {
-                        if *repos_segment == "repos"
-                            && (*resource_segment == "issues" || *resource_segment == "pulls")
-                            && number_segment.parse::<u32>().is_ok()
-                        {
-                            return true;
-                        }
-                    }
-                }
-            }
-            _ => {}
+        (*resource == "issues" || *resource == "pull" || *resource == "pulls")
+            && number.parse::<u32>().is_ok()
+    }
+
+    /// Checks if path segments match GitHub API pattern.
+    fn is_github_api_path(segments: &[&str]) -> bool {
+        segments.first() == Some(&"repos")
+            && Self::validate_github_path_segments(
+                segments,
+                GITHUB_API_MIN_PATH_SEGMENTS,
+                GITHUB_API_RESOURCE_TYPE_INDEX,
+            )
+    }
+
+    /// Checks if path segments match GitHub web pattern.
+    fn is_github_web_path(segments: &[&str]) -> bool {
+        Self::validate_github_path_segments(
+            segments,
+            GITHUB_WEB_MIN_PATH_SEGMENTS,
+            GITHUB_WEB_RESOURCE_TYPE_INDEX,
+        )
+    }
+
+    /// Checks if a URL matches a GitHub issue or pull request pattern.
+    fn is_github_issue_url(&self, parsed_url: &ParsedUrl) -> bool {
+        if !self.is_github_host(parsed_url) {
+            return false;
         }
 
-        false
+        let path_segments = self.extract_path_segments(parsed_url);
+        self.matches_github_issue_pattern(parsed_url.host_str(), &path_segments)
+    }
+
+    /// Checks if the parsed URL is a GitHub host.
+    fn is_github_host(&self, parsed_url: &ParsedUrl) -> bool {
+        matches!(
+            parsed_url.host_str(),
+            Some("github.com") | Some("api.github.com")
+        )
+    }
+
+    /// Extracts path segments from a parsed URL.
+    fn extract_path_segments<'a>(&self, parsed_url: &'a ParsedUrl) -> Vec<&'a str> {
+        parsed_url
+            .path()
+            .split('/')
+            .filter(|s| !s.is_empty())
+            .collect()
+    }
+
+    /// Checks if the path segments match a GitHub issue pattern.
+    fn matches_github_issue_pattern(&self, host: Option<&str>, segments: &[&str]) -> bool {
+        match host {
+            Some("github.com") => Self::is_github_web_path(segments),
+            Some("api.github.com") => Self::is_github_api_path(segments),
+            _ => false,
+        }
     }
 }
 

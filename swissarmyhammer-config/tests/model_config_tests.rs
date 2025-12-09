@@ -33,7 +33,7 @@ impl TestEnvironment {
     }
 
     fn activate(&self) {
-        env::set_var("HOME", &self._env.home_path());
+        env::set_var("HOME", self._env.home_path());
         env::set_current_dir(&self.project_root).expect("Failed to change to project dir");
     }
 

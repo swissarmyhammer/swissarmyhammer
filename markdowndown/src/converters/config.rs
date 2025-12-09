@@ -1,5 +1,11 @@
 //! Configuration options for HTML to markdown conversion.
 
+/// Default maximum line width for markdown output
+const DEFAULT_MAX_LINE_WIDTH: usize = 120;
+
+/// Default maximum consecutive blank lines allowed
+const DEFAULT_MAX_BLANK_LINES: usize = 2;
+
 /// Configuration options for HTML to markdown conversion.
 #[derive(Debug, Clone)]
 pub struct HtmlConverterConfig {
@@ -20,12 +26,12 @@ pub struct HtmlConverterConfig {
 impl Default for HtmlConverterConfig {
     fn default() -> Self {
         Self {
-            max_line_width: 120,
+            max_line_width: DEFAULT_MAX_LINE_WIDTH,
             remove_scripts_styles: true,
             remove_navigation: true,
             remove_sidebars: true,
             remove_ads: true,
-            max_blank_lines: 2,
+            max_blank_lines: DEFAULT_MAX_BLANK_LINES,
         }
     }
 }
