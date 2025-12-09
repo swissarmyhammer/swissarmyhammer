@@ -146,25 +146,3 @@ swissarmyhammer-config = { path = "../swissarmyhammer-config" }
 [lib]
 name = "swissarmyhammer_workflow"
 path = "src/lib.rs"
-
-# Benchmark configuration
-# Note: These benchmarks don't exist yet, commenting out until they're created
-# [[bench]]
-# name = "benchmarks"
-# harness = false
-# path = "../benches/benchmarks.rs"
-#
-# [[bench]]
-# name = "issue_performance"
-# harness = false
-# path = "../benches/issue_performance.rs"
-#
-# [[bench]]
-# name = "memo_benchmarks"
-# harness = false
-# path = "../benches/memo_benchmarks.rs"
-#
-# [[bench]]
-# name = "executor_performance"
-# harness = false
-# path = "../benches/executor_performance.rs"

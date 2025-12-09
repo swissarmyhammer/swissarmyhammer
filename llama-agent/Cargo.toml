@@ -117,11 +117,3 @@ path = "src/examples/echo_sse.rs"
 [[example]]
 name = "echo_streamable"
 path = "src/examples/echo_streamable.rs"
-
-[[bench]]
-name = "template_cache_bench"
-harness = false
-
-[[bench]]
-name = "generation_profiling"
-harness = false

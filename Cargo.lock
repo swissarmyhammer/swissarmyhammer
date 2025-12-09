@@ -3623,7 +3623,6 @@ name = "mermaid-parser"
 version = "0.1.0"
 dependencies = [
  "chumsky",
- "criterion",
  "rstest 0.21.0",
 ]
 

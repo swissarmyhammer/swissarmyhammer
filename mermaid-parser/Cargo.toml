@@ -21,11 +21,6 @@ chumsky = "0.10.1"
 
 [dev-dependencies]
 rstest = "0.21"
-criterion = "0.5"
-
-[[bench]]
-name = "parser_benchmarks"
-harness = false
 
 # Examples
 [[example]]
@@ -41,8 +36,8 @@ name = "parse_all_types"
 path = "examples/parse_all_types.rs"
 
 [[example]]
-name = "error_handling"
-path = "examples/error_handling.rs"
+name = "mermaid_error_handling"
+path = "examples/mermaid_error_handling.rs"
 
 [[example]]
 name = "ast_analysis"
@@ -53,8 +48,8 @@ name = "validation"
 path = "examples/validation.rs"
 
 [[example]]
-name = "batch_processing"
-path = "examples/batch_processing.rs"
+name = "mermaid_batch_processing"
+path = "examples/mermaid_batch_processing.rs"
 
 [lints.clippy]
 # Strict linting configuration
