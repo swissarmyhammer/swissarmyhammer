@@ -907,6 +907,7 @@ impl RuleCheckTool {
                 max_concurrency: request.max_concurrency,
             };
 
+            tracing::info!("Checking files against unfiltered rules");
             send_progress(
                 context,
                 progress_token,
@@ -1031,6 +1032,7 @@ impl RuleCheckTool {
         let start_time = Instant::now();
         let progress_token = generate_progress_token();
 
+        tracing::info!("Starting rules check");
         send_progress(
             context,
             &progress_token,
@@ -1094,6 +1096,7 @@ impl RuleCheckTool {
             )
         };
 
+        tracing::info!("{}", message);
         send_progress(
             context,
             progress_token,
