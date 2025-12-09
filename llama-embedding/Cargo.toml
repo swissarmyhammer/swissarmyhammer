@@ -1,6 +1,6 @@
 [package]
 name = "llama-embedding"
-version = "0.1.0"
+version.workspace = true
 edition = "2021"
 description = "Text embedding functionality using llama-cpp-2 with batch processing support"
 authors = ["Claude"]

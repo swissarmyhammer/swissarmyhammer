@@ -1,6 +1,6 @@
 [package]
 name = "llama-common"
-version = "0.1.0"
+version.workspace = true
 edition = "2021"
 description = "Shared types, traits, and utilities for the llama-agent workspace"
 

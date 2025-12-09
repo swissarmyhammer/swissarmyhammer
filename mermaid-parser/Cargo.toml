@@ -1,6 +1,6 @@
 [package]
 name = "mermaid-parser"
-version = "0.1.0"
+version.workspace = true
 authors = ["William Ballard <wballard@mailbox.org>"]
 edition = "2021"
 license = "MIT OR Apache-2.0"
