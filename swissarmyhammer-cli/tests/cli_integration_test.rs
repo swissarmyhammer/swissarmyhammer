@@ -243,6 +243,10 @@ async fn test_flow_test_nonexistent_workflow() -> Result<()> {
 #[tokio::test]
 
 async fn test_flow_run_with_dry_run() -> Result<()> {
+    // Clean up any stale abort files from previous tests
+    let current_dir = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    let _ = swissarmyhammer_common::remove_abort_file(&current_dir);
+
     let result = run_sah_command_in_process(&["flow", "hello-world", "--dry-run"]).await?;
 
     assert_eq!(
@@ -335,6 +339,10 @@ stateDiagram-v2
 #[tokio::test]
 
 async fn test_flow_test_invalid_set_format() -> Result<()> {
+    // Clean up any stale abort files from previous tests
+    let current_dir = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    let _ = swissarmyhammer_common::remove_abort_file(&current_dir);
+
     let result = run_sah_command_in_process(&[
         "flow",
         "hello-world",

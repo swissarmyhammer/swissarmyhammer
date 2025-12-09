@@ -13,12 +13,14 @@ use swissarmyhammer_cli::{
 mod in_process_test_utils;
 use in_process_test_utils::run_sah_command_in_process;
 
-/// Get the repository root directory (parent of the CLI test directory)
+/// Get the repository root directory (parent of the CLI crate directory)
 fn get_repo_root() -> PathBuf {
-    std::env::current_dir()
-        .unwrap()
+    // Use CARGO_MANIFEST_DIR which is set at compile time to the crate directory
+    // Then get its parent to reach the workspace root
+    let cli_dir = env!("CARGO_MANIFEST_DIR");
+    PathBuf::from(cli_dir)
         .parent()
-        .unwrap()
+        .expect("CLI directory should have a parent")
         .to_path_buf()
 }
 

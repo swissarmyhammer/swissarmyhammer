@@ -3,7 +3,6 @@ title = "SwissArmyHammer Documentation"
 description = "Complete guide to using SwissArmyHammer - AI prompt management, workflows, and MCP integration"
 authors = ["SwissArmyHammer Contributors"]
 language = "en"
-multilingual = false
 src = "src"
 
 [rust]
