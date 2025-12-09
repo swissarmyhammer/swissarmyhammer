@@ -57,6 +57,7 @@ jobs:
         with:
           toolchain: ${{ matrix.rust }}
       - uses: Swatinem/rust-cache@v2
+      - name: Run examples
         run: |
           cargo metadata --format-version 1 \
             | jq -r '
