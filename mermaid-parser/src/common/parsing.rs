@@ -14,12 +14,11 @@ pub mod quoted_strings {
     pub fn unquote(input: &str) -> String {
         let trimmed = input.trim();
 
-        if trimmed.len() >= 2 {
-            if (trimmed.starts_with('"') && trimmed.ends_with('"'))
-                || (trimmed.starts_with('\'') && trimmed.ends_with('\''))
-            {
-                return trimmed[1..trimmed.len() - 1].to_string();
-            }
+        if trimmed.len() >= 2
+            && ((trimmed.starts_with('"') && trimmed.ends_with('"'))
+                || (trimmed.starts_with('\'') && trimmed.ends_with('\'')))
+        {
+            return trimmed[1..trimmed.len() - 1].to_string();
         }
 
         trimmed.to_string()
