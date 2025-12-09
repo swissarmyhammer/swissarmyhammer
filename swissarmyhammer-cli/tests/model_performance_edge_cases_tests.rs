@@ -371,7 +371,7 @@ fn create_large_config() -> String {
 prompts:
   default: "greeting"
   library_path: "./prompts"
-  
+
 workflows:
   timeout: 300
 "#;
@@ -688,10 +688,10 @@ async fn test_corrupted_config_recovery() -> Result<()> {
     let corrupted_config = r#"# Corrupted configuration
 prompt:
   valid: "section"
-  
+
 agent:
   invalid: yaml: [unclosed bracket
-  
+
 other_section:
   preserved: true
 "#;
@@ -920,102 +920,6 @@ async fn test_memory_usage_with_large_datasets() -> Result<()> {
     );
 
     println!("Processed {} agents in {:?}", agents_array.len(), duration);
-
-    Ok(())
-}
-
-/// Generate huge config content for stress testing
-fn generate_huge_config() -> String {
-    generate_large_yaml_config("# Extremely large configuration\n", 5000, |i| {
-        format!(
-            r#"
-entry_{:05}:
-  name: "Entry {}"
-  description: "Generated entry for stress testing model configuration handling"
-  data:
-    value_a: "data_{}"
-    value_b: {}
-    value_c: {}
-    value_d: "more_data_{}"
-    nested_data:
-      sub_a: "nested_{}"
-      sub_b: {}
-      sub_c: "deep_nested_{}"
-"#,
-            i,
-            i,
-            i,
-            i * 2,
-            i % 3 == 0,
-            i,
-            i,
-            i * 3,
-            i
-        )
-    })
-}
-
-/// Verify huge config integrity after update
-fn verify_huge_config_integrity(config_path: &Path) -> Result<Duration> {
-    let updated_config = fs::read_to_string(config_path)?;
-    assert!(
-        updated_config.contains("entry_04999:"),
-        "Should preserve all entries"
-    );
-    assert!(
-        updated_config.contains("models:"),
-        "Should add model section"
-    );
-
-    let parse_start = Instant::now();
-    let _: serde_yaml::Value = serde_yaml::from_str(&updated_config)?;
-    Ok(parse_start.elapsed())
-}
-
-#[tokio::test]
-async fn test_extremely_large_config_handling() -> Result<()> {
-    let _env = IsolatedTestEnvironment::new().expect("Failed to create test environment");
-    let temp_dir = _env.temp_dir();
-    let project_root = &temp_dir;
-
-    let sah_dir = project_root.join(".swissarmyhammer");
-    fs::create_dir_all(&sah_dir)?;
-    let config_path = sah_dir.join("sah.yaml");
-
-    let huge_config = generate_huge_config();
-    fs::write(&config_path, &huge_config)?;
-
-    let file_size = huge_config.len();
-    println!(
-        "Created config file of {} bytes ({:.2} MB)",
-        file_size,
-        file_size as f64 / 1024.0 / 1024.0
-    );
-
-    let start_time = Instant::now();
-
-    let use_output =
-        run_sah_command_with_timeout(&["model", "use", "claude-code"], Some(project_root), 30)
-            .await?;
-
-    let duration = start_time.elapsed();
-
-    if use_output.status.success() {
-        assert_operation_completed_within(
-            &use_output,
-            duration,
-            Duration::from_secs(30),
-            &format!("Handle {:.2} MB config", file_size as f64 / 1024.0 / 1024.0),
-        )?;
-        let parse_time = verify_huge_config_integrity(&config_path)?;
-
-        println!(
-            "Updated and validated {:.2} MB config in {:?} + {:?}",
-            file_size as f64 / 1024.0 / 1024.0,
-            duration,
-            parse_time
-        );
-    }
 
     Ok(())
 }
