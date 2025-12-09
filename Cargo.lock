@@ -3621,9 +3621,10 @@ dependencies = [
 [[package]]
 name = "mermaid-parser"
 version = "0.1.0"
-source = "git+https://github.com/wballard/mermaid_parser#33b484f10b6eee6a37e0aa0c07a7185f18a663c5"
 dependencies = [
  "chumsky",
+ "criterion",
+ "rstest 0.21.0",
 ]
 
 [[package]]
@@ -5205,6 +5206,18 @@ dependencies = [
 
 [[package]]
 name = "rstest"
+version = "0.21.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9afd55a67069d6e434a95161415f5beeada95a01c7b815508a82dcb0e1593682"
+dependencies = [
+ "futures",
+ "futures-timer",
+ "rstest_macros 0.21.0",
+ "rustc_version",
+]
+
+[[package]]
+name = "rstest"
 version = "0.22.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7b423f0e62bdd61734b67cd21ff50871dfaeb9cc74f869dcd6af974fbcb19936"
@@ -5225,6 +5238,24 @@ dependencies = [
  "futures-timer",
  "rstest_macros 0.23.0",
  "rustc_version",
+]
+
+[[package]]
+name = "rstest_macros"
+version = "0.21.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4165dfae59a39dd41d8dec720d3cbfbc71f69744efb480a3920f5d4e0cc6798d"
+dependencies = [
+ "cfg-if",
+ "glob",
+ "proc-macro-crate",
+ "proc-macro2",
+ "quote",
+ "regex",
+ "relative-path",
+ "rustc_version",
+ "syn 2.0.111",
+ "unicode-ident",
 ]
 
 [[package]]

@@ -23,6 +23,7 @@ members = [
     "llama-common",
     "llama-embedding",
     "llama-loader",
+    "mermaid-parser",
 ]
 resolver = "2"
 
@@ -154,6 +155,9 @@ process-wrap = "8.0"
 hf-hub = { version = "0.4.3", default-features = false, features = ["tokio", "default-tls"] }
 polars = { version = "0.41.0", features = ["lazy", "parquet", "dtype-struct", "streaming"] }
 jsonschema = "0.18"
+
+# Mermaid parser
+mermaid-parser = { path = "mermaid-parser" }
 
 # Additional common dependencies
 libc = "0.2"

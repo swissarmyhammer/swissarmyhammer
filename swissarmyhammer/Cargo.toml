@@ -71,7 +71,7 @@ tree-sitter-javascript = { workspace = true }
 tree-sitter-dart = { workspace = true }
 
 # Mermaid parsing
-mermaid-parser = { git = "https://github.com/wballard/mermaid_parser" }
+mermaid-parser = { workspace = true }
 
 # CEL expression evaluation
 cel-interpreter = "0.8"
