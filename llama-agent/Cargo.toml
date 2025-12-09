@@ -1,0 +1,127 @@
+[package]
+name = "llama-agent"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+# Core inference
+llama-cpp-2 = { workspace = true }
+
+# MCP integration  
+rmcp = { workspace = true }
+
+# Async runtime
+tokio = { workspace = true }
+tokio-stream = { workspace = true }
+
+
+# Serialization
+serde = { workspace = true }
+serde_json = { workspace = true }
+serde_yaml = { workspace = true }
+url = { workspace = true }
+schemars = { workspace = true }
+axum = { workspace = true }
+tokio-util = { workspace = true }
+
+# Error handling
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+
+# Utilities
+ulid = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+regex = { workspace = true }
+num_cpus = { workspace = true }
+dirs = "6.0"
+
+# HTTP client for MCP transport
+http = "1.1"
+
+# Process spawning for MCP child processes
+process-wrap = { workspace = true }
+
+# Async traits
+async-trait = { workspace = true }
+
+# Futures
+futures = { workspace = true }
+
+# HuggingFace integration  
+hf-hub = { workspace = true }
+
+# Shared model loading
+llama-loader = { workspace = true }
+
+# Shared common utilities
+llama-common = { workspace = true }
+
+# JSON Schema validation
+jsonschema = { workspace = true }
+md5 = { workspace = true }
+
+[features]
+test-utils = []
+
+[dev-dependencies]
+tempfile = { workspace = true }
+proptest = { workspace = true }
+# mockall = { workspace = true } # REMOVED - mocks are forbidden
+tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+futures = { workspace = true }
+tokio-stream = { workspace = true }
+serde_json = { workspace = true }
+
+rstest = { workspace = true }
+criterion = "0.5"
+
+[[example]]
+name = "streaming"
+path = "examples/streaming.rs"
+
+[[example]]
+name = "error_handling"
+path = "examples/error_handling.rs"
+
+[[example]]
+name = "compaction_basic"
+path = "examples/compaction_basic.rs"
+
+[[example]]
+name = "compaction_advanced"
+path = "examples/compaction_advanced.rs"
+
+[[example]]
+name = "large_prompt_test"
+path = "examples/large_prompt_test.rs"
+
+[[example]]
+name = "mcp_http"
+path = "examples/mcp_http.rs"
+
+[[example]]
+name = "mcp_stdin"
+path = "examples/mcp_stdin.rs"
+
+[[example]]
+name = "echo_stdio"
+path = "src/examples/echo_stdio.rs"
+
+[[example]]
+name = "echo_sse"
+path = "src/examples/echo_sse.rs"
+
+[[example]]
+name = "echo_streamable"
+path = "src/examples/echo_streamable.rs"
+
+[[bench]]
+name = "template_cache_bench"
+harness = false
+
+[[bench]]
+name = "generation_profiling"
+harness = false
