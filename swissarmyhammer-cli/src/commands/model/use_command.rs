@@ -38,6 +38,7 @@ fn format_agent_source(
     match source {
         swissarmyhammer_config::model::ModelConfigSource::Builtin => "builtin".green(),
         swissarmyhammer_config::model::ModelConfigSource::Project => "project".yellow(),
+        swissarmyhammer_config::model::ModelConfigSource::GitRoot => "gitroot".cyan(),
         swissarmyhammer_config::model::ModelConfigSource::User => "user".blue(),
     }
 }

@@ -23,6 +23,13 @@ impl TestEnvironment {
 
         fs::create_dir_all(&project_root).expect("Failed to create project root");
 
+        // Initialize as git repository for gitroot model discovery
+        std::process::Command::new("git")
+            .args(["init"])
+            .current_dir(&project_root)
+            .output()
+            .expect("Failed to init git repo");
+
         let original_dir = env::current_dir().expect("Failed to get current dir");
 
         Self {
@@ -45,6 +52,10 @@ impl TestEnvironment {
         self.project_root.join("models")
     }
 
+    fn gitroot_agents_dir(&self) -> std::path::PathBuf {
+        self.project_root.join(".swissarmyhammer").join("models")
+    }
+
     fn create_user_agent(&self, name: &str, content: &str) {
         let dir = self.user_agents_dir();
         fs::create_dir_all(&dir).expect("Failed to create user agents dir");
@@ -56,6 +67,13 @@ impl TestEnvironment {
         fs::create_dir_all(&dir).expect("Failed to create project agents dir");
         fs::write(dir.join(format!("{}.yaml", name)), content)
             .expect("Failed to write project agent");
+    }
+
+    fn create_gitroot_agent(&self, name: &str, content: &str) {
+        let dir = self.gitroot_agents_dir();
+        fs::create_dir_all(&dir).expect("Failed to create gitroot agents dir");
+        fs::write(dir.join(format!("{}.yaml", name)), content)
+            .expect("Failed to write gitroot agent");
     }
 }
 
@@ -348,6 +366,160 @@ fn test_agent_precedence_verification() {
     let agents = ModelManager::list_agents().expect("Should list all agents with precedence");
 
     assert_agent_has_source(&agents, "qwen-coder-flash", ModelConfigSource::Builtin);
+}
+
+#[test]
+fn test_gitroot_agent_loading() {
+    let env = TestEnvironment::new();
+    env.activate();
+
+    // Verify we're in a git repo
+    let git_root = swissarmyhammer_common::utils::directory_utils::find_git_repository_root();
+    assert!(git_root.is_some(), "Should be in a git repository");
+
+    // Create gitroot agent
+    env.create_gitroot_agent(
+        "gitroot-test",
+        r#"---
+description: "Test gitroot agent"
+---
+quiet: false
+executor:
+  type: claude-code
+  config: {}
+"#,
+    );
+
+    let agents = ModelManager::list_agents().expect("Should list all agents");
+
+    // Should include gitroot agent
+    assert_agent_has_source(&agents, "gitroot-test", ModelConfigSource::GitRoot);
+    assert_agent_description_contains(&agents, "gitroot-test", "Test gitroot agent");
+}
+
+#[test]
+fn test_gitroot_agent_overrides_project() {
+    let env = TestEnvironment::new();
+    env.activate();
+
+    // Create project agent
+    env.create_project_agent(
+        "override-test",
+        r#"---
+description: "Project version"
+---
+quiet: false
+executor:
+  type: claude-code
+  config: {}
+"#,
+    );
+
+    // Create gitroot agent with same name (should override project)
+    env.create_gitroot_agent(
+        "override-test",
+        r#"---
+description: "GitRoot version"
+---
+quiet: false
+executor:
+  type: claude-code
+  config: {}
+"#,
+    );
+
+    let agents = ModelManager::list_agents().expect("Should list all agents");
+
+    // GitRoot should override Project
+    assert_agent_has_source(&agents, "override-test", ModelConfigSource::GitRoot);
+    assert_agent_description_contains(&agents, "override-test", "GitRoot version");
+}
+
+#[test]
+fn test_user_agent_overrides_gitroot() {
+    let env = TestEnvironment::new();
+    env.activate();
+
+    // Create gitroot agent
+    env.create_gitroot_agent(
+        "override-test",
+        r#"---
+description: "GitRoot version"
+---
+quiet: false
+executor:
+  type: claude-code
+  config: {}
+"#,
+    );
+
+    // Create user agent with same name (should override gitroot)
+    env.create_user_agent(
+        "override-test",
+        r#"---
+description: "User version"
+---
+quiet: false
+executor:
+  type: claude-code
+  config: {}
+"#,
+    );
+
+    let agents = ModelManager::list_agents().expect("Should list all agents");
+
+    // User should override GitRoot
+    assert_agent_has_source(&agents, "override-test", ModelConfigSource::User);
+    assert_agent_description_contains(&agents, "override-test", "User version");
+}
+
+#[test]
+fn test_full_precedence_hierarchy_with_gitroot() {
+    let env = TestEnvironment::new();
+    env.activate();
+
+    // Override claude-code at each level to test full precedence
+    env.create_project_agent(
+        "claude-code",
+        r#"---
+description: "Project claude"
+---
+quiet: false
+executor:
+  type: claude-code
+  config: {}
+"#,
+    );
+
+    env.create_gitroot_agent(
+        "claude-code",
+        r#"---
+description: "GitRoot claude"
+---
+quiet: false
+executor:
+  type: claude-code
+  config: {}
+"#,
+    );
+
+    env.create_user_agent(
+        "claude-code",
+        r#"---
+description: "User claude"
+---
+quiet: false
+executor:
+  type: claude-code
+  config: {}
+"#,
+    );
+
+    let agents = ModelManager::list_agents().expect("Should list all agents");
+
+    // User should win (highest precedence)
+    assert_agent_has_source(&agents, "claude-code", ModelConfigSource::User);
+    assert_agent_description_contains(&agents, "claude-code", "User claude");
 }
 
 // =============================================================================
