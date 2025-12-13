@@ -1,0 +1,11 @@
+---
+description: "Devstral is an agentic LLM for software engineering tasks."
+---
+quiet: false
+executor:
+  type: llama-agent
+  config:
+    model:
+      source: !HuggingFace
+        repo: "unsloth/Devstral-Small-2-24B-Instruct-2512-GGUF"
+        filename: "Devstral-Small-2-24B-Instruct-2512-IQ4_NL.gguf"
