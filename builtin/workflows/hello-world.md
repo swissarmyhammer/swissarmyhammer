@@ -14,7 +14,7 @@ parameters:
     description: The name of the person to greet
     required: false
     type: string
-    default: ${USERNAME}
+    default: ${USER}
 
   - name: language
     description: The language to use for greeting
@@ -44,7 +44,7 @@ This is a simple workflow that demonstrates basic workflow functionality with op
 All parameters can be provided via CLI switches or interactive prompting:
 
 ```bash
-# Simple usage (uses USERNAME environment variable)
+# Simple usage (uses USER environment variable)
 sah flow run hello-world
 
 # CLI switches
@@ -79,7 +79,7 @@ This workflow demonstrates:
 
 1. **Start State**: Logs a welcome message with optional enthusiastic formatting
 2. **Greet State**: Executes a prompt with structured parameters
-   - `person_name` - The name to greet (optional string parameter, defaults to USERNAME environment variable)
+   - `person_name` - The name to greet (optional string parameter, defaults to USER environment variable)
    - `language` - The language choice with default fallback (optional choice parameter)
    - `enthusiastic` - Whether to use enthusiastic greeting (optional boolean parameter)
 3. **Farewell State**: Logs a goodbye message using template variables

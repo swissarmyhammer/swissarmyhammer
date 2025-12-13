@@ -1011,6 +1011,36 @@ impl ParameterResolver for DefaultParameterResolver {
 }
 
 impl DefaultParameterResolver {
+    /// Resolve environment variables in a string value
+    ///
+    /// Replaces ${VAR_NAME} patterns with environment variable values
+    fn resolve_env_vars(value: &str) -> String {
+        let var_regex = regex::Regex::new(r"\$\{([a-zA-Z_][a-zA-Z0-9_]*)\}").unwrap();
+        var_regex.replace_all(value, |caps: &regex::Captures| {
+            let var_name = &caps[1];
+            std::env::var(var_name).unwrap_or_else(|_| format!("${{{}}}", var_name))
+        }).into_owned()
+    }
+
+    /// Resolve environment variables in a JSON value
+    ///
+    /// If the value is a string containing ${VAR_NAME} patterns, resolves them.
+    /// Otherwise returns the value unchanged.
+    fn resolve_default_value(default: &serde_json::Value) -> serde_json::Value {
+        match default {
+            serde_json::Value::String(s) => {
+                if s.contains("${") {
+                    let resolved = Self::resolve_env_vars(s);
+                    tracing::debug!("Resolved parameter default '{}' -> '{}'", s, resolved);
+                    serde_json::Value::String(resolved)
+                } else {
+                    default.clone()
+                }
+            }
+            _ => default.clone(),
+        }
+    }
+
     /// Resolve parameters with conditional logic, using iterative approach to handle dependencies
     fn resolve_conditional_parameters(
         &self,
@@ -1050,8 +1080,9 @@ impl DefaultParameterResolver {
                 if should_include {
                     // Check if we can use a default value, regardless of whether it's required
                     if let Some(default) = &param.default {
-                        // Use default value for parameters when condition is met
-                        resolved.insert(param.name.clone(), default.clone());
+                        // Use default value for parameters when condition is met, resolving env vars
+                        let resolved_default = Self::resolve_default_value(default);
+                        resolved.insert(param.name.clone(), resolved_default);
                         changed = true;
                     } else if param.required {
                         // Only fail for required parameters without defaults

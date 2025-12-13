@@ -255,8 +255,29 @@ impl FlowTool {
             }
         }
 
-        for (key, value) in &request.parameters {
-            run.context.set_workflow_var(key.clone(), value.clone());
+        // Resolve parameters including defaults with environment variable substitution
+        use swissarmyhammer_common::parameters::{DefaultParameterResolver, ParameterResolver};
+        let resolver = DefaultParameterResolver::new();
+        let cli_args: std::collections::HashMap<String, String> = request
+            .parameters
+            .iter()
+            .map(|(k, v)| (k.clone(), v.to_string()))
+            .collect();
+
+        match resolver.resolve_parameters(&run.workflow.parameters, &cli_args, false) {
+            Ok(resolved_params) => {
+                tracing::debug!("Resolved {} workflow parameters", resolved_params.len());
+                for (key, value) in resolved_params {
+                    tracing::trace!("Setting workflow var: {} = {:?}", key, value);
+                    run.context.set_workflow_var(key, value);
+                }
+            }
+            Err(e) => {
+                return Err(McpError::invalid_params(
+                    format!("Failed to resolve parameters: {}", e),
+                    None,
+                ));
+            }
         }
 
         Ok((executor, run))
