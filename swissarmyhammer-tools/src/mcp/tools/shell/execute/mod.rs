@@ -1201,7 +1201,8 @@ fn prepare_shell_command(
         }
     }
 
-    cmd.stdout(std::process::Stdio::piped())
+    cmd.stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped());
 
     cmd
