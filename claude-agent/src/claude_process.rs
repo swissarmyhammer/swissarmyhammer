@@ -1,0 +1,636 @@
+//! Claude CLI process management for persistent stream-json communication
+//!
+//! This module provides process management capabilities for spawning and maintaining
+//! persistent `claude` CLI processes that communicate via the stream-json protocol.
+//!
+//! # Architecture
+//!
+//! The module provides two main types:
+//!
+//! - [`ClaudeProcessManager`]: Manages a collection of claude processes, one per session.
+//!   Provides session-level operations like spawn, get, terminate, and session existence checks.
+//!
+//! - [`ClaudeProcess`]: Represents a single persistent claude CLI child process.
+//!   Provides low-level I/O operations (read/write lines), process lifecycle management,
+//!   and status checking.
+//!
+//! # Stream-JSON Protocol
+//!
+//! The claude CLI is spawned with the following flags to enable stream-json communication:
+//!
+//! ```bash
+//! claude -p \
+//!   --input-format stream-json \
+//!   --output-format stream-json \
+//!   --verbose \
+//!   --dangerously-skip-permissions \
+//!   --replay-user-messages \
+//!   --session-id <uuid>
+//! ```
+//!
+//! - `-p`: Print mode (non-interactive)
+//! - `--input-format stream-json`: Accept newline-delimited JSON on stdin
+//! - `--output-format stream-json`: Emit newline-delimited JSON on stdout
+//! - `--verbose`: Required for stream-json output format
+//! - `--dangerously-skip-permissions`: ACP server handles permission checks
+//! - `--replay-user-messages`: Re-emit user messages for immediate acknowledgment
+//! - `--session-id <uuid>`: Use our ULID as Claude's session ID for consistency
+//!
+//! Messages are exchanged as newline-delimited JSON objects conforming to the
+//! JSON-RPC 2.0 specification for Agent Communication Protocol (ACP).
+//!
+//! # Thread Safety
+//!
+//! [`ClaudeProcessManager`] is thread-safe and can be safely shared across threads using `Arc`.
+//! It uses `Arc<RwLock<HashMap>>` internally to allow concurrent read access for session lookups
+//! while serializing write operations (spawn/terminate).
+//!
+//! Individual [`ClaudeProcess`] instances are wrapped in `Arc<Mutex<>>` to allow exclusive
+//! access for I/O operations, preventing data races when reading/writing to stdin/stdout.
+//!
+//! # Usage Example
+//!
+//! ```no_run
+//! use claude_agent::claude_process::ClaudeProcessManager;
+//! use claude_agent::session::SessionId;
+//!
+//! # async fn example() -> claude_agent::Result<()> {
+//! let manager = ClaudeProcessManager::new();
+//! let session_id = SessionId::new();
+//!
+//! // Spawn a new process
+//! manager.spawn_for_session(session_id).await?;
+//!
+//! // Get the process and interact with it
+//! let process = manager.get_process(&session_id).await?;
+//! let mut proc = process.lock().await;
+//!
+//! // Write a JSON-RPC message
+//! proc.write_line(r#"{"jsonrpc":"2.0","method":"initialize","params":{},"id":1}"#).await?;
+//!
+//! // Read the response
+//! if let Some(response) = proc.read_line().await? {
+//!     println!("Received: {}", response);
+//! }
+//!
+//! drop(proc); // Release lock before terminating
+//!
+//! // Terminate when done
+//! manager.terminate_session(&session_id).await?;
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! # Error Handling
+//!
+//! Operations return [`crate::Result<T>`] which wraps [`crate::AgentError`]:
+//!
+//! - `AgentError::Internal`: Process spawn failures, I/O errors, binary not found
+//! - `AgentError::Session`: Session already exists, session not found
+//!
+//! # Process Lifecycle
+//!
+//! 1. **Spawn**: `ClaudeProcess::spawn()` creates a new child process with stdin/stdout/stderr pipes
+//! 2. **Active**: Process runs persistently, accepting JSON messages on stdin and emitting on stdout
+//! 3. **Shutdown**: `shutdown()` drops stdin (signaling EOF), waits for graceful exit with 5s timeout,
+//!    then force-kills if necessary
+//!
+//! Processes are automatically cleaned up when terminated via the manager, but callers must ensure
+//! no `Arc<Mutex<ClaudeProcess>>` references are held when calling `terminate_session()`.
+
+use crate::session::SessionId;
+use crate::{AgentError, Result};
+use std::collections::HashMap;
+use std::mem::ManuallyDrop;
+use std::process::Stdio;
+use std::sync::{Arc, RwLock};
+use std::time::Duration;
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::process::{Child, ChildStderr, ChildStdin, ChildStdout, Command};
+use tokio::sync::Mutex;
+
+/// Claude CLI command-line arguments for stream-json communication
+const CLAUDE_CLI_ARGS: &[&str] = &[
+    "--print", // print mode (non-interactive)
+    "--input-format",
+    "stream-json", // accept newline-delimited JSON on stdin
+    "--output-format",
+    "stream-json",                    // emit newline-delimited JSON on stdout
+    "--verbose",                      // REQUIRED for stream-json output format
+    "--dangerously-skip-permissions", // ACP server handles permission checks
+    "--include-partial-messages",     // Emit partial messages for immediate streaming
+    // NOTE: This causes Claude to send a duplicate final combined message and empty terminator
+    // We filter these out in the streaming loop (skip large chunks and empty chunks)
+    "--replay-user-messages", // Re-emit user messages for transcript recording
+];
+
+/// Manages multiple persistent claude CLI processes, one per session
+///
+/// # Thread Safety
+///
+/// This type is thread-safe and can be safely shared across threads using `Arc<ClaudeProcessManager>`.
+///
+/// The internal `processes` map uses `Arc<RwLock<HashMap>>` which provides:
+/// - **Concurrent reads**: Multiple threads can simultaneously check session existence or retrieve processes
+/// - **Exclusive writes**: Spawn and terminate operations acquire exclusive write locks, preventing races
+///
+/// Individual processes are wrapped in `Arc<Mutex<ClaudeProcess>>` to ensure exclusive access
+/// for I/O operations. Callers must acquire the mutex lock before reading/writing to a process.
+///
+/// # Important
+///
+/// When calling `terminate_session()`, ensure no `Arc<Mutex<ClaudeProcess>>` references are held,
+/// as termination requires exclusive ownership. Drop all process references before terminating.
+#[derive(Debug)]
+pub struct ClaudeProcessManager {
+    processes: Arc<RwLock<HashMap<SessionId, Arc<Mutex<ClaudeProcess>>>>>,
+}
+
+impl ClaudeProcessManager {
+    /// Create a new process manager
+    pub fn new() -> Self {
+        Self {
+            processes: Arc::new(RwLock::new(HashMap::new())),
+        }
+    }
+
+    /// Spawn a new claude process for the given session
+    /// # Arguments
+    /// * `session_id` - Session identifier
+    /// * `cwd` - Working directory for the Claude process
+    ///
+    /// # Errors
+    /// Returns error if:
+    /// - Session already has a process
+    /// - Failed to spawn claude binary
+    /// - Process spawn fails
+    pub async fn spawn_for_session(
+        &self,
+        session_id: SessionId,
+        cwd: &std::path::Path,
+    ) -> Result<()> {
+        // Check if session already exists - use write lock to prevent race
+        let mut processes = self.processes.write().map_err(|_| {
+            AgentError::Internal("Failed to acquire write lock on processes".to_string())
+        })?;
+
+        if processes.contains_key(&session_id) {
+            // Process already exists, this is fine - just return success
+            tracing::debug!("Process already exists for session {}", session_id);
+            return Ok(());
+        }
+
+        // Spawn new process with working directory
+        let process = ClaudeProcess::spawn(session_id, cwd).map_err(|e| {
+            tracing::error!(
+                "Failed to spawn claude process for session {}: {}",
+                session_id,
+                e
+            );
+            e
+        })?;
+
+        // Insert into map
+        processes.insert(session_id, Arc::new(Mutex::new(process)));
+
+        tracing::info!("Spawned claude process for session {}", session_id);
+        Ok(())
+    }
+
+    /// Get the process for a session, spawning one if it doesn't exist
+    ///
+    /// # Arguments
+    /// * `session_id` - Session identifier
+    /// * `cwd` - Working directory for the Claude process if spawning is needed
+    ///
+    /// # Errors
+    /// Returns error if spawning fails
+    pub async fn get_process(
+        &self,
+        session_id: &SessionId,
+        cwd: &std::path::Path,
+    ) -> Result<Arc<Mutex<ClaudeProcess>>> {
+        // First try to get existing process
+        {
+            let processes = self.processes.read().map_err(|_| {
+                AgentError::Internal("Failed to acquire read lock on processes".to_string())
+            })?;
+            if let Some(process) = processes.get(session_id) {
+                tracing::debug!(
+                    "Reusing existing Claude process for session {} (total active: {})",
+                    session_id,
+                    processes.len()
+                );
+                return Ok(process.clone());
+            }
+        }
+
+        // Process doesn't exist, spawn one with working directory
+        tracing::info!(
+            "No process found for session {}, spawning new one in {}",
+            session_id,
+            cwd.display()
+        );
+        self.spawn_for_session(*session_id, cwd).await?;
+
+        // Get the newly spawned process
+        let processes = self.processes.read().map_err(|_| {
+            AgentError::Internal("Failed to acquire read lock on processes".to_string())
+        })?;
+
+        tracing::info!(
+            "Spawned new Claude process for session {} (total active: {})",
+            session_id,
+            processes.len()
+        );
+
+        processes.get(session_id).cloned().ok_or_else(|| {
+            AgentError::Internal("Process spawn succeeded but not found in map".to_string())
+        })
+    }
+
+    /// Terminate a session's process
+    ///
+    /// # Errors
+    /// Returns error if session does not exist or shutdown fails
+    pub async fn terminate_session(&self, session_id: &SessionId) -> Result<()> {
+        // Remove from map
+        let process = {
+            let mut processes = self.processes.write().map_err(|_| {
+                AgentError::Internal("Failed to acquire write lock on processes".to_string())
+            })?;
+            processes.remove(session_id)
+        };
+
+        if let Some(process_arc) = process {
+            // Take ownership and shutdown
+            let process = Arc::try_unwrap(process_arc).map_err(|_| {
+                AgentError::Internal("Process still has multiple references".to_string())
+            })?;
+            let process = process.into_inner();
+
+            process.shutdown().await?;
+            tracing::info!("Terminated claude process for session {}", session_id);
+            Ok(())
+        } else {
+            Err(AgentError::Session(format!(
+                "No process for session {}",
+                session_id
+            )))
+        }
+    }
+
+    /// Check if a session has a process
+    pub async fn has_session(&self, session_id: &SessionId) -> bool {
+        self.processes
+            .read()
+            .ok()
+            .map(|processes| processes.contains_key(session_id))
+            .unwrap_or(false)
+    }
+}
+
+impl Default for ClaudeProcessManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// A persistent claude CLI process for stream-json communication
+#[derive(Debug)]
+pub struct ClaudeProcess {
+    session_id: SessionId,
+    child: Child,
+    stdin: ManuallyDrop<ChildStdin>,
+    stdout: BufReader<ChildStdout>,
+    stderr: BufReader<ChildStderr>,
+    /// Flag to prevent Drop from killing if shutdown was called
+    shutdown_called: bool,
+}
+
+impl ClaudeProcess {
+    /// Spawn a new claude process with stream-json flags
+    ///
+    /// # Arguments
+    /// * `session_id` - Session identifier for logging
+    /// * `cwd` - Working directory for the Claude process
+    ///
+    /// # Errors
+    /// Returns error if:
+    /// - claude binary not found
+    /// - Process spawn fails
+    /// - stdin/stdout/stderr not available
+    pub fn spawn(session_id: SessionId, cwd: &std::path::Path) -> Result<Self> {
+        // Get test name from thread name or backtrace if in test context
+        let test_context = std::thread::current().name().map(|n| n.to_string());
+
+        // ⚠️ IMPORTANT: This spawns a real Claude binary (~500MB process)
+        // Consider using RecordedClaudeBackend for tests instead (see claude_backend.rs)
+        tracing::warn!(
+            "🚨 SPAWNING REAL CLAUDE BINARY for session {} (test: {:?}) in directory {} - Consider converting to recorded test!",
+            session_id,
+            test_context,
+            cwd.display()
+        );
+
+        let session_uuid_str = session_id.to_uuid_string();
+
+        let mut cmd = Command::new("claude")
+            .args(CLAUDE_CLI_ARGS)
+            .arg("--session-id")
+            .arg(&session_uuid_str)
+            .current_dir(cwd)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .map_err(|e| {
+                if e.kind() == std::io::ErrorKind::NotFound {
+                    AgentError::Internal(
+                        "claude binary not found in PATH. Please ensure claude CLI is installed."
+                            .to_string(),
+                    )
+                } else {
+                    AgentError::Internal(format!("Failed to spawn claude process: {}", e))
+                }
+            })?;
+
+        let stdin = cmd.stdin.take().ok_or_else(|| {
+            AgentError::Internal("Failed to capture claude process stdin".to_string())
+        })?;
+
+        let stdout = cmd.stdout.take().ok_or_else(|| {
+            AgentError::Internal("Failed to capture claude process stdout".to_string())
+        })?;
+
+        let stderr = cmd.stderr.take().ok_or_else(|| {
+            AgentError::Internal("Failed to capture claude process stderr".to_string())
+        })?;
+
+        let pid = cmd.id();
+        tracing::info!(
+            "Claude process spawned: session={}, pid={:?}, test={:?}",
+            session_id,
+            pid,
+            test_context
+        );
+
+        Ok(Self {
+            session_id,
+            child: cmd,
+            stdin: ManuallyDrop::new(stdin),
+            stdout: BufReader::new(stdout),
+            stderr: BufReader::new(stderr),
+            shutdown_called: false,
+        })
+    }
+
+    /// Write a line to the process stdin
+    ///
+    /// # Errors
+    /// Returns error if write or flush fails
+    pub async fn write_line(&mut self, line: &str) -> Result<()> {
+        self.stdin
+            .write_all(line.as_bytes())
+            .await
+            .map_err(|e| AgentError::Internal(format!("Failed to write to claude stdin: {}", e)))?;
+
+        self.stdin
+            .write_all(b"\n")
+            .await
+            .map_err(|e| AgentError::Internal(format!("Failed to write newline: {}", e)))?;
+
+        self.stdin
+            .flush()
+            .await
+            .map_err(|e| AgentError::Internal(format!("Failed to flush claude stdin: {}", e)))?;
+
+        tracing::trace!("Wrote line to session {}: {}", self.session_id, line);
+        Ok(())
+    }
+
+    /// Read a line from the process stdout
+    ///
+    /// Returns None if EOF (process terminated)
+    ///
+    /// # Errors
+    /// Returns error if read fails (but not on EOF)
+    pub async fn read_line(&mut self) -> Result<Option<String>> {
+        let mut line = String::new();
+        let bytes_read = self.stdout.read_line(&mut line).await.map_err(|e| {
+            AgentError::Internal(format!("Failed to read from claude stdout: {}", e))
+        })?;
+
+        if bytes_read == 0 {
+            tracing::debug!("EOF on claude stdout for session {}", self.session_id);
+            return Ok(None);
+        }
+
+        // Remove trailing newline
+        let line = line.trim_end().to_string();
+        tracing::trace!("Read line from session {}: {}", self.session_id, line);
+        Ok(Some(line))
+    }
+
+    /// Read a line from the process stderr
+    ///
+    /// Returns None if EOF
+    ///
+    /// # Errors
+    /// Returns error if read fails (but not on EOF)
+    pub async fn read_stderr_line(&mut self) -> Result<Option<String>> {
+        let mut line = String::new();
+        let bytes_read = self.stderr.read_line(&mut line).await.map_err(|e| {
+            AgentError::Internal(format!("Failed to read from claude stderr: {}", e))
+        })?;
+
+        if bytes_read == 0 {
+            return Ok(None);
+        }
+
+        // Remove trailing newline
+        let line = line.trim_end().to_string();
+        tracing::trace!(
+            "Read stderr line from session {}: {}",
+            self.session_id,
+            line
+        );
+        Ok(Some(line))
+    }
+
+    /// Check if the process is still alive
+    pub async fn is_alive(&mut self) -> bool {
+        match self.child.try_wait() {
+            Ok(Some(status)) => {
+                tracing::debug!(
+                    "Claude process for session {} exited with status: {}",
+                    self.session_id,
+                    status
+                );
+                false
+            }
+            Ok(None) => true,
+            Err(e) => {
+                tracing::error!(
+                    "Error checking claude process status for session {}: {}",
+                    self.session_id,
+                    e
+                );
+                false
+            }
+        }
+    }
+
+    /// Gracefully shutdown the process
+    ///
+    /// Attempts graceful termination first, then force kills if needed
+    ///
+    /// # Errors
+    /// Returns error if force kill fails
+    pub async fn shutdown(mut self) -> Result<()> {
+        tracing::debug!(
+            "Shutting down claude process for session {}",
+            self.session_id
+        );
+
+        // Mark that shutdown was called to prevent Drop from running
+        self.shutdown_called = true;
+
+        // Manually drop stdin to signal EOF to the process
+        unsafe {
+            ManuallyDrop::drop(&mut self.stdin);
+        }
+
+        // Try to wait for graceful exit with timeout
+        // Use try_wait in a loop to avoid blocking and retain access to child
+        let start = std::time::Instant::now();
+        let timeout_duration = Duration::from_secs(5);
+
+        loop {
+            match self.child.try_wait() {
+                Ok(Some(status)) => {
+                    tracing::info!(
+                        "Claude process for session {} exited gracefully with status: {}",
+                        self.session_id,
+                        status
+                    );
+                    return Ok(());
+                }
+                Ok(None) => {
+                    // Still running, check timeout
+                    if start.elapsed() >= timeout_duration {
+                        tracing::warn!(
+                            "Claude process for session {} did not exit gracefully, force killing",
+                            self.session_id
+                        );
+                        // Force kill the process
+                        if let Err(e) = self.child.kill().await {
+                            tracing::error!(
+                                "Failed to force kill claude process for session {}: {}",
+                                self.session_id,
+                                e
+                            );
+                            return Err(AgentError::Internal(format!(
+                                "Failed to force kill process: {}",
+                                e
+                            )));
+                        }
+                        // Wait for the killed process to clean up
+                        if let Err(e) = self.child.wait().await {
+                            tracing::error!(
+                                "Failed to wait after killing claude process for session {}: {}",
+                                self.session_id,
+                                e
+                            );
+                        }
+                        return Ok(());
+                    }
+                    // Sleep briefly before checking again
+                    tokio::time::sleep(Duration::from_millis(100)).await;
+                }
+                Err(e) => {
+                    tracing::error!(
+                        "Error checking claude process status for session {}: {}",
+                        self.session_id,
+                        e
+                    );
+                    return Err(AgentError::Internal(format!(
+                        "Failed to check process status: {}",
+                        e
+                    )));
+                }
+            }
+        }
+    }
+
+    /// Get the session ID for this process
+    pub fn session_id(&self) -> SessionId {
+        self.session_id
+    }
+}
+
+impl Drop for ClaudeProcess {
+    fn drop(&mut self) {
+        // If shutdown was already called, don't kill again
+        if self.shutdown_called {
+            tracing::debug!(
+                "Dropping ClaudeProcess for session {}, shutdown already called",
+                self.session_id
+            );
+            return;
+        }
+
+        tracing::debug!(
+            "Dropping ClaudeProcess for session {}, force-killing process",
+            self.session_id
+        );
+
+        // CRITICAL: Force-kill the child process immediately
+        // We can't use async here (Drop must be sync), so we use start_kill()
+        // which sends SIGKILL immediately without waiting
+        if let Err(e) = self.child.start_kill() {
+            // Only log if the process wasn't already dead
+            if e.kind() != std::io::ErrorKind::InvalidInput {
+                tracing::error!(
+                    "Failed to force-kill claude process for session {} during drop: {}",
+                    self.session_id,
+                    e
+                );
+            }
+        } else {
+            tracing::info!(
+                "Force-killed claude process for session {} during drop",
+                self.session_id
+            );
+        }
+
+        // Note: We don't wait for the process to exit here because Drop must be non-blocking
+        // The OS will clean up the zombie process
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_process_manager_new() {
+        let manager = ClaudeProcessManager::new();
+        let session_id = SessionId::new();
+        assert!(!manager.has_session(&session_id).await);
+    }
+
+    #[tokio::test]
+    async fn test_terminate_nonexistent_session() {
+        let manager = ClaudeProcessManager::new();
+        let session_id = SessionId::new();
+
+        let result = manager.terminate_session(&session_id).await;
+        assert!(result.is_err());
+        if let Err(AgentError::Session(msg)) = result {
+            assert!(msg.contains("No process for session"));
+        } else {
+            panic!("Expected Session error");
+        }
+    }
+}

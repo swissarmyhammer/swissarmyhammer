@@ -1,0 +1,17 @@
+{
+  "exchanges": [
+    {
+      "input": "{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"init\"}}",
+      "outputs": [
+        "{\"type\":\"system\",\"message\":\"init\",\"slash_commands\":[{\"name\":\"compact\",\"description\":\"Compact conversation history\"}]}"
+      ]
+    },
+    {
+      "input": "{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"test\"},{\"type\":\"text\",\"text\":\"test2\"}]}}",
+      "outputs": [
+        "{\"type\":\"assistant\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"Got both chunks!\"}]}}",
+        "{\"type\":\"result\",\"status\":\"success\",\"stop_reason\":\"end_turn\"}"
+      ]
+    }
+  ]
+}

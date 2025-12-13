@@ -477,7 +477,9 @@ pub enum ModelConfigSource {
     Builtin,
     /// Project-specific models from models/ directory
     Project,
-    /// User-defined models from .swissarmyhammer/models/
+    /// Git root models from .swissarmyhammer/models/ in git repository root
+    GitRoot,
+    /// User-defined models from ~/.swissarmyhammer/models/
     User,
 }
 
@@ -485,8 +487,9 @@ impl ModelConfigSource {
     /// Get emoji-based display string for the agent source
     ///
     /// - 📦 Built-in: System-provided built-in models
-    /// - 📁 Project: Project-specific models from agents/ directory
-    /// - 👤 User: User-defined models from .swissarmyhammer/agents/
+    /// - 📁 Project: Project-specific models from models/ directory
+    /// - 🔧 GitRoot: Git repository models from .swissarmyhammer/models/
+    /// - 👤 User: User-defined models from ~/.swissarmyhammer/models/
     ///
     /// # Examples
     ///
@@ -495,12 +498,14 @@ impl ModelConfigSource {
     ///
     /// assert_eq!(ModelConfigSource::Builtin.display_emoji(), "📦 Built-in");
     /// assert_eq!(ModelConfigSource::Project.display_emoji(), "📁 Project");
+    /// assert_eq!(ModelConfigSource::GitRoot.display_emoji(), "🔧 GitRoot");
     /// assert_eq!(ModelConfigSource::User.display_emoji(), "👤 User");
     /// ```
     pub fn display_emoji(&self) -> &'static str {
         match self {
             ModelConfigSource::Builtin => "📦 Built-in",
             ModelConfigSource::Project => "📁 Project",
+            ModelConfigSource::GitRoot => "🔧 GitRoot",
             ModelConfigSource::User => "👤 User",
         }
     }
@@ -665,6 +670,8 @@ impl ModelManager {
         let initial_builtin_count = agents.len();
         let (project_overrides, project_new) =
             Self::merge_agents_with_precedence(&mut agents, Self::load_project_models(), "project");
+        let (gitroot_overrides, gitroot_new) =
+            Self::merge_agents_with_precedence(&mut agents, Self::load_gitroot_models(), "gitroot");
         let (user_overrides, user_new) =
             Self::merge_agents_with_precedence(&mut agents, Self::load_user_models(), "user");
 
@@ -676,6 +683,14 @@ impl ModelManager {
             user_overrides,
             user_new,
         );
+
+        if gitroot_overrides > 0 || gitroot_new > 0 {
+            tracing::debug!(
+                "Git root models: {} overrides, {} new",
+                gitroot_overrides,
+                gitroot_new
+            );
+        }
 
         Self::log_final_agent_list(&agents);
 
@@ -1037,6 +1052,36 @@ impl ModelManager {
             .map_err(ModelError::IoError)?
             .join("models");
         Self::load_agents_from_dir(&project_models_dir, ModelConfigSource::Project)
+    }
+
+    /// Load git root models from .swissarmyhammer/models/
+    ///
+    /// Scans the git repository root's `.swissarmyhammer/models/` directory for agent
+    /// configuration files. Missing directory is handled gracefully by returning an empty vector.
+    ///
+    /// # Returns
+    /// * `Result<Vec<ModelInfo>, ModelError>` - Vector of git root model information
+    ///
+    /// # Examples
+    /// ```no_run
+    /// use swissarmyhammer_config::model::ModelManager;
+    ///
+    /// let gitroot_models = ModelManager::load_gitroot_models()?;
+    /// for model in gitroot_models {
+    ///     println!("Git root model: {}", model.name);
+    /// }
+    /// # Ok::<(), swissarmyhammer_config::ModelError>(())
+    /// ```
+    pub fn load_gitroot_models() -> Result<Vec<ModelInfo>, ModelError> {
+        use swissarmyhammer_common::utils::directory_utils::find_git_repository_root;
+
+        if let Some(git_root) = find_git_repository_root() {
+            let gitroot_models_dir = git_root.join(".swissarmyhammer").join("models");
+            Self::load_agents_from_dir(&gitroot_models_dir, ModelConfigSource::GitRoot)
+        } else {
+            // Not in a git repository
+            Ok(Vec::new())
+        }
     }
 
     /// Find a specific agent by name from all available sources
@@ -2136,6 +2181,7 @@ quiet: false"#;
             match agent.source {
                 ModelConfigSource::Builtin
                 | ModelConfigSource::Project
+                | ModelConfigSource::GitRoot
                 | ModelConfigSource::User => {
                     // Valid source
                 }

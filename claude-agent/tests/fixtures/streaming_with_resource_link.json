@@ -1,0 +1,19 @@
+{
+  "exchanges": [
+    {
+      "input": "{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"init\"}}",
+      "outputs": [
+        "{\"type\":\"system\",\"message\":\"init\",\"slash_commands\":[{\"name\":\"compact\",\"description\":\"Compact conversation history\"}]}"
+      ]
+    },
+    {
+      "input": "{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"I'm providing a resource link for reference. Please confirm you received it.\"},{\"type\":\"resource_link\",\"uri\":\"https://example.com/document.pdf\",\"name\":\"Example Document\"}]}}",
+      "outputs": [
+        "{\"type\":\"assistant\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"I can see you've\"}]}}",
+        "{\"type\":\"assistant\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\" shared a resource link\"}]}}",
+        "{\"type\":\"assistant\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\" to 'Example Document' (document.pdf). Yes, I received it!\"}]}}",
+        "{\"type\":\"result\",\"status\":\"success\",\"stop_reason\":\"end_turn\",\"meta\":{\"streaming\":true}}"
+      ]
+    }
+  ]
+}

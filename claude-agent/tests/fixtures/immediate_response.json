@@ -1,0 +1,32 @@
+[
+  {
+    "update_type": "AgentThoughtChunk",
+    "content": {
+      "Text": {
+        "text": "I'll respond with a greeting.",
+        "annotations": null,
+        "meta": null
+      }
+    }
+  },
+  {
+    "update_type": "AgentMessageChunk",
+    "content": {
+      "Text": {
+        "text": "Hello",
+        "annotations": null,
+        "meta": null
+      }
+    }
+  },
+  {
+    "update_type": "AgentMessageChunk",
+    "content": {
+      "Text": {
+        "text": "!",
+        "annotations": null,
+        "meta": null
+      }
+    }
+  }
+]

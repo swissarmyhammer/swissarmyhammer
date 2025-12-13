@@ -49,8 +49,14 @@ fn display_agent_summary_and_table(
     agents: &[swissarmyhammer_config::model::ModelInfo],
     verbose: bool,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let (builtin_count, project_count, user_count) = count_agents_by_source(agents);
-    display_agent_counts(agents.len(), builtin_count, project_count, user_count);
+    let (builtin_count, project_count, gitroot_count, user_count) = count_agents_by_source(agents);
+    display_agent_counts(
+        agents.len(),
+        builtin_count,
+        project_count,
+        gitroot_count,
+        user_count,
+    );
     display_agent_table(agents, verbose)?;
     Ok(())
 }
@@ -58,24 +64,26 @@ fn display_agent_summary_and_table(
 /// Count agents by source type
 fn count_agents_by_source(
     agents: &[swissarmyhammer_config::model::ModelInfo],
-) -> (usize, usize, usize) {
+) -> (usize, usize, usize, usize) {
     let mut builtin_count = 0;
     let mut project_count = 0;
+    let mut gitroot_count = 0;
     let mut user_count = 0;
 
     for agent in agents {
         match agent.source {
             ModelConfigSource::Builtin => builtin_count += 1,
             ModelConfigSource::Project => project_count += 1,
+            ModelConfigSource::GitRoot => gitroot_count += 1,
             ModelConfigSource::User => user_count += 1,
         }
     }
 
-    (builtin_count, project_count, user_count)
+    (builtin_count, project_count, gitroot_count, user_count)
 }
 
-/// Display agent count summary
-fn display_agent_counts(total: usize, builtin: usize, project: usize, user: usize) {
+/// Display model count summary
+fn display_agent_counts(total: usize, builtin: usize, project: usize, gitroot: usize, user: usize) {
     println!("Models: {}", total);
 
     if builtin > 0 {
@@ -83,6 +91,9 @@ fn display_agent_counts(total: usize, builtin: usize, project: usize, user: usiz
     }
     if project > 0 {
         println!("Project: {}", project);
+    }
+    if gitroot > 0 {
+        println!("GitRoot: {}", gitroot);
     }
     if user > 0 {
         println!("User: {}", user);
