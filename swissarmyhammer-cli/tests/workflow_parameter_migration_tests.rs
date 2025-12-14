@@ -88,27 +88,6 @@ async fn run_builtin_workflow_in_process(
 }
 
 #[tokio::test]
-async fn test_greeting_workflow_parameter_migration() -> Result<()> {
-    // Test that workflow accepts parameters via --var (current system)
-    let success = run_builtin_workflow_in_process(
-        "hello-world",
-        vec![
-            "person_name=Alice".to_string(),
-            "language=Spanish".to_string(),
-            "enthusiastic=true".to_string(),
-        ],
-        true, // dry-run
-    )
-    .await?;
-
-    assert!(
-        success,
-        "Hello-world workflow should accept --var parameters"
-    );
-    Ok(())
-}
-
-#[tokio::test]
 async fn test_hello_world_workflow_backward_compatibility() -> Result<()> {
     // Test that --var arguments work
     let success = run_builtin_workflow_in_process(

@@ -1104,9 +1104,9 @@ dependencies = [
 
 [[package]]
 name = "cmake"
-version = "0.1.55"
+version = "0.1.56"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d49d74c227b6cc9f3c51a2c7c667a05b6453f7f0f952a5f8e4493bb9e731d68e"
+checksum = "b042e5d8a74ae91bb0961acd039822472ec99f8ab0948cbf6d1369588f8be586"
 dependencies = [
  "cc",
 ]
@@ -3414,7 +3414,7 @@ dependencies = [
 [[package]]
 name = "llama-cpp-2"
 version = "0.1.130"
-source = "git+https://github.com/swissarmyhammer/llama-cpp-rs#f1649233a55e6e2496375533910bff151210a6b4"
+source = "git+https://github.com/swissarmyhammer/llama-cpp-rs#676e51feacd3257554fc757e38241329b793eadf"
 dependencies = [
  "enumflags2",
  "llama-cpp-sys-2",
@@ -3426,7 +3426,7 @@ dependencies = [
 [[package]]
 name = "llama-cpp-sys-2"
 version = "0.1.130"
-source = "git+https://github.com/swissarmyhammer/llama-cpp-rs#f1649233a55e6e2496375533910bff151210a6b4"
+source = "git+https://github.com/swissarmyhammer/llama-cpp-rs#676e51feacd3257554fc757e38241329b793eadf"
 dependencies = [
  "bindgen",
  "cc",

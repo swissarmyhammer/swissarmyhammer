@@ -1016,10 +1016,12 @@ impl DefaultParameterResolver {
     /// Replaces ${VAR_NAME} patterns with environment variable values
     fn resolve_env_vars(value: &str) -> String {
         let var_regex = regex::Regex::new(r"\$\{([a-zA-Z_][a-zA-Z0-9_]*)\}").unwrap();
-        var_regex.replace_all(value, |caps: &regex::Captures| {
-            let var_name = &caps[1];
-            std::env::var(var_name).unwrap_or_else(|_| format!("${{{}}}", var_name))
-        }).into_owned()
+        var_regex
+            .replace_all(value, |caps: &regex::Captures| {
+                let var_name = &caps[1];
+                std::env::var(var_name).unwrap_or_else(|_| format!("${{{}}}", var_name))
+            })
+            .into_owned()
     }
 
     /// Resolve environment variables in a JSON value

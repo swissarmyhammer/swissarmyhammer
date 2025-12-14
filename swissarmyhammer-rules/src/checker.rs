@@ -17,6 +17,34 @@ use swissarmyhammer_common::glob_utils::{expand_glob_patterns, GlobExpansionConf
 use swissarmyhammer_config::TemplateContext;
 use swissarmyhammer_prompts::{PromptLibrary, PromptResolver};
 
+/// Factory trait for providing per-rule agents
+///
+/// This allows different rules to use different agents, enabling per-rule
+/// tool filtering and other rule-specific agent configurations.
+pub trait AgentFactory: Send + Sync {
+    /// Get an agent for a specific rule
+    ///
+    /// # Arguments
+    ///
+    /// * `rule` - The rule that needs an agent
+    ///
+    /// # Returns
+    ///
+    /// An agent executor configured for this rule
+    fn get_agent_for_rule(&self, rule: &Rule) -> Arc<dyn AgentExecutor>;
+}
+
+/// Default agent factory that returns the same agent for all rules
+struct DefaultAgentFactory {
+    agent: Arc<dyn AgentExecutor>,
+}
+
+impl AgentFactory for DefaultAgentFactory {
+    fn get_agent_for_rule(&self, _rule: &Rule) -> Arc<dyn AgentExecutor> {
+        Arc::clone(&self.agent)
+    }
+}
+
 /// Check mode controlling fail-fast behavior
 ///
 /// Determines whether checking stops on the first ERROR violation or continues
@@ -111,8 +139,8 @@ pub struct RuleCheckRequest {
 /// # }
 /// ```
 pub struct RuleChecker {
-    /// LLM agent executor for running checks
-    agent: Arc<dyn AgentExecutor>,
+    /// Agent factory for providing per-rule agents
+    agent_factory: Arc<dyn AgentFactory>,
     /// Prompt library containing the .check prompt (wrapped in Arc for sharing in streams)
     prompt_library: Arc<PromptLibrary>,
     /// Rule library for partial template support (loaded once for performance)
@@ -123,6 +151,9 @@ pub struct RuleChecker {
 
 impl RuleChecker {
     /// Create a new RuleChecker with the given agent executor
+    ///
+    /// This uses a default agent factory that returns the same agent for all rules.
+    /// For per-rule agent configuration (e.g., tool filtering), use `with_agent_factory`.
     ///
     /// Loads the PromptLibrary containing the .check prompt from all sources
     /// (builtin, user, local).
@@ -160,6 +191,24 @@ impl RuleChecker {
     /// # }
     /// ```
     pub fn new(agent: Arc<dyn AgentExecutor>) -> Result<Self> {
+        let factory = Arc::new(DefaultAgentFactory { agent });
+        Self::with_agent_factory(factory)
+    }
+
+    /// Create a new RuleChecker with a custom agent factory
+    ///
+    /// This allows per-rule agent configuration, enabling features like per-rule
+    /// tool filtering or different models for different rules.
+    ///
+    /// # Arguments
+    ///
+    /// * `agent_factory` - Factory that provides agents for specific rules
+    ///
+    /// # Returns
+    ///
+    /// Returns a Result containing the initialized RuleChecker or an error if
+    /// the .check prompt cannot be loaded.
+    pub fn with_agent_factory(agent_factory: Arc<dyn AgentFactory>) -> Result<Self> {
         tracing::trace!("Creating RuleChecker");
 
         // Load all prompts including the builtin .check prompt
@@ -198,7 +247,7 @@ impl RuleChecker {
             .map_err(|e| RuleError::CheckError(format!("Failed to initialize cache: {}", e)))?;
 
         Ok(Self {
-            agent,
+            agent_factory,
             prompt_library: Arc::new(prompt_library),
             rule_library: Arc::new(rule_library),
             cache: Arc::new(cache),
@@ -459,7 +508,12 @@ impl RuleChecker {
         target_path: &Path,
         check_start: std::time::Instant,
     ) -> Result<Option<RuleViolation>> {
-        let agent = override_agent.unwrap_or(&self.agent);
+        // Use override agent if provided, otherwise get agent from factory for this rule
+        let agent = if let Some(agent) = override_agent {
+            agent
+        } else {
+            &self.agent_factory.get_agent_for_rule(rule)
+        };
 
         let agent_config = swissarmyhammer_config::model::ModelConfig::default();
         let agent_context = AgentExecutionContext::new(&agent_config);
@@ -805,10 +859,10 @@ impl RuleChecker {
     /// Create a cloneable version of RuleChecker for streaming
     ///
     /// This allows the checker to be cloned and used in async stream operations
-    /// while maintaining shared access to the underlying agent and libraries.
+    /// while maintaining shared access to the underlying agent factory and libraries.
     fn clone_for_streaming(&self) -> Self {
         Self {
-            agent: Arc::clone(&self.agent),
+            agent_factory: Arc::clone(&self.agent_factory),
             prompt_library: Arc::clone(&self.prompt_library),
             rule_library: Arc::clone(&self.rule_library),
             cache: Arc::clone(&self.cache),
