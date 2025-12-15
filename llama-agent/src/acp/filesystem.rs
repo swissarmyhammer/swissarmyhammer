@@ -665,7 +665,7 @@ mod tests {
         // Test RelativePath
         let error: agent_client_protocol::Error =
             FilesystemError::RelativePath("relative/path".to_string()).into();
-        assert_eq!(error.code, -32602); // Invalid params
+        assert_eq!(error.code, agent_client_protocol::ErrorCode::InvalidParams);
         assert!(error
             .data
             .as_ref()
@@ -677,7 +677,7 @@ mod tests {
         // Test PathTraversal
         let error: agent_client_protocol::Error =
             FilesystemError::PathTraversal("/etc/../../../etc/passwd".to_string()).into();
-        assert_eq!(error.code, -32602); // Invalid params
+        assert_eq!(error.code, agent_client_protocol::ErrorCode::InvalidParams);
         assert!(error
             .data
             .as_ref()
@@ -689,7 +689,7 @@ mod tests {
         // Test NotAllowed
         let error: agent_client_protocol::Error =
             FilesystemError::NotAllowed("/blocked/path".to_string()).into();
-        assert_eq!(error.code, -32602); // Invalid params
+        assert_eq!(error.code, agent_client_protocol::ErrorCode::InvalidParams);
         assert!(error
             .data
             .as_ref()
@@ -701,7 +701,7 @@ mod tests {
         // Test Blocked
         let error: agent_client_protocol::Error =
             FilesystemError::Blocked("/blocked/path".to_string()).into();
-        assert_eq!(error.code, -32602); // Invalid params
+        assert_eq!(error.code, agent_client_protocol::ErrorCode::InvalidParams);
         assert!(error
             .data
             .as_ref()
@@ -713,7 +713,7 @@ mod tests {
         // Test FileTooLarge
         let error: agent_client_protocol::Error =
             FilesystemError::FileTooLarge(1000000, 500000).into();
-        assert_eq!(error.code, -32602); // Invalid params
+        assert_eq!(error.code, agent_client_protocol::ErrorCode::InvalidParams);
         assert!(error
             .data
             .as_ref()
@@ -725,7 +725,7 @@ mod tests {
         // Test IO errors - NotFound
         let io_error = std::io::Error::new(std::io::ErrorKind::NotFound, "file not found");
         let error: agent_client_protocol::Error = FilesystemError::Io(io_error).into();
-        assert_eq!(error.code, -32602); // Invalid params
+        assert_eq!(error.code, agent_client_protocol::ErrorCode::InvalidParams);
         assert!(error
             .data
             .as_ref()
@@ -738,7 +738,7 @@ mod tests {
         let io_error =
             std::io::Error::new(std::io::ErrorKind::PermissionDenied, "permission denied");
         let error: agent_client_protocol::Error = FilesystemError::Io(io_error).into();
-        assert_eq!(error.code, -32602); // Invalid params
+        assert_eq!(error.code, agent_client_protocol::ErrorCode::InvalidParams);
         assert!(error
             .data
             .as_ref()
@@ -750,7 +750,7 @@ mod tests {
         // Test IO errors - AlreadyExists
         let io_error = std::io::Error::new(std::io::ErrorKind::AlreadyExists, "file exists");
         let error: agent_client_protocol::Error = FilesystemError::Io(io_error).into();
-        assert_eq!(error.code, -32602); // Invalid params
+        assert_eq!(error.code, agent_client_protocol::ErrorCode::InvalidParams);
         assert!(error
             .data
             .as_ref()
@@ -762,7 +762,7 @@ mod tests {
         // Test IO errors - Other (should be internal error)
         let io_error = std::io::Error::new(std::io::ErrorKind::Other, "unknown error");
         let error: agent_client_protocol::Error = FilesystemError::Io(io_error).into();
-        assert_eq!(error.code, -32603); // Internal error
+        assert_eq!(error.code, agent_client_protocol::ErrorCode::InternalError);
         assert!(error
             .data
             .as_ref()

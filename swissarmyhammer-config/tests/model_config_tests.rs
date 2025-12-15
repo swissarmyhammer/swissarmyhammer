@@ -1178,7 +1178,7 @@ quiet: true"#;
 
     let config = parse_model_config(content).expect("Should parse config with frontmatter");
     assert_eq!(config.executor_type(), ModelExecutorType::ClaudeCode);
-    assert_eq!(config.quiet, true);
+    assert!(config.quiet);
 }
 
 #[test]
@@ -1200,7 +1200,7 @@ quiet: false"#,
 
     let config = parse_model_config(&content).expect("Should parse pure config");
     assert_eq!(config.executor_type(), ModelExecutorType::LlamaAgent);
-    assert_eq!(config.quiet, false);
+    assert!(!config.quiet);
 }
 
 #[test]
@@ -1214,7 +1214,7 @@ quiet: false"#;
 
     let config = parse_model_config(content).expect("Should parse config with comments");
     assert_eq!(config.executor_type(), ModelExecutorType::ClaudeCode);
-    assert_eq!(config.quiet, false);
+    assert!(!config.quiet);
 }
 
 #[test]

@@ -1,0 +1,30 @@
+[package]
+name = "acp-conformance"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+
+[dependencies]
+agent-client-protocol.workspace = true
+tokio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+async-trait.workspace = true
+tracing-subscriber.workspace = true
+tempfile.workspace = true
+test-log.workspace = true
+llama-agent = { workspace = true, features = ["acp"] }
+# claude-agent = { path = "../claude-agent" }  # Disabled - still has 216 compilation errors
+futures.workspace = true
+tokio-util = { workspace = true, features = ["compat"] }
+piper = "0.2"
+serial_test.workspace = true

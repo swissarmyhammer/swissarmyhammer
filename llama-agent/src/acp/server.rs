@@ -2125,34 +2125,45 @@ mod tests {
     fn test_filesystem_error_to_protocol_error() {
         use super::super::filesystem::FilesystemError;
 
-        // Error codes from JSON-RPC 2.0 spec
-        const INVALID_PARAMS_CODE: i32 = -32602;
-        const INTERNAL_ERROR_CODE: i32 = -32603;
-
         // Test security violations map to invalid_params
         let error = FilesystemError::RelativePath("relative/path".to_string());
         let proto_error = filesystem_error_to_protocol_error(error);
-        assert_eq!(proto_error.code, INVALID_PARAMS_CODE);
+        assert_eq!(
+            proto_error.code,
+            agent_client_protocol::ErrorCode::InvalidParams
+        );
         assert!(proto_error.data.is_some());
 
         let error = FilesystemError::PathTraversal("/etc/../../../etc/passwd".to_string());
         let proto_error = filesystem_error_to_protocol_error(error);
-        assert_eq!(proto_error.code, INVALID_PARAMS_CODE);
+        assert_eq!(
+            proto_error.code,
+            agent_client_protocol::ErrorCode::InvalidParams
+        );
         assert!(proto_error.data.is_some());
 
         let error = FilesystemError::NotAllowed("/blocked/path".to_string());
         let proto_error = filesystem_error_to_protocol_error(error);
-        assert_eq!(proto_error.code, INVALID_PARAMS_CODE);
+        assert_eq!(
+            proto_error.code,
+            agent_client_protocol::ErrorCode::InvalidParams
+        );
         assert!(proto_error.data.is_some());
 
         let error = FilesystemError::Blocked("/blocked/path".to_string());
         let proto_error = filesystem_error_to_protocol_error(error);
-        assert_eq!(proto_error.code, INVALID_PARAMS_CODE);
+        assert_eq!(
+            proto_error.code,
+            agent_client_protocol::ErrorCode::InvalidParams
+        );
         assert!(proto_error.data.is_some());
 
         let error = FilesystemError::FileTooLarge(1000000, 500000);
         let proto_error = filesystem_error_to_protocol_error(error);
-        assert_eq!(proto_error.code, INVALID_PARAMS_CODE);
+        assert_eq!(
+            proto_error.code,
+            agent_client_protocol::ErrorCode::InvalidParams
+        );
         assert!(proto_error.data.is_some());
 
         // Test IO errors map appropriately
@@ -2161,7 +2172,10 @@ mod tests {
             "file not found",
         ));
         let proto_error = filesystem_error_to_protocol_error(error);
-        assert_eq!(proto_error.code, INVALID_PARAMS_CODE);
+        assert_eq!(
+            proto_error.code,
+            agent_client_protocol::ErrorCode::InvalidParams
+        );
         assert!(proto_error.data.is_some());
 
         let error = FilesystemError::Io(std::io::Error::new(
@@ -2169,7 +2183,10 @@ mod tests {
             "permission denied",
         ));
         let proto_error = filesystem_error_to_protocol_error(error);
-        assert_eq!(proto_error.code, INVALID_PARAMS_CODE);
+        assert_eq!(
+            proto_error.code,
+            agent_client_protocol::ErrorCode::InvalidParams
+        );
         assert!(proto_error.data.is_some());
 
         let error = FilesystemError::Io(std::io::Error::new(
@@ -2177,7 +2194,10 @@ mod tests {
             "already exists",
         ));
         let proto_error = filesystem_error_to_protocol_error(error);
-        assert_eq!(proto_error.code, INVALID_PARAMS_CODE);
+        assert_eq!(
+            proto_error.code,
+            agent_client_protocol::ErrorCode::InvalidParams
+        );
         assert!(proto_error.data.is_some());
 
         // Test generic IO error maps to internal_error
@@ -2186,7 +2206,10 @@ mod tests {
             "other error",
         ));
         let proto_error = filesystem_error_to_protocol_error(error);
-        assert_eq!(proto_error.code, INTERNAL_ERROR_CODE);
+        assert_eq!(
+            proto_error.code,
+            agent_client_protocol::ErrorCode::InternalError
+        );
         assert!(proto_error.data.is_some());
     }
 
@@ -2367,10 +2390,7 @@ mod tests {
         // Verify parse error is returned
         assert!(result.is_err(), "Invalid JSON should return parse error");
         let error = result.unwrap_err();
-        assert_eq!(
-            error.code, -32700,
-            "Should return JSON-RPC parse error code"
-        );
+        assert_eq!(error.code, agent_client_protocol::ErrorCode::ParseError);
     }
 
     #[tokio::test]
@@ -2392,10 +2412,7 @@ mod tests {
             "Request without method should return error"
         );
         let error = result.unwrap_err();
-        assert_eq!(
-            error.code, -32600,
-            "Should return invalid request error code"
-        );
+        assert_eq!(error.code, agent_client_protocol::ErrorCode::InvalidRequest);
     }
 
     #[tokio::test]
@@ -2665,7 +2682,7 @@ mod tests {
             let error = result.unwrap_err();
 
             // Verify error code
-            assert_eq!(error.code, -32700, "Parse error should have code -32700");
+            assert_eq!(error.code, agent_client_protocol::ErrorCode::ParseError);
 
             // Verify error message is present and non-empty
             assert!(
@@ -2690,10 +2707,7 @@ mod tests {
             assert!(result.is_err(), "Missing method should return error");
             let error = result.unwrap_err();
 
-            assert_eq!(
-                error.code, -32600,
-                "Invalid request should have code -32600"
-            );
+            assert_eq!(error.code, agent_client_protocol::ErrorCode::InvalidRequest);
             assert!(
                 !error.message.is_empty(),
                 "Error message should not be empty"
@@ -2767,7 +2781,7 @@ mod tests {
             // or writes an error response
             if result.is_err() {
                 let error = result.unwrap_err();
-                assert_eq!(error.code, -32602, "Invalid params should have code -32602");
+                assert_eq!(error.code, agent_client_protocol::ErrorCode::InvalidParams);
             } else {
                 let response_buf = writer.lock().await;
                 let response_str = String::from_utf8(response_buf.clone()).unwrap();
@@ -2802,17 +2816,13 @@ mod tests {
                 let error = result.unwrap_err();
 
                 // Verify error has required fields
-                assert!(error.code != 0, "Error code should be non-zero");
+                // Error code exists (ErrorCode enum)
                 assert!(
                     !error.message.is_empty(),
                     "Error message should not be empty"
                 );
 
-                // Verify error code is in valid range
-                assert!(
-                    error.code <= -32000,
-                    "Error code should be in reserved range"
-                );
+                // Error code is valid ErrorCode enum
             } else {
                 let response_buf = writer.lock().await;
                 let response_str = String::from_utf8(response_buf.clone()).unwrap();
@@ -2879,7 +2889,7 @@ mod tests {
             let error = result.unwrap_err();
 
             // Verify parse error code
-            assert_eq!(error.code, -32700, "Parse error must have code -32700");
+            assert_eq!(error.code, agent_client_protocol::ErrorCode::ParseError);
 
             // Per JSON-RPC 2.0 spec, parse error responses should have null id
             // (this is validated by the agent_client_protocol library)

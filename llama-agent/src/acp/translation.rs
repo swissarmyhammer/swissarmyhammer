@@ -446,7 +446,7 @@ impl ToJsonRpcError for agent_client_protocol::Error {
     fn to_json_rpc_code(&self) -> i32 {
         // Map agent_client_protocol::Error to JSON-RPC error codes
         // The agent_client_protocol::Error already contains a code field
-        self.code
+        self.code.into()
     }
 
     fn to_error_data(&self) -> Option<serde_json::Value> {
