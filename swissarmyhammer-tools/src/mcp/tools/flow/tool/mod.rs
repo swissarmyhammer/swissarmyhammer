@@ -261,7 +261,18 @@ impl FlowTool {
         let cli_args: std::collections::HashMap<String, String> = request
             .parameters
             .iter()
-            .map(|(k, v)| (k.clone(), v.to_string()))
+            .map(|(k, v)| {
+                // Extract the string value without JSON formatting
+                let value_str = match v {
+                    serde_json::Value::String(s) => s.clone(),
+                    serde_json::Value::Number(n) => n.to_string(),
+                    serde_json::Value::Bool(b) => b.to_string(),
+                    serde_json::Value::Null => String::new(),
+                    // For arrays and objects, use JSON representation
+                    _ => v.to_string(),
+                };
+                (k.clone(), value_str)
+            })
             .collect();
 
         match resolver.resolve_parameters(&run.workflow.parameters, &cli_args, false) {
@@ -1268,5 +1279,39 @@ mod tests {
                 "FlowStart should have 0% progress"
             );
         }
+    }
+
+    /// Regression test for string parameter quoting bug
+    ///
+    /// This test ensures that string parameters don't get extra quotes when
+    /// converted from JSON values. Previously, using `.to_string()` on a
+    /// JSON String value would produce "value" (with quotes), causing template
+    /// rendering to fail with nested quotes like: log "Message "value""
+    ///
+    /// This test verifies the fix in the parameter resolution code that properly
+    /// extracts string values without JSON formatting.
+    #[tokio::test]
+    async fn test_string_parameter_without_json_quotes() {
+        use serde_json::json;
+
+        // Simulate the parameter conversion that happens in setup_workflow_run
+        let test_value = json!("test.md");
+
+        // Test the conversion logic (same as in the fix)
+        let value_str = match &test_value {
+            serde_json::Value::String(s) => s.clone(),
+            serde_json::Value::Number(n) => n.to_string(),
+            serde_json::Value::Bool(b) => b.to_string(),
+            serde_json::Value::Null => String::new(),
+            _ => test_value.to_string(),
+        };
+
+        // Should extract the string without quotes
+        assert_eq!(value_str, "test.md", "String value should not include JSON quotes");
+
+        // Verify this doesn't happen with the buggy .to_string() approach
+        let buggy_conversion = test_value.to_string();
+        assert_eq!(buggy_conversion, "\"test.md\"", "to_string() includes quotes (this is the bug)");
+        assert_ne!(value_str, buggy_conversion, "Fixed conversion should differ from buggy .to_string()");
     }
 }

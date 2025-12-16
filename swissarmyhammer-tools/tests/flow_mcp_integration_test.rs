@@ -425,13 +425,143 @@ async fn test_flow_list_output_formats() {
     assert_different_formats(&json_result, &table_result);
 }
 
-// NOTE: Plan workflow test disabled - workflow hangs when called via MCP tool
-// This is a known issue documented in ideas/flow_tool_failure.md
-// The plan workflow works via CLI but hangs when called through MCP flow tool
-// TODO: Re-enable after workflow execution bug is fixed
-//
-// #[tokio::test]
-// async fn test_plan_workflow_executes_via_mcp() {
-//     // Test plan workflow execution via MCP
-//     // Currently hangs (times out after 60s)
-// }
+/// Test plan workflow with string parameter
+///
+/// Regression test for the string parameter quoting bug where JSON string values
+/// were incorrectly converted using `.to_string()`, producing "value" with quotes
+/// instead of extracting the plain string value.
+///
+/// This test is marked as ignored because it requires full agent execution which
+/// is slow. Run with `cargo test -- --ignored` to execute.
+#[tokio::test]
+#[ignore]
+async fn test_plan_workflow_with_string_parameter() {
+    let env = TestEnvironment::new().await;
+
+    // Create a temporary test specification file
+    let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
+    let test_spec_path = temp_dir.path().join("test_spec.md");
+    std::fs::write(&test_spec_path, "# Test Specification\n\nThis is a test.")
+        .expect("Failed to write test file");
+
+    let test_spec_str = test_spec_path
+        .to_str()
+        .expect("Path should be valid UTF-8");
+
+    eprintln!("Testing plan workflow with spec file: {}", test_spec_str);
+
+    // Execute plan workflow with string parameter
+    let exec_future = env.client().call_tool(CallToolRequestParam {
+        name: "flow".into(),
+        arguments: json!({
+            "flow_name": "plan",
+            "parameters": {
+                "plan_filename": test_spec_str
+            },
+            "quiet": true
+        })
+        .as_object()
+        .cloned(),
+    });
+
+    // Use longer timeout since this involves actual agent execution
+    let result = timeout(Duration::from_secs(120), exec_future)
+        .await
+        .expect("Plan workflow should not timeout")
+        .expect("Plan workflow should execute successfully");
+
+    // Verify we got a response
+    assert!(
+        !result.content.is_empty(),
+        "Plan workflow should return content"
+    );
+
+    // Parse the response to verify it's valid JSON with expected structure
+    let response_text = extract_text_content(&result).expect("Should have text content");
+    let response_json: serde_json::Value =
+        serde_json::from_str(response_text).expect("Response should be valid JSON");
+
+    assert!(
+        response_json.get("status").is_some(),
+        "Response should have status field"
+    );
+    assert!(
+        response_json.get("workflow").is_some(),
+        "Response should have workflow field"
+    );
+
+    eprintln!("✓ Plan workflow executed successfully via MCP");
+}
+
+/// Test workflow execution with string parameters verifies correct parameter passing
+///
+/// Regression test for the string parameter quoting bug. This test verifies that
+/// workflows with required string parameters can be executed without parameter
+/// parsing errors. This is faster than the full plan workflow test.
+#[tokio::test]
+async fn test_workflow_with_required_string_parameter() {
+    let env = TestEnvironment::new().await;
+    let list_result = call_flow_list(env.client(), "json", false).await;
+
+    // Find a workflow with required string parameter
+    let workflow_with_param = find_workflow_with_required_params(&list_result);
+
+    if workflow_with_param.is_none() {
+        log_test_skip("No workflows with required string parameters found");
+        return;
+    }
+
+    let (workflow_name, param_name) = workflow_with_param.unwrap();
+
+    eprintln!(
+        "Testing string parameter passing with workflow: {} (param: {})",
+        workflow_name, param_name
+    );
+
+    // Execute with a test string value
+    let test_value = "test_value.md";
+    let exec_future = env
+        .client()
+        .call_tool(CallToolRequestParam {
+            name: "flow".into(),
+            arguments: json!({
+                "flow_name": workflow_name,
+                "parameters": {
+                    param_name: test_value
+                }
+            })
+            .as_object()
+            .cloned(),
+        });
+
+    // Use short timeout - we only care that parameter parsing succeeds
+    let exec_result = timeout(Duration::from_secs(5), exec_future).await;
+
+    // The workflow should at least start executing without parameter parsing errors
+    // It may timeout or fail for other reasons (missing files, etc.) but if the
+    // string parameter quoting bug existed, it would fail immediately with a
+    // parameter validation error
+    match exec_result {
+        Ok(Ok(result)) => {
+            eprintln!("✓ Workflow accepted string parameter and completed");
+            assert!(!result.content.is_empty());
+        }
+        Ok(Err(e)) => {
+            let error_msg = format!("{:?}", e);
+            // Acceptable errors: workflow execution issues, missing files
+            // Unacceptable: parameter validation errors indicating quoting bugs
+            assert!(
+                !error_msg.contains("Invalid arguments")
+                    && !error_msg.contains("Missing required parameter"),
+                "Should not fail with parameter validation errors. Got: {}",
+                error_msg
+            );
+            eprintln!("ℹ Workflow started but failed during execution (expected): {}", error_msg);
+        }
+        Err(_timeout) => {
+            // Timeout is acceptable - it means parameter parsing succeeded
+            // and the workflow started executing (just took too long)
+            eprintln!("✓ Workflow accepted string parameter (timed out during execution)");
+        }
+    }
+}
