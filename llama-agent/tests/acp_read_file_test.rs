@@ -6,7 +6,6 @@
 //! 3. Calls fs/read_text_file via ext_method
 //! 4. Verifies the returned content matches
 
-#[cfg(feature = "acp")]
 mod acp_read_file_tests {
     use llama_agent::acp::AcpServer;
     use llama_agent::AgentServer;

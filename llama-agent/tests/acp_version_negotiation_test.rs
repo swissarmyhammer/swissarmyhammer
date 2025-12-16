@@ -6,7 +6,6 @@
 //! - Client's requested version is used if supported
 //! - Agent responds with the requested version in InitializeResponse
 
-#[cfg(feature = "acp")]
 mod version_negotiation_tests {
     use agent_client_protocol::{Agent, ProtocolVersion};
     use llama_agent::acp::AcpServer;

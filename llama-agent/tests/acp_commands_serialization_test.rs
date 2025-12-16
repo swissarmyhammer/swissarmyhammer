@@ -3,7 +3,6 @@
 //! This test verifies that the agent_client_protocol crate's command
 //! structures serialize field names according to the ACP specification (camelCase).
 
-#[cfg(feature = "acp")]
 mod acp_commands_serialization_tests {
     use agent_client_protocol::{
         AvailableCommand, AvailableCommandInput, UnstructuredCommandInput,

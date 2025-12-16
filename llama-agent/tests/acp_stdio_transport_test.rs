@@ -3,7 +3,6 @@
 //! This test verifies that the ACP server can be created and has stdio transport capability.
 //! The actual stdio methods are tested via the example binary which successfully compiles.
 
-#[cfg(feature = "acp")]
 mod stdio_tests {
     use llama_agent::acp::test_utils::create_test_acp_server;
     use std::sync::Arc;

@@ -511,7 +511,7 @@ impl RequestQueue {
     ///
     /// Returns Ok(()) if capability is available or if not in ACP mode.
     /// Returns Err if in ACP mode and capability is missing.
-    #[cfg(feature = "acp")]
+
     fn check_file_read_capability(session: &Session) -> Result<(), QueueError> {
         if let Some(ref caps) = session.client_capabilities {
             if !caps.fs.read_text_file {
@@ -528,7 +528,7 @@ impl RequestQueue {
     ///
     /// Returns Ok(()) if capability is available or if not in ACP mode.
     /// Returns Err if in ACP mode and capability is missing.
-    #[cfg(feature = "acp")]
+
     fn check_file_write_capability(session: &Session) -> Result<(), QueueError> {
         if let Some(ref caps) = session.client_capabilities {
             if !caps.fs.write_text_file {
@@ -635,7 +635,7 @@ impl RequestQueue {
             let should_load_cache = if tokens_file.exists() {
                 info!("Worker {} found token metadata file", worker_id);
                 // Check file read capability before reading token metadata
-                #[cfg(feature = "acp")]
+
                 Self::check_file_read_capability(session)?;
 
                 // Read the cached token sequence
@@ -669,17 +669,13 @@ impl RequestQueue {
                                 worker_id
                             );
                             // Check file write capability before deleting token metadata
-                            #[cfg(feature = "acp")]
+
                             if Self::check_file_write_capability(session).is_err() {
                                 warn!(
                                     "Worker {} skipping token metadata deletion due to capability check",
                                     worker_id
                                 );
                             } else {
-                                let _ = std::fs::remove_file(&tokens_file);
-                            }
-                            #[cfg(not(feature = "acp"))]
-                            {
                                 let _ = std::fs::remove_file(&tokens_file);
                             }
 
@@ -695,17 +691,13 @@ impl RequestQueue {
                             worker_id, e
                         );
                         // Check file write capability before deleting token metadata
-                        #[cfg(feature = "acp")]
+
                         if Self::check_file_write_capability(session).is_err() {
                             warn!(
                                 "Worker {} skipping token metadata deletion due to capability check",
                                 worker_id
                             );
                         } else {
-                            let _ = std::fs::remove_file(&tokens_file);
-                        }
-                        #[cfg(not(feature = "acp"))]
-                        {
                             let _ = std::fs::remove_file(&tokens_file);
                         }
 
@@ -932,7 +924,7 @@ impl RequestQueue {
                     );
 
                     // Check file write capability before saving token metadata
-                    #[cfg(feature = "acp")]
+
                     if let Err(e) = Self::check_file_write_capability(session) {
                         warn!(
                             "Worker {} skipping token metadata save due to capability check: {}",
@@ -1221,6 +1213,7 @@ mod tests {
 
     fn create_test_session() -> Session {
         Session {
+            cwd: std::path::PathBuf::from("/tmp"),
             id: SessionId::new(),
             messages: vec![Message {
                 role: MessageRole::User,
@@ -1238,12 +1231,12 @@ mod tests {
             transcript_path: None,
             context_state: None,
             template_token_count: None,
-            #[cfg(feature = "acp")]
+
             todos: Vec::new(),
-            #[cfg(feature = "acp")]
+
             available_commands: Vec::new(),
             current_mode: None,
-            #[cfg(feature = "acp")]
+
             client_capabilities: None,
         }
     }

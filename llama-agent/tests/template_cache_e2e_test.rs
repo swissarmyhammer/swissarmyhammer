@@ -529,6 +529,7 @@ async fn test_concurrent_sessions_cache_sharing() {
 /// Create a test session with standard configuration.
 fn create_test_session() -> Session {
     Session {
+        cwd: std::path::PathBuf::from("/tmp"),
         id: SessionId::new(),
         messages: vec![Message {
             role: MessageRole::System,
@@ -554,12 +555,12 @@ fn create_test_session() -> Session {
         transcript_path: None,
         context_state: None,
         template_token_count: None,
-        #[cfg(feature = "acp")]
+
         todos: Vec::new(),
-        #[cfg(feature = "acp")]
+
         available_commands: Vec::new(),
         current_mode: None,
-        #[cfg(feature = "acp")]
+
         client_capabilities: None,
     }
 }

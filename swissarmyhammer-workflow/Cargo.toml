@@ -115,7 +115,7 @@ tower-http = { workspace = true, features = ["trace"] }
 hyper = { workspace = true }
 
 # LlamaAgent integration for local AI execution
-llama-agent = { workspace = true, features = ["acp"] }
+llama-agent = { workspace = true }
 
 # Progress bars and user interface
 indicatif = { workspace = true }

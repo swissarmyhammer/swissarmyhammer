@@ -5,6 +5,7 @@
 
 use crate::types::*;
 use serde_json::json;
+use std::path::PathBuf;
 use std::time::SystemTime;
 
 /// Create a basic test session with no messages, tools, or MCP servers.
@@ -29,9 +30,8 @@ use std::time::SystemTime;
 /// // Use session for validation testing...
 /// ```
 pub fn create_empty_session() -> Session {
-            cwd: PathBuf::from("/tmp"),
     Session {
-            cwd: PathBuf::from("/tmp"),
+        cwd: PathBuf::from("/tmp"),
         id: SessionId::new(),
         messages: vec![],
         mcp_servers: vec![],
@@ -43,12 +43,9 @@ pub fn create_empty_session() -> Session {
         transcript_path: None,
         context_state: None,
         template_token_count: None,
-        #[cfg(feature = "acp")]
         todos: Vec::new(),
-        #[cfg(feature = "acp")]
         available_commands: Vec::new(),
         current_mode: None,
-        #[cfg(feature = "acp")]
         client_capabilities: None,
     }
 }
@@ -115,9 +112,8 @@ pub fn create_test_message(content: &str) -> Message {
 /// assert_eq!(session.messages.len(), 1);
 /// ```
 pub fn create_session_with_message(content: &str) -> Session {
-            cwd: PathBuf::from("/tmp"),
     Session {
-            cwd: PathBuf::from("/tmp"),
+        cwd: PathBuf::from("/tmp"),
         id: SessionId::new(),
         messages: vec![create_test_message(content)],
         mcp_servers: vec![],
@@ -129,12 +125,9 @@ pub fn create_session_with_message(content: &str) -> Session {
         transcript_path: None,
         context_state: None,
         template_token_count: None,
-        #[cfg(feature = "acp")]
         todos: Vec::new(),
-        #[cfg(feature = "acp")]
         available_commands: Vec::new(),
         current_mode: None,
-        #[cfg(feature = "acp")]
         client_capabilities: None,
     }
 }
@@ -165,9 +158,8 @@ pub fn create_session_with_message(content: &str) -> Session {
 /// assert_eq!(session.messages.len(), 2);
 /// ```
 pub fn create_session_with_messages(messages: Vec<Message>) -> Session {
-            cwd: PathBuf::from("/tmp"),
     Session {
-            cwd: PathBuf::from("/tmp"),
+        cwd: PathBuf::from("/tmp"),
         id: SessionId::new(),
         messages,
         mcp_servers: vec![],
@@ -179,12 +171,9 @@ pub fn create_session_with_messages(messages: Vec<Message>) -> Session {
         transcript_path: None,
         context_state: None,
         template_token_count: None,
-        #[cfg(feature = "acp")]
         todos: Vec::new(),
-        #[cfg(feature = "acp")]
         available_commands: Vec::new(),
         current_mode: None,
-        #[cfg(feature = "acp")]
         client_capabilities: None,
     }
 }
@@ -216,9 +205,8 @@ pub fn create_session_with_messages(messages: Vec<Message>) -> Session {
 /// assert_eq!(session.available_tools.len(), 1);
 /// ```
 pub fn create_session_with_tools(tools: Vec<ToolDefinition>) -> Session {
-            cwd: PathBuf::from("/tmp"),
     Session {
-            cwd: PathBuf::from("/tmp"),
+        cwd: PathBuf::from("/tmp"),
         id: SessionId::new(),
         messages: vec![],
         mcp_servers: vec![],
@@ -230,12 +218,9 @@ pub fn create_session_with_tools(tools: Vec<ToolDefinition>) -> Session {
         transcript_path: None,
         context_state: None,
         template_token_count: None,
-        #[cfg(feature = "acp")]
         todos: Vec::new(),
-        #[cfg(feature = "acp")]
         available_commands: Vec::new(),
         current_mode: None,
-        #[cfg(feature = "acp")]
         client_capabilities: None,
     }
 }

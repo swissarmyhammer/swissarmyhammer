@@ -16,9 +16,6 @@ use crate::types::messages::{Message, MessageRole, SimpleTokenCounter, TokenCoun
 use crate::types::prompts::PromptDefinition;
 use crate::types::tools::ToolDefinition;
 
-#[cfg(feature = "acp")]
-use swissarmyhammer_todo::TodoItem;
-
 /// Context state tracking for incremental prompt processing.
 ///
 /// This struct tracks the state of processed tokens to enable efficient incremental
@@ -288,8 +285,7 @@ pub struct Session {
     /// - Todos are created when the agent calls `mcp__swissarmyhammer__todo_create`
     /// - Todos are marked complete when `mcp__swissarmyhammer__todo_mark_complete` is called
     /// - The list is maintained per-session to isolate task tracking between different conversations
-    #[cfg(feature = "acp")]
-    pub todos: Vec<TodoItem>,
+    pub todos: Vec<swissarmyhammer_todo::TodoItem>,
     /// Available commands that can be invoked during this session
     ///
     /// Tracks slash commands that are available to the user in this session.
@@ -306,7 +302,6 @@ pub struct Session {
     /// When ACP feature is enabled, changes to available_commands trigger
     /// AvailableCommandsUpdate notifications to inform clients of the current
     /// command set.
-    #[cfg(feature = "acp")]
     pub available_commands: Vec<agent_client_protocol::AvailableCommand>,
     /// Current session mode identifier for ACP current mode updates
     ///
@@ -342,7 +337,6 @@ pub struct Session {
     /// When capabilities are not available (None), file operations should not be performed
     /// in ACP contexts. For non-ACP contexts (MCP mode), this field is None and operations
     /// proceed without capability checks.
-    #[cfg(feature = "acp")]
     pub client_capabilities: Option<agent_client_protocol::ClientCapabilities>,
 }
 

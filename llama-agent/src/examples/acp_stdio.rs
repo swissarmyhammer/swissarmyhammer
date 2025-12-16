@@ -19,22 +19,20 @@
 //! To integrate with an editor, configure it to spawn this binary and communicate
 //! via stdin/stdout using the Agent Client Protocol.
 
-#[cfg(feature = "acp")]
 use anyhow::Result;
-#[cfg(feature = "acp")]
+
 use llama_agent::acp::{AcpConfig, AcpServer};
-#[cfg(feature = "acp")]
+
 use llama_agent::agent::AgentServer;
-#[cfg(feature = "acp")]
+
 use llama_agent::types::{
     AgentConfig, ModelConfig, ModelSource, ParallelConfig, QueueConfig, RetryConfig, SessionConfig,
 };
-#[cfg(feature = "acp")]
+
 use std::sync::Arc;
-#[cfg(feature = "acp")]
+
 use tracing_subscriber::{self, EnvFilter};
 
-#[cfg(feature = "acp")]
 #[tokio::main]
 async fn main() -> Result<()> {
     // Initialize tracing to stderr (stdout is reserved for JSON-RPC)
@@ -120,11 +118,4 @@ async fn main() -> Result<()> {
     tracing::info!("ACP server shutdown complete");
 
     Ok(())
-}
-
-#[cfg(not(feature = "acp"))]
-fn main() {
-    eprintln!("This example requires the 'acp' feature to be enabled.");
-    eprintln!("Run with: cargo run --example acp_stdio --features acp");
-    std::process::exit(1);
 }

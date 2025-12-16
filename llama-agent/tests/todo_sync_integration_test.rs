@@ -3,7 +3,6 @@
 //! This test suite verifies that session todos stay synchronized with TodoStorage
 //! when using the Agent's sync_session_todos method.
 
-#[cfg(feature = "acp")]
 mod acp_tests {
     use llama_agent::types::SessionConfig;
     use llama_agent::SessionManager;

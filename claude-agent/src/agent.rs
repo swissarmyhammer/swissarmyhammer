@@ -3036,32 +3036,28 @@ impl Agent for ClaudeAgent {
 
         tracing::info!("Stored client capabilities for ACP compliance");
 
-        let response = InitializeResponse {
-            agent_capabilities: self.capabilities.clone(),
-            // AUTHENTICATION ARCHITECTURE DECISION:
-            // Claude Code is a local development tool that runs entirely on the user's machine.
-            // It does not require authentication because:
-            // 1. It operates within the user's own development environment
-            // 2. It does not connect to external services requiring credentials
-            // 3. It has no multi-user access control requirements
-            // 4. All operations are performed with the user's existing local permissions
-            //
-            // Therefore, we intentionally declare NO authentication methods (empty array).
-            // This is an architectural decision - do not add authentication methods.
-            // If remote authentication is needed in the future, it should be a separate feature.
-            auth_methods: vec![],
-            protocol_version: self.negotiate_protocol_version(&request.protocol_version),
-            agent_info: Some(agent_client_protocol::Implementation {
-                name: "claude-agent".to_string(),
-                title: Some(format!("Claude Agent v{}", env!("CARGO_PKG_VERSION"))),
-                version: env!("CARGO_PKG_VERSION").to_string(),
-            }),
-            meta: Some(serde_json::json!({
-                "agent_name": "Claude Agent",
-                "version": env!("CARGO_PKG_VERSION"),
-                "protocol_supported": "1.0.0"
-            })),
-        };
+        // AUTHENTICATION ARCHITECTURE DECISION:
+        // Claude Code is a local development tool that runs entirely on the user's machine.
+        // It does not require authentication because:
+        // 1. It operates within the user's own development environment
+        // 2. It does not connect to external services requiring credentials
+        // 3. It has no multi-user access control requirements
+        // 4. All operations are performed with the user's existing local permissions
+        //
+        // Therefore, we intentionally declare NO authentication methods (empty array).
+        // This is an architectural decision - do not add authentication methods.
+        // If remote authentication is needed in the future, it should be a separate feature.
+
+        let agent_info = agent_client_protocol::Implementation::new(
+            "claude-agent",
+            env!("CARGO_PKG_VERSION")
+        )
+        .title(format!("Claude Agent v{}", env!("CARGO_PKG_VERSION")));
+
+        let response = InitializeResponse::new(self.negotiate_protocol_version(&request.protocol_version))
+            .agent_capabilities(self.capabilities.clone())
+            .auth_methods(vec![])
+            .agent_info(agent_info);
 
         self.log_response("initialize", &response);
         Ok(response)
@@ -4364,9 +4360,7 @@ impl ClaudeAgent {
                                 agent_client_protocol::RequestPermissionOutcome::Cancelled => {
                                     crate::tools::PermissionOutcome::Cancelled
                                 }
-                                agent_client_protocol::RequestPermissionOutcome::Selected {
-                                    option_id,
-                                } => {
+                                agent_client_protocol::RequestPermissionOutcome::Selected(option_id) => {
                                     let option_id_str = option_id.0.to_string();
 
                                     // Store preference if it's an "always" decision
@@ -4650,7 +4644,7 @@ impl ClaudeAgent {
         );
 
         // Return WriteTextFileResponse as per ACP specification
-        Ok(WriteTextFileResponse { meta: None })
+        Ok(WriteTextFileResponse::default())
     }
 
     /// Handle terminal/output ACP extension method
@@ -5338,11 +5332,9 @@ impl ClaudeAgent {
         // Get the session to access its working directory
         let session = self
             .session_manager
-            .get_session(&crate::session::SessionId::from_string(
-                session_id.to_string(),
-            )?)
-            .map_err(|e| crate::error::AgentError::SessionNotFound(session_id.to_string()))?
-            .ok_or_else(|| crate::error::AgentError::SessionNotFound(session_id.to_string()))?;
+            .get_session(&session_id.to_string().parse()?)
+            .map_err(|e| crate::error::AgentError::Session(format!("Session not found: {}", session_id)))?
+            .ok_or_else(|| crate::error::AgentError::Session(format!("Session not found: {}", session_id)))?;
 
         // Create TodoStorage using the session's working directory
         let todo_storage = swissarmyhammer_todo::TodoStorage::new_with_working_dir(session.cwd)
@@ -5486,7 +5478,7 @@ impl ClaudeAgent {
         };
 
         // Update the session's todos vector
-        let session_id_parsed = crate::session::SessionId::from_string(session_id.to_string())?;
+        let session_id_parsed: crate::session::SessionId = session_id.to_string().parse()?;
         self.session_manager
             .update_session(&session_id_parsed, |session| {
                 session.todos = todo_ids;
@@ -8587,7 +8579,7 @@ mod tests {
         };
 
         let result = agent.handle_write_text_file(params).await.unwrap();
-        assert_eq!(result, WriteTextFileResponse { meta: None });
+        assert_eq!(result, WriteTextFileResponse::default());
 
         // Verify the file content was overwritten
         let written_content = tokio::fs::read_to_string(temp_file.path()).await.unwrap();
@@ -8612,7 +8604,7 @@ mod tests {
         };
 
         let result = agent.handle_write_text_file(params).await.unwrap();
-        assert_eq!(result, WriteTextFileResponse { meta: None });
+        assert_eq!(result, WriteTextFileResponse::default());
 
         // Verify the parent directories were created
         assert!(nested_path.parent().unwrap().exists());
@@ -8653,7 +8645,7 @@ mod tests {
         };
 
         let result = agent.handle_write_text_file(params).await.unwrap();
-        assert_eq!(result, WriteTextFileResponse { meta: None });
+        assert_eq!(result, WriteTextFileResponse::default());
 
         // Verify empty file was created
         let written_content = tokio::fs::read_to_string(&file_path).await.unwrap();
@@ -8680,7 +8672,7 @@ mod tests {
         };
 
         let result = agent.handle_write_text_file(params).await.unwrap();
-        assert_eq!(result, WriteTextFileResponse { meta: None });
+        assert_eq!(result, WriteTextFileResponse::default());
 
         // Verify large content was written correctly
         let written_content = tokio::fs::read_to_string(&file_path).await.unwrap();
@@ -8706,7 +8698,7 @@ mod tests {
         };
 
         let result = agent.handle_write_text_file(params).await.unwrap();
-        assert_eq!(result, WriteTextFileResponse { meta: None });
+        assert_eq!(result, WriteTextFileResponse::default());
 
         // Verify unicode content was written correctly
         let written_content = tokio::fs::read_to_string(&file_path).await.unwrap();

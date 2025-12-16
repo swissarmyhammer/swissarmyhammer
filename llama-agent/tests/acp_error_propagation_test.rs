@@ -12,7 +12,6 @@
 //! - Error data contains relevant details
 //! - Errors convert properly between layers
 
-#[cfg(feature = "acp")]
 mod acp_error_propagation_tests {
     use llama_agent::acp::error::{
         ConfigError, PermissionError, ServerError, SessionError, TerminalError,

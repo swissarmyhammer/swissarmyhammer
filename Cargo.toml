@@ -14,6 +14,7 @@ members = [
     "swissarmyhammer-todo",
     "swissarmyhammer-templating",
     "swissarmyhammer-prompts",
+    "swissarmyhammer-modes",
     "swissarmyhammer-agent-executor",
     "swissarmyhammer-rules",
     "swissarmyhammer-workflow",

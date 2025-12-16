@@ -268,23 +268,24 @@ impl ProtocolTranslator {
                                 }
                             };
 
-                            let tool_call = ToolCall {
-                                id: ToolCallId::new(id.as_str()),
-                                title: name.clone(),
-                                kind: Self::infer_tool_kind(name),
-                                status,
-                                content: vec![],
-                                locations: vec![],
-                                raw_input: Some(input.clone()),
-                                raw_output: None,
-                                meta,
+                            let tool_call = ToolCall::new(
+                                ToolCallId::new(id.as_str()),
+                                name.clone()
+                            )
+                            .kind(Self::infer_tool_kind(name))
+                            .status(status)
+                            .raw_input(Some(input.clone()));
+
+                            let tool_call = if let Some(meta_map) = meta {
+                                tool_call.meta(meta_map)
+                            } else {
+                                tool_call
                             };
 
-                            return Ok(Some(SessionNotification {
-                                session_id: session_id.clone(),
-                                update: SessionUpdate::ToolCall(tool_call),
-                                meta: None,
-                            }));
+                            return Ok(Some(SessionNotification::new(
+                                session_id.clone(),
+                                SessionUpdate::ToolCall(tool_call)
+                            )));
                         }
                         Some("text") => {
                             let text = first_item.get("text").and_then(|t| t.as_str()).ok_or_else(
@@ -350,13 +351,11 @@ impl ProtocolTranslator {
                                         if let Some(content_str) = content_value.as_str() {
                                             // Simple string content (legacy format)
                                             Some(vec![
-                                                agent_client_protocol::ToolCallContent::Content {
-                                                    content: ContentBlock::Text(TextContent {
-                                                        text: content_str.to_string(),
-                                                        annotations: None,
-                                                        meta: None,
-                                                    }),
-                                                },
+                                                agent_client_protocol::ToolCallContent::Content(
+                                                    agent_client_protocol::Content::new(
+                                                        ContentBlock::Text(TextContent::new(content_str.to_string()))
+                                                    )
+                                                ),
                                             ])
                                         } else if let Some(content_array) = content_value.as_array()
                                         {
@@ -373,13 +372,11 @@ impl ProtocolTranslator {
                                                                 .and_then(|t| t.as_str())
                                                             {
                                                                 result.push(
-                                                                    agent_client_protocol::ToolCallContent::Content {
-                                                                        content: ContentBlock::Text(TextContent {
-                                                                            text: text.to_string(),
-                                                                            annotations: None,
-                                                                            meta: None,
-                                                                        }),
-                                                                    },
+                                                                    agent_client_protocol::ToolCallContent::Content(
+                                                                        agent_client_protocol::Content::new(
+                                                                            ContentBlock::Text(TextContent::new(text.to_string()))
+                                                                        )
+                                                                    ),
                                                                 );
                                                             }
                                                         }

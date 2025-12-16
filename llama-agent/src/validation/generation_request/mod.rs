@@ -25,6 +25,7 @@ mod integration_tests {
 
         // Create a realistic session
         let session = Session {
+            cwd: std::path::PathBuf::from("/tmp"),
             id: SessionId::new(),
             messages: vec![Message {
                 role: MessageRole::User,
@@ -42,12 +43,12 @@ mod integration_tests {
             transcript_path: None,
             context_state: None,
             template_token_count: None,
-            #[cfg(feature = "acp")]
+
             todos: Vec::new(),
-            #[cfg(feature = "acp")]
+
             available_commands: Vec::new(),
             current_mode: None,
-            #[cfg(feature = "acp")]
+
             client_capabilities: None,
         };
 
@@ -71,6 +72,7 @@ mod integration_tests {
         let validator = CompositeGenerationRequestValidator::new();
 
         let session = Session {
+            cwd: std::path::PathBuf::from("/tmp"),
             id: SessionId::new(),
             messages: vec![
                 Message {
@@ -104,12 +106,12 @@ mod integration_tests {
             transcript_path: None,
             context_state: None,
             template_token_count: None,
-            #[cfg(feature = "acp")]
+            
             todos: Vec::new(),
-            #[cfg(feature = "acp")]
+            
             available_commands: Vec::new(),
             current_mode: None,
-        #[cfg(feature = "acp")]
+        
         client_capabilities: None,
         };
 
@@ -134,6 +136,7 @@ mod integration_tests {
 
         // Create session with no messages AND suspicious content in a hypothetical message
         let session = Session {
+            cwd: std::path::PathBuf::from("/tmp"),
             id: SessionId::new(),
             messages: vec![], // Empty messages - should fail session validation first
             mcp_servers: vec![],
@@ -145,12 +148,12 @@ mod integration_tests {
             transcript_path: None,
             context_state: None,
             template_token_count: None,
-            #[cfg(feature = "acp")]
+
             todos: Vec::new(),
-            #[cfg(feature = "acp")]
+
             available_commands: Vec::new(),
             current_mode: None,
-            #[cfg(feature = "acp")]
+
             client_capabilities: None,
         };
 
@@ -185,6 +188,7 @@ mod integration_tests {
 
         // Test with message that's too long for the custom config
         let session = Session {
+            cwd: std::path::PathBuf::from("/tmp"),
             id: SessionId::new(),
             messages: vec![Message {
                 role: MessageRole::User,
@@ -202,12 +206,12 @@ mod integration_tests {
             transcript_path: None,
             context_state: None,
             template_token_count: None,
-            #[cfg(feature = "acp")]
+            
             todos: Vec::new(),
-            #[cfg(feature = "acp")]
+            
             available_commands: Vec::new(),
             current_mode: None,
-        #[cfg(feature = "acp")]
+        
         client_capabilities: None,
         };
 

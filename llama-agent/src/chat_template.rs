@@ -1108,6 +1108,7 @@ mod qwen3coder_model_integration {
     /// Create realistic session with comprehensive tool definitions for testing
     fn create_qwen3coder_session_with_tools() -> Session {
         Session {
+            cwd: std::path::PathBuf::from("/tmp"),
             id: SessionId::new(),
             messages: vec![
                 Message {
@@ -1189,12 +1190,12 @@ mod qwen3coder_model_integration {
             transcript_path: None,
             context_state: None,
             template_token_count: None,
-            #[cfg(feature = "acp")]
+            
             todos: Vec::new(),
-            #[cfg(feature = "acp")]
+            
             available_commands: Vec::new(),
             current_mode: None,
-        #[cfg(feature = "acp")]
+        
         client_capabilities: None,
         }
     }
@@ -1651,6 +1652,7 @@ mod qwen3coder_integration_tests {
     /// Create a realistic Qwen3Coder session with comprehensive tool definitions
     fn create_qwen3coder_session() -> Session {
         Session {
+            cwd: std::path::PathBuf::from("/tmp"),
             id: SessionId::new(),
             messages: vec![
                 Message {
@@ -1781,12 +1783,12 @@ mod qwen3coder_integration_tests {
             transcript_path: None,
             context_state: None,
             template_token_count: None,
-            #[cfg(feature = "acp")]
+            
             todos: Vec::new(),
-            #[cfg(feature = "acp")]
+            
             available_commands: Vec::new(),
             current_mode: None,
-        #[cfg(feature = "acp")]
+        
         client_capabilities: None,
         }
     }
@@ -4183,6 +4185,7 @@ mod tests {
 
     fn create_test_session() -> Session {
         Session {
+            cwd: std::path::PathBuf::from("/tmp"),
             id: SessionId::new(),
             messages: vec![
                 Message {
@@ -4214,12 +4217,12 @@ mod tests {
             transcript_path: None,
             context_state: None,
             template_token_count: None,
-            #[cfg(feature = "acp")]
+
             todos: Vec::new(),
-            #[cfg(feature = "acp")]
+
             available_commands: Vec::new(),
             current_mode: None,
-            #[cfg(feature = "acp")]
+
             client_capabilities: None,
         }
     }
@@ -6721,6 +6724,7 @@ mod template_only_tests {
 
     fn create_test_session_with_system() -> Session {
         let mut session = Session {
+            cwd: std::path::PathBuf::from("/tmp"),
             id: SessionId::new(),
             messages: vec![Message {
                 role: MessageRole::System,
@@ -6738,12 +6742,12 @@ mod template_only_tests {
             transcript_path: None,
             context_state: None,
             template_token_count: None,
-            #[cfg(feature = "acp")]
+
             todos: Vec::new(),
-            #[cfg(feature = "acp")]
+
             available_commands: Vec::new(),
             current_mode: None,
-            #[cfg(feature = "acp")]
+
             client_capabilities: None,
         };
 

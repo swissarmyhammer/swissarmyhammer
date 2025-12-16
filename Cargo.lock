@@ -6209,6 +6209,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "swissarmyhammer-modes"
+version = "0.3.0"
+dependencies = [
+ "anyhow",
+ "dirs 6.0.0",
+ "include_dir",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "swissarmyhammer-common",
+ "tempfile",
+ "thiserror 1.0.69",
+ "tracing",
+ "walkdir",
+]
+
+[[package]]
 name = "swissarmyhammer-prompts"
 version = "0.3.0"
 dependencies = [

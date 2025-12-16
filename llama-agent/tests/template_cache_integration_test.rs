@@ -45,6 +45,7 @@ async fn test_session_template_caching_workflow() {
 
             // Create a test session
             let _session = Session {
+                cwd: std::path::PathBuf::from("/tmp"),
                 id: SessionId::new(),
                 messages: vec![Message {
                     role: MessageRole::System,
@@ -70,12 +71,12 @@ async fn test_session_template_caching_workflow() {
                 transcript_path: None,
                 context_state: None,
                 template_token_count: None,
-                #[cfg(feature = "acp")]
+
                 todos: Vec::new(),
-                #[cfg(feature = "acp")]
+
                 available_commands: Vec::new(),
                 current_mode: None,
-                #[cfg(feature = "acp")]
+
                 client_capabilities: None,
             };
 
@@ -125,6 +126,7 @@ async fn test_chat_engine_extract_template_components() {
     let engine = ChatTemplateEngine::new();
 
     let session = Session {
+        cwd: std::path::PathBuf::from("/tmp"),
         id: SessionId::new(),
         messages: vec![
             Message {
@@ -161,12 +163,12 @@ async fn test_chat_engine_extract_template_components() {
         transcript_path: None,
         context_state: None,
         template_token_count: None,
-        #[cfg(feature = "acp")]
+
         todos: Vec::new(),
-        #[cfg(feature = "acp")]
+
         available_commands: Vec::new(),
         current_mode: None,
-        #[cfg(feature = "acp")]
+
         client_capabilities: None,
     };
 
@@ -184,6 +186,7 @@ async fn test_chat_engine_extract_template_components_no_tools() {
     let engine = ChatTemplateEngine::new();
 
     let session = Session {
+        cwd: std::path::PathBuf::from("/tmp"),
         id: SessionId::new(),
         messages: vec![Message {
             role: MessageRole::System,
@@ -201,12 +204,12 @@ async fn test_chat_engine_extract_template_components_no_tools() {
         transcript_path: None,
         context_state: None,
         template_token_count: None,
-        #[cfg(feature = "acp")]
+
         todos: Vec::new(),
-        #[cfg(feature = "acp")]
+
         available_commands: Vec::new(),
         current_mode: None,
-        #[cfg(feature = "acp")]
+
         client_capabilities: None,
     };
 
@@ -223,6 +226,7 @@ async fn test_chat_engine_extract_template_with_multiple_system_messages() {
     let engine = ChatTemplateEngine::new();
 
     let session = Session {
+        cwd: std::path::PathBuf::from("/tmp"),
         id: SessionId::new(),
         messages: vec![
             Message {
@@ -249,12 +253,12 @@ async fn test_chat_engine_extract_template_with_multiple_system_messages() {
         transcript_path: None,
         context_state: None,
         template_token_count: None,
-        #[cfg(feature = "acp")]
+
         todos: Vec::new(),
-        #[cfg(feature = "acp")]
+
         available_commands: Vec::new(),
         current_mode: None,
-        #[cfg(feature = "acp")]
+
         client_capabilities: None,
     };
 
@@ -325,6 +329,7 @@ async fn test_session_template_token_count_field() {
     // Test that Session has template_token_count field and it works correctly
 
     let session_without_cache = Session {
+        cwd: std::path::PathBuf::from("/tmp"),
         id: SessionId::new(),
         messages: vec![Message {
             role: MessageRole::System,
@@ -342,18 +347,19 @@ async fn test_session_template_token_count_field() {
         transcript_path: None,
         context_state: None,
         template_token_count: None,
-        #[cfg(feature = "acp")]
+
         todos: Vec::new(),
-        #[cfg(feature = "acp")]
+
         available_commands: Vec::new(),
         current_mode: None,
-        #[cfg(feature = "acp")]
+
         client_capabilities: None,
     };
 
     assert_eq!(session_without_cache.template_token_count, None);
 
     let session_with_cache = Session {
+        cwd: std::path::PathBuf::from("/tmp"),
         id: SessionId::new(),
         messages: vec![Message {
             role: MessageRole::System,
@@ -371,12 +377,12 @@ async fn test_session_template_token_count_field() {
         transcript_path: None,
         context_state: None,
         template_token_count: Some(42),
-        #[cfg(feature = "acp")]
+
         todos: Vec::new(),
-        #[cfg(feature = "acp")]
+
         available_commands: Vec::new(),
         current_mode: None,
-        #[cfg(feature = "acp")]
+
         client_capabilities: None,
     };
 
@@ -409,6 +415,7 @@ async fn test_template_components_extraction_consistency() {
     let engine = ChatTemplateEngine::new();
 
     let session = Session {
+        cwd: std::path::PathBuf::from("/tmp"),
         id: SessionId::new(),
         messages: vec![Message {
             role: MessageRole::System,
@@ -434,12 +441,12 @@ async fn test_template_components_extraction_consistency() {
         transcript_path: None,
         context_state: None,
         template_token_count: None,
-        #[cfg(feature = "acp")]
+
         todos: Vec::new(),
-        #[cfg(feature = "acp")]
+
         available_commands: Vec::new(),
         current_mode: None,
-        #[cfg(feature = "acp")]
+
         client_capabilities: None,
     };
 
@@ -462,6 +469,7 @@ async fn test_template_token_count_optional_behavior() {
     // Test that None vs Some(0) are distinct and meaningful
 
     let session_none = Session {
+        cwd: std::path::PathBuf::from("/tmp"),
         id: SessionId::new(),
         messages: vec![],
         mcp_servers: Vec::new(),
@@ -473,16 +481,17 @@ async fn test_template_token_count_optional_behavior() {
         transcript_path: None,
         context_state: None,
         template_token_count: None,
-        #[cfg(feature = "acp")]
+
         todos: Vec::new(),
-        #[cfg(feature = "acp")]
+
         available_commands: Vec::new(),
         current_mode: None,
-        #[cfg(feature = "acp")]
+
         client_capabilities: None,
     };
 
     let session_zero = Session {
+        cwd: std::path::PathBuf::from("/tmp"),
         id: SessionId::new(),
         messages: vec![],
         mcp_servers: Vec::new(),
@@ -494,12 +503,12 @@ async fn test_template_token_count_optional_behavior() {
         transcript_path: None,
         context_state: None,
         template_token_count: Some(0),
-        #[cfg(feature = "acp")]
+
         todos: Vec::new(),
-        #[cfg(feature = "acp")]
+
         available_commands: Vec::new(),
         current_mode: None,
-        #[cfg(feature = "acp")]
+
         client_capabilities: None,
     };
 

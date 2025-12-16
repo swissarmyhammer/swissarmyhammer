@@ -24,6 +24,7 @@ use tempfile::TempDir;
 #[test]
 fn test_session_creation_without_acp() {
     let session = Session {
+        cwd: std::path::PathBuf::from("/tmp"),
         id: SessionId::new(),
         messages: vec![Message {
             role: MessageRole::User,
@@ -41,12 +42,12 @@ fn test_session_creation_without_acp() {
         transcript_path: None,
         context_state: None,
         template_token_count: None,
-        #[cfg(feature = "acp")]
+
         todos: Vec::new(),
-        #[cfg(feature = "acp")]
+
         available_commands: Vec::new(),
         current_mode: None,
-        #[cfg(feature = "acp")]
+
         client_capabilities: None,
     };
 
@@ -263,6 +264,7 @@ fn test_no_acp_dependencies_required() {
 
     // Create a basic session to verify core functionality
     let session = Session {
+        cwd: std::path::PathBuf::from("/tmp"),
         id: SessionId::new(),
         messages: vec![],
         mcp_servers: vec![],
@@ -274,12 +276,12 @@ fn test_no_acp_dependencies_required() {
         transcript_path: None,
         context_state: None,
         template_token_count: None,
-        #[cfg(feature = "acp")]
+
         todos: Vec::new(),
-        #[cfg(feature = "acp")]
+
         available_commands: Vec::new(),
         current_mode: None,
-        #[cfg(feature = "acp")]
+
         client_capabilities: None,
     };
 

@@ -66,7 +66,7 @@ impl AcpSessionState {
         Self {
             session_id: AcpSessionId::new(llama_session_id.to_string()),
             llama_session_id,
-            mode: SessionMode::Code,
+            mode: SessionMode::Custom("general-purpose".to_string()),
             client_capabilities: ClientCapabilities::default(),
             permissions: PermissionStorage::new(),
             available_commands: Vec::new(),
@@ -82,7 +82,7 @@ impl AcpSessionState {
         Self {
             session_id: AcpSessionId::new(llama_session_id.to_string()),
             llama_session_id,
-            mode: SessionMode::Code,
+            mode: SessionMode::Custom("general-purpose".to_string()),
             client_capabilities,
             permissions: PermissionStorage::new(),
             available_commands: Vec::new(),
@@ -108,7 +108,7 @@ mod tests {
         assert_eq!(state.session_id.0.as_ref(), llama_id.to_string().as_str());
 
         // Verify default values
-        assert!(matches!(state.mode, SessionMode::Code));
+        assert!(matches!(state.mode, SessionMode::Custom(ref s) if s == "general-purpose"));
         assert!(state.available_commands.is_empty());
 
         // Verify permissions storage is initialized
@@ -144,7 +144,7 @@ mod tests {
         // The actual capabilities depend on the external crate's default implementation
 
         // Verify default values
-        assert!(matches!(state.mode, SessionMode::Code));
+        assert!(matches!(state.mode, SessionMode::Custom(ref s) if s == "general-purpose"));
         assert!(state.available_commands.is_empty());
 
         // Verify timestamp is recent
@@ -246,7 +246,7 @@ mod tests {
         let llama_id = LlamaSessionId::new();
         let state = AcpSessionState::new(llama_id);
 
-        assert!(matches!(state.mode, SessionMode::Code));
+        assert!(matches!(state.mode, SessionMode::Custom(ref s) if s == "general-purpose"));
     }
 
     #[test]

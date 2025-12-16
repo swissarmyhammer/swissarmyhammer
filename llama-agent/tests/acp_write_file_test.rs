@@ -6,7 +6,6 @@
 //! 3. Verifies the file was created with correct content
 //! 4. Tests various security and error conditions
 
-#[cfg(feature = "acp")]
 mod acp_write_file_tests {
     use llama_agent::acp::AcpServer;
     use llama_agent::AgentServer;

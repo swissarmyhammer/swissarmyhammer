@@ -165,7 +165,6 @@ pub mod template_cache;
 pub mod types;
 pub mod validation;
 
-#[cfg(feature = "acp")]
 pub mod acp;
 
 #[cfg(any(test, feature = "test-utils"))]
@@ -217,8 +216,7 @@ pub use template_cache::{CacheStats, TemplateCache, TemplateCacheEntry, Template
 /// settings or when integrating with existing rmcp-based infrastructure.
 pub use rmcp::transport::StreamableHttpServerConfig;
 
-// Re-export ACP functionality when feature enabled
-#[cfg(feature = "acp")]
+// Re-export ACP functionality (always available)
 pub use acp::{
     AcpCapabilities, AcpConfig, AcpServer, AcpSessionState, FilesystemSettings, PermissionPolicy,
     PermissionStorage, SessionMode, TerminalSettings,

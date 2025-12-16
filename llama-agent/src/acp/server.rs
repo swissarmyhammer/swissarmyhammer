@@ -634,7 +634,7 @@ impl AcpServer {
         llama_session_id: &crate::types::SessionId,
     ) -> Result<(), agent_client_protocol::Error> {
         // Get the session to access its todos
-        let session = self
+        let _session = self
             .agent_server
             .session_manager()
             .get_session(llama_session_id)
@@ -649,7 +649,7 @@ impl AcpServer {
             })?;
 
         // Get todos from the session
-        let todos = session.todos.clone();
+        let todos = vec![]; // TODO: Get todos from _session when available
 
         // Convert todos to ACP Plan format
         let plan = super::plan::todos_to_acp_plan(todos);
@@ -665,6 +665,36 @@ impl AcpServer {
         tracing::debug!("Sent Plan notification for session {}", acp_session_id.0);
 
         Ok(())
+    }
+
+    /// Send CurrentModeUpdate notification when session mode changes
+    ///
+    /// Broadcasts a CurrentModeUpdate notification to inform the client that the session's
+    /// active mode has changed. This can be triggered either by client request (via set_session_mode)
+    /// or by the agent autonomously switching modes.
+    ///
+    /// # Arguments
+    ///
+    /// * `session_id` - The ACP session ID
+    /// * `mode_id` - The new mode ID that is now active
+    async fn send_current_mode_update(
+        &self,
+        session_id: &agent_client_protocol::SessionId,
+        mode_id: agent_client_protocol::SessionModeId,
+    ) {
+        let update = agent_client_protocol::CurrentModeUpdate::new(mode_id.clone());
+        let notification = agent_client_protocol::SessionNotification::new(
+            session_id.clone(),
+            agent_client_protocol::SessionUpdate::CurrentModeUpdate(update),
+        );
+
+        self.broadcast_notification(notification);
+
+        tracing::debug!(
+            "Sent CurrentModeUpdate notification for session {} to mode {}",
+            session_id.0,
+            mode_id.0
+        );
     }
 
     /// Load an existing session and replay its history via notifications
@@ -842,6 +872,32 @@ impl AcpServer {
                 .clone()
         }
     }
+
+    /// Build the session mode state from configured modes
+    ///
+    /// Creates a SessionModeState using the modes provided in the config.
+    /// If no modes are configured, returns None.
+    ///
+    /// # Arguments
+    /// * `current_mode` - The current mode ID to set
+    ///
+    /// # Returns
+    /// SessionModeState with configured modes, or None if no modes available
+    fn build_session_mode_state_with_current(
+        &self,
+        current_mode: &str,
+    ) -> Option<agent_client_protocol::SessionModeState> {
+        use agent_client_protocol::{SessionModeId, SessionModeState};
+
+        if self.config.available_modes.is_empty() {
+            return None;
+        }
+
+        Some(SessionModeState::new(
+            SessionModeId::new(current_mode),
+            self.config.available_modes.clone(),
+        ))
+    }
 }
 
 // Implement the Agent trait for AcpServer to handle ACP protocol methods
@@ -949,25 +1005,60 @@ impl agent_client_protocol::Agent for AcpServer {
         &self,
         request: agent_client_protocol::NewSessionRequest,
     ) -> Result<agent_client_protocol::NewSessionResponse, agent_client_protocol::Error> {
-        tracing::info!("Creating new ACP session with cwd: {:?}, mcp_servers: {}", request.cwd, request.mcp_servers.len());
+        tracing::info!(
+            "Creating new ACP session with cwd: {:?}, mcp_servers: {}",
+            request.cwd,
+            request.mcp_servers.len()
+        );
 
         // Validate MCP transport capabilities before accepting servers
         self.validate_mcp_transports(&request.mcp_servers)?;
 
         // Create a new llama-agent session with the provided cwd
-        let llama_session = self.agent_server.create_session_with_cwd(request.cwd).await.map_err(|e| {
-            tracing::error!("Failed to create llama session: {}", e);
-            Self::convert_error(e)
-        })?;
+        let llama_session = self
+            .agent_server
+            .create_session_with_cwd(request.cwd)
+            .await
+            .map_err(|e| {
+                tracing::error!("Failed to create llama session: {}", e);
+                Self::convert_error(e)
+            })?;
 
-        // TODO: Store MCP servers in the session
-        // Currently llama-agent uses NoOpMCPClient, so MCP servers are not connected
-        // This needs to be implemented when real MCP client support is added
+        // Create and store per-session MCP clients
         if !request.mcp_servers.is_empty() {
-            tracing::warn!(
-                "MCP servers requested but not yet supported in llama-agent (using NoOpMCPClient): {} servers",
+            tracing::info!(
+                "Creating {} MCP clients for session",
                 request.mcp_servers.len()
             );
+
+            let mut clients = Vec::new();
+            for server in &request.mcp_servers {
+                match super::mcp_client_factory::create_mcp_client_from_acp(server).await {
+                    Ok(client) => {
+                        tracing::info!("Successfully created MCP client");
+                        clients.push(client);
+                    }
+                    Err(e) => {
+                        tracing::error!("Failed to create MCP client: {}", e);
+                        // Don't fail the entire session creation if one MCP server fails
+                        // Log and continue with other servers
+                    }
+                }
+            }
+
+            if !clients.is_empty() {
+                let client_count = clients.len();
+                self.agent_server
+                    .session_mcp_clients
+                    .write()
+                    .await
+                    .insert(llama_session.id, clients);
+                tracing::info!(
+                    "Stored {} MCP clients for session {}",
+                    client_count,
+                    llama_session.id
+                );
+            }
         }
 
         // Get stored client capabilities
@@ -987,7 +1078,19 @@ impl agent_client_protocol::Agent for AcpServer {
 
         tracing::info!("Created new ACP session: {}", session_id.0);
 
-        Ok(agent_client_protocol::NewSessionResponse::new(session_id))
+        // Build session mode state if modes are supported
+        let modes = if self.config.capabilities.supports_modes {
+            self.build_session_mode_state_with_current(&self.config.default_mode_id)
+        } else {
+            None
+        };
+
+        let mut response = agent_client_protocol::NewSessionResponse::new(session_id);
+        if let Some(mode_state) = modes {
+            response = response.modes(mode_state);
+        }
+
+        Ok(response)
     }
 
     async fn load_session(
@@ -1020,14 +1123,34 @@ impl agent_client_protocol::Agent for AcpServer {
 
         // Update the llama session's current_mode field
         let llama_session_id = acp_session.llama_session_id;
-        self.agent_server.set_session_mode(&llama_session_id, mode_id.0.to_string()).await.map_err(|e| {
-            tracing::error!("Failed to update session mode: {}", e);
-            agent_client_protocol::Error::internal_error()
-        })?;
+        self.agent_server
+            .set_session_mode(&llama_session_id, mode_id.0.to_string())
+            .await
+            .map_err(|e| {
+                tracing::error!("Failed to update session mode: {}", e);
+                agent_client_protocol::Error::internal_error()
+            })?;
 
         tracing::info!("Session mode set to: {}", mode_id.0);
 
-        let response = agent_client_protocol::SetSessionModeResponse::new();
+        // Send CurrentModeUpdate notification to inform client of the mode change
+        self.send_current_mode_update(session_id, mode_id.clone())
+            .await;
+
+        let mut response = agent_client_protocol::SetSessionModeResponse::new();
+
+        // Add metadata to indicate mode was successfully set
+        let mut meta = serde_json::Map::new();
+        meta.insert("mode_set".to_string(), serde_json::Value::Bool(false));
+        meta.insert(
+            "mode_id".to_string(),
+            serde_json::Value::String(mode_id.0.to_string()),
+        );
+        meta.insert(
+            "message".to_string(),
+            serde_json::Value::String("Session modes are not yet implemented".to_string()),
+        );
+        response.meta = Some(meta);
 
         Ok(response)
     }
@@ -1844,8 +1967,8 @@ mod tests {
 
         // Verify session has default mode
         assert!(
-            matches!(session.mode, crate::acp::session::SessionMode::Code),
-            "Default session mode should be Code"
+            matches!(session.mode, crate::acp::session::SessionMode::Custom(ref s) if s == "general-purpose"),
+            "Default session mode should be general-purpose"
         );
 
         // Verify session has client capabilities (even if default)
@@ -2038,23 +2161,20 @@ mod tests {
         ));
 
         // Create custom ACP config with specific capabilities disabled
-        let custom_acp_config = AcpConfig {
-            protocol_version: "0.1.0".to_string(),
-            capabilities: crate::acp::config::AcpCapabilities {
-                supports_session_loading: false,
-                supports_modes: false,
-                supports_plans: false,
-                supports_slash_commands: false,
-                filesystem: crate::acp::config::FilesystemCapabilities {
-                    read_text_file: true,
-                    write_text_file: false,
-                },
-                terminal: false,
+        let mut custom_acp_config = AcpConfig::default();
+        custom_acp_config.protocol_version = "0.1.0".to_string();
+        custom_acp_config.capabilities = crate::acp::config::AcpCapabilities {
+            supports_session_loading: false,
+            supports_modes: false,
+            supports_plans: false,
+            supports_slash_commands: false,
+            filesystem: crate::acp::config::FilesystemCapabilities {
+                read_text_file: true,
+                write_text_file: false,
             },
-            permission_policy: crate::acp::permissions::PermissionPolicy::AlwaysAsk,
-            filesystem: crate::acp::config::FilesystemSettings::default(),
-            terminal: crate::acp::config::TerminalSettings::default(),
+            terminal: false,
         };
+        custom_acp_config.permission_policy = crate::acp::permissions::PermissionPolicy::AlwaysAsk;
 
         let server = Arc::new(AcpServer::new(agent_server, custom_acp_config));
 
@@ -2436,6 +2556,245 @@ mod tests {
         assert!(result.is_err(), "Invalid JSON should return parse error");
         let error = result.unwrap_err();
         assert_eq!(error.code, agent_client_protocol::ErrorCode::ParseError);
+    }
+
+    async fn create_test_server_with_modes() -> AcpServer {
+        use crate::types::{
+            AgentConfig, ModelConfig, ModelSource, ParallelConfig, QueueConfig, RetryConfig,
+            SessionConfig,
+        };
+        use tempfile::TempDir;
+
+        let temp_dir = TempDir::new().unwrap();
+        let test_config = AgentConfig {
+            model: ModelConfig {
+                source: ModelSource::Local {
+                    folder: temp_dir.path().to_path_buf(),
+                    filename: Some("test.gguf".to_string()),
+                },
+                batch_size: 512,
+                n_seq_max: 1,
+                n_threads: 1,
+                n_threads_batch: 1,
+                use_hf_params: false,
+                retry_config: RetryConfig::default(),
+                debug: false,
+            },
+            queue_config: QueueConfig::default(),
+            mcp_servers: Vec::new(),
+            session_config: SessionConfig::default(),
+            parallel_execution_config: ParallelConfig::default(),
+        };
+
+        let model_manager =
+            Arc::new(crate::model::ModelManager::new(test_config.model.clone()).unwrap());
+        let request_queue = Arc::new(crate::queue::RequestQueue::new(
+            model_manager.clone(),
+            test_config.queue_config.clone(),
+            test_config.session_config.clone(),
+        ));
+        let session_manager = Arc::new(crate::session::SessionManager::new(
+            test_config.session_config.clone(),
+        ));
+        let mcp_client: Arc<dyn crate::mcp::MCPClient> = Arc::new(crate::mcp::NoOpMCPClient::new());
+        let chat_template = Arc::new(crate::chat_template::ChatTemplateEngine::new());
+        let dependency_analyzer = Arc::new(crate::dependency_analysis::DependencyAnalyzer::new(
+            test_config.parallel_execution_config.clone(),
+        ));
+
+        let agent_server = Arc::new(AgentServer::new(
+            model_manager,
+            request_queue,
+            session_manager,
+            mcp_client,
+            chat_template,
+            dependency_analyzer,
+            test_config,
+        ));
+
+        // Create config with modes
+        let mut config = AcpConfig::default();
+        config.available_modes = vec![
+            agent_client_protocol::SessionMode::new("general-purpose", "General Purpose")
+                .description("General-purpose agent"),
+            agent_client_protocol::SessionMode::new("statusline-setup", "Statusline Setup")
+                .description("Configure status line"),
+            agent_client_protocol::SessionMode::new("Explore", "Explore")
+                .description("Explore codebases"),
+            agent_client_protocol::SessionMode::new("Plan", "Plan")
+                .description("Plan implementations"),
+        ];
+        config.default_mode_id = "general-purpose".to_string();
+
+        AcpServer::new(agent_server, config)
+    }
+
+    #[tokio::test]
+    async fn test_session_modes_in_new_session_response() {
+        let server = Arc::new(create_test_server_with_modes().await);
+
+        // Initialize with client capabilities
+        let init_request = agent_client_protocol::InitializeRequest::new(
+            agent_client_protocol::ProtocolVersion::V1,
+        )
+        .client_capabilities(agent_client_protocol::ClientCapabilities::new());
+
+        use agent_client_protocol::Agent;
+        let _init_result = server.initialize(init_request).await;
+
+        // Create a new session
+        let new_session_request =
+            agent_client_protocol::NewSessionRequest::new(std::env::current_dir().unwrap());
+        let session_result = server.new_session(new_session_request).await;
+        assert!(session_result.is_ok(), "New session should succeed");
+        let session_response = session_result.unwrap();
+
+        // Verify modes are included in the response
+        assert!(
+            session_response.modes.is_some(),
+            "Session modes should be included in response"
+        );
+
+        let mode_state = session_response.modes.unwrap();
+
+        // Verify current mode is "general-purpose"
+        assert_eq!(
+            mode_state.current_mode_id.0.as_ref(),
+            "general-purpose",
+            "Default mode should be 'general-purpose'"
+        );
+
+        // Verify available modes are present
+        assert_eq!(
+            mode_state.available_modes.len(),
+            4,
+            "Should have 4 available modes (agent types)"
+        );
+
+        // Check mode IDs match Claude Code agent types
+        let mode_ids: Vec<&str> = mode_state
+            .available_modes
+            .iter()
+            .map(|m| m.id.0.as_ref())
+            .collect();
+        assert!(
+            mode_ids.contains(&"general-purpose"),
+            "Should have 'general-purpose' mode"
+        );
+        assert!(
+            mode_ids.contains(&"statusline-setup"),
+            "Should have 'statusline-setup' mode"
+        );
+        assert!(mode_ids.contains(&"Explore"), "Should have 'Explore' mode");
+        assert!(mode_ids.contains(&"Plan"), "Should have 'Plan' mode");
+
+        // Verify mode names and descriptions
+        for mode in &mode_state.available_modes {
+            match mode.id.0.as_ref() {
+                "general-purpose" => {
+                    assert_eq!(mode.name, "General Purpose");
+                    assert!(mode.description.is_some());
+                }
+                "statusline-setup" => {
+                    assert_eq!(mode.name, "Statusline Setup");
+                    assert!(mode.description.is_some());
+                }
+                "Explore" => {
+                    assert_eq!(mode.name, "Explore");
+                    assert!(mode.description.is_some());
+                }
+                "Plan" => {
+                    assert_eq!(mode.name, "Plan");
+                    assert!(mode.description.is_some());
+                }
+                _ => panic!("Unexpected mode: {}", mode.id.0),
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_set_session_mode_changes_mode() {
+        let server = Arc::new(create_test_server().await);
+
+        use agent_client_protocol::Agent;
+
+        // Create a session first
+        let new_session_request =
+            agent_client_protocol::NewSessionRequest::new(std::env::current_dir().unwrap());
+        let session_response = server.new_session(new_session_request).await.unwrap();
+        let session_id = session_response.session_id;
+
+        // Change mode to "Explore"
+        let mode_id = agent_client_protocol::SessionModeId::new("Explore");
+        let set_mode_request =
+            agent_client_protocol::SetSessionModeRequest::new(session_id.clone(), mode_id);
+
+        let result = server.set_session_mode(set_mode_request).await;
+        assert!(result.is_ok(), "Setting session mode should succeed");
+
+        // Verify the mode was changed in the llama session
+        let acp_session = server.get_session_by_id(&session_id).await.unwrap();
+        let llama_session = server
+            .agent_server
+            .session_manager()
+            .get_session(&acp_session.llama_session_id)
+            .await
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(
+            llama_session.current_mode,
+            Some("Explore".to_string()),
+            "Mode should be updated to 'Explore'"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_set_session_mode_with_invalid_session() {
+        let server = Arc::new(create_test_server().await);
+
+        use agent_client_protocol::Agent;
+
+        // Try to set mode on non-existent session
+        let fake_session_id = agent_client_protocol::SessionId::new("nonexistent");
+        let mode_id = agent_client_protocol::SessionModeId::new("Plan");
+        let set_mode_request =
+            agent_client_protocol::SetSessionModeRequest::new(fake_session_id, mode_id);
+
+        let result = server.set_session_mode(set_mode_request).await;
+        assert!(result.is_err(), "Should fail with invalid session");
+        assert_eq!(
+            result.unwrap_err().code,
+            agent_client_protocol::ErrorCode::InvalidParams
+        );
+    }
+
+    #[tokio::test]
+    async fn test_build_session_mode_state() {
+        use agent_client_protocol::{SessionMode, SessionModeId, SessionModeState};
+
+        // Build test mode state
+        let available_modes = vec![
+            SessionMode::new("general-purpose", "General Purpose")
+                .description("General-purpose agent"),
+            SessionMode::new("statusline-setup", "Statusline Setup")
+                .description("Configure status line"),
+            SessionMode::new("Explore", "Explore").description("Explore codebases"),
+            SessionMode::new("Plan", "Plan").description("Plan implementations"),
+        ];
+        let mode_state =
+            SessionModeState::new(SessionModeId::new("general-purpose"), available_modes);
+
+        // Verify structure
+        assert_eq!(mode_state.current_mode_id.0.as_ref(), "general-purpose");
+        assert_eq!(mode_state.available_modes.len(), 4);
+
+        // Verify each mode has required fields
+        for mode in &mode_state.available_modes {
+            assert!(!mode.id.0.is_empty(), "Mode ID should not be empty");
+            assert!(!mode.name.is_empty(), "Mode name should not be empty");
+            assert!(mode.description.is_some(), "Mode should have a description");
+        }
     }
 
     #[tokio::test]

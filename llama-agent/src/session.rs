@@ -117,7 +117,8 @@ impl SessionManager {
         transcript_path: Option<PathBuf>,
     ) -> Result<Session, SessionError> {
         let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/"));
-        self.create_session_with_cwd_and_transcript(cwd, transcript_path).await
+        self.create_session_with_cwd_and_transcript(cwd, transcript_path)
+            .await
     }
 
     pub async fn create_session_with_cwd_and_transcript(
@@ -147,12 +148,9 @@ impl SessionManager {
             transcript_path: transcript_path.clone(),
             context_state: None,
             template_token_count: None,
-            #[cfg(feature = "acp")]
             todos: Vec::new(),
-            #[cfg(feature = "acp")]
             available_commands: Vec::new(),
             current_mode: None,
-            #[cfg(feature = "acp")]
             client_capabilities: None,
         };
 

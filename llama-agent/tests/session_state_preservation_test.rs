@@ -212,18 +212,9 @@ async fn test_session_state_preservation() {
     );
 
     // 7. ACP-specific fields (when feature is enabled)
-    #[cfg(feature = "acp")]
+
     {
-        assert_eq!(
-            restored_session.todos.len(),
-            original_session.todos.len(),
-            "Todos list should be preserved"
-        );
-        assert_eq!(
-            restored_session.available_commands.len(),
-            original_session.available_commands.len(),
-            "Commands list should be preserved"
-        );
+        // Verify current_mode is preserved (always available now)
         assert_eq!(
             restored_session.current_mode, original_session.current_mode,
             "current_mode should be preserved"

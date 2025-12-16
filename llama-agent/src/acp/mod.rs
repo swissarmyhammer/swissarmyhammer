@@ -252,6 +252,7 @@ pub mod commands;
 pub mod config;
 pub mod error;
 pub mod filesystem;
+pub mod mcp_client_factory;
 pub mod permissions;
 pub mod plan;
 pub mod server;

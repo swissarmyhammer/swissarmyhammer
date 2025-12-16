@@ -10,7 +10,6 @@
 //!
 //! The tests are structured to match the expected flow once implementation is complete.
 
-#[cfg(feature = "acp")]
 mod acp_tests {
     use llama_agent::acp::AcpServer;
     use llama_agent::types::{ModelConfig, ModelSource};
@@ -495,7 +494,7 @@ mod acp_tests {
         );
 
         // 7. ACP-specific fields (when feature is enabled)
-        #[cfg(feature = "acp")]
+
         {
             assert_eq!(
                 restored_session.todos.len(),

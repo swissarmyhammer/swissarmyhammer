@@ -22,7 +22,7 @@ async-trait.workspace = true
 tracing-subscriber.workspace = true
 tempfile.workspace = true
 test-log.workspace = true
-llama-agent = { workspace = true, features = ["acp"] }
+llama-agent = { workspace = true }
 # claude-agent = { path = "../claude-agent" }  # Disabled - still has 216 compilation errors
 futures.workspace = true
 tokio-util = { workspace = true, features = ["compat"] }

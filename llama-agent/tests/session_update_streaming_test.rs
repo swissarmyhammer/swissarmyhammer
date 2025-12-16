@@ -4,7 +4,6 @@
 //! AvailableCommandsUpdate, CurrentModeUpdate, UserMessageChunk, AgentMessageChunk)
 //! are correctly streamed during load_session.
 
-#[cfg(feature = "acp")]
 mod acp_tests {
     use agent_client_protocol::{Agent, AvailableCommand, LoadSessionRequest};
     use llama_agent::acp::AcpServer;

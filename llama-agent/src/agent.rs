@@ -28,7 +28,7 @@ use tracing::{debug, error, info, trace, warn};
 const DEFAULT_CONTEXT_SIZE: usize = 4096;
 
 /// Capability types for ACP operations
-#[cfg(feature = "acp")]
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum CapabilityType {
     FsRead,
@@ -39,7 +39,7 @@ enum CapabilityType {
 /// Mapping of tool name patterns to required ACP capabilities
 /// This provides a robust, maintainable way to enforce capability checks
 /// without relying on fragile string matching in the hot path.
-#[cfg(feature = "acp")]
+
 const TOOL_CAPABILITY_MAP: &[(&str, CapabilityType)] = &[
     // Filesystem read operations
     ("fs/read", CapabilityType::FsRead),
@@ -75,6 +75,13 @@ pub struct AgentServer {
     request_queue: Arc<RequestQueue>,
     session_manager: Arc<SessionManager>,
     mcp_client: Arc<dyn MCPClient>,
+    /// Per-session MCP clients for ACP sessions
+    /// Maps SessionId to a vector of MCP clients created from session/new mcpServers parameter
+    pub(crate) session_mcp_clients: Arc<
+        tokio::sync::RwLock<
+            std::collections::HashMap<crate::types::SessionId, Vec<Arc<dyn MCPClient>>>,
+        >,
+    >,
     chat_template: Arc<ChatTemplateEngine>,
     dependency_analyzer: Arc<DependencyAnalyzer>,
     config: AgentConfig,
@@ -82,8 +89,8 @@ pub struct AgentServer {
     shutdown_token: tokio_util::sync::CancellationToken,
     /// Client capabilities from ACP initialize request (if running as ACP server)
     /// This enables capability enforcement for filesystem, terminal, and other operations
-    #[cfg(feature = "acp")]
-    client_capabilities: tokio::sync::RwLock<Option<agent_client_protocol::ClientCapabilities>>,
+    pub(crate) client_capabilities:
+        tokio::sync::RwLock<Option<agent_client_protocol::ClientCapabilities>>,
 }
 
 impl std::fmt::Debug for AgentServer {
@@ -110,12 +117,14 @@ impl AgentServer {
             request_queue,
             session_manager,
             mcp_client,
+            session_mcp_clients: Arc::new(tokio::sync::RwLock::new(
+                std::collections::HashMap::new(),
+            )),
             chat_template,
             dependency_analyzer,
             config,
             start_time: Instant::now(),
             shutdown_token: tokio_util::sync::CancellationToken::new(),
-            #[cfg(feature = "acp")]
             client_capabilities: tokio::sync::RwLock::new(None),
         }
     }
@@ -137,7 +146,7 @@ impl AgentServer {
     /// let client_caps = initialize_request.client_capabilities;
     /// agent_server.set_client_capabilities(client_caps).await;
     /// ```
-    #[cfg(feature = "acp")]
+
     pub async fn set_client_capabilities(
         &self,
         capabilities: agent_client_protocol::ClientCapabilities,
@@ -150,7 +159,7 @@ impl AgentServer {
     ///
     /// Returns the client capabilities if they have been set via an ACP initialize
     /// request, or None if running in non-ACP mode or before initialization.
-    #[cfg(feature = "acp")]
+
     pub async fn get_client_capabilities(
         &self,
     ) -> Option<agent_client_protocol::ClientCapabilities> {
@@ -180,7 +189,7 @@ impl AgentServer {
     ///
     /// * `Ok(())` - If the operation is allowed
     /// * `Err(AgentError)` - If the client lacks the required capability
-    #[cfg(feature = "acp")]
+
     async fn check_tool_capability(&self, tool_name: &str) -> Result<(), AgentError> {
         // Get client capabilities
         let caps = self.client_capabilities.read().await;
@@ -280,7 +289,7 @@ impl AgentServer {
         );
 
         // Check capabilities if running in ACP mode
-        #[cfg(feature = "acp")]
+
         self.check_tool_capability(tool_name).await?;
 
         self.mcp_client
@@ -363,7 +372,7 @@ impl AgentServer {
         params: serde_json::Value,
     ) -> Result<serde_json::Value, AgentError> {
         // Check capabilities even for unsupported methods to enforce security
-        #[cfg(feature = "acp")]
+
         {
             // Map extension method names to required capabilities
             match method {
@@ -1225,7 +1234,10 @@ impl AgentAPI for AgentServer {
     }
 
     async fn create_session_with_cwd(&self, cwd: PathBuf) -> Result<Session, AgentError> {
-        let session = self.session_manager.create_session_with_cwd_and_transcript(cwd, None).await?;
+        let session = self
+            .session_manager
+            .create_session_with_cwd_and_transcript(cwd, None)
+            .await?;
         debug!("Created new session with cwd: {}", session.id);
         Ok(session)
     }
@@ -1306,7 +1318,7 @@ impl AgentAPI for AgentServer {
         // Check client capabilities if running in ACP mode. In non-ACP mode, all tools are allowed.
         // When the acp feature is enabled, this enforces that clients have advertised the required
         // capabilities (filesystem operations, terminal access) before tools are executed.
-        #[cfg(feature = "acp")]
+
         if let Err(e) = self.check_tool_capability(&tool_call.name).await {
             let error_msg = format!("Capability check failed: {}", e);
             error!(
@@ -1376,7 +1388,7 @@ impl AgentAPI for AgentServer {
         let tool_result = self.execute_tool_with_retry(&tool_call).await;
 
         // Sync session todos if this was a todo-related tool call and it succeeded
-        #[cfg(feature = "acp")]
+
         if tool_result.error.is_none()
             && (tool_call.name == "mcp__swissarmyhammer__todo_create"
                 || tool_call.name == "mcp__swissarmyhammer__todo_mark_complete")
@@ -1626,9 +1638,18 @@ impl AgentAPI for AgentServer {
 
 impl AgentServer {
     /// Update session mode
-    pub async fn set_session_mode(&self, session_id: &SessionId, mode: String) -> Result<(), AgentError> {
-        let mut session = self.session_manager.get_session(session_id).await?
-            .ok_or_else(|| AgentError::Session(crate::types::SessionError::NotFound(session_id.to_string())))?;
+    pub async fn set_session_mode(
+        &self,
+        session_id: &SessionId,
+        mode: String,
+    ) -> Result<(), AgentError> {
+        let mut session = self
+            .session_manager
+            .get_session(session_id)
+            .await?
+            .ok_or_else(|| {
+                AgentError::Session(crate::types::SessionError::NotFound(session_id.to_string()))
+            })?;
 
         session.current_mode = Some(mode);
         self.session_manager.update_session(session).await?;
@@ -1840,12 +1861,9 @@ impl AgentServer {
                     transcript_path: None,
                     context_state: None,
                     template_token_count: None,
-                    #[cfg(feature = "acp")]
                     todos: Vec::new(),
-                    #[cfg(feature = "acp")]
                     available_commands: Vec::new(),
                     current_mode: None,
-                    #[cfg(feature = "acp")]
                     client_capabilities: None,
                 };
 
@@ -1929,7 +1947,7 @@ impl AgentServer {
     /// # Returns
     ///
     /// `Ok(())` if sync succeeds, `Err` if the session doesn't exist or sync fails
-    #[cfg(feature = "acp")]
+
     async fn sync_session_todos(&self, session_id: &SessionId) -> Result<(), AgentError> {
         use swissarmyhammer_todo::TodoStorage;
 
@@ -2000,7 +2018,7 @@ impl AgentServer {
     /// will fail immediately without retrying.
     async fn execute_tool_with_retry(&self, tool_call: &ToolCall) -> ToolResult {
         // Check capabilities before attempting execution (ACP mode)
-        #[cfg(feature = "acp")]
+
         if let Err(e) = self.check_tool_capability(&tool_call.name).await {
             let error_msg = format!("Capability check failed: {}", e);
             error!(

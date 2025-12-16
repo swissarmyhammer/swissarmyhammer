@@ -118,6 +118,7 @@ mod agent_template_cache_tests {
         use std::time::SystemTime;
 
         let session = Session {
+            cwd: std::path::PathBuf::from("/tmp"),
             id: SessionId::new(),
             messages: vec![Message {
                 role: MessageRole::System,
@@ -135,12 +136,12 @@ mod agent_template_cache_tests {
             transcript_path: None,
             context_state: None,
             template_token_count: None,
-            #[cfg(feature = "acp")]
+
             todos: Vec::new(),
-            #[cfg(feature = "acp")]
+
             available_commands: Vec::new(),
             current_mode: None,
-            #[cfg(feature = "acp")]
+
             client_capabilities: None,
         };
 

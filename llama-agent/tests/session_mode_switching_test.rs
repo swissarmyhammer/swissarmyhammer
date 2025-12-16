@@ -3,7 +3,6 @@
 //! This test verifies that session modes can be switched and that the mode state
 //! is properly tracked in both the ACP session state and the llama session.
 
-#[cfg(feature = "acp")]
 mod session_mode_tests {
     use agent_client_protocol::{Agent, SessionModeId};
     use llama_agent::acp::session::{AcpSessionState, SessionMode};
@@ -100,13 +99,13 @@ mod session_mode_tests {
 
     #[tokio::test]
     async fn test_session_mode_initialization() {
-        // Test that new sessions start with Code mode
+        // Test that new sessions start with general-purpose mode
         let llama_id = LlamaSessionId::new();
         let state = AcpSessionState::new(llama_id);
 
         assert!(
-            matches!(state.mode, SessionMode::Code),
-            "New sessions should start in Code mode"
+            matches!(state.mode, SessionMode::Custom(ref s) if s == "general-purpose"),
+            "New sessions should start in general-purpose mode"
         );
     }
 

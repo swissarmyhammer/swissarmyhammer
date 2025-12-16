@@ -63,7 +63,21 @@ async fn create_test_agent() -> acp_conformance::Result<impl Agent> {
         agent_config,
     ));
 
-    let acp_config = llama_agent::acp::AcpConfig::default();
+    let mut acp_config = llama_agent::acp::AcpConfig::default();
+
+    // Configure available modes for testing
+    acp_config.available_modes = vec![
+        agent_client_protocol::SessionMode::new("general-purpose", "General Purpose")
+            .description("General-purpose agent for researching complex questions, searching for code, and executing multi-step tasks"),
+        agent_client_protocol::SessionMode::new("statusline-setup", "Statusline Setup")
+            .description("Configure the status line setting"),
+        agent_client_protocol::SessionMode::new("Explore", "Explore")
+            .description("Fast agent specialized for exploring codebases"),
+        agent_client_protocol::SessionMode::new("Plan", "Plan")
+            .description("Software architect agent for designing implementation plans"),
+    ];
+    acp_config.default_mode_id = "general-purpose".to_string();
+
     let acp_server = llama_agent::acp::AcpServer::new(agent_server, acp_config);
 
     #[derive(Clone)]
@@ -74,7 +88,8 @@ async fn create_test_agent() -> acp_conformance::Result<impl Agent> {
         async fn request_permission(
             &self,
             _request: agent_client_protocol::RequestPermissionRequest,
-        ) -> agent_client_protocol::Result<agent_client_protocol::RequestPermissionResponse> {
+        ) -> agent_client_protocol::Result<agent_client_protocol::RequestPermissionResponse>
+        {
             Ok(agent_client_protocol::RequestPermissionResponse::new(
                 agent_client_protocol::RequestPermissionOutcome::Cancelled,
             ))
@@ -106,12 +121,8 @@ async fn create_test_agent() -> acp_conformance::Result<impl Agent> {
         tokio::task::spawn_local(fut);
     };
 
-    let (client_conn, client_io_task) = ClientSideConnection::new(
-        DummyClient,
-        client_to_agent_tx,
-        agent_to_client_rx,
-        spawn,
-    );
+    let (client_conn, client_io_task) =
+        ClientSideConnection::new(DummyClient, client_to_agent_tx, agent_to_client_rx, spawn);
 
     let (_agent_conn, agent_io_task) =
         AgentSideConnection::new(acp_server, agent_to_client_tx, client_to_agent_rx, spawn);
@@ -203,6 +214,40 @@ async fn test_llama_set_session_mode() {
             test_set_session_mode(&agent)
                 .await
                 .expect("Set session mode should succeed");
+        })
+        .await;
+}
+
+#[test_log::test(tokio::test)]
+#[serial_test::serial]
+async fn test_llama_new_session_includes_modes() {
+    let local_set = tokio::task::LocalSet::new();
+    local_set
+        .run_until(async {
+            let agent = create_test_agent()
+                .await
+                .expect("Failed to create test agent");
+
+            test_new_session_includes_modes(&agent)
+                .await
+                .expect("New session should include modes");
+        })
+        .await;
+}
+
+#[test_log::test(tokio::test)]
+#[serial_test::serial]
+async fn test_llama_set_session_mode_to_available() {
+    let local_set = tokio::task::LocalSet::new();
+    local_set
+        .run_until(async {
+            let agent = create_test_agent()
+                .await
+                .expect("Failed to create test agent");
+
+            test_set_session_mode_to_available(&agent)
+                .await
+                .expect("Set session mode to available should succeed");
         })
         .await;
 }

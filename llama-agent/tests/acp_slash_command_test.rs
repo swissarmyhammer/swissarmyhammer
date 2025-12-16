@@ -5,7 +5,6 @@
 //! 2. Slash commands are derived from MCP prompts via CommandRegistry
 //! 3. Commands include proper metadata for parameters when available
 
-#[cfg(feature = "acp")]
 mod acp_slash_command_tests {
     use async_trait::async_trait;
     use llama_agent::acp::commands::CommandRegistry;

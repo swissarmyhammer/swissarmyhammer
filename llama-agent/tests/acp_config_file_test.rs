@@ -1,5 +1,3 @@
-#![cfg(feature = "acp")]
-
 use llama_agent::acp::config::{FilesystemSettings, TerminalSettings};
 use llama_agent::acp::AcpConfig;
 use std::io::Write;

@@ -35,6 +35,23 @@ pub struct AcpConfig {
 
     /// Terminal settings
     pub terminal: TerminalSettings,
+
+    /// Available session modes
+    ///
+    /// Defines the modes that can be used with this agent.
+    /// If empty and supports_modes is true, no modes will be returned.
+    #[serde(skip, default)]
+    pub available_modes: Vec<agent_client_protocol::SessionMode>,
+
+    /// Default mode ID
+    ///
+    /// The mode to use when creating new sessions. Must be in available_modes list.
+    #[serde(default = "default_mode_id_value")]
+    pub default_mode_id: String,
+}
+
+fn default_mode_id_value() -> String {
+    "general-purpose".to_string()
 }
 
 impl Default for AcpConfig {
@@ -45,6 +62,8 @@ impl Default for AcpConfig {
             permission_policy: PermissionPolicy::AlwaysAsk,
             filesystem: FilesystemSettings::default(),
             terminal: TerminalSettings::default(),
+            available_modes: Vec::new(),
+            default_mode_id: "general-purpose".to_string(),
         }
     }
 }
@@ -422,6 +441,7 @@ filesystem:
 terminal:
   outputBufferBytes: 524288
   gracefulShutdownTimeout: 10
+defaultModeId: "general-purpose"
 "#;
 
         let mut temp_file = NamedTempFile::new().unwrap();
