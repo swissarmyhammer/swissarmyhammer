@@ -1224,6 +1224,12 @@ impl AgentAPI for AgentServer {
         Ok(session)
     }
 
+    async fn create_session_with_cwd(&self, cwd: PathBuf) -> Result<Session, AgentError> {
+        let session = self.session_manager.create_session_with_cwd_and_transcript(cwd, None).await?;
+        debug!("Created new session with cwd: {}", session.id);
+        Ok(session)
+    }
+
     async fn create_session_with_transcript(
         &self,
         transcript_path: Option<PathBuf>,
@@ -1619,6 +1625,16 @@ impl AgentAPI for AgentServer {
 }
 
 impl AgentServer {
+    /// Update session mode
+    pub async fn set_session_mode(&self, session_id: &SessionId, mode: String) -> Result<(), AgentError> {
+        let mut session = self.session_manager.get_session(session_id).await?
+            .ok_or_else(|| AgentError::Session(crate::types::SessionError::NotFound(session_id.to_string())))?;
+
+        session.current_mode = Some(mode);
+        self.session_manager.update_session(session).await?;
+        Ok(())
+    }
+
     /// Create a new session and return its ID.
     ///
     /// This is a convenience method that wraps `create_session` and returns
@@ -1814,6 +1830,7 @@ impl AgentServer {
                 let temp_session = Session {
                     id: SessionId::new(),
                     messages,
+                    cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/")),
                     mcp_servers: Vec::new(),
                     available_tools: Vec::new(),
                     available_prompts: Vec::new(),

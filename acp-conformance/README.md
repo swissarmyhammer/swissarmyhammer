@@ -12,6 +12,10 @@ This crate provides comprehensive conformance testing based on the official ACP 
 
 Based on https://agentclientprotocol.com/protocol/initialization
 
+### ✅ Session Setup Protocol (Complete)
+
+Based on https://agentclientprotocol.com/protocol/session-setup
+
 **Requirements Tested:**
 1. ✅ Protocol version negotiation (V1)
 2. ✅ Client capabilities handling (fs, terminal)
@@ -29,9 +33,31 @@ Based on https://agentclientprotocol.com/protocol/initialization
 - `test_initialize_idempotent` - Multiple initialize calls
 - `test_with_client_info` - Client implementation info
 
+**Requirements Tested:**
+1. ✅ Protocol version negotiation (V1)
+2. ✅ Client capabilities handling (fs, terminal)
+3. ✅ Agent capabilities advertisement (loadSession, prompt types, MCP transports)
+4. ✅ Authentication methods declaration
+5. ✅ Implementation info (agent name, version)
+6. ✅ Initialize idempotency
+7. ✅ Client info handling
+
+**Test Functions:**
+- `test_new_session_minimal` - Create session with minimal params (cwd only)
+- `test_new_session_with_mcp` - Create session with MCP server config
+- `test_session_ids_unique` - Verify unique session IDs
+- `test_load_nonexistent_session` - Error handling for invalid session
+- `test_set_session_mode` - Mode switching
+
+**Requirements Tested:**
+1. ✅ session/new creates sessions with unique IDs
+2. ✅ cwd parameter accepted
+3. ✅ mcpServers parameter accepted
+4. ✅ session/load rejects nonexistent sessions
+5. ✅ session/set-mode accepts mode changes
+
 ### 🚧 Other Protocol Sections (TODO)
 
-- Sessions (new, load, set_mode)
 - Prompting
 - Tool calls
 - Notifications

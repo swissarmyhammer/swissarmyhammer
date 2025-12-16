@@ -42,6 +42,11 @@ pub trait AgentAPI {
 
     async fn create_session(&self) -> Result<crate::types::sessions::Session, AgentError>;
 
+    async fn create_session_with_cwd(
+        &self,
+        cwd: std::path::PathBuf,
+    ) -> Result<crate::types::sessions::Session, AgentError>;
+
     async fn create_session_with_transcript(
         &self,
         transcript_path: Option<std::path::PathBuf>,

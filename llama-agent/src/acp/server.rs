@@ -107,6 +107,39 @@ impl AcpServer {
         self.start_with_streams(stdin, stdout).await
     }
 
+    /// Validate MCP transport capabilities
+    ///
+    /// Per ACP spec: Agents must validate that MCP transport types match
+    /// the capabilities advertised in the initialize response.
+    fn validate_mcp_transports(
+        &self,
+        mcp_servers: &[agent_client_protocol::McpServer],
+    ) -> Result<(), agent_client_protocol::Error> {
+        for server in mcp_servers {
+            match server {
+                agent_client_protocol::McpServer::Stdio(_) => {
+                    // stdio is always supported (baseline requirement)
+                    continue;
+                }
+                agent_client_protocol::McpServer::Http(_) => {
+                    // For now, http is advertised as true in initialize, so allow
+                    // TODO: Make this configurable when we add mcp_capabilities to AcpCapabilities
+                    tracing::debug!("HTTP MCP server accepted");
+                }
+                agent_client_protocol::McpServer::Sse(_) => {
+                    // SSE is advertised as false, so reject
+                    tracing::error!("SSE MCP server requested but sse capability not advertised");
+                    return Err(agent_client_protocol::Error::invalid_params());
+                }
+                _ => {
+                    // Unknown MCP server type (future-proofing for protocol extensions)
+                    tracing::warn!("Unknown MCP server type, accepting");
+                }
+            }
+        }
+        Ok(())
+    }
+
     /// Convert a llama-agent error to ACP JSON-RPC error format
     ///
     /// This helper uses the ToJsonRpcError trait to convert llama-agent errors
@@ -914,15 +947,28 @@ impl agent_client_protocol::Agent for AcpServer {
 
     async fn new_session(
         &self,
-        _request: agent_client_protocol::NewSessionRequest,
+        request: agent_client_protocol::NewSessionRequest,
     ) -> Result<agent_client_protocol::NewSessionResponse, agent_client_protocol::Error> {
-        tracing::info!("Creating new ACP session");
+        tracing::info!("Creating new ACP session with cwd: {:?}, mcp_servers: {}", request.cwd, request.mcp_servers.len());
 
-        // Create a new llama-agent session
-        let llama_session = self.agent_server.create_session().await.map_err(|e| {
+        // Validate MCP transport capabilities before accepting servers
+        self.validate_mcp_transports(&request.mcp_servers)?;
+
+        // Create a new llama-agent session with the provided cwd
+        let llama_session = self.agent_server.create_session_with_cwd(request.cwd).await.map_err(|e| {
             tracing::error!("Failed to create llama session: {}", e);
             Self::convert_error(e)
         })?;
+
+        // TODO: Store MCP servers in the session
+        // Currently llama-agent uses NoOpMCPClient, so MCP servers are not connected
+        // This needs to be implemented when real MCP client support is added
+        if !request.mcp_servers.is_empty() {
+            tracing::warn!(
+                "MCP servers requested but not yet supported in llama-agent (using NoOpMCPClient): {} servers",
+                request.mcp_servers.len()
+            );
+        }
 
         // Get stored client capabilities
         let client_caps = self
@@ -966,23 +1012,22 @@ impl agent_client_protocol::Agent for AcpServer {
             mode_id.0
         );
 
-        // Session modes are not currently supported in llama-agent
-        tracing::warn!("Session modes are not yet implemented, mode_id will be ignored");
+        // Get ACP session to find llama session ID
+        let acp_session = self.get_session(session_id).await.ok_or_else(|| {
+            tracing::error!("Session not found: {}", session_id.0);
+            agent_client_protocol::Error::invalid_params()
+        })?;
 
-        let mut meta = serde_json::Map::new();
-        meta.insert("mode_set".to_string(), serde_json::Value::Bool(false));
-        meta.insert(
-            "message".to_string(),
-            serde_json::Value::String(
-                "Session modes are not yet implemented in llama-agent".to_string(),
-            ),
-        );
-        meta.insert(
-            "mode_id".to_string(),
-            serde_json::Value::String(mode_id.0.to_string()),
-        );
+        // Update the llama session's current_mode field
+        let llama_session_id = acp_session.llama_session_id;
+        self.agent_server.set_session_mode(&llama_session_id, mode_id.0.to_string()).await.map_err(|e| {
+            tracing::error!("Failed to update session mode: {}", e);
+            agent_client_protocol::Error::internal_error()
+        })?;
 
-        let response = agent_client_protocol::SetSessionModeResponse::new().meta(meta);
+        tracing::info!("Session mode set to: {}", mode_id.0);
+
+        let response = agent_client_protocol::SetSessionModeResponse::new();
 
         Ok(response)
     }

@@ -108,11 +108,21 @@ impl SessionManager {
     }
 
     pub async fn create_session(&self) -> Result<Session, SessionError> {
-        self.create_session_with_transcript(None).await
+        let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/"));
+        self.create_session_with_cwd_and_transcript(cwd, None).await
     }
 
     pub async fn create_session_with_transcript(
         &self,
+        transcript_path: Option<PathBuf>,
+    ) -> Result<Session, SessionError> {
+        let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/"));
+        self.create_session_with_cwd_and_transcript(cwd, transcript_path).await
+    }
+
+    pub async fn create_session_with_cwd_and_transcript(
+        &self,
+        cwd: PathBuf,
         transcript_path: Option<PathBuf>,
     ) -> Result<Session, SessionError> {
         let mut sessions = self.sessions.write().await;
@@ -127,6 +137,7 @@ impl SessionManager {
         let session = Session {
             id: SessionId::new(),
             messages: Vec::new(),
+            cwd,
             mcp_servers: Vec::new(),
             available_tools: Vec::new(),
             available_prompts: Vec::new(),

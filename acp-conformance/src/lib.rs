@@ -7,6 +7,7 @@
 //!
 //! Tests are organized by protocol section:
 //! - `initialization`: Protocol initialization and capability negotiation
+//! - `sessions`: Session setup (new, load, set_mode)
 //!
 //! # Running Tests
 //!
@@ -16,6 +17,7 @@
 //! ```
 
 pub mod initialization;
+pub mod sessions;
 
 /// Result type for conformance tests
 pub type Result<T> = std::result::Result<T, Error>;

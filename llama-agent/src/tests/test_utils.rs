@@ -8,7 +8,9 @@ use std::time::SystemTime;
 
 /// Create a test session with the specified number of messages
 pub fn create_test_session_with_messages(message_count: usize) -> Session {
+            cwd: PathBuf::from("/tmp"),
     let mut session = Session {
+            cwd: PathBuf::from("/tmp"),
         id: SessionId::new(),
         messages: Vec::new(),
         mcp_servers: Vec::new(),
@@ -52,7 +54,9 @@ pub fn create_test_session_with_messages(message_count: usize) -> Session {
 
 /// Create a test session with messages that have substantial content for token testing
 pub fn create_large_content_session(message_count: usize, words_per_message: usize) -> Session {
+            cwd: PathBuf::from("/tmp"),
     let mut session = Session {
+            cwd: PathBuf::from("/tmp"),
         id: SessionId::new(),
         messages: Vec::new(),
         mcp_servers: Vec::new(),
@@ -93,7 +97,9 @@ pub fn create_large_content_session(message_count: usize, words_per_message: usi
 
 /// Create a test session with tool calls for testing tool call validation
 pub fn create_session_with_tool_calls() -> Session {
+            cwd: PathBuf::from("/tmp"),
     let mut session = Session {
+            cwd: PathBuf::from("/tmp"),
         id: SessionId::new(),
         messages: Vec::new(),
         mcp_servers: Vec::new(),
@@ -147,7 +153,9 @@ pub fn create_session_with_tool_calls() -> Session {
 
 /// Create a session with incomplete tool calls for validation testing
 pub fn create_session_with_incomplete_tool_calls() -> Session {
+            cwd: PathBuf::from("/tmp"),
     let mut session = Session {
+            cwd: PathBuf::from("/tmp"),
         id: SessionId::new(),
         messages: Vec::new(),
         mcp_servers: Vec::new(),
@@ -232,12 +240,14 @@ pub fn create_test_token_usage(total: usize, message_tokens: Vec<usize>) -> Toke
 
 /// Create a session that should trigger compaction based on token usage
 pub fn create_session_requiring_compaction() -> Session {
+            cwd: PathBuf::from("/tmp"),
     // Create session with enough messages to exceed typical thresholds
     create_large_content_session(20, 50) // 20 messages with 50 words each
 }
 
 /// Create a minimal session that should not trigger compaction
 pub fn create_minimal_session() -> Session {
+            cwd: PathBuf::from("/tmp"),
     create_test_session_with_messages(2) // Just 2 messages
 }
 
@@ -443,6 +453,7 @@ pub fn create_config_with_local_model(folder: PathBuf, filename: String) -> Agen
 
 /// Create a session with specified number of alternating messages
 pub fn create_session_with_messages(count: usize) -> Session {
+            cwd: PathBuf::from("/tmp"),
     let messages = (0..count)
         .map(|i| Message {
             role: if i % 2 == 0 {
@@ -458,6 +469,7 @@ pub fn create_session_with_messages(count: usize) -> Session {
         .collect();
 
     Session {
+            cwd: PathBuf::from("/tmp"),
         id: SessionId::new(),
         messages,
         mcp_servers: Vec::new(),
@@ -481,9 +493,11 @@ pub fn create_session_with_messages(count: usize) -> Session {
 
 /// Create a session with sample conversation
 pub fn create_session_with_sample_conversation() -> Session {
+            cwd: PathBuf::from("/tmp"),
     let now = SystemTime::now();
 
     Session {
+            cwd: PathBuf::from("/tmp"),
         id: SessionId::new(),
         messages: vec![
             Message {

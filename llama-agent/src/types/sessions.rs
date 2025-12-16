@@ -229,6 +229,8 @@ pub struct SessionBackup {
 pub struct Session {
     pub id: SessionId,
     pub messages: Vec<Message>,
+    /// Working directory for this session (ACP requirement - must be absolute path)
+    pub cwd: PathBuf,
     pub mcp_servers: Vec<MCPServerConfig>,
     pub available_tools: Vec<ToolDefinition>,
     pub available_prompts: Vec<PromptDefinition>,
