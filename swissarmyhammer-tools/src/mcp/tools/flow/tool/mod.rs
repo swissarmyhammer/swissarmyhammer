@@ -1307,11 +1307,20 @@ mod tests {
         };
 
         // Should extract the string without quotes
-        assert_eq!(value_str, "test.md", "String value should not include JSON quotes");
+        assert_eq!(
+            value_str, "test.md",
+            "String value should not include JSON quotes"
+        );
 
         // Verify this doesn't happen with the buggy .to_string() approach
         let buggy_conversion = test_value.to_string();
-        assert_eq!(buggy_conversion, "\"test.md\"", "to_string() includes quotes (this is the bug)");
-        assert_ne!(value_str, buggy_conversion, "Fixed conversion should differ from buggy .to_string()");
+        assert_eq!(
+            buggy_conversion, "\"test.md\"",
+            "to_string() includes quotes (this is the bug)"
+        );
+        assert_ne!(
+            value_str, buggy_conversion,
+            "Fixed conversion should differ from buggy .to_string()"
+        );
     }
 }

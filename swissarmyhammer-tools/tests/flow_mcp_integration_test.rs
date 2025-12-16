@@ -444,9 +444,7 @@ async fn test_plan_workflow_with_string_parameter() {
     std::fs::write(&test_spec_path, "# Test Specification\n\nThis is a test.")
         .expect("Failed to write test file");
 
-    let test_spec_str = test_spec_path
-        .to_str()
-        .expect("Path should be valid UTF-8");
+    let test_spec_str = test_spec_path.to_str().expect("Path should be valid UTF-8");
 
     eprintln!("Testing plan workflow with spec file: {}", test_spec_str);
 
@@ -520,19 +518,17 @@ async fn test_workflow_with_required_string_parameter() {
 
     // Execute with a test string value
     let test_value = "test_value.md";
-    let exec_future = env
-        .client()
-        .call_tool(CallToolRequestParam {
-            name: "flow".into(),
-            arguments: json!({
-                "flow_name": workflow_name,
-                "parameters": {
-                    param_name: test_value
-                }
-            })
-            .as_object()
-            .cloned(),
-        });
+    let exec_future = env.client().call_tool(CallToolRequestParam {
+        name: "flow".into(),
+        arguments: json!({
+            "flow_name": workflow_name,
+            "parameters": {
+                param_name: test_value
+            }
+        })
+        .as_object()
+        .cloned(),
+    });
 
     // Use short timeout - we only care that parameter parsing succeeds
     let exec_result = timeout(Duration::from_secs(5), exec_future).await;
@@ -556,7 +552,10 @@ async fn test_workflow_with_required_string_parameter() {
                 "Should not fail with parameter validation errors. Got: {}",
                 error_msg
             );
-            eprintln!("ℹ Workflow started but failed during execution (expected): {}", error_msg);
+            eprintln!(
+                "ℹ Workflow started but failed during execution (expected): {}",
+                error_msg
+            );
         }
         Err(_timeout) => {
             // Timeout is acceptable - it means parameter parsing succeeded
