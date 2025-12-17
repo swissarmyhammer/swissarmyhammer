@@ -12,6 +12,7 @@ dependencies = [
  "futures",
  "llama-agent",
  "piper",
+ "rstest 0.23.0",
  "serde",
  "serde_json",
  "serial_test",

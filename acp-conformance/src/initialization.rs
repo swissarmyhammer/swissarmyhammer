@@ -32,7 +32,7 @@ use agent_client_protocol::{
 };
 
 /// Test basic initialization with minimal capabilities
-pub async fn test_minimal_initialization<A: Agent>(agent: &A) -> crate::Result<()> {
+pub async fn test_minimal_initialization<A: Agent + ?Sized>(agent: &A) -> crate::Result<()> {
     tracing::info!("Testing minimal initialization");
 
     // Create minimal request
@@ -51,7 +51,9 @@ pub async fn test_minimal_initialization<A: Agent>(agent: &A) -> crate::Result<(
 }
 
 /// Test initialization with full client capabilities
-pub async fn test_full_capabilities_initialization<A: Agent>(agent: &A) -> crate::Result<()> {
+pub async fn test_full_capabilities_initialization<A: Agent + ?Sized>(
+    agent: &A,
+) -> crate::Result<()> {
     tracing::info!("Testing initialization with full client capabilities");
 
     // Create request with all client capabilities
@@ -76,7 +78,7 @@ pub async fn test_full_capabilities_initialization<A: Agent>(agent: &A) -> crate
 }
 
 /// Test that agent handles missing optional fields gracefully
-pub async fn test_minimal_client_capabilities<A: Agent>(agent: &A) -> crate::Result<()> {
+pub async fn test_minimal_client_capabilities<A: Agent + ?Sized>(agent: &A) -> crate::Result<()> {
     tracing::info!("Testing with minimal client capabilities (none declared)");
 
     // Create request with no client capabilities
@@ -94,7 +96,7 @@ pub async fn test_minimal_client_capabilities<A: Agent>(agent: &A) -> crate::Res
 }
 
 /// Test protocol version negotiation
-pub async fn test_protocol_version_negotiation<A: Agent>(agent: &A) -> crate::Result<()> {
+pub async fn test_protocol_version_negotiation<A: Agent + ?Sized>(agent: &A) -> crate::Result<()> {
     tracing::info!("Testing protocol version negotiation");
 
     // Test with V1
@@ -109,7 +111,7 @@ pub async fn test_protocol_version_negotiation<A: Agent>(agent: &A) -> crate::Re
 }
 
 /// Test that initialize can be called multiple times (idempotent)
-pub async fn test_initialize_idempotent<A: Agent>(agent: &A) -> crate::Result<()> {
+pub async fn test_initialize_idempotent<A: Agent + ?Sized>(agent: &A) -> crate::Result<()> {
     tracing::info!("Testing initialize idempotency");
 
     let request = InitializeRequest::new(ProtocolVersion::V1);
@@ -133,7 +135,7 @@ pub async fn test_initialize_idempotent<A: Agent>(agent: &A) -> crate::Result<()
 }
 
 /// Test initialization with client info
-pub async fn test_with_client_info<A: Agent>(agent: &A) -> crate::Result<()> {
+pub async fn test_with_client_info<A: Agent + ?Sized>(agent: &A) -> crate::Result<()> {
     tracing::info!("Testing initialization with client info");
 
     let client_info = agent_client_protocol::Implementation::new("test-client", "1.0.0")

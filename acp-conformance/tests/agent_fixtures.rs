@@ -1,21 +1,21 @@
-//! Integration tests for llama-agent ACP session setup conformance
+//! Agent fixtures for conformance testing
 //!
-//! These tests verify that llama-agent correctly implements the ACP session setup
-//! protocol per https://agentclientprotocol.com/protocol/session-setup
+//! This module provides factories for creating agent instances that implement
+//! the Agent trait and are connected via streams for in-process testing.
 
-use acp_conformance::sessions::*;
 use agent_client_protocol::{Agent, AgentSideConnection, ClientSideConnection};
 use std::sync::Arc;
 
-/// Helper to create a test llama-agent instance
-async fn create_test_agent() -> acp_conformance::Result<impl Agent> {
-    let (client_to_agent_rx, client_to_agent_tx) = piper::pipe(8192);
-    let (agent_to_client_rx, agent_to_client_tx) = piper::pipe(8192);
+/// Result type for agent creation
+pub type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
+/// Creates a test llama-agent instance connected via streams
+/// Always includes session mode support for full conformance testing
+pub async fn create_llama_agent() -> Result<impl Agent> {
     let model_config = llama_agent::types::ModelConfig {
         source: llama_agent::types::ModelSource::Local {
             folder: std::env::temp_dir(),
-            filename: Some("nonexistent.gguf".to_string()),
+            filename: Some("nonexistent.gguf".to_string()), // Won't load model for tests
         },
         batch_size: 512,
         n_seq_max: 1,
@@ -63,9 +63,8 @@ async fn create_test_agent() -> acp_conformance::Result<impl Agent> {
         agent_config,
     ));
 
+    // Configure ACP server with session modes
     let mut acp_config = llama_agent::acp::AcpConfig::default();
-
-    // Configure available modes for testing
     acp_config.available_modes = vec![
         agent_client_protocol::SessionMode::new("general-purpose", "General Purpose")
             .description("General-purpose agent for researching complex questions, searching for code, and executing multi-step tasks"),
@@ -80,6 +79,19 @@ async fn create_test_agent() -> acp_conformance::Result<impl Agent> {
 
     let acp_server = llama_agent::acp::AcpServer::new(agent_server, acp_config);
 
+    create_agent_connection(acp_server)
+}
+
+/// Helper to create client/agent connection with streams
+fn create_agent_connection<A>(acp_server: A) -> Result<impl Agent>
+where
+    A: agent_client_protocol::Agent + 'static,
+{
+    // Create bidirectional streams using piper (provides futures AsyncRead/AsyncWrite)
+    let (client_to_agent_rx, client_to_agent_tx) = piper::pipe(8192);
+    let (agent_to_client_rx, agent_to_client_tx) = piper::pipe(8192);
+
+    // Create dummy client for receiving agent requests
     #[derive(Clone)]
     struct DummyClient;
 
@@ -121,133 +133,17 @@ async fn create_test_agent() -> acp_conformance::Result<impl Agent> {
         tokio::task::spawn_local(fut);
     };
 
+    // Create client connection to the agent
     let (client_conn, client_io_task) =
         ClientSideConnection::new(DummyClient, client_to_agent_tx, agent_to_client_rx, spawn);
 
+    // Create agent connection (wrapping our ACP server)
     let (_agent_conn, agent_io_task) =
         AgentSideConnection::new(acp_server, agent_to_client_tx, client_to_agent_rx, spawn);
 
+    // Spawn IO tasks
     tokio::task::spawn_local(client_io_task);
     tokio::task::spawn_local(agent_io_task);
 
     Ok(client_conn)
-}
-
-#[test_log::test(tokio::test)]
-#[serial_test::serial]
-async fn test_llama_new_session_minimal() {
-    let local_set = tokio::task::LocalSet::new();
-    local_set
-        .run_until(async {
-            let agent = create_test_agent()
-                .await
-                .expect("Failed to create test agent");
-
-            test_new_session_minimal(&agent)
-                .await
-                .expect("New session minimal should succeed");
-        })
-        .await;
-}
-
-#[test_log::test(tokio::test)]
-#[serial_test::serial]
-async fn test_llama_new_session_with_mcp() {
-    let local_set = tokio::task::LocalSet::new();
-    local_set
-        .run_until(async {
-            let agent = create_test_agent()
-                .await
-                .expect("Failed to create test agent");
-
-            test_new_session_with_mcp(&agent)
-                .await
-                .expect("New session with MCP should succeed");
-        })
-        .await;
-}
-
-#[test_log::test(tokio::test)]
-#[serial_test::serial]
-async fn test_llama_session_ids_unique() {
-    let local_set = tokio::task::LocalSet::new();
-    local_set
-        .run_until(async {
-            let agent = create_test_agent()
-                .await
-                .expect("Failed to create test agent");
-
-            test_session_ids_unique(&agent)
-                .await
-                .expect("Session IDs should be unique");
-        })
-        .await;
-}
-
-#[test_log::test(tokio::test)]
-#[serial_test::serial]
-async fn test_llama_load_nonexistent_session() {
-    let local_set = tokio::task::LocalSet::new();
-    local_set
-        .run_until(async {
-            let agent = create_test_agent()
-                .await
-                .expect("Failed to create test agent");
-
-            test_load_nonexistent_session(&agent)
-                .await
-                .expect("Load nonexistent should fail correctly");
-        })
-        .await;
-}
-
-#[test_log::test(tokio::test)]
-#[serial_test::serial]
-async fn test_llama_set_session_mode() {
-    let local_set = tokio::task::LocalSet::new();
-    local_set
-        .run_until(async {
-            let agent = create_test_agent()
-                .await
-                .expect("Failed to create test agent");
-
-            test_set_session_mode(&agent)
-                .await
-                .expect("Set session mode should succeed");
-        })
-        .await;
-}
-
-#[test_log::test(tokio::test)]
-#[serial_test::serial]
-async fn test_llama_new_session_includes_modes() {
-    let local_set = tokio::task::LocalSet::new();
-    local_set
-        .run_until(async {
-            let agent = create_test_agent()
-                .await
-                .expect("Failed to create test agent");
-
-            test_new_session_includes_modes(&agent)
-                .await
-                .expect("New session should include modes");
-        })
-        .await;
-}
-
-#[test_log::test(tokio::test)]
-#[serial_test::serial]
-async fn test_llama_set_session_mode_to_available() {
-    let local_set = tokio::task::LocalSet::new();
-    local_set
-        .run_until(async {
-            let agent = create_test_agent()
-                .await
-                .expect("Failed to create test agent");
-
-            test_set_session_mode_to_available(&agent)
-                .await
-                .expect("Set session mode to available should succeed");
-        })
-        .await;
 }

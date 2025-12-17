@@ -1,7 +1,7 @@
-//! Conformance tests for ACP initialization protocol
+//! Conformance tests for ACP session setup protocol
 //!
 //! These tests verify that agent implementations correctly implement the ACP
-//! initialization protocol per https://agentclientprotocol.com/protocol/initialization
+//! session setup protocol per https://agentclientprotocol.com/protocol/session-setup
 //!
 //! Tests are parametrized using rstest to run against multiple agent implementations.
 //! To add a new agent to test, simply add its factory function to the #[rstest] attributes.
@@ -16,7 +16,7 @@ type AgentFactory = fn() -> std::pin::Pin<
     Box<dyn std::future::Future<Output = agent_fixtures::Result<Box<dyn Agent>>> + Send>,
 >;
 
-// Agent factory functions that can be passed to rstest
+// Agent factory function
 fn llama_agent_factory() -> std::pin::Pin<
     Box<dyn std::future::Future<Output = agent_fixtures::Result<Box<dyn Agent>>> + Send>,
 > {
@@ -36,17 +36,16 @@ fn llama_agent_factory() -> std::pin::Pin<
 
 #[rstest]
 #[case::llama_agent(llama_agent_factory)]
-// #[case::claude_agent(claude_agent_factory)]
 #[test_log::test(tokio::test)]
 #[serial_test::serial]
-async fn test_minimal_initialization(#[case] factory: AgentFactory) {
+async fn test_new_session_minimal(#[case] factory: AgentFactory) {
     let local_set = tokio::task::LocalSet::new();
     local_set
         .run_until(async {
             let agent = factory().await.expect("Failed to create agent");
-            acp_conformance::initialization::test_minimal_initialization(&*agent)
+            acp_conformance::sessions::test_new_session_minimal(&*agent)
                 .await
-                .expect("Minimal initialization should succeed");
+                .expect("New session minimal should succeed");
         })
         .await;
 }
@@ -55,14 +54,14 @@ async fn test_minimal_initialization(#[case] factory: AgentFactory) {
 #[case::llama_agent(llama_agent_factory)]
 #[test_log::test(tokio::test)]
 #[serial_test::serial]
-async fn test_full_capabilities_initialization(#[case] factory: AgentFactory) {
+async fn test_new_session_with_mcp(#[case] factory: AgentFactory) {
     let local_set = tokio::task::LocalSet::new();
     local_set
         .run_until(async {
             let agent = factory().await.expect("Failed to create agent");
-            acp_conformance::initialization::test_full_capabilities_initialization(&*agent)
+            acp_conformance::sessions::test_new_session_with_mcp(&*agent)
                 .await
-                .expect("Full capabilities initialization should succeed");
+                .expect("New session with MCP should succeed");
         })
         .await;
 }
@@ -71,14 +70,14 @@ async fn test_full_capabilities_initialization(#[case] factory: AgentFactory) {
 #[case::llama_agent(llama_agent_factory)]
 #[test_log::test(tokio::test)]
 #[serial_test::serial]
-async fn test_protocol_version_negotiation(#[case] factory: AgentFactory) {
+async fn test_session_ids_unique(#[case] factory: AgentFactory) {
     let local_set = tokio::task::LocalSet::new();
     local_set
         .run_until(async {
             let agent = factory().await.expect("Failed to create agent");
-            acp_conformance::initialization::test_protocol_version_negotiation(&*agent)
+            acp_conformance::sessions::test_session_ids_unique(&*agent)
                 .await
-                .expect("Protocol version negotiation should succeed");
+                .expect("Session IDs should be unique");
         })
         .await;
 }
@@ -87,14 +86,14 @@ async fn test_protocol_version_negotiation(#[case] factory: AgentFactory) {
 #[case::llama_agent(llama_agent_factory)]
 #[test_log::test(tokio::test)]
 #[serial_test::serial]
-async fn test_minimal_client_capabilities(#[case] factory: AgentFactory) {
+async fn test_load_nonexistent_session(#[case] factory: AgentFactory) {
     let local_set = tokio::task::LocalSet::new();
     local_set
         .run_until(async {
             let agent = factory().await.expect("Failed to create agent");
-            acp_conformance::initialization::test_minimal_client_capabilities(&*agent)
+            acp_conformance::sessions::test_load_nonexistent_session(&*agent)
                 .await
-                .expect("Minimal client capabilities should succeed");
+                .expect("Load nonexistent should fail correctly");
         })
         .await;
 }
@@ -103,14 +102,14 @@ async fn test_minimal_client_capabilities(#[case] factory: AgentFactory) {
 #[case::llama_agent(llama_agent_factory)]
 #[test_log::test(tokio::test)]
 #[serial_test::serial]
-async fn test_initialize_idempotent(#[case] factory: AgentFactory) {
+async fn test_set_session_mode(#[case] factory: AgentFactory) {
     let local_set = tokio::task::LocalSet::new();
     local_set
         .run_until(async {
             let agent = factory().await.expect("Failed to create agent");
-            acp_conformance::initialization::test_initialize_idempotent(&*agent)
+            acp_conformance::sessions::test_set_session_mode(&*agent)
                 .await
-                .expect("Initialize idempotency test should succeed");
+                .expect("Set session mode should succeed");
         })
         .await;
 }
@@ -119,14 +118,30 @@ async fn test_initialize_idempotent(#[case] factory: AgentFactory) {
 #[case::llama_agent(llama_agent_factory)]
 #[test_log::test(tokio::test)]
 #[serial_test::serial]
-async fn test_with_client_info(#[case] factory: AgentFactory) {
+async fn test_new_session_includes_modes(#[case] factory: AgentFactory) {
     let local_set = tokio::task::LocalSet::new();
     local_set
         .run_until(async {
             let agent = factory().await.expect("Failed to create agent");
-            acp_conformance::initialization::test_with_client_info(&*agent)
+            acp_conformance::sessions::test_new_session_includes_modes(&*agent)
                 .await
-                .expect("Client info test should succeed");
+                .expect("New session should include modes");
+        })
+        .await;
+}
+
+#[rstest]
+#[case::llama_agent(llama_agent_factory)]
+#[test_log::test(tokio::test)]
+#[serial_test::serial]
+async fn test_set_session_mode_to_available(#[case] factory: AgentFactory) {
+    let local_set = tokio::task::LocalSet::new();
+    local_set
+        .run_until(async {
+            let agent = factory().await.expect("Failed to create agent");
+            acp_conformance::sessions::test_set_session_mode_to_available(&*agent)
+                .await
+                .expect("Set session mode to available should succeed");
         })
         .await;
 }

@@ -28,3 +28,4 @@ futures.workspace = true
 tokio-util = { workspace = true, features = ["compat"] }
 piper = "0.2"
 serial_test.workspace = true
+rstest.workspace = true

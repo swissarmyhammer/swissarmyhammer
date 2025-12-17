@@ -25,7 +25,7 @@ use agent_client_protocol::{
 };
 
 /// Test creating a new session with minimal parameters
-pub async fn test_new_session_minimal<A: Agent>(agent: &A) -> crate::Result<()> {
+pub async fn test_new_session_minimal<A: Agent + ?Sized>(agent: &A) -> crate::Result<()> {
     tracing::info!("Testing new session with minimal parameters");
 
     let cwd = std::env::temp_dir();
@@ -46,7 +46,7 @@ pub async fn test_new_session_minimal<A: Agent>(agent: &A) -> crate::Result<()> 
 }
 
 /// Test creating a new session with MCP servers
-pub async fn test_new_session_with_mcp<A: Agent>(agent: &A) -> crate::Result<()> {
+pub async fn test_new_session_with_mcp<A: Agent + ?Sized>(agent: &A) -> crate::Result<()> {
     tracing::info!("Testing new session with MCP servers");
 
     let cwd = std::env::temp_dir();
@@ -70,7 +70,7 @@ pub async fn test_new_session_with_mcp<A: Agent>(agent: &A) -> crate::Result<()>
 }
 
 /// Test that session IDs are unique
-pub async fn test_session_ids_unique<A: Agent>(agent: &A) -> crate::Result<()> {
+pub async fn test_session_ids_unique<A: Agent + ?Sized>(agent: &A) -> crate::Result<()> {
     tracing::info!("Testing session ID uniqueness");
 
     let cwd = std::env::temp_dir();
@@ -100,7 +100,7 @@ pub async fn test_session_ids_unique<A: Agent>(agent: &A) -> crate::Result<()> {
 }
 
 /// Test loading a nonexistent session
-pub async fn test_load_nonexistent_session<A: Agent>(agent: &A) -> crate::Result<()> {
+pub async fn test_load_nonexistent_session<A: Agent + ?Sized>(agent: &A) -> crate::Result<()> {
     tracing::info!("Testing load of nonexistent session");
 
     let fake_session_id = SessionId::new("01HZZZZZZZZZZZZZZZZZZZZZZ");
@@ -122,7 +122,7 @@ pub async fn test_load_nonexistent_session<A: Agent>(agent: &A) -> crate::Result
 }
 
 /// Test setting session mode
-pub async fn test_set_session_mode<A: Agent>(agent: &A) -> crate::Result<()> {
+pub async fn test_set_session_mode<A: Agent + ?Sized>(agent: &A) -> crate::Result<()> {
     tracing::info!("Testing set session mode");
 
     // First create a session
@@ -146,7 +146,7 @@ pub async fn test_set_session_mode<A: Agent>(agent: &A) -> crate::Result<()> {
 ///
 /// Per ACP spec: https://agentclientprotocol.com/protocol/session-modes
 /// Agents MAY return available modes during session setup
-pub async fn test_new_session_includes_modes<A: Agent>(agent: &A) -> crate::Result<()> {
+pub async fn test_new_session_includes_modes<A: Agent + ?Sized>(agent: &A) -> crate::Result<()> {
     tracing::info!("Testing new session includes mode information");
 
     let cwd = std::env::temp_dir();
@@ -220,7 +220,7 @@ pub async fn test_new_session_includes_modes<A: Agent>(agent: &A) -> crate::Resu
 ///
 /// Per ACP spec: https://agentclientprotocol.com/protocol/session-modes
 /// Clients can switch modes by calling session/set-mode with a mode from available_modes
-pub async fn test_set_session_mode_to_available<A: Agent>(agent: &A) -> crate::Result<()> {
+pub async fn test_set_session_mode_to_available<A: Agent + ?Sized>(agent: &A) -> crate::Result<()> {
     tracing::info!("Testing set session mode to an available mode");
 
     // First create a session
