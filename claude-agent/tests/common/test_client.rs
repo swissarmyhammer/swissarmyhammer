@@ -120,7 +120,7 @@ impl Client for TestClient {
             .expect("TestClient lock poisoned - a test panic occurred while holding the lock");
 
         let content = files.get(&request.path).ok_or_else(|| {
-            AcpError::invalid_params().with_data(format!("File not found: {:?}", request.path))
+            AcpError::invalid_params().data(format!("File not found: {:?}", request.path))
         })?;
 
         // Handle line/limit parameters
@@ -138,10 +138,7 @@ impl Client for TestClient {
             String::new()
         };
 
-        Ok(ReadTextFileResponse {
-            content: result_lines,
-            meta: None,
-        })
+        Ok(ReadTextFileResponse::new(result_lines))
     }
 
     /// Write text file to in-memory filesystem
@@ -157,7 +154,7 @@ impl Client for TestClient {
             .expect("TestClient lock poisoned - a test panic occurred while holding the lock");
         files.insert(request.path, request.content);
 
-        Ok(WriteTextFileResponse { meta: None })
+        Ok(WriteTextFileResponse::new())
     }
 
     /// Handle session notifications
@@ -180,13 +177,13 @@ impl Client for TestClient {
         _request: RequestPermissionRequest,
     ) -> Result<RequestPermissionResponse, AcpError> {
         // Auto-approve all permissions in tests
-        use agent_client_protocol::{PermissionOptionId, RequestPermissionOutcome};
-        Ok(RequestPermissionResponse {
-            outcome: RequestPermissionOutcome::Selected {
-                option_id: PermissionOptionId::new("allow"),
-            },
-            meta: None,
-        })
+        use agent_client_protocol::{
+            PermissionOptionId, RequestPermissionOutcome, SelectedPermissionOutcome,
+        };
+        let selected = SelectedPermissionOutcome::new(PermissionOptionId::new("allow"));
+        Ok(RequestPermissionResponse::new(
+            RequestPermissionOutcome::Selected(selected),
+        ))
     }
 }
 
@@ -196,7 +193,7 @@ mod tests {
     use agent_client_protocol::SessionId;
 
     fn test_session_id() -> SessionId {
-        SessionId(Arc::from("test-session"))
+        SessionId::new("test-session")
     }
 
     #[tokio::test]
@@ -204,13 +201,7 @@ mod tests {
         let client = TestClient::new();
         client.add_file("/test/file.txt", "Hello, world!");
 
-        let request = ReadTextFileRequest {
-            session_id: test_session_id(),
-            path: PathBuf::from("/test/file.txt"),
-            line: None,
-            limit: None,
-            meta: None,
-        };
+        let request = ReadTextFileRequest::new(test_session_id(), PathBuf::from("/test/file.txt"));
 
         let response = client.read_text_file(request).await.unwrap();
         assert_eq!(response.content, "Hello, world!");
@@ -220,13 +211,8 @@ mod tests {
     async fn test_read_nonexistent_file() {
         let client = TestClient::new();
 
-        let request = ReadTextFileRequest {
-            session_id: test_session_id(),
-            path: PathBuf::from("/nonexistent.txt"),
-            line: None,
-            limit: None,
-            meta: None,
-        };
+        let request =
+            ReadTextFileRequest::new(test_session_id(), PathBuf::from("/nonexistent.txt"));
 
         let result = client.read_text_file(request).await;
         assert!(result.is_err());
@@ -237,13 +223,9 @@ mod tests {
         let client = TestClient::new();
         client.add_file("/test/multi.txt", "line1\nline2\nline3\nline4");
 
-        let request = ReadTextFileRequest {
-            session_id: test_session_id(),
-            path: PathBuf::from("/test/multi.txt"),
-            line: Some(2),  // Start at line 2 (0-indexed becomes line 1)
-            limit: Some(2), // Read 2 lines
-            meta: None,
-        };
+        let request = ReadTextFileRequest::new(test_session_id(), PathBuf::from("/test/multi.txt"))
+            .line(2) // Start at line 2 (0-indexed becomes line 1)
+            .limit(2); // Read 2 lines
 
         let response = client.read_text_file(request).await.unwrap();
         assert_eq!(response.content, "line2\nline3");
@@ -253,12 +235,11 @@ mod tests {
     async fn test_write_new_file() {
         let client = TestClient::new();
 
-        let request = WriteTextFileRequest {
-            session_id: test_session_id(),
-            path: PathBuf::from("/test/new.txt"),
-            content: "New content".to_string(),
-            meta: None,
-        };
+        let request = WriteTextFileRequest::new(
+            test_session_id(),
+            PathBuf::from("/test/new.txt"),
+            "New content".to_string(),
+        );
 
         let result = client.write_text_file(request).await;
         assert!(result.is_ok());
@@ -275,12 +256,11 @@ mod tests {
         let client = TestClient::new();
         client.add_file("/test/existing.txt", "Old content");
 
-        let request = WriteTextFileRequest {
-            session_id: test_session_id(),
-            path: PathBuf::from("/test/existing.txt"),
-            content: "New content".to_string(),
-            meta: None,
-        };
+        let request = WriteTextFileRequest::new(
+            test_session_id(),
+            PathBuf::from("/test/existing.txt"),
+            "New content".to_string(),
+        );
 
         client.write_text_file(request).await.unwrap();
 
@@ -295,22 +275,13 @@ mod tests {
     async fn test_session_notification_succeeds() {
         let client = TestClient::new();
 
-        let notification = SessionNotification {
-            session_id: test_session_id(),
-            update: agent_client_protocol::SessionUpdate::AgentMessageChunk(
-                agent_client_protocol::ContentChunk {
-                    content: agent_client_protocol::ContentBlock::Text(
-                        agent_client_protocol::TextContent {
-                            text: "test".to_string(),
-                            annotations: None,
-                            meta: None,
-                        },
-                    ),
-                    meta: None,
-                },
-            ),
-            meta: None,
-        };
+        let text_content = agent_client_protocol::TextContent::new("test".to_string());
+        let content_block = agent_client_protocol::ContentBlock::Text(text_content);
+        let content_chunk = agent_client_protocol::ContentChunk::new(content_block);
+        let notification = agent_client_protocol::SessionNotification::new(
+            test_session_id(),
+            agent_client_protocol::SessionUpdate::AgentMessageChunk(content_chunk),
+        );
 
         let result = client.session_notification(notification).await;
         assert!(result.is_ok());
@@ -320,24 +291,19 @@ mod tests {
     async fn test_request_permission_auto_approves() {
         let client = TestClient::new();
 
-        let request = RequestPermissionRequest {
-            session_id: test_session_id(),
-            tool_call: agent_client_protocol::ToolCallUpdate {
-                id: agent_client_protocol::ToolCallId::new("tool-1"),
-                fields: agent_client_protocol::ToolCallUpdateFields {
-                    title: Some("test-tool".to_string()),
-                    ..Default::default()
-                },
-                meta: None,
-            },
-            options: vec![],
-            meta: None,
-        };
+        let fields =
+            agent_client_protocol::ToolCallUpdateFields::new().title("test-tool".to_string());
+        let tool_call_update = agent_client_protocol::ToolCallUpdate::new(
+            agent_client_protocol::ToolCallId::new("tool-1"),
+            fields,
+        );
+
+        let request = RequestPermissionRequest::new(test_session_id(), tool_call_update, vec![]);
 
         let response = client.request_permission(request).await.unwrap();
         match response.outcome {
-            agent_client_protocol::RequestPermissionOutcome::Selected { option_id } => {
-                assert_eq!(option_id.0.as_ref(), "allow");
+            agent_client_protocol::RequestPermissionOutcome::Selected(selected) => {
+                assert_eq!(selected.option_id.0.as_ref(), "allow");
             }
             _ => panic!("Expected Selected outcome with 'allow'"),
         }

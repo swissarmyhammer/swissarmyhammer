@@ -286,17 +286,17 @@ impl ClaudeAgentServer {
                     AgentError::Protocol("Failed to convert params to RawValue".to_string())
                 })?;
 
-                let ext_request = agent_client_protocol::ExtRequest {
-                    method: method.to_string().into(),
-                    params: Arc::from(params_raw),
-                };
+                let ext_request = agent_client_protocol::ExtRequest::new(
+                    method.to_string(),
+                    Arc::from(params_raw),
+                );
                 agent
                     .ext_method(ext_request)
                     .await
-                    .map(|raw_value| {
+                    .map(|ext_response| {
                         // Parse the RawValue back to serde_json::Value
-                        serde_json::from_str(raw_value.get()).unwrap_or_else(|_| {
-                            serde_json::Value::String(raw_value.get().to_string())
+                        serde_json::from_str(ext_response.0.get()).unwrap_or_else(|_| {
+                            serde_json::Value::String(ext_response.0.get().to_string())
                         })
                     })
                     .map_err(|e| {

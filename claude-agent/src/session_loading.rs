@@ -82,7 +82,7 @@ impl EnhancedSessionLoader {
                 );
                 return Err(SessionSetupError::SessionStorageFailure {
                     session_id: Some(agent_client_protocol::SessionId::new(
-                        session_id.to_string().into(),
+                        session_id.to_string(),
                     )),
                     storage_error: e.to_string(),
                     recovery_suggestion: "Check session storage backend and retry".to_string(),
@@ -217,23 +217,37 @@ impl EnhancedSessionLoader {
 
         for (i, message) in session.context.iter().enumerate() {
             // Use SessionUpdate stored directly in the message
-            let notification = SessionNotification {
-                session_id: agent_client_protocol::SessionId::new(session.id.to_string()),
-                update: message.update.clone(),
-                meta: Some(serde_json::json!({
-                    "timestamp": message.timestamp
-                        .duration_since(UNIX_EPOCH)
-                        .unwrap_or_default()
-                        .as_secs(),
-                    "message_type": "historical_replay",
-                    "message_index": i,
-                    "total_messages": session.context.len(),
-                    "session_age": SystemTime::now()
-                        .duration_since(session.created_at)
-                        .unwrap_or_default()
-                        .as_secs()
-                })),
-            };
+            let mut meta_map = serde_json::Map::new();
+            meta_map.insert(
+                "timestamp".to_string(),
+                serde_json::json!(message
+                    .timestamp
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs()),
+            );
+            meta_map.insert(
+                "message_type".to_string(),
+                serde_json::json!("historical_replay"),
+            );
+            meta_map.insert("message_index".to_string(), serde_json::json!(i));
+            meta_map.insert(
+                "total_messages".to_string(),
+                serde_json::json!(session.context.len()),
+            );
+            meta_map.insert(
+                "session_age".to_string(),
+                serde_json::json!(SystemTime::now()
+                    .duration_since(session.created_at)
+                    .unwrap_or_default()
+                    .as_secs()),
+            );
+
+            let notification = SessionNotification::new(
+                agent_client_protocol::SessionId::new(session.id.to_string()),
+                message.update.clone(),
+            )
+            .meta(meta_map);
 
             notifications.push(notification);
 
@@ -298,29 +312,56 @@ impl EnhancedSessionLoader {
         session: &Session,
         request: &LoadSessionRequest,
     ) -> LoadSessionResponse {
-        LoadSessionResponse {
-            modes: None, // No specific modes for now
-            meta: Some(serde_json::json!({
-                "session_id": session.id.to_string(),
-                "created_at": session.created_at
-                    .duration_since(UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_secs(),
-                "last_accessed": session.last_accessed
-                    .duration_since(UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_secs(),
-                "message_count": session.context.len(),
-                "client_capabilities": session.client_capabilities.is_some(),
-                "mcp_servers": session.mcp_servers.clone(),
-                "requested_cwd": request.cwd.display().to_string(),
-                "requested_mcp_servers": request.mcp_servers.len(),
-                "load_timestamp": SystemTime::now()
-                    .duration_since(UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_secs()
-            })),
-        }
+        let mut meta = serde_json::Map::new();
+        meta.insert(
+            "session_id".to_string(),
+            serde_json::json!(session.id.to_string()),
+        );
+        meta.insert(
+            "created_at".to_string(),
+            serde_json::json!(session
+                .created_at
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs()),
+        );
+        meta.insert(
+            "last_accessed".to_string(),
+            serde_json::json!(session
+                .last_accessed
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs()),
+        );
+        meta.insert(
+            "message_count".to_string(),
+            serde_json::json!(session.context.len()),
+        );
+        meta.insert(
+            "client_capabilities".to_string(),
+            serde_json::json!(session.client_capabilities.is_some()),
+        );
+        meta.insert(
+            "mcp_servers".to_string(),
+            serde_json::json!(session.mcp_servers.clone()),
+        );
+        meta.insert(
+            "requested_cwd".to_string(),
+            serde_json::json!(request.cwd.display().to_string()),
+        );
+        meta.insert(
+            "requested_mcp_servers".to_string(),
+            serde_json::json!(request.mcp_servers.len()),
+        );
+        meta.insert(
+            "load_timestamp".to_string(),
+            serde_json::json!(SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs()),
+        );
+
+        LoadSessionResponse::new().meta(meta)
     }
 
     /// Convert ACP MCP server config to internal type for validation
@@ -333,13 +374,9 @@ impl EnhancedSessionLoader {
         use agent_client_protocol::McpServer;
 
         match acp_config {
-            McpServer::Stdio {
-                name,
-                command,
-                args,
-                env,
-            } => {
-                let internal_env = env
+            McpServer::Stdio(stdio) => {
+                let internal_env = stdio
+                    .env
                     .iter()
                     .map(|env_var| EnvVariable {
                         name: env_var.name.clone(),
@@ -348,15 +385,16 @@ impl EnhancedSessionLoader {
                     .collect();
 
                 Some(McpServerConfig::Stdio(StdioTransport {
-                    name: name.clone(),
-                    command: command.to_string_lossy().to_string(),
-                    args: args.clone(),
+                    name: stdio.name.clone(),
+                    command: stdio.command.to_string_lossy().to_string(),
+                    args: stdio.args.clone(),
                     env: internal_env,
                     cwd: None, // ACP doesn't specify cwd, use default
                 }))
             }
-            McpServer::Http { name, url, headers } => {
-                let internal_headers = headers
+            McpServer::Http(http) => {
+                let internal_headers = http
+                    .headers
                     .iter()
                     .map(|header| HttpHeader {
                         name: header.name.clone(),
@@ -366,13 +404,14 @@ impl EnhancedSessionLoader {
 
                 Some(McpServerConfig::Http(HttpTransport {
                     transport_type: "http".to_string(),
-                    name: name.clone(),
-                    url: url.clone(),
+                    name: http.name.clone(),
+                    url: http.url.clone(),
                     headers: internal_headers,
                 }))
             }
-            McpServer::Sse { name, url, headers } => {
-                let internal_headers = headers
+            McpServer::Sse(sse) => {
+                let internal_headers = sse
+                    .headers
                     .iter()
                     .map(|header| HttpHeader {
                         name: header.name.clone(),
@@ -382,10 +421,15 @@ impl EnhancedSessionLoader {
 
                 Some(McpServerConfig::Sse(SseTransport {
                     transport_type: "sse".to_string(),
-                    name: name.clone(),
-                    url: url.clone(),
+                    name: sse.name.clone(),
+                    url: sse.url.clone(),
                     headers: internal_headers,
                 }))
+            }
+            _ => {
+                // Unknown MCP server type, skip it
+                tracing::warn!("Unknown MCP server type, skipping");
+                None
             }
         }
     }
@@ -432,19 +476,30 @@ impl SessionHistoryReplayer {
 
         for (i, message) in session.context.iter().enumerate() {
             // Use SessionUpdate stored directly in message
-            let notification = SessionNotification {
-                session_id: agent_client_protocol::SessionId::new(session.id.to_string()),
-                update: message.update.clone(),
-                meta: Some(serde_json::json!({
-                    "timestamp": message.timestamp
-                        .duration_since(UNIX_EPOCH)
-                        .unwrap_or_default()
-                        .as_secs(),
-                    "message_type": "historical_replay",
-                    "message_index": i,
-                    "total_messages": total_messages
-                })),
-            };
+            let mut meta_map = serde_json::Map::new();
+            meta_map.insert(
+                "timestamp".to_string(),
+                serde_json::json!(message
+                    .timestamp
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs()),
+            );
+            meta_map.insert(
+                "message_type".to_string(),
+                serde_json::json!("historical_replay"),
+            );
+            meta_map.insert("message_index".to_string(), serde_json::json!(i));
+            meta_map.insert(
+                "total_messages".to_string(),
+                serde_json::json!(total_messages),
+            );
+
+            let notification = SessionNotification::new(
+                agent_client_protocol::SessionId::new(session.id.to_string()),
+                message.update.clone(),
+            )
+            .meta(meta_map);
 
             // Send notification with error handling
             match notification_sender.send_notification(notification).await {
@@ -473,7 +528,7 @@ impl SessionHistoryReplayer {
                         );
                         return Err(SessionSetupError::SessionHistoryReplayFailed {
                             session_id: agent_client_protocol::SessionId::new(
-                                session.id.to_string().into(),
+                                session.id.to_string(),
                             ),
                             failed_at_message: i,
                             total_messages,
@@ -629,17 +684,14 @@ mod tests {
         let session_manager = SessionManager::new();
         let loader = EnhancedSessionLoader::new(session_manager);
 
-        let request = LoadSessionRequest {
-            session_id: SessionId::new("01ARZ3NDEKTSV4RRFFQ69G5FAV"),
-            cwd: std::env::current_dir().unwrap(),
-            mcp_servers: vec![McpServer::Stdio {
-                name: "test-server".to_string(),
-                command: PathBuf::from("echo"),
-                args: vec!["hello".to_string()],
-                env: vec![],
-            }],
-            meta: None,
-        };
+        let stdio =
+            agent_client_protocol::McpServerStdio::new("test-server", PathBuf::from("echo"))
+                .args(vec!["hello".to_string()]);
+        let request = LoadSessionRequest::new(
+            SessionId::new("01ARZ3NDEKTSV4RRFFQ69G5FAV"),
+            std::env::current_dir().unwrap(),
+        )
+        .mcp_servers(vec![McpServer::Stdio(stdio)]);
 
         let result = loader.validate_load_request(&request);
         assert!(result.is_ok());
@@ -652,16 +704,16 @@ mod tests {
         let session_manager = SessionManager::new();
         let loader = EnhancedSessionLoader::new(session_manager);
 
-        let request = LoadSessionRequest {
-            session_id: SessionId::new("01ARZ3NDEKTSV4RRFFQ69G5FAV"),
-            cwd: std::env::current_dir().unwrap(),
-            mcp_servers: vec![McpServer::Http {
-                name: "test-http-server".to_string(),
-                url: "https://example.com/mcp".to_string(),
-                headers: vec![],
-            }],
-            meta: None,
-        };
+        let request = LoadSessionRequest::new(
+            SessionId::new("01ARZ3NDEKTSV4RRFFQ69G5FAV"),
+            std::env::current_dir().unwrap(),
+        )
+        .mcp_servers(vec![McpServer::Http(
+            agent_client_protocol::McpServerHttp::new(
+                "test-http-server",
+                "https://example.com/mcp",
+            ),
+        )]);
 
         let result = loader.validate_load_request(&request);
         assert!(result.is_ok());
@@ -674,16 +726,13 @@ mod tests {
         let session_manager = SessionManager::new();
         let loader = EnhancedSessionLoader::new(session_manager);
 
-        let request = LoadSessionRequest {
-            session_id: SessionId::new("01ARZ3NDEKTSV4RRFFQ69G5FAV"),
-            cwd: std::env::current_dir().unwrap(),
-            mcp_servers: vec![McpServer::Sse {
-                name: "test-sse-server".to_string(),
-                url: "https://example.com/sse".to_string(),
-                headers: vec![],
-            }],
-            meta: None,
-        };
+        let request = LoadSessionRequest::new(
+            SessionId::new("01ARZ3NDEKTSV4RRFFQ69G5FAV"),
+            std::env::current_dir().unwrap(),
+        )
+        .mcp_servers(vec![McpServer::Sse(
+            agent_client_protocol::McpServerSse::new("test-sse-server", "https://example.com/sse"),
+        )]);
 
         let result = loader.validate_load_request(&request);
         assert!(result.is_ok());
@@ -699,11 +748,10 @@ mod tests {
         let request = LoadSessionRequest {
             session_id: SessionId::new("01ARZ3NDEKTSV4RRFFQ69G5FAV"),
             cwd: std::env::current_dir().unwrap(),
-            mcp_servers: vec![McpServer::Http {
-                name: "test-http-server".to_string(),
-                url: "not-a-valid-url".to_string(),
-                headers: vec![],
-            }],
+            mcp_servers: vec![McpServer::Http(agent_client_protocol::McpServerHttp::new(
+                "test-http-server",
+                "not-a-valid-url",
+            ))],
             meta: None,
         };
 
@@ -724,16 +772,13 @@ mod tests {
         let session_manager = SessionManager::new();
         let loader = EnhancedSessionLoader::new(session_manager);
 
-        let request = LoadSessionRequest {
-            session_id: SessionId::new("01ARZ3NDEKTSV4RRFFQ69G5FAV"),
-            cwd: std::env::current_dir().unwrap(),
-            mcp_servers: vec![McpServer::Sse {
-                name: "test-sse-server".to_string(),
-                url: "invalid://url".to_string(),
-                headers: vec![],
-            }],
-            meta: None,
-        };
+        let request = LoadSessionRequest::new(
+            SessionId::new("01ARZ3NDEKTSV4RRFFQ69G5FAV"),
+            std::env::current_dir().unwrap(),
+        )
+        .mcp_servers(vec![McpServer::Sse(
+            agent_client_protocol::McpServerSse::new("test-sse-server", "invalid://url"),
+        )]);
 
         let result = loader.validate_load_request(&request);
         assert!(result.is_err());
@@ -753,29 +798,23 @@ mod tests {
         let session_manager = SessionManager::new();
         let loader = EnhancedSessionLoader::new(session_manager);
 
-        let request = LoadSessionRequest {
-            session_id: SessionId::new("01ARZ3NDEKTSV4RRFFQ69G5FAV"),
-            cwd: std::env::current_dir().unwrap(),
-            mcp_servers: vec![
-                McpServer::Stdio {
-                    name: "stdio-server".to_string(),
-                    command: PathBuf::from("echo"),
-                    args: vec![],
-                    env: vec![],
-                },
-                McpServer::Http {
-                    name: "http-server".to_string(),
-                    url: "https://example.com/mcp".to_string(),
-                    headers: vec![],
-                },
-                McpServer::Sse {
-                    name: "sse-server".to_string(),
-                    url: "https://example.com/sse".to_string(),
-                    headers: vec![],
-                },
-            ],
-            meta: None,
-        };
+        let stdio =
+            agent_client_protocol::McpServerStdio::new("stdio-server", PathBuf::from("echo"));
+        let request = LoadSessionRequest::new(
+            SessionId::new("01ARZ3NDEKTSV4RRFFQ69G5FAV"),
+            std::env::current_dir().unwrap(),
+        )
+        .mcp_servers(vec![
+            McpServer::Stdio(stdio),
+            McpServer::Http(agent_client_protocol::McpServerHttp::new(
+                "http-server",
+                "https://example.com/mcp",
+            )),
+            McpServer::Sse(agent_client_protocol::McpServerSse::new(
+                "sse-server",
+                "https://example.com/sse",
+            )),
+        ]);
 
         let result = loader.validate_load_request(&request);
         assert!(result.is_ok());
@@ -789,17 +828,15 @@ mod tests {
         let session_manager = SessionManager::new();
         let loader = EnhancedSessionLoader::new(session_manager);
 
-        let request = LoadSessionRequest {
-            session_id: SessionId::new("01ARZ3NDEKTSV4RRFFQ69G5FAV"),
-            cwd: std::env::current_dir().unwrap(),
-            mcp_servers: vec![McpServer::Stdio {
-                name: "nonexistent-server".to_string(),
-                command: PathBuf::from("/absolute/path/to/nonexistent/command"),
-                args: vec![],
-                env: vec![],
-            }],
-            meta: None,
-        };
+        let stdio = agent_client_protocol::McpServerStdio::new(
+            "nonexistent-server",
+            PathBuf::from("/absolute/path/to/nonexistent/command"),
+        );
+        let request = LoadSessionRequest::new(
+            SessionId::new("01ARZ3NDEKTSV4RRFFQ69G5FAV"),
+            std::env::current_dir().unwrap(),
+        )
+        .mcp_servers(vec![McpServer::Stdio(stdio)]);
 
         let result = loader.validate_load_request(&request);
         assert!(result.is_err());

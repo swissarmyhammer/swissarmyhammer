@@ -44,15 +44,11 @@ fn create_test_environment() -> (
         ToolCallHandler::new(permissions, Arc::clone(&session_manager), permission_engine);
 
     // Set client capabilities
-    let capabilities = agent_client_protocol::ClientCapabilities {
-        fs: agent_client_protocol::FileSystemCapability {
-            read_text_file: true,
-            write_text_file: true,
-            meta: None,
-        },
-        terminal: true,
-        meta: None,
-    };
+    let capabilities = agent_client_protocol::ClientCapabilities::new()
+        .fs(agent_client_protocol::FileSystemCapability::new()
+            .read_text_file(true)
+            .write_text_file(true))
+        .terminal(true);
     handler.set_client_capabilities(capabilities);
 
     // Create a session
@@ -240,22 +236,18 @@ async fn test_stored_permission_allows_tool_without_prompt() {
         Arc::clone(&permission_engine),
     );
 
-    let capabilities = agent_client_protocol::ClientCapabilities {
-        fs: agent_client_protocol::FileSystemCapability {
-            read_text_file: true,
-            write_text_file: true,
-            meta: None,
-        },
-        terminal: true,
-        meta: None,
-    };
+    let capabilities = agent_client_protocol::ClientCapabilities::new()
+        .fs(agent_client_protocol::FileSystemCapability::new()
+            .read_text_file(true)
+            .write_text_file(true))
+        .terminal(true);
     handler.set_client_capabilities(capabilities);
 
     let test_dir = TempDir::new().unwrap();
     let internal_session_id = session_manager
         .create_session(test_dir.path().to_path_buf(), None)
         .unwrap();
-    let session_id = agent_client_protocol::SessionId(internal_session_id.to_string().into());
+    let session_id = agent_client_protocol::SessionId::new(internal_session_id.to_string());
 
     // Store an allow-always permission for fs_write
     permission_engine
@@ -317,22 +309,18 @@ async fn test_stored_permission_denies_tool() {
         Arc::clone(&permission_engine),
     );
 
-    let capabilities = agent_client_protocol::ClientCapabilities {
-        fs: agent_client_protocol::FileSystemCapability {
-            read_text_file: true,
-            write_text_file: true,
-            meta: None,
-        },
-        terminal: true,
-        meta: None,
-    };
+    let capabilities = agent_client_protocol::ClientCapabilities::new()
+        .fs(agent_client_protocol::FileSystemCapability::new()
+            .read_text_file(true)
+            .write_text_file(true))
+        .terminal(true);
     handler.set_client_capabilities(capabilities);
 
     let test_dir = TempDir::new().unwrap();
     let internal_session_id = session_manager
         .create_session(test_dir.path().to_path_buf(), None)
         .unwrap();
-    let session_id = agent_client_protocol::SessionId(internal_session_id.to_string().into());
+    let session_id = agent_client_protocol::SessionId::new(internal_session_id.to_string());
 
     // Store a deny-always permission for fs_write
     permission_engine
@@ -396,22 +384,18 @@ async fn test_custom_policy_denies_tool() {
     let mut handler =
         ToolCallHandler::new(permissions, Arc::clone(&session_manager), permission_engine);
 
-    let capabilities = agent_client_protocol::ClientCapabilities {
-        fs: agent_client_protocol::FileSystemCapability {
-            read_text_file: true,
-            write_text_file: true,
-            meta: None,
-        },
-        terminal: true,
-        meta: None,
-    };
+    let capabilities = agent_client_protocol::ClientCapabilities::new()
+        .fs(agent_client_protocol::FileSystemCapability::new()
+            .read_text_file(true)
+            .write_text_file(true))
+        .terminal(true);
     handler.set_client_capabilities(capabilities);
 
     let test_dir = TempDir::new().unwrap();
     let internal_session_id = session_manager
         .create_session(test_dir.path().to_path_buf(), None)
         .unwrap();
-    let session_id = agent_client_protocol::SessionId(internal_session_id.to_string().into());
+    let session_id = agent_client_protocol::SessionId::new(internal_session_id.to_string());
 
     let test_file = test_dir.path().join("denied_by_policy.txt");
 
@@ -469,22 +453,18 @@ async fn test_custom_policy_allows_tool() {
     let mut handler =
         ToolCallHandler::new(permissions, Arc::clone(&session_manager), permission_engine);
 
-    let capabilities = agent_client_protocol::ClientCapabilities {
-        fs: agent_client_protocol::FileSystemCapability {
-            read_text_file: true,
-            write_text_file: true,
-            meta: None,
-        },
-        terminal: true,
-        meta: None,
-    };
+    let capabilities = agent_client_protocol::ClientCapabilities::new()
+        .fs(agent_client_protocol::FileSystemCapability::new()
+            .read_text_file(true)
+            .write_text_file(true))
+        .terminal(true);
     handler.set_client_capabilities(capabilities);
 
     let test_dir = TempDir::new().unwrap();
     let internal_session_id = session_manager
         .create_session(test_dir.path().to_path_buf(), None)
         .unwrap();
-    let session_id = agent_client_protocol::SessionId(internal_session_id.to_string().into());
+    let session_id = agent_client_protocol::SessionId::new(internal_session_id.to_string());
 
     let test_file = test_dir.path().join("allowed_by_policy.txt");
 
@@ -542,22 +522,18 @@ async fn test_pattern_matching_in_permissions() {
         Arc::clone(&permission_engine),
     );
 
-    let capabilities = agent_client_protocol::ClientCapabilities {
-        fs: agent_client_protocol::FileSystemCapability {
-            read_text_file: true,
-            write_text_file: true,
-            meta: None,
-        },
-        terminal: true,
-        meta: None,
-    };
+    let capabilities = agent_client_protocol::ClientCapabilities::new()
+        .fs(agent_client_protocol::FileSystemCapability::new()
+            .read_text_file(true)
+            .write_text_file(true))
+        .terminal(true);
     handler.set_client_capabilities(capabilities);
 
     let test_dir = TempDir::new().unwrap();
     let internal_session_id = session_manager
         .create_session(test_dir.path().to_path_buf(), None)
         .unwrap();
-    let session_id = agent_client_protocol::SessionId(internal_session_id.to_string().into());
+    let session_id = agent_client_protocol::SessionId::new(internal_session_id.to_string());
 
     // Both fs_read and fs_write should be allowed by the wildcard permission
     let test_file = test_dir.path().join("pattern_test.txt");
@@ -631,22 +607,18 @@ async fn test_permission_expiration() {
     let mut handler =
         ToolCallHandler::new(permissions, Arc::clone(&session_manager), permission_engine);
 
-    let capabilities = agent_client_protocol::ClientCapabilities {
-        fs: agent_client_protocol::FileSystemCapability {
-            read_text_file: true,
-            write_text_file: true,
-            meta: None,
-        },
-        terminal: true,
-        meta: None,
-    };
+    let capabilities = agent_client_protocol::ClientCapabilities::new()
+        .fs(agent_client_protocol::FileSystemCapability::new()
+            .read_text_file(true)
+            .write_text_file(true))
+        .terminal(true);
     handler.set_client_capabilities(capabilities);
 
     let test_dir = TempDir::new().unwrap();
     let internal_session_id = session_manager
         .create_session(test_dir.path().to_path_buf(), None)
         .unwrap();
-    let session_id = agent_client_protocol::SessionId(internal_session_id.to_string().into());
+    let session_id = agent_client_protocol::SessionId::new(internal_session_id.to_string());
 
     let test_file = test_dir.path().join("expired_permission.txt");
 
@@ -692,22 +664,18 @@ async fn test_auto_approved_fs_read_bypasses_policy() {
     let mut handler =
         ToolCallHandler::new(permissions, Arc::clone(&session_manager), permission_engine);
 
-    let capabilities = agent_client_protocol::ClientCapabilities {
-        fs: agent_client_protocol::FileSystemCapability {
-            read_text_file: true,
-            write_text_file: true,
-            meta: None,
-        },
-        terminal: true,
-        meta: None,
-    };
+    let capabilities = agent_client_protocol::ClientCapabilities::new()
+        .fs(agent_client_protocol::FileSystemCapability::new()
+            .read_text_file(true)
+            .write_text_file(true))
+        .terminal(true);
     handler.set_client_capabilities(capabilities);
 
     let test_dir = TempDir::new().unwrap();
     let internal_session_id = session_manager
         .create_session(test_dir.path().to_path_buf(), None)
         .unwrap();
-    let session_id = agent_client_protocol::SessionId(internal_session_id.to_string().into());
+    let session_id = agent_client_protocol::SessionId::new(internal_session_id.to_string());
 
     // Create a test file
     let test_file = test_dir.path().join("auto_approved_read.txt");
@@ -757,22 +725,18 @@ async fn test_auto_approved_fs_write_bypasses_policy() {
     let mut handler =
         ToolCallHandler::new(permissions, Arc::clone(&session_manager), permission_engine);
 
-    let capabilities = agent_client_protocol::ClientCapabilities {
-        fs: agent_client_protocol::FileSystemCapability {
-            read_text_file: true,
-            write_text_file: true,
-            meta: None,
-        },
-        terminal: true,
-        meta: None,
-    };
+    let capabilities = agent_client_protocol::ClientCapabilities::new()
+        .fs(agent_client_protocol::FileSystemCapability::new()
+            .read_text_file(true)
+            .write_text_file(true))
+        .terminal(true);
     handler.set_client_capabilities(capabilities);
 
     let test_dir = TempDir::new().unwrap();
     let internal_session_id = session_manager
         .create_session(test_dir.path().to_path_buf(), None)
         .unwrap();
-    let session_id = agent_client_protocol::SessionId(internal_session_id.to_string().into());
+    let session_id = agent_client_protocol::SessionId::new(internal_session_id.to_string());
 
     let test_file = test_dir.path().join("auto_approved_write.txt");
 
@@ -823,22 +787,18 @@ async fn test_auto_approved_terminal_bypasses_policy() {
     let mut handler =
         ToolCallHandler::new(permissions, Arc::clone(&session_manager), permission_engine);
 
-    let capabilities = agent_client_protocol::ClientCapabilities {
-        fs: agent_client_protocol::FileSystemCapability {
-            read_text_file: true,
-            write_text_file: true,
-            meta: None,
-        },
-        terminal: true,
-        meta: None,
-    };
+    let capabilities = agent_client_protocol::ClientCapabilities::new()
+        .fs(agent_client_protocol::FileSystemCapability::new()
+            .read_text_file(true)
+            .write_text_file(true))
+        .terminal(true);
     handler.set_client_capabilities(capabilities);
 
     let test_dir = TempDir::new().unwrap();
     let internal_session_id = session_manager
         .create_session(test_dir.path().to_path_buf(), None)
         .unwrap();
-    let session_id = agent_client_protocol::SessionId(internal_session_id.to_string().into());
+    let session_id = agent_client_protocol::SessionId::new(internal_session_id.to_string());
 
     // terminal_create should be auto-approved and bypass policy engine (normally requires permission)
     let request = InternalToolRequest {
@@ -887,22 +847,18 @@ async fn test_auto_approved_multiple_tools() {
     let mut handler =
         ToolCallHandler::new(permissions, Arc::clone(&session_manager), permission_engine);
 
-    let capabilities = agent_client_protocol::ClientCapabilities {
-        fs: agent_client_protocol::FileSystemCapability {
-            read_text_file: true,
-            write_text_file: true,
-            meta: None,
-        },
-        terminal: true,
-        meta: None,
-    };
+    let capabilities = agent_client_protocol::ClientCapabilities::new()
+        .fs(agent_client_protocol::FileSystemCapability::new()
+            .read_text_file(true)
+            .write_text_file(true))
+        .terminal(true);
     handler.set_client_capabilities(capabilities);
 
     let test_dir = TempDir::new().unwrap();
     let internal_session_id = session_manager
         .create_session(test_dir.path().to_path_buf(), None)
         .unwrap();
-    let session_id = agent_client_protocol::SessionId(internal_session_id.to_string().into());
+    let session_id = agent_client_protocol::SessionId::new(internal_session_id.to_string());
 
     // Test fs_write (auto-approved)
     let write_file = test_dir.path().join("multi_approved.txt");
@@ -978,22 +934,18 @@ async fn test_non_auto_approved_tool_still_requires_permission() {
     let mut handler =
         ToolCallHandler::new(permissions, Arc::clone(&session_manager), permission_engine);
 
-    let capabilities = agent_client_protocol::ClientCapabilities {
-        fs: agent_client_protocol::FileSystemCapability {
-            read_text_file: true,
-            write_text_file: true,
-            meta: None,
-        },
-        terminal: true,
-        meta: None,
-    };
+    let capabilities = agent_client_protocol::ClientCapabilities::new()
+        .fs(agent_client_protocol::FileSystemCapability::new()
+            .read_text_file(true)
+            .write_text_file(true))
+        .terminal(true);
     handler.set_client_capabilities(capabilities);
 
     let test_dir = TempDir::new().unwrap();
     let internal_session_id = session_manager
         .create_session(test_dir.path().to_path_buf(), None)
         .unwrap();
-    let session_id = agent_client_protocol::SessionId(internal_session_id.to_string().into());
+    let session_id = agent_client_protocol::SessionId::new(internal_session_id.to_string());
 
     let test_file = test_dir.path().join("not_auto_approved.txt");
 
@@ -1057,22 +1009,18 @@ async fn test_auto_approved_with_deny_policy_still_denied() {
     let mut handler =
         ToolCallHandler::new(permissions, Arc::clone(&session_manager), permission_engine);
 
-    let capabilities = agent_client_protocol::ClientCapabilities {
-        fs: agent_client_protocol::FileSystemCapability {
-            read_text_file: true,
-            write_text_file: true,
-            meta: None,
-        },
-        terminal: true,
-        meta: None,
-    };
+    let capabilities = agent_client_protocol::ClientCapabilities::new()
+        .fs(agent_client_protocol::FileSystemCapability::new()
+            .read_text_file(true)
+            .write_text_file(true))
+        .terminal(true);
     handler.set_client_capabilities(capabilities);
 
     let test_dir = TempDir::new().unwrap();
     let internal_session_id = session_manager
         .create_session(test_dir.path().to_path_buf(), None)
         .unwrap();
-    let session_id = agent_client_protocol::SessionId(internal_session_id.to_string().into());
+    let session_id = agent_client_protocol::SessionId::new(internal_session_id.to_string());
 
     let test_file = test_dir.path().join("auto_approved_but_denied.txt");
 
@@ -1124,15 +1072,11 @@ async fn test_fs_read_fails_without_read_capability() {
         ToolCallHandler::new(permissions, Arc::clone(&session_manager), permission_engine);
 
     // Set capabilities with read_text_file disabled
-    let capabilities = agent_client_protocol::ClientCapabilities {
-        fs: agent_client_protocol::FileSystemCapability {
-            read_text_file: false, // Capability disabled
-            write_text_file: true,
-            meta: None,
-        },
-        terminal: true,
-        meta: None,
-    };
+    let capabilities = agent_client_protocol::ClientCapabilities::new()
+        .fs(agent_client_protocol::FileSystemCapability::new()
+            .read_text_file(false) // Capability disabled
+            .write_text_file(true))
+        .terminal(true);
     handler.set_client_capabilities(capabilities);
 
     let test_file = temp_dir.path().join("test.txt");
@@ -1185,15 +1129,11 @@ async fn test_fs_write_fails_without_write_capability() {
         ToolCallHandler::new(permissions, Arc::clone(&session_manager), permission_engine);
 
     // Set capabilities with write_text_file disabled
-    let capabilities = agent_client_protocol::ClientCapabilities {
-        fs: agent_client_protocol::FileSystemCapability {
-            read_text_file: true,
-            write_text_file: false, // Capability disabled
-            meta: None,
-        },
-        terminal: true,
-        meta: None,
-    };
+    let capabilities = agent_client_protocol::ClientCapabilities::new()
+        .fs(agent_client_protocol::FileSystemCapability::new()
+            .read_text_file(true)
+            .write_text_file(false)) // Capability disabled
+        .terminal(true);
     handler.set_client_capabilities(capabilities);
 
     let test_file = temp_dir.path().join("write_test.txt");
@@ -1246,15 +1186,11 @@ async fn test_terminal_fails_without_terminal_capability() {
         ToolCallHandler::new(permissions, Arc::clone(&session_manager), permission_engine);
 
     // Set capabilities with terminal disabled
-    let capabilities = agent_client_protocol::ClientCapabilities {
-        fs: agent_client_protocol::FileSystemCapability {
-            read_text_file: true,
-            write_text_file: true,
-            meta: None,
-        },
-        terminal: false, // Capability disabled
-        meta: None,
-    };
+    let capabilities = agent_client_protocol::ClientCapabilities::new()
+        .fs(agent_client_protocol::FileSystemCapability::new()
+            .read_text_file(true)
+            .write_text_file(true))
+        .terminal(false); // Capability disabled
     handler.set_client_capabilities(capabilities);
 
     let internal_session_id = session_manager
@@ -1302,15 +1238,11 @@ async fn test_operations_fail_with_no_capabilities() {
         ToolCallHandler::new(permissions, Arc::clone(&session_manager), permission_engine);
 
     // Set capabilities with all filesystem and terminal capabilities disabled
-    let capabilities = agent_client_protocol::ClientCapabilities {
-        fs: agent_client_protocol::FileSystemCapability {
-            read_text_file: false,
-            write_text_file: false,
-            meta: None,
-        },
-        terminal: false,
-        meta: None,
-    };
+    let capabilities = agent_client_protocol::ClientCapabilities::new()
+        .fs(agent_client_protocol::FileSystemCapability::new()
+            .read_text_file(false)
+            .write_text_file(false))
+        .terminal(false);
     handler.set_client_capabilities(capabilities);
 
     let test_file = temp_dir.path().join("test.txt");

@@ -357,11 +357,10 @@ impl ToolCallHandler {
         // 2. This leaves previous_state as None, which ensures the first update will include all fields
         // 3. This "bootstrap" behavior guarantees clients receive complete state on first update
         if let Some(sender) = &self.notification_sender {
-            let notification = agent_client_protocol::SessionNotification {
-                session_id: session_id.clone(),
-                update: agent_client_protocol::SessionUpdate::ToolCall(report.to_acp_tool_call()),
-                meta: None,
-            };
+            let notification = agent_client_protocol::SessionNotification::new(
+                session_id.clone(),
+                agent_client_protocol::SessionUpdate::ToolCall(report.to_acp_tool_call()),
+            );
 
             if let Err(e) = sender.send_update(notification).await {
                 tracing::warn!(
@@ -390,13 +389,12 @@ impl ToolCallHandler {
 
                 // Send tool_call_update notification for status changes
                 if let Some(sender) = &self.notification_sender {
-                    let notification = agent_client_protocol::SessionNotification {
-                        session_id: session_id.clone(),
-                        update: agent_client_protocol::SessionUpdate::ToolCallUpdate(
+                    let notification = agent_client_protocol::SessionNotification::new(
+                        session_id.clone(),
+                        agent_client_protocol::SessionUpdate::ToolCallUpdate(
                             report.to_acp_tool_call_update(),
                         ),
-                        meta: None,
-                    };
+                    );
 
                     if let Err(e) = sender.send_update(notification).await {
                         tracing::warn!(
@@ -438,13 +436,12 @@ impl ToolCallHandler {
                 // Send final tool_call_update notification with completed status and results
                 // Include context fields (content/locations) in final update for full context
                 if let Some(sender) = &self.notification_sender {
-                    let notification = agent_client_protocol::SessionNotification {
-                        session_id: session_id.clone(),
-                        update: agent_client_protocol::SessionUpdate::ToolCallUpdate(
+                    let notification = agent_client_protocol::SessionNotification::new(
+                        session_id.clone(),
+                        agent_client_protocol::SessionUpdate::ToolCallUpdate(
                             report.to_acp_tool_call_update_with_context(true),
                         ),
-                        meta: None,
-                    };
+                    );
 
                     if let Err(e) = sender.send_update(notification).await {
                         tracing::warn!(
@@ -580,13 +577,12 @@ impl ToolCallHandler {
                 // Send final tool_call_update notification with failed status and error details
                 // Include context fields (content/locations) in final update for full context
                 if let Some(sender) = &self.notification_sender {
-                    let notification = agent_client_protocol::SessionNotification {
-                        session_id: session_id.clone(),
-                        update: agent_client_protocol::SessionUpdate::ToolCallUpdate(
+                    let notification = agent_client_protocol::SessionNotification::new(
+                        session_id.clone(),
+                        agent_client_protocol::SessionUpdate::ToolCallUpdate(
                             report.to_acp_tool_call_update_with_context(true),
                         ),
-                        meta: None,
-                    };
+                    );
 
                     if let Err(e) = sender.send_update(notification).await {
                         tracing::warn!(
@@ -621,13 +617,12 @@ impl ToolCallHandler {
                 // Send final tool_call_update notification with cancelled status
                 // Include context fields (content/locations) in final update for full context
                 if let Some(sender) = &self.notification_sender {
-                    let notification = agent_client_protocol::SessionNotification {
-                        session_id: session_id.clone(),
-                        update: agent_client_protocol::SessionUpdate::ToolCallUpdate(
+                    let notification = agent_client_protocol::SessionNotification::new(
+                        session_id.clone(),
+                        agent_client_protocol::SessionUpdate::ToolCallUpdate(
                             report.to_acp_tool_call_update_with_context(true),
                         ),
-                        meta: None,
-                    };
+                    );
 
                     if let Err(e) = sender.send_update(notification).await {
                         tracing::warn!(
@@ -931,6 +926,7 @@ impl ToolCallHandler {
 
     /// Check if a tool requires explicit permission
     #[cfg(test)]
+    #[allow(dead_code)]
     fn requires_permission(&self, tool_name: &str) -> bool {
         self.permissions
             .require_permission_for
@@ -1770,6 +1766,7 @@ impl ToolCallHandler {
 impl ToolCallHandler {
     /// Create a permission request for a tool that requires authorization
     #[cfg(test)]
+    #[allow(dead_code)]
     fn create_permission_request(
         &self,
         request: &InternalToolRequest,
@@ -4083,15 +4080,11 @@ mod tests {
             ToolCallHandler::new(permissions, session_manager.clone(), permission_engine);
 
         // Set client capabilities for file operations
-        let capabilities = agent_client_protocol::ClientCapabilities {
-            fs: agent_client_protocol::FileSystemCapability {
-                read_text_file: true,
-                write_text_file: true,
-                meta: None,
-            },
-            terminal: false,
-            meta: None,
-        };
+        let capabilities = agent_client_protocol::ClientCapabilities::new()
+            .fs(agent_client_protocol::FileSystemCapability::new()
+                .read_text_file(true)
+                .write_text_file(true))
+            .terminal(false);
         handler.set_client_capabilities(capabilities);
 
         // Create a temporary directory for testing

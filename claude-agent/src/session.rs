@@ -343,34 +343,25 @@ impl Message {
 
         let update = match role {
             MessageRole::User => {
-                SessionUpdate::UserMessageChunk(agent_client_protocol::ContentChunk {
-                    content: ContentBlock::Text(TextContent {
-                        text: content,
-                        annotations: None,
-                        meta: None,
-                    }),
-                    meta: None,
-                })
+                let text_content = TextContent::new(content);
+                let content_block = ContentBlock::Text(text_content);
+                SessionUpdate::UserMessageChunk(agent_client_protocol::ContentChunk::new(
+                    content_block,
+                ))
             }
             MessageRole::Assistant => {
-                SessionUpdate::AgentMessageChunk(agent_client_protocol::ContentChunk {
-                    content: ContentBlock::Text(TextContent {
-                        text: content,
-                        annotations: None,
-                        meta: None,
-                    }),
-                    meta: None,
-                })
+                let text_content = TextContent::new(content);
+                let content_block = ContentBlock::Text(text_content);
+                SessionUpdate::AgentMessageChunk(agent_client_protocol::ContentChunk::new(
+                    content_block,
+                ))
             }
             MessageRole::System => {
-                SessionUpdate::AgentMessageChunk(agent_client_protocol::ContentChunk {
-                    content: ContentBlock::Text(TextContent {
-                        text: format!("[System] {}", content),
-                        annotations: None,
-                        meta: None,
-                    }),
-                    meta: None,
-                })
+                let text_content = TextContent::new(format!("[System] {}", content));
+                let content_block = ContentBlock::Text(text_content);
+                SessionUpdate::AgentMessageChunk(agent_client_protocol::ContentChunk::new(
+                    content_block,
+                ))
             }
         };
 

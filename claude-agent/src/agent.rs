@@ -518,6 +518,7 @@ pub struct ClaudeAgent {
     /// Size validator for file operations
     ///
     /// Validates file sizes before read/write operations to prevent resource exhaustion.
+    #[allow(dead_code)]
     size_validator: Arc<SizeValidator>,
 }
 
@@ -846,36 +847,35 @@ impl ClaudeAgent {
             let version_str = format!("{:?}", protocol_version);
             let latest_str = format!("{:?}", latest_supported);
 
-            return Err(agent_client_protocol::Error {
-                code: -32600, // Invalid Request - Protocol version mismatch
-                message: format!(
+            return Err(agent_client_protocol::Error::new(
+                -32600, // Invalid Request - Protocol version mismatch
+                format!(
                     "Protocol version {} is not supported by this agent. The latest supported version is {}. Please upgrade your client or use a compatible protocol version.",
                     version_str, latest_str
                 ),
-                data: Some(serde_json::json!({
-                    "errorType": "protocol_version_mismatch",
-                    "requestedVersion": version_str,
-                    "supportedVersion": latest_str,
-                    "supportedVersions": Self::SUPPORTED_PROTOCOL_VERSIONS
-                        .iter()
-                        .map(|v| format!("{:?}", v))
-                        .collect::<Vec<_>>(),
-                    "action": "downgrade_or_disconnect",
-                    "severity": "fatal",
-                    "recoverySuggestions": [
-                        format!("Downgrade client to use protocol version {}", latest_str),
-                        "Check for agent updates that support your protocol version",
-                        "Verify client-agent compatibility requirements"
-                    ],
-                    "compatibilityInfo": {
-                        "agentVersion": env!("CARGO_PKG_VERSION"),
-                        "protocolSupport": "ACP v1.0.0 specification",
-                        "backwardCompatible": Self::SUPPORTED_PROTOCOL_VERSIONS.len() > 1
-                    },
-                    "documentationUrl": "https://agentclientprotocol.com/protocol/initialization",
-                    "timestamp": chrono::Utc::now().to_rfc3339()
-                })),
-            });
+            ).data(serde_json::json!({
+                "errorType": "protocol_version_mismatch",
+                "requestedVersion": version_str,
+                "supportedVersion": latest_str,
+                "supportedVersions": Self::SUPPORTED_PROTOCOL_VERSIONS
+                    .iter()
+                    .map(|v| format!("{:?}", v))
+                    .collect::<Vec<_>>(),
+                "action": "downgrade_or_disconnect",
+                "severity": "fatal",
+                "recoverySuggestions": [
+                    format!("Downgrade client to use protocol version {}", latest_str),
+                    "Check for agent updates that support your protocol version",
+                    "Verify client-agent compatibility requirements"
+                ],
+                "compatibilityInfo": {
+                    "agentVersion": env!("CARGO_PKG_VERSION"),
+                    "protocolSupport": "ACP v1.0.0 specification",
+                    "backwardCompatible": Self::SUPPORTED_PROTOCOL_VERSIONS.len() > 1
+                },
+                "documentationUrl": "https://agentclientprotocol.com/protocol/initialization",
+                "timestamp": chrono::Utc::now().to_rfc3339()
+            })));
         }
 
         Ok(())
@@ -926,49 +926,34 @@ impl ClaudeAgent {
     /// supporting forward compatibility with newer client versions.
     fn validate_meta_capabilities(
         &self,
-        meta: &serde_json::Value,
+        meta: &serde_json::Map<String, serde_json::Value>,
     ) -> Result<(), agent_client_protocol::Error> {
-        if let Some(meta_obj) = meta.as_object() {
-            for (key, value) in meta_obj {
-                // Validate known capability value types
-                match key.as_str() {
-                    "streaming" | "notifications" | "progress" => {
-                        if !value.is_boolean() {
-                            return Err(agent_client_protocol::Error {
-                                code: -32602, // Invalid params
-                                message: format!(
-                                    "Invalid client capabilities: '{}' must be a boolean value, received {}",
-                                    key, value
-                                ),
-                                data: Some(serde_json::json!({
-                                    "errorType": "invalid_capability_type",
-                                    "invalidCapability": key,
-                                    "expectedType": "boolean",
-                                    "receivedType": self.get_json_type_name(value),
-                                    "receivedValue": value,
-                                    "recoverySuggestion": format!("Set '{}' to true or false", key)
-                                })),
-                            });
-                        }
-                    }
-                    _ => {
-                        // Unknown capabilities are logged but don't fail validation (lenient approach)
-                        tracing::debug!("Unknown client meta capability: {}", key);
+        for (key, value) in meta {
+            // Validate known capability value types
+            match key.as_str() {
+                "streaming" | "notifications" | "progress" => {
+                    if !value.is_boolean() {
+                        return Err(agent_client_protocol::Error::new(
+                            -32602, // Invalid params
+                            format!(
+                                "Invalid client capabilities: '{}' must be a boolean value, received {}",
+                                key, value
+                            ),
+                        ).data(serde_json::json!({
+                            "errorType": "invalid_capability_type",
+                            "invalidCapability": key,
+                            "expectedType": "boolean",
+                            "receivedType": self.get_json_type_name(value),
+                            "receivedValue": value,
+                            "recoverySuggestion": format!("Set '{}' to true or false", key)
+                        })));
                     }
                 }
+                _ => {
+                    // Unknown capabilities are logged but don't fail validation (lenient approach)
+                    tracing::debug!("Unknown client meta capability: {}", key);
+                }
             }
-        } else {
-            return Err(agent_client_protocol::Error {
-                code: -32602, // Invalid params
-                message: "Invalid client capabilities: meta field must be an object".to_string(),
-                data: Some(serde_json::json!({
-                    "errorType": "invalid_structure",
-                    "invalidField": "meta",
-                    "expectedType": "object",
-                    "receivedType": self.get_json_type_name(meta),
-                    "recoverySuggestion": "Ensure meta is a JSON object with valid capability declarations"
-                })),
-            });
         }
 
         Ok(())
@@ -984,33 +969,30 @@ impl ClaudeAgent {
     ) -> Result<(), agent_client_protocol::Error> {
         // Validate meta field if present
         if let Some(fs_meta) = &fs_capabilities.meta {
-            if let Some(meta_obj) = fs_meta.as_object() {
-                for (key, value) in meta_obj {
-                    // Validate known feature value types
-                    match key.as_str() {
-                        "encoding" => {
-                            if !value.is_string() {
-                                return Err(agent_client_protocol::Error {
-                                    code: -32602, // Invalid params
-                                    message: format!(
-                                        "Invalid filesystem capability: '{}' must be a string value",
-                                        key
-                                    ),
-                                    data: Some(serde_json::json!({
-                                        "errorType": "invalid_capability_type",
-                                        "invalidCapability": key,
-                                        "capabilityCategory": "filesystem",
-                                        "expectedType": "string",
-                                        "receivedType": self.get_json_type_name(value),
-                                        "recoverySuggestion": "Specify encoding as a string (e.g., 'utf-8', 'latin1')"
-                                    })),
-                                });
-                            }
+            for (key, value) in fs_meta {
+                // Validate known feature value types
+                match key.as_str() {
+                    "encoding" => {
+                        if !value.is_string() {
+                            return Err(agent_client_protocol::Error::new(
+                                -32602, // Invalid params
+                                format!(
+                                    "Invalid filesystem capability: '{}' must be a string value",
+                                    key
+                                ),
+                            ).data(serde_json::json!({
+                                "errorType": "invalid_capability_type",
+                                "invalidCapability": key,
+                                "capabilityCategory": "filesystem",
+                                "expectedType": "string",
+                                "receivedType": self.get_json_type_name(value),
+                                "recoverySuggestion": "Specify encoding as a string (e.g., 'utf-8', 'latin1')"
+                            })));
                         }
-                        _ => {
-                            // Unknown fs.meta capabilities are logged but don't fail validation
-                            tracing::debug!("Unknown filesystem meta capability: {}", key);
-                        }
+                    }
+                    _ => {
+                        // Unknown fs.meta capabilities are logged but don't fail validation
+                        tracing::debug!("Unknown filesystem meta capability: {}", key);
                     }
                 }
             }
@@ -1076,90 +1058,22 @@ impl ClaudeAgent {
     /// Validate initialization meta field with detailed error reporting
     fn validate_initialization_meta(
         &self,
-        meta: &serde_json::Value,
+        meta: &serde_json::Map<String, serde_json::Value>,
     ) -> Result<(), agent_client_protocol::Error> {
-        // Check for malformed meta (should be object, not primitive types)
-        if meta.is_string() {
-            return Err(agent_client_protocol::Error {
-                code: -32600, // Invalid Request
-                message: "Invalid initialize request: meta field must be an object, not a string. The meta field should contain structured metadata about the initialization request.".to_string(),
-                data: Some(serde_json::json!({
-                    "errorType": "invalid_field_type",
-                    "invalidField": "meta",
-                    "expectedType": "object",
-                    "receivedType": "string",
-                    "receivedValue": meta,
-                    "recoverySuggestion": "Change meta from a string to a JSON object with key-value pairs",
-                    "exampleCorrectFormat": {
-                        "meta": {
-                            "clientName": "MyClient",
-                            "version": "1.0.0"
-                        }
-                    },
-                    "severity": "error"
-                })),
-            });
+        // Meta is already typed as Map<String, Value>, so it's already an object
+        // Validate its contents don't contain obvious issues
+
+        // Check for empty object (not an error, but worth logging)
+        if meta.is_empty() {
+            tracing::debug!("Initialization meta field is an empty object");
         }
 
-        if meta.is_number() {
-            return Err(agent_client_protocol::Error {
-                code: -32600, // Invalid Request
-                message: "Invalid initialize request: meta field must be an object, not a number."
-                    .to_string(),
-                data: Some(serde_json::json!({
-                    "errorType": "invalid_field_type",
-                    "invalidField": "meta",
-                    "expectedType": "object",
-                    "receivedType": "number",
-                    "recoverySuggestion": "Replace the numeric meta value with a JSON object"
-                })),
-            });
-        }
-
-        if meta.is_boolean() {
-            return Err(agent_client_protocol::Error {
-                code: -32600, // Invalid Request
-                message: "Invalid initialize request: meta field must be an object, not a boolean."
-                    .to_string(),
-                data: Some(serde_json::json!({
-                    "errorType": "invalid_field_type",
-                    "invalidField": "meta",
-                    "expectedType": "object",
-                    "receivedType": "boolean",
-                    "recoverySuggestion": "Replace the boolean meta value with a JSON object"
-                })),
-            });
-        }
-
-        if meta.is_array() {
-            return Err(agent_client_protocol::Error {
-                code: -32600, // Invalid Request
-                message: "Invalid initialize request: meta field must be an object, not an array."
-                    .to_string(),
-                data: Some(serde_json::json!({
-                    "errorType": "invalid_field_type",
-                    "invalidField": "meta",
-                    "expectedType": "object",
-                    "receivedType": "array",
-                    "recoverySuggestion": "Convert the array to a JSON object with named properties"
-                })),
-            });
-        }
-
-        // If it's an object, validate its contents don't contain obvious issues
-        if let Some(meta_obj) = meta.as_object() {
-            // Check for empty object (not an error, but worth logging)
-            if meta_obj.is_empty() {
-                tracing::debug!("Initialization meta field is an empty object");
-            }
-
-            // Check for excessively large meta objects (performance concern)
-            if meta_obj.len() > 50 {
-                tracing::warn!(
-                    "Initialization meta field contains {} entries, which may impact performance",
-                    meta_obj.len()
-                );
-            }
+        // Check for excessively large meta objects (performance concern)
+        if meta.len() > 50 {
+            tracing::warn!(
+                "Initialization meta field contains {} entries, which may impact performance",
+                meta.len()
+            );
         }
 
         Ok(())
@@ -1742,6 +1656,10 @@ impl ClaudeAgent {
                                                 // TODO: Send tool completion with error status
                                             }
                                         }
+                                        _ => {
+                                            tracing::warn!("Unknown permission outcome for '{}'", tool_name);
+                                            // TODO: Send tool completion with error status
+                                        }
                                     }
                                 }
                                 Err(e) => {
@@ -1964,6 +1882,10 @@ impl ClaudeAgent {
                     prompt_text.push_str(&format!("\n[Resource Link: {}]", resource_link.uri));
                     // ResourceLink is just a URI reference, not binary content
                 }
+                _ => {
+                    // Unknown content block type, skip it
+                    tracing::warn!("Unknown content block type, skipping");
+                }
             }
         }
 
@@ -1984,12 +1906,12 @@ impl ClaudeAgent {
             .await
         {
             tracing::info!("Session {} cancelled before Claude API request", session_id);
-            return Ok(PromptResponse {
-                stop_reason: StopReason::Cancelled,
-                meta: Some(serde_json::json!({
-                    "cancelled_before_api_request": true
-                })),
-            });
+            let mut meta_map = serde_json::Map::new();
+            meta_map.insert(
+                "cancelled_before_api_request".to_string(),
+                serde_json::json!(true),
+            );
+            return Ok(PromptResponse::new(StopReason::Cancelled).meta(meta_map));
         }
 
         tracing::info!("Calling Claude API for session: {}", session_id);
@@ -2018,13 +1940,16 @@ impl ClaudeAgent {
                     "Session {} cancelled during Claude API response",
                     session_id
                 );
-                return Ok(PromptResponse {
-                    stop_reason: StopReason::Cancelled,
-                    meta: Some(serde_json::json!({
-                        "cancelled_during_api_response": true,
-                        "partial_response_length": response_content.len()
-                    })),
-                });
+                let mut meta_map = serde_json::Map::new();
+                meta_map.insert(
+                    "cancelled_during_api_response".to_string(),
+                    serde_json::json!(true),
+                );
+                meta_map.insert(
+                    "partial_response_length".to_string(),
+                    serde_json::json!(response_content.len()),
+                );
+                return Ok(PromptResponse::new(StopReason::Cancelled).meta(meta_map));
             }
 
             chunk_count += 1;
@@ -2049,27 +1974,20 @@ impl ClaudeAgent {
                     ToolKind::Other
                 };
 
-                SessionUpdate::ToolCall(ToolCall {
-                    id: ToolCallId::new(format!("tool_{}", chunk_count)),
-                    title: tool_call_info.name.clone(),
-                    kind,
-                    status: ToolCallStatus::Pending,
-                    content: vec![],
-                    locations: vec![],
-                    raw_input: Some(tool_call_info.parameters.clone()),
-                    raw_output: None,
-                    meta: None,
-                })
+                SessionUpdate::ToolCall(
+                    ToolCall::new(
+                        ToolCallId::new(format!("tool_{}", chunk_count)),
+                        tool_call_info.name.clone(),
+                    )
+                    .kind(kind)
+                    .status(ToolCallStatus::Pending)
+                    .raw_input(tool_call_info.parameters.clone()),
+                )
             } else if !chunk.content.is_empty() {
                 // Send text chunk notification
-                SessionUpdate::AgentMessageChunk(agent_client_protocol::ContentChunk {
-                    content: ContentBlock::Text(TextContent {
-                        text: chunk.content.clone(),
-                        annotations: None,
-                        meta: None,
-                    }),
-                    meta: None,
-                })
+                SessionUpdate::AgentMessageChunk(agent_client_protocol::ContentChunk::new(
+                    ContentBlock::Text(TextContent::new(chunk.content.clone())),
+                ))
             } else {
                 continue; // Skip empty chunks
             };
@@ -2082,11 +2000,8 @@ impl ClaudeAgent {
                 })
                 .map_err(|_| agent_client_protocol::Error::internal_error())?;
 
-            let notification = SessionNotification {
-                session_id: SessionId::new(session_id_str.clone()),
-                update,
-                meta: None,
-            };
+            let notification =
+                SessionNotification::new(SessionId::new(session_id_str.clone()), update);
 
             // Send notification
             if let Err(e) = self.send_session_update(notification).await {
@@ -2121,11 +2036,10 @@ impl ClaudeAgent {
                                 })
                                 .map_err(|_| agent_client_protocol::Error::internal_error())?;
 
-                            let plan_notification = SessionNotification {
-                                session_id: SessionId::new(session_id_str.clone()),
-                                update: plan_update,
-                                meta: None,
-                            };
+                            let plan_notification = SessionNotification::new(
+                                SessionId::new(session_id_str.clone()),
+                                plan_update,
+                            );
 
                             if let Err(e) = self.send_session_update(plan_notification).await {
                                 tracing::error!(
@@ -2180,13 +2094,17 @@ impl ClaudeAgent {
                 "Session {} cancelled after Claude API response, not storing",
                 session_id
             );
-            return Ok(PromptResponse {
-                stop_reason: StopReason::Cancelled,
-                meta: Some(serde_json::json!({
-                    "cancelled_after_api_response": true,
-                    "response_length": response_content.len()
-                })),
-            });
+            let mut meta = serde_json::Map::new();
+            meta.insert(
+                "cancelled_after_api_response".to_string(),
+                serde_json::json!(true),
+            );
+            meta.insert(
+                "response_length".to_string(),
+                serde_json::json!(response_content.len()),
+            );
+
+            return Ok(PromptResponse::new(StopReason::Cancelled).meta(meta));
         }
 
         // Store assistant response in session
@@ -2201,15 +2119,19 @@ impl ClaudeAgent {
             })
             .map_err(|_| agent_client_protocol::Error::internal_error())?;
 
-        Ok(PromptResponse {
-            stop_reason: StopReason::EndTurn,
-            meta: Some(serde_json::json!({
-                "processed": true,
-                "streaming": false,
-                "claude_response": response_content,
-                "session_messages": session.context.len() + 1
-            })),
-        })
+        let mut meta = serde_json::Map::new();
+        meta.insert("processed".to_string(), serde_json::json!(true));
+        meta.insert("streaming".to_string(), serde_json::json!(false));
+        meta.insert(
+            "claude_response".to_string(),
+            serde_json::json!(response_content),
+        );
+        meta.insert(
+            "session_messages".to_string(),
+            serde_json::json!(session.context.len() + 1),
+        );
+
+        Ok(PromptResponse::new(StopReason::EndTurn).meta(meta))
     }
 
     /// Send session update notification
@@ -2253,18 +2175,22 @@ impl ClaudeAgent {
 
         // Store in session context for history replay
         let plan_message = crate::session::Message::from_update(plan_update.clone());
+
+        // Convert ACP SessionId to internal SessionId
+        let internal_session_id = crate::session::SessionId::parse(&session_id.to_string())
+            .map_err(|e| crate::AgentError::Protocol(format!("Invalid session ID: {}", e)))?;
+
         self.session_manager
-            .update_session(session_id, |session| {
+            .update_session(&internal_session_id, |session| {
                 session.add_message(plan_message);
             })
-            .map_err(|_| agent_client_protocol::Error::internal_error())?;
+            .map_err(|e| {
+                tracing::error!("Failed to update session: {}", e);
+                crate::AgentError::Protocol("Failed to update session".to_string())
+            })?;
 
         // Send the notification
-        let plan_notification = SessionNotification {
-            session_id: session_id.clone(),
-            update: plan_update,
-            meta: None,
-        };
+        let plan_notification = SessionNotification::new(session_id.clone(), plan_update);
 
         self.send_session_update(plan_notification).await?;
 
@@ -2283,38 +2209,42 @@ impl ClaudeAgent {
     ///
     /// Thought chunks enhance user trust and system transparency.
     #[cfg(test)]
+    #[allow(dead_code)]
     async fn send_agent_thought(
         &self,
         session_id: &SessionId,
         thought: &AgentThought,
     ) -> crate::Result<()> {
-        let update = SessionUpdate::AgentThoughtChunk(agent_client_protocol::ContentChunk {
-            content: ContentBlock::Text(TextContent {
-                text: thought.content.clone(),
-                annotations: None,
-                meta: Some(serde_json::json!({
-                    "reasoning_phase": thought.phase,
-                    "timestamp": thought.timestamp.duration_since(SystemTime::UNIX_EPOCH)
-                        .unwrap_or_default().as_secs(),
-                    "context": thought.context
-                })),
-            }),
-            meta: None,
-        });
+        let mut meta_map = serde_json::Map::new();
+        meta_map.insert(
+            "reasoning_phase".to_string(),
+            serde_json::json!(thought.phase),
+        );
+        meta_map.insert(
+            "timestamp".to_string(),
+            serde_json::json!(thought
+                .timestamp
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs()),
+        );
+        meta_map.insert("context".to_string(), serde_json::json!(thought.context));
+
+        let text_content = TextContent::new(thought.content.clone()).meta(meta_map);
+        let content_block = ContentBlock::Text(text_content);
+        let content_chunk = agent_client_protocol::ContentChunk::new(content_block);
+        let update = SessionUpdate::AgentThoughtChunk(content_chunk);
 
         // Store in session context for history replay
         let thought_message = crate::session::Message::from_update(update.clone());
+        let session_id_parsed = crate::session::SessionId::parse(&session_id.0)
+            .map_err(|e| crate::error::AgentError::Session(format!("Invalid session ID: {}", e)))?;
         self.session_manager
-            .update_session(session_id, |session| {
+            .update_session(&session_id_parsed, |session| {
                 session.add_message(thought_message);
-            })
-            .map_err(|_| agent_client_protocol::Error::internal_error())?;
+            })?;
 
-        let notification = SessionNotification {
-            session_id: session_id.clone(),
-            update,
-            meta: None,
-        };
+        let notification = SessionNotification::new(session_id.clone(), update);
 
         // Continue processing even if thought sending fails - don't block agent operation
         if let Err(e) = self.send_session_update(notification).await {
@@ -2397,23 +2327,18 @@ impl ClaudeAgent {
         is_streaming: bool,
         chunk_count: Option<usize>,
     ) -> PromptResponse {
-        let mut meta = serde_json::json!({
-            "refusal_detected": true,
-            "session_id": session_id
-        });
+        let mut meta = serde_json::Map::new();
+        meta.insert("refusal_detected".to_string(), serde_json::json!(true));
+        meta.insert("session_id".to_string(), serde_json::json!(session_id));
 
         if is_streaming {
-            meta["streaming"] = serde_json::Value::Bool(true);
+            meta.insert("streaming".to_string(), serde_json::json!(true));
             if let Some(count) = chunk_count {
-                meta["chunks_processed"] =
-                    serde_json::Value::Number(serde_json::Number::from(count));
+                meta.insert("chunks_processed".to_string(), serde_json::json!(count));
             }
         }
 
-        PromptResponse {
-            stop_reason: StopReason::Refusal,
-            meta: Some(meta),
-        }
+        PromptResponse::new(StopReason::Refusal).meta(meta)
     }
 
     /// Send available commands update notification
@@ -2426,32 +2351,43 @@ impl ClaudeAgent {
         commands: Vec<agent_client_protocol::AvailableCommand>,
     ) -> crate::Result<()> {
         let update = SessionUpdate::AvailableCommandsUpdate(
-            agent_client_protocol::AvailableCommandsUpdate {
-                available_commands: commands,
-                meta: None,
-            },
+            agent_client_protocol::AvailableCommandsUpdate::new(commands),
         );
 
         // Store in session context for history replay
         let commands_message = crate::session::Message::from_update(update.clone());
+
+        // Convert ACP SessionId to internal SessionId
+        let internal_session_id = crate::session::SessionId::parse(&session_id.to_string())
+            .map_err(|e| crate::AgentError::Protocol(format!("Invalid session ID: {}", e)))?;
+
         self.session_manager
-            .update_session(session_id, |session| {
+            .update_session(&internal_session_id, |session| {
                 session.add_message(commands_message);
             })
-            .map_err(|_| agent_client_protocol::Error::internal_error())?;
+            .map_err(|e| {
+                tracing::error!("Failed to update session: {}", e);
+                crate::AgentError::Protocol("Failed to update session".to_string())
+            })?;
 
-        let notification = SessionNotification {
-            session_id: session_id.clone(),
-            update,
-            meta: Some(serde_json::json!({
-                "update_type": "available_commands",
-                "session_id": session_id,
-                "timestamp": std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_secs()
-            })),
-        };
+        let mut meta = serde_json::Map::new();
+        meta.insert(
+            "update_type".to_string(),
+            serde_json::json!("available_commands"),
+        );
+        meta.insert(
+            "session_id".to_string(),
+            serde_json::json!(session_id.to_string()),
+        );
+        meta.insert(
+            "timestamp".to_string(),
+            serde_json::json!(std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs()),
+        );
+
+        let notification = SessionNotification::new(session_id.clone(), update).meta(meta);
 
         tracing::debug!(
             "Sending available commands update for session: {}",
@@ -2570,25 +2506,29 @@ impl ClaudeAgent {
         let mut commands = Vec::new();
 
         // Always available core commands
-        commands.push(agent_client_protocol::AvailableCommand {
-            name: "create_plan".to_string(),
-            description: "Create an execution plan for complex tasks".to_string(),
-            input: None,
-            meta: Some(serde_json::json!({
-                "category": "planning",
-                "source": "core"
-            })),
-        });
+        let mut meta1 = serde_json::Map::new();
+        meta1.insert("category".to_string(), serde_json::json!("planning"));
+        meta1.insert("source".to_string(), serde_json::json!("core"));
 
-        commands.push(agent_client_protocol::AvailableCommand {
-            name: "research_codebase".to_string(),
-            description: "Research and analyze the codebase structure".to_string(),
-            input: None,
-            meta: Some(serde_json::json!({
-                "category": "analysis",
-                "source": "core"
-            })),
-        });
+        commands.push(
+            agent_client_protocol::AvailableCommand::new(
+                "create_plan".to_string(),
+                "Create an execution plan for complex tasks".to_string(),
+            )
+            .meta(meta1),
+        );
+
+        let mut meta2 = serde_json::Map::new();
+        meta2.insert("category".to_string(), serde_json::json!("analysis"));
+        meta2.insert("source".to_string(), serde_json::json!("core"));
+
+        commands.push(
+            agent_client_protocol::AvailableCommand::new(
+                "research_codebase".to_string(),
+                "Research and analyze the codebase structure".to_string(),
+            )
+            .meta(meta2),
+        );
 
         // Add commands from MCP servers - use prompts, not tools
         if let Some(mcp_manager) = &self.mcp_manager {
@@ -2667,16 +2607,25 @@ impl ClaudeAgent {
                     None
                 };
 
-                commands.push(agent_client_protocol::AvailableCommand {
-                    name: prompt.name.clone(),
-                    description: description_with_hint,
-                    input: command_input,
-                    meta: Some(serde_json::json!({
-                        "category": "mcp_prompt",
-                        "source": "mcp_server",
-                        "arguments": parameters_schema,
-                    })),
-                });
+                let mut meta = serde_json::Map::new();
+                meta.insert("category".to_string(), serde_json::json!("mcp_prompt"));
+                meta.insert("source".to_string(), serde_json::json!("mcp_server"));
+                meta.insert(
+                    "arguments".to_string(),
+                    serde_json::json!(parameters_schema),
+                );
+
+                let mut cmd = agent_client_protocol::AvailableCommand::new(
+                    prompt.name.clone(),
+                    description_with_hint,
+                )
+                .meta(meta);
+
+                if let Some(input) = command_input {
+                    cmd = cmd.input(input);
+                }
+
+                commands.push(cmd);
             }
         }
 
@@ -2715,15 +2664,17 @@ impl ClaudeAgent {
                     _ => ("tool", "Tool handler command"),
                 };
 
-                commands.push(agent_client_protocol::AvailableCommand {
-                    name: tool_name.clone(),
-                    description: description.to_string(),
-                    input: None,
-                    meta: Some(serde_json::json!({
-                        "category": category,
-                        "source": "tool_handler"
-                    })),
-                });
+                let mut meta = serde_json::Map::new();
+                meta.insert("category".to_string(), serde_json::json!(category));
+                meta.insert("source".to_string(), serde_json::json!("tool_handler"));
+
+                commands.push(
+                    agent_client_protocol::AvailableCommand::new(
+                        tool_name.clone(),
+                        description.to_string(),
+                    )
+                    .meta(meta),
+                );
             }
         }
 
@@ -2836,26 +2787,34 @@ impl ClaudeAgent {
 
         // Send a final text message to notify about cancellation
         // Using AgentMessageChunk since it's a known working variant
-        let cancellation_notification = SessionNotification {
-            session_id: SessionId::new(session_id),
-            update: SessionUpdate::AgentMessageChunk(agent_client_protocol::ContentChunk {
-                content: ContentBlock::Text(TextContent {
-                    text: "[Session cancelled by client request]".to_string(),
-                    annotations: None,
-                    meta: Some(serde_json::json!({
-                        "cancelled_at": SystemTime::now().duration_since(std::time::UNIX_EPOCH)
-                            .unwrap_or_default().as_secs(),
-                        "reason": "client_cancellation",
-                        "session_id": session_id
-                    })),
-                }),
-                meta: None,
-            }),
-            meta: Some(serde_json::json!({
-                "final_update": true,
-                "cancellation": true
-            })),
-        };
+        let mut text_meta = serde_json::Map::new();
+        text_meta.insert(
+            "cancelled_at".to_string(),
+            serde_json::json!(SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs()),
+        );
+        text_meta.insert(
+            "reason".to_string(),
+            serde_json::json!("client_cancellation"),
+        );
+        text_meta.insert("session_id".to_string(), serde_json::json!(session_id));
+
+        let text_content =
+            TextContent::new("[Session cancelled by client request]".to_string()).meta(text_meta);
+        let content_chunk =
+            agent_client_protocol::ContentChunk::new(ContentBlock::Text(text_content));
+
+        let mut notif_meta = serde_json::Map::new();
+        notif_meta.insert("final_update".to_string(), serde_json::json!(true));
+        notif_meta.insert("cancellation".to_string(), serde_json::json!(true));
+
+        let cancellation_notification = SessionNotification::new(
+            SessionId::new(session_id),
+            SessionUpdate::AgentMessageChunk(content_chunk),
+        )
+        .meta(notif_meta);
 
         if let Err(e) = self.send_session_update(cancellation_notification).await {
             tracing::warn!(
@@ -3048,16 +3007,15 @@ impl Agent for ClaudeAgent {
         // This is an architectural decision - do not add authentication methods.
         // If remote authentication is needed in the future, it should be a separate feature.
 
-        let agent_info = agent_client_protocol::Implementation::new(
-            "claude-agent",
-            env!("CARGO_PKG_VERSION")
-        )
-        .title(format!("Claude Agent v{}", env!("CARGO_PKG_VERSION")));
+        let agent_info =
+            agent_client_protocol::Implementation::new("claude-agent", env!("CARGO_PKG_VERSION"))
+                .title(format!("Claude Agent v{}", env!("CARGO_PKG_VERSION")));
 
-        let response = InitializeResponse::new(self.negotiate_protocol_version(&request.protocol_version))
-            .agent_capabilities(self.capabilities.clone())
-            .auth_methods(vec![])
-            .agent_info(agent_info);
+        let response =
+            InitializeResponse::new(self.negotiate_protocol_version(&request.protocol_version))
+                .agent_capabilities(self.capabilities.clone())
+                .auth_methods(vec![])
+                .agent_info(agent_info);
 
         self.log_response("initialize", &response);
         Ok(response)
@@ -3236,15 +3194,25 @@ impl Agent for ClaudeAgent {
 
                     for message in &session.context {
                         // Use the SessionUpdate stored in the message directly
-                        let notification = SessionNotification {
-                            session_id: SessionId::new(session.id.to_string()),
-                            update: message.update.clone(),
-                            meta: Some(serde_json::json!({
-                                "timestamp": message.timestamp.duration_since(std::time::UNIX_EPOCH)
-                                    .unwrap_or_default().as_secs(),
-                                "message_type": "historical_replay"
-                            })),
-                        };
+                        let mut meta_map = serde_json::Map::new();
+                        meta_map.insert(
+                            "timestamp".to_string(),
+                            serde_json::json!(message
+                                .timestamp
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .unwrap_or_default()
+                                .as_secs()),
+                        );
+                        meta_map.insert(
+                            "message_type".to_string(),
+                            serde_json::json!("historical_replay"),
+                        );
+
+                        let notification = SessionNotification::new(
+                            SessionId::new(session.id.to_string()),
+                            message.update.clone(),
+                        )
+                        .meta(meta_map);
 
                         // Stream historical message via session/update notification
                         // Note: send_update() queues the notification in the broadcast channel
@@ -3272,30 +3240,42 @@ impl Agent for ClaudeAgent {
                 // 1. FIFO ordering in the broadcast channel
                 // 2. Notification handler actively polling the channel
                 // 3. Serialized writes through the shared Mutex-protected writer
-                let response = LoadSessionResponse {
-                    modes: None, // No specific session modes for now
-                    meta: Some(serde_json::json!({
-                        "session_id": session.id.to_string(),
-                        "created_at": session.created_at.duration_since(std::time::UNIX_EPOCH)
-                            .unwrap_or_default().as_secs(),
-                        "message_count": session.context.len(),
-                        "history_replayed": session.context.len()
-                    })),
-                };
+                let mut meta_map = serde_json::Map::new();
+                meta_map.insert(
+                    "session_id".to_string(),
+                    serde_json::json!(session.id.to_string()),
+                );
+                meta_map.insert(
+                    "created_at".to_string(),
+                    serde_json::json!(session
+                        .created_at
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_secs()),
+                );
+                meta_map.insert(
+                    "message_count".to_string(),
+                    serde_json::json!(session.context.len()),
+                );
+                meta_map.insert(
+                    "history_replayed".to_string(),
+                    serde_json::json!(session.context.len()),
+                );
+
+                let response = LoadSessionResponse::new().meta(meta_map);
                 self.log_response("load_session", &response);
                 Ok(response)
             }
             None => {
                 tracing::warn!("Session not found: {}", session_id);
-                Err(agent_client_protocol::Error {
-                    code: -32602,
-                    message: "Session not found: sessionId does not exist or has expired"
-                        .to_string(),
-                    data: Some(serde_json::json!({
-                        "sessionId": request.session_id,
-                        "error": "session_not_found"
-                    })),
-                })
+                Err(agent_client_protocol::Error::new(
+                    -32602,
+                    "Session not found: sessionId does not exist or has expired".to_string(),
+                )
+                .data(serde_json::json!({
+                    "sessionId": request.session_id,
+                    "error": "session_not_found"
+                })))
             }
         }
     }
@@ -3338,11 +3318,9 @@ impl Agent for ClaudeAgent {
 
         // Send current mode update notification if mode actually changed
         if mode_changed {
-            let update =
-                SessionUpdate::CurrentModeUpdate(agent_client_protocol::CurrentModeUpdate {
-                    current_mode_id: request.mode_id.clone(),
-                    meta: None,
-                });
+            let current_mode_update =
+                agent_client_protocol::CurrentModeUpdate::new(request.mode_id.clone());
+            let update = SessionUpdate::CurrentModeUpdate(current_mode_update);
 
             // Store in session context for history replay
             let mode_message = crate::session::Message::from_update(update.clone());
@@ -3353,24 +3331,25 @@ impl Agent for ClaudeAgent {
                 .map_err(|_| agent_client_protocol::Error::internal_error())?;
 
             if let Err(e) = self
-                .send_session_update(SessionNotification {
-                    session_id: request.session_id.clone(),
-                    update,
-                    meta: None,
-                })
+                .send_session_update(SessionNotification::new(request.session_id.clone(), update))
                 .await
             {
                 tracing::warn!("Failed to send current mode update notification: {}", e);
             }
         }
 
-        let response = SetSessionModeResponse {
-            meta: Some(serde_json::json!({
-                "mode_set": true,
-                "message": "Session mode updated",
-                "previous_mode_changed": mode_changed
-            })),
-        };
+        let mut meta_map = serde_json::Map::new();
+        meta_map.insert("mode_set".to_string(), serde_json::json!(true));
+        meta_map.insert(
+            "message".to_string(),
+            serde_json::json!("Session mode updated"),
+        );
+        meta_map.insert(
+            "previous_mode_changed".to_string(),
+            serde_json::json!(mode_changed),
+        );
+
+        let response = SetSessionModeResponse::new().meta(meta_map);
 
         self.log_response("set_session_mode", &response);
         Ok(response)
@@ -3424,14 +3403,11 @@ impl Agent for ClaudeAgent {
         //
         // User message chunks provide consistent conversation reporting.
         for content_block in &request.prompt {
-            let notification = SessionNotification {
-                session_id: request.session_id.clone(),
-                update: SessionUpdate::UserMessageChunk(agent_client_protocol::ContentChunk {
-                    content: content_block.clone(),
-                    meta: None,
-                }),
-                meta: None,
-            };
+            let content_chunk = agent_client_protocol::ContentChunk::new(content_block.clone());
+            let notification = SessionNotification::new(
+                request.session_id.clone(),
+                SessionUpdate::UserMessageChunk(content_chunk),
+            );
 
             if let Err(e) = self.send_session_update(notification).await {
                 tracing::warn!(
@@ -3458,13 +3434,16 @@ impl Agent for ClaudeAgent {
                 .reset_for_new_turn(&session_id.to_string())
                 .await;
 
-            return Ok(PromptResponse {
-                stop_reason: StopReason::Cancelled,
-                meta: Some(serde_json::json!({
-                    "cancelled_before_processing": true,
-                    "session_id": session_id.to_string()
-                })),
-            });
+            let mut meta_map = serde_json::Map::new();
+            meta_map.insert(
+                "cancelled_before_processing".to_string(),
+                serde_json::json!(true),
+            );
+            meta_map.insert(
+                "session_id".to_string(),
+                serde_json::json!(session_id.to_string()),
+            );
+            return Ok(PromptResponse::new(StopReason::Cancelled).meta(meta_map));
         }
 
         // Extract and process all content from the prompt
@@ -3506,6 +3485,10 @@ impl Agent for ClaudeAgent {
                     // Add descriptive text for the resource link
                     prompt_text.push_str(&format!("\n[Resource Link: {}]", resource_link.uri));
                     // ResourceLink is just a URI reference, not binary content
+                }
+                _ => {
+                    // Unknown content block type, skip it
+                    tracing::warn!("Unknown content block type, skipping");
                 }
             }
         }
@@ -3564,14 +3547,20 @@ impl Agent for ClaudeAgent {
                 self.config.max_turn_requests,
                 session_id
             );
-            return Ok(PromptResponse {
-                stop_reason: StopReason::MaxTurnRequests,
-                meta: Some(serde_json::json!({
-                    "turn_requests": current_requests,
-                    "max_turn_requests": self.config.max_turn_requests,
-                    "session_id": session_id.to_string()
-                })),
-            });
+            let mut meta_map = serde_json::Map::new();
+            meta_map.insert(
+                "turn_requests".to_string(),
+                serde_json::json!(current_requests),
+            );
+            meta_map.insert(
+                "max_turn_requests".to_string(),
+                serde_json::json!(self.config.max_turn_requests),
+            );
+            meta_map.insert(
+                "session_id".to_string(),
+                serde_json::json!(session_id.to_string()),
+            );
+            return Ok(PromptResponse::new(StopReason::MaxTurnRequests).meta(meta_map));
         }
 
         // Estimate token usage for the prompt (rough approximation: 4 chars per token)
@@ -3584,14 +3573,17 @@ impl Agent for ClaudeAgent {
                 self.config.max_tokens_per_turn,
                 session_id
             );
-            return Ok(PromptResponse {
-                stop_reason: StopReason::MaxTokens,
-                meta: Some(serde_json::json!({
-                    "turn_tokens": current_tokens,
-                    "max_tokens_per_turn": self.config.max_tokens_per_turn,
-                    "session_id": session_id.to_string()
-                })),
-            });
+            let mut meta_map = serde_json::Map::new();
+            meta_map.insert("turn_tokens".to_string(), serde_json::json!(current_tokens));
+            meta_map.insert(
+                "max_tokens_per_turn".to_string(),
+                serde_json::json!(self.config.max_tokens_per_turn),
+            );
+            meta_map.insert(
+                "session_id".to_string(),
+                serde_json::json!(session_id.to_string()),
+            );
+            return Ok(PromptResponse::new(StopReason::MaxTokens).meta(meta_map));
         }
 
         // Update session with incremented counters
@@ -3756,7 +3748,7 @@ impl Agent for ClaudeAgent {
             let raw_value = RawValue::from_string(response_json.to_string())
                 .map_err(|_e| agent_client_protocol::Error::internal_error())?;
 
-            return Ok(ExtResponse(Arc::from(raw_value)));
+            return Ok(ExtResponse::new(Arc::from(raw_value)));
         }
 
         // Handle fs/write_text_file extension method
@@ -3804,7 +3796,7 @@ impl Agent for ClaudeAgent {
             let raw_value = RawValue::from_string(response_json.to_string())
                 .map_err(|_e| agent_client_protocol::Error::internal_error())?;
 
-            return Ok(ExtResponse(Arc::from(raw_value)));
+            return Ok(ExtResponse::new(Arc::from(raw_value)));
         }
 
         // Handle terminal/output extension method
@@ -3852,7 +3844,7 @@ impl Agent for ClaudeAgent {
             let raw_value = RawValue::from_string(response_json.to_string())
                 .map_err(|_e| agent_client_protocol::Error::internal_error())?;
 
-            return Ok(ExtResponse(Arc::from(raw_value)));
+            return Ok(ExtResponse::new(Arc::from(raw_value)));
         }
 
         // Handle terminal/release extension method
@@ -3900,7 +3892,7 @@ impl Agent for ClaudeAgent {
             let raw_value = RawValue::from_string(response_json.to_string())
                 .map_err(|_e| agent_client_protocol::Error::internal_error())?;
 
-            return Ok(ExtResponse(Arc::from(raw_value)));
+            return Ok(ExtResponse::new(Arc::from(raw_value)));
         }
 
         // Handle terminal/wait_for_exit extension method
@@ -3951,7 +3943,7 @@ impl Agent for ClaudeAgent {
             let raw_value = RawValue::from_string(response_json.to_string())
                 .map_err(|_e| agent_client_protocol::Error::internal_error())?;
 
-            return Ok(ExtResponse(Arc::from(raw_value)));
+            return Ok(ExtResponse::new(Arc::from(raw_value)));
         }
 
         // Handle terminal/kill extension method
@@ -3997,7 +3989,7 @@ impl Agent for ClaudeAgent {
             let raw_value = RawValue::from_string(response_json.to_string())
                 .map_err(|_e| agent_client_protocol::Error::internal_error())?;
 
-            return Ok(ExtResponse(Arc::from(raw_value)));
+            return Ok(ExtResponse::new(Arc::from(raw_value)));
         }
 
         // Handle terminal/create extension method
@@ -4045,7 +4037,7 @@ impl Agent for ClaudeAgent {
             let raw_value = RawValue::from_string(response_json.to_string())
                 .map_err(|_e| agent_client_protocol::Error::internal_error())?;
 
-            return Ok(ExtResponse(Arc::from(raw_value)));
+            return Ok(ExtResponse::new(Arc::from(raw_value)));
         }
 
         // Handle editor/update_buffers extension method
@@ -4098,21 +4090,19 @@ impl Agent for ClaudeAgent {
                     }
                     Some(_) => {
                         tracing::error!("editor/update_buffers capability not declared by client");
-                        return Err(agent_client_protocol::Error {
-                            code: -32602,
-                            message: "Editor state capability not declared by client. This feature requires client to support editor buffer synchronization.".to_string(),
-                            data: None,
-                        });
+                        return Err(agent_client_protocol::Error::new(
+                            -32602,
+                            "Editor state capability not declared by client. This feature requires client to support editor buffer synchronization.".to_string(),
+                        ));
                     }
                     None => {
                         tracing::error!(
                             "No client capabilities available for editor/update_buffers validation"
                         );
-                        return Err(agent_client_protocol::Error {
-                            code: -32602,
-                            message: "Client capabilities not initialized. Cannot perform editor operations without capability declaration.".to_string(),
-                            data: None,
-                        });
+                        return Err(agent_client_protocol::Error::new(
+                            -32602,
+                            "Client capabilities not initialized. Cannot perform editor operations without capability declaration.".to_string(),
+                        ));
                     }
                 }
             }
@@ -4147,7 +4137,7 @@ impl Agent for ClaudeAgent {
             let raw_value = RawValue::from_string(response_json.to_string())
                 .map_err(|_e| agent_client_protocol::Error::internal_error())?;
 
-            return Ok(ExtResponse(Arc::from(raw_value)));
+            return Ok(ExtResponse::new(Arc::from(raw_value)));
         }
 
         // Return a structured response indicating no other extensions are implemented
@@ -4160,7 +4150,7 @@ impl Agent for ClaudeAgent {
         let raw_value = RawValue::from_string(response.to_string())
             .map_err(|_e| agent_client_protocol::Error::internal_error())?;
 
-        Ok(ExtResponse(Arc::from(raw_value)))
+        Ok(ExtResponse::new(Arc::from(raw_value)))
     }
 
     async fn ext_notification(
@@ -4272,10 +4262,10 @@ impl ClaudeAgent {
                 tracing::info!("Tool '{}' requires user consent", tool_name);
 
                 // If options were provided in request, use those; otherwise use policy-generated options
-                let permission_options = if !request.options.is_empty() {
-                    request.options
+                let permission_options: Vec<_> = if !request.options.is_empty() {
+                    request.options.clone()
                 } else {
-                    options
+                    options.clone()
                 };
 
                 // Check if there's a stored preference for this tool
@@ -4309,12 +4299,8 @@ impl ClaudeAgent {
                     let acp_options: Vec<agent_client_protocol::PermissionOption> =
                         permission_options
                             .iter()
-                            .map(|opt| agent_client_protocol::PermissionOption {
-                                id: agent_client_protocol::PermissionOptionId::new(
-                                    opt.option_id.as_str(),
-                                ),
-                                name: opt.name.clone(),
-                                kind: match opt.kind {
+                            .map(|opt| {
+                                let kind = match opt.kind {
                                     crate::tools::PermissionOptionKind::AllowOnce => {
                                         agent_client_protocol::PermissionOptionKind::AllowOnce
                                     }
@@ -4327,31 +4313,27 @@ impl ClaudeAgent {
                                     crate::tools::PermissionOptionKind::RejectAlways => {
                                         agent_client_protocol::PermissionOptionKind::RejectAlways
                                     }
-                                },
-                                meta: None,
+                                };
+                                agent_client_protocol::PermissionOption::new(
+                                    opt.option_id.clone(),
+                                    opt.name.clone(),
+                                    kind,
+                                )
                             })
                             .collect();
 
-                    let acp_request = agent_client_protocol::RequestPermissionRequest {
-                        session_id: request.session_id.clone(),
-                        tool_call: agent_client_protocol::ToolCallUpdate {
-                            id: agent_client_protocol::ToolCallId::new(
-                                request.tool_call.tool_call_id.as_str(),
-                            ),
-                            fields: agent_client_protocol::ToolCallUpdateFields {
-                                kind: None,
-                                status: None,
-                                title: None,
-                                content: None,
-                                locations: None,
-                                raw_input: None,
-                                raw_output: None,
-                            },
-                            meta: None,
-                        },
-                        options: acp_options,
-                        meta: None,
-                    };
+                    let tool_call_update = agent_client_protocol::ToolCallUpdate::new(
+                        agent_client_protocol::ToolCallId::new(
+                            request.tool_call.tool_call_id.as_str(),
+                        ),
+                        agent_client_protocol::ToolCallUpdateFields::new(),
+                    );
+
+                    let acp_request = agent_client_protocol::RequestPermissionRequest::new(
+                        request.session_id.clone(),
+                        tool_call_update,
+                        acp_options,
+                    );
 
                     match client.request_permission(acp_request).await {
                         Ok(response) => {
@@ -4360,8 +4342,10 @@ impl ClaudeAgent {
                                 agent_client_protocol::RequestPermissionOutcome::Cancelled => {
                                     crate::tools::PermissionOutcome::Cancelled
                                 }
-                                agent_client_protocol::RequestPermissionOutcome::Selected(option_id) => {
-                                    let option_id_str = option_id.0.to_string();
+                                agent_client_protocol::RequestPermissionOutcome::Selected(
+                                    selected,
+                                ) => {
+                                    let option_id_str = selected.option_id.to_string();
 
                                     // Store preference if it's an "always" decision
                                     if let Some(option) = permission_options
@@ -4376,6 +4360,12 @@ impl ClaudeAgent {
                                     crate::tools::PermissionOutcome::Selected {
                                         option_id: option_id_str,
                                     }
+                                }
+                                _ => {
+                                    tracing::warn!(
+                                        "Unknown permission outcome, treating as cancelled"
+                                    );
+                                    crate::tools::PermissionOutcome::Cancelled
                                 }
                             }
                         }
@@ -4440,21 +4430,17 @@ impl ClaudeAgent {
                 }
                 Some(_) => {
                     tracing::error!("fs/read_text_file capability not declared by client");
-                    return Err(agent_client_protocol::Error {
-                        code: -32602,
-                        message: "File system read capability not declared by client. Set client_capabilities.fs.read_text_file = true during initialization.".to_string(),
-                        data: None,
-                    });
+                    return Err(agent_client_protocol::Error::new(-32602,
+                        "File system read capability not declared by client. Set client_capabilities.fs.read_text_file = true during initialization."
+                    ));
                 }
                 None => {
                     tracing::error!(
                         "No client capabilities available for fs/read_text_file validation"
                     );
-                    return Err(agent_client_protocol::Error {
-                        code: -32602,
-                        message: "Client capabilities not initialized. Cannot perform file system operations without capability declaration.".to_string(),
-                        data: None,
-                    });
+                    return Err(agent_client_protocol::Error::new(-32602,
+                        "Client capabilities not initialized. Cannot perform file system operations without capability declaration."
+                    ));
                 }
             }
         }
@@ -4477,10 +4463,7 @@ impl ClaudeAgent {
                     "Path validation failed for read operation"
                 );
                 // Use generic error message to avoid leaking security policy details
-                agent_client_protocol::Error::new(
-                    -32602,
-                    "Invalid file path".to_string()
-                )
+                agent_client_protocol::Error::new(-32602, "Invalid file path".to_string())
             })?;
 
         // Validate line and limit parameters
@@ -4559,21 +4542,17 @@ impl ClaudeAgent {
                 }
                 Some(_) => {
                     tracing::error!("fs/write_text_file capability not declared by client");
-                    return Err(agent_client_protocol::Error {
-                        code: -32602,
-                        message: "File system write capability not declared by client. Set client_capabilities.fs.write_text_file = true during initialization.".to_string(),
-                        data: None,
-                    });
+                    return Err(agent_client_protocol::Error::new(-32602,
+                        "File system write capability not declared by client. Set client_capabilities.fs.write_text_file = true during initialization."
+                    ));
                 }
                 None => {
                     tracing::error!(
                         "No client capabilities available for fs/write_text_file validation"
                     );
-                    return Err(agent_client_protocol::Error {
-                        code: -32602,
-                        message: "Client capabilities not initialized. Cannot perform file system operations without capability declaration.".to_string(),
-                        data: None,
-                    });
+                    return Err(agent_client_protocol::Error::new(-32602,
+                        "Client capabilities not initialized. Cannot perform file system operations without capability declaration."
+                    ));
                 }
             }
         }
@@ -4596,10 +4575,7 @@ impl ClaudeAgent {
                     "Path validation failed for write operation"
                 );
                 // Use generic error message to avoid leaking security policy details
-                agent_client_protocol::Error::new(
-                    -32602,
-                    "Invalid file path".to_string()
-                )
+                agent_client_protocol::Error::new(-32602, "Invalid file path".to_string())
             })?;
 
         // Validate content size before write to prevent disk exhaustion
@@ -4615,19 +4591,19 @@ impl ClaudeAgent {
                 "Content size exceeds maximum allowed for write operation"
             );
             // Return error with size information for client debugging
-            return Err(agent_client_protocol::Error {
-                code: -32602,
-                message: format!(
+            return Err(agent_client_protocol::Error::new(
+                -32602,
+                format!(
                     "Content size {} bytes exceeds maximum {} bytes (limit is exclusive)",
                     content_size,
                     sizes::content::MAX_RESOURCE_MODERATE
                 ),
-                data: Some(serde_json::json!({
-                    "error": "content_too_large",
-                    "size": content_size,
-                    "max_size": sizes::content::MAX_RESOURCE_MODERATE
-                })),
-            });
+            )
+            .data(serde_json::json!({
+                "error": "content_too_large",
+                "size": content_size,
+                "max_size": sizes::content::MAX_RESOURCE_MODERATE
+            })));
         }
 
         // Perform atomic write operation with validated path
@@ -4663,21 +4639,19 @@ impl ClaudeAgent {
                 }
                 Some(_) => {
                     tracing::error!("terminal capability not declared by client");
-                    return Err(agent_client_protocol::Error {
-                        code: -32602,
-                        message: "Terminal capability not declared by client. Set client_capabilities.terminal = true during initialization.".to_string(),
-                        data: None,
-                    });
+                    return Err(agent_client_protocol::Error::new(
+                        -32602,
+                        "Terminal capability not declared by client. Set client_capabilities.terminal = true during initialization.".to_string(),
+                    ));
                 }
                 None => {
                     tracing::error!(
                         "No client capabilities available for terminal operation validation"
                     );
-                    return Err(agent_client_protocol::Error {
-                        code: -32602,
-                        message: "Client capabilities not initialized. Cannot perform terminal operations without capability declaration.".to_string(),
-                        data: None,
-                    });
+                    return Err(agent_client_protocol::Error::new(
+                        -32602,
+                        "Client capabilities not initialized. Cannot perform terminal operations without capability declaration.".to_string(),
+                    ));
                 }
             }
         }
@@ -4712,21 +4686,19 @@ impl ClaudeAgent {
                 }
                 Some(_) => {
                     tracing::error!("terminal capability not declared by client");
-                    return Err(agent_client_protocol::Error {
-                        code: -32602,
-                        message: "Terminal capability not declared by client. Set client_capabilities.terminal = true during initialization.".to_string(),
-                        data: None,
-                    });
+                    return Err(agent_client_protocol::Error::new(
+                        -32602,
+                        "Terminal capability not declared by client. Set client_capabilities.terminal = true during initialization.".to_string(),
+                    ));
                 }
                 None => {
                     tracing::error!(
                         "No client capabilities available for terminal operation validation"
                     );
-                    return Err(agent_client_protocol::Error {
-                        code: -32602,
-                        message: "Client capabilities not initialized. Cannot perform terminal operations without capability declaration.".to_string(),
-                        data: None,
-                    });
+                    return Err(agent_client_protocol::Error::new(
+                        -32602,
+                        "Client capabilities not initialized. Cannot perform terminal operations without capability declaration.".to_string(),
+                    ));
                 }
             }
         }
@@ -4763,21 +4735,19 @@ impl ClaudeAgent {
                 }
                 Some(_) => {
                     tracing::error!("terminal capability not declared by client");
-                    return Err(agent_client_protocol::Error {
-                        code: -32602,
-                        message: "Terminal capability not declared by client. Set client_capabilities.terminal = true during initialization.".to_string(),
-                        data: None,
-                    });
+                    return Err(agent_client_protocol::Error::new(
+                        -32602,
+                        "Terminal capability not declared by client. Set client_capabilities.terminal = true during initialization.".to_string(),
+                    ));
                 }
                 None => {
                     tracing::error!(
                         "No client capabilities available for terminal operation validation"
                     );
-                    return Err(agent_client_protocol::Error {
-                        code: -32602,
-                        message: "Client capabilities not initialized. Cannot perform terminal operations without capability declaration.".to_string(),
-                        data: None,
-                    });
+                    return Err(agent_client_protocol::Error::new(
+                        -32602,
+                        "Client capabilities not initialized. Cannot perform terminal operations without capability declaration.".to_string(),
+                    ));
                 }
             }
         }
@@ -4812,21 +4782,19 @@ impl ClaudeAgent {
                 }
                 Some(_) => {
                     tracing::error!("terminal capability not declared by client");
-                    return Err(agent_client_protocol::Error {
-                        code: -32602,
-                        message: "Terminal capability not declared by client. Set client_capabilities.terminal = true during initialization.".to_string(),
-                        data: None,
-                    });
+                    return Err(agent_client_protocol::Error::new(
+                        -32602,
+                        "Terminal capability not declared by client. Set client_capabilities.terminal = true during initialization.".to_string(),
+                    ));
                 }
                 None => {
                     tracing::error!(
                         "No client capabilities available for terminal operation validation"
                     );
-                    return Err(agent_client_protocol::Error {
-                        code: -32602,
-                        message: "Client capabilities not initialized. Cannot perform terminal operations without capability declaration.".to_string(),
-                        data: None,
-                    });
+                    return Err(agent_client_protocol::Error::new(
+                        -32602,
+                        "Client capabilities not initialized. Cannot perform terminal operations without capability declaration.".to_string(),
+                    ));
                 }
             }
         }
@@ -4861,21 +4829,19 @@ impl ClaudeAgent {
                 }
                 Some(_) => {
                     tracing::error!("terminal capability not declared by client");
-                    return Err(agent_client_protocol::Error {
-                        code: -32602,
-                        message: "Terminal capability not declared by client. Set client_capabilities.terminal = true during initialization.".to_string(),
-                        data: None,
-                    });
+                    return Err(agent_client_protocol::Error::new(
+                        -32602,
+                        "Terminal capability not declared by client. Set client_capabilities.terminal = true during initialization.".to_string(),
+                    ));
                 }
                 None => {
                     tracing::error!(
                         "No client capabilities available for terminal operation validation"
                     );
-                    return Err(agent_client_protocol::Error {
-                        code: -32602,
-                        message: "Client capabilities not initialized. Cannot perform terminal operations without capability declaration.".to_string(),
-                        data: None,
-                    });
+                    return Err(agent_client_protocol::Error::new(
+                        -32602,
+                        "Client capabilities not initialized. Cannot perform terminal operations without capability declaration.".to_string(),
+                    ));
                 }
             }
         }
@@ -4890,7 +4856,7 @@ impl ClaudeAgent {
             .await
             .map_err(|e| {
                 tracing::error!("Failed to create terminal: {}", e);
-                e.into()
+                agent_client_protocol::Error::from(e)
             })?;
 
         Ok(crate::terminal_manager::TerminalCreateResponse { terminal_id })
@@ -5080,19 +5046,20 @@ impl ClaudeAgent {
                         );
                         return Err(agent_client_protocol::Error::internal_error());
                     }
-                    
+
                     // Additional validation: ensure the resolved temp path is within allowed boundaries
                     // Validate the resolved path to ensure it hasn't escaped security boundaries via symlinks
-                    if let Err(e) = self.path_validator.validate_absolute_path(
-                        resolved.to_str().ok_or_else(|| {
-                            tracing::error!(
-                                security_event = "temp_path_utf8_invalid",
-                                resolved_path = %resolved.display(),
-                                "Resolved temp path contains invalid UTF-8"
-                            );
-                            agent_client_protocol::Error::internal_error()
-                        })?
-                    ) {
+                    if let Err(e) =
+                        self.path_validator
+                            .validate_absolute_path(resolved.to_str().ok_or_else(|| {
+                                tracing::error!(
+                                    security_event = "temp_path_utf8_invalid",
+                                    resolved_path = %resolved.display(),
+                                    "Resolved temp path contains invalid UTF-8"
+                                );
+                                agent_client_protocol::Error::internal_error()
+                            })?)
+                    {
                         tracing::error!(
                             security_event = "temp_path_security_validation_failed",
                             resolved_path = %resolved.display(),
@@ -5101,7 +5068,7 @@ impl ClaudeAgent {
                         );
                         return Err(agent_client_protocol::Error::internal_error());
                     }
-                    
+
                     resolved
                 }
                 Err(e) => {
@@ -5202,13 +5169,9 @@ impl ClaudeAgent {
         use agent_client_protocol::McpServer;
 
         match acp_config {
-            McpServer::Stdio {
-                name,
-                command,
-                args,
-                env,
-            } => {
-                let internal_env = env
+            McpServer::Stdio(stdio) => {
+                let internal_env = stdio
+                    .env
                     .iter()
                     .map(|env_var| EnvVariable {
                         name: env_var.name.clone(),
@@ -5217,15 +5180,16 @@ impl ClaudeAgent {
                     .collect();
 
                 Some(McpServerConfig::Stdio(StdioTransport {
-                    name: name.clone(),
-                    command: command.to_string_lossy().to_string(),
-                    args: args.clone(),
+                    name: stdio.name.clone(),
+                    command: stdio.command.to_string_lossy().to_string(),
+                    args: stdio.args.clone(),
                     env: internal_env,
                     cwd: None, // ACP doesn't specify cwd, use default
                 }))
             }
-            McpServer::Http { name, url, headers } => {
-                let internal_headers = headers
+            McpServer::Http(http) => {
+                let internal_headers = http
+                    .headers
                     .iter()
                     .map(|header| HttpHeader {
                         name: header.name.clone(),
@@ -5235,13 +5199,14 @@ impl ClaudeAgent {
 
                 Some(McpServerConfig::Http(HttpTransport {
                     transport_type: "http".to_string(),
-                    name: name.clone(),
-                    url: url.clone(),
+                    name: http.name.clone(),
+                    url: http.url.clone(),
                     headers: internal_headers,
                 }))
             }
-            McpServer::Sse { name, url, headers } => {
-                let internal_headers = headers
+            McpServer::Sse(sse) => {
+                let internal_headers = sse
+                    .headers
                     .iter()
                     .map(|header| HttpHeader {
                         name: header.name.clone(),
@@ -5251,11 +5216,12 @@ impl ClaudeAgent {
 
                 Some(McpServerConfig::Sse(SseTransport {
                     transport_type: "sse".to_string(),
-                    name: name.clone(),
-                    url: url.clone(),
+                    name: sse.name.clone(),
+                    url: sse.url.clone(),
                     headers: internal_headers,
                 }))
             }
+            _ => None,
         }
     }
 
@@ -5272,33 +5238,33 @@ impl ClaudeAgent {
                 declared_capability,
                 supported_transports,
             } => {
-                agent_client_protocol::Error {
-                    code: -32602, // Invalid params
-                    message: format!(
+                agent_client_protocol::Error::new(
+                    -32602, // Invalid params
+                    format!(
                         "{} transport not supported: agent did not declare mcpCapabilities.{}",
                         requested_transport.to_uppercase(),
                         requested_transport
                     ),
-                    data: Some(serde_json::json!({
-                        "requestedTransport": requested_transport,
-                        "declaredCapability": declared_capability,
-                        "supportedTransports": supported_transports
-                    })),
-                }
+                )
+                .data(serde_json::json!({
+                    "requestedTransport": requested_transport,
+                    "declaredCapability": declared_capability,
+                    "supportedTransports": supported_transports
+                }))
             }
             SessionSetupError::LoadSessionNotSupported {
                 declared_capability,
             } => {
-                agent_client_protocol::Error {
-                    code: -32601, // Method not found
-                    message: "Method not supported: agent does not support loadSession capability"
+                agent_client_protocol::Error::new(
+                    -32601, // Method not found
+                    "Method not supported: agent does not support loadSession capability"
                         .to_string(),
-                    data: Some(serde_json::json!({
-                        "method": "session/load",
-                        "requiredCapability": "loadSession",
-                        "declared": declared_capability
-                    })),
-                }
+                )
+                .data(serde_json::json!({
+                    "method": "session/load",
+                    "requiredCapability": "loadSession",
+                    "declared": declared_capability
+                }))
             }
             _ => {
                 // For any other validation errors, return generic invalid params
@@ -5330,11 +5296,22 @@ impl ClaudeAgent {
         session_id: &str,
     ) -> crate::Result<swissarmyhammer_todo::TodoStorage> {
         // Get the session to access its working directory
+        let session_id_parsed =
+            session_id
+                .to_string()
+                .parse()
+                .map_err(|e: crate::session::SessionIdError| {
+                    crate::error::AgentError::Session(format!("Invalid session ID: {}", e))
+                })?;
         let session = self
             .session_manager
-            .get_session(&session_id.to_string().parse()?)
-            .map_err(|e| crate::error::AgentError::Session(format!("Session not found: {}", session_id)))?
-            .ok_or_else(|| crate::error::AgentError::Session(format!("Session not found: {}", session_id)))?;
+            .get_session(&session_id_parsed)
+            .map_err(|_e| {
+                crate::error::AgentError::Session(format!("Session not found: {}", session_id))
+            })?
+            .ok_or_else(|| {
+                crate::error::AgentError::Session(format!("Session not found: {}", session_id))
+            })?;
 
         // Create TodoStorage using the session's working directory
         let todo_storage = swissarmyhammer_todo::TodoStorage::new_with_working_dir(session.cwd)
@@ -5470,7 +5447,7 @@ impl ClaudeAgent {
         let todo_ids: Vec<String> = if let Some(list) = todo_list {
             list.todo
                 .iter()
-                .filter(|item| !item.done())
+                .filter(|item| !item.is_complete())
                 .map(|item| item.id.clone())
                 .collect()
         } else {
@@ -5478,7 +5455,13 @@ impl ClaudeAgent {
         };
 
         // Update the session's todos vector
-        let session_id_parsed: crate::session::SessionId = session_id.to_string().parse()?;
+        let session_id_parsed: crate::session::SessionId =
+            session_id
+                .to_string()
+                .parse()
+                .map_err(|e: crate::session::SessionIdError| {
+                    crate::error::AgentError::Session(format!("Invalid session ID: {}", e))
+                })?;
         self.session_manager
             .update_session(&session_id_parsed, |session| {
                 session.todos = todo_ids;
@@ -5507,12 +5490,12 @@ mod tests {
             _args: RequestPermissionRequest,
         ) -> Result<RequestPermissionResponse, agent_client_protocol::Error> {
             // Auto-approve all permission requests in tests
-            Ok(RequestPermissionResponse {
-                outcome: agent_client_protocol::RequestPermissionOutcome::Selected {
-                    option_id: agent_client_protocol::PermissionOptionId::new("allow-once"),
-                },
-                meta: None,
-            })
+            let selected = agent_client_protocol::SelectedPermissionOutcome::new(
+                agent_client_protocol::PermissionOptionId::new("allow-once"),
+            );
+            Ok(RequestPermissionResponse::new(
+                agent_client_protocol::RequestPermissionOutcome::Selected(selected),
+            ))
         }
 
         async fn session_notification(
@@ -5578,20 +5561,20 @@ mod tests {
         println!("Agent created");
 
         // Initialize with client capabilities
-        let init_request = InitializeRequest {
-            protocol_version: agent_client_protocol::V1,
-            client_capabilities: agent_client_protocol::ClientCapabilities {
-                fs: agent_client_protocol::FileSystemCapability {
-                    read_text_file: true,
-                    write_text_file: true,
-                    meta: None,
-                },
-                terminal: true,
-                meta: Some(serde_json::json!({"streaming": true})),
-            },
-            client_info: None,
-            meta: Some(serde_json::json!({"test": true})),
-        };
+        let mut caps_meta = serde_json::Map::new();
+        caps_meta.insert("streaming".to_string(), serde_json::json!(true));
+        let client_capabilities = agent_client_protocol::ClientCapabilities::new()
+            .fs(agent_client_protocol::FileSystemCapability::new()
+                .read_text_file(true)
+                .write_text_file(true))
+            .terminal(true)
+            .meta(caps_meta);
+
+        let mut meta_map = serde_json::Map::new();
+        meta_map.insert("test".to_string(), serde_json::json!(true));
+        let init_request = InitializeRequest::new(agent_client_protocol::ProtocolVersion::V1)
+            .client_capabilities(client_capabilities)
+            .meta(meta_map);
 
         match agent.initialize(init_request).await {
             Ok(_) => println!("Agent initialized successfully"),
@@ -5599,11 +5582,10 @@ mod tests {
         }
 
         // Create session
-        let new_request = NewSessionRequest {
-            cwd: std::path::PathBuf::from("/tmp"),
-            mcp_servers: vec![],
-            meta: Some(serde_json::json!({"test": true})),
-        };
+        let mut session_meta = serde_json::Map::new();
+        session_meta.insert("test".to_string(), serde_json::json!(true));
+        let new_request =
+            NewSessionRequest::new(std::path::PathBuf::from("/tmp")).meta(session_meta);
 
         let new_response = match agent.new_session(new_request).await {
             Ok(resp) => resp,
@@ -5620,48 +5602,45 @@ mod tests {
     async fn test_initialize() {
         let agent = create_test_agent().await;
 
-        let request = InitializeRequest {
-            client_capabilities: agent_client_protocol::ClientCapabilities {
-                fs: agent_client_protocol::FileSystemCapability {
-                    read_text_file: true,
-                    write_text_file: true,
-                    meta: None,
-                },
-                terminal: true,
-                meta: Some(serde_json::json!({"streaming": true})),
-            },
-            protocol_version: Default::default(),
-            client_info: None,
-            meta: None,
-        };
+        let mut caps_meta = serde_json::Map::new();
+        caps_meta.insert("streaming".to_string(), serde_json::json!(true));
+        let client_capabilities = agent_client_protocol::ClientCapabilities::new()
+            .fs(agent_client_protocol::FileSystemCapability::new()
+                .read_text_file(true)
+                .write_text_file(true))
+            .terminal(true)
+            .meta(caps_meta);
+
+        let request = InitializeRequest::new(agent_client_protocol::ProtocolVersion::V1)
+            .client_capabilities(client_capabilities);
 
         let response = agent.initialize(request).await.unwrap();
 
         assert!(response.agent_capabilities.meta.is_some());
         assert!(response.auth_methods.is_empty());
         assert!(response.meta.is_some());
-        // Protocol version should be the default value
-        assert_eq!(response.protocol_version, Default::default());
+        // Protocol version should be V1
+        assert_eq!(
+            response.protocol_version,
+            agent_client_protocol::ProtocolVersion::V1
+        );
     }
 
     #[tokio::test]
     async fn test_initialize_mcp_capabilities() {
         let agent = create_test_agent().await;
 
-        let request = InitializeRequest {
-            client_capabilities: agent_client_protocol::ClientCapabilities {
-                fs: agent_client_protocol::FileSystemCapability {
-                    read_text_file: true,
-                    write_text_file: true,
-                    meta: None,
-                },
-                terminal: true,
-                meta: Some(serde_json::json!({"streaming": true})),
-            },
-            protocol_version: Default::default(),
-            client_info: None,
-            meta: None,
-        };
+        let mut caps_meta = serde_json::Map::new();
+        caps_meta.insert("streaming".to_string(), serde_json::json!(true));
+        let client_capabilities = agent_client_protocol::ClientCapabilities::new()
+            .fs(agent_client_protocol::FileSystemCapability::new()
+                .read_text_file(true)
+                .write_text_file(true))
+            .terminal(true)
+            .meta(caps_meta);
+
+        let request = InitializeRequest::new(agent_client_protocol::ProtocolVersion::V1)
+            .client_capabilities(client_capabilities);
 
         let response = agent.initialize(request).await.unwrap();
 
@@ -5692,19 +5671,17 @@ mod tests {
         let agent = create_test_agent().await;
 
         // Test that authentication is properly rejected since we declare no auth methods
-        let request = AuthenticateRequest {
-            method_id: agent_client_protocol::AuthMethodId("none".to_string().into()),
-            meta: None,
-        };
+        let request = AuthenticateRequest::new(agent_client_protocol::AuthMethodId(
+            "none".to_string().into(),
+        ));
 
         let result = agent.authenticate(request).await;
         assert!(result.is_err(), "Authentication should be rejected");
 
         // Test with a different method to ensure all methods are rejected
-        let request2 = AuthenticateRequest {
-            method_id: agent_client_protocol::AuthMethodId("basic".to_string().into()),
-            meta: None,
-        };
+        let request2 = AuthenticateRequest::new(agent_client_protocol::AuthMethodId(
+            "basic".to_string().into(),
+        ));
 
         let result2 = agent.authenticate(request2).await;
         assert!(
@@ -5717,11 +5694,12 @@ mod tests {
     async fn test_new_session() {
         let agent = create_test_agent().await;
 
-        let request = NewSessionRequest {
-            cwd: std::path::PathBuf::from("/tmp"),
-            mcp_servers: vec![],
-            meta: Some(serde_json::json!({"test": true})),
-        };
+        let request = NewSessionRequest::new(std::path::PathBuf::from("/tmp")).meta(
+            serde_json::json!({"test": true})
+                .as_object()
+                .unwrap()
+                .clone(),
+        );
 
         let response = agent.new_session(request).await.unwrap();
         assert!(!response.session_id.0.is_empty());
@@ -5738,11 +5716,12 @@ mod tests {
         let agent = create_test_agent().await;
 
         // First create a session
-        let new_request = NewSessionRequest {
-            cwd: std::path::PathBuf::from("/tmp"),
-            mcp_servers: vec![],
-            meta: Some(serde_json::json!({"test": true})),
-        };
+        let new_request = NewSessionRequest::new(std::path::PathBuf::from("/tmp")).meta(
+            serde_json::json!({"test": true})
+                .as_object()
+                .unwrap()
+                .clone(),
+        );
         let new_response = agent.new_session(new_request).await.unwrap();
 
         // Now load it
@@ -5769,11 +5748,12 @@ mod tests {
         let agent = create_test_agent().await;
 
         // First create a session
-        let new_request = NewSessionRequest {
-            cwd: std::path::PathBuf::from("/tmp"),
-            mcp_servers: vec![],
-            meta: Some(serde_json::json!({"test": true})),
-        };
+        let new_request = NewSessionRequest::new(std::path::PathBuf::from("/tmp")).meta(
+            serde_json::json!({"test": true})
+                .as_object()
+                .unwrap()
+                .clone(),
+        );
         let new_response = agent.new_session(new_request).await.unwrap();
         let session_id = agent.parse_session_id(&new_response.session_id).unwrap();
 
@@ -5895,20 +5875,15 @@ mod tests {
 
         // Test that the capability validation code path exists by verifying
         // that the agent properly declares the capability in initialize response
-        let init_request = InitializeRequest {
-            client_capabilities: agent_client_protocol::ClientCapabilities {
-                fs: agent_client_protocol::FileSystemCapability {
-                    read_text_file: true,
-                    write_text_file: true,
-                    meta: None,
-                },
-                terminal: true,
-                meta: Some(serde_json::json!({"streaming": true})),
-            },
-            protocol_version: Default::default(),
-            client_info: None,
-            meta: None,
-        };
+        let init_request = InitializeRequest::new(agent_client_protocol::ProtocolVersion::V1)
+            .client_capabilities(
+                agent_client_protocol::ClientCapabilities::new()
+                    .fs(agent_client_protocol::FileSystemCapability::new()
+                        .read_text_file(true)
+                        .write_text_file(true))
+                    .terminal(true)
+                    .meta(Some(serde_json::json!({"streaming": true}))),
+            );
 
         let init_response = agent.initialize(init_request).await.unwrap();
         assert!(
@@ -5980,11 +5955,7 @@ mod tests {
         let (agent, _receiver) = create_test_agent_with_notifications().await;
 
         // First create a valid session using system temp directory
-        let new_session_request = NewSessionRequest {
-            cwd: std::env::temp_dir(),
-            mcp_servers: vec![],
-            meta: None,
-        };
+        let new_session_request = NewSessionRequest::new(std::env::temp_dir());
         let session_response = agent.new_session(new_session_request).await.unwrap();
 
         let request = SetSessionModeRequest {
@@ -6013,11 +5984,7 @@ mod tests {
         let agent = create_test_agent().await;
 
         // First create a session
-        let new_session_request = NewSessionRequest {
-            cwd: std::path::PathBuf::from("/tmp"),
-            mcp_servers: vec![],
-            meta: None,
-        };
+        let new_session_request = NewSessionRequest::new(std::path::PathBuf::from("/tmp"));
         let new_session_response = agent.new_session(new_session_request).await.unwrap();
 
         let request = PromptRequest {
@@ -6095,11 +6062,7 @@ mod tests {
         let agent = create_test_agent().await;
 
         // Create session
-        let new_session_request = NewSessionRequest {
-            cwd: std::path::PathBuf::from("/tmp"),
-            mcp_servers: vec![],
-            meta: None,
-        };
+        let new_session_request = NewSessionRequest::new(std::path::PathBuf::from("/tmp"));
         let new_session_response = agent.new_session(new_session_request).await.unwrap();
 
         // Send prompt
@@ -6182,11 +6145,7 @@ mod tests {
         let agent = create_test_agent().await;
 
         // Create a valid session first
-        let new_session_request = NewSessionRequest {
-            cwd: std::path::PathBuf::from("/tmp"),
-            mcp_servers: vec![],
-            meta: None,
-        };
+        let new_session_request = NewSessionRequest::new(std::path::PathBuf::from("/tmp"));
         let session_response = agent.new_session(new_session_request).await.unwrap();
 
         // Test empty prompt
@@ -6211,11 +6170,7 @@ mod tests {
         let agent = create_test_agent().await;
 
         // Create a valid session first
-        let new_session_request = NewSessionRequest {
-            cwd: std::path::PathBuf::from("/tmp"),
-            mcp_servers: vec![],
-            meta: None,
-        };
+        let new_session_request = NewSessionRequest::new(std::path::PathBuf::from("/tmp"));
         let session_response = agent.new_session(new_session_request).await.unwrap();
 
         // Test non-text content block
@@ -6243,11 +6198,7 @@ mod tests {
         let agent = create_test_agent().await;
 
         // Create session
-        let new_session_request = NewSessionRequest {
-            cwd: std::path::PathBuf::from("/tmp"),
-            mcp_servers: vec![],
-            meta: None,
-        };
+        let new_session_request = NewSessionRequest::new(std::path::PathBuf::from("/tmp"));
         let new_session_response = agent.new_session(new_session_request).await.unwrap();
 
         // Send first prompt
@@ -6349,11 +6300,12 @@ mod tests {
         let (agent, _notification_receiver) = create_test_agent_with_notifications().await;
 
         // Create session with streaming capabilities
-        let new_session_request = NewSessionRequest {
-            cwd: std::path::PathBuf::from("/tmp"),
-            mcp_servers: vec![],
-            meta: Some(serde_json::json!({"streaming": true})),
-        };
+        let new_session_request = NewSessionRequest::new(std::path::PathBuf::from("/tmp")).meta(
+            serde_json::json!({"streaming": true})
+                .as_object()
+                .unwrap()
+                .clone(),
+        );
         let session_response = agent.new_session(new_session_request).await.unwrap();
 
         // Update session to have client capabilities with streaming enabled
@@ -6361,15 +6313,14 @@ mod tests {
         agent
             .session_manager
             .update_session(&session_id, |session| {
-                session.client_capabilities = Some(agent_client_protocol::ClientCapabilities {
-                    fs: agent_client_protocol::FileSystemCapability {
-                        read_text_file: true,
-                        write_text_file: true,
-                        meta: None,
-                    },
-                    terminal: true,
-                    meta: Some(serde_json::json!({"streaming": true})),
-                });
+                session.client_capabilities = Some(
+                    agent_client_protocol::ClientCapabilities::new()
+                        .fs(agent_client_protocol::FileSystemCapability::new()
+                            .read_text_file(true)
+                            .write_text_file(true))
+                        .terminal(true)
+                        .meta(Some(serde_json::json!({"streaming": true}))),
+                );
             })
             .unwrap();
 
@@ -6433,11 +6384,7 @@ mod tests {
         let (agent, _notification_receiver) = create_test_agent_with_notifications().await;
 
         // Create session without streaming capabilities
-        let new_session_request = NewSessionRequest {
-            cwd: std::path::PathBuf::from("/tmp"),
-            mcp_servers: vec![],
-            meta: None,
-        };
+        let new_session_request = NewSessionRequest::new(std::path::PathBuf::from("/tmp"));
         let session_response = agent.new_session(new_session_request).await.unwrap();
 
         // Session should not have streaming capabilities (default)
@@ -6479,11 +6426,7 @@ mod tests {
         let (agent, _) = create_test_agent_with_notifications().await;
 
         // Create a session
-        let new_session_request = NewSessionRequest {
-            cwd: std::path::PathBuf::from("/tmp"),
-            mcp_servers: vec![],
-            meta: None,
-        };
+        let new_session_request = NewSessionRequest::new(std::path::PathBuf::from("/tmp"));
         let session_response = agent.new_session(new_session_request).await.unwrap();
         let session_id = session_response.session_id.0.as_ref().parse().unwrap();
 
@@ -6493,26 +6436,20 @@ mod tests {
             .get_session(&session_id)
             .unwrap()
             .unwrap();
-        let dummy_request = PromptRequest {
-            session_id: session_response.session_id,
-            prompt: vec![],
-            meta: None,
-        };
+        let dummy_request = PromptRequest::new(session_response.session_id, vec![]);
         assert!(!agent.should_stream(&session, &dummy_request));
 
         // Add client capabilities without streaming
         agent
             .session_manager
             .update_session(&session_id, |session| {
-                session.client_capabilities = Some(agent_client_protocol::ClientCapabilities {
-                    fs: agent_client_protocol::FileSystemCapability {
-                        read_text_file: true,
-                        write_text_file: true,
-                        meta: None,
-                    },
-                    terminal: true,
-                    meta: None, // No streaming meta
-                });
+                session.client_capabilities = Some(
+                    agent_client_protocol::ClientCapabilities::new()
+                        .fs(agent_client_protocol::FileSystemCapability::new()
+                            .read_text_file(true)
+                            .write_text_file(true))
+                        .terminal(true),
+                ); // No streaming meta
             })
             .unwrap();
 
@@ -6527,15 +6464,14 @@ mod tests {
         agent
             .session_manager
             .update_session(&session_id, |session| {
-                session.client_capabilities = Some(agent_client_protocol::ClientCapabilities {
-                    fs: agent_client_protocol::FileSystemCapability {
-                        read_text_file: true,
-                        write_text_file: true,
-                        meta: None,
-                    },
-                    terminal: true,
-                    meta: Some(serde_json::json!({"streaming": true})),
-                });
+                session.client_capabilities = Some(
+                    agent_client_protocol::ClientCapabilities::new()
+                        .fs(agent_client_protocol::FileSystemCapability::new()
+                            .read_text_file(true)
+                            .write_text_file(true))
+                        .terminal(true)
+                        .meta(Some(serde_json::json!({"streaming": true}))),
+                );
             })
             .unwrap();
 
@@ -6553,11 +6489,12 @@ mod tests {
         let (agent, _notification_receiver) = create_test_agent_with_notifications().await;
 
         // Create session with streaming capabilities
-        let new_session_request = NewSessionRequest {
-            cwd: std::path::PathBuf::from("/tmp"),
-            mcp_servers: vec![],
-            meta: Some(serde_json::json!({"streaming": true})),
-        };
+        let new_session_request = NewSessionRequest::new(std::path::PathBuf::from("/tmp")).meta(
+            serde_json::json!({"streaming": true})
+                .as_object()
+                .unwrap()
+                .clone(),
+        );
         let session_response = agent.new_session(new_session_request).await.unwrap();
 
         // Update session to have client capabilities with streaming enabled
@@ -6565,15 +6502,14 @@ mod tests {
         agent
             .session_manager
             .update_session(&session_id, |session| {
-                session.client_capabilities = Some(agent_client_protocol::ClientCapabilities {
-                    fs: agent_client_protocol::FileSystemCapability {
-                        read_text_file: true,
-                        write_text_file: true,
-                        meta: None,
-                    },
-                    terminal: true,
-                    meta: Some(serde_json::json!({"streaming": true})),
-                });
+                session.client_capabilities = Some(
+                    agent_client_protocol::ClientCapabilities::new()
+                        .fs(agent_client_protocol::FileSystemCapability::new()
+                            .read_text_file(true)
+                            .write_text_file(true))
+                        .terminal(true)
+                        .meta(Some(serde_json::json!({"streaming": true}))),
+                );
             })
             .unwrap();
 
@@ -6672,11 +6608,12 @@ mod tests {
         let (agent, _notification_receiver) = create_test_agent_with_notifications().await;
 
         // Create session with streaming capabilities
-        let new_session_request = NewSessionRequest {
-            cwd: std::path::PathBuf::from("/tmp"),
-            mcp_servers: vec![],
-            meta: Some(serde_json::json!({"streaming": true})),
-        };
+        let new_session_request = NewSessionRequest::new(std::path::PathBuf::from("/tmp")).meta(
+            serde_json::json!({"streaming": true})
+                .as_object()
+                .unwrap()
+                .clone(),
+        );
         let session_response = agent.new_session(new_session_request).await.unwrap();
 
         // Update session to have client capabilities with streaming enabled
@@ -6684,15 +6621,14 @@ mod tests {
         agent
             .session_manager
             .update_session(&session_id, |session| {
-                session.client_capabilities = Some(agent_client_protocol::ClientCapabilities {
-                    fs: agent_client_protocol::FileSystemCapability {
-                        read_text_file: true,
-                        write_text_file: true,
-                        meta: None,
-                    },
-                    terminal: true,
-                    meta: Some(serde_json::json!({"streaming": true})),
-                });
+                session.client_capabilities = Some(
+                    agent_client_protocol::ClientCapabilities::new()
+                        .fs(agent_client_protocol::FileSystemCapability::new()
+                            .read_text_file(true)
+                            .write_text_file(true))
+                        .terminal(true)
+                        .meta(Some(serde_json::json!({"streaming": true}))),
+                );
             })
             .unwrap();
 
@@ -6781,30 +6717,24 @@ mod tests {
         let (agent, _notifications) = create_test_agent_with_notifications().await;
 
         // Test initialize
-        let init_request = InitializeRequest {
-            client_capabilities: agent_client_protocol::ClientCapabilities {
-                fs: agent_client_protocol::FileSystemCapability {
-                    read_text_file: true,
-                    write_text_file: true,
-                    meta: None,
-                },
-                terminal: true,
-                meta: Some(serde_json::json!({"streaming": true})),
-            },
-            protocol_version: Default::default(),
-            client_info: None,
-            meta: None,
-        };
+        let init_request = InitializeRequest::new(agent_client_protocol::ProtocolVersion::V1)
+            .client_capabilities(
+                agent_client_protocol::ClientCapabilities::new()
+                    .fs(agent_client_protocol::FileSystemCapability::new()
+                        .read_text_file(true)
+                        .write_text_file(true))
+                    .terminal(true)
+                    .meta(Some(serde_json::json!({"streaming": true}))),
+            );
 
         let init_response = agent.initialize(init_request).await.unwrap();
         assert!(init_response.agent_capabilities.meta.is_some());
         assert!(init_response.auth_methods.is_empty());
 
         // Test authenticate - should fail since we declare no auth methods
-        let auth_request = AuthenticateRequest {
-            method_id: agent_client_protocol::AuthMethodId("none".to_string().into()),
-            meta: None,
-        };
+        let auth_request = AuthenticateRequest::new(agent_client_protocol::AuthMethodId(
+            "none".to_string().into(),
+        ));
 
         let auth_result = agent.authenticate(auth_request).await;
         assert!(
@@ -6813,11 +6743,7 @@ mod tests {
         );
 
         // Test session creation
-        let session_request = NewSessionRequest {
-            cwd: std::path::PathBuf::from("/tmp"),
-            mcp_servers: vec![],
-            meta: None,
-        };
+        let session_request = NewSessionRequest::new(std::path::PathBuf::from("/tmp"));
 
         let session_response = agent.new_session(session_request).await.unwrap();
         assert!(!session_response.session_id.0.is_empty());
@@ -6874,20 +6800,14 @@ mod tests {
         let agent = create_test_agent().await;
 
         // For now, test with supported version to see basic flow
-        let request = InitializeRequest {
-            client_capabilities: agent_client_protocol::ClientCapabilities {
-                fs: agent_client_protocol::FileSystemCapability {
-                    read_text_file: true,
-                    write_text_file: true,
-                    meta: None,
-                },
-                terminal: true,
-                meta: None,
-            },
-            protocol_version: Default::default(),
-            client_info: None,
-            meta: None,
-        };
+        let request = InitializeRequest::new(agent_client_protocol::ProtocolVersion::V1)
+            .client_capabilities(
+                agent_client_protocol::ClientCapabilities::new()
+                    .fs(agent_client_protocol::FileSystemCapability::new()
+                        .read_text_file(true)
+                        .write_text_file(true))
+                    .terminal(true),
+            );
 
         // This should succeed now since we don't have unsupported version logic yet
         let result = agent.initialize(request).await;
@@ -6899,20 +6819,14 @@ mod tests {
         let agent = create_test_agent().await;
 
         // For now, test that default protocol version works
-        let request = InitializeRequest {
-            client_capabilities: agent_client_protocol::ClientCapabilities {
-                fs: agent_client_protocol::FileSystemCapability {
-                    read_text_file: true,
-                    write_text_file: true,
-                    meta: None,
-                },
-                terminal: true,
-                meta: None,
-            },
-            protocol_version: Default::default(),
-            client_info: None,
-            meta: None,
-        };
+        let request = InitializeRequest::new(agent_client_protocol::ProtocolVersion::V1)
+            .client_capabilities(
+                agent_client_protocol::ClientCapabilities::new()
+                    .fs(agent_client_protocol::FileSystemCapability::new()
+                        .read_text_file(true)
+                        .write_text_file(true))
+                    .terminal(true),
+            );
 
         // This should succeed with default version
         let result = agent.initialize(request).await;
@@ -6926,18 +6840,16 @@ mod tests {
         // Test with unknown capability in meta
         // Unknown capabilities should be accepted (lenient validation for forward compatibility)
         let request = InitializeRequest {
-            client_capabilities: agent_client_protocol::ClientCapabilities {
-                fs: agent_client_protocol::FileSystemCapability {
-                    read_text_file: true,
-                    write_text_file: true,
-                    meta: Some(serde_json::json!({"unknown_feature": "test"})),
-                },
-                terminal: true,
-                meta: Some(serde_json::json!({
+            client_capabilities: agent_client_protocol::ClientCapabilities::new()
+                .fs(agent_client_protocol::FileSystemCapability::new()
+                    .read_text_file(true)
+                    .write_text_file(true)
+                    .meta(Some(serde_json::json!({"unknown_feature": "test"}))))
+                .terminal(true)
+                .meta(Some(serde_json::json!({
                     "customExtension": true,
                     "streaming": true
-                })),
-            },
+                }))),
             protocol_version: Default::default(),
             client_info: None,
             meta: None,
@@ -6957,20 +6869,17 @@ mod tests {
         // Test with invalid capability structure
         let request = InitializeRequest {
             protocol_version: Default::default(),
-            client_capabilities: agent_client_protocol::ClientCapabilities {
-                fs: agent_client_protocol::FileSystemCapability {
-                    read_text_file: true,
-                    write_text_file: true,
-                    meta: None,
-                },
-                terminal: true,
-                meta: Some(serde_json::json!({
+            client_capabilities: agent_client_protocol::ClientCapabilities::new()
+                .fs(agent_client_protocol::FileSystemCapability::new()
+                    .read_text_file(true)
+                    .write_text_file(true))
+                .terminal(true)
+                .meta(Some(serde_json::json!({
                     "malformed": "data",
                     "nested": {
                         "invalid": []
                     }
-                })),
-            },
+                }))),
             client_info: None,
             meta: Some(serde_json::json!("invalid_meta_format")), // Should be object, not string
         };
@@ -6995,22 +6904,17 @@ mod tests {
         let agent = create_test_agent().await;
 
         // Test with known capability having wrong type (should be rejected)
-        let request = InitializeRequest {
-            client_capabilities: agent_client_protocol::ClientCapabilities {
-                fs: agent_client_protocol::FileSystemCapability {
-                    read_text_file: true,
-                    write_text_file: true,
-                    meta: None,
-                },
-                terminal: true,
-                meta: Some(serde_json::json!({
-                    "streaming": "invalid_string_value"  // streaming must be boolean
-                })),
-            },
-            protocol_version: Default::default(),
-            client_info: None,
-            meta: None,
-        };
+        let request = InitializeRequest::new(agent_client_protocol::ProtocolVersion::V1)
+            .client_capabilities(
+                agent_client_protocol::ClientCapabilities::new()
+                    .fs(agent_client_protocol::FileSystemCapability::new()
+                        .read_text_file(true)
+                        .write_text_file(true))
+                    .terminal(true)
+                    .meta(Some(serde_json::json!({
+                        "streaming": "invalid_string_value"  // streaming must be boolean
+                    }))),
+            );
 
         let result = agent.initialize(request).await;
         assert!(
@@ -7036,22 +6940,17 @@ mod tests {
 
         // Test with unknown file system capability
         // Unknown fs.meta capabilities should be accepted (lenient validation)
-        let request = InitializeRequest {
-            client_capabilities: agent_client_protocol::ClientCapabilities {
-                fs: agent_client_protocol::FileSystemCapability {
-                    read_text_file: true,
-                    write_text_file: true,
-                    meta: Some(serde_json::json!({
-                        "unknown_feature": true
-                    })),
-                },
-                terminal: true,
-                meta: None,
-            },
-            protocol_version: Default::default(),
-            client_info: None,
-            meta: None,
-        };
+        let request = InitializeRequest::new(agent_client_protocol::ProtocolVersion::V1)
+            .client_capabilities(
+                agent_client_protocol::ClientCapabilities::new()
+                    .fs(agent_client_protocol::FileSystemCapability::new()
+                        .read_text_file(true)
+                        .write_text_file(true)
+                        .meta(Some(serde_json::json!({
+                            "unknown_feature": true
+                        }))))
+                    .terminal(true),
+            );
 
         let result = agent.initialize(request).await;
         assert!(
@@ -7065,35 +6964,25 @@ mod tests {
         let agent = create_test_agent().await;
 
         // Test that current implementation supports both V0 and V1
-        let v0_request = InitializeRequest {
-            protocol_version: agent_client_protocol::V0,
-            client_capabilities: agent_client_protocol::ClientCapabilities {
-                fs: agent_client_protocol::FileSystemCapability {
-                    read_text_file: true,
-                    write_text_file: true,
-                    meta: None,
-                },
-                terminal: true,
-                meta: None,
-            },
-            client_info: None,
-            meta: None,
-        };
+        let v0_request = InitializeRequest::new(agent_client_protocol::ProtocolVersion::V0)
+            .client_capabilities(
+                agent_client_protocol::ClientCapabilities::new()
+                    .fs(agent_client_protocol::FileSystemCapability::new()
+                        .read_text_file(true)
+                        .write_text_file(true))
+                    .terminal(true),
+            );
 
         let v0_result = agent.initialize(v0_request).await;
         assert!(v0_result.is_ok(), "V0 should be supported");
 
         let v1_request = InitializeRequest {
-            client_capabilities: agent_client_protocol::ClientCapabilities {
-                fs: agent_client_protocol::FileSystemCapability {
-                    read_text_file: true,
-                    write_text_file: true,
-                    meta: None,
-                },
-                terminal: true,
-                meta: None,
-            },
-            protocol_version: agent_client_protocol::V1,
+            client_capabilities: agent_client_protocol::ClientCapabilities::new()
+                .fs(agent_client_protocol::FileSystemCapability::new()
+                    .read_text_file(true)
+                    .write_text_file(true))
+                .terminal(true),
+            protocol_version: agent_client_protocol::ProtocolVersion::V1,
             client_info: None,
             meta: None,
         };
@@ -7123,16 +7012,12 @@ mod tests {
 
         // Test client requests V1 -> agent should respond with V1
         let v1_request = InitializeRequest {
-            client_capabilities: agent_client_protocol::ClientCapabilities {
-                fs: agent_client_protocol::FileSystemCapability {
-                    read_text_file: true,
-                    write_text_file: true,
-                    meta: None,
-                },
-                terminal: true,
-                meta: None,
-            },
-            protocol_version: agent_client_protocol::V1,
+            client_capabilities: agent_client_protocol::ClientCapabilities::new()
+                .fs(agent_client_protocol::FileSystemCapability::new()
+                    .read_text_file(true)
+                    .write_text_file(true))
+                .terminal(true),
+            protocol_version: agent_client_protocol::ProtocolVersion::V1,
             client_info: None,
             meta: None,
         };
@@ -7140,30 +7025,24 @@ mod tests {
         let v1_response = agent.initialize(v1_request).await.unwrap();
         assert_eq!(
             v1_response.protocol_version,
-            agent_client_protocol::V1,
+            agent_client_protocol::ProtocolVersion::V1,
             "Agent should respond with client's requested version when supported"
         );
 
         // Test client requests V0 -> agent should respond with V0
-        let v0_request = InitializeRequest {
-            protocol_version: agent_client_protocol::V0,
-            client_capabilities: agent_client_protocol::ClientCapabilities {
-                fs: agent_client_protocol::FileSystemCapability {
-                    read_text_file: true,
-                    write_text_file: true,
-                    meta: None,
-                },
-                terminal: true,
-                meta: None,
-            },
-            client_info: None,
-            meta: None,
-        };
+        let v0_request = InitializeRequest::new(agent_client_protocol::ProtocolVersion::V0)
+            .client_capabilities(
+                agent_client_protocol::ClientCapabilities::new()
+                    .fs(agent_client_protocol::FileSystemCapability::new()
+                        .read_text_file(true)
+                        .write_text_file(true))
+                    .terminal(true),
+            );
 
         let v0_response = agent.initialize(v0_request).await.unwrap();
         assert_eq!(
             v0_response.protocol_version,
-            agent_client_protocol::V0,
+            agent_client_protocol::ProtocolVersion::V0,
             "Agent should respond with client's requested version when supported"
         );
     }
@@ -7178,14 +7057,14 @@ mod tests {
         let negotiated_v1 = agent.negotiate_protocol_version(&agent_client_protocol::V1);
         assert_eq!(
             negotiated_v1,
-            agent_client_protocol::V1,
+            agent_client_protocol::ProtocolVersion::V1,
             "V1 should be negotiated to V1 when supported"
         );
 
         let negotiated_v0 = agent.negotiate_protocol_version(&agent_client_protocol::V0);
         assert_eq!(
             negotiated_v0,
-            agent_client_protocol::V0,
+            agent_client_protocol::ProtocolVersion::V0,
             "V0 should be negotiated to V0 when supported"
         );
 
@@ -7206,7 +7085,7 @@ mod tests {
             .unwrap_or(&agent_client_protocol::V1);
         assert_eq!(
             *latest,
-            agent_client_protocol::V1,
+            agent_client_protocol::ProtocolVersion::V1,
             "Latest supported version should be V1"
         );
     }
@@ -8409,29 +8288,19 @@ mod tests {
         let agent = create_test_agent().await;
 
         // Initialize with read_text_file capability disabled
-        let init_request = InitializeRequest {
-            protocol_version: agent_client_protocol::V1,
-            client_capabilities: agent_client_protocol::ClientCapabilities {
-                fs: agent_client_protocol::FileSystemCapability {
-                    read_text_file: false,
-                    write_text_file: true,
-                    meta: None,
-                },
-                terminal: true,
-                meta: None,
-            },
-            client_info: None,
-            meta: None,
-        };
+        let init_request = InitializeRequest::new(agent_client_protocol::ProtocolVersion::V1)
+            .client_capabilities(
+                agent_client_protocol::ClientCapabilities::new()
+                    .fs(agent_client_protocol::FileSystemCapability::new()
+                        .read_text_file(false)
+                        .write_text_file(true))
+                    .terminal(true),
+            );
 
         agent.initialize(init_request).await.unwrap();
 
         // Create session
-        let new_request = NewSessionRequest {
-            cwd: std::path::PathBuf::from("/tmp"),
-            mcp_servers: vec![],
-            meta: None,
-        };
+        let new_request = NewSessionRequest::new(std::path::PathBuf::from("/tmp"));
 
         let new_response = agent.new_session(new_request).await.unwrap();
         let session_id = new_response.session_id.0.as_ref().to_string();
@@ -9046,16 +8915,13 @@ mod tests {
         let agent = Arc::new(agent);
 
         let init_request = InitializeRequest {
-            protocol_version: agent_client_protocol::V1,
-            client_capabilities: agent_client_protocol::ClientCapabilities {
-                fs: agent_client_protocol::FileSystemCapability {
-                    read_text_file: true,
-                    write_text_file: true,
-                    meta: None,
-                },
-                terminal: true,
-                meta: Some(serde_json::json!({"streaming": false})),
-            },
+            protocol_version: agent_client_protocol::ProtocolVersion::V1,
+            client_capabilities: agent_client_protocol::ClientCapabilities::new()
+                .fs(agent_client_protocol::FileSystemCapability::new()
+                    .read_text_file(true)
+                    .write_text_file(true))
+                .terminal(true)
+                .meta(Some(serde_json::json!({"streaming": false}))),
             client_info: None,
             meta: Some(serde_json::json!({"test": true})),
         };
@@ -9063,11 +8929,12 @@ mod tests {
 
         let mut notification_receiver = agent.notification_sender.sender.subscribe();
 
-        let new_request = NewSessionRequest {
-            cwd: std::path::PathBuf::from("/tmp"),
-            mcp_servers: vec![],
-            meta: Some(serde_json::json!({"test": true})),
-        };
+        let new_request = NewSessionRequest::new(std::path::PathBuf::from("/tmp")).meta(
+            serde_json::json!({"test": true})
+                .as_object()
+                .unwrap()
+                .clone(),
+        );
         let new_response = agent.new_session(new_request).await.unwrap();
 
         let prompt_request = PromptRequest {
@@ -9312,15 +9179,11 @@ mod tests {
         let agent = create_test_agent().await;
 
         // Set client capabilities to enable filesystem tools
-        let caps = agent_client_protocol::ClientCapabilities {
-            fs: agent_client_protocol::FileSystemCapability {
-                read_text_file: true,
-                write_text_file: true,
-                meta: None,
-            },
-            terminal: false,
-            meta: None,
-        };
+        let caps = agent_client_protocol::ClientCapabilities::new()
+            .fs(agent_client_protocol::FileSystemCapability::new()
+                .read_text_file(true)
+                .write_text_file(true))
+            .terminal(false);
 
         let mut client_caps = agent.client_capabilities.write().await;
         *client_caps = Some(caps.clone());
@@ -9355,15 +9218,11 @@ mod tests {
         let agent = create_test_agent().await;
 
         // Set capabilities with only read enabled
-        let caps = agent_client_protocol::ClientCapabilities {
-            fs: agent_client_protocol::FileSystemCapability {
-                read_text_file: true,
-                write_text_file: false,
-                meta: None,
-            },
-            terminal: false,
-            meta: None,
-        };
+        let caps = agent_client_protocol::ClientCapabilities::new()
+            .fs(agent_client_protocol::FileSystemCapability::new()
+                .read_text_file(true)
+                .write_text_file(false))
+            .terminal(false);
 
         let mut client_caps = agent.client_capabilities.write().await;
         *client_caps = Some(caps.clone());
@@ -9401,15 +9260,11 @@ mod tests {
         let agent = create_test_agent().await;
 
         // Enable terminal capability
-        let caps = agent_client_protocol::ClientCapabilities {
-            fs: agent_client_protocol::FileSystemCapability {
-                read_text_file: false,
-                write_text_file: false,
-                meta: None,
-            },
-            terminal: true,
-            meta: None,
-        };
+        let caps = agent_client_protocol::ClientCapabilities::new()
+            .fs(agent_client_protocol::FileSystemCapability::new()
+                .read_text_file(false)
+                .write_text_file(false))
+            .terminal(true);
 
         let mut client_caps = agent.client_capabilities.write().await;
         *client_caps = Some(caps.clone());
@@ -9483,15 +9338,11 @@ mod tests {
         let agent = create_test_agent().await;
 
         // Enable all capabilities
-        let caps = agent_client_protocol::ClientCapabilities {
-            fs: agent_client_protocol::FileSystemCapability {
-                read_text_file: true,
-                write_text_file: true,
-                meta: None,
-            },
-            terminal: true,
-            meta: None,
-        };
+        let caps = agent_client_protocol::ClientCapabilities::new()
+            .fs(agent_client_protocol::FileSystemCapability::new()
+                .read_text_file(true)
+                .write_text_file(true))
+            .terminal(true);
 
         let mut client_caps = agent.client_capabilities.write().await;
         *client_caps = Some(caps.clone());
@@ -9707,28 +9558,19 @@ mod tests {
                 let agent = create_test_connection().await;
 
                 // Initialize the connection
-                let init_request = InitializeRequest {
-                    protocol_version: agent_client_protocol::V1,
-                    client_capabilities: agent_client_protocol::ClientCapabilities {
-                        fs: agent_client_protocol::FileSystemCapability {
-                            read_text_file: true,
-                            write_text_file: true,
-                            meta: None,
-                        },
-                        terminal: true,
-                        meta: None,
-                    },
-                    client_info: None,
-                    meta: None,
-                };
+                let init_request =
+                    InitializeRequest::new(agent_client_protocol::ProtocolVersion::V1)
+                        .client_capabilities(
+                            agent_client_protocol::ClientCapabilities::new()
+                                .fs(agent_client_protocol::FileSystemCapability::new()
+                                    .read_text_file(true)
+                                    .write_text_file(true))
+                                .terminal(true),
+                        );
                 agent.initialize(init_request).await.unwrap();
 
                 // Create a session
-                let new_session_request = NewSessionRequest {
-                    cwd: std::path::PathBuf::from("/tmp"),
-                    mcp_servers: vec![],
-                    meta: None,
-                };
+                let new_session_request = NewSessionRequest::new(std::path::PathBuf::from("/tmp"));
                 let session_response = agent.new_session(new_session_request).await.unwrap();
 
                 // First prompt - send via ACP protocol
@@ -9785,11 +9627,12 @@ mod tests {
         agent.config.max_turn_requests = 0;
 
         // Create a session with streaming capability
-        let new_session_request = NewSessionRequest {
-            cwd: std::path::PathBuf::from("/tmp"),
-            mcp_servers: vec![],
-            meta: Some(serde_json::json!({"streaming": true})),
-        };
+        let new_session_request = NewSessionRequest::new(std::path::PathBuf::from("/tmp")).meta(
+            serde_json::json!({"streaming": true})
+                .as_object()
+                .unwrap()
+                .clone(),
+        );
         let session_response = agent.new_session(new_session_request).await.unwrap();
         let session_id: crate::session::SessionId =
             session_response.session_id.0.as_ref().parse().unwrap();
@@ -9798,15 +9641,14 @@ mod tests {
         agent
             .session_manager
             .update_session(&session_id, |session| {
-                session.client_capabilities = Some(agent_client_protocol::ClientCapabilities {
-                    fs: agent_client_protocol::FileSystemCapability {
-                        read_text_file: true,
-                        write_text_file: true,
-                        meta: None,
-                    },
-                    terminal: true,
-                    meta: Some(serde_json::json!({"streaming": true})),
-                });
+                session.client_capabilities = Some(
+                    agent_client_protocol::ClientCapabilities::new()
+                        .fs(agent_client_protocol::FileSystemCapability::new()
+                            .read_text_file(true)
+                            .write_text_file(true))
+                        .terminal(true)
+                        .meta(Some(serde_json::json!({"streaming": true}))),
+                );
             })
             .unwrap();
 

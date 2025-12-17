@@ -573,11 +573,12 @@ impl SessionSetupError {
     /// Convert SessionSetupError to agent_client_protocol::Error
     pub fn to_protocol_error(&self) -> agent_client_protocol::Error {
         let json_rpc_error = self.to_json_rpc_error();
-        agent_client_protocol::Error {
-            code: json_rpc_error.code,
-            message: json_rpc_error.message,
-            data: json_rpc_error.data,
+        let mut error =
+            agent_client_protocol::Error::new(json_rpc_error.code, json_rpc_error.message);
+        if let Some(data) = json_rpc_error.data {
+            error = error.data(data);
         }
+        error
     }
 }
 

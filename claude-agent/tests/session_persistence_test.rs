@@ -7,7 +7,7 @@
 //! 4. Handle edge cases like missing files, corrupted data, etc.
 
 use claude_agent::session::{Message, MessageRole, Session, SessionId, SessionManager};
-use std::path::PathBuf;
+
 use std::time::Duration;
 use tempfile::TempDir;
 
@@ -182,16 +182,13 @@ fn test_session_with_client_capabilities_persisted() {
     let (manager, _temp_dir) = create_test_session_manager();
     let cwd = std::env::current_dir().unwrap();
 
-    let capabilities = agent_client_protocol::ClientCapabilities {
-        slash_commands: Some(agent_client_protocol::SlashCommandsCapability {
-            support: Some(agent_client_protocol::SlashCommandSupport::Builtin(vec![
-                "help".to_string(),
-                "quit".to_string(),
-            ])),
-            meta: None,
-        }),
-        ..Default::default()
-    };
+    let fs_cap = agent_client_protocol::FileSystemCapability::new()
+        .read_text_file(true)
+        .write_text_file(true);
+
+    let capabilities = agent_client_protocol::ClientCapabilities::new()
+        .fs(fs_cap)
+        .terminal(true);
 
     let session_id = manager
         .create_session(cwd, Some(capabilities.clone()))
@@ -203,20 +200,10 @@ fn test_session_with_client_capabilities_persisted() {
     assert!(session.client_capabilities.is_some());
     let loaded_caps = session.client_capabilities.unwrap();
 
-    // Verify slash commands were preserved
-    if let Some(slash_commands) = loaded_caps.slash_commands {
-        if let Some(agent_client_protocol::SlashCommandSupport::Builtin(commands)) =
-            slash_commands.support
-        {
-            assert_eq!(commands.len(), 2);
-            assert!(commands.contains(&"help".to_string()));
-            assert!(commands.contains(&"quit".to_string()));
-        } else {
-            panic!("Expected builtin slash commands");
-        }
-    } else {
-        panic!("Slash commands capability should be preserved");
-    }
+    // Verify capabilities were preserved
+    assert!(loaded_caps.fs.read_text_file);
+    assert!(loaded_caps.fs.write_text_file);
+    assert!(loaded_caps.terminal);
 }
 
 #[test]
@@ -285,18 +272,14 @@ fn test_session_available_commands_persisted() {
     let session_id = manager.create_session(cwd, None).unwrap();
 
     let commands = vec![
-        agent_client_protocol::AvailableCommand {
-            name: "create_plan".to_string(),
-            description: "Create an execution plan".to_string(),
-            input: None,
-            meta: None,
-        },
-        agent_client_protocol::AvailableCommand {
-            name: "research_codebase".to_string(),
-            description: "Research the codebase".to_string(),
-            input: None,
-            meta: None,
-        },
+        agent_client_protocol::AvailableCommand::new(
+            "create_plan".to_string(),
+            "Create an execution plan".to_string(),
+        ),
+        agent_client_protocol::AvailableCommand::new(
+            "research_codebase".to_string(),
+            "Research the codebase".to_string(),
+        ),
     ];
 
     manager

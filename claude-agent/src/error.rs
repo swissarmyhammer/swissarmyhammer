@@ -242,12 +242,13 @@ impl AgentError {
 /// Convert AgentError to agent_client_protocol::Error for ACP method handlers
 impl From<AgentError> for agent_client_protocol::Error {
     fn from(error: AgentError) -> Self {
-        let json_rpc_error = error.to_json_rpc_error();
-        agent_client_protocol::Error {
-            code: json_rpc_error.code,
-            message: json_rpc_error.message,
-            data: json_rpc_error.data,
+        let json_rpc_error = ToJsonRpcError::to_json_rpc_error(&error);
+        let mut err =
+            agent_client_protocol::Error::new(json_rpc_error.code, json_rpc_error.message);
+        if let Some(data) = json_rpc_error.data {
+            err = err.data(data);
         }
+        err
     }
 }
 

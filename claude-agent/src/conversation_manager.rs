@@ -226,13 +226,16 @@ impl ConversationManager {
                     "Session {} cancelled during multi-turn conversation",
                     session_id
                 );
-                return Ok(PromptResponse {
-                    stop_reason: StopReason::Cancelled,
-                    meta: Some(serde_json::json!({
-                        "turn_requests": turn_request_count,
-                        "turn_tokens": turn_token_count,
-                    })),
-                });
+                let mut meta_map = serde_json::Map::new();
+                meta_map.insert(
+                    "turn_requests".to_string(),
+                    serde_json::json!(turn_request_count),
+                );
+                meta_map.insert(
+                    "turn_tokens".to_string(),
+                    serde_json::json!(turn_token_count),
+                );
+                return Ok(PromptResponse::new(StopReason::Cancelled).meta(meta_map));
             }
 
             // Check turn request limit
@@ -244,13 +247,16 @@ impl ConversationManager {
                     max_turn_requests,
                     session_id
                 );
-                return Ok(PromptResponse {
-                    stop_reason: StopReason::MaxTurnRequests,
-                    meta: Some(serde_json::json!({
-                        "turn_requests": turn_request_count,
-                        "max_turn_requests": max_turn_requests,
-                    })),
-                });
+                let mut meta_map = serde_json::Map::new();
+                meta_map.insert(
+                    "turn_requests".to_string(),
+                    serde_json::json!(turn_request_count),
+                );
+                meta_map.insert(
+                    "max_turn_requests".to_string(),
+                    serde_json::json!(max_turn_requests),
+                );
+                return Ok(PromptResponse::new(StopReason::MaxTurnRequests).meta(meta_map));
             }
 
             // Send request to language model
@@ -271,13 +277,16 @@ impl ConversationManager {
                     max_tokens_per_turn,
                     session_id
                 );
-                return Ok(PromptResponse {
-                    stop_reason: StopReason::MaxTokens,
-                    meta: Some(serde_json::json!({
-                        "turn_tokens": turn_token_count,
-                        "max_tokens_per_turn": max_tokens_per_turn,
-                    })),
-                });
+                let mut meta_map = serde_json::Map::new();
+                meta_map.insert(
+                    "turn_tokens".to_string(),
+                    serde_json::json!(turn_token_count),
+                );
+                meta_map.insert(
+                    "max_tokens_per_turn".to_string(),
+                    serde_json::json!(max_tokens_per_turn),
+                );
+                return Ok(PromptResponse::new(StopReason::MaxTokens).meta(meta_map));
             }
 
             // Add assistant response to conversation history
@@ -293,13 +302,16 @@ impl ConversationManager {
                     "Multi-turn conversation completed after {} LM requests",
                     turn_request_count
                 );
-                return Ok(PromptResponse {
-                    stop_reason: StopReason::EndTurn,
-                    meta: Some(serde_json::json!({
-                        "turn_requests": turn_request_count,
-                        "turn_tokens": turn_token_count,
-                    })),
-                });
+                let mut meta_map = serde_json::Map::new();
+                meta_map.insert(
+                    "turn_requests".to_string(),
+                    serde_json::json!(turn_request_count),
+                );
+                meta_map.insert(
+                    "turn_tokens".to_string(),
+                    serde_json::json!(turn_token_count),
+                );
+                return Ok(PromptResponse::new(StopReason::EndTurn).meta(meta_map));
             }
 
             // Execute tool calls
@@ -399,26 +411,15 @@ impl ConversationManager {
                     text_content.push_str(&chunk.content);
 
                     // Send streaming update
-                    if let Err(e) = self
-                        .notification_sender
-                        .send_update(SessionNotification {
-                            session_id: agent_client_protocol::SessionId::new(
-                                session_id.to_string().into(),
-                            ),
-                            update: SessionUpdate::AgentMessageChunk(
-                                agent_client_protocol::ContentChunk {
-                                    content: ContentBlock::Text(TextContent {
-                                        text: chunk.content.clone(),
-                                        annotations: None,
-                                        meta: None,
-                                    }),
-                                    meta: None,
-                                },
-                            ),
-                            meta: None,
-                        })
-                        .await
-                    {
+                    let text_content = TextContent::new(chunk.content.clone());
+                    let content_block = ContentBlock::Text(text_content);
+                    let content_chunk = agent_client_protocol::ContentChunk::new(content_block);
+                    let notification = SessionNotification::new(
+                        agent_client_protocol::SessionId::new(session_id.to_string()),
+                        SessionUpdate::AgentMessageChunk(content_chunk),
+                    );
+
+                    if let Err(e) = self.notification_sender.send_update(notification).await {
                         tracing::warn!("Failed to send streaming update: {}", e);
                     }
                 }
@@ -602,7 +603,7 @@ impl ConversationManager {
                 let tool_handler = self.tool_handler.write().await;
                 tool_handler
                     .handle_tool_request(
-                        &agent_client_protocol::SessionId::new(session_id.to_string().into()),
+                        &agent_client_protocol::SessionId::new(session_id.to_string()),
                         internal_request,
                     )
                     .await

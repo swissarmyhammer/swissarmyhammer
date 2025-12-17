@@ -1,0 +1,12 @@
+{
+  "exchanges": [
+    {
+      "input": "{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"hi\"}}",
+      "outputs": [
+        "{\"type\":\"system\",\"message\":{\"init\":{\"slash_commands\":[]}}}",
+        "{\"type\":\"assistant\",\"message\":{\"role\":\"assistant\",\"content\":\"Hello! How can I assist you today?\"}}",
+        "{\"type\":\"result\",\"status\":\"success\"}"
+      ]
+    }
+  ]
+}

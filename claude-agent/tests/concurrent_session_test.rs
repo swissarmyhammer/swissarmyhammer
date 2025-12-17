@@ -49,7 +49,7 @@ async fn test_concurrent_session_creation() {
     assert_eq!(session_ids.len(), 10);
 
     // Verify all session IDs are unique
-    let mut unique_ids = session_ids.clone();
+    let mut unique_ids: Vec<String> = session_ids.iter().map(|id| id.to_string()).collect();
     unique_ids.sort();
     unique_ids.dedup();
     assert_eq!(unique_ids.len(), 10, "All session IDs should be unique");

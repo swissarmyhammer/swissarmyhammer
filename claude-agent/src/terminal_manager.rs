@@ -101,7 +101,7 @@ pub struct TerminalSession {
 ///
 /// This struct defines all the parameters needed to create a new terminal session
 /// following the Anthropic Computer Protocol (ACP) specification.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct TerminalCreateParams {
     /// Session identifier that must exist and be a valid ULID format
     #[serde(rename = "sessionId")]
@@ -123,7 +123,7 @@ pub struct TerminalCreateParams {
 ///
 /// Represents a single environment variable to be set in the terminal session.
 /// Environment variables override system defaults when names conflict.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct EnvVariable {
     /// Environment variable name (cannot be empty)
     pub name: String,
@@ -214,6 +214,7 @@ impl TerminalManager {
     }
 
     /// Check if client has terminal capability
+    #[allow(dead_code)]
     async fn has_terminal_capability(&self) -> bool {
         let caps = self.client_capabilities.read().await;
         match &*caps {

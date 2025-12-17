@@ -6,7 +6,8 @@
 //! Kept for manual verification and re-recording fixtures.
 
 use agent_client_protocol::{
-    Agent, InitializeRequest, NewSessionRequest, SessionNotification, SessionUpdate, V1,
+    Agent, InitializeRequest, NewSessionRequest, ProtocolVersion, SessionNotification,
+    SessionUpdate,
 };
 use claude_agent::{agent::ClaudeAgent, config::AgentConfig};
 use std::sync::Arc;
@@ -54,29 +55,19 @@ async fn test_inner() {
     let agent = Arc::new(agent);
 
     // Initialize agent
-    let init_request = InitializeRequest {
-        protocol_version: V1,
-        client_capabilities: agent_client_protocol::ClientCapabilities {
-            fs: agent_client_protocol::FileSystemCapability {
-                read_text_file: true,
-                write_text_file: true,
-                meta: None,
-            },
-            terminal: false,
-            meta: None,
-        },
-        client_info: None,
-        meta: None,
-    };
+    let fs_cap = agent_client_protocol::FileSystemCapability::new()
+        .read_text_file(true)
+        .write_text_file(true);
+    let client_capabilities = agent_client_protocol::ClientCapabilities::new()
+        .fs(fs_cap)
+        .terminal(false);
+    let init_request =
+        InitializeRequest::new(ProtocolVersion::V1).client_capabilities(client_capabilities);
     agent.initialize(init_request).await.unwrap();
 
     // Create session - this should spawn Claude process and read init message
     let cwd = std::env::current_dir().expect("Failed to get current directory");
-    let new_session_request = NewSessionRequest {
-        cwd,
-        mcp_servers: vec![],
-        meta: None,
-    };
+    let new_session_request = NewSessionRequest::new(cwd);
 
     eprintln!("\n=== Creating session ===");
     let session_response = agent

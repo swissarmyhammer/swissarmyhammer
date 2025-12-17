@@ -31,15 +31,11 @@ mod tests {
         let mut handler = ToolCallHandler::new(permissions, session_manager, permission_engine);
 
         // Set full client capabilities for tests to ensure ACP compliance
-        let capabilities = agent_client_protocol::ClientCapabilities {
-            fs: agent_client_protocol::FileSystemCapability {
-                read_text_file: true,
-                write_text_file: true,
-                meta: None,
-            },
-            terminal: true,
-            meta: None,
-        };
+        let capabilities = agent_client_protocol::ClientCapabilities::new()
+            .fs(agent_client_protocol::FileSystemCapability::new()
+                .read_text_file(true)
+                .write_text_file(true))
+            .terminal(true);
         handler.set_client_capabilities(capabilities);
 
         let (sender, receiver) = NotificationSender::new(32);
@@ -388,15 +384,11 @@ mod tests {
         let mut handler = ToolCallHandler::new(permissions, session_manager, permission_engine);
 
         // Set client capabilities for ACP compliance
-        let capabilities = agent_client_protocol::ClientCapabilities {
-            fs: agent_client_protocol::FileSystemCapability {
-                read_text_file: true,
-                write_text_file: true,
-                meta: None,
-            },
-            terminal: true,
-            meta: None,
-        };
+        let capabilities = agent_client_protocol::ClientCapabilities::new()
+            .fs(agent_client_protocol::FileSystemCapability::new()
+                .read_text_file(true)
+                .write_text_file(true))
+            .terminal(true);
         handler.set_client_capabilities(capabilities);
 
         let session_id = SessionId::new("test_session_no_sender");
@@ -460,7 +452,8 @@ mod tests {
                 assert_eq!(content.len(), 1, "Should have one content item");
 
                 match &content[0] {
-                    agent_client_protocol::ToolCallContent::Terminal { terminal_id: tid } => {
+                    agent_client_protocol::ToolCallContent::Terminal(terminal) => {
+                        let tid = &terminal.terminal_id;
                         assert_eq!(
                             tid.0.as_ref(),
                             terminal_id.as_str(),
@@ -637,7 +630,8 @@ mod tests {
                 assert_eq!(content.len(), 1, "Should have one terminal content item");
 
                 match &content[0] {
-                    agent_client_protocol::ToolCallContent::Terminal { terminal_id: tid } => {
+                    agent_client_protocol::ToolCallContent::Terminal(terminal) => {
+                        let tid = &terminal.terminal_id;
                         assert_eq!(
                             tid.0.as_ref(),
                             terminal_id.as_str(),
@@ -740,15 +734,11 @@ mod tests {
             ToolCallHandler::new(permissions, session_manager.clone(), permission_engine);
 
         // Set client capabilities WITHOUT terminal capability
-        let capabilities = agent_client_protocol::ClientCapabilities {
-            fs: agent_client_protocol::FileSystemCapability {
-                read_text_file: true,
-                write_text_file: true,
-                meta: None,
-            },
-            terminal: false, // Explicitly disable terminal capability
-            meta: None,
-        };
+        let capabilities = agent_client_protocol::ClientCapabilities::new()
+            .fs(agent_client_protocol::FileSystemCapability::new()
+                .read_text_file(true)
+                .write_text_file(true))
+            .terminal(false); // Explicitly disable terminal capability
         handler.set_client_capabilities(capabilities);
 
         // Create a session
@@ -817,15 +807,11 @@ mod tests {
         let mut handler = ToolCallHandler::new(permissions, session_manager, permission_engine);
 
         // Set client capabilities WITHOUT terminal capability
-        let capabilities = agent_client_protocol::ClientCapabilities {
-            fs: agent_client_protocol::FileSystemCapability {
-                read_text_file: true,
-                write_text_file: true,
-                meta: None,
-            },
-            terminal: false,
-            meta: None,
-        };
+        let capabilities = agent_client_protocol::ClientCapabilities::new()
+            .fs(agent_client_protocol::FileSystemCapability::new()
+                .read_text_file(true)
+                .write_text_file(true))
+            .terminal(false);
         handler.set_client_capabilities(capabilities);
 
         let session_id = SessionId::new("test_session_no_terminal");
@@ -937,15 +923,11 @@ mod tests {
             ToolCallHandler::new(permissions, session_manager.clone(), permission_engine);
 
         // Set client capabilities WITHOUT file read capability
-        let capabilities = agent_client_protocol::ClientCapabilities {
-            fs: agent_client_protocol::FileSystemCapability {
-                read_text_file: false, // Explicitly disable read capability
-                write_text_file: true,
-                meta: None,
-            },
-            terminal: false,
-            meta: None,
-        };
+        let capabilities = agent_client_protocol::ClientCapabilities::new()
+            .fs(agent_client_protocol::FileSystemCapability::new()
+                .read_text_file(false) // Explicitly disable read capability
+                .write_text_file(true))
+            .terminal(false);
         handler.set_client_capabilities(capabilities);
 
         // Create a session with a test file
@@ -1005,15 +987,11 @@ mod tests {
             ToolCallHandler::new(permissions, session_manager.clone(), permission_engine);
 
         // Set client capabilities WITHOUT file write capability
-        let capabilities = agent_client_protocol::ClientCapabilities {
-            fs: agent_client_protocol::FileSystemCapability {
-                read_text_file: true,
-                write_text_file: false, // Explicitly disable write capability
-                meta: None,
-            },
-            terminal: false,
-            meta: None,
-        };
+        let capabilities = agent_client_protocol::ClientCapabilities::new()
+            .fs(agent_client_protocol::FileSystemCapability::new()
+                .read_text_file(true)
+                .write_text_file(false)) // Explicitly disable write capability
+            .terminal(false);
         handler.set_client_capabilities(capabilities);
 
         // Create a session

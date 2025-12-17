@@ -542,11 +542,12 @@ mod tests {
     use std::path::PathBuf;
 
     fn create_test_new_session_request() -> NewSessionRequest {
-        NewSessionRequest {
-            cwd: std::env::current_dir().unwrap(),
-            mcp_servers: vec![],
-            meta: Some(serde_json::json!({"test": true})),
-        }
+        NewSessionRequest::new(std::env::current_dir().unwrap()).meta(
+            serde_json::json!({"test": true})
+                .as_object()
+                .unwrap()
+                .clone(),
+        )
     }
 
     fn create_test_load_session_request() -> LoadSessionRequest {

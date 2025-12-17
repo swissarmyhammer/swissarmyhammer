@@ -8,22 +8,14 @@ use agent_client_protocol::{AudioContent, ContentBlock, ImageContent, ResourceLi
 
 /// Create a text content block with the given text
 pub fn text(content: &str) -> ContentBlock {
-    ContentBlock::Text(TextContent {
-        text: content.to_string(),
-        annotations: None,
-        meta: None,
-    })
+    let text_content = TextContent::new(content.to_string());
+    ContentBlock::Text(text_content)
 }
 
 /// Create an image content block with the given MIME type and base64 data
 pub fn image(mime_type: &str, data: &str) -> ContentBlock {
-    ContentBlock::Image(ImageContent {
-        data: data.to_string(),
-        mime_type: mime_type.to_string(),
-        uri: None,
-        annotations: None,
-        meta: None,
-    })
+    let image_content = ImageContent::new(data.to_string(), mime_type.to_string());
+    ContentBlock::Image(image_content)
 }
 
 /// Create a valid PNG image content block using test data
@@ -33,12 +25,8 @@ pub fn image_png() -> ContentBlock {
 
 /// Create an audio content block with the given MIME type and base64 data
 pub fn audio(mime_type: &str, data: &str) -> ContentBlock {
-    ContentBlock::Audio(AudioContent {
-        data: data.to_string(),
-        mime_type: mime_type.to_string(),
-        annotations: None,
-        meta: None,
-    })
+    let audio_content = AudioContent::new(data.to_string(), mime_type.to_string());
+    ContentBlock::Audio(audio_content)
 }
 
 /// Create a valid WAV audio content block using test data
@@ -48,16 +36,8 @@ pub fn audio_wav() -> ContentBlock {
 
 /// Create a resource link content block with customizable fields
 pub fn resource_link(uri: &str, name: &str) -> ContentBlock {
-    ContentBlock::ResourceLink(ResourceLink {
-        uri: uri.to_string(),
-        name: name.to_string(),
-        description: None,
-        mime_type: None,
-        title: None,
-        size: None,
-        annotations: None,
-        meta: None,
-    })
+    let resource_link = ResourceLink::new(name.to_string(), uri.to_string());
+    ContentBlock::ResourceLink(resource_link)
 }
 
 /// Create a resource link content block with all fields populated
@@ -69,16 +49,12 @@ pub fn resource_link_full(
     title: &str,
     size: u64,
 ) -> ContentBlock {
-    ContentBlock::ResourceLink(ResourceLink {
-        uri: uri.to_string(),
-        name: name.to_string(),
-        description: Some(description.to_string()),
-        mime_type: Some(mime_type.to_string()),
-        title: Some(title.to_string()),
-        size: Some(size.try_into().unwrap()),
-        annotations: None,
-        meta: None,
-    })
+    let resource_link = ResourceLink::new(name.to_string(), uri.to_string())
+        .description(description.to_string())
+        .mime_type(mime_type.to_string())
+        .title(title.to_string())
+        .size(size as i64);
+    ContentBlock::ResourceLink(resource_link)
 }
 
 #[cfg(test)]

@@ -16,22 +16,14 @@ mod tests {
 
     // Helper functions to create content blocks
     fn image(mime_type: &str, data: &str) -> ContentBlock {
-        ContentBlock::Image(ImageContent {
-            data: data.to_string(),
-            mime_type: mime_type.to_string(),
-            uri: None,
-            annotations: None,
-            meta: None,
-        })
+        ContentBlock::Image(ImageContent::new(data.to_string(), mime_type.to_string()))
     }
 
     fn audio(mime_type: &str, data: &str) -> ContentBlock {
-        ContentBlock::Audio(agent_client_protocol::AudioContent {
-            data: data.to_string(),
-            mime_type: mime_type.to_string(),
-            annotations: None,
-            meta: None,
-        })
+        ContentBlock::Audio(agent_client_protocol::AudioContent::new(
+            data.to_string(),
+            mime_type.to_string(),
+        ))
     }
 
     fn audio_wav() -> ContentBlock {
@@ -133,11 +125,8 @@ mod tests {
     fn test_safe_text_content_processing() {
         let processor = create_moderate_secure_processor();
 
-        let safe_text = ContentBlock::Text(TextContent {
-            text: "This is completely safe text content.".to_string(),
-            annotations: None,
-            meta: None,
-        });
+        let safe_text =
+            ContentBlock::Text(TextContent::new("This is completely safe text content."));
 
         let result = processor.process_content_block(&safe_text);
         assert!(result.is_ok());
@@ -153,11 +142,8 @@ mod tests {
     fn test_malicious_text_content_blocking() {
         let processor = create_strict_secure_processor();
 
-        let dangerous_text = ContentBlock::Text(TextContent {
-            text: "<script>alert('XSS attack');</script>".to_string(),
-            annotations: None,
-            meta: None,
-        });
+        let dangerous_text =
+            ContentBlock::Text(TextContent::new("<script>alert('XSS attack');</script>"));
 
         let result = processor.process_content_block(&dangerous_text);
         assert!(result.is_err());
@@ -219,13 +205,7 @@ mod tests {
         // Create base64 data that exceeds strict mode limits (1MB)
         let oversized_data = "A".repeat(2 * 1024 * 1024); // 2MB of 'A' characters
 
-        let oversized_image = ContentBlock::Image(ImageContent {
-            data: oversized_data,
-            mime_type: "image/png".to_string(),
-            uri: None,
-            annotations: None,
-            meta: None,
-        });
+        let oversized_image = ContentBlock::Image(ImageContent::new(oversized_data, "image/png"));
 
         let result = processor.process_content_block(&oversized_image);
         assert!(result.is_err());
@@ -243,16 +223,10 @@ mod tests {
     fn test_ssrf_protection_blocking() {
         let processor = create_strict_secure_processor();
 
-        let malicious_resource_link = ContentBlock::ResourceLink(ResourceLink {
-            uri: "http://localhost:8080/admin".to_string(), // Should be blocked by SSRF protection
-            name: "admin_panel".to_string(),
-            description: None,
-            mime_type: None,
-            title: None,
-            size: None,
-            annotations: None,
-            meta: None,
-        });
+        let malicious_resource_link = ContentBlock::ResourceLink(ResourceLink::new(
+            "admin_panel",
+            "http://localhost:8080/admin",
+        )); // Should be blocked by SSRF protection
 
         let result = processor.process_content_block(&malicious_resource_link);
         assert!(result.is_err());
@@ -270,16 +244,10 @@ mod tests {
     fn test_safe_uri_processing() {
         let processor = create_moderate_secure_processor();
 
-        let safe_resource_link = ContentBlock::ResourceLink(ResourceLink {
-            uri: "https://example.com/document.pdf".to_string(),
-            name: "document".to_string(),
-            description: None,
-            mime_type: None,
-            title: None,
-            size: None,
-            annotations: None,
-            meta: None,
-        });
+        let safe_resource_link = ContentBlock::ResourceLink(ResourceLink::new(
+            "document",
+            "https://example.com/document.pdf",
+        ));
 
         let result = processor.process_content_block(&safe_resource_link);
         assert!(result.is_ok());
@@ -296,11 +264,7 @@ mod tests {
 
         // Create an array that exceeds strict mode limits (10 items)
         let oversized_array = vec![
-            ContentBlock::Text(TextContent {
-                text: "Item".to_string(),
-                annotations: None,
-                meta: None,
-            });
+            ContentBlock::Text(TextContent::new("Item"));
             20 // Exceeds strict limit of 10
         ];
 
@@ -321,21 +285,9 @@ mod tests {
         let processor = create_moderate_secure_processor();
 
         let safe_array = vec![
-            ContentBlock::Text(TextContent {
-                text: "First item".to_string(),
-                annotations: None,
-                meta: None,
-            }),
-            ContentBlock::Text(TextContent {
-                text: "Second item".to_string(),
-                annotations: None,
-                meta: None,
-            }),
-            ContentBlock::Text(TextContent {
-                text: "Third item".to_string(),
-                annotations: None,
-                meta: None,
-            }),
+            ContentBlock::Text(TextContent::new("First item")),
+            ContentBlock::Text(TextContent::new("Second item")),
+            ContentBlock::Text(TextContent::new("Third item")),
         ];
 
         let result = processor.process_content_blocks(&safe_array);
@@ -352,13 +304,10 @@ mod tests {
     fn test_invalid_base64_format_blocking() {
         let processor = create_moderate_secure_processor();
 
-        let invalid_image = ContentBlock::Image(ImageContent {
-            data: "This is not valid base64!@#$%".to_string(),
-            mime_type: "image/png".to_string(),
-            uri: None,
-            annotations: None,
-            meta: None,
-        });
+        let invalid_image = ContentBlock::Image(ImageContent::new(
+            "This is not valid base64!@#$%",
+            "image/png",
+        ));
 
         let result = processor.process_content_block(&invalid_image);
         assert!(result.is_err());
@@ -377,16 +326,8 @@ mod tests {
     fn test_dangerous_uri_schemes_blocking() {
         let processor = create_strict_secure_processor();
 
-        let dangerous_resource = ContentBlock::ResourceLink(ResourceLink {
-            uri: "javascript:alert('XSS')".to_string(), // Dangerous scheme
-            name: "dangerous".to_string(),
-            description: None,
-            mime_type: None,
-            title: None,
-            size: None,
-            annotations: None,
-            meta: None,
-        });
+        let dangerous_resource =
+            ContentBlock::ResourceLink(ResourceLink::new("dangerous", "javascript:alert('XSS')")); // Dangerous scheme
 
         let result = processor.process_content_block(&dangerous_resource);
         assert!(result.is_err());
@@ -422,16 +363,8 @@ mod tests {
         let permissive_processor = create_permissive_secure_processor();
 
         // Content that should be allowed in permissive but blocked in strict
-        let localhost_resource = ContentBlock::ResourceLink(ResourceLink {
-            uri: "http://localhost:3000/api".to_string(),
-            name: "local_api".to_string(),
-            description: None,
-            mime_type: None,
-            title: None,
-            size: None,
-            annotations: None,
-            meta: None,
-        });
+        let localhost_resource =
+            ContentBlock::ResourceLink(ResourceLink::new("local_api", "http://localhost:3000/api"));
 
         let strict_result = strict_processor.process_content_block(&localhost_resource);
         let permissive_result = permissive_processor.process_content_block(&localhost_resource);
@@ -449,21 +382,11 @@ mod tests {
 
         // Test that normal, safe content processing still works correctly
         let mixed_content = vec![
-            ContentBlock::Text(TextContent {
-                text: "Safe text content".to_string(),
-                annotations: None,
-                meta: None,
-            }),
-            ContentBlock::ResourceLink(ResourceLink {
-                uri: "https://example.com/safe-resource".to_string(),
-                name: "safe_resource".to_string(),
-                description: None,
-                mime_type: None,
-                title: None,
-                size: None,
-                annotations: None,
-                meta: None,
-            }),
+            ContentBlock::Text(TextContent::new("Safe text content")),
+            ContentBlock::ResourceLink(ResourceLink::new(
+                "safe_resource",
+                "https://example.com/safe-resource",
+            )),
         ];
 
         let result = secure_processor.process_content_blocks(&mixed_content);
@@ -485,11 +408,7 @@ mod tests {
     fn test_error_context_preservation() {
         let processor = create_strict_secure_processor();
 
-        let malicious_text = ContentBlock::Text(TextContent {
-            text: "javascript:alert('test')".to_string(),
-            annotations: None,
-            meta: None,
-        });
+        let malicious_text = ContentBlock::Text(TextContent::new("javascript:alert('test')"));
 
         let result = processor.process_content_block(&malicious_text);
         assert!(result.is_err());
@@ -511,11 +430,7 @@ mod tests {
 
         let processor = create_moderate_secure_processor();
 
-        let test_content = ContentBlock::Text(TextContent {
-            text: "Performance test content".to_string(),
-            annotations: None,
-            meta: None,
-        });
+        let test_content = ContentBlock::Text(TextContent::new("Performance test content"));
 
         // Measure processing time
         let start = Instant::now();

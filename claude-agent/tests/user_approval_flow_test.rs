@@ -48,15 +48,11 @@ fn create_test_environment() -> (
     );
 
     // Set client capabilities
-    let capabilities = agent_client_protocol::ClientCapabilities {
-        fs: agent_client_protocol::FileSystemCapability {
-            read_text_file: true,
-            write_text_file: true,
-            meta: None,
-        },
-        terminal: true,
-        meta: None,
-    };
+    let capabilities = agent_client_protocol::ClientCapabilities::new()
+        .fs(agent_client_protocol::FileSystemCapability::new()
+            .read_text_file(true)
+            .write_text_file(true))
+        .terminal(true);
     handler.set_client_capabilities(capabilities);
 
     // Create a session
@@ -107,15 +103,11 @@ fn create_test_environment_with_capabilities(
     );
 
     // Set client capabilities with specific settings
-    let capabilities = agent_client_protocol::ClientCapabilities {
-        fs: agent_client_protocol::FileSystemCapability {
-            read_text_file: read_capability,
-            write_text_file: write_capability,
-            meta: None,
-        },
-        terminal: terminal_capability,
-        meta: None,
-    };
+    let capabilities = agent_client_protocol::ClientCapabilities::new()
+        .fs(agent_client_protocol::FileSystemCapability::new()
+            .read_text_file(read_capability)
+            .write_text_file(write_capability))
+        .terminal(terminal_capability);
     handler.set_client_capabilities(capabilities);
 
     // Create a session
@@ -196,7 +188,7 @@ async fn test_user_approval_flow_allow_once_then_requires_permission_again() {
     engine
         .store_permission_decision(
             "fs_write",
-            claude_agent::permissions::PermissionDecision::AllowOnce,
+            claude_agent::permissions::PermissionDecision::Allow,
             None,
         )
         .await
@@ -298,7 +290,7 @@ async fn test_user_approval_flow_reject_once() {
     engine
         .store_permission_decision(
             "fs_write",
-            claude_agent::permissions::PermissionDecision::DenyOnce,
+            claude_agent::permissions::PermissionDecision::Deny,
             None,
         )
         .await
@@ -617,7 +609,7 @@ async fn test_user_approval_flow_permission_cleared() {
     );
 
     // Clear the permission
-    engine.clear_permission("fs_write").await.unwrap();
+    engine.remove_permission("fs_write").await.unwrap();
 
     // Second request should require permission again
     let test_file2 = test_dir.path().join("after_clear.txt");

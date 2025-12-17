@@ -9,6 +9,38 @@ use std::sync::Arc;
 /// Result type for agent creation
 pub type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
+/// Creates a test claude-agent instance connected via streams
+///
+/// For conformance testing, this uses playback mode to avoid calling the real Claude API.
+/// Set CLAUDE_AGENT_MODE=record to record new fixtures.
+#[allow(dead_code)]
+pub async fn create_claude_agent() -> Result<impl Agent> {
+    let mut config = claude_agent::config::AgentConfig::default();
+
+    // Check for environment variable to override mode
+    let mode = std::env::var("CLAUDE_AGENT_MODE").unwrap_or_else(|_| "playback".to_string());
+
+    config.claude.mode = match mode.as_str() {
+        "record" => {
+            let output_path =
+                std::env::current_dir()?.join("tests/fixtures/conformance_recording.json");
+            claude_agent::config::ClaudeAgentMode::Record { output_path }
+        }
+        "playback" => {
+            let input_path =
+                std::env::current_dir()?.join("tests/fixtures/conformance_minimal.json");
+            claude_agent::config::ClaudeAgentMode::Playback { input_path }
+        }
+        _ => claude_agent::config::ClaudeAgentMode::Normal,
+    };
+
+    let (agent, _receiver) = claude_agent::agent::ClaudeAgent::new(config)
+        .await
+        .map_err(|e| format!("Failed to create claude agent: {}", e))?;
+
+    create_agent_connection(agent)
+}
+
 /// Creates a test llama-agent instance connected via streams
 /// Always includes session mode support for full conformance testing
 pub async fn create_llama_agent() -> Result<impl Agent> {

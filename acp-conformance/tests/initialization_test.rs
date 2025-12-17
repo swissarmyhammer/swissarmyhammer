@@ -26,17 +26,18 @@ fn llama_agent_factory() -> std::pin::Pin<
     })
 }
 
-// Add more agent factories here:
-// fn claude_agent_factory() -> std::pin::Pin<Box<dyn std::future::Future<Output = agent_fixtures::Result<Box<dyn Agent>>> + Send>> {
-//     Box::pin(async {
-//         let agent = agent_fixtures::create_claude_agent().await?;
-//         Ok(Box::new(agent) as Box<dyn Agent>)
-//     })
-// }
+fn claude_agent_factory() -> std::pin::Pin<
+    Box<dyn std::future::Future<Output = agent_fixtures::Result<Box<dyn Agent>>> + Send>,
+> {
+    Box::pin(async {
+        let agent = agent_fixtures::create_claude_agent().await?;
+        Ok(Box::new(agent) as Box<dyn Agent>)
+    })
+}
 
 #[rstest]
 #[case::llama_agent(llama_agent_factory)]
-// #[case::claude_agent(claude_agent_factory)]
+#[case::claude_agent(claude_agent_factory)]
 #[test_log::test(tokio::test)]
 #[serial_test::serial]
 async fn test_minimal_initialization(#[case] factory: AgentFactory) {

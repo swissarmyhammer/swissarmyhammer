@@ -339,11 +339,8 @@ impl ClaudeClient {
         process: Arc<Mutex<ClaudeProcess>>,
         prompt: &str,
     ) -> Result<()> {
-        let content = vec![ContentBlock::Text(TextContent {
-            text: prompt.to_string(),
-            annotations: None,
-            meta: None,
-        })];
+        let text_content = TextContent::new(prompt.to_string());
+        let content = vec![ContentBlock::Text(text_content)];
         let stream_json = self.protocol_translator.acp_to_stream_json(content)?;
 
         // Debug logging to trace what's actually sent to Claude CLI
@@ -510,7 +507,7 @@ impl ClaudeClient {
                 // Check if this is a result message (indicates end)
                 if Self::is_end_of_stream(&line) {
                     // Parse the result message to extract stop_reason
-                    if let Ok(Some(result)) = self.protocol_translator.parse_result_message(&line) {
+                    if let Ok(Some(result)) = protocol_translator.parse_result_message(&line) {
                         // Send a final chunk with the stop_reason
                         let final_chunk = MessageChunk {
                             content: String::new(),
@@ -580,7 +577,7 @@ impl ClaudeClient {
                                 content: String::new(),
                                 chunk_type: ChunkType::ToolCall,
                                 tool_call: Some(ToolCallInfo {
-                                    id: tool_call.id.0.to_string(),
+                                    id: tool_call.tool_call_id.0.to_string(),
                                     name: tool_call.title.clone(),
                                     parameters: tool_call
                                         .raw_input

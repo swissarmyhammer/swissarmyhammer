@@ -23,7 +23,7 @@ tracing-subscriber.workspace = true
 tempfile.workspace = true
 test-log.workspace = true
 llama-agent = { workspace = true }
-# claude-agent = { path = "../claude-agent" }  # Disabled - still has 216 compilation errors
+claude-agent = { path = "../claude-agent" }
 futures.workspace = true
 tokio-util = { workspace = true, features = ["compat"] }
 piper = "0.2"

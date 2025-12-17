@@ -164,33 +164,27 @@ impl CapabilityValidator {
     /// - Known meta capabilities (`streaming`, `notifications`, `progress`) have wrong types (must be boolean)
     ///
     /// Unknown meta capabilities are logged but don't fail validation (lenient approach for forward compatibility).
-    fn validate_client_meta_capabilities(&self, meta: &Value) -> SessionSetupResult<()> {
-        if !meta.is_object() {
-            return Err(SessionSetupError::CapabilityFormatError {
-                capability_name: "meta".to_string(),
-                expected_format: "object".to_string(),
-                actual_value: meta.clone(),
-            });
-        }
-
+    fn validate_client_meta_capabilities(
+        &self,
+        meta: &serde_json::Map<String, serde_json::Value>,
+    ) -> SessionSetupResult<()> {
+        // Meta is already a Map, so it's already an object
         // Validate that meta values have appropriate types
-        if let Some(meta_obj) = meta.as_object() {
-            for (key, value) in meta_obj {
-                // Common meta capabilities should be booleans
-                match key.as_str() {
-                    "streaming" | "notifications" | "progress" => {
-                        if !value.is_boolean() {
-                            return Err(SessionSetupError::CapabilityFormatError {
-                                capability_name: format!("meta.{}", key),
-                                expected_format: "boolean".to_string(),
-                                actual_value: value.clone(),
-                            });
-                        }
+        for (key, value) in meta {
+            // Common meta capabilities should be booleans
+            match key.as_str() {
+                "streaming" | "notifications" | "progress" => {
+                    if !value.is_boolean() {
+                        return Err(SessionSetupError::CapabilityFormatError {
+                            capability_name: format!("meta.{}", key),
+                            expected_format: "boolean".to_string(),
+                            actual_value: value.clone(),
+                        });
                     }
-                    _ => {
-                        // Unknown meta capabilities are logged as warnings but don't fail validation
-                        tracing::debug!("Unknown client meta capability: {}", key);
-                    }
+                }
+                _ => {
+                    // Unknown meta capabilities are logged as warnings but don't fail validation
+                    tracing::debug!("Unknown client meta capability: {}", key);
                 }
             }
         }
@@ -217,15 +211,10 @@ impl CapabilityValidator {
         &self,
         fs_caps: &agent_client_protocol::FileSystemCapability,
     ) -> SessionSetupResult<()> {
-        // Validate meta field if present
-        if let Some(fs_meta) = &fs_caps.meta {
-            if !fs_meta.is_object() {
-                return Err(SessionSetupError::CapabilityFormatError {
-                    capability_name: "fs.meta".to_string(),
-                    expected_format: "object".to_string(),
-                    actual_value: fs_meta.clone(),
-                });
-            }
+        // Validate meta field if present - meta is already a Map so no need to check is_object
+        if let Some(_fs_meta) = &fs_caps.meta {
+            // Meta field exists and is already typed as Map<String, Value>
+            // No additional validation needed
         }
 
         // read_text_file and write_text_file are boolean fields that are always valid

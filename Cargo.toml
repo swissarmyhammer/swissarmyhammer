@@ -24,10 +24,9 @@ members = [
     "llama-common",
     "llama-embedding",
     "llama-loader",
-    "mermaid-parser", "acp-conformance",
-]
-exclude = [
-    "claude-agent",  # Reference implementation for ACP integration, not part of build
+    "mermaid-parser",
+    "acp-conformance",
+    "claude-agent",
 ]
 resolver = "2"
 

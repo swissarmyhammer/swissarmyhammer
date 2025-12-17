@@ -363,17 +363,32 @@ impl ToolCallReport {
 
     /// Convert to agent_client_protocol::ToolCall for session notifications
     pub fn to_acp_tool_call(&self) -> agent_client_protocol::ToolCall {
-        agent_client_protocol::ToolCall {
-            id: agent_client_protocol::ToolCallId::new(self.tool_call_id.clone().into()),
-            title: self.title.clone(),
-            kind: self.kind.to_acp_kind(),
-            status: self.status.to_acp_status(),
-            content: self.content.iter().map(|c| c.to_acp_content()).collect(),
-            locations: self.locations.iter().map(|l| l.to_acp_location()).collect(),
-            raw_input: self.raw_input.clone(),
-            raw_output: self.raw_output.clone(),
-            meta: None,
+        let mut call = agent_client_protocol::ToolCall::new(
+            agent_client_protocol::ToolCallId::new(self.tool_call_id.clone()),
+            self.title.clone(),
+        )
+        .kind(self.kind.to_acp_kind())
+        .status(self.status.to_acp_status());
+
+        let content: Vec<_> = self.content.iter().map(|c| c.to_acp_content()).collect();
+        if !content.is_empty() {
+            call = call.content(content);
         }
+
+        let locations: Vec<_> = self.locations.iter().map(|l| l.to_acp_location()).collect();
+        if !locations.is_empty() {
+            call = call.locations(locations);
+        }
+
+        if let Some(ref raw_input) = self.raw_input {
+            call = call.raw_input(raw_input.clone());
+        }
+
+        if let Some(ref raw_output) = self.raw_output {
+            call = call.raw_output(raw_output.clone());
+        }
+
+        call
     }
 
     /// Convert to agent_client_protocol::ToolCallUpdate for status updates
@@ -394,71 +409,84 @@ impl ToolCallReport {
         &self,
         include_context_fields: bool,
     ) -> agent_client_protocol::ToolCallUpdate {
-        let fields = if let Some(prev) = &self.previous_state {
+        let mut fields = agent_client_protocol::ToolCallUpdateFields::new();
+
+        if let Some(prev) = &self.previous_state {
             // ACP partial update: only include fields that have changed since last update
-            agent_client_protocol::ToolCallUpdateFields {
-                status: if prev.status != self.status {
-                    Some(self.status.to_acp_status())
-                } else {
-                    None
-                },
-                title: if prev.title != self.title {
-                    Some(self.title.clone())
-                } else {
-                    None
-                },
-                kind: if prev.kind != self.kind {
-                    Some(self.kind.to_acp_kind())
-                } else {
-                    None
-                },
-                // Note: Content and location changes are detected by length only
-                // (intentional performance optimization - O(1) vs O(n) deep comparison).
-                // This means modifying existing items without changing count won't trigger
-                // an update, but add/remove operations are always detected.
-                content: if prev.content_len != self.content.len()
-                    || (include_context_fields && !self.content.is_empty())
-                {
-                    Some(self.content.iter().map(|c| c.to_acp_content()).collect())
-                } else {
-                    None
-                },
-                locations: if prev.locations_len != self.locations.len()
-                    || (include_context_fields && !self.locations.is_empty())
-                {
-                    Some(self.locations.iter().map(|l| l.to_acp_location()).collect())
-                } else {
-                    None
-                },
-                raw_input: if prev.raw_input_present != self.raw_input.is_some() {
-                    self.raw_input.clone()
-                } else {
-                    None
-                },
-                raw_output: if prev.raw_output_present != self.raw_output.is_some() {
-                    self.raw_output.clone()
-                } else {
-                    None
-                },
+            if prev.status != self.status {
+                fields = fields.status(self.status.to_acp_status());
+            }
+            if prev.title != self.title {
+                fields = fields.title(self.title.clone());
+            }
+            if prev.kind != self.kind {
+                fields = fields.kind(self.kind.to_acp_kind());
+            }
+            // Note: Content and location changes are detected by length only
+            // (intentional performance optimization - O(1) vs O(n) deep comparison).
+            // This means modifying existing items without changing count won't trigger
+            // an update, but add/remove operations are always detected.
+            if prev.content_len != self.content.len()
+                || (include_context_fields && !self.content.is_empty())
+            {
+                fields = fields.content(
+                    self.content
+                        .iter()
+                        .map(|c| c.to_acp_content())
+                        .collect::<Vec<_>>(),
+                );
+            }
+            if prev.locations_len != self.locations.len()
+                || (include_context_fields && !self.locations.is_empty())
+            {
+                fields = fields.locations(
+                    self.locations
+                        .iter()
+                        .map(|l| l.to_acp_location())
+                        .collect::<Vec<_>>(),
+                );
+            }
+            if prev.raw_input_present != self.raw_input.is_some() {
+                if let Some(ref raw_input) = self.raw_input {
+                    fields = fields.raw_input(raw_input.clone());
+                }
+            }
+            if prev.raw_output_present != self.raw_output.is_some() {
+                if let Some(ref raw_output) = self.raw_output {
+                    fields = fields.raw_output(raw_output.clone());
+                }
             }
         } else {
             // First update - send all fields to establish initial state
-            agent_client_protocol::ToolCallUpdateFields {
-                kind: Some(self.kind.to_acp_kind()),
-                status: Some(self.status.to_acp_status()),
-                title: Some(self.title.clone()),
-                content: Some(self.content.iter().map(|c| c.to_acp_content()).collect()),
-                locations: Some(self.locations.iter().map(|l| l.to_acp_location()).collect()),
-                raw_input: self.raw_input.clone(),
-                raw_output: self.raw_output.clone(),
-            }
-        };
+            fields = fields
+                .kind(self.kind.to_acp_kind())
+                .status(self.status.to_acp_status())
+                .title(self.title.clone())
+                .content(
+                    self.content
+                        .iter()
+                        .map(|c| c.to_acp_content())
+                        .collect::<Vec<_>>(),
+                )
+                .locations(
+                    self.locations
+                        .iter()
+                        .map(|l| l.to_acp_location())
+                        .collect::<Vec<_>>(),
+                );
 
-        agent_client_protocol::ToolCallUpdate {
-            id: agent_client_protocol::ToolCallId::new(self.tool_call_id.clone().into()),
-            fields,
-            meta: None,
+            if let Some(ref raw_input) = self.raw_input {
+                fields = fields.raw_input(raw_input.clone());
+            }
+            if let Some(ref raw_output) = self.raw_output {
+                fields = fields.raw_output(raw_output.clone());
+            }
         }
+
+        agent_client_protocol::ToolCallUpdate::new(
+            agent_client_protocol::ToolCallId::new(self.tool_call_id.clone()),
+            fields,
+        )
     }
 
     /// Convert to agent_client_protocol::ToolCallUpdate with default behavior
@@ -506,29 +534,28 @@ impl ToolCallContent {
     pub fn to_acp_content(&self) -> agent_client_protocol::ToolCallContent {
         match self {
             ToolCallContent::Content { content } => {
-                agent_client_protocol::ToolCallContent::Content {
-                    content: content.clone(),
-                }
+                // ToolCallContent::Content is a tuple variant wrapping a Content struct
+                let content_block = agent_client_protocol::ContentBlock::from(content.clone());
+                agent_client_protocol::ToolCallContent::from(content_block)
             }
             ToolCallContent::Diff {
                 path,
                 old_text,
                 new_text,
             } => {
-                // ACP expects a diff field with a Diff struct
-                agent_client_protocol::ToolCallContent::Diff {
-                    diff: agent_client_protocol::Diff {
-                        path: path.clone().into(),
-                        old_text: old_text.clone(),
-                        new_text: new_text.clone(),
-                        meta: None,
-                    },
+                // ToolCallContent::Diff is a tuple variant wrapping a Diff struct
+                let mut diff = agent_client_protocol::Diff::new(path.clone(), new_text.clone());
+                if let Some(ref old) = old_text {
+                    diff = diff.old_text(old.clone());
                 }
+                agent_client_protocol::ToolCallContent::Diff(diff)
             }
             ToolCallContent::Terminal { terminal_id } => {
-                agent_client_protocol::ToolCallContent::Terminal {
-                    terminal_id: agent_client_protocol::TerminalId::new(terminal_id.clone().into()),
-                }
+                // ToolCallContent::Terminal is a tuple variant wrapping a Terminal struct
+                let terminal = agent_client_protocol::Terminal::new(
+                    agent_client_protocol::TerminalId::new(terminal_id.clone()),
+                );
+                agent_client_protocol::ToolCallContent::Terminal(terminal)
             }
         }
     }
@@ -537,11 +564,11 @@ impl ToolCallContent {
 impl ToolCallLocation {
     /// Convert to agent_client_protocol::ToolCallLocation
     pub fn to_acp_location(&self) -> agent_client_protocol::ToolCallLocation {
-        agent_client_protocol::ToolCallLocation {
-            path: self.path.clone().into(),
-            line: self.line.map(|l| l as u32),
-            meta: None,
+        let mut location = agent_client_protocol::ToolCallLocation::new(self.path.clone());
+        if let Some(line) = self.line {
+            location = location.line(line as u32);
         }
+        location
     }
 }
 

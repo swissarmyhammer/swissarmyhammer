@@ -157,20 +157,22 @@ impl PlanEntry {
     /// The meta field is populated when notes are present and includes
     /// the entry ID and timestamps for client tracking.
     pub fn to_acp_entry(&self) -> AcpPlanEntry {
-        AcpPlanEntry {
-            content: self.content.clone(),
-            priority: self.priority.to_acp_priority(),
-            status: self.status.to_acp_status(),
-            meta: self.notes.as_ref().map(|notes| {
-                let value = serde_json::json!({
-                    "id": self.id,
-                    "notes": notes,
-                    "created_at": self.created_at,
-                    "updated_at": self.updated_at
-                });
-                value.as_object().cloned().unwrap()
-            }),
+        let mut entry = AcpPlanEntry::new(
+            self.content.clone(),
+            self.priority.to_acp_priority(),
+            self.status.to_acp_status(),
+        );
+
+        if let Some(notes) = &self.notes {
+            let mut meta_map = serde_json::Map::new();
+            meta_map.insert("id".to_string(), serde_json::json!(self.id));
+            meta_map.insert("notes".to_string(), serde_json::json!(notes));
+            meta_map.insert("created_at".to_string(), serde_json::json!(self.created_at));
+            meta_map.insert("updated_at".to_string(), serde_json::json!(self.updated_at));
+            entry = entry.meta(meta_map);
         }
+
+        entry
     }
 }
 
@@ -271,14 +273,19 @@ impl AgentPlan {
 
     /// Convert plan to ACP-compliant format for session/update notifications
     pub fn to_acp_plan(&self) -> AcpPlan {
-        AcpPlan {
-            entries: self
-                .entries
-                .iter()
-                .map(|entry| entry.to_acp_entry())
-                .collect(),
-            meta: self.metadata.as_ref().and_then(|v| v.as_object().cloned()),
+        let entries = self
+            .entries
+            .iter()
+            .map(|entry| entry.to_acp_entry())
+            .collect();
+
+        let mut plan = AcpPlan::new(entries);
+
+        if let Some(metadata) = self.metadata.as_ref().and_then(|v| v.as_object().cloned()) {
+            plan = plan.meta(metadata);
         }
+
+        plan
     }
 
     /// Deprecated: Use to_acp_plan() instead

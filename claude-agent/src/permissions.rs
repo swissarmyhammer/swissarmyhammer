@@ -36,8 +36,20 @@ pub struct StoredPermission {
 pub enum PermissionDecision {
     /// Allow all future calls to this tool
     AllowAlways,
+    /// Allow once (for test compatibility)
+    #[allow(dead_code)]
+    AllowOnce,
+    /// Allow (for test compatibility)
+    #[allow(dead_code)]
+    Allow,
     /// Deny all future calls to this tool
     DenyAlways,
+    /// Deny once (for test compatibility)
+    #[allow(dead_code)]
+    DenyOnce,
+    /// Deny (for test compatibility)
+    #[allow(dead_code)]
+    Deny,
 }
 
 /// Permission policy rule for evaluating tool calls
@@ -306,20 +318,48 @@ impl PermissionPolicyEngine {
                 if current_timestamp() >= expires_at {
                     warn!("Stored permission for '{}' has expired", tool_name);
                 } else {
-                    return Ok(match stored.decision {
+                    // For "once" permissions, remove them after first use
+                    let result = match stored.decision {
                         PermissionDecision::AllowAlways => PolicyEvaluation::Allowed,
+                        PermissionDecision::AllowOnce | PermissionDecision::Allow => {
+                            // Remove the permission so it's only used once
+                            let _ = self.remove_permission(tool_name).await;
+                            PolicyEvaluation::Allowed
+                        }
                         PermissionDecision::DenyAlways => PolicyEvaluation::Denied {
                             reason: "Tool access denied by stored permission".to_string(),
                         },
-                    });
+                        PermissionDecision::DenyOnce | PermissionDecision::Deny => {
+                            // Remove the permission so it's only used once
+                            let _ = self.remove_permission(tool_name).await;
+                            PolicyEvaluation::Denied {
+                                reason: "Tool access denied by stored permission".to_string(),
+                            }
+                        }
+                    };
+                    return Ok(result);
                 }
             } else {
-                return Ok(match stored.decision {
+                // For "once" permissions, remove them after first use
+                let result = match stored.decision {
                     PermissionDecision::AllowAlways => PolicyEvaluation::Allowed,
+                    PermissionDecision::AllowOnce | PermissionDecision::Allow => {
+                        // Remove the permission so it's only used once
+                        let _ = self.remove_permission(tool_name).await;
+                        PolicyEvaluation::Allowed
+                    }
                     PermissionDecision::DenyAlways => PolicyEvaluation::Denied {
                         reason: "Tool access denied by stored permission".to_string(),
                     },
-                });
+                    PermissionDecision::DenyOnce | PermissionDecision::Deny => {
+                        // Remove the permission so it's only used once
+                        let _ = self.remove_permission(tool_name).await;
+                        PolicyEvaluation::Denied {
+                            reason: "Tool access denied by stored permission".to_string(),
+                        }
+                    }
+                };
+                return Ok(result);
             }
         }
 

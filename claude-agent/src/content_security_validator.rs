@@ -419,8 +419,9 @@ impl ContentSecurityValidator {
             }
             _ => {
                 // Unknown or unsupported content block type - reject for security
-                return Err(ContentSecurityError::UnsupportedContentType {
-                    content_type: "unknown".to_string(),
+                return Err(ContentSecurityError::SecurityValidationFailed {
+                    reason: "Unsupported content type".to_string(),
+                    policy_violated: "content_type_allowlist".to_string(),
                 });
             }
         }
@@ -662,8 +663,9 @@ impl ContentSecurityValidator {
             }
             _ => {
                 // Unknown or unsupported resource type - reject for security
-                return Err(ContentSecurityError::UnsupportedContentType {
-                    content_type: "unknown resource type".to_string(),
+                return Err(ContentSecurityError::SecurityValidationFailed {
+                    reason: "Unsupported resource type".to_string(),
+                    policy_violated: "resource_type_allowlist".to_string(),
                 });
             }
         }

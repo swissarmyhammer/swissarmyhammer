@@ -38,40 +38,31 @@ async fn test_read_cargo_toml_gets_completion_notification() {
             };
 
             // Initialize
-            if agent
-                .initialize(InitializeRequest {
-                    protocol_version: ProtocolVersion::default(),
-                    client_capabilities: ClientCapabilities {
-                        fs: FileSystemCapability {
-                            read_text_file: true,
-                            write_text_file: true,
-                            meta: None,
-                        },
-                        terminal: false,
-                        meta: Some(serde_json::json!({
-                            "streaming": true
-                        })),
-                    },
-                    client_info: None,
-                    meta: None,
-                })
-                .await
-                .is_err()
-            {
+            let fs_cap = FileSystemCapability::new()
+                .read_text_file(true)
+                .write_text_file(true);
+
+            let mut meta = std::collections::HashMap::new();
+            meta.insert("streaming".to_string(), serde_json::Value::Bool(true));
+
+            let meta_map: serde_json::Map<String, serde_json::Value> = meta.into_iter().collect();
+            let client_capabilities = ClientCapabilities::new()
+                .fs(fs_cap)
+                .terminal(false)
+                .meta(meta_map);
+
+            let init_request = InitializeRequest::new(agent_client_protocol::ProtocolVersion::V1)
+                .client_capabilities(client_capabilities);
+
+            if agent.initialize(init_request).await.is_err() {
                 eprintln!("⚠ Test requires claude");
                 return;
             }
 
             // Create session
             let cwd = std::env::current_dir().unwrap();
-            let session_response = match agent
-                .new_session(NewSessionRequest {
-                    cwd,
-                    mcp_servers: vec![],
-                    meta: None,
-                })
-                .await
-            {
+            let session_request = NewSessionRequest::new(cwd);
+            let session_response = match agent.new_session(session_request).await {
                 Ok(resp) => resp,
                 Err(_) => {
                     eprintln!("⚠ Session creation failed");
@@ -89,20 +80,13 @@ async fn test_read_cargo_toml_gets_completion_notification() {
 
             // THE KEY TEST: Ask claude to read Cargo.toml
             eprintln!("\n📤 Sending: 'Read the Cargo.toml file'");
-            let prompt_result = agent
-                .prompt(PromptRequest {
-                    session_id: session_response.session_id,
-                    prompt: vec![agent_client_protocol::ContentBlock::Text(
-                        agent_client_protocol::TextContent {
-                            text: "Read the Cargo.toml file and tell me the package name"
-                                .to_string(),
-                            annotations: None,
-                            meta: None,
-                        },
-                    )],
-                    meta: None,
-                })
-                .await;
+            let text_content = agent_client_protocol::TextContent::new(
+                "Read the Cargo.toml file and tell me the package name".to_string(),
+            );
+            let content_block = agent_client_protocol::ContentBlock::Text(text_content);
+            let prompt_request =
+                PromptRequest::new(session_response.session_id.clone(), vec![content_block]);
+            let prompt_result = agent.prompt(prompt_request).await;
 
             if prompt_result.is_err() {
                 eprintln!("⚠ Prompt failed");
@@ -144,7 +128,7 @@ async fn test_read_cargo_toml_gets_completion_notification() {
                             .unwrap_or_else(|| "None".to_string());
                         eprintln!(
                             "[{}] 🔄 ToolCallUpdate: {} status={}",
-                            idx, update.id.0, status_str
+                            idx, update.tool_call_id, status_str
                         );
                         tool_updates.push(update.clone());
 
@@ -183,7 +167,7 @@ async fn test_read_cargo_toml_gets_completion_notification() {
                 eprintln!("\n✅ SUCCESS: Tool completion notifications ARE being sent");
                 eprintln!("Completed tools:");
                 for completion in &tool_completions {
-                    eprintln!("  - {}", completion.id.0);
+                    eprintln!("  - {}", completion.tool_call_id);
                 }
             } else {
                 eprintln!("\n❌ FAILURE: NO tool completion notifications");

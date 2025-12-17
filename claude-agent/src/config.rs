@@ -52,11 +52,32 @@ pub struct AgentConfig {
     pub max_turn_requests: u64,
 }
 
+/// Mode for Claude agent operation
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ClaudeAgentMode {
+    /// Normal mode - interacts with real Claude API
+    Normal,
+    /// Record mode - records interactions to a file
+    Record { output_path: std::path::PathBuf },
+    /// Playback mode - replays from a recorded file
+    Playback { input_path: std::path::PathBuf },
+}
+
+impl Default for ClaudeAgentMode {
+    fn default() -> Self {
+        Self::Normal
+    }
+}
+
 /// Configuration for Claude SDK integration
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ClaudeConfig {
     pub model: String,
     pub stream_format: StreamFormat,
+    /// Agent operation mode (normal, record, playback)
+    #[serde(default)]
+    pub mode: ClaudeAgentMode,
 }
 
 /// Server configuration options  
@@ -552,6 +573,7 @@ impl Default for AgentConfig {
             claude: ClaudeConfig {
                 model: "claude-sonnet-4-20250514".to_string(),
                 stream_format: StreamFormat::StreamJson,
+                mode: ClaudeAgentMode::default(),
             },
             server: ServerConfig {
                 port: None,

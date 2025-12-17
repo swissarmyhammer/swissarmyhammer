@@ -116,7 +116,7 @@ impl ProtocolTranslator {
                             format!(
                                 "Resource ({}): [binary data, {} bytes]",
                                 blob_resource.uri,
-                                blob_resource.data.len()
+                                blob_resource.blob.len()
                             )
                         }
                         _ => {
@@ -268,13 +268,10 @@ impl ProtocolTranslator {
                                 }
                             };
 
-                            let tool_call = ToolCall::new(
-                                ToolCallId::new(id.as_str()),
-                                name.clone()
-                            )
-                            .kind(Self::infer_tool_kind(name))
-                            .status(status)
-                            .raw_input(Some(input.clone()));
+                            let tool_call = ToolCall::new(ToolCallId::new(id), name)
+                                .kind(Self::infer_tool_kind(name))
+                                .status(status)
+                                .raw_input(Some(input.clone()));
 
                             let tool_call = if let Some(meta_map) = meta {
                                 tool_call.meta(meta_map)
@@ -284,7 +281,7 @@ impl ProtocolTranslator {
 
                             return Ok(Some(SessionNotification::new(
                                 session_id.clone(),
-                                SessionUpdate::ToolCall(tool_call)
+                                SessionUpdate::ToolCall(tool_call),
                             )));
                         }
                         Some("text") => {
@@ -296,20 +293,14 @@ impl ProtocolTranslator {
                             // Note: This may duplicate stream_event chunks when --include-partial-messages is used
                             // Higher-level code (in claude.rs) must filter duplicates based on streaming state
                             tracing::debug!("📨 ASSISTANT text: {} chars", text.len());
-                            return Ok(Some(SessionNotification {
-                                session_id: session_id.clone(),
-                                update: SessionUpdate::AgentMessageChunk(
-                                    agent_client_protocol::ContentChunk {
-                                        content: ContentBlock::Text(TextContent {
-                                            text: text.to_string(),
-                                            annotations: None,
-                                            meta: None,
-                                        }),
-                                        meta: None,
-                                    },
-                                ),
-                                meta: None,
-                            }));
+                            let text_content = TextContent::new(text.to_string());
+                            let content_block = ContentBlock::Text(text_content);
+                            let content_chunk =
+                                agent_client_protocol::ContentChunk::new(content_block);
+                            return Ok(Some(SessionNotification::new(
+                                session_id.clone(),
+                                SessionUpdate::AgentMessageChunk(content_chunk),
+                            )));
                         }
                         _ => {
                             // Unknown or missing content type
@@ -353,8 +344,10 @@ impl ProtocolTranslator {
                                             Some(vec![
                                                 agent_client_protocol::ToolCallContent::Content(
                                                     agent_client_protocol::Content::new(
-                                                        ContentBlock::Text(TextContent::new(content_str.to_string()))
-                                                    )
+                                                        ContentBlock::Text(TextContent::new(
+                                                            content_str.to_string(),
+                                                        )),
+                                                    ),
                                                 ),
                                             ])
                                         } else if let Some(content_array) = content_value.as_array()
@@ -404,23 +397,17 @@ impl ProtocolTranslator {
                                         ToolCallUpdateFields,
                                     };
 
-                                    return Ok(Some(SessionNotification {
-                                        session_id: session_id.clone(),
-                                        update: SessionUpdate::ToolCallUpdate(ToolCallUpdate {
-                                            id: ToolCallId::new(tool_use_id),
-                                            fields: ToolCallUpdateFields {
-                                                status: Some(ToolCallStatus::Completed),
-                                                kind: None,
-                                                title: None,
-                                                content: tool_content,
-                                                locations: None,
-                                                raw_input: None,
-                                                raw_output: None,
-                                            },
-                                            meta: None,
-                                        }),
-                                        meta: None,
-                                    }));
+                                    let mut fields = ToolCallUpdateFields::new()
+                                        .status(ToolCallStatus::Completed);
+                                    if let Some(content) = tool_content {
+                                        fields = fields.content(content);
+                                    }
+                                    let tool_call_update =
+                                        ToolCallUpdate::new(ToolCallId::new(tool_use_id), fields);
+                                    return Ok(Some(SessionNotification::new(
+                                        session_id.clone(),
+                                        SessionUpdate::ToolCallUpdate(tool_call_update),
+                                    )));
                                 }
                             }
                         }
@@ -476,31 +463,40 @@ impl ProtocolTranslator {
                                             ("claude_builtin", format!("Claude: {}", cmd_name))
                                         };
 
-                                        agent_client_protocol::AvailableCommand {
-                                            name: cmd_name,
-                                            description,
-                                            input: None,
-                                            meta: Some(serde_json::json!({
-                                                "source": "claude_cli",
-                                                "category": category,
-                                            })),
+                                        {
+                                            let mut meta_map = serde_json::Map::new();
+                                            meta_map.insert(
+                                                "source".to_string(),
+                                                serde_json::json!("claude_cli"),
+                                            );
+                                            meta_map.insert(
+                                                "category".to_string(),
+                                                serde_json::json!(category),
+                                            );
+                                            agent_client_protocol::AvailableCommand::new(
+                                                cmd_name,
+                                                description,
+                                            )
+                                            .meta(meta_map)
                                         }
                                     })
                                     .collect();
 
                             // Return AvailableCommandsUpdate notification
-                            return Ok(Some(SessionNotification {
-                                session_id: session_id.clone(),
-                                update: SessionUpdate::AvailableCommandsUpdate(
-                                    agent_client_protocol::AvailableCommandsUpdate {
-                                        available_commands,
-                                        meta: None,
-                                    },
-                                ),
-                                meta: Some(serde_json::json!({
-                                    "source": "claude_cli_init",
-                                })),
-                            }));
+                            let commands_update =
+                                agent_client_protocol::AvailableCommandsUpdate::new(
+                                    available_commands,
+                                );
+                            let mut meta_map = serde_json::Map::new();
+                            meta_map
+                                .insert("source".to_string(), serde_json::json!("claude_cli_init"));
+                            return Ok(Some(
+                                SessionNotification::new(
+                                    session_id.clone(),
+                                    SessionUpdate::AvailableCommandsUpdate(commands_update),
+                                )
+                                .meta(meta_map),
+                            ));
                         }
                     }
                 }
@@ -532,20 +528,14 @@ impl ProtocolTranslator {
                                         text.len(),
                                         text.chars().take(50).collect::<String>()
                                     );
-                                    return Ok(Some(SessionNotification {
-                                        session_id: session_id.clone(),
-                                        update: SessionUpdate::AgentMessageChunk(
-                                            agent_client_protocol::ContentChunk {
-                                                content: ContentBlock::Text(TextContent {
-                                                    text: text.to_string(),
-                                                    annotations: None,
-                                                    meta: None,
-                                                }),
-                                                meta: None,
-                                            },
-                                        ),
-                                        meta: None,
-                                    }));
+                                    let text_content = TextContent::new(text.to_string());
+                                    let content_block = ContentBlock::Text(text_content);
+                                    let content_chunk =
+                                        agent_client_protocol::ContentChunk::new(content_block);
+                                    return Ok(Some(SessionNotification::new(
+                                        session_id.clone(),
+                                        SessionUpdate::AgentMessageChunk(content_chunk),
+                                    )));
                                 }
 
                                 // Check for input_json_delta (tool call input chunks)
@@ -780,6 +770,7 @@ struct ImageSource {
 }
 
 #[derive(Deserialize)]
+#[allow(dead_code)]
 struct StreamJsonAssistantMessage {
     r#type: String,
     message: AssistantMessage,
@@ -787,6 +778,7 @@ struct StreamJsonAssistantMessage {
 
 impl StreamJsonAssistantMessage {
     /// Validate that the message type is correct
+    #[allow(dead_code)]
     fn validate(&self) -> Result<()> {
         if self.r#type != "assistant" {
             return Err(AgentError::Internal(format!(
@@ -799,12 +791,14 @@ impl StreamJsonAssistantMessage {
 }
 
 #[derive(Deserialize)]
+#[allow(dead_code)]
 struct AssistantMessage {
     content: Vec<ContentItem>,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(tag = "type")]
+#[allow(dead_code)]
 enum ContentItem {
     #[serde(rename = "text")]
     Text { text: String },
@@ -1564,7 +1558,8 @@ mod tests {
                 assert_eq!(content.len(), 1);
 
                 match &content[0] {
-                    agent_client_protocol::ToolCallContent::Content { content: block } => {
+                    agent_client_protocol::ToolCallContent::Content(content_wrapper) => {
+                        let block = &content_wrapper.content;
                         match block {
                             ContentBlock::Text(text) => {
                                 assert_eq!(text.text, "File contents here");
@@ -1610,7 +1605,8 @@ mod tests {
 
                 // Check first chunk
                 match &content[0] {
-                    agent_client_protocol::ToolCallContent::Content { content: block } => {
+                    agent_client_protocol::ToolCallContent::Content(content_wrapper) => {
+                        let block = &content_wrapper.content;
                         match block {
                             ContentBlock::Text(text) => {
                                 assert_eq!(text.text, "First chunk");
@@ -1623,7 +1619,8 @@ mod tests {
 
                 // Check second chunk
                 match &content[1] {
-                    agent_client_protocol::ToolCallContent::Content { content: block } => {
+                    agent_client_protocol::ToolCallContent::Content(content_wrapper) => {
+                        let block = &content_wrapper.content;
                         match block {
                             ContentBlock::Text(text) => {
                                 assert_eq!(text.text, "Second chunk");

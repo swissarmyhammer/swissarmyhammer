@@ -23,6 +23,7 @@ pub mod json_rpc_codes;
 pub mod mime_type_validator;
 
 #[cfg(test)]
+#[cfg(test)]
 mod content_security_integration_tests;
 pub mod error;
 pub mod mcp;
@@ -42,7 +43,6 @@ pub mod session_loading;
 pub mod session_validation;
 pub mod size_validator;
 pub mod terminal_manager;
-#[cfg(test)]
 mod tool_call_lifecycle_tests;
 pub mod tool_classification;
 pub mod tool_types;
