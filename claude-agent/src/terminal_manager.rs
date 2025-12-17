@@ -17,7 +17,7 @@ use tokio::task::JoinHandle;
 pub struct TerminalManager {
     pub terminals: Arc<RwLock<HashMap<String, TerminalSession>>>,
     rate_limiter: Arc<RateLimiter>,
-    client_capabilities: Arc<RwLock<Option<agent_client_protocol::ClientCapabilities>>>,
+    pub client_capabilities: Arc<RwLock<Option<agent_client_protocol::ClientCapabilities>>>,
 }
 
 /// Terminal lifecycle state
@@ -226,6 +226,7 @@ impl TerminalManager {
     /// Validate that client has terminal capability, return error if not
     async fn validate_terminal_capability(&self) -> crate::Result<()> {
         let caps = self.client_capabilities.read().await;
+        tracing::debug!("Terminal manager validating capabilities: {:?}", caps.as_ref().map(|c| c.terminal));
         match &*caps {
             Some(caps) if caps.terminal => Ok(()),
             Some(_) => Err(crate::AgentError::Protocol(
@@ -242,11 +243,8 @@ impl TerminalManager {
         format!("term_{}", ulid::Ulid::new())
     }
 
-    /// Create a new terminal session
-    pub async fn create_terminal(&self, working_dir: Option<String>) -> crate::Result<String> {
-        // Check terminal capability
-        self.validate_terminal_capability().await?;
-
+    /// Create a new terminal session (skips capability check - caller must validate)
+    pub(crate) async fn create_terminal_unchecked(&self, working_dir: Option<String>) -> crate::Result<String> {
         // Check rate limit (cost 1 - terminal creation is a standard operation)
         // Use a default client_id for non-session-based creates
         self.rate_limiter
@@ -257,10 +255,11 @@ impl TerminalManager {
         let working_dir = working_dir
             .map(std::path::PathBuf::from)
             .unwrap_or_else(|| {
-                std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."))
+                std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("/"))
             });
 
-        let session = TerminalSession {
+        // Store terminal session
+        let terminal_session = TerminalSession {
             process: None,
             working_dir,
             environment: std::env::vars().collect(),
@@ -275,12 +274,20 @@ impl TerminalManager {
             output_task: None,
             timeout_config: TimeoutConfig::default(),
         };
+        self.terminals
+            .write()
+            .await
+            .insert(terminal_id.clone(), terminal_session);
 
-        let mut terminals = self.terminals.write().await;
-        terminals.insert(terminal_id.clone(), session);
-
-        tracing::info!("Created terminal session: {}", terminal_id);
         Ok(terminal_id)
+    }
+
+    /// Create a new terminal session
+    pub async fn create_terminal(&self, working_dir: Option<String>) -> crate::Result<String> {
+        // Check terminal capability
+        self.validate_terminal_capability().await?;
+
+        self.create_terminal_unchecked(working_dir).await
     }
 
     /// Create ACP-compliant terminal session with command and all parameters

@@ -11,43 +11,6 @@ use swissarmyhammer_common::test_utils::IsolatedTestEnvironment;
 mod in_process_test_utils;
 use in_process_test_utils::run_sah_command_in_process_with_dir;
 
-/// Test that memo commands require Git repository - DISABLED: Memo commands only available with dynamic-cli feature
-// #[tokio::test]
-// #[ignore = "Memo commands only available with dynamic-cli feature"]
-async fn _test_memo_commands_require_git_repository_disabled() {
-    let _env = IsolatedTestEnvironment::new().expect("Failed to create test environment");
-    let temp_dir = _env.temp_dir();
-
-    // Use explicit working directory instead of global directory change
-
-    let result = run_sah_command_in_process_with_dir(&["memo", "list"], &temp_dir).await;
-
-    // Restore original directory
-
-    let output = result.unwrap();
-    assert_ne!(output.exit_code, 0, "Command should fail");
-
-    assert!(
-        output
-            .stderr
-            .contains("Memo operations require a Git repository"),
-        "Should contain Git repo error: {}",
-        output.stderr
-    );
-    assert!(
-        output
-            .stderr
-            .contains("Memos are stored in .swissarmyhammer/memos/"),
-        "Should mention memos directory: {}",
-        output.stderr
-    );
-    assert!(
-        output.stderr.contains("git init"),
-        "Should suggest git init: {}",
-        output.stderr
-    );
-}
-
 /// Test that todo commands require Git repository
 #[tokio::test]
 async fn test_todo_commands_require_git_repository() {
@@ -73,38 +36,6 @@ async fn test_todo_commands_require_git_repository() {
             || output.stderr.contains("Git repository"),
         "Should show git repository error: {}",
         output.stderr
-    );
-}
-
-/// Test error message format consistency - DISABLED: Memo commands only available with dynamic-cli feature
-// #[tokio::test]
-// #[ignore = "Memo commands only available with dynamic-cli feature"]
-async fn _test_error_message_format_consistency_disabled() {
-    let _env = IsolatedTestEnvironment::new().expect("Failed to create test environment");
-    let temp_dir = _env.temp_dir();
-
-    // Use explicit working directory instead of global directory change
-
-    // Test memo command error format
-    let result = run_sah_command_in_process_with_dir(&["memo", "create", "test"], &temp_dir).await;
-
-    // Restore original directory
-
-    let output = result.unwrap();
-    assert_ne!(output.exit_code, 0, "Command should fail");
-
-    let stderr = &output.stderr;
-
-    // Check for consistent error format elements
-    assert!(stderr.contains("✗"), "Error should start with ✗ icon");
-    assert!(
-        stderr.contains("Solutions:"),
-        "Error should include Solutions section"
-    );
-    assert!(stderr.contains("git init"), "Error should suggest git init");
-    assert!(
-        stderr.contains("Current directory:"),
-        "Error should show current directory"
     );
 }
 
@@ -232,31 +163,5 @@ async fn test_error_messages_are_actionable() {
     assert_eq!(
         output.exit_code, 0,
         "Todo create should succeed with git repository"
-    );
-}
-
-/// Test error context preservation - DISABLED: Memo commands only available with dynamic-cli feature
-// #[tokio::test]
-// #[ignore = "Memo commands only available with dynamic-cli feature"]
-async fn _test_error_context_preservation_disabled() {
-    let _env = IsolatedTestEnvironment::new().expect("Failed to create test environment");
-    let temp_dir = _env.temp_dir();
-
-    // Use explicit working directory instead of global directory change
-
-    let result =
-        run_sah_command_in_process_with_dir(&["memo", "get", "invalid_id"], &temp_dir).await;
-
-    // Restore original directory
-
-    let output = result.unwrap();
-    assert_ne!(output.exit_code, 0, "Command should fail");
-
-    let stderr = &output.stderr;
-
-    // Should contain Git repository error, not invalid ID error, since Git check happens first
-    assert!(
-        stderr.contains("Git repository"),
-        "Should show Git repository error first"
     );
 }

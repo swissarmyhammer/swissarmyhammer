@@ -122,6 +122,7 @@ swissarmyhammer-agent-executor/.swissarmyhammer
 swissarmyhammer-cli/.swissarmyhammer
 swissarmyhammer-workflow/.swissarmyhammer
 swissarmyhammer-tools/.swissarmyhammer
+claude-agent/.swissarmyhammer/sessions
 
 .work
 

@@ -689,7 +689,16 @@ impl ToolCallHandler {
         &mut self,
         capabilities: agent_client_protocol::ClientCapabilities,
     ) {
-        self.client_capabilities = Some(capabilities);
+        self.client_capabilities = Some(capabilities.clone());
+        // Share capabilities with terminal manager
+        // Use blocking write since this is a setup operation
+        let terminal_cap_result = self.terminal_manager.client_capabilities.try_write();
+        if let Ok(mut caps_lock) = terminal_cap_result {
+            *caps_lock = Some(capabilities.clone());
+            tracing::debug!("Set terminal manager capabilities: terminal={}", capabilities.terminal);
+        } else {
+            tracing::warn!("Could not set terminal manager capabilities - lock contention");
+        }
     }
 
     /// Set the notification sender for session updates
@@ -1529,9 +1538,10 @@ impl ToolCallHandler {
         let args = self.parse_tool_args(&request.arguments)?;
         let working_dir = args.get("working_dir").and_then(|v| v.as_str());
 
+        // Call create_terminal_unchecked since we already validated capabilities
         let terminal_id = self
             .terminal_manager
-            .create_terminal(working_dir.map(String::from))
+            .create_terminal_unchecked(working_dir.map(String::from))
             .await?;
 
         Ok(format!("Created terminal session: {}", terminal_id))
