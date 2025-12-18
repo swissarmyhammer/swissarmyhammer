@@ -9,6 +9,7 @@
 //! - `initialization`: Protocol initialization and capability negotiation
 //! - `sessions`: Session setup (new, load, set_mode)
 //! - `content`: Content blocks (text, image, audio, embedded resources, resource links)
+//! - `file_system`: File system access (read_text_file, write_text_file)
 //!
 //! # Running Tests
 //!
@@ -18,6 +19,7 @@
 //! ```
 
 pub mod content;
+pub mod file_system;
 pub mod initialization;
 pub mod sessions;
 

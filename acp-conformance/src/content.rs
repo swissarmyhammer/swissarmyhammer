@@ -347,8 +347,6 @@ pub async fn test_content_validation<A: Agent + ?Sized>(agent: &A) -> crate::Res
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     // Basic smoke test to ensure module compiles
     #[test]
     fn test_module_compiles() {

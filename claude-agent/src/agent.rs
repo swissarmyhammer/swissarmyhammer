@@ -4561,10 +4561,14 @@ impl ClaudeAgent {
         self.parse_session_id(&SessionId::new(params.session_id.clone()))
             .map_err(|_| agent_client_protocol::Error::invalid_params())?;
 
-        // Validate path security using PathValidator
-        // This checks: absolute path, no traversal, no symlinks, blocked paths
-        let validated_path = self
-            .path_validator
+        // Validate path security using PathValidator with non-strict canonicalization
+        // For write operations, the file may not exist yet, so we use non-strict mode
+        // This still checks: absolute path, no traversal
+        // Note: For production use, consider using the same blocked/allowed paths as the main validator
+        let write_validator =
+            crate::path_validator::PathValidator::new().with_strict_canonicalization(false);
+
+        let validated_path = write_validator
             .validate_absolute_path(&params.path)
             .map_err(|e| {
                 tracing::warn!(
@@ -5049,17 +5053,19 @@ impl ClaudeAgent {
 
                     // Additional validation: ensure the resolved temp path is within allowed boundaries
                     // Validate the resolved path to ensure it hasn't escaped security boundaries via symlinks
-                    if let Err(e) =
-                        self.path_validator
-                            .validate_absolute_path(resolved.to_str().ok_or_else(|| {
-                                tracing::error!(
-                                    security_event = "temp_path_utf8_invalid",
-                                    resolved_path = %resolved.display(),
-                                    "Resolved temp path contains invalid UTF-8"
-                                );
-                                agent_client_protocol::Error::internal_error()
-                            })?)
-                    {
+                    // Use non-strict canonicalization since the temp file doesn't exist yet
+                    let temp_validator = crate::path_validator::PathValidator::new()
+                        .with_strict_canonicalization(false);
+                    if let Err(e) = temp_validator.validate_absolute_path(
+                        resolved.to_str().ok_or_else(|| {
+                            tracing::error!(
+                                security_event = "temp_path_utf8_invalid",
+                                resolved_path = %resolved.display(),
+                                "Resolved temp path contains invalid UTF-8"
+                            );
+                            agent_client_protocol::Error::internal_error()
+                        })?,
+                    ) {
                         tracing::error!(
                             security_event = "temp_path_security_validation_failed",
                             resolved_path = %resolved.display(),

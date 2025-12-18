@@ -95,7 +95,7 @@ pub async fn create_llama_agent() -> Result<impl Agent> {
         agent_config,
     ));
 
-    // Configure ACP server with session modes
+    // Configure ACP server with session modes and filesystem access
     let mut acp_config = llama_agent::acp::AcpConfig::default();
     acp_config.available_modes = vec![
         agent_client_protocol::SessionMode::new("general-purpose", "General Purpose")
@@ -108,6 +108,9 @@ pub async fn create_llama_agent() -> Result<impl Agent> {
             .description("Software architect agent for designing implementation plans"),
     ];
     acp_config.default_mode_id = "general-purpose".to_string();
+
+    // Allow filesystem access to /tmp for conformance tests
+    acp_config.filesystem.allowed_paths = vec![std::env::temp_dir()];
 
     let acp_server = llama_agent::acp::AcpServer::new(agent_server, acp_config);
 
