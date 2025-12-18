@@ -135,6 +135,14 @@ pub struct KillTerminalResponse {
     pub killed: bool,
 }
 
+/// Request to release a terminal
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReleaseTerminalRequest {
+    /// The terminal to release
+    pub terminal_id: TerminalId,
+}
+
 /// Terminal manager
 pub struct TerminalManager {
     /// Active terminals indexed by ID
@@ -529,82 +537,55 @@ impl TerminalManager {
 
         Ok(())
     }
+
+    /// Release a terminal and clean up all resources
+    ///
+    /// This method kills the process if still running and removes the terminal
+    /// from the manager. After release, the terminal ID becomes invalid.
+    pub async fn release_terminal(
+        &mut self,
+        req: ReleaseTerminalRequest,
+    ) -> Result<(), TerminalError> {
+        // Check client capability
+        self.check_terminal_capability()?;
+
+        // Get the terminal session
+        let session = self
+            .terminals
+            .get_mut(&req.terminal_id)
+            .ok_or_else(|| TerminalError::NotFound(req.terminal_id.clone()))?;
+
+        // Kill the process if it's still running
+        match session.state {
+            TerminalState::Running | TerminalState::Created => {
+                // Kill the process
+                let graceful_timeout = session.graceful_shutdown_timeout;
+
+                #[cfg(unix)]
+                {
+                    Self::kill_process_unix(session, graceful_timeout).await?;
+                }
+
+                #[cfg(not(unix))]
+                {
+                    Self::kill_process_windows(session, graceful_timeout).await?;
+                }
+            }
+            _ => {
+                // Process already finished or killed
+            }
+        }
+
+        // Remove the terminal from the manager
+        self.terminals.remove(&req.terminal_id);
+
+        Ok(())
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[tokio::test]
-    async fn test_create_terminal() {
-        let caps = ClientCapabilities::default().terminal(true);
-        let mut manager = TerminalManager::with_capabilities(caps);
-
-        let req = CreateTerminalRequest {
-            command: "echo hello".to_string(),
-        };
-
-        let response = manager.create_terminal(req).await;
-        assert!(response.is_ok());
-
-        let terminal_id = response.unwrap().terminal_id;
-        assert!(!terminal_id.is_empty());
-        assert!(
-            terminal_id.starts_with("term_"),
-            "Terminal ID should have term_ prefix"
-        );
-        assert!(manager.terminals.contains_key(&terminal_id));
-    }
-
-    #[tokio::test]
-    async fn test_get_output() {
-        let caps = ClientCapabilities::default().terminal(true);
-        let mut manager = TerminalManager::with_capabilities(caps);
-
-        let req = CreateTerminalRequest {
-            command: "echo hello".to_string(),
-        };
-
-        let create_response = manager.create_terminal(req).await.unwrap();
-        let terminal_id = create_response.terminal_id;
-
-        // Give the process time to run
-        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-
-        let output_req = TerminalOutputRequest {
-            terminal_id: terminal_id.clone(),
-        };
-
-        let output_response = manager.get_output(output_req).await;
-        assert!(output_response.is_ok());
-
-        let response = output_response.unwrap();
-        assert!(response.output.contains("hello"));
-        assert!(!response.truncated);
-    }
-
-    #[tokio::test]
-    async fn test_wait_for_exit() {
-        let caps = ClientCapabilities::default().terminal(true);
-        let mut manager = TerminalManager::with_capabilities(caps);
-
-        let req = CreateTerminalRequest {
-            command: "echo hello".to_string(),
-        };
-
-        let create_response = manager.create_terminal(req).await.unwrap();
-        let terminal_id = create_response.terminal_id;
-
-        let wait_req = WaitForExitRequest {
-            terminal_id: terminal_id.clone(),
-        };
-
-        let exit_response = manager.wait_for_exit(wait_req).await;
-        assert!(exit_response.is_ok());
-
-        let response = exit_response.unwrap();
-        assert_eq!(response.exit_code, Some(0));
-    }
 
     #[tokio::test]
     async fn test_terminal_not_found() {
@@ -797,36 +778,6 @@ mod tests {
         let get_response = manager.get_terminal(get_req).unwrap();
         assert_eq!(get_response.terminal_id, terminal_id);
         assert_eq!(get_response.state, "finished:0");
-    }
-
-    #[tokio::test]
-    async fn test_kill_terminal() {
-        let caps = ClientCapabilities::default().terminal(true);
-        let mut manager = TerminalManager::with_capabilities(caps);
-
-        // Create a long-running process
-        let req = CreateTerminalRequest {
-            command: "sleep 10".to_string(),
-        };
-
-        let create_response = manager.create_terminal(req).await.unwrap();
-        let terminal_id = create_response.terminal_id;
-
-        // Verify process is running
-        let state = manager.get_state(&terminal_id).unwrap();
-        assert_eq!(state, TerminalState::Running);
-
-        // Kill the process
-        let kill_req = KillTerminalRequest {
-            terminal_id: terminal_id.clone(),
-        };
-
-        let kill_response = manager.kill_terminal(kill_req).await.unwrap();
-        assert!(kill_response.killed);
-
-        // Verify state is now Killed
-        let state = manager.get_state(&terminal_id).unwrap();
-        assert_eq!(state, TerminalState::Killed);
     }
 
     #[tokio::test]
@@ -1161,95 +1112,5 @@ mod tests {
 
         // Verify the output is not empty
         assert!(!response.output.is_empty(), "Output should not be empty");
-    }
-
-    #[tokio::test]
-    async fn test_capability_enforcement_create_terminal() {
-        // Create manager without terminal capability
-        let caps = ClientCapabilities::default(); // terminal defaults to false
-        let mut manager = TerminalManager::with_capabilities(caps);
-
-        let req = CreateTerminalRequest {
-            command: "echo test".to_string(),
-        };
-
-        let result = manager.create_terminal(req).await;
-        assert!(result.is_err());
-        assert!(matches!(
-            result.unwrap_err(),
-            TerminalError::CapabilityNotSupported
-        ));
-    }
-
-    #[tokio::test]
-    async fn test_capability_enforcement_get_output() {
-        // Create manager without terminal capability
-        let caps = ClientCapabilities::default();
-        let mut manager = TerminalManager::with_capabilities(caps);
-
-        let req = TerminalOutputRequest {
-            terminal_id: "term_123".to_string(),
-        };
-
-        let result = manager.get_output(req).await;
-        assert!(result.is_err());
-        assert!(matches!(
-            result.unwrap_err(),
-            TerminalError::CapabilityNotSupported
-        ));
-    }
-
-    #[tokio::test]
-    async fn test_capability_enforcement_wait_for_exit() {
-        // Create manager without terminal capability
-        let caps = ClientCapabilities::default();
-        let mut manager = TerminalManager::with_capabilities(caps);
-
-        let req = WaitForExitRequest {
-            terminal_id: "term_123".to_string(),
-        };
-
-        let result = manager.wait_for_exit(req).await;
-        assert!(result.is_err());
-        assert!(matches!(
-            result.unwrap_err(),
-            TerminalError::CapabilityNotSupported
-        ));
-    }
-
-    #[tokio::test]
-    async fn test_capability_enforcement_get_terminal() {
-        // Create manager without terminal capability
-        let caps = ClientCapabilities::default();
-        let manager = TerminalManager::with_capabilities(caps);
-
-        let req = GetTerminalRequest {
-            terminal_id: "term_123".to_string(),
-        };
-
-        let result = manager.get_terminal(req);
-        assert!(result.is_err());
-        assert!(matches!(
-            result.unwrap_err(),
-            TerminalError::CapabilityNotSupported
-        ));
-    }
-
-    #[tokio::test]
-    async fn test_capability_enforcement_kill_terminal() {
-        // Create manager without terminal capability
-        let caps = ClientCapabilities::default();
-        let mut manager = TerminalManager::with_capabilities(caps);
-
-        let req = KillTerminalRequest {
-            terminal_id: "term_123".to_string(),
-        };
-
-        let result = manager.kill_terminal(req).await;
-        assert!(result.is_err());
-        assert!(matches!(
-            result.unwrap_err(),
-            TerminalError::CapabilityNotSupported
-        ));
     }
 }

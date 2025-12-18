@@ -1802,6 +1802,47 @@ impl agent_client_protocol::Agent for AcpServer {
                 })?
             }
 
+            "terminal/release" => {
+                // Validate client capabilities for terminal operations
+                {
+                    let client_caps = self.client_capabilities.read().await;
+                    match &*client_caps {
+                        Some(caps) if caps.terminal => {
+                            tracing::debug!("Terminal capability validated");
+                        }
+                        Some(_) => {
+                            tracing::error!("terminal/release capability not declared by client");
+                            return Err(agent_client_protocol::Error::invalid_params());
+                        }
+                        None => {
+                            tracing::error!(
+                                "No client capabilities available for terminal/release validation"
+                            );
+                            return Err(agent_client_protocol::Error::invalid_params());
+                        }
+                    }
+                }
+
+                let term_req: super::terminal::ReleaseTerminalRequest =
+                    serde_json::from_value(params_value).map_err(|e| {
+                        tracing::error!("Failed to parse terminal/release params: {}", e);
+                        agent_client_protocol::Error::invalid_params()
+                    })?;
+
+                self.terminal_manager
+                    .write()
+                    .await
+                    .release_terminal(term_req)
+                    .await
+                    .map_err(|e| {
+                        tracing::error!("terminal/release failed: {}", e);
+                        agent_client_protocol::Error::internal_error()
+                    })?;
+
+                // Return null for successful release
+                serde_json::Value::Null
+            }
+
             // Unknown method
             _ => {
                 tracing::warn!("Unknown extension method: {}", request.method);

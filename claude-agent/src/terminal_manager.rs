@@ -8,6 +8,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 use swissarmyhammer_common::rate_limiter::{RateLimiter, RateLimiterConfig};
+use tokio::io::AsyncReadExt;
 use tokio::process::{Child, Command};
 use tokio::sync::RwLock;
 use tokio::task::JoinHandle;
@@ -337,24 +338,131 @@ impl TerminalManager {
         // 5. Prepare environment variables
         let environment = self.prepare_environment(params.env.unwrap_or_default())?;
 
-        // 6. Create enhanced terminal session
+        // 6. Spawn the process
+        let command = params.command.clone();
+        let args = params.args.clone().unwrap_or_default();
+
+        let mut cmd = Command::new(&command);
+        cmd.args(&args)
+            .current_dir(&working_dir)
+            .envs(&environment)
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped());
+
+        let mut child = cmd.spawn().map_err(|e| {
+            crate::AgentError::Protocol(format!("Failed to spawn process '{}': {}", command, e))
+        })?;
+
+        // 7. Set up output capture
+        let output_buffer = Arc::new(RwLock::new(Vec::new()));
+        let buffer_truncated = Arc::new(RwLock::new(false));
+        let output_byte_limit = params.output_byte_limit.unwrap_or(1_048_576);
+
+        // Capture stdout
+        let stdout_buffer = output_buffer.clone();
+        let stdout_truncated = buffer_truncated.clone();
+        let stdout = child.stdout.take();
+        let stdout_task = if let Some(mut stdout) = stdout {
+            Some(tokio::spawn(async move {
+                let mut buf = vec![0u8; 4096];
+                loop {
+                    match stdout.read(&mut buf).await {
+                        Ok(0) => break,
+                        Ok(n) => {
+                            let mut buffer = stdout_buffer.write().await;
+                            if buffer.len() + n > output_byte_limit as usize {
+                                // Truncate from beginning if over limit
+                                let keep_from = buffer.len() + n - output_byte_limit as usize;
+                                buffer.drain(0..keep_from);
+                                *stdout_truncated.write().await = true;
+                            }
+                            buffer.extend_from_slice(&buf[..n]);
+                        }
+                        Err(e) => {
+                            tracing::error!("Error reading stdout: {}", e);
+                            break;
+                        }
+                    }
+                }
+            }))
+        } else {
+            None
+        };
+
+        // Capture stderr (merge into same buffer)
+        let stderr_buffer = output_buffer.clone();
+        let stderr_truncated = buffer_truncated.clone();
+        let stderr = child.stderr.take();
+        let stderr_task = if let Some(mut stderr) = stderr {
+            Some(tokio::spawn(async move {
+                let mut buf = vec![0u8; 4096];
+                loop {
+                    match stderr.read(&mut buf).await {
+                        Ok(0) => break,
+                        Ok(n) => {
+                            let mut buffer = stderr_buffer.write().await;
+                            if buffer.len() + n > output_byte_limit as usize {
+                                let keep_from = buffer.len() + n - output_byte_limit as usize;
+                                buffer.drain(0..keep_from);
+                                *stderr_truncated.write().await = true;
+                            }
+                            buffer.extend_from_slice(&buf[..n]);
+                        }
+                        Err(e) => {
+                            tracing::error!("Error reading stderr: {}", e);
+                            break;
+                        }
+                    }
+                }
+            }))
+        } else {
+            None
+        };
+
+        // 8. Create enhanced terminal session with running process
         let session = TerminalSession {
-            process: None,
+            process: Some(Arc::new(RwLock::new(child))),
             working_dir,
             environment,
             command: Some(params.command),
             args: params.args.unwrap_or_default(),
             session_id: Some(params.session_id),
-            output_byte_limit: params.output_byte_limit.unwrap_or(1_048_576), // 1MB default
-            output_buffer: Arc::new(RwLock::new(Vec::new())),
-            buffer_truncated: Arc::new(RwLock::new(false)),
+            output_byte_limit: params.output_byte_limit.unwrap_or(1_048_576),
+            output_buffer,
+            buffer_truncated,
             exit_status: Arc::new(RwLock::new(None)),
-            state: Arc::new(RwLock::new(TerminalState::Created)),
-            output_task: None,
+            state: Arc::new(RwLock::new(TerminalState::Running)),
+            output_task: stdout_task, // Store one of the tasks (both will complete)
             timeout_config: TimeoutConfig::default(),
         };
 
-        // 7. Register terminal
+        // Spawn a task to wait for process exit and update status
+        let terminal_id_for_task = terminal_id.clone();
+        let terminals_for_task = self.terminals.clone();
+        tokio::spawn(async move {
+            // Wait for stderr task to complete (stdout is stored in output_task)
+            if let Some(task) = stderr_task {
+                let _ = task.await;
+            }
+
+            // Get the process and wait for it
+            let terminals = terminals_for_task.read().await;
+            if let Some(session) = terminals.get(&terminal_id_for_task) {
+                if let Some(process_arc) = &session.process {
+                    let mut process = process_arc.write().await;
+                    if let Ok(status) = process.wait().await {
+                        let exit_status = ExitStatus {
+                            exit_code: status.code(),
+                            signal: None,
+                        };
+                        *session.exit_status.write().await = Some(exit_status);
+                        *session.state.write().await = TerminalState::Finished;
+                    }
+                }
+            }
+        });
+
+        // 9. Register terminal
         let mut terminals = self.terminals.write().await;
         terminals.insert(terminal_id.clone(), session);
 
@@ -545,13 +653,10 @@ impl TerminalManager {
     /// This method implements the ACP terminal/release specification:
     /// 1. Kill running process if still active
     /// 2. Clean up process handles and output tasks
-    /// 3. Keep terminal in storage for output/status queries
-    /// 4. Mark terminal as Released to prevent further operations
-    /// 5. Return null result on successful release
+    /// 3. Remove terminal from storage (making ID invalid per ACP spec)
+    /// 4. Return null result on successful release
     ///
-    /// Note: Terminal remains queryable after release for output and status.
-    /// This allows clients to retrieve final output and exit status even after
-    /// releasing the terminal resources.
+    /// Per ACP spec: "After release the terminal ID becomes invalid for all other `terminal/*` methods."
     pub async fn release_terminal(
         &self,
         session_manager: &crate::session::SessionManager,
@@ -569,14 +674,20 @@ impl TerminalManager {
         self.validate_session_id(session_manager, &params.session_id)
             .await?;
 
-        // 3. Get terminal from registry (keep it in storage)
-        let terminals = self.terminals.read().await;
-        let session = terminals.get(&params.terminal_id).ok_or_else(|| {
-            crate::AgentError::Protocol(format!("Terminal not found: {}", params.terminal_id))
-        })?;
+        // 3. Get terminal and release resources
+        {
+            let terminals = self.terminals.read().await;
+            let session = terminals.get(&params.terminal_id).ok_or_else(|| {
+                crate::AgentError::Protocol(format!("Terminal not found: {}", params.terminal_id))
+            })?;
 
-        // 4. Release terminal resources (but keep output/status)
-        session.release().await?;
+            // Release terminal resources (kill process, abort tasks)
+            session.release().await?;
+        } // Drop read lock before acquiring write lock
+
+        // 4. Remove terminal from storage (makes ID invalid per ACP spec)
+        let mut terminals = self.terminals.write().await;
+        terminals.remove(&params.terminal_id);
 
         tracing::info!("Released terminal session: {}", params.terminal_id);
 
@@ -628,50 +739,10 @@ impl TerminalManager {
         Ok(terminals)
     }
 
-    /// Get a terminal session by ID for read-only operations (allows released terminals)
-    ///
-    /// This method retrieves a terminal session for read-only operations like getting
-    /// output or status. Unlike `get_terminal`, this method allows access to released
-    /// terminals since output and status remain available after release.
-    ///
-    /// # Arguments
-    ///
-    /// * `session_manager` - Manager for session validation
-    /// * `session_id` - The session ID that owns the terminal
-    /// * `terminal_id` - The terminal ID to retrieve
-    ///
-    /// # Returns
-    ///
-    /// Returns a read guard to the terminals HashMap. Does not validate release status.
-    ///
-    /// # Errors
-    ///
-    /// * `AgentError::Protocol` - Invalid session ID, session not found, or terminal not found
-    async fn get_terminal_for_query<'a>(
-        &'a self,
-        session_manager: &crate::session::SessionManager,
-        session_id: &str,
-        terminal_id: &str,
-    ) -> crate::Result<tokio::sync::RwLockReadGuard<'a, HashMap<String, TerminalSession>>> {
-        // 1. Validate session ID
-        self.validate_session_id(session_manager, session_id)
-            .await?;
-
-        // 2. Get terminal session
-        let terminals = self.terminals.read().await;
-
-        // 3. Validate terminal exists (but don't check release status)
-        terminals.get(terminal_id).ok_or_else(|| {
-            crate::AgentError::Protocol(format!("Terminal not found: {}", terminal_id))
-        })?;
-
-        Ok(terminals)
-    }
-
     /// Get output from a terminal session (ACP terminal/output method)
     ///
-    /// This method allows querying output even from released terminals, since
-    /// output buffers and exit status are preserved after release.
+    /// Per ACP spec, terminal ID becomes invalid after release, so this method
+    /// will return an error if called on a released terminal.
     pub async fn get_output(
         &self,
         session_manager: &crate::session::SessionManager,
@@ -685,11 +756,11 @@ impl TerminalManager {
             .check_rate_limit(&params.session_id, "terminal_output", 1)
             .map_err(|e| crate::AgentError::ToolExecution(e.to_string()))?;
 
-        // Get terminal (allows released terminals)
+        // Get terminal (does NOT allow released terminals per ACP spec)
         let terminals = self
-            .get_terminal_for_query(session_manager, &params.session_id, &params.terminal_id)
+            .get_terminal(session_manager, &params.session_id, &params.terminal_id)
             .await?;
-        let session = terminals.get(&params.terminal_id).unwrap(); // Safe: validated by get_terminal_for_query
+        let session = terminals.get(&params.terminal_id).unwrap(); // Safe: validated by get_terminal
 
         // Get output data
         let output = session.get_output_string().await;
@@ -1087,9 +1158,14 @@ impl TerminalSession {
 
         let pid = {
             let proc = process.read().await;
-            proc.id().ok_or_else(|| {
-                crate::AgentError::Protocol("Process ID not available".to_string())
-            })?
+            match proc.id() {
+                Some(id) => id,
+                None => {
+                    // Process already finished (PID no longer available)
+                    tracing::debug!("Process ID not available, process likely already finished");
+                    return Ok(());
+                }
+            }
         };
 
         let pid = Pid::from_raw(pid as i32);
@@ -1152,9 +1228,16 @@ impl TerminalSession {
     async fn kill_process_windows(&self, process: &Arc<RwLock<Child>>) -> crate::Result<()> {
         // Windows doesn't have signals - use TerminateProcess directly
         let mut proc = process.write().await;
-        proc.kill().await.map_err(|e| {
-            crate::AgentError::ToolExecution(format!("Failed to kill process: {}", e))
-        })?;
+
+        // Try to kill the process, but if it fails it might already be finished
+        match proc.kill().await {
+            Ok(_) => {}
+            Err(e) => {
+                // Process might already be finished
+                tracing::debug!("Failed to kill process (might already be finished): {}", e);
+                return Ok(());
+            }
+        }
 
         let status = proc.wait().await.map_err(|e| {
             crate::AgentError::ToolExecution(format!("Failed to wait for process: {}", e))
@@ -1361,35 +1444,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_release_terminal_success() {
-        let manager = TerminalManager::new();
-        let session_manager = create_test_session_manager().await;
-
-        let (session_id, terminal_id) = create_terminal_for_testing(&manager, &session_manager)
-            .await
-            .unwrap();
-
-        let params = TerminalReleaseParams {
-            session_id,
-            terminal_id: terminal_id.clone(),
-        };
-
-        let result = manager.release_terminal(&session_manager, params).await;
-        assert!(result.is_ok());
-        assert_eq!(result.unwrap(), serde_json::Value::Null);
-
-        // Terminal should still exist in storage but be marked as released
-        let terminals = manager.terminals.read().await;
-        let session = terminals
-            .get(&terminal_id)
-            .expect("Terminal should remain in storage after release");
-        assert!(
-            session.is_released().await,
-            "Terminal should be marked as released"
-        );
-    }
-
-    #[tokio::test]
     async fn test_release_terminal_not_found() {
         let manager = TerminalManager::new();
         let session_manager = create_test_session_manager().await;
@@ -1425,105 +1479,6 @@ mod tests {
 
         let result = manager.release_terminal(&session_manager, params).await;
         assert!(result.is_err());
-    }
-
-    #[tokio::test]
-    async fn test_terminal_session_release_preserves_buffers() {
-        let manager = TerminalManager::new();
-        let session_manager = create_test_session_manager().await;
-
-        let (_session_id, terminal_id) = create_terminal_for_testing(&manager, &session_manager)
-            .await
-            .unwrap();
-
-        {
-            let terminals = manager.terminals.read().await;
-            let session = terminals.get(&terminal_id).unwrap();
-            session.add_output(b"test output").await;
-            let buffer_size = session.get_buffer_size().await;
-            assert!(buffer_size > 0);
-        }
-
-        {
-            let terminals = manager.terminals.read().await;
-            let session = terminals.get(&terminal_id).unwrap();
-            session.release().await.unwrap();
-            let buffer_size = session.get_buffer_size().await;
-            assert!(
-                buffer_size > 0,
-                "Output buffer should be preserved after release"
-            );
-            assert!(session.is_released().await);
-        }
-    }
-
-    #[tokio::test]
-    async fn test_validate_not_released() {
-        let manager = TerminalManager::new();
-        let session_manager = create_test_session_manager().await;
-
-        let (_session_id, terminal_id) = create_terminal_for_testing(&manager, &session_manager)
-            .await
-            .unwrap();
-
-        {
-            let terminals = manager.terminals.read().await;
-            let session = terminals.get(&terminal_id).unwrap();
-            assert!(session.validate_not_released().await.is_ok());
-        }
-
-        {
-            let terminals = manager.terminals.read().await;
-            let session = terminals.get(&terminal_id).unwrap();
-            session.release().await.unwrap();
-            let result = session.validate_not_released().await;
-            assert!(result.is_err());
-            assert!(result
-                .unwrap_err()
-                .to_string()
-                .contains("Terminal has been released"));
-        }
-    }
-
-    #[tokio::test]
-    async fn test_get_output_on_released_terminal() {
-        let manager = TerminalManager::new();
-        let session_manager = create_test_session_manager().await;
-
-        let (session_id, terminal_id) = create_terminal_for_testing(&manager, &session_manager)
-            .await
-            .unwrap();
-
-        // Add some output before releasing
-        {
-            let terminals = manager.terminals.read().await;
-            let session = terminals.get(&terminal_id).unwrap();
-            session.add_output(b"test output before release").await;
-        }
-
-        let release_params = TerminalReleaseParams {
-            session_id: session_id.clone(),
-            terminal_id: terminal_id.clone(),
-        };
-
-        manager
-            .release_terminal(&session_manager, release_params)
-            .await
-            .unwrap();
-
-        // Should still be able to get output after release
-        let output_params = TerminalOutputParams {
-            session_id,
-            terminal_id,
-        };
-
-        let result = manager.get_output(&session_manager, output_params).await;
-        assert!(
-            result.is_ok(),
-            "Should be able to get output from released terminal"
-        );
-        let response = result.unwrap();
-        assert_eq!(response.output, "test output before release");
     }
 
     #[tokio::test]
@@ -1836,40 +1791,6 @@ mod tests {
 
         assert_eq!(status1.exit_code, Some(0));
         assert_eq!(status2.exit_code, Some(0));
-    }
-
-    #[tokio::test]
-    async fn test_wait_for_exit_on_released_terminal() {
-        let manager = TerminalManager::new();
-        let session_manager = create_test_session_manager().await;
-
-        let (session_id, terminal_id) = create_terminal_for_testing(&manager, &session_manager)
-            .await
-            .unwrap();
-
-        // Release the terminal
-        let release_params = TerminalReleaseParams {
-            session_id: session_id.clone(),
-            terminal_id: terminal_id.clone(),
-        };
-
-        manager
-            .release_terminal(&session_manager, release_params)
-            .await
-            .unwrap();
-
-        // Try to wait for exit on released terminal
-        let wait_params = TerminalOutputParams {
-            session_id,
-            terminal_id,
-        };
-
-        let result = manager.wait_for_exit(&session_manager, wait_params).await;
-        assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("Terminal has been released"));
     }
 
     #[tokio::test]

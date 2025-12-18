@@ -10,6 +10,7 @@
 //! - `sessions`: Session setup (new, load, set_mode)
 //! - `content`: Content blocks (text, image, audio, embedded resources, resource links)
 //! - `file_system`: File system access (read_text_file, write_text_file)
+//! - `terminals`: Terminal command execution (create, output, wait_for_exit, kill, release)
 //!
 //! # Running Tests
 //!
@@ -22,6 +23,7 @@ pub mod content;
 pub mod file_system;
 pub mod initialization;
 pub mod sessions;
+pub mod terminals;
 
 /// Result type for conformance tests
 pub type Result<T> = std::result::Result<T, Error>;
