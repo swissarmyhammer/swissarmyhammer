@@ -106,12 +106,12 @@ mod integration_tests {
             transcript_path: None,
             context_state: None,
             template_token_count: None,
-            
+
             todos: Vec::new(),
-            
+
             available_commands: Vec::new(),
             current_mode: None,
-        
+
         client_capabilities: None,
         };
 
@@ -206,12 +206,12 @@ mod integration_tests {
             transcript_path: None,
             context_state: None,
             template_token_count: None,
-            
+
             todos: Vec::new(),
-            
+
             available_commands: Vec::new(),
             current_mode: None,
-        
+
         client_capabilities: None,
         };
 

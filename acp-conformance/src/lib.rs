@@ -8,6 +8,7 @@
 //! Tests are organized by protocol section:
 //! - `initialization`: Protocol initialization and capability negotiation
 //! - `sessions`: Session setup (new, load, set_mode)
+//! - `content`: Content blocks (text, image, audio, embedded resources, resource links)
 //!
 //! # Running Tests
 //!
@@ -16,6 +17,7 @@
 //! cargo test
 //! ```
 
+pub mod content;
 pub mod initialization;
 pub mod sessions;
 

@@ -60,10 +60,18 @@ pub fn acp_to_llama_messages(content: Vec<ContentBlock>) -> Result<Vec<Message>,
                     "Audio content not yet supported".to_string(),
                 ));
             }
-            ContentBlock::ResourceLink(_) => {
-                return Err(TranslationError::UnsupportedContent(
-                    "Resource link content not yet supported".to_string(),
-                ));
+            ContentBlock::ResourceLink(resource_link) => {
+                // Per ACP spec: "All agents MUST support resource links in prompts"
+                // Convert resource link to a text description for the LLM
+                let description =
+                    format!("[Resource: {} ({})]", resource_link.name, resource_link.uri);
+                messages.push(Message {
+                    role: MessageRole::User,
+                    content: description,
+                    tool_call_id: None,
+                    tool_name: None,
+                    timestamp: SystemTime::now(),
+                });
             }
             ContentBlock::Resource(_) => {
                 return Err(TranslationError::UnsupportedContent(

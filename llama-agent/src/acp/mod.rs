@@ -255,6 +255,7 @@ pub mod filesystem;
 pub mod mcp_client_factory;
 pub mod permissions;
 pub mod plan;
+pub mod raw_message_manager;
 pub mod server;
 pub mod session;
 pub mod terminal;
@@ -272,5 +273,6 @@ pub use permissions::{
     PermissionAction, PermissionEvaluation, PermissionPolicy, PermissionPolicyEngine,
     PermissionRule, PermissionStorage, ToolPattern,
 };
+pub use raw_message_manager::RawMessageManager;
 pub use server::AcpServer;
 pub use session::{AcpSessionState, SessionMode};

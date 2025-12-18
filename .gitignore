@@ -123,6 +123,7 @@ swissarmyhammer-cli/.swissarmyhammer
 swissarmyhammer-workflow/.swissarmyhammer
 swissarmyhammer-tools/.swissarmyhammer
 claude-agent/.swissarmyhammer/sessions
+acp-conformance/.swissarmyhammer/sessions
 
 .work
 
@@ -143,6 +144,9 @@ doc/book
 
 # Claude Code configuration
 .claude/
+
+# ACP transcript recordings
+.acp/
 
 # Test workflow files (not part of the project source)
 builtin/workflows/*-test.md

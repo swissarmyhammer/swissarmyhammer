@@ -1190,12 +1190,12 @@ mod qwen3coder_model_integration {
             transcript_path: None,
             context_state: None,
             template_token_count: None,
-            
+
             todos: Vec::new(),
-            
+
             available_commands: Vec::new(),
             current_mode: None,
-        
+
         client_capabilities: None,
         }
     }
@@ -1783,12 +1783,12 @@ mod qwen3coder_integration_tests {
             transcript_path: None,
             context_state: None,
             template_token_count: None,
-            
+
             todos: Vec::new(),
-            
+
             available_commands: Vec::new(),
             current_mode: None,
-        
+
         client_capabilities: None,
         }
     }

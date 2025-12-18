@@ -597,7 +597,7 @@ impl ClaudeAgent {
             // Create raw message manager for recording JSON-RPC messages across all agents
             let raw_json_path = std::env::current_dir()
                 .unwrap_or_else(|_| std::path::PathBuf::from("."))
-                .join(".hence")
+                .join(".acp")
                 .join("transcript_raw.jsonl");
             if let Some(parent) = raw_json_path.parent() {
                 let _ = std::fs::create_dir_all(parent);

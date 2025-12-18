@@ -226,7 +226,10 @@ impl TerminalManager {
     /// Validate that client has terminal capability, return error if not
     async fn validate_terminal_capability(&self) -> crate::Result<()> {
         let caps = self.client_capabilities.read().await;
-        tracing::debug!("Terminal manager validating capabilities: {:?}", caps.as_ref().map(|c| c.terminal));
+        tracing::debug!(
+            "Terminal manager validating capabilities: {:?}",
+            caps.as_ref().map(|c| c.terminal)
+        );
         match &*caps {
             Some(caps) if caps.terminal => Ok(()),
             Some(_) => Err(crate::AgentError::Protocol(
@@ -244,7 +247,10 @@ impl TerminalManager {
     }
 
     /// Create a new terminal session (skips capability check - caller must validate)
-    pub(crate) async fn create_terminal_unchecked(&self, working_dir: Option<String>) -> crate::Result<String> {
+    pub(crate) async fn create_terminal_unchecked(
+        &self,
+        working_dir: Option<String>,
+    ) -> crate::Result<String> {
         // Check rate limit (cost 1 - terminal creation is a standard operation)
         // Use a default client_id for non-session-based creates
         self.rate_limiter

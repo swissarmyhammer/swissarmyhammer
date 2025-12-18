@@ -695,7 +695,10 @@ impl ToolCallHandler {
         let terminal_cap_result = self.terminal_manager.client_capabilities.try_write();
         if let Ok(mut caps_lock) = terminal_cap_result {
             *caps_lock = Some(capabilities.clone());
-            tracing::debug!("Set terminal manager capabilities: terminal={}", capabilities.terminal);
+            tracing::debug!(
+                "Set terminal manager capabilities: terminal={}",
+                capabilities.terminal
+            );
         } else {
             tracing::warn!("Could not set terminal manager capabilities - lock contention");
         }

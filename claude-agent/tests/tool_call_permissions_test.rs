@@ -807,9 +807,7 @@ async fn test_auto_approved_terminal_bypasses_policy() {
         arguments: json!({}),
     };
 
-    let result = handler
-        .handle_tool_request(&session_id, request)
-        .await;
+    let result = handler.handle_tool_request(&session_id, request).await;
 
     match result {
         Ok(ToolCallResult::Success(msg)) => {
@@ -825,7 +823,10 @@ async fn test_auto_approved_terminal_bypasses_policy() {
             );
         }
         Err(e) => {
-            panic!("Auto-approved terminal_create should succeed, got error: {:?}", e);
+            panic!(
+                "Auto-approved terminal_create should succeed, got error: {:?}",
+                e
+            );
         }
     }
 }
@@ -1154,14 +1155,14 @@ async fn test_fs_write_fails_without_write_capability() {
         }),
     };
 
-    let result = handler
-        .handle_tool_request(&session_id, request)
-        .await;
+    let result = handler.handle_tool_request(&session_id, request).await;
 
     match result {
         Ok(ToolCallResult::Error(msg)) => {
             assert!(
-                msg.contains("capability") || msg.contains("not supported") || msg.contains("not available"),
+                msg.contains("capability")
+                    || msg.contains("not supported")
+                    || msg.contains("not available"),
                 "Error should mention missing capability, got: {}",
                 msg
             );
@@ -1170,7 +1171,9 @@ async fn test_fs_write_fails_without_write_capability() {
             // Also acceptable - error returned instead of ToolCallResult::Error
             let msg = e.to_string();
             assert!(
-                msg.contains("capability") || msg.contains("not supported") || msg.contains("not available"),
+                msg.contains("capability")
+                    || msg.contains("not supported")
+                    || msg.contains("not available"),
                 "Error should mention missing capability, got: {}",
                 msg
             );
@@ -1179,7 +1182,10 @@ async fn test_fs_write_fails_without_write_capability() {
             // Also acceptable
         }
         Ok(other) => {
-            panic!("fs_write should fail when write_text_file capability is false, got: {:?}", other);
+            panic!(
+                "fs_write should fail when write_text_file capability is false, got: {:?}",
+                other
+            );
         }
     }
 }
@@ -1217,9 +1223,7 @@ async fn test_terminal_fails_without_terminal_capability() {
         arguments: json!({}),
     };
 
-    let result = handler
-        .handle_tool_request(&session_id, request)
-        .await;
+    let result = handler.handle_tool_request(&session_id, request).await;
 
     match result {
         Ok(ToolCallResult::Error(msg)) => {
@@ -1242,7 +1246,10 @@ async fn test_terminal_fails_without_terminal_capability() {
             // Also acceptable
         }
         Ok(other) => {
-            panic!("terminal_create should fail when terminal capability is false, got: {:?}", other);
+            panic!(
+                "terminal_create should fail when terminal capability is false, got: {:?}",
+                other
+            );
         }
     }
 }
@@ -1286,9 +1293,7 @@ async fn test_operations_fail_with_no_capabilities() {
         }),
     };
 
-    let read_result = handler
-        .handle_tool_request(&session_id, read_request)
-        .await;
+    let read_result = handler.handle_tool_request(&session_id, read_request).await;
 
     match read_result {
         Ok(ToolCallResult::Error(_)) | Err(_) => {
@@ -1322,7 +1327,10 @@ async fn test_operations_fail_with_no_capabilities() {
         Ok(ToolCallResult::PermissionRequired(_)) => {
             // Also acceptable - permission required because no capabilities
         }
-        Ok(other) => panic!("fs_write should fail or require permission with no capabilities, got: {:?}", other),
+        Ok(other) => panic!(
+            "fs_write should fail or require permission with no capabilities, got: {:?}",
+            other
+        ),
     }
 
     // Test terminal_create fails
@@ -1343,6 +1351,9 @@ async fn test_operations_fail_with_no_capabilities() {
         Ok(ToolCallResult::PermissionRequired(_)) => {
             // Also acceptable
         }
-        Ok(other) => panic!("terminal_create should fail with no capabilities, got: {:?}", other),
+        Ok(other) => panic!(
+            "terminal_create should fail with no capabilities, got: {:?}",
+            other
+        ),
     }
 }

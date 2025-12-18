@@ -12,6 +12,7 @@ use tokio::sync::{broadcast, RwLock};
 use super::config::AcpConfig;
 use super::filesystem::FilesystemOperations;
 use super::permissions::PermissionPolicyEngine;
+use super::raw_message_manager::RawMessageManager;
 use super::session::AcpSessionState;
 use super::terminal::TerminalManager;
 use super::translation::ToJsonRpcError;
@@ -43,6 +44,9 @@ pub struct AcpServer {
 
     /// Terminal manager for process handling
     terminal_manager: Arc<RwLock<TerminalManager>>,
+
+    /// Raw message recorder for debugging/auditing
+    raw_message_manager: Option<RawMessageManager>,
 }
 
 impl AcpServer {
@@ -61,6 +65,33 @@ impl AcpServer {
             config.terminal.graceful_shutdown_timeout.as_duration(),
         )));
 
+        // Initialize raw message recorder for debugging
+        let raw_message_manager = {
+            let raw_json_path = std::env::current_dir()
+                .unwrap_or_else(|_| std::path::PathBuf::from("."))
+                .join(".acp")
+                .join("transcript_raw.jsonl");
+
+            // Create parent directory if needed
+            if let Some(parent) = raw_json_path.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+
+            match RawMessageManager::new(raw_json_path.clone()) {
+                Ok(manager) => {
+                    tracing::info!(
+                        "Raw ACP JSON-RPC messages recording to {}",
+                        raw_json_path.display()
+                    );
+                    Some(manager)
+                }
+                Err(e) => {
+                    tracing::warn!("Failed to create raw message recorder: {}", e);
+                    None
+                }
+            }
+        };
+
         Self {
             agent_server,
             sessions: Arc::new(RwLock::new(HashMap::new())),
@@ -71,6 +102,7 @@ impl AcpServer {
             permission_engine,
             filesystem_ops,
             terminal_manager,
+            raw_message_manager,
         }
     }
 
@@ -600,6 +632,13 @@ impl AcpServer {
     ///
     /// * `notification` - The session notification to broadcast
     fn broadcast_notification(&self, notification: SessionNotification) {
+        // Record notification to raw message log for debugging
+        if let Some(ref manager) = self.raw_message_manager {
+            if let Ok(json) = serde_json::to_string(&notification) {
+                manager.record(json);
+            }
+        }
+
         match self.notification_tx.send(notification) {
             Ok(subscriber_count) => {
                 tracing::debug!("Notification broadcast to {} subscribers", subscriber_count);
@@ -935,10 +974,12 @@ impl agent_client_protocol::Agent for AcpServer {
         );
 
         // Build agent capabilities from config
+        // Only advertise capabilities we actually support
+        // Currently llama-agent only supports text content (see translation.rs)
         let prompt_caps = agent_client_protocol::PromptCapabilities::new()
-            .audio(true)
-            .embedded_context(true)
-            .image(true)
+            .audio(false)
+            .embedded_context(false)
+            .image(false)
             .meta({
                 let mut map = serde_json::Map::new();
                 map.insert("streaming".to_string(), serde_json::Value::Bool(true));
@@ -2010,20 +2051,21 @@ mod tests {
         let prompt_caps = agent_caps
             .get("promptCapabilities")
             .expect("Prompt capabilities should be advertised");
+        // llama-agent currently only supports text content
         assert_eq!(
             prompt_caps.get("audio"),
-            Some(&serde_json::Value::Bool(true)),
-            "Should advertise audio support"
+            Some(&serde_json::Value::Bool(false)),
+            "Should not advertise audio support (not yet implemented)"
         );
         assert_eq!(
             prompt_caps.get("embeddedContext"),
-            Some(&serde_json::Value::Bool(true)),
-            "Should advertise embedded context support"
+            Some(&serde_json::Value::Bool(false)),
+            "Should not advertise embedded context support (not yet implemented)"
         );
         assert_eq!(
             prompt_caps.get("image"),
-            Some(&serde_json::Value::Bool(true)),
-            "Should advertise image support"
+            Some(&serde_json::Value::Bool(false)),
+            "Should not advertise image support (not yet implemented)"
         );
         // meta field is optional in prompt capabilities, only check if present
         if let Some(prompt_meta) = prompt_caps.get("meta") {
