@@ -1,10 +1,12 @@
 //! Test file writing via ACP protocol
 //!
-//! This test verifies the fs/write_text_file extension method:
-//! 1. Initializes an ACP session with write capability
-//! 2. Calls fs/write_text_file via ext_method
-//! 3. Verifies the file was created with correct content
-//! 4. Tests various security and error conditions
+//! Tests implementation-specific security and error handling for fs/write_text_file.
+//! Basic conformance tests are in acp-conformance crate.
+//!
+//! These tests verify:
+//! - Path security (allowed_paths, relative paths)
+//! - Edge cases (overwrite, empty content, subdirectories, unicode)
+//! - Error handling (nonexistent parent directory)
 
 mod acp_write_file_tests {
     use llama_agent::acp::AcpServer;
@@ -98,147 +100,6 @@ mod acp_write_file_tests {
         // Create the ACP server
         let server = AcpServer::new(agent_server, acp_config);
         Ok(Arc::new(server))
-    }
-
-    /// Test writing a text file via ACP fs/write_text_file
-    #[tokio::test]
-    async fn test_write_text_file_success() {
-        use agent_client_protocol::Agent;
-
-        // Create temp directory
-        let temp_dir = TempDir::new().expect("Failed to create temp dir");
-        let test_file_path = temp_dir.path().join("output.txt");
-        let test_content = "Hello, ACP Write!\nThis is a test file.\n";
-
-        // Create server
-        let server = create_test_server(&temp_dir)
-            .await
-            .expect("Failed to create server");
-
-        // Initialize with client capabilities
-        let init_request = agent_client_protocol::InitializeRequest::new(
-            agent_client_protocol::ProtocolVersion::V1,
-        )
-        .client_capabilities(
-            agent_client_protocol::ClientCapabilities::new().fs(
-                agent_client_protocol::FileSystemCapability::new()
-                    .read_text_file(false)
-                    .write_text_file(true),
-            ),
-        );
-
-        let _init_response = server
-            .initialize(init_request)
-            .await
-            .expect("Initialize failed");
-
-        // Create a session
-        let new_session_request =
-            agent_client_protocol::NewSessionRequest::new(temp_dir.path().to_path_buf());
-        let session_response = server
-            .new_session(new_session_request)
-            .await
-            .expect("New session failed");
-        let session_id = session_response.session_id;
-
-        // Create fs/write_text_file request
-        let write_request = agent_client_protocol::WriteTextFileRequest::new(
-            session_id.clone(),
-            test_file_path.to_string_lossy().to_string(),
-            test_content.to_string(),
-        );
-
-        // Serialize to JSON Value
-        let request_json =
-            serde_json::to_value(&write_request).expect("Failed to serialize request");
-
-        // Create ExtRequest
-        let raw_value = agent_client_protocol::RawValue::from_string(request_json.to_string())
-            .expect("Failed to create RawValue");
-        let ext_request =
-            agent_client_protocol::ExtRequest::new("fs/write_text_file", Arc::from(raw_value));
-
-        // Call ext_method
-        let ext_response = server
-            .ext_method(ext_request)
-            .await
-            .expect("ext_method failed");
-
-        // Parse response
-        let response_value: serde_json::Value =
-            serde_json::from_str(ext_response.0.get()).expect("Failed to parse response");
-        let _response: agent_client_protocol::WriteTextFileResponse =
-            serde_json::from_value(response_value).expect("Failed to deserialize response");
-
-        // Verify file was created with correct content
-        let written_content =
-            std::fs::read_to_string(&test_file_path).expect("Failed to read written file");
-        assert_eq!(
-            written_content, test_content,
-            "Written content should match requested content"
-        );
-    }
-
-    /// Test writing a file without required capability
-    #[tokio::test]
-    async fn test_write_text_file_without_capability() {
-        use agent_client_protocol::Agent;
-
-        // Create temp directory
-        let temp_dir = TempDir::new().expect("Failed to create temp dir");
-        let test_file_path = temp_dir.path().join("output.txt");
-
-        // Create server
-        let server = create_test_server(&temp_dir)
-            .await
-            .expect("Failed to create server");
-
-        // Initialize without write capability
-        let init_request = agent_client_protocol::InitializeRequest::new(
-            agent_client_protocol::ProtocolVersion::V1,
-        )
-        .client_capabilities(
-            agent_client_protocol::ClientCapabilities::new().fs(
-                agent_client_protocol::FileSystemCapability::new()
-                    .read_text_file(false)
-                    .write_text_file(false), // Capability disabled
-            ),
-        );
-
-        let _init_response = server
-            .initialize(init_request)
-            .await
-            .expect("Initialize failed");
-
-        // Create a session
-        let new_session_request =
-            agent_client_protocol::NewSessionRequest::new(temp_dir.path().to_path_buf());
-        let session_response = server
-            .new_session(new_session_request)
-            .await
-            .expect("New session failed");
-        let session_id = session_response.session_id;
-
-        // Try to write file
-        let write_request = agent_client_protocol::WriteTextFileRequest::new(
-            session_id.clone(),
-            test_file_path.to_string_lossy().to_string(),
-            "test content".to_string(),
-        );
-
-        let request_json =
-            serde_json::to_value(&write_request).expect("Failed to serialize request");
-        let raw_value = agent_client_protocol::RawValue::from_string(request_json.to_string())
-            .expect("Failed to create RawValue");
-        let ext_request =
-            agent_client_protocol::ExtRequest::new("fs/write_text_file", Arc::from(raw_value));
-
-        // Call should fail due to missing capability
-        let result = server.ext_method(ext_request).await;
-        assert!(
-            result.is_err(),
-            "Should fail when client doesn't have write_text_file capability"
-        );
     }
 
     /// Test writing a file outside allowed paths
