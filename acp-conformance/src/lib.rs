@@ -12,6 +12,7 @@
 //! - `file_system`: File system access (read_text_file, write_text_file)
 //! - `terminals`: Terminal command execution (create, output, wait_for_exit, kill, release)
 //! - `agent_plan`: Agent planning and execution strategies (plan creation, updates, dynamic evolution)
+//! - `slash_commands`: Slash command advertisement and invocation
 //!
 //! # Running Tests
 //!
@@ -26,6 +27,7 @@ pub mod file_system;
 pub mod initialization;
 pub mod responses;
 pub mod sessions;
+pub mod slash_commands;
 pub mod terminals;
 pub mod validation;
 
