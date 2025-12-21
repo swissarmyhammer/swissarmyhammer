@@ -234,12 +234,12 @@ pub async fn test_terminal_output<A: Agent + ?Sized>(agent: &A) -> crate::Result
             let response_value: serde_json::Value = serde_json::from_str(response.0.get())?;
 
             // Check required fields
-            if !response_value.get("output").is_some() {
+            if response_value.get("output").is_none() {
                 return Err(crate::Error::Validation(
                     "Response missing 'output' field".to_string(),
                 ));
             }
-            if !response_value.get("truncated").is_some() {
+            if response_value.get("truncated").is_none() {
                 return Err(crate::Error::Validation(
                     "Response missing 'truncated' field".to_string(),
                 ));

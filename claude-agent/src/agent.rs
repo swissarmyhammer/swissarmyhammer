@@ -510,6 +510,11 @@ pub struct ClaudeAgent {
     /// Tracks plan entries and their status changes as work progresses,
     /// enabling ACP-compliant progress reporting to clients.
     plan_manager: Arc<RwLock<crate::plan::PlanManager>>,
+    /// Available agents (modes) from Claude CLI init message
+    ///
+    /// Stores agent id, name, and description tuples parsed from the Claude CLI
+    /// init JSON. Used to provide ACP session modes functionality.
+    available_agents: Arc<RwLock<Option<Vec<(String, String, Option<String>)>>>>,
     /// Path validator for secure file operations
     ///
     /// Validates file paths to prevent path traversal attacks, enforce allowed/blocked
@@ -745,6 +750,7 @@ impl ClaudeAgent {
             client: None, // Client connection set later via set_client()
             permission_storage: Arc::new(permission_storage::PermissionStorage::new()),
             plan_manager: Arc::new(RwLock::new(crate::plan::PlanManager::new())),
+            available_agents: Arc::new(RwLock::new(None)),
             path_validator,
             size_validator,
         };
@@ -758,6 +764,45 @@ impl ClaudeAgent {
     /// Required for the agent to send client/request_permission and other client requests.
     pub fn set_client(&mut self, client: Arc<dyn agent_client_protocol::Client + Send + Sync>) {
         self.client = Some(client);
+    }
+
+    /// Set available agents (modes) from Claude CLI init message
+    ///
+    /// Called after parsing the init JSON from Claude CLI to store the available agents.
+    /// These are used to provide ACP session modes functionality.
+    pub async fn set_available_agents(&self, agents: Vec<(String, String, Option<String>)>) {
+        let mut available_agents = self.available_agents.write().await;
+        *available_agents = Some(agents);
+    }
+
+    /// Get available agents (modes) as ACP SessionMode structs
+    ///
+    /// Returns None if agents haven't been parsed yet from init message.
+    pub async fn get_available_modes(&self) -> Option<Vec<agent_client_protocol::SessionMode>> {
+        let available_agents = self.available_agents.read().await;
+        available_agents.as_ref().map(|agents| {
+            agents
+                .iter()
+                .map(|(id, name, description)| {
+                    let mut mode =
+                        agent_client_protocol::SessionMode::new(id.clone(), name.clone());
+                    if let Some(desc) = description {
+                        mode = mode.description(desc.clone());
+                    }
+                    mode
+                })
+                .collect()
+        })
+    }
+
+    /// Get the current mode for a session
+    ///
+    /// Returns the current mode ID if set, or None if no mode is configured.
+    pub async fn get_session_mode(&self, session_id: &crate::session::SessionId) -> Option<String> {
+        self.session_manager
+            .get_session(session_id)
+            .ok()
+            .and_then(|s| s.and_then(|sess| sess.current_mode.clone()))
     }
 
     /// Start monitoring MCP server notifications for capability changes
@@ -1261,17 +1306,6 @@ impl ClaudeAgent {
     /// - Enable/disable specific tools based on mode
     /// - Configure different prompting strategies per mode
     /// - Apply mode-specific system prompts
-    async fn apply_mode_configuration(
-        &self,
-        _session_id: &crate::session::SessionId,
-        _mode_id: &str,
-    ) -> Result<(), agent_client_protocol::Error> {
-        // Currently no mode-specific configuration to apply
-        // This is a placeholder for future mode-specific behavior
-        tracing::debug!("Applying mode-specific configuration (currently no-op)");
-        Ok(())
-    }
-
     /// Validate a prompt request for common issues
     async fn validate_prompt_request(
         &self,
@@ -1435,9 +1469,16 @@ impl ClaudeAgent {
             .map_err(|_| agent_client_protocol::Error::internal_error())?;
 
         let context: crate::claude::SessionContext = session.into();
+
+        // Get current mode for this session to pass --agent flag
+        let agent_mode = self.get_session_mode(session_id).await;
+        if let Some(ref mode) = agent_mode {
+            tracing::debug!("Using agent mode '{}' for session {}", mode, session_id);
+        }
+
         let mut stream = self
             .claude_client
-            .query_stream_with_context(&prompt_text, &context)
+            .query_stream_with_context(&prompt_text, &context, agent_mode)
             .await
             .map_err(|e| {
                 tracing::error!("Failed to create streaming query: {}", e);
@@ -1916,10 +1957,16 @@ impl ClaudeAgent {
 
         tracing::info!("Calling Claude API for session: {}", session_id);
 
+        // Get current mode for this session to pass --agent flag
+        let agent_mode = self.get_session_mode(session_id).await;
+        if let Some(ref mode) = agent_mode {
+            tracing::debug!("Using agent mode '{}' for session {}", mode, session_id);
+        }
+
         // Use streaming API internally to get notifications, but accumulate full response
         let mut stream = self
             .claude_client
-            .query_stream_with_context(&prompt_text, &context)
+            .query_stream_with_context(&prompt_text, &context, agent_mode)
             .await
             .map_err(|e| {
                 tracing::error!("Claude API error: {:?}", e);
@@ -3106,14 +3153,26 @@ impl Agent for ClaudeAgent {
 
         let protocol_session_id = SessionId::new(session_id.to_string());
 
-        // Spawn Claude process immediately and read init message with slash_commands
+        // Spawn Claude process immediately and read init message with slash_commands and available_agents
         tracing::info!("Spawning Claude process for session: {}", session_id);
-        if let Err(e) = self
+        match self
             .claude_client
             .spawn_process_and_consume_init(&session_id, &protocol_session_id, &request.cwd)
             .await
         {
-            tracing::error!("Failed to spawn Claude process and read init: {}", e);
+            Ok(Some(agents)) => {
+                tracing::info!(
+                    "Storing {} available agents from Claude CLI init",
+                    agents.len()
+                );
+                self.set_available_agents(agents).await;
+            }
+            Ok(None) => {
+                tracing::debug!("No available agents in Claude CLI init message");
+            }
+            Err(e) => {
+                tracing::error!("Failed to spawn Claude process and read init: {}", e);
+            }
         }
 
         // Send initial available commands after session creation (core + tool_handler commands)
@@ -3131,7 +3190,25 @@ impl Agent for ClaudeAgent {
             );
         }
 
-        let response = NewSessionResponse::new(SessionId::new(session_id.to_string()));
+        let mut response = NewSessionResponse::new(SessionId::new(session_id.to_string()));
+
+        // Add available modes if we have them from Claude CLI
+        if let Some(available_modes) = self.get_available_modes().await {
+            // Get the current mode from the session (defaults to first agent if not set)
+            let current_mode_id = self
+                .session_manager
+                .get_session(&session_id)
+                .ok()
+                .and_then(|s| s.and_then(|sess| sess.current_mode.clone()))
+                .or_else(|| available_modes.first().map(|m| m.id.0.to_string()))
+                .unwrap_or_else(|| "default".to_string());
+
+            let mode_state = agent_client_protocol::SessionModeState::new(
+                agent_client_protocol::SessionModeId::new(current_mode_id.as_str()),
+                available_modes,
+            );
+            response = response.modes(mode_state);
+        }
 
         self.log_response("new_session", &response);
         Ok(response)
@@ -3295,6 +3372,28 @@ impl Agent for ClaudeAgent {
 
         let mode_id_string = request.mode_id.0.to_string();
 
+        // Validate mode ID is in available modes
+        let available_agents = self.available_agents.read().await;
+        if let Some(agents) = available_agents.as_ref() {
+            let mode_exists = agents.iter().any(|(id, _, _)| id == &mode_id_string);
+            if !mode_exists {
+                tracing::error!(
+                    "Invalid mode '{}' requested. Available modes: {:?}",
+                    mode_id_string,
+                    agents
+                        .iter()
+                        .map(|(id, name, _)| format!("{}:{}", id, name))
+                        .collect::<Vec<_>>()
+                );
+                return Err(agent_client_protocol::Error::invalid_params());
+            }
+        } else {
+            // No available modes - shouldn't happen but reject to be safe
+            tracing::warn!("set_session_mode called but no available modes configured");
+            return Err(agent_client_protocol::Error::invalid_params());
+        }
+        drop(available_agents);
+
         // Get the current mode to check if it will change
         let current_mode = self
             .session_manager
@@ -3312,12 +3411,33 @@ impl Agent for ClaudeAgent {
             })
             .map_err(|_| agent_client_protocol::Error::internal_error())?;
 
-        // Apply mode-specific configuration
-        self.apply_mode_configuration(&parsed_session_id, &mode_id_string)
-            .await?;
+        tracing::info!("Session mode set to: {}", mode_id_string);
 
-        // Send current mode update notification if mode actually changed
+        // Terminate existing Claude process if mode changed
+        // This forces a respawn with the new --agent flag on next prompt
         if mode_changed {
+            tracing::info!(
+                "Mode changed for session {}, terminating Claude process to force respawn with --agent {}",
+                parsed_session_id,
+                mode_id_string
+            );
+
+            if let Err(e) = self
+                .claude_client
+                .terminate_session(&parsed_session_id)
+                .await
+            {
+                tracing::warn!(
+                    "Failed to terminate Claude process for session {}: {}",
+                    parsed_session_id,
+                    e
+                );
+            } else {
+                tracing::info!(
+                    "Claude process terminated, will respawn with new mode on next prompt"
+                );
+            }
+
             let current_mode_update =
                 agent_client_protocol::CurrentModeUpdate::new(request.mode_id.clone());
             let update = SessionUpdate::CurrentModeUpdate(current_mode_update);
@@ -3344,10 +3464,13 @@ impl Agent for ClaudeAgent {
             "message".to_string(),
             serde_json::json!("Session mode updated"),
         );
-        meta_map.insert(
-            "previous_mode_changed".to_string(),
-            serde_json::json!(mode_changed),
-        );
+        meta_map.insert("mode_changed".to_string(), serde_json::json!(mode_changed));
+        if mode_changed {
+            meta_map.insert(
+                "process_action".to_string(),
+                serde_json::json!("terminated_for_respawn"),
+            );
+        }
 
         let response = SetSessionModeResponse::new().meta(meta_map);
 

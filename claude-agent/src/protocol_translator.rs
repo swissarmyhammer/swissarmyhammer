@@ -427,6 +427,50 @@ impl ProtocolTranslator {
                     if subtype == "init" {
                         tracing::debug!("Received system init message");
 
+                        // Extract agents array for mode support
+                        // Claude CLI provides "agents": ["general-purpose", "Explore", "Plan", ...]
+                        let available_agents =
+                            parsed
+                                .get("agents")
+                                .and_then(|v| v.as_array())
+                                .map(|agents| {
+                                    agents
+                                        .iter()
+                                        .filter_map(|agent| {
+                                            let id = agent.as_str()?;
+                                            // Create human-readable name from ID
+                                            // e.g., "general-purpose" -> "General Purpose"
+                                            let name = id
+                                                .split('-')
+                                                .map(|word| {
+                                                    let mut chars = word.chars();
+                                                    match chars.next() {
+                                                        None => String::new(),
+                                                        Some(first) => {
+                                                            first.to_uppercase().collect::<String>()
+                                                                + chars.as_str()
+                                                        }
+                                                    }
+                                                })
+                                                .collect::<Vec<_>>()
+                                                .join(" ");
+
+                                            Some((id.to_string(), name, None::<String>))
+                                        })
+                                        .collect::<Vec<_>>()
+                                });
+
+                        if let Some(agents) = &available_agents {
+                            tracing::info!(
+                                "Claude CLI provided {} agents: {:?}",
+                                agents.len(),
+                                agents
+                                    .iter()
+                                    .map(|(id, name, _)| format!("{}:{}", id, name))
+                                    .collect::<Vec<_>>()
+                            );
+                        }
+
                         // Extract slash_commands array
                         if let Some(slash_commands) =
                             parsed.get("slash_commands").and_then(|v| v.as_array())
@@ -482,6 +526,10 @@ impl ProtocolTranslator {
                                     })
                                     .collect();
 
+                            // Store available_agents in session-level state if present
+                            // Note: These will be retrieved by the agent during new_session
+                            // to include in the NewSessionResponse
+
                             // Return AvailableCommandsUpdate notification
                             let commands_update =
                                 agent_client_protocol::AvailableCommandsUpdate::new(
@@ -490,6 +538,15 @@ impl ProtocolTranslator {
                             let mut meta_map = serde_json::Map::new();
                             meta_map
                                 .insert("source".to_string(), serde_json::json!("claude_cli_init"));
+
+                            // Add available_agents to metadata if present
+                            if let Some(agents) = available_agents {
+                                meta_map.insert(
+                                    "available_agents".to_string(),
+                                    serde_json::json!(agents),
+                                );
+                            }
+
                             return Ok(Some(
                                 SessionNotification::new(
                                     session_id.clone(),

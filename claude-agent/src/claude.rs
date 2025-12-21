@@ -34,21 +34,32 @@ impl ClaudeClient {
         self.raw_message_manager = Some(manager);
     }
 
+    /// Terminate the Claude process for a session
+    ///
+    /// This kills the process and removes it from the process manager.
+    /// The process will be automatically respawned on the next prompt.
+    pub async fn terminate_session(&self, session_id: &crate::session::SessionId) -> Result<()> {
+        self.process_manager.terminate_session(session_id).await
+    }
+
     /// Spawn Claude process and consume init message during session creation
     ///
     /// This ensures the Claude process is ready and we've processed the system/init
-    /// message (which contains slash_commands) before responding to new_session.
+    /// message (which contains slash_commands and available_agents) before responding to new_session.
     ///
     /// # Arguments
     /// * `session_id` - Internal session identifier
     /// * `acp_session_id` - ACP protocol session identifier
     /// * `cwd` - Working directory for the Claude process
+    ///
+    /// # Returns
+    /// Returns available agents (id, name, description) if present in init message
     pub async fn spawn_process_and_consume_init(
         &self,
         session_id: &crate::session::SessionId,
         acp_session_id: &agent_client_protocol::SessionId,
         cwd: &std::path::Path,
-    ) -> Result<()> {
+    ) -> Result<Option<Vec<(String, String, Option<String>)>>> {
         tracing::debug!(
             "Spawning Claude process for session: {} in {}",
             session_id,
@@ -56,7 +67,11 @@ impl ClaudeClient {
         );
 
         // Spawn the process (or get existing) with working directory
-        let process = self.process_manager.get_process(session_id, cwd).await?;
+        // Note: During init, we don't have a mode yet, so pass None
+        let process = self
+            .process_manager
+            .get_process(session_id, cwd, None)
+            .await?;
 
         // The Claude CLI emits a system/init message AFTER receiving the first input
         // Send a minimal greeting to trigger init without priming Claude's behavior
@@ -83,6 +98,8 @@ impl ClaudeClient {
         })
         .await;
 
+        let mut available_agents = None;
+
         match init_line {
             Ok(Ok(Some(line))) => {
                 tracing::info!("Received init line from Claude CLI ({} bytes)", line.len());
@@ -93,7 +110,7 @@ impl ClaudeClient {
                 }
 
                 // Parse through protocol_translator
-                match self
+                available_agents = match self
                     .protocol_translator
                     .stream_json_to_acp(&line, acp_session_id)
                     .await
@@ -103,23 +120,56 @@ impl ClaudeClient {
                             "Protocol translator created notification from init message"
                         );
 
+                        // Extract available_agents from metadata before forwarding
+                        let agents = notification
+                            .meta
+                            .as_ref()
+                            .and_then(|meta| meta.get("available_agents"))
+                            .and_then(|v| v.as_array())
+                            .map(|arr| {
+                                arr.iter()
+                                    .filter_map(|agent_arr| {
+                                        let agent_tuple = agent_arr.as_array()?;
+                                        let id = agent_tuple.get(0)?.as_str()?.to_string();
+                                        let name = agent_tuple.get(1)?.as_str()?.to_string();
+                                        let description = agent_tuple.get(2).and_then(|v| {
+                                            if v.is_null() {
+                                                None
+                                            } else {
+                                                v.as_str().map(|s| s.to_string())
+                                            }
+                                        });
+                                        Some((id, name, description))
+                                    })
+                                    .collect::<Vec<_>>()
+                            });
+
                         // Forward the notification
                         if let Some(sender) = &self.notification_sender {
                             tracing::info!(
                                 "Forwarding AvailableCommandsUpdate from Claude init message"
                             );
-                            sender.send_update(notification).await?;
+                            if let Err(e) = sender.send_update(notification).await {
+                                tracing::warn!(
+                                    "Failed to send init notification (expected in tests): {}",
+                                    e
+                                );
+                            }
                         } else {
                             tracing::warn!("No notification sender configured - cannot forward init notification");
                         }
+
+                        agents
                     }
                     Ok(None) => {
                         tracing::warn!("Init message produced no notification - check protocol_translator parsing");
+                        None
                     }
                     Err(e) => {
                         tracing::error!("Failed to parse init message: {}", e);
+                        None
                     }
-                }
+                };
 
                 // Consume remaining response lines (assistant message, result)
                 // CRITICAL: Must consume the complete response including final "result" message.
@@ -209,7 +259,7 @@ impl ClaudeClient {
             }
         }
 
-        Ok(())
+        Ok(available_agents)
     }
 }
 
@@ -378,6 +428,7 @@ impl ClaudeClient {
         prompt: &str,
         session_id: &SessionId,
         cwd: &std::path::Path,
+        agent_mode: Option<String>,
     ) -> Result<String> {
         if prompt.is_empty() {
             return Err(crate::error::AgentError::Process(
@@ -385,8 +436,11 @@ impl ClaudeClient {
             ));
         }
 
-        // Get the process for this session
-        let process = self.process_manager.get_process(session_id, cwd).await?;
+        // Get the process for this session (will spawn with --agent flag if mode specified)
+        let process = self
+            .process_manager
+            .get_process(session_id, cwd, agent_mode)
+            .await?;
 
         // Send prompt to process
         self.send_prompt_to_process(process.clone(), prompt).await?;
@@ -458,6 +512,7 @@ impl ClaudeClient {
         prompt: &str,
         session_id: &SessionId,
         cwd: &std::path::Path,
+        agent_mode: Option<String>,
     ) -> Result<Pin<Box<dyn Stream<Item = MessageChunk> + Send>>> {
         if prompt.is_empty() {
             return Err(crate::error::AgentError::Process(
@@ -465,8 +520,11 @@ impl ClaudeClient {
             ));
         }
 
-        // Get the process for this session
-        let process = self.process_manager.get_process(session_id, cwd).await?;
+        // Get the process for this session (will spawn with --agent flag if mode specified)
+        let process = self
+            .process_manager
+            .get_process(session_id, cwd, agent_mode)
+            .await?;
 
         // Send prompt to process
         self.send_prompt_to_process(process.clone(), prompt).await?;
@@ -612,6 +670,7 @@ impl ClaudeClient {
         &self,
         prompt: &str,
         context: &SessionContext,
+        agent_mode: Option<String>,
     ) -> Result<String> {
         if prompt.is_empty() {
             return Err(crate::error::AgentError::Process(
@@ -639,7 +698,12 @@ impl ClaudeClient {
         );
 
         let response = self
-            .query(&full_conversation, &context.session_id, &context.cwd)
+            .query(
+                &full_conversation,
+                &context.session_id,
+                &context.cwd,
+                agent_mode,
+            )
             .await?;
 
         tracing::info!(
@@ -655,6 +719,7 @@ impl ClaudeClient {
         &self,
         prompt: &str,
         context: &SessionContext,
+        agent_mode: Option<String>,
     ) -> Result<Pin<Box<dyn Stream<Item = MessageChunk> + Send>>> {
         if prompt.is_empty() {
             return Err(crate::error::AgentError::Process(
@@ -666,7 +731,7 @@ impl ClaudeClient {
         // the new prompt without rebuilding the full conversation history.
         // The process manager ensures we're using the same CLI process for this
         // session, which maintains context across calls.
-        self.query_stream(prompt, &context.session_id, &context.cwd)
+        self.query_stream(prompt, &context.session_id, &context.cwd, agent_mode)
             .await
     }
 }

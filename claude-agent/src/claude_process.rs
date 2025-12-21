@@ -158,6 +158,7 @@ impl ClaudeProcessManager {
     /// # Arguments
     /// * `session_id` - Session identifier
     /// * `cwd` - Working directory for the Claude process
+    /// * `agent_mode` - Optional agent mode to use (passed as --agent flag)
     ///
     /// # Errors
     /// Returns error if:
@@ -168,6 +169,7 @@ impl ClaudeProcessManager {
         &self,
         session_id: SessionId,
         cwd: &std::path::Path,
+        agent_mode: Option<String>,
     ) -> Result<()> {
         // Check if session already exists - use write lock to prevent race
         let mut processes = self.processes.write().map_err(|_| {
@@ -180,8 +182,8 @@ impl ClaudeProcessManager {
             return Ok(());
         }
 
-        // Spawn new process with working directory
-        let process = ClaudeProcess::spawn(session_id, cwd).map_err(|e| {
+        // Spawn new process with working directory and optional agent mode
+        let process = ClaudeProcess::spawn(session_id, cwd, agent_mode).map_err(|e| {
             tracing::error!(
                 "Failed to spawn claude process for session {}: {}",
                 session_id,
@@ -202,6 +204,7 @@ impl ClaudeProcessManager {
     /// # Arguments
     /// * `session_id` - Session identifier
     /// * `cwd` - Working directory for the Claude process if spawning is needed
+    /// * `agent_mode` - Optional agent mode to use (passed as --agent flag)
     ///
     /// # Errors
     /// Returns error if spawning fails
@@ -209,6 +212,7 @@ impl ClaudeProcessManager {
         &self,
         session_id: &SessionId,
         cwd: &std::path::Path,
+        agent_mode: Option<String>,
     ) -> Result<Arc<Mutex<ClaudeProcess>>> {
         // First try to get existing process
         {
@@ -225,13 +229,22 @@ impl ClaudeProcessManager {
             }
         }
 
-        // Process doesn't exist, spawn one with working directory
-        tracing::info!(
-            "No process found for session {}, spawning new one in {}",
-            session_id,
-            cwd.display()
-        );
-        self.spawn_for_session(*session_id, cwd).await?;
+        // Process doesn't exist, spawn one with working directory and optional agent mode
+        if let Some(ref mode) = agent_mode {
+            tracing::info!(
+                "No process found for session {}, spawning new one in {} with agent mode '{}'",
+                session_id,
+                cwd.display(),
+                mode
+            );
+        } else {
+            tracing::info!(
+                "No process found for session {}, spawning new one in {}",
+                session_id,
+                cwd.display()
+            );
+        }
+        self.spawn_for_session(*session_id, cwd, agent_mode).await?;
 
         // Get the newly spawned process
         let processes = self.processes.read().map_err(|_| {
@@ -320,7 +333,11 @@ impl ClaudeProcess {
     /// - claude binary not found
     /// - Process spawn fails
     /// - stdin/stdout/stderr not available
-    pub fn spawn(session_id: SessionId, cwd: &std::path::Path) -> Result<Self> {
+    pub fn spawn(
+        session_id: SessionId,
+        cwd: &std::path::Path,
+        agent_mode: Option<String>,
+    ) -> Result<Self> {
         // Get test name from thread name or backtrace if in test context
         let test_context = std::thread::current().name().map(|n| n.to_string());
 
@@ -335,10 +352,20 @@ impl ClaudeProcess {
 
         let session_uuid_str = session_id.to_uuid_string();
 
-        let mut cmd = Command::new("claude")
+        // Build command with optional --agent flag
+        let mut command = Command::new("claude");
+        command
             .args(CLAUDE_CLI_ARGS)
             .arg("--session-id")
-            .arg(&session_uuid_str)
+            .arg(&session_uuid_str);
+
+        // Add --agent flag if mode is specified
+        if let Some(mode) = agent_mode {
+            tracing::info!("Spawning Claude with agent mode: {}", mode);
+            command.arg("--agent").arg(&mode);
+        }
+
+        let mut cmd = command
             .current_dir(cwd)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())

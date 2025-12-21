@@ -1156,6 +1156,28 @@ impl agent_client_protocol::Agent for AcpServer {
             mode_id.0
         );
 
+        // Validate mode ID is in available modes list
+        if !self.config.available_modes.is_empty() {
+            let mode_exists = self
+                .config
+                .available_modes
+                .iter()
+                .any(|m| m.id.0.as_ref() == mode_id.0.as_ref());
+
+            if !mode_exists {
+                tracing::error!(
+                    "Invalid mode '{}' requested. Available modes: {:?}",
+                    mode_id.0,
+                    self.config
+                        .available_modes
+                        .iter()
+                        .map(|m| m.id.0.as_ref())
+                        .collect::<Vec<_>>()
+                );
+                return Err(agent_client_protocol::Error::invalid_params());
+            }
+        }
+
         // Get ACP session to find llama session ID
         let acp_session = self.get_session(session_id).await.ok_or_else(|| {
             tracing::error!("Session not found: {}", session_id.0);
