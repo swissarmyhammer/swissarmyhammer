@@ -1,4 +1,3 @@
-# .swissarmyhammer/issues is real, DO NOT IGNORE IT
 
 # Rust
 target
@@ -100,8 +99,6 @@ CHANGELOG.md
 # Example configuration files
 **/acp-config.example.yaml
 
-# README files in subdirectories (keep root README.md)
-llama-agent/README.md
 
 # Test issue files
 swissarmyhammer/issues/
@@ -167,3 +164,4 @@ cc.json
 .swissarmyhammer/workflow-runs
 .swissarmyhammer/workflow-runs/
 .llama-sessions
+acp-conformance/.swissarmyhammer/
