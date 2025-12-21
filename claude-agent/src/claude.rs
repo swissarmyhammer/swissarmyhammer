@@ -53,13 +53,16 @@ impl ClaudeClient {
     /// * `cwd` - Working directory for the Claude process
     ///
     /// # Returns
-    /// Returns available agents (id, name, description) if present in init message
+    /// Returns (available_agents, current_agent) if present in init message
     pub async fn spawn_process_and_consume_init(
         &self,
         session_id: &crate::session::SessionId,
         acp_session_id: &agent_client_protocol::SessionId,
         cwd: &std::path::Path,
-    ) -> Result<Option<Vec<(String, String, Option<String>)>>> {
+    ) -> Result<(
+        Option<Vec<(String, String, Option<String>)>>,
+        Option<String>,
+    )> {
         tracing::debug!(
             "Spawning Claude process for session: {} in {}",
             session_id,
@@ -99,6 +102,7 @@ impl ClaudeClient {
         .await;
 
         let mut available_agents = None;
+        let mut current_agent = None;
 
         match init_line {
             Ok(Ok(Some(line))) => {
@@ -110,7 +114,7 @@ impl ClaudeClient {
                 }
 
                 // Parse through protocol_translator
-                available_agents = match self
+                match self
                     .protocol_translator
                     .stream_json_to_acp(&line, acp_session_id)
                     .await
@@ -121,7 +125,7 @@ impl ClaudeClient {
                         );
 
                         // Extract available_agents from metadata before forwarding
-                        let agents = notification
+                        available_agents = notification
                             .meta
                             .as_ref()
                             .and_then(|meta| meta.get("available_agents"))
@@ -144,6 +148,14 @@ impl ClaudeClient {
                                     .collect::<Vec<_>>()
                             });
 
+                        // Extract current_agent from metadata if present
+                        current_agent = notification
+                            .meta
+                            .as_ref()
+                            .and_then(|meta| meta.get("current_agent"))
+                            .and_then(|v| v.as_str())
+                            .map(|s| s.to_string());
+
                         // Forward the notification
                         if let Some(sender) = &self.notification_sender {
                             tracing::info!(
@@ -158,18 +170,14 @@ impl ClaudeClient {
                         } else {
                             tracing::warn!("No notification sender configured - cannot forward init notification");
                         }
-
-                        agents
                     }
                     Ok(None) => {
                         tracing::warn!("Init message produced no notification - check protocol_translator parsing");
-                        None
                     }
                     Err(e) => {
                         tracing::error!("Failed to parse init message: {}", e);
-                        None
                     }
-                };
+                }
 
                 // Consume remaining response lines (assistant message, result)
                 // CRITICAL: Must consume the complete response including final "result" message.
@@ -259,7 +267,7 @@ impl ClaudeClient {
             }
         }
 
-        Ok(available_agents)
+        Ok((available_agents, current_agent))
     }
 }
 

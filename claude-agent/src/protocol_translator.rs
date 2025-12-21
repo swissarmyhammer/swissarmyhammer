@@ -427,6 +427,12 @@ impl ProtocolTranslator {
                     if subtype == "init" {
                         tracing::debug!("Received system init message");
 
+                        // Extract current_agent if present
+                        let current_agent = parsed
+                            .get("current_agent")
+                            .and_then(|v| v.as_str())
+                            .map(|s| s.to_string());
+
                         // Extract agents array for mode support
                         // Claude CLI provides "agents": ["general-purpose", "Explore", "Plan", ...]
                         let available_agents =
@@ -544,6 +550,14 @@ impl ProtocolTranslator {
                                 meta_map.insert(
                                     "available_agents".to_string(),
                                     serde_json::json!(agents),
+                                );
+                            }
+
+                            // Add current_agent to metadata if present
+                            if let Some(current) = current_agent {
+                                meta_map.insert(
+                                    "current_agent".to_string(),
+                                    serde_json::json!(current),
                                 );
                             }
 

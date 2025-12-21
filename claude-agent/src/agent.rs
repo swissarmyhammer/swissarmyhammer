@@ -3160,14 +3160,31 @@ impl Agent for ClaudeAgent {
             .spawn_process_and_consume_init(&session_id, &protocol_session_id, &request.cwd)
             .await
         {
-            Ok(Some(agents)) => {
+            Ok((Some(agents), current_agent)) => {
                 tracing::info!(
                     "Storing {} available agents from Claude CLI init",
                     agents.len()
                 );
                 self.set_available_agents(agents).await;
+
+                // Set initial mode if Claude CLI specified current_agent
+                if let Some(mode) = current_agent {
+                    tracing::info!("Setting initial mode from Claude CLI: {}", mode);
+                    self.session_manager
+                        .update_session(&session_id, |session| {
+                            session.current_mode = Some(mode.clone());
+                        })
+                        .map_err(|_| {
+                            tracing::warn!("Failed to set initial mode");
+                        })
+                        .ok();
+                } else {
+                    tracing::debug!(
+                        "No current_agent in init - session starts without mode (no --agent flag)"
+                    );
+                }
             }
-            Ok(None) => {
+            Ok((None, _)) => {
                 tracing::debug!("No available agents in Claude CLI init message");
             }
             Err(e) => {
@@ -3192,22 +3209,25 @@ impl Agent for ClaudeAgent {
 
         let mut response = NewSessionResponse::new(SessionId::new(session_id.to_string()));
 
-        // Add available modes if we have them from Claude CLI
+        // Add available modes only if the session has a mode explicitly set
+        // Per user requirement: don't assume any default mode - no mode means no --agent flag
         if let Some(available_modes) = self.get_available_modes().await {
-            // Get the current mode from the session (defaults to first agent if not set)
-            let current_mode_id = self
-                .session_manager
-                .get_session(&session_id)
-                .ok()
-                .and_then(|s| s.and_then(|sess| sess.current_mode.clone()))
-                .or_else(|| available_modes.first().map(|m| m.id.0.to_string()))
-                .unwrap_or_else(|| "default".to_string());
-
-            let mode_state = agent_client_protocol::SessionModeState::new(
-                agent_client_protocol::SessionModeId::new(current_mode_id.as_str()),
-                available_modes,
-            );
-            response = response.modes(mode_state);
+            // Only include modes in response if session has current_mode set
+            if let Some(current_mode_id) = self.get_session_mode(&session_id).await {
+                let mode_state = agent_client_protocol::SessionModeState::new(
+                    agent_client_protocol::SessionModeId::new(current_mode_id.as_str()),
+                    available_modes,
+                );
+                response = response.modes(mode_state);
+                tracing::info!("Session created with mode: {}", current_mode_id);
+            } else {
+                // Modes are available but not set - don't include in response
+                // This allows sessions to run without --agent flag until mode is explicitly set
+                tracing::debug!(
+                    "Session created without mode (available modes: {}, will not use --agent flag)",
+                    available_modes.len()
+                );
+            }
         }
 
         self.log_response("new_session", &response);
