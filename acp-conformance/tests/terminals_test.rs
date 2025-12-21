@@ -35,9 +35,19 @@ fn claude_agent_factory() -> std::pin::Pin<
     })
 }
 
+fn agent_agent_factory() -> std::pin::Pin<
+    Box<dyn std::future::Future<Output = agent_fixtures::Result<Box<dyn Agent>>> + Send>,
+> {
+    Box::pin(async {
+        let agent = agent_fixtures::create_agent().await?;
+        Ok(Box::new(agent) as Box<dyn Agent>)
+    })
+}
+
 #[rstest]
 #[case::llama_agent(llama_agent_factory)]
 #[case::claude_agent(claude_agent_factory)]
+#[case::agent(agent_agent_factory)]
 #[test_log::test(tokio::test)]
 #[serial_test::serial]
 async fn test_terminal_capability_check(#[case] factory: AgentFactory) {
@@ -55,6 +65,7 @@ async fn test_terminal_capability_check(#[case] factory: AgentFactory) {
 #[rstest]
 #[case::llama_agent(llama_agent_factory)]
 #[case::claude_agent(claude_agent_factory)]
+#[case::agent(agent_agent_factory)]
 #[test_log::test(tokio::test)]
 #[serial_test::serial]
 async fn test_terminal_create(#[case] factory: AgentFactory) {
@@ -72,6 +83,7 @@ async fn test_terminal_create(#[case] factory: AgentFactory) {
 #[rstest]
 #[case::llama_agent(llama_agent_factory)]
 #[case::claude_agent(claude_agent_factory)]
+#[case::agent(agent_agent_factory)]
 #[test_log::test(tokio::test)]
 #[serial_test::serial]
 async fn test_terminal_output(#[case] factory: AgentFactory) {
@@ -89,6 +101,7 @@ async fn test_terminal_output(#[case] factory: AgentFactory) {
 #[rstest]
 #[case::llama_agent(llama_agent_factory)]
 #[case::claude_agent(claude_agent_factory)]
+#[case::agent(agent_agent_factory)]
 #[test_log::test(tokio::test)]
 #[serial_test::serial]
 async fn test_terminal_wait_for_exit(#[case] factory: AgentFactory) {
@@ -106,6 +119,7 @@ async fn test_terminal_wait_for_exit(#[case] factory: AgentFactory) {
 #[rstest]
 #[case::llama_agent(llama_agent_factory)]
 #[case::claude_agent(claude_agent_factory)]
+#[case::agent(agent_agent_factory)]
 #[test_log::test(tokio::test)]
 #[serial_test::serial]
 async fn test_terminal_kill(#[case] factory: AgentFactory) {
@@ -123,6 +137,7 @@ async fn test_terminal_kill(#[case] factory: AgentFactory) {
 #[rstest]
 #[case::llama_agent(llama_agent_factory)]
 #[case::claude_agent(claude_agent_factory)]
+#[case::agent(agent_agent_factory)]
 #[test_log::test(tokio::test)]
 #[serial_test::serial]
 async fn test_terminal_release(#[case] factory: AgentFactory) {
@@ -140,6 +155,7 @@ async fn test_terminal_release(#[case] factory: AgentFactory) {
 #[rstest]
 #[case::llama_agent(llama_agent_factory)]
 #[case::claude_agent(claude_agent_factory)]
+#[case::agent(agent_agent_factory)]
 #[test_log::test(tokio::test)]
 #[serial_test::serial]
 async fn test_terminal_timeout(#[case] factory: AgentFactory) {

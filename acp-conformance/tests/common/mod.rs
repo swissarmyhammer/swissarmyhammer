@@ -40,6 +40,19 @@ pub fn llama_agent_factory() -> AgentFactory {
     }
 }
 
+/// Creates a factory function for the generic agent.
+///
+/// Returns a function that can be used in rstest parametrized tests to create
+/// generic agent instances with minimal configuration.
+pub fn agent_agent_factory() -> AgentFactory {
+    || {
+        Box::pin(async {
+            let agent = crate::agent_fixtures::create_agent().await?;
+            Ok(Box::new(agent) as Box<dyn Agent>)
+        })
+    }
+}
+
 /// Macro to run a test function with an agent created from a factory.
 ///
 /// This macro reduces boilerplate by handling:

@@ -37,9 +37,19 @@ fn claude_agent_factory() -> std::pin::Pin<
     })
 }
 
+fn agent_agent_factory() -> std::pin::Pin<
+    Box<dyn std::future::Future<Output = agent_fixtures::Result<Box<dyn Agent>>> + Send>,
+> {
+    Box::pin(async {
+        let agent = agent_fixtures::create_agent().await?;
+        Ok(Box::new(agent) as Box<dyn Agent>)
+    })
+}
+
 #[rstest]
 #[case::llama_agent(llama_agent_factory)]
 #[case::claude_agent(claude_agent_factory)]
+#[case::agent(agent_agent_factory)]
 #[test_log::test(tokio::test)]
 #[serial_test::serial]
 async fn test_new_session_minimal(#[case] factory: AgentFactory) {
@@ -57,6 +67,7 @@ async fn test_new_session_minimal(#[case] factory: AgentFactory) {
 #[rstest]
 #[case::llama_agent(llama_agent_factory)]
 #[case::claude_agent(claude_agent_factory)]
+#[case::agent(agent_agent_factory)]
 #[test_log::test(tokio::test)]
 #[serial_test::serial]
 async fn test_new_session_with_mcp(#[case] factory: AgentFactory) {
@@ -74,6 +85,7 @@ async fn test_new_session_with_mcp(#[case] factory: AgentFactory) {
 #[rstest]
 #[case::llama_agent(llama_agent_factory)]
 #[case::claude_agent(claude_agent_factory)]
+#[case::agent(agent_agent_factory)]
 #[test_log::test(tokio::test)]
 #[serial_test::serial]
 async fn test_session_ids_unique(#[case] factory: AgentFactory) {
@@ -91,6 +103,7 @@ async fn test_session_ids_unique(#[case] factory: AgentFactory) {
 #[rstest]
 #[case::llama_agent(llama_agent_factory)]
 #[case::claude_agent(claude_agent_factory)]
+#[case::agent(agent_agent_factory)]
 #[test_log::test(tokio::test)]
 #[serial_test::serial]
 async fn test_load_nonexistent_session(#[case] factory: AgentFactory) {
@@ -108,6 +121,7 @@ async fn test_load_nonexistent_session(#[case] factory: AgentFactory) {
 #[rstest]
 #[case::llama_agent(llama_agent_factory)]
 #[case::claude_agent(claude_agent_factory)]
+#[case::agent(agent_agent_factory)]
 #[test_log::test(tokio::test)]
 #[serial_test::serial]
 async fn test_set_session_mode(#[case] factory: AgentFactory) {
@@ -125,6 +139,7 @@ async fn test_set_session_mode(#[case] factory: AgentFactory) {
 #[rstest]
 #[case::llama_agent(llama_agent_factory)]
 #[case::claude_agent(claude_agent_factory)]
+#[case::agent(agent_agent_factory)]
 #[test_log::test(tokio::test)]
 #[serial_test::serial]
 async fn test_new_session_includes_modes(#[case] factory: AgentFactory) {
@@ -142,6 +157,7 @@ async fn test_new_session_includes_modes(#[case] factory: AgentFactory) {
 #[rstest]
 #[case::llama_agent(llama_agent_factory)]
 #[case::claude_agent(claude_agent_factory)]
+#[case::agent(agent_agent_factory)]
 #[test_log::test(tokio::test)]
 #[serial_test::serial]
 async fn test_set_session_mode_to_available(#[case] factory: AgentFactory) {
@@ -159,6 +175,7 @@ async fn test_set_session_mode_to_available(#[case] factory: AgentFactory) {
 #[rstest]
 #[case::llama_agent(llama_agent_factory)]
 #[case::claude_agent(claude_agent_factory)]
+#[case::agent(agent_agent_factory)]
 #[test_log::test(tokio::test)]
 #[serial_test::serial]
 async fn test_set_invalid_session_mode(#[case] factory: AgentFactory) {
@@ -176,6 +193,7 @@ async fn test_set_invalid_session_mode(#[case] factory: AgentFactory) {
 #[rstest]
 #[case::llama_agent(llama_agent_factory)]
 #[case::claude_agent(claude_agent_factory)]
+#[case::agent(agent_agent_factory)]
 #[test_log::test(tokio::test)]
 #[serial_test::serial]
 async fn test_mode_state_validation(#[case] factory: AgentFactory) {
@@ -193,6 +211,7 @@ async fn test_mode_state_validation(#[case] factory: AgentFactory) {
 #[rstest]
 #[case::llama_agent(llama_agent_factory)]
 #[case::claude_agent(claude_agent_factory)]
+#[case::agent(agent_agent_factory)]
 #[test_log::test(tokio::test)]
 #[serial_test::serial]
 async fn test_session_mode_independence(#[case] factory: AgentFactory) {

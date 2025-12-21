@@ -117,6 +117,78 @@ pub async fn create_llama_agent() -> Result<impl Agent> {
     create_agent_connection(acp_server)
 }
 
+/// Creates a generic test agent instance connected via streams
+/// This represents a minimal baseline agent configuration for conformance testing
+pub async fn create_agent() -> Result<impl Agent> {
+    let model_config = llama_agent::types::ModelConfig {
+        source: llama_agent::types::ModelSource::Local {
+            folder: std::env::temp_dir(),
+            filename: Some("nonexistent.gguf".to_string()), // Won't load model for tests
+        },
+        batch_size: 512,
+        n_seq_max: 1,
+        n_threads: 1,
+        n_threads_batch: 1,
+        use_hf_params: false,
+        retry_config: llama_agent::types::RetryConfig::default(),
+        debug: false,
+    };
+
+    let agent_config = llama_agent::types::AgentConfig {
+        model: model_config,
+        queue_config: llama_agent::types::QueueConfig::default(),
+        mcp_servers: Vec::new(),
+        session_config: llama_agent::types::SessionConfig::default(),
+        parallel_execution_config: llama_agent::types::ParallelConfig::default(),
+    };
+
+    let model_manager = Arc::new(
+        llama_agent::model::ModelManager::new(agent_config.model.clone())
+            .expect("Failed to create model manager"),
+    );
+    let request_queue = Arc::new(llama_agent::queue::RequestQueue::new(
+        model_manager.clone(),
+        agent_config.queue_config.clone(),
+        agent_config.session_config.clone(),
+    ));
+    let session_manager = Arc::new(llama_agent::session::SessionManager::new(
+        agent_config.session_config.clone(),
+    ));
+    let mcp_client: Arc<dyn llama_agent::mcp::MCPClient> =
+        Arc::new(llama_agent::mcp::NoOpMCPClient::new());
+    let chat_template = Arc::new(llama_agent::chat_template::ChatTemplateEngine::new());
+    let dependency_analyzer = Arc::new(llama_agent::dependency_analysis::DependencyAnalyzer::new(
+        agent_config.parallel_execution_config.clone(),
+    ));
+
+    let agent_server = Arc::new(llama_agent::AgentServer::new(
+        model_manager,
+        request_queue,
+        session_manager,
+        mcp_client,
+        chat_template,
+        dependency_analyzer,
+        agent_config,
+    ));
+
+    // Configure ACP server with minimal configuration (single session mode)
+    let mut acp_config = llama_agent::acp::AcpConfig::default();
+    // Single mode - minimal but complete agent
+    acp_config.available_modes =
+        vec![
+            agent_client_protocol::SessionMode::new("default", "Default")
+                .description("Default agent mode"),
+        ];
+    acp_config.default_mode_id = "default".to_string();
+
+    // Allow filesystem access to /tmp for conformance tests
+    acp_config.filesystem.allowed_paths = vec![std::env::temp_dir()];
+
+    let acp_server = llama_agent::acp::AcpServer::new(agent_server, acp_config);
+
+    create_agent_connection(acp_server)
+}
+
 /// Helper to create client/agent connection with streams
 fn create_agent_connection<A>(acp_server: A) -> Result<impl Agent>
 where

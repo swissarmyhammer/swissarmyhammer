@@ -35,9 +35,19 @@ fn claude_agent_factory() -> std::pin::Pin<
     })
 }
 
+fn agent_agent_factory() -> std::pin::Pin<
+    Box<dyn std::future::Future<Output = agent_fixtures::Result<Box<dyn Agent>>> + Send>,
+> {
+    Box::pin(async {
+        let agent = agent_fixtures::create_agent().await?;
+        Ok(Box::new(agent) as Box<dyn Agent>)
+    })
+}
+
 #[rstest]
 #[case::llama_agent(llama_agent_factory)]
 #[case::claude_agent(claude_agent_factory)]
+#[case::agent(agent_agent_factory)]
 #[test_log::test(tokio::test)]
 #[serial_test::serial]
 async fn test_minimal_initialization(#[case] factory: AgentFactory) {
@@ -54,6 +64,7 @@ async fn test_minimal_initialization(#[case] factory: AgentFactory) {
 
 #[rstest]
 #[case::llama_agent(llama_agent_factory)]
+#[case::agent(agent_agent_factory)]
 #[test_log::test(tokio::test)]
 #[serial_test::serial]
 async fn test_full_capabilities_initialization(#[case] factory: AgentFactory) {
@@ -70,6 +81,7 @@ async fn test_full_capabilities_initialization(#[case] factory: AgentFactory) {
 
 #[rstest]
 #[case::llama_agent(llama_agent_factory)]
+#[case::agent(agent_agent_factory)]
 #[test_log::test(tokio::test)]
 #[serial_test::serial]
 async fn test_protocol_version_negotiation(#[case] factory: AgentFactory) {
@@ -86,6 +98,7 @@ async fn test_protocol_version_negotiation(#[case] factory: AgentFactory) {
 
 #[rstest]
 #[case::llama_agent(llama_agent_factory)]
+#[case::agent(agent_agent_factory)]
 #[test_log::test(tokio::test)]
 #[serial_test::serial]
 async fn test_minimal_client_capabilities(#[case] factory: AgentFactory) {
@@ -102,6 +115,7 @@ async fn test_minimal_client_capabilities(#[case] factory: AgentFactory) {
 
 #[rstest]
 #[case::llama_agent(llama_agent_factory)]
+#[case::agent(agent_agent_factory)]
 #[test_log::test(tokio::test)]
 #[serial_test::serial]
 async fn test_initialize_idempotent(#[case] factory: AgentFactory) {
@@ -118,6 +132,7 @@ async fn test_initialize_idempotent(#[case] factory: AgentFactory) {
 
 #[rstest]
 #[case::llama_agent(llama_agent_factory)]
+#[case::agent(agent_agent_factory)]
 #[test_log::test(tokio::test)]
 #[serial_test::serial]
 async fn test_with_client_info(#[case] factory: AgentFactory) {

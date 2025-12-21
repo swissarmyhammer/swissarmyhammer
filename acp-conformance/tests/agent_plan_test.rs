@@ -35,9 +35,19 @@ fn claude_agent_factory() -> std::pin::Pin<
     })
 }
 
+fn agent_agent_factory() -> std::pin::Pin<
+    Box<dyn std::future::Future<Output = agent_fixtures::Result<Box<dyn Agent>>> + Send>,
+> {
+    Box::pin(async {
+        let agent = agent_fixtures::create_agent().await?;
+        Ok(Box::new(agent) as Box<dyn Agent>)
+    })
+}
+
 #[rstest]
 #[case::llama_agent(llama_agent_factory)]
 #[case::claude_agent(claude_agent_factory)]
+#[case::agent(agent_agent_factory)]
 #[test_log::test(tokio::test)]
 #[serial_test::serial]
 async fn test_agent_accepts_planning_prompt(#[case] factory: AgentFactory) {
@@ -55,6 +65,7 @@ async fn test_agent_accepts_planning_prompt(#[case] factory: AgentFactory) {
 #[rstest]
 #[case::llama_agent(llama_agent_factory)]
 #[case::claude_agent(claude_agent_factory)]
+#[case::agent(agent_agent_factory)]
 #[test_log::test(tokio::test)]
 #[serial_test::serial]
 async fn test_plan_entry_structure_validation(#[case] factory: AgentFactory) {
@@ -72,6 +83,7 @@ async fn test_plan_entry_structure_validation(#[case] factory: AgentFactory) {
 #[rstest]
 #[case::llama_agent(llama_agent_factory)]
 #[case::claude_agent(claude_agent_factory)]
+#[case::agent(agent_agent_factory)]
 #[test_log::test(tokio::test)]
 #[serial_test::serial]
 async fn test_plan_session_update_structure(#[case] factory: AgentFactory) {
@@ -89,6 +101,7 @@ async fn test_plan_session_update_structure(#[case] factory: AgentFactory) {
 #[rstest]
 #[case::llama_agent(llama_agent_factory)]
 #[case::claude_agent(claude_agent_factory)]
+#[case::agent(agent_agent_factory)]
 #[test_log::test(tokio::test)]
 #[serial_test::serial]
 async fn test_dynamic_plan_evolution(#[case] factory: AgentFactory) {
