@@ -306,7 +306,7 @@ impl ModelManager {
         // This allows proper caching of conversation history across multiple batches
         let n_ctx = std::cmp::max(model_native_ctx, self.config.batch_size as usize);
         let n_batch = self.config.batch_size;
-        let n_ubatch = self.config.batch_size;
+        let n_ubatch = self.config.batch_size / 4;
 
         // Log KV cache configuration prominently
         debug!(

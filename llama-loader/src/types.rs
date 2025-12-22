@@ -130,7 +130,7 @@ impl Default for ModelConfig {
                 filename: None,
                 folder: None,
             },
-            batch_size: 1024,
+            batch_size: 512,
             n_seq_max: 8,
             n_threads: 1,
             n_threads_batch: 1,
