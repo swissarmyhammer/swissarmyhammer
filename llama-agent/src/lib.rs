@@ -153,6 +153,7 @@ pub mod dependency_analysis;
 pub mod echo;
 pub mod echo_real_tests;
 pub mod generation;
+pub mod generation_backend;
 pub mod mcp;
 pub mod mcp_unified_test;
 pub mod model;

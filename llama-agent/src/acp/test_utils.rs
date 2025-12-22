@@ -95,6 +95,7 @@ pub fn create_test_agent_config(temp_dir: &std::path::Path) -> crate::types::Age
         mcp_servers: Vec::new(),
         session_config: SessionConfig::default(),
         parallel_execution_config: ParallelConfig::default(),
+        mode: crate::types::LlamaAgentMode::default(),
     }
 }
 

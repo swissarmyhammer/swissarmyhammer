@@ -174,7 +174,7 @@ pub struct GenerationResponse {
 }
 
 /// Reason why text generation stopped.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum FinishReason {
     Stopped(String),
 }

@@ -44,6 +44,9 @@ pub async fn create_claude_agent() -> Result<impl Agent> {
 /// Creates a test llama-agent instance connected via streams
 /// Always includes session mode support for full conformance testing
 pub async fn create_llama_agent() -> Result<impl Agent> {
+    // Check for playback mode via environment variable (default to playback for fast tests)
+    let mode = std::env::var("LLAMA_AGENT_MODE").unwrap_or_else(|_| "playback".to_string());
+
     // Use standard test models from llama-agent
     use llama_agent::test_models::{TEST_MODEL_FILE, TEST_MODEL_REPO};
 
@@ -62,12 +65,28 @@ pub async fn create_llama_agent() -> Result<impl Agent> {
         debug: false,
     };
 
+    // Configure mode based on environment
+    let agent_mode = match mode.as_str() {
+        "record" => {
+            let output_path =
+                std::env::current_dir()?.join("tests/fixtures/llama_conformance_recording.json");
+            llama_agent::types::LlamaAgentMode::Record { output_path }
+        }
+        "playback" => {
+            let input_path =
+                std::env::current_dir()?.join("tests/fixtures/llama_conformance_minimal.json");
+            llama_agent::types::LlamaAgentMode::Playback { input_path }
+        }
+        _ => llama_agent::types::LlamaAgentMode::Normal,
+    };
+
     let agent_config = llama_agent::types::AgentConfig {
         model: model_config,
         queue_config: llama_agent::types::QueueConfig::default(),
         mcp_servers: Vec::new(),
         session_config: llama_agent::types::SessionConfig::default(),
         parallel_execution_config: llama_agent::types::ParallelConfig::default(),
+        mode: agent_mode.clone(),
     };
 
     let model_manager = Arc::new(
@@ -75,11 +94,15 @@ pub async fn create_llama_agent() -> Result<impl Agent> {
             .expect("Failed to create model manager"),
     );
 
-    // Load the model (will auto-download from HuggingFace if not cached)
-    model_manager
-        .load_model()
-        .await
-        .expect("Failed to load test model - ensure network connectivity for HuggingFace download");
+    // Load the model only if not in playback mode
+    if !matches!(
+        agent_mode,
+        llama_agent::types::LlamaAgentMode::Playback { .. }
+    ) {
+        model_manager.load_model().await.expect(
+            "Failed to load test model - ensure network connectivity for HuggingFace download",
+        );
+    }
 
     let request_queue = Arc::new(llama_agent::queue::RequestQueue::new(
         model_manager.clone(),
@@ -131,6 +154,9 @@ pub async fn create_llama_agent() -> Result<impl Agent> {
 /// Creates a generic test agent instance connected via streams
 /// This represents a minimal baseline agent configuration for conformance testing
 pub async fn create_agent() -> Result<impl Agent> {
+    // Check for playback mode via environment variable (default to playback for fast tests)
+    let mode = std::env::var("LLAMA_AGENT_MODE").unwrap_or_else(|_| "playback".to_string());
+
     // Use standard test models from llama-agent
     use llama_agent::test_models::{TEST_MODEL_FILE, TEST_MODEL_REPO};
 
@@ -149,12 +175,28 @@ pub async fn create_agent() -> Result<impl Agent> {
         debug: false,
     };
 
+    // Configure mode based on environment
+    let agent_mode = match mode.as_str() {
+        "record" => {
+            let output_path =
+                std::env::current_dir()?.join("tests/fixtures/llama_conformance_recording.json");
+            llama_agent::types::LlamaAgentMode::Record { output_path }
+        }
+        "playback" => {
+            let input_path =
+                std::env::current_dir()?.join("tests/fixtures/llama_conformance_minimal.json");
+            llama_agent::types::LlamaAgentMode::Playback { input_path }
+        }
+        _ => llama_agent::types::LlamaAgentMode::Normal,
+    };
+
     let agent_config = llama_agent::types::AgentConfig {
         model: model_config,
         queue_config: llama_agent::types::QueueConfig::default(),
         mcp_servers: Vec::new(),
         session_config: llama_agent::types::SessionConfig::default(),
         parallel_execution_config: llama_agent::types::ParallelConfig::default(),
+        mode: agent_mode.clone(),
     };
 
     let model_manager = Arc::new(
@@ -162,11 +204,15 @@ pub async fn create_agent() -> Result<impl Agent> {
             .expect("Failed to create model manager"),
     );
 
-    // Load the model (will auto-download from HuggingFace if not cached)
-    model_manager
-        .load_model()
-        .await
-        .expect("Failed to load test model - ensure network connectivity for HuggingFace download");
+    // Load the model only if not in playback mode
+    if !matches!(
+        agent_mode,
+        llama_agent::types::LlamaAgentMode::Playback { .. }
+    ) {
+        model_manager.load_model().await.expect(
+            "Failed to load test model - ensure network connectivity for HuggingFace download",
+        );
+    }
 
     let request_queue = Arc::new(llama_agent::queue::RequestQueue::new(
         model_manager.clone(),
