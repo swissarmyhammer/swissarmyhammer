@@ -88,9 +88,7 @@ If no issues found, respond with "PASS".
     let result = checker.check_file(&rule, &test_file, None).await;
 
     // If this fails, check if it's because partials aren't working
-    if result.is_err() {
-        let err = result.unwrap_err();
-
+    if let Err(err) = result {
         // Skip if agent not available
         if skip_if_agent_unavailable(&err) {
             return;
@@ -140,9 +138,7 @@ async fn test_rule_with_builtin_partial() {
     let result = checker.check_file(&rule, &test_file, None).await;
 
     // Should not fail with "Partial does not exist"
-    if result.is_err() {
-        let err = result.unwrap_err();
-
+    if let Err(err) = result {
         if skip_if_agent_unavailable(&err) {
             return;
         }

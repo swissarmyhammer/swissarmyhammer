@@ -319,8 +319,7 @@ fn test_all_directions() {
         let result = architecture::parse(&input);
 
         // Some direction strings might cause parsing issues
-        if result.is_ok() {
-            let diagram = result.unwrap();
+        if let Ok(diagram) = result {
             // Just verify it parses without error
             assert!(diagram.services.len() <= 1);
         }

@@ -72,7 +72,7 @@ pub async fn load_huggingface_model_with_path_and_folder(
                 return Err(ModelError::NotFound(format!(
                     "Could not auto-detect model file in repository: {}. Please specify --filename{}",
                     repo,
-                    if folder.is_some() { format!(" or check folder {}", folder.unwrap()) } else { String::new() }
+                    if let Some(f) = folder { format!(" or check folder {}", f) } else { String::new() }
                 )));
             }
         }

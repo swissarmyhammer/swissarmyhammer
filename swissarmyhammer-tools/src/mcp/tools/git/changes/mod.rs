@@ -613,23 +613,24 @@ mod tests {
         let result = tool.execute(arguments, &context).await;
 
         // Empty repository should either succeed with empty files or fail gracefully
-        if result.is_ok() {
-            let response = result.unwrap();
-            let response_text = match &response.content[0].raw {
-                rmcp::model::RawContent::Text(text) => &text.text,
-                _ => panic!("Expected text content"),
-            };
-            let parsed: GitChangesResponse = serde_json::from_str(response_text).unwrap();
-            // Empty repo should have no tracked files
-            assert_eq!(parsed.files.len(), 0);
-        } else {
-            // Or it might fail with an appropriate error
-            let error = result.unwrap_err();
-            assert!(
-                error.message.contains("Failed to get")
-                    || error.message.contains("empty")
-                    || error.message.contains("no commits")
-            );
+        match result {
+            Ok(response) => {
+                let response_text = match &response.content[0].raw {
+                    rmcp::model::RawContent::Text(text) => &text.text,
+                    _ => panic!("Expected text content"),
+                };
+                let parsed: GitChangesResponse = serde_json::from_str(response_text).unwrap();
+                // Empty repo should have no tracked files
+                assert_eq!(parsed.files.len(), 0);
+            }
+            Err(error) => {
+                // Or it might fail with an appropriate error
+                assert!(
+                    error.message.contains("Failed to get")
+                        || error.message.contains("empty")
+                        || error.message.contains("no commits")
+                );
+            }
         }
     }
 

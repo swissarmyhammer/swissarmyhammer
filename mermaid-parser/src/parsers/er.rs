@@ -886,7 +886,7 @@ mod tests {
         let tokens = tokens.unwrap();
 
         // Should include: CUSTOMER, {, newline, string, name, PK, newline, }
-        let expected_tokens = vec![
+        let expected_tokens = [
             ERToken::EntityName("CUSTOMER".to_string()),
             ERToken::LeftBrace,
             ERToken::NewLine,

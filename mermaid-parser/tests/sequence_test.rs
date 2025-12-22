@@ -65,19 +65,17 @@ fn test_sequence_files(#[files("test/sequence/*.mermaid")] path: PathBuf) {
                 // Every message should reference valid participants
                 for statement in &diagram.statements {
                     use mermaid_parser::common::ast::SequenceStatement;
-                    match statement {
-                        SequenceStatement::Message(msg) => {
-                            // The participants in messages are automatically added if not declared
-                            // So we just check that from and to are not empty
-                            assert!(
-                                !msg.from.is_empty(),
-                                "Message has empty 'from' in {:?}",
-                                path
-                            );
-                            assert!(!msg.to.is_empty(), "Message has empty 'to' in {:?}", path);
-                        }
-                        _ => {} // Other statement types are valid
+                    if let SequenceStatement::Message(msg) = statement {
+                        // The participants in messages are automatically added if not declared
+                        // So we just check that from and to are not empty
+                        assert!(
+                            !msg.from.is_empty(),
+                            "Message has empty 'from' in {:?}",
+                            path
+                        );
+                        assert!(!msg.to.is_empty(), "Message has empty 'to' in {:?}", path);
                     }
+                    // Other statement types are valid
                 }
             }
             other => {

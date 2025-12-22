@@ -936,8 +936,8 @@ async fn test_read_tool_path_traversal_protection() {
 
         // The result may either fail due to path validation or file not found
         // Both outcomes are acceptable for security
-        if result.is_err() {
-            let error_msg = format!("{:?}", result.unwrap_err());
+        if let Err(err) = result {
+            let error_msg = format!("{:?}", err);
             assert!(
                 error_msg.contains("blocked pattern")
                     || error_msg.contains("not found")
@@ -1139,8 +1139,8 @@ async fn test_read_tool_permission_denied_scenarios() {
 
     let result = tool.execute(arguments, &context).await;
     // Note: This test may pass on systems where we can't actually restrict permissions
-    if result.is_err() {
-        let error_msg = format!("{:?}", result.unwrap_err());
+    if let Err(err) = result {
+        let error_msg = format!("{:?}", err);
         println!("Permission denied test error: {}", error_msg);
     }
 }
@@ -1877,8 +1877,8 @@ async fn test_grep_tool_error_handling() {
 
     let result = tool.execute(arguments, &context).await;
     // This should either fail during execution or handle gracefully
-    if result.is_err() {
-        let error_msg = format!("{:?}", result.unwrap_err());
+    if let Err(err) = result {
+        let error_msg = format!("{:?}", err);
         assert!(error_msg.contains("Invalid output_mode"));
     }
 }

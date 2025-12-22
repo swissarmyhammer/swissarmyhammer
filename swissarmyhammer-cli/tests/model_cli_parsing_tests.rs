@@ -612,11 +612,11 @@ fn test_argument_order_flexibility() {
     let result1 = try_parse_cli(&["model", "list", "--format", "json"]);
     let result2 = try_parse_cli(&["--verbose", "model", "list", "--format", "json"]);
 
-    if result1.is_err() {
-        eprintln!("result1 error: {:?}", result1.as_ref().unwrap_err());
+    if let Err(err) = &result1 {
+        eprintln!("result1 error: {:?}", err);
     }
-    if result2.is_err() {
-        eprintln!("result2 error: {:?}", result2.as_ref().unwrap_err());
+    if let Err(err) = &result2 {
+        eprintln!("result2 error: {:?}", err);
     }
 
     assert!(

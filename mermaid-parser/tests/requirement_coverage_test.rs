@@ -339,15 +339,13 @@ requirement missing_id {
 
     let result1 = requirement::parse(input1);
     // Check if parser allows it or not
-    if result1.is_ok() {
-        let diagram = result1.unwrap();
+    if let Ok(diagram) = result1 {
         let req = &diagram.requirements["missing_id"];
         // Parser may only capture first word
         assert_eq!(req.text, "missing");
         // ID might be empty or have a default
     } else {
         // Parser rejects it, which is also valid
-        assert!(result1.is_err());
     }
 
     // Test requirement without text
@@ -359,14 +357,12 @@ requirement missing_text {
 "#;
 
     let result2 = requirement::parse(input2);
-    if result2.is_ok() {
-        let diagram = result2.unwrap();
+    if let Ok(diagram) = result2 {
         let req = &diagram.requirements["missing_text"];
         assert_eq!(req.id, "1");
         // Text might be empty or have a default
     } else {
         // Parser rejects it, which is also valid
-        assert!(result2.is_err());
     }
 }
 
@@ -381,8 +377,7 @@ element missing_type {
 
     let result = requirement::parse(input);
     // Parser may allow missing type with empty default
-    if result.is_ok() {
-        let diagram = result.unwrap();
+    if let Ok(diagram) = result {
         let elem = &diagram.elements["missing_type"];
         assert_eq!(elem.element_type, ""); // Empty type
         assert_eq!(elem.doc_ref, Some("some/path".to_string()));

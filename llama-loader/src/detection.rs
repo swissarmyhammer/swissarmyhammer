@@ -68,8 +68,8 @@ pub async fn auto_detect_hf_model_file_with_folder(
 
             Err(ModelError::NotFound(format!(
                 "No .gguf model files found in HuggingFace repository{}",
-                if folder.is_some() {
-                    format!(" in folder {}", folder.unwrap())
+                if let Some(f) = folder {
+                    format!(" in folder {}", f)
                 } else {
                     String::new()
                 }

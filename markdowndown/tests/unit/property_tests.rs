@@ -708,8 +708,8 @@ mod markdowndown_api_properties {
         let result2 = detect_url_type(url);
 
         assert_eq!(result1.is_ok(), result2.is_ok());
-        if result1.is_ok() && result2.is_ok() {
-            assert_eq!(result1.unwrap(), result2.unwrap());
+        if let (Ok(r1), Ok(r2)) = (result1, result2) {
+            assert_eq!(r1, r2);
         }
     }
 }

@@ -22,8 +22,9 @@ async fn main() -> Result<()> {
     tracing::info!("Starting Echo MCP server with stdio transport");
 
     // Create an instance of our echo service and serve with stdio transport
-    let service = EchoService::new().serve(stdio()).await.inspect_err(|e| {
+    let service = EchoService::new().serve(stdio()).await.map_err(|e| {
         tracing::error!("serving error: {:?}", e);
+        e
     })?;
 
     // Wait for the service to complete
