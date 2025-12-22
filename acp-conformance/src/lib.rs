@@ -8,6 +8,7 @@
 //! Tests are organized by protocol section:
 //! - `initialization`: Protocol initialization and capability negotiation
 //! - `sessions`: Session setup (new, load, set_mode)
+//! - `prompt_turn`: Prompt turn lifecycle (user message, agent processing, notifications, completion)
 //! - `content`: Content blocks (text, image, audio, embedded resources, resource links)
 //! - `file_system`: File system access (read_text_file, write_text_file)
 //! - `terminals`: Terminal command execution (create, output, wait_for_exit, kill, release)
@@ -25,6 +26,7 @@ pub mod agent_plan;
 pub mod content;
 pub mod file_system;
 pub mod initialization;
+pub mod prompt_turn;
 pub mod responses;
 pub mod sessions;
 pub mod slash_commands;

@@ -18,8 +18,8 @@ use llama_agent::types::{
 use llama_agent::{AgentAPI, AgentServer};
 use std::time::{Instant, SystemTime};
 
-const MODEL_REPO: &str = "unsloth/Qwen3-0.6B-GGUF";
-const MODEL_FILE: &str = "Qwen3-0.6B-UD-Q4_K_XL.gguf";
+// Use standard test models from test_models module
+use llama_agent::test_models::{TEST_MODEL_FILE as MODEL_FILE, TEST_MODEL_REPO as MODEL_REPO};
 
 fn create_config() -> AgentConfig {
     AgentConfig {

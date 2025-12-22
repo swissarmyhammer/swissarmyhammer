@@ -25,9 +25,8 @@ use llama_agent::{AgentAPI, AgentServer};
 use std::time::{Duration, Instant, SystemTime};
 use tracing::{info, warn};
 
-/// Small model for testing incremental processing behavior
-const TEST_MODEL_REPO: &str = "unsloth/Qwen3-0.6B-GGUF";
-const TEST_MODEL_FILE: &str = "Qwen3-0.6B-IQ4_NL.gguf";
+// Use standard test models from test_models module
+use llama_agent::test_models::{TEST_MODEL_FILE, TEST_MODEL_REPO};
 
 /// Create a test agent config with context state enabled
 fn create_test_agent_config() -> AgentConfig {

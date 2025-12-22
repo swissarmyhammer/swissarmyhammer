@@ -9,9 +9,8 @@ use std::time::{Duration, Instant};
 use tracing::{info, warn};
 
 /// Small model for testing cache behavior with actual AgentServer
-/// Using Qwen3-0.6B model which is smaller and faster
-const TEST_MODEL_REPO: &str = "unsloth/Qwen3-0.6B-GGUF";
-const TEST_MODEL_FILE: &str = "Qwen3-0.6B-UD-Q4_K_XL.gguf";
+// Use standard test models from test_models module
+use llama_agent::test_models::{TEST_MODEL_FILE, TEST_MODEL_REPO};
 
 /// Create a test agent config with a small model
 fn create_test_agent_config() -> AgentConfig {

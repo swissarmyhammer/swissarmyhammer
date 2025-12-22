@@ -170,6 +170,13 @@ pub mod acp;
 #[cfg(any(test, feature = "test-utils"))]
 pub mod tests;
 
+/// Standard test models for llama-agent testing
+///
+/// This module provides canonical model constants for all tests.
+/// Always use these constants instead of hardcoding model names.
+#[cfg(any(test, feature = "test-utils"))]
+pub mod test_models;
+
 #[cfg(test)]
 mod error_consistency_tests;
 

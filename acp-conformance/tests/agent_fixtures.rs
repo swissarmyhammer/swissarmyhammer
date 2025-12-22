@@ -44,10 +44,14 @@ pub async fn create_claude_agent() -> Result<impl Agent> {
 /// Creates a test llama-agent instance connected via streams
 /// Always includes session mode support for full conformance testing
 pub async fn create_llama_agent() -> Result<impl Agent> {
+    // Use standard test models from llama-agent
+    use llama_agent::test_models::{TEST_MODEL_FILE, TEST_MODEL_REPO};
+
     let model_config = llama_agent::types::ModelConfig {
-        source: llama_agent::types::ModelSource::Local {
-            folder: std::env::temp_dir(),
-            filename: Some("nonexistent.gguf".to_string()), // Won't load model for tests
+        source: llama_agent::types::ModelSource::HuggingFace {
+            repo: TEST_MODEL_REPO.to_string(),
+            filename: Some(TEST_MODEL_FILE.to_string()),
+            folder: None,
         },
         batch_size: 512,
         n_seq_max: 1,
@@ -70,6 +74,13 @@ pub async fn create_llama_agent() -> Result<impl Agent> {
         llama_agent::model::ModelManager::new(agent_config.model.clone())
             .expect("Failed to create model manager"),
     );
+
+    // Load the model (will auto-download from HuggingFace if not cached)
+    model_manager
+        .load_model()
+        .await
+        .expect("Failed to load test model - ensure network connectivity for HuggingFace download");
+
     let request_queue = Arc::new(llama_agent::queue::RequestQueue::new(
         model_manager.clone(),
         agent_config.queue_config.clone(),
@@ -120,10 +131,14 @@ pub async fn create_llama_agent() -> Result<impl Agent> {
 /// Creates a generic test agent instance connected via streams
 /// This represents a minimal baseline agent configuration for conformance testing
 pub async fn create_agent() -> Result<impl Agent> {
+    // Use standard test models from llama-agent
+    use llama_agent::test_models::{TEST_MODEL_FILE, TEST_MODEL_REPO};
+
     let model_config = llama_agent::types::ModelConfig {
-        source: llama_agent::types::ModelSource::Local {
-            folder: std::env::temp_dir(),
-            filename: Some("nonexistent.gguf".to_string()), // Won't load model for tests
+        source: llama_agent::types::ModelSource::HuggingFace {
+            repo: TEST_MODEL_REPO.to_string(),
+            filename: Some(TEST_MODEL_FILE.to_string()),
+            folder: None,
         },
         batch_size: 512,
         n_seq_max: 1,
@@ -146,6 +161,13 @@ pub async fn create_agent() -> Result<impl Agent> {
         llama_agent::model::ModelManager::new(agent_config.model.clone())
             .expect("Failed to create model manager"),
     );
+
+    // Load the model (will auto-download from HuggingFace if not cached)
+    model_manager
+        .load_model()
+        .await
+        .expect("Failed to load test model - ensure network connectivity for HuggingFace download");
+
     let request_queue = Arc::new(llama_agent::queue::RequestQueue::new(
         model_manager.clone(),
         agent_config.queue_config.clone(),
