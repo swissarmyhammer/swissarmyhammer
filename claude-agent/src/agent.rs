@@ -9843,10 +9843,21 @@ impl AgentWithFixture for ClaudeAgent {
 
         let mode = self.fixture_mode(test_name);
 
+        // Get unsafe pointer to claude_client for modification
+        let client_ptr = Arc::as_ptr(&self.claude_client) as *mut crate::claude::ClaudeClient;
+
         // Reconfigure the agent's mode based on fixture
         self.config.claude.mode = match &mode {
             FixtureMode::Record { path } => {
                 tracing::info!("Configuring claude-agent for record mode: {:?}", path);
+
+                // For recording, spawn will happen on demand and get wrapped
+                // We'll set a flag that tells spawn to wrap in RecordingBackend
+                // For now, just set the mode - actual spawning happens in ClaudeClient
+                unsafe {
+                    (*client_ptr).backend = None; // Will spawn real process on demand
+                }
+
                 crate::config::ClaudeAgentMode::Record { output_path: path.clone() }
             }
             FixtureMode::Playback { path } => {
@@ -9856,8 +9867,6 @@ impl AgentWithFixture for ClaudeAgent {
                 if let Ok(recorded) = RecordedClaudeBackend::from_file(path) {
                     let backend: Box<dyn crate::claude_backend::ClaudeBackend> = Box::new(recorded);
 
-                    // Set backend on claude_client (unsafe to mutate Arc)
-                    let client_ptr = Arc::as_ptr(&self.claude_client) as *mut crate::claude::ClaudeClient;
                     unsafe {
                         (*client_ptr).backend = Some(Arc::new(tokio::sync::Mutex::new(backend)));
                     }
@@ -9869,6 +9878,11 @@ impl AgentWithFixture for ClaudeAgent {
             }
             FixtureMode::Normal => {
                 tracing::info!("Configuring claude-agent for normal mode");
+
+                unsafe {
+                    (*client_ptr).backend = None;
+                }
+
                 crate::config::ClaudeAgentMode::Normal
             }
         };

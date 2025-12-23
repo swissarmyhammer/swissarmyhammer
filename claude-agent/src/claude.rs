@@ -491,6 +491,65 @@ impl ClaudeClient {
         false
     }
 
+    /// Stream query using backend (fixture mode)
+    async fn query_stream_with_backend(
+        &self,
+        prompt: &str,
+        session_id: &SessionId,
+    ) -> Result<Pin<Box<dyn Stream<Item = MessageChunk> + Send>>> {
+        tracing::info!("Using backend for streaming query (fixture mode)");
+
+        // Format prompt
+        let text_content = TextContent::new(prompt.to_string());
+        let content = vec![ContentBlock::Text(text_content)];
+        let stream_json = self.protocol_translator.acp_to_stream_json(content)?;
+
+        // Write to backend
+        self.write(&stream_json).await?;
+
+        // Create channel for streaming
+        let (tx, rx) = tokio::sync::mpsc::channel(100);
+        let acp_session_id = Self::to_acp_session_id(session_id);
+        let protocol_translator = Arc::clone(&self.protocol_translator);
+        let backend = self.backend.clone();
+
+        // Spawn task to read from backend and emit chunks
+        tokio::spawn(async move {
+            if let Some(backend) = backend {
+                let mut backend_lock = backend.lock().await;
+
+                loop {
+                    match backend_lock.read_line().await {
+                        Ok(Some(line)) => {
+                            if let Ok(Some(notification)) = protocol_translator
+                                .stream_json_to_acp(&line, &acp_session_id)
+                                .await
+                            {
+                                match notification.update {
+                                    SessionUpdate::AgentMessageChunk(chunk) => {
+                                        let msg_chunk = Self::content_block_to_message_chunk(chunk.content);
+                                        if tx.send(msg_chunk).await.is_err() {
+                                            break;
+                                        }
+                                    }
+                                    _ => {}
+                                }
+                            }
+
+                            if Self::is_end_of_stream(&line) {
+                                break;
+                            }
+                        }
+                        Ok(None) => break,
+                        Err(_) => break,
+                    }
+                }
+            }
+        });
+
+        Ok(Box::pin(tokio_stream::wrappers::ReceiverStream::new(rx)))
+    }
+
     /// Execute a simple query without session context
     pub async fn query(
         &self,
