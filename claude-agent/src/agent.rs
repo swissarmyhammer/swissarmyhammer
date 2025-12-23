@@ -9839,18 +9839,38 @@ impl AgentWithFixture for ClaudeAgent {
 
     fn with_fixture(&mut self, test_name: &str) {
         use agent_client_protocol_extras::FixtureMode;
+        use crate::claude_backend::{RecordedClaudeBackend, RecordingClaudeBackend, RealClaudeBackend};
 
         let mode = self.fixture_mode(test_name);
 
         // Reconfigure the agent's mode based on fixture
-        self.config.claude.mode = match mode {
+        self.config.claude.mode = match &mode {
             FixtureMode::Record { path } => {
-                crate::config::ClaudeAgentMode::Record { output_path: path }
+                tracing::info!("Configuring claude-agent for record mode: {:?}", path);
+                crate::config::ClaudeAgentMode::Record { output_path: path.clone() }
             }
             FixtureMode::Playback { path } => {
-                crate::config::ClaudeAgentMode::Playback { input_path: path }
+                tracing::info!("Configuring claude-agent for playback mode: {:?}", path);
+
+                // Load playback backend
+                if let Ok(recorded) = RecordedClaudeBackend::from_file(path) {
+                    let backend: Box<dyn crate::claude_backend::ClaudeBackend> = Box::new(recorded);
+
+                    // Set backend on claude_client (unsafe to mutate Arc)
+                    let client_ptr = Arc::as_ptr(&self.claude_client) as *mut crate::claude::ClaudeClient;
+                    unsafe {
+                        (*client_ptr).backend = Some(Arc::new(tokio::sync::Mutex::new(backend)));
+                    }
+                } else {
+                    tracing::warn!("Failed to load fixture from {:?}, using normal mode", path);
+                }
+
+                crate::config::ClaudeAgentMode::Playback { input_path: path.clone() }
             }
-            FixtureMode::Normal => crate::config::ClaudeAgentMode::Normal,
+            FixtureMode::Normal => {
+                tracing::info!("Configuring claude-agent for normal mode");
+                crate::config::ClaudeAgentMode::Normal
+            }
         };
     }
 }

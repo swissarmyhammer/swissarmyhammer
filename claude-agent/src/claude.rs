@@ -26,6 +26,35 @@ pub struct ClaudeClient {
 }
 
 impl ClaudeClient {
+    /// Check if using backend (fixture mode)
+    fn has_backend(&self) -> bool {
+        self.backend.is_some()
+    }
+
+    /// Write line through backend or process
+    async fn write(&self, line: &str) -> Result<()> {
+        if let Some(ref backend) = self.backend {
+            backend.lock().await.write_line(line).await
+        } else {
+            // Will need process - this is handled by callers
+            Err(crate::error::AgentError::Internal(
+                "write called without backend or process".to_string(),
+            ))
+        }
+    }
+
+    /// Read line through backend or process
+    async fn read(&self) -> Result<Option<String>> {
+        if let Some(ref backend) = self.backend {
+            backend.lock().await.read_line().await
+        } else {
+            // Will need process - this is handled by callers
+            Err(crate::error::AgentError::Internal(
+                "read called without backend or process".to_string(),
+            ))
+        }
+    }
+
     /// Set notification sender for forwarding all notifications from protocol_translator
     pub fn set_notification_sender(&mut self, sender: Arc<crate::agent::NotificationSender>) {
         self.notification_sender = Some(sender);
@@ -71,8 +100,38 @@ impl ClaudeClient {
             cwd.display()
         );
 
-        // Spawn the process (or get existing) with working directory
-        // Note: During init, we don't have a mode yet, so pass None
+        // Use backend if available (fixture mode)
+        if self.has_backend() {
+            tracing::info!("Using backend for init (fixture mode)");
+            let init_trigger = r#"{"type":"user","message":{"role":"user","content":"hi"}}"#;
+
+            self.write(init_trigger).await?;
+
+            let init_line_result = tokio::time::timeout(std::time::Duration::from_secs(15), self.read())
+                .await;
+
+            match init_line_result {
+                Ok(Ok(Some(line))) => {
+                    if let Ok(Some(notif)) = self
+                        .protocol_translator
+                        .stream_json_to_acp(&line, acp_session_id)
+                        .await
+                    {
+                        if let SessionUpdate::AvailableCommandsUpdate(_) = notif.update {
+                            return Ok((
+                                Some(self.protocol_translator.get_available_agents()),
+                                self.protocol_translator.get_current_agent(),
+                            ));
+                        }
+                    }
+                }
+                _ => {}
+            }
+
+            return Ok((None, None));
+        }
+
+        // Normal mode: spawn real process
         let process = self
             .process_manager
             .get_process(session_id, cwd, None)
