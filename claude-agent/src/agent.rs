@@ -1477,6 +1477,24 @@ impl ClaudeAgent {
             tracing::debug!("Using agent mode '{}' for session {}", mode, session_id);
         }
 
+        // If Record mode, ensure backend is initialized before streaming
+        if matches!(self.config.claude.mode, crate::config::ClaudeAgentMode::Record { .. }) {
+            if let crate::config::ClaudeAgentMode::Record { ref output_path } = self.config.claude.mode {
+                let client_ptr = Arc::as_ptr(&self.claude_client) as *mut crate::claude::ClaudeClient;
+                unsafe {
+                    if (*client_ptr).backend.is_none() {
+                        (*client_ptr)
+                            .ensure_recording_backend(&session_id, &session.cwd, output_path.clone())
+                            .await
+                            .map_err(|e| {
+                                tracing::error!("Failed to initialize recording backend: {}", e);
+                                agent_client_protocol::Error::internal_error()
+                            })?;
+                    }
+                }
+            }
+        }
+
         let mut stream = self
             .claude_client
             .query_stream_with_context(&prompt_text, &context, agent_mode)

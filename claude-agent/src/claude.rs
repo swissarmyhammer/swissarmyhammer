@@ -34,27 +34,32 @@ impl ClaudeClient {
     /// Ensure backend is initialized for Record mode
     ///
     /// If in Record mode and backend not set, spawns process and wraps in RecordingBackend
-    async fn ensure_recording_backend(
+    pub(crate) async fn ensure_recording_backend(
         &mut self,
         session_id: &SessionId,
         cwd: &std::path::Path,
-        output_path: &std::path::Path,
+        output_path: std::path::PathBuf,
     ) -> Result<()> {
         if self.backend.is_some() {
             return Ok(()); // Already have backend
         }
 
+        tracing::info!("Spawning process and wrapping in RecordingBackend for {:?}", output_path);
+
         // Spawn real process
         let process = self.process_manager.get_process(session_id, cwd, None).await?;
-        let process_lock = process.lock().await;
 
-        // We can't move out of the lock, so we need a different approach
-        // For now, just log that we would wrap it
-        tracing::info!(
-            "Would wrap process in RecordingBackend for {:?}",
-            output_path
+        // Wrap in backends
+        let real_backend = crate::claude_backend::RealClaudeBackend::new(process);
+        let recording_backend = crate::claude_backend::RecordingClaudeBackend::new(
+            real_backend,
+            output_path,
         );
 
+        // Set the backend
+        self.backend = Some(Arc::new(tokio::sync::Mutex::new(Box::new(recording_backend))));
+
+        tracing::info!("RecordingBackend initialized and ready");
         Ok(())
     }
 
@@ -127,36 +132,7 @@ impl ClaudeClient {
             cwd.display()
         );
 
-        // Use backend if available (fixture mode)
-        if self.has_backend() {
-            tracing::info!("Using backend for init (fixture mode)");
-            let init_trigger = r#"{"type":"user","message":{"role":"user","content":"hi"}}"#;
-
-            self.write(init_trigger).await?;
-
-            let init_line_result = tokio::time::timeout(std::time::Duration::from_secs(15), self.read())
-                .await;
-
-            match init_line_result {
-                Ok(Ok(Some(line))) => {
-                    if let Ok(Some(notif)) = self
-                        .protocol_translator
-                        .stream_json_to_acp(&line, acp_session_id)
-                        .await
-                    {
-                        if let SessionUpdate::AvailableCommandsUpdate(_) = notif.update {
-                            // Return empty for now - not critical for fixture mode
-                            return Ok((None, None));
-                        }
-                    }
-                }
-                _ => {}
-            }
-
-            return Ok((None, None));
-        }
-
-        // Normal mode: spawn real process
+        // Spawn the process for this session
         let process = self
             .process_manager
             .get_process(session_id, cwd, None)
@@ -880,6 +856,11 @@ impl ClaudeClient {
             return Err(crate::error::AgentError::Process(
                 "Empty prompt".to_string(),
             ));
+        }
+
+        // Use backend if available (fixture mode)
+        if self.has_backend() {
+            return self.query_stream_with_backend(prompt, &context.session_id).await;
         }
 
         // Claude CLI maintains conversation state internally, so we just send
