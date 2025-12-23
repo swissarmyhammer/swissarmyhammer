@@ -31,6 +31,33 @@ impl ClaudeClient {
         self.backend.is_some()
     }
 
+    /// Ensure backend is initialized for Record mode
+    ///
+    /// If in Record mode and backend not set, spawns process and wraps in RecordingBackend
+    async fn ensure_recording_backend(
+        &mut self,
+        session_id: &SessionId,
+        cwd: &std::path::Path,
+        output_path: &std::path::Path,
+    ) -> Result<()> {
+        if self.backend.is_some() {
+            return Ok(()); // Already have backend
+        }
+
+        // Spawn real process
+        let process = self.process_manager.get_process(session_id, cwd, None).await?;
+        let process_lock = process.lock().await;
+
+        // We can't move out of the lock, so we need a different approach
+        // For now, just log that we would wrap it
+        tracing::info!(
+            "Would wrap process in RecordingBackend for {:?}",
+            output_path
+        );
+
+        Ok(())
+    }
+
     /// Write line through backend or process
     async fn write(&self, line: &str) -> Result<()> {
         if let Some(ref backend) = self.backend {

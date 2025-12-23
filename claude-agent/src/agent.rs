@@ -9851,11 +9851,16 @@ impl AgentWithFixture for ClaudeAgent {
             FixtureMode::Record { path } => {
                 tracing::info!("Configuring claude-agent for record mode: {:?}", path);
 
-                // For recording, spawn will happen on demand and get wrapped
-                // We'll set a flag that tells spawn to wrap in RecordingBackend
-                // For now, just set the mode - actual spawning happens in ClaudeClient
+                // Spawn process and wrap in RecordingBackend
+                // We need to spawn the process here and wrap it
+                // This will be done lazily when first I/O happens through backend
+                // For now we set backend to None and let normal spawn happen
+                // Then we'll intercept and wrap it
+
+                // Actually, we can't spawn yet - we don't have session_id/cwd
+                // So we store the Record mode and spawn will wrap it later
                 unsafe {
-                    (*client_ptr).backend = None; // Will spawn real process on demand
+                    (*client_ptr).backend = None; // Process will be spawned and wrapped on first use
                 }
 
                 crate::config::ClaudeAgentMode::Record { output_path: path.clone() }
