@@ -24,6 +24,7 @@ use agent_client_protocol::{
     PromptResponse, RawValue, SessionId, SessionNotification, SessionUpdate, SetSessionModeRequest,
     SetSessionModeResponse, StopReason, TextContent, WriteTextFileResponse,
 };
+use agent_client_protocol_extras::AgentWithFixture;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::SystemTime;
@@ -9829,3 +9830,28 @@ mod tests {
         assert_eq!(meta["max_turn_requests"], 0);
     }
 }
+
+// Fixture support
+impl AgentWithFixture for ClaudeAgent {
+    fn agent_type(&self) -> &'static str {
+        "claude"
+    }
+
+    fn with_fixture(&mut self, test_name: &str) {
+        use agent_client_protocol_extras::FixtureMode;
+
+        let mode = self.fixture_mode(test_name);
+
+        // Reconfigure the agent's mode based on fixture
+        self.config.claude.mode = match mode {
+            FixtureMode::Record { path } => crate::config::ClaudeAgentMode::Record {
+                output_path: path,
+            },
+            FixtureMode::Playback { path } => crate::config::ClaudeAgentMode::Playback {
+                input_path: path,
+            },
+            FixtureMode::Normal => crate::config::ClaudeAgentMode::Normal,
+        };
+    }
+}
+

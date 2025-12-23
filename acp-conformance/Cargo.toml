@@ -10,6 +10,7 @@ homepage.workspace = true
 
 [dependencies]
 agent-client-protocol.workspace = true
+agent-client-protocol-extras = { path = "../agent-client-protocol-extras" }
 tokio.workspace = true
 serde.workspace = true
 serde_json.workspace = true

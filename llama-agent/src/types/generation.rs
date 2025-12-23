@@ -162,7 +162,7 @@ impl GenerationRequest {
 }
 
 /// Response from text generation operation.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct GenerationResponse {
     pub generated_text: String,
     pub tokens_generated: u32,

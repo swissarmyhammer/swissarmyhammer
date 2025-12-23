@@ -7,13 +7,14 @@ name = "acp-conformance"
 version = "0.3.0"
 dependencies = [
  "agent-client-protocol",
+ "agent-client-protocol-extras",
  "anyhow",
  "async-trait",
  "claude-agent",
  "futures",
  "llama-agent",
  "piper",
- "rstest 0.23.0",
+ "rstest 0.26.1",
  "serde",
  "serde_json",
  "serial_test",
@@ -47,6 +48,14 @@ dependencies = [
  "log",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "agent-client-protocol-extras"
+version = "0.3.0"
+dependencies = [
+ "agent-client-protocol",
+ "tracing",
 ]
 
 [[package]]
@@ -1082,6 +1091,7 @@ name = "claude-agent"
 version = "0.3.0"
 dependencies = [
  "agent-client-protocol",
+ "agent-client-protocol-extras",
  "anyhow",
  "async-trait",
  "base64 0.22.1",
@@ -3393,6 +3403,7 @@ name = "llama-agent"
 version = "0.3.0"
 dependencies = [
  "agent-client-protocol",
+ "agent-client-protocol-extras",
  "anyhow",
  "async-trait",
  "axum",
@@ -3413,7 +3424,7 @@ dependencies = [
  "proptest",
  "regex",
  "rmcp",
- "rstest 0.23.0",
+ "rstest 0.26.1",
  "schemars 0.8.22",
  "serde",
  "serde_json",
@@ -3476,7 +3487,7 @@ dependencies = [
  "llama-cpp-2",
  "llama-loader",
  "md5",
- "rstest 0.23.0",
+ "rstest 0.26.1",
  "serde",
  "tempfile",
  "thiserror 1.0.69",
@@ -5273,14 +5284,13 @@ dependencies = [
 
 [[package]]
 name = "rstest"
-version = "0.23.0"
+version = "0.26.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0a2c585be59b6b5dd66a9d2084aa1d8bd52fbdb806eafdeffb52791147862035"
+checksum = "f5a3193c063baaa2a95a33f03035c8a72b83d97a54916055ba22d35ed3839d49"
 dependencies = [
- "futures",
  "futures-timer",
- "rstest_macros 0.23.0",
- "rustc_version",
+ "futures-util",
+ "rstest_macros 0.26.1",
 ]
 
 [[package]]
@@ -5321,9 +5331,9 @@ dependencies = [
 
 [[package]]
 name = "rstest_macros"
-version = "0.23.0"
+version = "0.26.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "825ea780781b15345a146be27eaefb05085e337e869bff01b4306a4fd4a9ad5a"
+checksum = "9c845311f0ff7951c5506121a9ad75aec44d083c31583b2ea5a30bcb0b0abba0"
 dependencies = [
  "cfg-if",
  "glob",

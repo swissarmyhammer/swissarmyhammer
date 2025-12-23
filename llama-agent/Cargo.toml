@@ -4,6 +4,9 @@ version.workspace = true
 edition = "2021"
 
 [dependencies]
+# Fixture support
+agent-client-protocol-extras = { path = "../agent-client-protocol-extras" }
+
 # Core inference
 llama-cpp-2 = { workspace = true }
 

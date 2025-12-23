@@ -1,171 +1,99 @@
-//! Conformance tests for ACP terminal protocol
-//!
-//! These tests verify that agent implementations correctly implement the ACP
-//! terminal protocol per https://agentclientprotocol.com/protocol/terminals
-//!
-//! Tests are parametrized using rstest to run against multiple agent implementations.
-//! To add a new agent to test, simply add its factory function to the #[rstest] attributes.
+//! Conformance tests for ACP terminals protocol
 
 mod agent_fixtures;
 
 use agent_client_protocol::Agent;
+use agent_client_protocol_extras::AgentWithFixture;
 use rstest::rstest;
 
-// Helper type to make agent creation testable
-type AgentFactory = fn() -> std::pin::Pin<
-    Box<dyn std::future::Future<Output = agent_fixtures::Result<Box<dyn Agent>>> + Send>,
->;
-
-// Agent factory functions that can be passed to rstest
-fn llama_agent_factory() -> std::pin::Pin<
-    Box<dyn std::future::Future<Output = agent_fixtures::Result<Box<dyn Agent>>> + Send>,
-> {
-    Box::pin(async {
-        let agent = agent_fixtures::create_llama_agent().await?;
-        Ok(Box::new(agent) as Box<dyn Agent>)
-    })
-}
-
-fn claude_agent_factory() -> std::pin::Pin<
-    Box<dyn std::future::Future<Output = agent_fixtures::Result<Box<dyn Agent>>> + Send>,
-> {
-    Box::pin(async {
-        let agent = agent_fixtures::create_claude_agent().await?;
-        Ok(Box::new(agent) as Box<dyn Agent>)
-    })
-}
-
-fn agent_agent_factory() -> std::pin::Pin<
-    Box<dyn std::future::Future<Output = agent_fixtures::Result<Box<dyn Agent>>> + Send>,
-> {
-    Box::pin(async {
-        let agent = agent_fixtures::create_agent().await?;
-        Ok(Box::new(agent) as Box<dyn Agent>)
-    })
+#[rstest]
+#[case::llama(agent_fixtures::llama_agent_factory())]
+#[case::claude(agent_fixtures::claude_agent_factory())]
+#[awt]
+#[test_log::test(tokio::test)]
+#[serial_test::serial]
+async fn test_terminal_capability_check(#[case] #[future] mut agent: Box<dyn AgentWithFixture>) {
+    agent.with_fixture("test_terminal_capability_check");
+    acp_conformance::terminals::test_terminal_capability_check(&*agent)
+        .await
+        .expect("test_terminal_capability_check should succeed");
 }
 
 #[rstest]
-#[case::llama_agent(llama_agent_factory)]
-#[case::claude_agent(claude_agent_factory)]
-#[case::agent(agent_agent_factory)]
+#[case::llama(agent_fixtures::llama_agent_factory())]
+#[case::claude(agent_fixtures::claude_agent_factory())]
+#[awt]
 #[test_log::test(tokio::test)]
 #[serial_test::serial]
-async fn test_terminal_capability_check(#[case] factory: AgentFactory) {
-    let local_set = tokio::task::LocalSet::new();
-    local_set
-        .run_until(async {
-            let agent = factory().await.expect("Failed to create agent");
-            acp_conformance::terminals::test_terminal_capability_check(&*agent)
-                .await
-                .expect("Terminal capability check should succeed");
-        })
-        .await;
+async fn test_terminal_create(#[case] #[future] mut agent: Box<dyn AgentWithFixture>) {
+    agent.with_fixture("test_terminal_create");
+    acp_conformance::terminals::test_terminal_create(&*agent)
+        .await
+        .expect("test_terminal_create should succeed");
 }
 
 #[rstest]
-#[case::llama_agent(llama_agent_factory)]
-#[case::claude_agent(claude_agent_factory)]
-#[case::agent(agent_agent_factory)]
+#[case::llama(agent_fixtures::llama_agent_factory())]
+#[case::claude(agent_fixtures::claude_agent_factory())]
+#[awt]
 #[test_log::test(tokio::test)]
 #[serial_test::serial]
-async fn test_terminal_create(#[case] factory: AgentFactory) {
-    let local_set = tokio::task::LocalSet::new();
-    local_set
-        .run_until(async {
-            let agent = factory().await.expect("Failed to create agent");
-            acp_conformance::terminals::test_terminal_create(&*agent)
-                .await
-                .expect("Terminal create should succeed");
-        })
-        .await;
+async fn test_terminal_output(#[case] #[future] mut agent: Box<dyn AgentWithFixture>) {
+    agent.with_fixture("test_terminal_output");
+    acp_conformance::terminals::test_terminal_output(&*agent)
+        .await
+        .expect("test_terminal_output should succeed");
 }
 
 #[rstest]
-#[case::llama_agent(llama_agent_factory)]
-#[case::claude_agent(claude_agent_factory)]
-#[case::agent(agent_agent_factory)]
+#[case::llama(agent_fixtures::llama_agent_factory())]
+#[case::claude(agent_fixtures::claude_agent_factory())]
+#[awt]
 #[test_log::test(tokio::test)]
 #[serial_test::serial]
-async fn test_terminal_output(#[case] factory: AgentFactory) {
-    let local_set = tokio::task::LocalSet::new();
-    local_set
-        .run_until(async {
-            let agent = factory().await.expect("Failed to create agent");
-            acp_conformance::terminals::test_terminal_output(&*agent)
-                .await
-                .expect("Terminal output should succeed");
-        })
-        .await;
+async fn test_terminal_wait_for_exit(#[case] #[future] mut agent: Box<dyn AgentWithFixture>) {
+    agent.with_fixture("test_terminal_wait_for_exit");
+    acp_conformance::terminals::test_terminal_wait_for_exit(&*agent)
+        .await
+        .expect("test_terminal_wait_for_exit should succeed");
 }
 
 #[rstest]
-#[case::llama_agent(llama_agent_factory)]
-#[case::claude_agent(claude_agent_factory)]
-#[case::agent(agent_agent_factory)]
+#[case::llama(agent_fixtures::llama_agent_factory())]
+#[case::claude(agent_fixtures::claude_agent_factory())]
+#[awt]
 #[test_log::test(tokio::test)]
 #[serial_test::serial]
-async fn test_terminal_wait_for_exit(#[case] factory: AgentFactory) {
-    let local_set = tokio::task::LocalSet::new();
-    local_set
-        .run_until(async {
-            let agent = factory().await.expect("Failed to create agent");
-            acp_conformance::terminals::test_terminal_wait_for_exit(&*agent)
-                .await
-                .expect("Terminal wait for exit should succeed");
-        })
-        .await;
+async fn test_terminal_kill(#[case] #[future] mut agent: Box<dyn AgentWithFixture>) {
+    agent.with_fixture("test_terminal_kill");
+    acp_conformance::terminals::test_terminal_kill(&*agent)
+        .await
+        .expect("test_terminal_kill should succeed");
 }
 
 #[rstest]
-#[case::llama_agent(llama_agent_factory)]
-#[case::claude_agent(claude_agent_factory)]
-#[case::agent(agent_agent_factory)]
+#[case::llama(agent_fixtures::llama_agent_factory())]
+#[case::claude(agent_fixtures::claude_agent_factory())]
+#[awt]
 #[test_log::test(tokio::test)]
 #[serial_test::serial]
-async fn test_terminal_kill(#[case] factory: AgentFactory) {
-    let local_set = tokio::task::LocalSet::new();
-    local_set
-        .run_until(async {
-            let agent = factory().await.expect("Failed to create agent");
-            acp_conformance::terminals::test_terminal_kill(&*agent)
-                .await
-                .expect("Terminal kill should succeed");
-        })
-        .await;
+async fn test_terminal_release(#[case] #[future] mut agent: Box<dyn AgentWithFixture>) {
+    agent.with_fixture("test_terminal_release");
+    acp_conformance::terminals::test_terminal_release(&*agent)
+        .await
+        .expect("test_terminal_release should succeed");
 }
 
 #[rstest]
-#[case::llama_agent(llama_agent_factory)]
-#[case::claude_agent(claude_agent_factory)]
-#[case::agent(agent_agent_factory)]
+#[case::llama(agent_fixtures::llama_agent_factory())]
+#[case::claude(agent_fixtures::claude_agent_factory())]
+#[awt]
 #[test_log::test(tokio::test)]
 #[serial_test::serial]
-async fn test_terminal_release(#[case] factory: AgentFactory) {
-    let local_set = tokio::task::LocalSet::new();
-    local_set
-        .run_until(async {
-            let agent = factory().await.expect("Failed to create agent");
-            acp_conformance::terminals::test_terminal_release(&*agent)
-                .await
-                .expect("Terminal release should succeed");
-        })
-        .await;
+async fn test_terminal_timeout(#[case] #[future] mut agent: Box<dyn AgentWithFixture>) {
+    agent.with_fixture("test_terminal_timeout");
+    acp_conformance::terminals::test_terminal_timeout(&*agent)
+        .await
+        .expect("test_terminal_timeout should succeed");
 }
 
-#[rstest]
-#[case::llama_agent(llama_agent_factory)]
-#[case::claude_agent(claude_agent_factory)]
-#[case::agent(agent_agent_factory)]
-#[test_log::test(tokio::test)]
-#[serial_test::serial]
-async fn test_terminal_timeout(#[case] factory: AgentFactory) {
-    let local_set = tokio::task::LocalSet::new();
-    local_set
-        .run_until(async {
-            let agent = factory().await.expect("Failed to create agent");
-            acp_conformance::terminals::test_terminal_timeout(&*agent)
-                .await
-                .expect("Terminal timeout pattern should succeed");
-        })
-        .await;
-}

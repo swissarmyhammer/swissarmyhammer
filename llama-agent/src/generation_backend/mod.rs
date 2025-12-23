@@ -33,9 +33,11 @@ use std::pin::Pin;
 
 pub mod real;
 pub mod recorded;
+pub mod recording;
 
 pub use real::RealGenerationBackend;
 pub use recorded::{RecordedGenerationBackend, RecordedSession};
+pub use recording::RecordingGenerationBackend;
 
 /// Trait for generation backends
 ///

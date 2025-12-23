@@ -27,6 +27,7 @@ members = [
     "mermaid-parser",
     "acp-conformance",
     "claude-agent",
+    "agent-client-protocol-extras",
 ]
 resolver = "2"
 
@@ -177,7 +178,7 @@ assert_cmd = "2.0"
 predicates = "3.0"
 proptest = "1.0"
 sysinfo = "0.30"
-rstest = "0.23"
+rstest = "0.26.1"
 cargo-release = "0.25"
 
 

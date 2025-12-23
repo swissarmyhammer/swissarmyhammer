@@ -19,7 +19,7 @@ use super::translation::ToJsonRpcError;
 
 pub struct AcpServer {
     /// Underlying llama-agent server
-    agent_server: Arc<AgentServer>,
+    pub(crate) agent_server: Arc<AgentServer>,
 
     /// Active ACP sessions (ACP session ID → session state)
     sessions: Arc<RwLock<HashMap<AcpSessionId, AcpSessionState>>>,

@@ -2,7 +2,7 @@ use crate::chat_template::ChatTemplateEngine;
 use crate::dependency_analysis::{DependencyAnalyzer, ParallelExecutionDecision};
 use crate::generation::GenerationHelper;
 use crate::generation_backend::{
-    GenerationBackend, RealGenerationBackend, RecordedGenerationBackend,
+    GenerationBackend, RealGenerationBackend, RecordedGenerationBackend, RecordingGenerationBackend,
 };
 use crate::mcp::MCPClient;
 use crate::model::ModelManager;
@@ -74,11 +74,11 @@ type SummaryGeneratorFn = Box<
 >;
 
 pub struct AgentServer {
-    model_manager: Arc<ModelManager>,
-    request_queue: Arc<RequestQueue>,
+    pub(crate) model_manager: Arc<ModelManager>,
+    pub(crate) request_queue: Arc<RequestQueue>,
     /// Generation backend (real inference or playback)
-    generation_backend: Arc<dyn GenerationBackend>,
-    session_manager: Arc<SessionManager>,
+    pub(crate) generation_backend: Arc<dyn GenerationBackend>,
+    pub(crate) session_manager: Arc<SessionManager>,
     mcp_client: Arc<dyn MCPClient>,
     /// Per-session MCP clients for ACP sessions
     /// Maps SessionId to a vector of MCP clients created from session/new mcpServers parameter
@@ -89,7 +89,7 @@ pub struct AgentServer {
     >,
     chat_template: Arc<ChatTemplateEngine>,
     dependency_analyzer: Arc<DependencyAnalyzer>,
-    config: AgentConfig,
+    pub(crate) config: AgentConfig,
     start_time: Instant,
     shutdown_token: tokio_util::sync::CancellationToken,
     /// Client capabilities from ACP initialize request (if running as ACP server)
@@ -142,13 +142,14 @@ impl AgentServer {
                 }
             }
             LlamaAgentMode::Record { output_path } => {
-                info!(
-                    "Record mode not yet implemented, using normal mode. Output path: {:?}",
-                    output_path
-                );
-                Arc::new(RealGenerationBackend::new(
+                info!("Using record mode, will save to: {:?}", output_path);
+                let real_backend = Arc::new(RealGenerationBackend::new(
                     request_queue.clone(),
                     session_manager.clone(),
+                ));
+                Arc::new(RecordingGenerationBackend::new(
+                    real_backend,
+                    output_path.clone(),
                 ))
             }
         };
