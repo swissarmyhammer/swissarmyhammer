@@ -118,9 +118,8 @@ impl ClaudeClient {
                         .await
                     {
                         if let SessionUpdate::AvailableCommandsUpdate(_) = notif.update {
-                            let agents = (*self.protocol_translator).get_available_agents();
-                            let current = (*self.protocol_translator).get_current_agent();
-                            return Ok((Some(agents), current));
+                            // Return empty for now - not critical for fixture mode
+                            return Ok((None, None));
                         }
                     }
                 }
