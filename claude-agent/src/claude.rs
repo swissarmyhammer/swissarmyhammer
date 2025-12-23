@@ -118,10 +118,9 @@ impl ClaudeClient {
                         .await
                     {
                         if let SessionUpdate::AvailableCommandsUpdate(_) = notif.update {
-                            return Ok((
-                                Some(self.protocol_translator.get_available_agents()),
-                                self.protocol_translator.get_current_agent(),
-                            ));
+                            let agents = (*self.protocol_translator).get_available_agents();
+                            let current = (*self.protocol_translator).get_current_agent();
+                            return Ok((Some(agents), current));
                         }
                     }
                 }
