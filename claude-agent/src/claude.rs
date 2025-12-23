@@ -21,6 +21,8 @@ pub struct ClaudeClient {
     protocol_translator: Arc<ProtocolTranslator>,
     notification_sender: Option<Arc<crate::agent::NotificationSender>>,
     raw_message_manager: Option<crate::agent::RawMessageManager>,
+    /// Optional backend for fixture mode (overrides process_manager when set)
+    pub(crate) backend: Option<Arc<tokio::sync::Mutex<Box<dyn crate::claude_backend::ClaudeBackend>>>>,
 }
 
 impl ClaudeClient {
@@ -338,6 +340,7 @@ impl ClaudeClient {
             protocol_translator,
             notification_sender: None,
             raw_message_manager: None,
+            backend: None,
         })
     }
 
@@ -352,6 +355,7 @@ impl ClaudeClient {
             protocol_translator,
             notification_sender: None,
             raw_message_manager: None,
+            backend: None,
         })
     }
 
