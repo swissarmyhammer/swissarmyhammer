@@ -12,7 +12,11 @@ use rstest::rstest;
 #[awt]
 #[test_log::test(tokio::test)]
 #[serial_test::serial]
-async fn test_text_content_support(#[case] #[future] mut agent: Box<dyn AgentWithFixture>) {
+async fn test_text_content_support(
+    #[case]
+    #[future]
+    mut agent: Box<dyn AgentWithFixture>,
+) {
     agent.with_fixture("test_text_content_support");
     acp_conformance::content::test_text_content_support(&*agent)
         .await
@@ -25,7 +29,11 @@ async fn test_text_content_support(#[case] #[future] mut agent: Box<dyn AgentWit
 #[awt]
 #[test_log::test(tokio::test)]
 #[serial_test::serial]
-async fn test_image_content_with_capability(#[case] #[future] mut agent: Box<dyn AgentWithFixture>) {
+async fn test_image_content_with_capability(
+    #[case]
+    #[future]
+    mut agent: Box<dyn AgentWithFixture>,
+) {
     agent.with_fixture("test_image_content_with_capability");
     acp_conformance::content::test_image_content_with_capability(&*agent)
         .await
@@ -38,7 +46,11 @@ async fn test_image_content_with_capability(#[case] #[future] mut agent: Box<dyn
 #[awt]
 #[test_log::test(tokio::test)]
 #[serial_test::serial]
-async fn test_audio_content_with_capability(#[case] #[future] mut agent: Box<dyn AgentWithFixture>) {
+async fn test_audio_content_with_capability(
+    #[case]
+    #[future]
+    mut agent: Box<dyn AgentWithFixture>,
+) {
     agent.with_fixture("test_audio_content_with_capability");
     acp_conformance::content::test_audio_content_with_capability(&*agent)
         .await
@@ -51,7 +63,11 @@ async fn test_audio_content_with_capability(#[case] #[future] mut agent: Box<dyn
 #[awt]
 #[test_log::test(tokio::test)]
 #[serial_test::serial]
-async fn test_embedded_resource_with_capability(#[case] #[future] mut agent: Box<dyn AgentWithFixture>) {
+async fn test_embedded_resource_with_capability(
+    #[case]
+    #[future]
+    mut agent: Box<dyn AgentWithFixture>,
+) {
     agent.with_fixture("test_embedded_resource_with_capability");
     acp_conformance::content::test_embedded_resource_with_capability(&*agent)
         .await
@@ -64,7 +80,11 @@ async fn test_embedded_resource_with_capability(#[case] #[future] mut agent: Box
 #[awt]
 #[test_log::test(tokio::test)]
 #[serial_test::serial]
-async fn test_resource_link_content(#[case] #[future] mut agent: Box<dyn AgentWithFixture>) {
+async fn test_resource_link_content(
+    #[case]
+    #[future]
+    mut agent: Box<dyn AgentWithFixture>,
+) {
     agent.with_fixture("test_resource_link_content");
     acp_conformance::content::test_resource_link_content(&*agent)
         .await
@@ -77,10 +97,13 @@ async fn test_resource_link_content(#[case] #[future] mut agent: Box<dyn AgentWi
 #[awt]
 #[test_log::test(tokio::test)]
 #[serial_test::serial]
-async fn test_content_validation(#[case] #[future] mut agent: Box<dyn AgentWithFixture>) {
+async fn test_content_validation(
+    #[case]
+    #[future]
+    mut agent: Box<dyn AgentWithFixture>,
+) {
     agent.with_fixture("test_content_validation");
     acp_conformance::content::test_content_validation(&*agent)
         .await
         .expect("test_content_validation should succeed");
 }
-

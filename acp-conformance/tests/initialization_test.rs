@@ -12,7 +12,11 @@ use rstest::rstest;
 #[awt]
 #[test_log::test(tokio::test)]
 #[serial_test::serial]
-async fn test_minimal_initialization(#[case] #[future] mut agent: Box<dyn AgentWithFixture>) {
+async fn test_minimal_initialization(
+    #[case]
+    #[future]
+    mut agent: Box<dyn AgentWithFixture>,
+) {
     agent.with_fixture("test_minimal_initialization");
     acp_conformance::initialization::test_minimal_initialization(&*agent)
         .await
@@ -25,7 +29,11 @@ async fn test_minimal_initialization(#[case] #[future] mut agent: Box<dyn AgentW
 #[awt]
 #[test_log::test(tokio::test)]
 #[serial_test::serial]
-async fn test_full_capabilities_initialization(#[case] #[future] mut agent: Box<dyn AgentWithFixture>) {
+async fn test_full_capabilities_initialization(
+    #[case]
+    #[future]
+    mut agent: Box<dyn AgentWithFixture>,
+) {
     agent.with_fixture("test_full_capabilities_initialization");
     acp_conformance::initialization::test_full_capabilities_initialization(&*agent)
         .await
@@ -38,7 +46,11 @@ async fn test_full_capabilities_initialization(#[case] #[future] mut agent: Box<
 #[awt]
 #[test_log::test(tokio::test)]
 #[serial_test::serial]
-async fn test_protocol_version_negotiation(#[case] #[future] mut agent: Box<dyn AgentWithFixture>) {
+async fn test_protocol_version_negotiation(
+    #[case]
+    #[future]
+    mut agent: Box<dyn AgentWithFixture>,
+) {
     agent.with_fixture("test_protocol_version_negotiation");
     acp_conformance::initialization::test_protocol_version_negotiation(&*agent)
         .await
@@ -51,7 +63,11 @@ async fn test_protocol_version_negotiation(#[case] #[future] mut agent: Box<dyn 
 #[awt]
 #[test_log::test(tokio::test)]
 #[serial_test::serial]
-async fn test_minimal_client_capabilities(#[case] #[future] mut agent: Box<dyn AgentWithFixture>) {
+async fn test_minimal_client_capabilities(
+    #[case]
+    #[future]
+    mut agent: Box<dyn AgentWithFixture>,
+) {
     agent.with_fixture("test_minimal_client_capabilities");
     acp_conformance::initialization::test_minimal_client_capabilities(&*agent)
         .await
@@ -64,7 +80,11 @@ async fn test_minimal_client_capabilities(#[case] #[future] mut agent: Box<dyn A
 #[awt]
 #[test_log::test(tokio::test)]
 #[serial_test::serial]
-async fn test_initialize_idempotent(#[case] #[future] mut agent: Box<dyn AgentWithFixture>) {
+async fn test_initialize_idempotent(
+    #[case]
+    #[future]
+    mut agent: Box<dyn AgentWithFixture>,
+) {
     agent.with_fixture("test_initialize_idempotent");
     acp_conformance::initialization::test_initialize_idempotent(&*agent)
         .await
@@ -77,7 +97,11 @@ async fn test_initialize_idempotent(#[case] #[future] mut agent: Box<dyn AgentWi
 #[awt]
 #[test_log::test(tokio::test)]
 #[serial_test::serial]
-async fn test_with_client_info(#[case] #[future] mut agent: Box<dyn AgentWithFixture>) {
+async fn test_with_client_info(
+    #[case]
+    #[future]
+    mut agent: Box<dyn AgentWithFixture>,
+) {
     agent.with_fixture("test_with_client_info");
     acp_conformance::initialization::test_with_client_info(&*agent)
         .await

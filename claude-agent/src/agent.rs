@@ -9844,14 +9844,13 @@ impl AgentWithFixture for ClaudeAgent {
 
         // Reconfigure the agent's mode based on fixture
         self.config.claude.mode = match mode {
-            FixtureMode::Record { path } => crate::config::ClaudeAgentMode::Record {
-                output_path: path,
-            },
-            FixtureMode::Playback { path } => crate::config::ClaudeAgentMode::Playback {
-                input_path: path,
-            },
+            FixtureMode::Record { path } => {
+                crate::config::ClaudeAgentMode::Record { output_path: path }
+            }
+            FixtureMode::Playback { path } => {
+                crate::config::ClaudeAgentMode::Playback { input_path: path }
+            }
             FixtureMode::Normal => crate::config::ClaudeAgentMode::Normal,
         };
     }
 }
-

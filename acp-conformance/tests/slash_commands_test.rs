@@ -12,7 +12,11 @@ use rstest::rstest;
 #[awt]
 #[test_log::test(tokio::test)]
 #[serial_test::serial]
-async fn test_command_structure_validation(#[case] #[future] mut agent: Box<dyn AgentWithFixture>) {
+async fn test_command_structure_validation(
+    #[case]
+    #[future]
+    mut agent: Box<dyn AgentWithFixture>,
+) {
     agent.with_fixture("test_command_structure_validation");
     acp_conformance::slash_commands::test_command_structure_validation(&*agent)
         .await
@@ -25,7 +29,11 @@ async fn test_command_structure_validation(#[case] #[future] mut agent: Box<dyn 
 #[awt]
 #[test_log::test(tokio::test)]
 #[serial_test::serial]
-async fn test_advertise_commands(#[case] #[future] mut agent: Box<dyn AgentWithFixture>) {
+async fn test_advertise_commands(
+    #[case]
+    #[future]
+    mut agent: Box<dyn AgentWithFixture>,
+) {
     agent.with_fixture("test_advertise_commands");
     acp_conformance::slash_commands::test_advertise_commands(&*agent)
         .await
@@ -38,7 +46,11 @@ async fn test_advertise_commands(#[case] #[future] mut agent: Box<dyn AgentWithF
 #[awt]
 #[test_log::test(tokio::test)]
 #[serial_test::serial]
-async fn test_run_command(#[case] #[future] mut agent: Box<dyn AgentWithFixture>) {
+async fn test_run_command(
+    #[case]
+    #[future]
+    mut agent: Box<dyn AgentWithFixture>,
+) {
     agent.with_fixture("test_run_command");
     acp_conformance::slash_commands::test_run_command(&*agent)
         .await
@@ -51,7 +63,11 @@ async fn test_run_command(#[case] #[future] mut agent: Box<dyn AgentWithFixture>
 #[awt]
 #[test_log::test(tokio::test)]
 #[serial_test::serial]
-async fn test_command_field_validation(#[case] #[future] mut agent: Box<dyn AgentWithFixture>) {
+async fn test_command_field_validation(
+    #[case]
+    #[future]
+    mut agent: Box<dyn AgentWithFixture>,
+) {
     agent.with_fixture("test_command_field_validation");
     acp_conformance::slash_commands::test_command_field_validation(&*agent)
         .await
@@ -64,7 +80,11 @@ async fn test_command_field_validation(#[case] #[future] mut agent: Box<dyn Agen
 #[awt]
 #[test_log::test(tokio::test)]
 #[serial_test::serial]
-async fn test_command_input_hint(#[case] #[future] mut agent: Box<dyn AgentWithFixture>) {
+async fn test_command_input_hint(
+    #[case]
+    #[future]
+    mut agent: Box<dyn AgentWithFixture>,
+) {
     agent.with_fixture("test_command_input_hint");
     acp_conformance::slash_commands::test_command_input_hint(&*agent)
         .await
@@ -77,7 +97,11 @@ async fn test_command_input_hint(#[case] #[future] mut agent: Box<dyn AgentWithF
 #[awt]
 #[test_log::test(tokio::test)]
 #[serial_test::serial]
-async fn test_command_with_input(#[case] #[future] mut agent: Box<dyn AgentWithFixture>) {
+async fn test_command_with_input(
+    #[case]
+    #[future]
+    mut agent: Box<dyn AgentWithFixture>,
+) {
     agent.with_fixture("test_command_with_input");
     acp_conformance::slash_commands::test_command_with_input(&*agent)
         .await
@@ -90,10 +114,13 @@ async fn test_command_with_input(#[case] #[future] mut agent: Box<dyn AgentWithF
 #[awt]
 #[test_log::test(tokio::test)]
 #[serial_test::serial]
-async fn test_command_with_mixed_content(#[case] #[future] mut agent: Box<dyn AgentWithFixture>) {
+async fn test_command_with_mixed_content(
+    #[case]
+    #[future]
+    mut agent: Box<dyn AgentWithFixture>,
+) {
     agent.with_fixture("test_command_with_mixed_content");
     acp_conformance::slash_commands::test_command_with_mixed_content(&*agent)
         .await
         .expect("test_command_with_mixed_content should succeed");
 }
-

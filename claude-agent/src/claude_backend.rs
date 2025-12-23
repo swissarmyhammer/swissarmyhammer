@@ -36,10 +36,12 @@
 //!
 //! See `tests/test_prompt_recorded.rs` for complete examples.
 
+use crate::claude_process::ClaudeProcess;
 use crate::error::Result;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
+use std::sync::{Arc, Mutex};
 
 /// Trait for Claude process backends
 ///
@@ -161,10 +163,55 @@ impl ClaudeBackend for RecordedClaudeBackend {
     }
 }
 
+/// Backend that uses real Claude process
+///
+/// This wraps a ClaudeProcess and provides the ClaudeBackend interface.
+pub struct RealClaudeBackend {
+    process: Option<ClaudeProcess>,
+}
+
+impl RealClaudeBackend {
+    /// Create a new real backend from a process
+    pub fn new(process: ClaudeProcess) -> Self {
+        Self {
+            process: Some(process),
+        }
+    }
+}
+
+#[async_trait]
+impl ClaudeBackend for RealClaudeBackend {
+    async fn write_line(&mut self, line: &str) -> Result<()> {
+        self.process
+            .as_mut()
+            .ok_or_else(|| crate::AgentError::Internal("Process already shutdown".to_string()))?
+            .write_line(line)
+            .await
+    }
+
+    async fn read_line(&mut self) -> Result<Option<String>> {
+        self.process
+            .as_mut()
+            .ok_or_else(|| crate::AgentError::Internal("Process already shutdown".to_string()))?
+            .read_line()
+            .await
+    }
+
+    async fn shutdown(&mut self) -> Result<()> {
+        if let Some(process) = self.process.take() {
+            process.shutdown().await
+        } else {
+            Ok(())
+        }
+    }
+}
+
 /// Backend that records to a fixture while using real Claude
 ///
-/// This wraps a real backend and captures all I/O to a file on drop.
+/// This wraps a RealClaudeBackend and captures all I/O to a file on drop.
 pub struct RecordingClaudeBackend {
+    /// Real backend for actual Claude process
+    real_backend: RealClaudeBackend,
     /// Output path for the recording
     output_path: std::path::PathBuf,
     /// Recorded exchanges
@@ -175,12 +222,13 @@ pub struct RecordingClaudeBackend {
 
 impl RecordingClaudeBackend {
     /// Create a new recording backend
-    pub fn new(output_path: std::path::PathBuf) -> Self {
+    pub fn new(real_backend: RealClaudeBackend, output_path: std::path::PathBuf) -> Self {
         tracing::info!("RecordingBackend: Will record to {:?}", output_path);
         Self {
+            real_backend,
             output_path,
-            exchanges: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
-            current_exchange: std::sync::Arc::new(std::sync::Mutex::new(None)),
+            exchanges: Arc::new(Mutex::new(Vec::new())),
+            current_exchange: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -198,8 +246,9 @@ impl RecordingClaudeBackend {
             })?;
         }
 
-        let json = serde_json::to_string_pretty(&session)
-            .map_err(|e| crate::AgentError::Internal(format!("Failed to serialize recording: {}", e)))?;
+        let json = serde_json::to_string_pretty(&session).map_err(|e| {
+            crate::AgentError::Internal(format!("Failed to serialize recording: {}", e))
+        })?;
 
         std::fs::write(&self.output_path, json).map_err(|e| {
             crate::AgentError::Internal(format!(
@@ -228,28 +277,42 @@ impl Drop for RecordingClaudeBackend {
 #[async_trait]
 impl ClaudeBackend for RecordingClaudeBackend {
     async fn write_line(&mut self, line: &str) -> Result<()> {
-        // Start a new exchange
-        let mut current = self.current_exchange.lock().unwrap();
-        *current = Some(ClaudeExchange {
-            input: line.to_string(),
-            outputs: Vec::new(),
-        });
+        // Start a new exchange (release lock before await)
+        {
+            let mut current = self.current_exchange.lock().unwrap();
+            *current = Some(ClaudeExchange {
+                input: line.to_string(),
+                outputs: Vec::new(),
+            });
+        }
 
-        // For recording, we don't forward - we just record the intent
-        // The actual process will handle the real I/O
-        tracing::debug!("RecordingBackend: Recorded write_line (will spawn real process)");
-        Ok(())
+        // Forward to real backend
+        self.real_backend.write_line(line).await
     }
 
     async fn read_line(&mut self) -> Result<Option<String>> {
-        // For recording mode, we need to actually read from a real process
-        // This is a placeholder - recording will happen at the process level
-        tracing::warn!("RecordingBackend: read_line called but no real backend configured");
-        Ok(None)
+        // Read from real backend
+        let output = self.real_backend.read_line().await?;
+
+        // Record the output
+        if let Some(ref line) = output {
+            let mut current = self.current_exchange.lock().unwrap();
+            if let Some(ref mut exchange) = *current {
+                exchange.outputs.push(line.clone());
+            }
+        } else {
+            // End of stream - finalize current exchange
+            let mut current = self.current_exchange.lock().unwrap();
+            if let Some(exchange) = current.take() {
+                self.exchanges.lock().unwrap().push(exchange);
+            }
+        }
+
+        Ok(output)
     }
 
     async fn shutdown(&mut self) -> Result<()> {
-        Ok(())
+        self.real_backend.shutdown().await
     }
 }
 

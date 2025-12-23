@@ -16,30 +16,29 @@ pub(crate) type AgentFactory = fn() -> std::pin::Pin<
 >;
 
 /// Llama agent factory for rstest
-pub(crate) fn llama_agent_factory() -> std::pin::Pin<
-    Box<dyn std::future::Future<Output = Box<dyn AgentWithFixture>> + Send>,
-> {
+pub(crate) fn llama_agent_factory(
+) -> std::pin::Pin<Box<dyn std::future::Future<Output = Box<dyn AgentWithFixture>> + Send>> {
     Box::pin(async {
-        create_llama_agent().await.expect("Failed to create llama agent")
+        create_llama_agent()
+            .await
+            .expect("Failed to create llama agent")
     })
 }
 
 /// Claude agent factory for rstest
-pub(crate) fn claude_agent_factory() -> std::pin::Pin<
-    Box<dyn std::future::Future<Output = Box<dyn AgentWithFixture>> + Send>,
-> {
+pub(crate) fn claude_agent_factory(
+) -> std::pin::Pin<Box<dyn std::future::Future<Output = Box<dyn AgentWithFixture>> + Send>> {
     Box::pin(async {
-        create_claude_agent().await.expect("Failed to create claude agent")
+        create_claude_agent()
+            .await
+            .expect("Failed to create claude agent")
     })
 }
 
 /// Generic agent factory for rstest (uses llama)
-pub(crate) fn agent_agent_factory() -> std::pin::Pin<
-    Box<dyn std::future::Future<Output = Box<dyn AgentWithFixture>> + Send>,
-> {
-    Box::pin(async {
-        create_agent().await.expect("Failed to create agent")
-    })
+pub(crate) fn agent_agent_factory(
+) -> std::pin::Pin<Box<dyn std::future::Future<Output = Box<dyn AgentWithFixture>> + Send>> {
+    Box::pin(async { create_agent().await.expect("Failed to create agent") })
 }
 
 /// Create claude-agent for testing

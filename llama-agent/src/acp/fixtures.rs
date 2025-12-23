@@ -34,14 +34,16 @@ impl AgentWithFixture for super::AcpServer {
 
             // Recreate generation backend with new mode
             agent_server.generation_backend = match &agent_server.config.mode {
-                crate::types::LlamaAgentMode::Normal => Arc::new(
-                    crate::generation_backend::RealGenerationBackend::new(
+                crate::types::LlamaAgentMode::Normal => {
+                    Arc::new(crate::generation_backend::RealGenerationBackend::new(
                         agent_server.request_queue.clone(),
                         agent_server.session_manager.clone(),
-                    ),
-                ),
+                    ))
+                }
                 crate::types::LlamaAgentMode::Playback { input_path } => {
-                    match crate::generation_backend::RecordedGenerationBackend::from_file(input_path) {
+                    match crate::generation_backend::RecordedGenerationBackend::from_file(
+                        input_path,
+                    ) {
                         Ok(backend) => Arc::new(backend),
                         Err(_) => Arc::new(crate::generation_backend::RealGenerationBackend::new(
                             agent_server.request_queue.clone(),
@@ -49,15 +51,15 @@ impl AgentWithFixture for super::AcpServer {
                         )),
                     }
                 }
-                crate::types::LlamaAgentMode::Record { output_path } => Arc::new(
-                    crate::generation_backend::RecordingGenerationBackend::new(
+                crate::types::LlamaAgentMode::Record { output_path } => {
+                    Arc::new(crate::generation_backend::RecordingGenerationBackend::new(
                         Arc::new(crate::generation_backend::RealGenerationBackend::new(
                             agent_server.request_queue.clone(),
                             agent_server.session_manager.clone(),
                         )),
                         output_path.clone(),
-                    ),
-                ),
+                    ))
+                }
             };
         }
     }

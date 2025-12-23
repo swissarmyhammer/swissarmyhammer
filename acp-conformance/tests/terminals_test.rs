@@ -12,7 +12,11 @@ use rstest::rstest;
 #[awt]
 #[test_log::test(tokio::test)]
 #[serial_test::serial]
-async fn test_terminal_capability_check(#[case] #[future] mut agent: Box<dyn AgentWithFixture>) {
+async fn test_terminal_capability_check(
+    #[case]
+    #[future]
+    mut agent: Box<dyn AgentWithFixture>,
+) {
     agent.with_fixture("test_terminal_capability_check");
     acp_conformance::terminals::test_terminal_capability_check(&*agent)
         .await
@@ -25,7 +29,11 @@ async fn test_terminal_capability_check(#[case] #[future] mut agent: Box<dyn Age
 #[awt]
 #[test_log::test(tokio::test)]
 #[serial_test::serial]
-async fn test_terminal_create(#[case] #[future] mut agent: Box<dyn AgentWithFixture>) {
+async fn test_terminal_create(
+    #[case]
+    #[future]
+    mut agent: Box<dyn AgentWithFixture>,
+) {
     agent.with_fixture("test_terminal_create");
     acp_conformance::terminals::test_terminal_create(&*agent)
         .await
@@ -38,7 +46,11 @@ async fn test_terminal_create(#[case] #[future] mut agent: Box<dyn AgentWithFixt
 #[awt]
 #[test_log::test(tokio::test)]
 #[serial_test::serial]
-async fn test_terminal_output(#[case] #[future] mut agent: Box<dyn AgentWithFixture>) {
+async fn test_terminal_output(
+    #[case]
+    #[future]
+    mut agent: Box<dyn AgentWithFixture>,
+) {
     agent.with_fixture("test_terminal_output");
     acp_conformance::terminals::test_terminal_output(&*agent)
         .await
@@ -51,7 +63,11 @@ async fn test_terminal_output(#[case] #[future] mut agent: Box<dyn AgentWithFixt
 #[awt]
 #[test_log::test(tokio::test)]
 #[serial_test::serial]
-async fn test_terminal_wait_for_exit(#[case] #[future] mut agent: Box<dyn AgentWithFixture>) {
+async fn test_terminal_wait_for_exit(
+    #[case]
+    #[future]
+    mut agent: Box<dyn AgentWithFixture>,
+) {
     agent.with_fixture("test_terminal_wait_for_exit");
     acp_conformance::terminals::test_terminal_wait_for_exit(&*agent)
         .await
@@ -64,7 +80,11 @@ async fn test_terminal_wait_for_exit(#[case] #[future] mut agent: Box<dyn AgentW
 #[awt]
 #[test_log::test(tokio::test)]
 #[serial_test::serial]
-async fn test_terminal_kill(#[case] #[future] mut agent: Box<dyn AgentWithFixture>) {
+async fn test_terminal_kill(
+    #[case]
+    #[future]
+    mut agent: Box<dyn AgentWithFixture>,
+) {
     agent.with_fixture("test_terminal_kill");
     acp_conformance::terminals::test_terminal_kill(&*agent)
         .await
@@ -77,7 +97,11 @@ async fn test_terminal_kill(#[case] #[future] mut agent: Box<dyn AgentWithFixtur
 #[awt]
 #[test_log::test(tokio::test)]
 #[serial_test::serial]
-async fn test_terminal_release(#[case] #[future] mut agent: Box<dyn AgentWithFixture>) {
+async fn test_terminal_release(
+    #[case]
+    #[future]
+    mut agent: Box<dyn AgentWithFixture>,
+) {
     agent.with_fixture("test_terminal_release");
     acp_conformance::terminals::test_terminal_release(&*agent)
         .await
@@ -90,10 +114,13 @@ async fn test_terminal_release(#[case] #[future] mut agent: Box<dyn AgentWithFix
 #[awt]
 #[test_log::test(tokio::test)]
 #[serial_test::serial]
-async fn test_terminal_timeout(#[case] #[future] mut agent: Box<dyn AgentWithFixture>) {
+async fn test_terminal_timeout(
+    #[case]
+    #[future]
+    mut agent: Box<dyn AgentWithFixture>,
+) {
     agent.with_fixture("test_terminal_timeout");
     acp_conformance::terminals::test_terminal_timeout(&*agent)
         .await
         .expect("test_terminal_timeout should succeed");
 }
-

@@ -13,7 +13,9 @@ use rstest::rstest;
 #[test_log::test(tokio::test)]
 #[serial_test::serial]
 async fn test_basic_prompt_response(
-    #[case] #[future] mut agent: Box<dyn AgentWithFixture>,
+    #[case]
+    #[future]
+    mut agent: Box<dyn AgentWithFixture>,
 ) {
     agent.with_fixture("test_basic_prompt_response");
     acp_conformance::prompt_turn::test_basic_prompt_response(&*agent)
@@ -28,7 +30,9 @@ async fn test_basic_prompt_response(
 #[test_log::test(tokio::test)]
 #[serial_test::serial]
 async fn test_prompt_completion(
-    #[case] #[future] mut agent: Box<dyn AgentWithFixture>,
+    #[case]
+    #[future]
+    mut agent: Box<dyn AgentWithFixture>,
 ) {
     agent.with_fixture("test_prompt_completion");
     acp_conformance::prompt_turn::test_prompt_completion(&*agent)
@@ -43,7 +47,9 @@ async fn test_prompt_completion(
 #[test_log::test(tokio::test)]
 #[serial_test::serial]
 async fn test_stop_reasons(
-    #[case] #[future] mut agent: Box<dyn AgentWithFixture>,
+    #[case]
+    #[future]
+    mut agent: Box<dyn AgentWithFixture>,
 ) {
     agent.with_fixture("test_stop_reasons");
     acp_conformance::prompt_turn::test_stop_reasons(&*agent)
@@ -58,7 +64,9 @@ async fn test_stop_reasons(
 #[test_log::test(tokio::test)]
 #[serial_test::serial]
 async fn test_cancellation(
-    #[case] #[future] mut agent: Box<dyn AgentWithFixture>,
+    #[case]
+    #[future]
+    mut agent: Box<dyn AgentWithFixture>,
 ) {
     agent.with_fixture("test_cancellation");
     acp_conformance::prompt_turn::test_cancellation(&*agent)
@@ -73,7 +81,9 @@ async fn test_cancellation(
 #[test_log::test(tokio::test)]
 #[serial_test::serial]
 async fn test_multiple_prompts(
-    #[case] #[future] mut agent: Box<dyn AgentWithFixture>,
+    #[case]
+    #[future]
+    mut agent: Box<dyn AgentWithFixture>,
 ) {
     agent.with_fixture("test_multiple_prompts");
     acp_conformance::prompt_turn::test_multiple_prompts(&*agent)

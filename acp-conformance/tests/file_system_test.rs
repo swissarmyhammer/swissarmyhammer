@@ -12,7 +12,11 @@ use rstest::rstest;
 #[awt]
 #[test_log::test(tokio::test)]
 #[serial_test::serial]
-async fn test_read_text_file_capability_check(#[case] #[future] mut agent: Box<dyn AgentWithFixture>) {
+async fn test_read_text_file_capability_check(
+    #[case]
+    #[future]
+    mut agent: Box<dyn AgentWithFixture>,
+) {
     agent.with_fixture("test_read_text_file_capability_check");
     acp_conformance::file_system::test_read_text_file_capability_check(&*agent)
         .await
@@ -25,7 +29,11 @@ async fn test_read_text_file_capability_check(#[case] #[future] mut agent: Box<d
 #[awt]
 #[test_log::test(tokio::test)]
 #[serial_test::serial]
-async fn test_write_text_file_capability_check(#[case] #[future] mut agent: Box<dyn AgentWithFixture>) {
+async fn test_write_text_file_capability_check(
+    #[case]
+    #[future]
+    mut agent: Box<dyn AgentWithFixture>,
+) {
     agent.with_fixture("test_write_text_file_capability_check");
     acp_conformance::file_system::test_write_text_file_capability_check(&*agent)
         .await
@@ -38,7 +46,11 @@ async fn test_write_text_file_capability_check(#[case] #[future] mut agent: Box<
 #[awt]
 #[test_log::test(tokio::test)]
 #[serial_test::serial]
-async fn test_read_text_file_basic(#[case] #[future] mut agent: Box<dyn AgentWithFixture>) {
+async fn test_read_text_file_basic(
+    #[case]
+    #[future]
+    mut agent: Box<dyn AgentWithFixture>,
+) {
     agent.with_fixture("test_read_text_file_basic");
     acp_conformance::file_system::test_read_text_file_basic(&*agent)
         .await
@@ -51,7 +63,11 @@ async fn test_read_text_file_basic(#[case] #[future] mut agent: Box<dyn AgentWit
 #[awt]
 #[test_log::test(tokio::test)]
 #[serial_test::serial]
-async fn test_read_text_file_with_range(#[case] #[future] mut agent: Box<dyn AgentWithFixture>) {
+async fn test_read_text_file_with_range(
+    #[case]
+    #[future]
+    mut agent: Box<dyn AgentWithFixture>,
+) {
     agent.with_fixture("test_read_text_file_with_range");
     acp_conformance::file_system::test_read_text_file_with_range(&*agent)
         .await
@@ -64,7 +80,11 @@ async fn test_read_text_file_with_range(#[case] #[future] mut agent: Box<dyn Age
 #[awt]
 #[test_log::test(tokio::test)]
 #[serial_test::serial]
-async fn test_write_text_file_basic(#[case] #[future] mut agent: Box<dyn AgentWithFixture>) {
+async fn test_write_text_file_basic(
+    #[case]
+    #[future]
+    mut agent: Box<dyn AgentWithFixture>,
+) {
     agent.with_fixture("test_write_text_file_basic");
     acp_conformance::file_system::test_write_text_file_basic(&*agent)
         .await
@@ -77,7 +97,11 @@ async fn test_write_text_file_basic(#[case] #[future] mut agent: Box<dyn AgentWi
 #[awt]
 #[test_log::test(tokio::test)]
 #[serial_test::serial]
-async fn test_write_text_file_creates_new(#[case] #[future] mut agent: Box<dyn AgentWithFixture>) {
+async fn test_write_text_file_creates_new(
+    #[case]
+    #[future]
+    mut agent: Box<dyn AgentWithFixture>,
+) {
     agent.with_fixture("test_write_text_file_creates_new");
     acp_conformance::file_system::test_write_text_file_creates_new(&*agent)
         .await
@@ -90,10 +114,13 @@ async fn test_write_text_file_creates_new(#[case] #[future] mut agent: Box<dyn A
 #[awt]
 #[test_log::test(tokio::test)]
 #[serial_test::serial]
-async fn test_read_write_integration(#[case] #[future] mut agent: Box<dyn AgentWithFixture>) {
+async fn test_read_write_integration(
+    #[case]
+    #[future]
+    mut agent: Box<dyn AgentWithFixture>,
+) {
     agent.with_fixture("test_read_write_integration");
     acp_conformance::file_system::test_read_write_integration(&*agent)
         .await
         .expect("test_read_write_integration should succeed");
 }
-

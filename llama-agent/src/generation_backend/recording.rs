@@ -27,10 +27,7 @@ pub struct RecordingGenerationBackend {
 
 impl RecordingGenerationBackend {
     /// Create a new recording backend
-    pub fn new(
-        real_backend: Arc<RealGenerationBackend>,
-        output_path: PathBuf,
-    ) -> Self {
+    pub fn new(real_backend: Arc<RealGenerationBackend>, output_path: PathBuf) -> Self {
         tracing::info!("RecordingBackend: Will record to {:?}", output_path);
         Self {
             real_backend,
