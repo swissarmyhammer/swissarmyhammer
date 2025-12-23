@@ -1478,11 +1478,15 @@ impl ClaudeAgent {
         }
 
         // If Record mode, ensure backend is initialized before streaming
+        tracing::info!("Checking Record mode: {:?}", self.config.claude.mode);
         if matches!(self.config.claude.mode, crate::config::ClaudeAgentMode::Record { .. }) {
+            tracing::info!("In Record mode, initializing RecordingBackend");
             if let crate::config::ClaudeAgentMode::Record { ref output_path } = self.config.claude.mode {
                 let client_ptr = Arc::as_ptr(&self.claude_client) as *mut crate::claude::ClaudeClient;
                 unsafe {
+                    tracing::info!("Backend is_none: {}", (*client_ptr).backend.is_none());
                     if (*client_ptr).backend.is_none() {
+                        tracing::info!("Calling ensure_recording_backend");
                         (*client_ptr)
                             .ensure_recording_backend(&session_id, &session.cwd, output_path.clone())
                             .await
