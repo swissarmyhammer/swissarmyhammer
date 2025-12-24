@@ -78,69 +78,43 @@ impl<A: Agent> Drop for RecordingAgent<A> {
     }
 }
 
+#[async_trait::async_trait(?Send)]
 impl<A: Agent> Agent for RecordingAgent<A> {
-    fn initialize(
-        &self,
-        request: InitializeRequest,
-    ) -> Pin<Box<dyn std::future::Future<Output = agent_client_protocol::Result<InitializeResponse>> + Send>> {
-        // Just forward for now - recording will be added later
-        self.inner.initialize(request)
+    async fn initialize(&self, request: InitializeRequest) -> agent_client_protocol::Result<InitializeResponse> {
+        // Just forward - recording will be added later
+        self.inner.initialize(request).await
     }
 
-    fn authenticate(
-        &self,
-        request: AuthenticateRequest,
-    ) -> Pin<Box<dyn std::future::Future<Output = agent_client_protocol::Result<AuthenticateResponse>> + Send>> {
-        self.inner.authenticate(request)
+    async fn authenticate(&self, request: AuthenticateRequest) -> agent_client_protocol::Result<AuthenticateResponse> {
+        self.inner.authenticate(request).await
     }
 
-    fn new_session(
-        &self,
-        request: NewSessionRequest,
-    ) -> Pin<Box<dyn std::future::Future<Output = agent_client_protocol::Result<NewSessionResponse>> + Send>> {
-        self.inner.new_session(request)
+    async fn new_session(&self, request: NewSessionRequest) -> agent_client_protocol::Result<NewSessionResponse> {
+        self.inner.new_session(request).await
     }
 
-    fn prompt(
-        &self,
-        request: PromptRequest,
-    ) -> Pin<Box<dyn std::future::Future<Output = agent_client_protocol::Result<PromptResponse>> + Send>> {
-        self.inner.prompt(request)
+    async fn prompt(&self, request: PromptRequest) -> agent_client_protocol::Result<PromptResponse> {
+        self.inner.prompt(request).await
     }
 
-    fn cancel(
-        &self,
-        request: CancelNotification,
-    ) -> Pin<Box<dyn std::future::Future<Output = agent_client_protocol::Result<()>> + Send>> {
-        self.inner.cancel(request)
+    async fn cancel(&self, request: CancelNotification) -> agent_client_protocol::Result<()> {
+        self.inner.cancel(request).await
     }
 
-    fn load_session(
-        &self,
-        request: LoadSessionRequest,
-    ) -> Pin<Box<dyn std::future::Future<Output = agent_client_protocol::Result<LoadSessionResponse>> + Send>> {
-        self.inner.load_session(request)
+    async fn load_session(&self, request: LoadSessionRequest) -> agent_client_protocol::Result<LoadSessionResponse> {
+        self.inner.load_session(request).await
     }
 
-    fn set_session_mode(
-        &self,
-        request: SetSessionModeRequest,
-    ) -> Pin<Box<dyn std::future::Future<Output = agent_client_protocol::Result<SetSessionModeResponse>> + Send>> {
-        self.inner.set_session_mode(request)
+    async fn set_session_mode(&self, request: SetSessionModeRequest) -> agent_client_protocol::Result<SetSessionModeResponse> {
+        self.inner.set_session_mode(request).await
     }
 
-    fn ext_method(
-        &self,
-        request: ExtRequest,
-    ) -> Pin<Box<dyn std::future::Future<Output = agent_client_protocol::Result<ExtResponse>> + Send>> {
-        self.inner.ext_method(request)
+    async fn ext_method(&self, request: ExtRequest) -> agent_client_protocol::Result<ExtResponse> {
+        self.inner.ext_method(request).await
     }
 
-    fn ext_notification(
-        &self,
-        notification: ExtNotification,
-    ) -> Pin<Box<dyn std::future::Future<Output = agent_client_protocol::Result<()>> + Send>> {
-        self.inner.ext_notification(notification)
+    async fn ext_notification(&self, notification: ExtNotification) -> agent_client_protocol::Result<()> {
+        self.inner.ext_notification(notification).await
     }
 }
 

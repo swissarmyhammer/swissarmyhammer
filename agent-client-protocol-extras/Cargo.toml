@@ -10,6 +10,7 @@ homepage.workspace = true
 
 [dependencies]
 agent-client-protocol.workspace = true
+async-trait.workspace = true
 futures.workspace = true
 tracing.workspace = true
 serde.workspace = true
