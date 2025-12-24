@@ -3405,3 +3405,12 @@ mod tests {
         }
     }
 }
+
+use agent_client_protocol_extras::AgentWithFixture;
+
+impl AgentWithFixture for AcpServer {
+    fn agent_type(&self) -> &'static str {
+        "llama"
+    }
+}
+

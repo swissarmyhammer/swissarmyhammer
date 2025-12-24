@@ -16,9 +16,11 @@
         "agentCapabilities": {
           "_meta": {
             "streaming": true,
-            "supports_modes": true,
-            "supports_plans": true,
-            "supports_slash_commands": true
+            "tools": [
+              "fs_read",
+              "fs_write",
+              "fs_list"
+            ]
           },
           "loadSession": true,
           "mcpCapabilities": {
@@ -29,15 +31,15 @@
             "_meta": {
               "streaming": true
             },
-            "audio": false,
-            "embeddedContext": false,
-            "image": false
+            "audio": true,
+            "embeddedContext": true,
+            "image": true
           },
           "sessionCapabilities": {}
         },
         "agentInfo": {
-          "name": "llama-agent",
-          "title": "LLaMA Agent v0.3.0",
+          "name": "claude-agent",
+          "title": "Claude Agent v0.3.0",
           "version": "0.3.0"
         },
         "authMethods": [],
@@ -51,7 +53,7 @@
         "mcpServers": []
       },
       "response": {
-        "sessionId": "01KD861ZZRFQHYPN6N4FZG1K8B"
+        "sessionId": "01KD8620SBFAEJFWNWD4D40BXR"
       }
     },
     {
@@ -63,11 +65,14 @@
             "type": "text"
           }
         ],
-        "sessionId": "01KD861ZZRFQHYPN6N4FZG1K8B"
+        "sessionId": "01KD8620SBFAEJFWNWD4D40BXR"
       },
       "response": {
         "_meta": {
-          "tokens_generated": 5050
+          "claude_response": "I'm doing well, thanks! Ready to help you with your software engineering tasks.\n\nI can see you're working on the `acp-conformance` project with some recent changes to agent fixtures and the recording agent implementation. Is there anything specific you'd like to work on, or would you like me to help with something in the codebase?",
+          "processed": true,
+          "session_messages": 3,
+          "streaming": false
         },
         "stopReason": "end_turn"
       }

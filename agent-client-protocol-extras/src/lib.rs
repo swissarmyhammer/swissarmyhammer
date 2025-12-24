@@ -22,7 +22,28 @@ use agent_client_protocol::Agent;
 use std::path::PathBuf;
 
 pub mod recording;
+pub mod playback;
+
 pub use recording::RecordingAgent;
+pub use playback::PlaybackAgent;
+
+/// Wrap agent with fixture (recording or playback)
+///
+/// Returns PlaybackAgent if fixture exists, RecordingAgent if not.
+pub fn with_fixture<A: AgentWithFixture + 'static>(
+    agent: A,
+    test_name: &str,
+) -> Box<dyn AgentWithFixture> {
+    let path = get_fixture_path_for(agent.agent_type(), test_name);
+
+    if path.exists() {
+        tracing::info!("Fixture exists, using playback: {:?}", path);
+        Box::new(PlaybackAgent::new(path, agent.agent_type()))
+    } else {
+        tracing::info!("Fixture missing, using recording: {:?}", path);
+        Box::new(RecordingAgent::new(agent, path))
+    }
+}
 
 /// Marker trait for agents used in conformance testing
 ///

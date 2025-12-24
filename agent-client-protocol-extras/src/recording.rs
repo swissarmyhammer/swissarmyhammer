@@ -6,10 +6,8 @@ use agent_client_protocol::{
     LoadSessionResponse, NewSessionRequest, NewSessionResponse, PromptRequest, PromptResponse,
     SetSessionModeRequest, SetSessionModeResponse,
 };
-use futures::FutureExt;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
-use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 
 /// Recorded method call
@@ -33,7 +31,7 @@ pub struct RecordingAgent<A> {
     calls: Arc<Mutex<Vec<RecordedCall>>>,
 }
 
-impl<A: Agent> RecordingAgent<A> {
+impl<A> RecordingAgent<A> {
     pub fn new(inner: A, path: PathBuf) -> Self {
         tracing::info!("RecordingAgent: Will record to {:?}", path);
         Self {
@@ -81,8 +79,9 @@ impl<A> Drop for RecordingAgent<A> {
 #[async_trait::async_trait(?Send)]
 impl<A: Agent> Agent for RecordingAgent<A> {
     async fn initialize(&self, request: InitializeRequest) -> agent_client_protocol::Result<InitializeResponse> {
-        // Just forward - recording will be added later
-        self.inner.initialize(request).await
+        let response = self.inner.initialize(request.clone()).await?;
+        self.record("initialize", &request, &response);
+        Ok(response)
     }
 
     async fn authenticate(&self, request: AuthenticateRequest) -> agent_client_protocol::Result<AuthenticateResponse> {
@@ -90,11 +89,15 @@ impl<A: Agent> Agent for RecordingAgent<A> {
     }
 
     async fn new_session(&self, request: NewSessionRequest) -> agent_client_protocol::Result<NewSessionResponse> {
-        self.inner.new_session(request).await
+        let response = self.inner.new_session(request.clone()).await?;
+        self.record("new_session", &request, &response);
+        Ok(response)
     }
 
     async fn prompt(&self, request: PromptRequest) -> agent_client_protocol::Result<PromptResponse> {
-        self.inner.prompt(request).await
+        let response = self.inner.prompt(request.clone()).await?;
+        self.record("prompt", &request, &response);
+        Ok(response)
     }
 
     async fn cancel(&self, request: CancelNotification) -> agent_client_protocol::Result<()> {

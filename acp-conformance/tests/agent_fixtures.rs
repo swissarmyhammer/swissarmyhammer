@@ -3,9 +3,7 @@
 //! One factory per agent type. All return Box<dyn AgentWithFixture>.
 //! Tests call agent.use_fixture("test_name") to auto-configure record/playback.
 
-use agent_client_protocol::Agent;
 use agent_client_protocol_extras::AgentWithFixture;
-use std::sync::Arc;
 
 /// Result type for agent creation
 pub type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
@@ -43,28 +41,32 @@ pub(crate) fn agent_agent_factory(
 
 /// Create claude-agent for testing
 async fn create_claude_agent() -> Result<Box<dyn AgentWithFixture>> {
-    use agent_client_protocol_extras::{get_fixture_path_for, get_test_name_from_thread, RecordingAgent};
+    use agent_client_protocol_extras::get_test_name_from_thread;
 
     let config = claude_agent::config::AgentConfig::default();
     let (agent, _receiver) = claude_agent::agent::ClaudeAgent::new(config).await?;
 
     let test_name = get_test_name_from_thread();
-    let path = get_fixture_path_for(agent.agent_type(), &test_name);
-
-    // Wrap in RecordingAgent - it will record on first run, save on drop
-    Ok(Box::new(RecordingAgent::new(agent, path)))
+    Ok(agent_client_protocol_extras::with_fixture(agent, &test_name))
 }
 
 /// Create llama-agent for testing
 async fn create_llama_agent() -> Result<Box<dyn AgentWithFixture>> {
-    use agent_client_protocol_extras::{get_fixture_path_for, get_test_name_from_thread, RecordingAgent};
+    use agent_client_protocol_extras::get_test_name_from_thread;
 
-    let agent = llama_agent::acp::AcpServer::for_testing(None)?;
+    // Use test model config
+    use llama_agent::test_models::{TEST_MODEL_FILE, TEST_MODEL_REPO};
+    let mut config = llama_agent::types::AgentConfig::default();
+    config.model.source = llama_agent::types::ModelSource::HuggingFace {
+        repo: TEST_MODEL_REPO.to_string(),
+        filename: Some(TEST_MODEL_FILE.to_string()),
+        folder: None,
+    };
+
+    let agent = llama_agent::acp::test_utils::create_acp_server(config).await?;
+
     let test_name = get_test_name_from_thread();
-    let path = get_fixture_path_for(agent.agent_type(), &test_name);
-
-    // Wrap in RecordingAgent - it will record on first run, save on drop
-    Ok(Box::new(RecordingAgent::new(agent, path)))
+    Ok(agent_client_protocol_extras::with_fixture(agent, &test_name))
 }
 
 /// Create generic agent (uses llama)
