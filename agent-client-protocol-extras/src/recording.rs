@@ -70,7 +70,7 @@ impl<A: Agent> RecordingAgent<A> {
     }
 }
 
-impl<A: Agent> Drop for RecordingAgent<A> {
+impl<A> Drop for RecordingAgent<A> {
     fn drop(&mut self) {
         if let Err(e) = self.save() {
             tracing::error!("Failed to save recording: {}", e);
