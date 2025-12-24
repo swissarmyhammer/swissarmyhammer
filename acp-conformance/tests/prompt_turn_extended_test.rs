@@ -20,9 +20,9 @@ use rstest::rstest;
 #[test_log::test(tokio::test)]
 #[serial_test::serial]
 async fn test_empty_prompt_handling(
-    #[case] #[future] mut agent: Box<dyn AgentWithFixture>,
+    #[case] #[future]agent: Box<dyn AgentWithFixture>,
 ) {
-    agent.with_fixture("test_empty_prompt_handling");
+
 
     // Initialize agent
     let client_caps = ClientCapabilities::new();
@@ -66,8 +66,8 @@ async fn test_empty_prompt_handling(
 #[awt]
 #[test_log::test(tokio::test)]
 #[serial_test::serial]
-async fn test_long_prompt_handling(#[case] #[future] mut agent: Box<dyn AgentWithFixture>) {
-    agent.with_fixture("test_long_prompt_handling");
+async fn test_long_prompt_handling(#[case] #[future]agent: Box<dyn AgentWithFixture>) {
+
 
     // Initialize agent
     let client_caps = ClientCapabilities::new();
@@ -115,9 +115,9 @@ async fn test_long_prompt_handling(#[case] #[future] mut agent: Box<dyn AgentWit
 #[test_log::test(tokio::test)]
 #[serial_test::serial]
 async fn test_special_characters_in_prompt(
-    #[case] #[future] mut agent: Box<dyn AgentWithFixture>,
+    #[case] #[future]agent: Box<dyn AgentWithFixture>,
 ) {
-    agent.with_fixture("test_special_characters_in_prompt");
+
 
     // Initialize agent
     let client_caps = ClientCapabilities::new();
@@ -153,8 +153,8 @@ async fn test_special_characters_in_prompt(
 #[awt]
 #[test_log::test(tokio::test)]
 #[serial_test::serial]
-async fn test_multiple_content_blocks(#[case] #[future] mut agent: Box<dyn AgentWithFixture>) {
-    agent.with_fixture("test_multiple_content_blocks");
+async fn test_multiple_content_blocks(#[case] #[future]agent: Box<dyn AgentWithFixture>) {
+
 
     // Initialize agent
     let client_caps = ClientCapabilities::new();
@@ -193,8 +193,8 @@ async fn test_multiple_content_blocks(#[case] #[future] mut agent: Box<dyn Agent
 #[awt]
 #[test_log::test(tokio::test)]
 #[serial_test::serial]
-async fn test_rapid_sequential_prompts(#[case] #[future] mut agent: Box<dyn AgentWithFixture>) {
-    agent.with_fixture("test_rapid_sequential_prompts");
+async fn test_rapid_sequential_prompts(#[case] #[future]agent: Box<dyn AgentWithFixture>) {
+
 
     // Initialize agent
     let client_caps = ClientCapabilities::new();
@@ -234,8 +234,8 @@ async fn test_rapid_sequential_prompts(#[case] #[future] mut agent: Box<dyn Agen
 #[awt]
 #[test_log::test(tokio::test)]
 #[serial_test::serial]
-async fn test_prompt_invalid_session(#[case] #[future] mut agent: Box<dyn AgentWithFixture>) {
-    agent.with_fixture("test_prompt_invalid_session");
+async fn test_prompt_invalid_session(#[case] #[future]agent: Box<dyn AgentWithFixture>) {
+
 
     // Initialize agent
     let client_caps = ClientCapabilities::new();
@@ -266,9 +266,9 @@ async fn test_prompt_invalid_session(#[case] #[future] mut agent: Box<dyn AgentW
 #[test_log::test(tokio::test)]
 #[serial_test::serial]
 async fn test_end_turn_stop_reason_common(
-    #[case] #[future] mut agent: Box<dyn AgentWithFixture>,
+    #[case] #[future]agent: Box<dyn AgentWithFixture>,
 ) {
-    agent.with_fixture("test_end_turn_stop_reason_common");
+
 
     // Initialize agent
     let client_caps = ClientCapabilities::new();
@@ -303,9 +303,9 @@ async fn test_end_turn_stop_reason_common(
 #[test_log::test(tokio::test)]
 #[serial_test::serial]
 async fn test_prompt_without_initialization(
-    #[case] #[future] mut agent: Box<dyn AgentWithFixture>,
+    #[case] #[future]agent: Box<dyn AgentWithFixture>,
 ) {
-    agent.with_fixture("test_prompt_without_initialization");
+
 
     // Create session WITHOUT initializing
     let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("/tmp"));

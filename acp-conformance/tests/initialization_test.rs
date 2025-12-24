@@ -15,9 +15,9 @@ use rstest::rstest;
 async fn test_minimal_initialization(
     #[case]
     #[future]
-    mut agent: Box<dyn AgentWithFixture>,
+agent: Box<dyn AgentWithFixture>,
 ) {
-    agent.with_fixture("test_minimal_initialization");
+
     acp_conformance::initialization::test_minimal_initialization(&*agent)
         .await
         .expect("Minimal initialization should succeed");
@@ -32,9 +32,9 @@ async fn test_minimal_initialization(
 async fn test_full_capabilities_initialization(
     #[case]
     #[future]
-    mut agent: Box<dyn AgentWithFixture>,
+agent: Box<dyn AgentWithFixture>,
 ) {
-    agent.with_fixture("test_full_capabilities_initialization");
+
     acp_conformance::initialization::test_full_capabilities_initialization(&*agent)
         .await
         .expect("Full capabilities initialization should succeed");
@@ -49,9 +49,9 @@ async fn test_full_capabilities_initialization(
 async fn test_protocol_version_negotiation(
     #[case]
     #[future]
-    mut agent: Box<dyn AgentWithFixture>,
+agent: Box<dyn AgentWithFixture>,
 ) {
-    agent.with_fixture("test_protocol_version_negotiation");
+
     acp_conformance::initialization::test_protocol_version_negotiation(&*agent)
         .await
         .expect("Protocol version negotiation should succeed");
@@ -66,9 +66,9 @@ async fn test_protocol_version_negotiation(
 async fn test_minimal_client_capabilities(
     #[case]
     #[future]
-    mut agent: Box<dyn AgentWithFixture>,
+agent: Box<dyn AgentWithFixture>,
 ) {
-    agent.with_fixture("test_minimal_client_capabilities");
+
     acp_conformance::initialization::test_minimal_client_capabilities(&*agent)
         .await
         .expect("Minimal client capabilities should succeed");
@@ -83,9 +83,9 @@ async fn test_minimal_client_capabilities(
 async fn test_initialize_idempotent(
     #[case]
     #[future]
-    mut agent: Box<dyn AgentWithFixture>,
+agent: Box<dyn AgentWithFixture>,
 ) {
-    agent.with_fixture("test_initialize_idempotent");
+
     acp_conformance::initialization::test_initialize_idempotent(&*agent)
         .await
         .expect("Initialize idempotent should succeed");
@@ -100,9 +100,9 @@ async fn test_initialize_idempotent(
 async fn test_with_client_info(
     #[case]
     #[future]
-    mut agent: Box<dyn AgentWithFixture>,
+agent: Box<dyn AgentWithFixture>,
 ) {
-    agent.with_fixture("test_with_client_info");
+
     acp_conformance::initialization::test_with_client_info(&*agent)
         .await
         .expect("With client info should succeed");

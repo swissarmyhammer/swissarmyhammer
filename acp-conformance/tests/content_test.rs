@@ -15,9 +15,9 @@ use rstest::rstest;
 async fn test_text_content_support(
     #[case]
     #[future]
-    mut agent: Box<dyn AgentWithFixture>,
+agent: Box<dyn AgentWithFixture>,
 ) {
-    agent.with_fixture("test_text_content_support");
+
     acp_conformance::content::test_text_content_support(&*agent)
         .await
         .expect("test_text_content_support should succeed");
@@ -32,9 +32,9 @@ async fn test_text_content_support(
 async fn test_image_content_with_capability(
     #[case]
     #[future]
-    mut agent: Box<dyn AgentWithFixture>,
+agent: Box<dyn AgentWithFixture>,
 ) {
-    agent.with_fixture("test_image_content_with_capability");
+
     acp_conformance::content::test_image_content_with_capability(&*agent)
         .await
         .expect("test_image_content_with_capability should succeed");
@@ -49,9 +49,9 @@ async fn test_image_content_with_capability(
 async fn test_audio_content_with_capability(
     #[case]
     #[future]
-    mut agent: Box<dyn AgentWithFixture>,
+agent: Box<dyn AgentWithFixture>,
 ) {
-    agent.with_fixture("test_audio_content_with_capability");
+
     acp_conformance::content::test_audio_content_with_capability(&*agent)
         .await
         .expect("test_audio_content_with_capability should succeed");
@@ -66,9 +66,9 @@ async fn test_audio_content_with_capability(
 async fn test_embedded_resource_with_capability(
     #[case]
     #[future]
-    mut agent: Box<dyn AgentWithFixture>,
+agent: Box<dyn AgentWithFixture>,
 ) {
-    agent.with_fixture("test_embedded_resource_with_capability");
+
     acp_conformance::content::test_embedded_resource_with_capability(&*agent)
         .await
         .expect("test_embedded_resource_with_capability should succeed");
@@ -83,9 +83,9 @@ async fn test_embedded_resource_with_capability(
 async fn test_resource_link_content(
     #[case]
     #[future]
-    mut agent: Box<dyn AgentWithFixture>,
+agent: Box<dyn AgentWithFixture>,
 ) {
-    agent.with_fixture("test_resource_link_content");
+
     acp_conformance::content::test_resource_link_content(&*agent)
         .await
         .expect("test_resource_link_content should succeed");
@@ -100,9 +100,9 @@ async fn test_resource_link_content(
 async fn test_content_validation(
     #[case]
     #[future]
-    mut agent: Box<dyn AgentWithFixture>,
+agent: Box<dyn AgentWithFixture>,
 ) {
-    agent.with_fixture("test_content_validation");
+
     acp_conformance::content::test_content_validation(&*agent)
         .await
         .expect("test_content_validation should succeed");
