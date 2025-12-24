@@ -15,8 +15,9 @@ use rstest::rstest;
 async fn test_new_session_minimal(
     #[case]
     #[future]
-    agent: Box<dyn AgentWithFixture>,
+    mut agent: Box<dyn AgentWithFixture>,
 ) {
+    agent.with_fixture("test_new_session_minimal");
     acp_conformance::sessions::test_new_session_minimal(&*agent)
         .await
         .expect("New session minimal should succeed");
@@ -31,8 +32,9 @@ async fn test_new_session_minimal(
 async fn test_new_session_with_mcp(
     #[case]
     #[future]
-    agent: Box<dyn AgentWithFixture>,
+    mut agent: Box<dyn AgentWithFixture>,
 ) {
+    agent.with_fixture("test_new_session_with_mcp");
     acp_conformance::sessions::test_new_session_with_mcp(&*agent)
         .await
         .expect("New session with MCP should succeed");
@@ -47,8 +49,9 @@ async fn test_new_session_with_mcp(
 async fn test_session_ids_unique(
     #[case]
     #[future]
-    agent: Box<dyn AgentWithFixture>,
+    mut agent: Box<dyn AgentWithFixture>,
 ) {
+    agent.with_fixture("test_session_ids_unique");
     acp_conformance::sessions::test_session_ids_unique(&*agent)
         .await
         .expect("Session IDs should be unique");
@@ -63,8 +66,9 @@ async fn test_session_ids_unique(
 async fn test_load_nonexistent_session(
     #[case]
     #[future]
-    agent: Box<dyn AgentWithFixture>,
+    mut agent: Box<dyn AgentWithFixture>,
 ) {
+    agent.with_fixture("test_load_nonexistent_session");
     acp_conformance::sessions::test_load_nonexistent_session(&*agent)
         .await
         .expect("Load nonexistent session should succeed");
@@ -79,8 +83,9 @@ async fn test_load_nonexistent_session(
 async fn test_set_session_mode(
     #[case]
     #[future]
-    agent: Box<dyn AgentWithFixture>,
+    mut agent: Box<dyn AgentWithFixture>,
 ) {
+    agent.with_fixture("test_set_session_mode");
     acp_conformance::sessions::test_set_session_mode(&*agent)
         .await
         .expect("Set session mode should succeed");
@@ -95,8 +100,9 @@ async fn test_set_session_mode(
 async fn test_new_session_includes_modes(
     #[case]
     #[future]
-    agent: Box<dyn AgentWithFixture>,
+    mut agent: Box<dyn AgentWithFixture>,
 ) {
+    agent.with_fixture("test_new_session_includes_modes");
     acp_conformance::sessions::test_new_session_includes_modes(&*agent)
         .await
         .expect("New session includes modes should succeed");
@@ -111,8 +117,9 @@ async fn test_new_session_includes_modes(
 async fn test_set_session_mode_to_available(
     #[case]
     #[future]
-    agent: Box<dyn AgentWithFixture>,
+    mut agent: Box<dyn AgentWithFixture>,
 ) {
+    agent.with_fixture("test_set_session_mode_to_available");
     acp_conformance::sessions::test_set_session_mode_to_available(&*agent)
         .await
         .expect("Set session mode to available should succeed");
@@ -127,8 +134,9 @@ async fn test_set_session_mode_to_available(
 async fn test_set_invalid_session_mode(
     #[case]
     #[future]
-    agent: Box<dyn AgentWithFixture>,
+    mut agent: Box<dyn AgentWithFixture>,
 ) {
+    agent.with_fixture("test_set_invalid_session_mode");
     acp_conformance::sessions::test_set_invalid_session_mode(&*agent)
         .await
         .expect("Set invalid session mode should succeed");
@@ -143,8 +151,9 @@ async fn test_set_invalid_session_mode(
 async fn test_mode_state_validation(
     #[case]
     #[future]
-    agent: Box<dyn AgentWithFixture>,
+    mut agent: Box<dyn AgentWithFixture>,
 ) {
+    agent.with_fixture("test_mode_state_validation");
     acp_conformance::sessions::test_mode_state_validation(&*agent)
         .await
         .expect("Mode state validation should succeed");
@@ -159,8 +168,9 @@ async fn test_mode_state_validation(
 async fn test_session_mode_independence(
     #[case]
     #[future]
-    agent: Box<dyn AgentWithFixture>,
+    mut agent: Box<dyn AgentWithFixture>,
 ) {
+    agent.with_fixture("test_session_mode_independence");
     acp_conformance::sessions::test_session_mode_independence(&*agent)
         .await
         .expect("Session mode independence should succeed");
