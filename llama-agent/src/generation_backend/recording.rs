@@ -78,6 +78,13 @@ impl RecordingGenerationBackend {
 
 impl Drop for RecordingGenerationBackend {
     fn drop(&mut self) {
+        // Give spawned tasks time to complete
+        // In test context, tasks should finish quickly
+        std::thread::sleep(std::time::Duration::from_millis(500));
+
+        let exchange_count = self.exchanges.lock().unwrap().len();
+        tracing::info!("RecordingBackend Drop: {} exchanges recorded", exchange_count);
+
         if let Err(e) = self.save_recording() {
             tracing::error!("Failed to save recording on drop: {}", e);
         }
@@ -135,9 +142,15 @@ impl GenerationBackend for RecordingGenerationBackend {
             let mut total_tokens = 0;
             let mut last_finish_reason = None;
 
+            tracing::info!("RecordingBackend: Starting to consume stream");
+            let mut chunk_count = 0;
+
             while let Some(chunk_result) = real_stream.next().await {
                 match chunk_result {
                     Ok(chunk) => {
+                        chunk_count += 1;
+                        tracing::debug!("RecordingBackend: Got chunk #{}: {} tokens", chunk_count, chunk.token_count);
+
                         // Record chunk data
                         recorded_chunks.push(StreamChunkData::from(chunk.clone()));
                         accumulated_text.push_str(&chunk.text);
@@ -148,15 +161,19 @@ impl GenerationBackend for RecordingGenerationBackend {
 
                         // Forward to test
                         if tx.send(Ok(chunk)).await.is_err() {
+                            tracing::warn!("RecordingBackend: Test dropped receiver");
                             break;
                         }
                     }
                     Err(e) => {
+                        tracing::error!("RecordingBackend: Stream error: {}", e);
                         let _ = tx.send(Err(e)).await;
                         break;
                     }
                 }
             }
+
+            tracing::info!("RecordingBackend: Stream complete, recorded {} chunks, {} tokens", chunk_count, total_tokens);
 
             // Save exchange
             let exchange = GenerationExchange {
