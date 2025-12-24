@@ -9838,3 +9838,10 @@ impl AgentWithFixture for ClaudeAgent {
     }
 }
 
+// Fixture support
+impl AgentWithFixture for ClaudeAgent {
+    fn agent_type(&self) -> &'static str {
+        "claude"
+    }
+}
+
