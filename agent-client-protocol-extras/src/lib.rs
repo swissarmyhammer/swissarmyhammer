@@ -22,50 +22,12 @@ use agent_client_protocol::Agent;
 use std::path::PathBuf;
 
 
-/// Trait for agents that support fixture recording and playback
+/// Marker trait for agents used in conformance testing
 ///
-/// This trait is called on an agent instance to configure it for fixture mode.
-///
-/// # Usage
-///
-/// ```ignore
-/// let mut agent = MyAgent::new(...);
-/// agent.with_fixture("test_basic_prompt");  // Auto-detects record vs playback
-/// ```
+/// Identifies which agent type for fixture organization.
 pub trait AgentWithFixture: Agent {
     /// Agent type identifier for fixture organization (e.g., "claude", "llama")
     fn agent_type(&self) -> &'static str;
-
-    /// Configure agent to use fixture for a test
-    ///
-    /// Automatically detects record vs playback mode based on file existence.
-    /// Fixture path: `.fixtures/<agent_type>/<test_name>.json`
-    ///
-    /// # Arguments
-    ///
-    /// * `test_name` - Test name (e.g., "test_basic_prompt_response")
-    ///
-    /// # Behavior
-    ///
-    /// - If fixture exists: Configures agent for playback mode
-    /// - If fixture missing: Configures agent for record mode (will create fixture)
-    fn with_fixture(&mut self, test_name: &str);
-
-    /// Get the fixture path for this agent and test (helper)
-    ///
-    /// Returns `.fixtures/<agent_type>/<test_name>.json`
-    fn fixture_path(&self, test_name: &str) -> PathBuf {
-        get_fixture_path_for(self.agent_type(), test_name)
-    }
-
-    /// Determine fixture mode for a test (helper)
-    ///
-    /// - If fixture exists: Playback mode
-    /// - If fixture missing: Record mode
-    fn fixture_mode(&self, test_name: &str) -> FixtureMode {
-        let path = self.fixture_path(test_name);
-        resolve_fixture_path(Some(path))
-    }
 }
 
 /// Get fixture path for a test
