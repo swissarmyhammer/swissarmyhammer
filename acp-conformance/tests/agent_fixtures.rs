@@ -43,17 +43,28 @@ pub(crate) fn agent_agent_factory(
 
 /// Create claude-agent for testing
 async fn create_claude_agent() -> Result<Box<dyn AgentWithFixture>> {
-    // Create with default/normal mode - with_fixture will configure it
+    use agent_client_protocol_extras::{get_fixture_path_for, get_test_name_from_thread, RecordingAgent};
+
     let config = claude_agent::config::AgentConfig::default();
     let (agent, _receiver) = claude_agent::agent::ClaudeAgent::new(config).await?;
-    Ok(Box::new(agent))
+
+    let test_name = get_test_name_from_thread();
+    let path = get_fixture_path_for(agent.agent_type(), &test_name);
+
+    // Wrap in RecordingAgent - it will record on first run, save on drop
+    Ok(Box::new(RecordingAgent::new(agent, path)))
 }
 
 /// Create llama-agent for testing
 async fn create_llama_agent() -> Result<Box<dyn AgentWithFixture>> {
-    // Create with default/normal mode - with_fixture will configure it
-    let acp_server = llama_agent::acp::AcpServer::for_testing(None)?;
-    Ok(Box::new(acp_server))
+    use agent_client_protocol_extras::{get_fixture_path_for, get_test_name_from_thread, RecordingAgent};
+
+    let agent = llama_agent::acp::AcpServer::for_testing(None)?;
+    let test_name = get_test_name_from_thread();
+    let path = get_fixture_path_for(agent.agent_type(), &test_name);
+
+    // Wrap in RecordingAgent - it will record on first run, save on drop
+    Ok(Box::new(RecordingAgent::new(agent, path)))
 }
 
 /// Create generic agent (uses llama)

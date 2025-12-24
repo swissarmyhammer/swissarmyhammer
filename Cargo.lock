@@ -55,9 +55,9 @@ name = "agent-client-protocol-extras"
 version = "0.3.0"
 dependencies = [
  "agent-client-protocol",
+ "futures",
  "serde",
  "serde_json",
- "tokio",
  "tracing",
 ]
 

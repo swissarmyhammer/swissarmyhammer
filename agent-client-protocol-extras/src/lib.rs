@@ -21,6 +21,8 @@
 use agent_client_protocol::Agent;
 use std::path::PathBuf;
 
+pub mod recording;
+pub use recording::RecordingAgent;
 
 /// Marker trait for agents used in conformance testing
 ///
