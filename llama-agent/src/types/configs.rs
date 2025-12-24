@@ -14,24 +14,6 @@ use crate::types::mcp::MCPServerConfig;
 use crate::types::sessions::CompactionConfig;
 use crate::types::tools::ParallelConfig;
 
-/// Agent operation mode for testing and development
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum LlamaAgentMode {
-    /// Normal mode - real model inference
-    Normal,
-    /// Record mode - record generation to fixture
-    Record { output_path: PathBuf },
-    /// Playback mode - replay from fixture
-    Playback { input_path: PathBuf },
-}
-
-impl Default for LlamaAgentMode {
-    fn default() -> Self {
-        Self::Normal
-    }
-}
-
 /// Main configuration for an agent instance.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct AgentConfig {
@@ -40,9 +22,6 @@ pub struct AgentConfig {
     pub mcp_servers: Vec<MCPServerConfig>,
     pub session_config: SessionConfig,
     pub parallel_execution_config: ParallelConfig,
-    /// Agent operation mode (normal, record, playback)
-    #[serde(default)]
-    pub mode: LlamaAgentMode,
 }
 
 impl AgentConfig {

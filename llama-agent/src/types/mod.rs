@@ -50,7 +50,7 @@ pub use tools::{
 };
 
 // Re-export configuration types
-pub use configs::{AgentConfig, HealthStatus, LlamaAgentMode, QueueConfig, SessionConfig};
+pub use configs::{AgentConfig, HealthStatus, QueueConfig, SessionConfig};
 
 // Re-export streaming types
 pub use streaming::{AgentAPI, StreamChunk};

@@ -1477,28 +1477,6 @@ impl ClaudeAgent {
             tracing::debug!("Using agent mode '{}' for session {}", mode, session_id);
         }
 
-        // If Record mode, ensure backend is initialized before streaming
-        tracing::info!("Checking Record mode: {:?}", self.config.claude.mode);
-        if matches!(self.config.claude.mode, crate::config::ClaudeAgentMode::Record { .. }) {
-            tracing::info!("In Record mode, initializing RecordingBackend");
-            if let crate::config::ClaudeAgentMode::Record { ref output_path } = self.config.claude.mode {
-                let client_ptr = Arc::as_ptr(&self.claude_client) as *mut crate::claude::ClaudeClient;
-                unsafe {
-                    tracing::info!("Backend is_none: {}", (*client_ptr).backend.is_none());
-                    if (*client_ptr).backend.is_none() {
-                        tracing::info!("Calling ensure_recording_backend");
-                        (*client_ptr)
-                            .ensure_recording_backend(&session_id, &session.cwd, output_path.clone())
-                            .await
-                            .map_err(|e| {
-                                tracing::error!("Failed to initialize recording backend: {}", e);
-                                agent_client_protocol::Error::internal_error()
-                            })?;
-                    }
-                }
-            }
-        }
-
         let mut stream = self
             .claude_client
             .query_stream_with_context(&prompt_text, &context, agent_mode)
@@ -9858,60 +9836,5 @@ impl AgentWithFixture for ClaudeAgent {
     fn agent_type(&self) -> &'static str {
         "claude"
     }
-
-    fn with_fixture(&mut self, test_name: &str) {
-        use agent_client_protocol_extras::FixtureMode;
-        use crate::claude_backend::{RecordedClaudeBackend, RecordingClaudeBackend, RealClaudeBackend};
-
-        let mode = self.fixture_mode(test_name);
-
-        // Get unsafe pointer to claude_client for modification
-        let client_ptr = Arc::as_ptr(&self.claude_client) as *mut crate::claude::ClaudeClient;
-
-        // Reconfigure the agent's mode based on fixture
-        self.config.claude.mode = match &mode {
-            FixtureMode::Record { path } => {
-                tracing::info!("Configuring claude-agent for record mode: {:?}", path);
-
-                // Spawn process and wrap in RecordingBackend
-                // We need to spawn the process here and wrap it
-                // This will be done lazily when first I/O happens through backend
-                // For now we set backend to None and let normal spawn happen
-                // Then we'll intercept and wrap it
-
-                // Actually, we can't spawn yet - we don't have session_id/cwd
-                // So we store the Record mode and spawn will wrap it later
-                unsafe {
-                    (*client_ptr).backend = None; // Process will be spawned and wrapped on first use
-                }
-
-                crate::config::ClaudeAgentMode::Record { output_path: path.clone() }
-            }
-            FixtureMode::Playback { path } => {
-                tracing::info!("Configuring claude-agent for playback mode: {:?}", path);
-
-                // Load playback backend
-                if let Ok(recorded) = RecordedClaudeBackend::from_file(path) {
-                    let backend: Box<dyn crate::claude_backend::ClaudeBackend> = Box::new(recorded);
-
-                    unsafe {
-                        (*client_ptr).backend = Some(Arc::new(tokio::sync::Mutex::new(backend)));
-                    }
-                } else {
-                    tracing::warn!("Failed to load fixture from {:?}, using normal mode", path);
-                }
-
-                crate::config::ClaudeAgentMode::Playback { input_path: path.clone() }
-            }
-            FixtureMode::Normal => {
-                tracing::info!("Configuring claude-agent for normal mode");
-
-                unsafe {
-                    (*client_ptr).backend = None;
-                }
-
-                crate::config::ClaudeAgentMode::Normal
-            }
-        };
-    }
 }
+

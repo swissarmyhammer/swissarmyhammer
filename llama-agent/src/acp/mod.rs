@@ -252,7 +252,6 @@ pub mod commands;
 pub mod config;
 pub mod error;
 pub mod filesystem;
-pub mod fixtures;
 pub mod mcp_client_factory;
 pub mod permissions;
 pub mod plan;
@@ -260,7 +259,6 @@ pub mod raw_message_manager;
 pub mod server;
 pub mod session;
 pub mod terminal;
-pub mod test_helpers;
 pub mod translation;
 
 // Test utilities are available in both test and non-test builds

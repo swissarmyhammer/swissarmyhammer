@@ -21,72 +21,9 @@ pub struct ClaudeClient {
     protocol_translator: Arc<ProtocolTranslator>,
     notification_sender: Option<Arc<crate::agent::NotificationSender>>,
     raw_message_manager: Option<crate::agent::RawMessageManager>,
-    /// Optional backend for fixture mode (overrides process_manager when set)
-    pub(crate) backend: Option<Arc<tokio::sync::Mutex<Box<dyn crate::claude_backend::ClaudeBackend>>>>,
 }
 
 impl ClaudeClient {
-    /// Check if using backend (fixture mode)
-    fn has_backend(&self) -> bool {
-        self.backend.is_some()
-    }
-
-    /// Ensure backend is initialized for Record mode
-    ///
-    /// If in Record mode and backend not set, spawns process and wraps in RecordingBackend
-    pub(crate) async fn ensure_recording_backend(
-        &mut self,
-        session_id: &SessionId,
-        cwd: &std::path::Path,
-        output_path: std::path::PathBuf,
-    ) -> Result<()> {
-        if self.backend.is_some() {
-            return Ok(()); // Already have backend
-        }
-
-        tracing::info!("Spawning process and wrapping in RecordingBackend for {:?}", output_path);
-
-        // Spawn real process
-        let process = self.process_manager.get_process(session_id, cwd, None).await?;
-
-        // Wrap in backends
-        let real_backend = crate::claude_backend::RealClaudeBackend::new(process);
-        let recording_backend = crate::claude_backend::RecordingClaudeBackend::new(
-            real_backend,
-            output_path,
-        );
-
-        // Set the backend
-        self.backend = Some(Arc::new(tokio::sync::Mutex::new(Box::new(recording_backend))));
-
-        tracing::info!("RecordingBackend initialized and ready");
-        Ok(())
-    }
-
-    /// Write line through backend or process
-    async fn write(&self, line: &str) -> Result<()> {
-        if let Some(ref backend) = self.backend {
-            backend.lock().await.write_line(line).await
-        } else {
-            // Will need process - this is handled by callers
-            Err(crate::error::AgentError::Internal(
-                "write called without backend or process".to_string(),
-            ))
-        }
-    }
-
-    /// Read line through backend or process
-    async fn read(&self) -> Result<Option<String>> {
-        if let Some(ref backend) = self.backend {
-            backend.lock().await.read_line().await
-        } else {
-            // Will need process - this is handled by callers
-            Err(crate::error::AgentError::Internal(
-                "read called without backend or process".to_string(),
-            ))
-        }
-    }
-
     /// Set notification sender for forwarding all notifications from protocol_translator
     pub fn set_notification_sender(&mut self, sender: Arc<crate::agent::NotificationSender>) {
         self.notification_sender = Some(sender);
@@ -132,7 +69,8 @@ impl ClaudeClient {
             cwd.display()
         );
 
-        // Spawn the process for this session
+        // Spawn the process (or get existing) with working directory
+        // Note: During init, we don't have a mode yet, so pass None
         let process = self
             .process_manager
             .get_process(session_id, cwd, None)
@@ -400,7 +338,6 @@ impl ClaudeClient {
             protocol_translator,
             notification_sender: None,
             raw_message_manager: None,
-            backend: None,
         })
     }
 
@@ -415,7 +352,6 @@ impl ClaudeClient {
             protocol_translator,
             notification_sender: None,
             raw_message_manager: None,
-            backend: None,
         })
     }
 
@@ -492,65 +428,6 @@ impl ClaudeClient {
             }
         }
         false
-    }
-
-    /// Stream query using backend (fixture mode)
-    async fn query_stream_with_backend(
-        &self,
-        prompt: &str,
-        session_id: &SessionId,
-    ) -> Result<Pin<Box<dyn Stream<Item = MessageChunk> + Send>>> {
-        tracing::info!("Using backend for streaming query (fixture mode)");
-
-        // Format prompt
-        let text_content = TextContent::new(prompt.to_string());
-        let content = vec![ContentBlock::Text(text_content)];
-        let stream_json = self.protocol_translator.acp_to_stream_json(content)?;
-
-        // Write to backend
-        self.write(&stream_json).await?;
-
-        // Create channel for streaming
-        let (tx, rx) = tokio::sync::mpsc::channel(100);
-        let acp_session_id = Self::to_acp_session_id(session_id);
-        let protocol_translator = Arc::clone(&self.protocol_translator);
-        let backend = self.backend.clone();
-
-        // Spawn task to read from backend and emit chunks
-        tokio::spawn(async move {
-            if let Some(backend) = backend {
-                let mut backend_lock = backend.lock().await;
-
-                loop {
-                    match backend_lock.read_line().await {
-                        Ok(Some(line)) => {
-                            if let Ok(Some(notification)) = protocol_translator
-                                .stream_json_to_acp(&line, &acp_session_id)
-                                .await
-                            {
-                                match notification.update {
-                                    SessionUpdate::AgentMessageChunk(chunk) => {
-                                        let msg_chunk = Self::content_block_to_message_chunk(chunk.content);
-                                        if tx.send(msg_chunk).await.is_err() {
-                                            break;
-                                        }
-                                    }
-                                    _ => {}
-                                }
-                            }
-
-                            if Self::is_end_of_stream(&line) {
-                                break;
-                            }
-                        }
-                        Ok(None) => break,
-                        Err(_) => break,
-                    }
-                }
-            }
-        });
-
-        Ok(Box::pin(tokio_stream::wrappers::ReceiverStream::new(rx)))
     }
 
     /// Execute a simple query without session context
@@ -856,11 +733,6 @@ impl ClaudeClient {
             return Err(crate::error::AgentError::Process(
                 "Empty prompt".to_string(),
             ));
-        }
-
-        // Use backend if available (fixture mode)
-        if self.has_backend() {
-            return self.query_stream_with_backend(prompt, &context.session_id).await;
         }
 
         // Claude CLI maintains conversation state internally, so we just send

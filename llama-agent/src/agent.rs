@@ -1,9 +1,6 @@
 use crate::chat_template::ChatTemplateEngine;
 use crate::dependency_analysis::{DependencyAnalyzer, ParallelExecutionDecision};
 use crate::generation::GenerationHelper;
-use crate::generation_backend::{
-    GenerationBackend, RealGenerationBackend, RecordedGenerationBackend, RecordingGenerationBackend,
-};
 use crate::mcp::MCPClient;
 use crate::model::ModelManager;
 use crate::queue::RequestQueue;
@@ -11,7 +8,7 @@ use crate::session::SessionManager;
 use crate::session::{CompactionResult, CompactionSummary};
 use crate::types::{
     AgentAPI, AgentConfig, AgentError, CompactionConfig, GenerationRequest, GenerationResponse,
-    HealthStatus, LlamaAgentMode, Message, Session, SessionId, StreamChunk, ToolCall, ToolResult,
+    HealthStatus, Message, Session, SessionId, StreamChunk, ToolCall, ToolResult,
 };
 use async_trait::async_trait;
 use futures::{Stream, StreamExt};
@@ -74,11 +71,9 @@ type SummaryGeneratorFn = Box<
 >;
 
 pub struct AgentServer {
-    pub(crate) model_manager: Arc<ModelManager>,
-    pub(crate) request_queue: Arc<RequestQueue>,
-    /// Generation backend (real inference or playback)
-    pub(crate) generation_backend: Arc<dyn GenerationBackend>,
-    pub(crate) session_manager: Arc<SessionManager>,
+    model_manager: Arc<ModelManager>,
+    request_queue: Arc<RequestQueue>,
+    session_manager: Arc<SessionManager>,
     mcp_client: Arc<dyn MCPClient>,
     /// Per-session MCP clients for ACP sessions
     /// Maps SessionId to a vector of MCP clients created from session/new mcpServers parameter
@@ -89,7 +84,7 @@ pub struct AgentServer {
     >,
     chat_template: Arc<ChatTemplateEngine>,
     dependency_analyzer: Arc<DependencyAnalyzer>,
-    pub(crate) config: AgentConfig,
+    config: AgentConfig,
     start_time: Instant,
     shutdown_token: tokio_util::sync::CancellationToken,
     /// Client capabilities from ACP initialize request (if running as ACP server)
@@ -117,47 +112,9 @@ impl AgentServer {
         dependency_analyzer: Arc<DependencyAnalyzer>,
         config: AgentConfig,
     ) -> Self {
-        // Create generation backend based on mode
-        let generation_backend: Arc<dyn GenerationBackend> = match &config.mode {
-            LlamaAgentMode::Normal => Arc::new(RealGenerationBackend::new(
-                request_queue.clone(),
-                session_manager.clone(),
-            )),
-            LlamaAgentMode::Playback { input_path } => {
-                match RecordedGenerationBackend::from_file(input_path) {
-                    Ok(backend) => {
-                        info!("Using playback mode from fixture: {:?}", input_path);
-                        Arc::new(backend)
-                    }
-                    Err(e) => {
-                        warn!(
-                            "Failed to load playback fixture from {:?}: {}. Falling back to normal mode.",
-                            input_path, e
-                        );
-                        Arc::new(RealGenerationBackend::new(
-                            request_queue.clone(),
-                            session_manager.clone(),
-                        ))
-                    }
-                }
-            }
-            LlamaAgentMode::Record { output_path } => {
-                info!("Using record mode, will save to: {:?}", output_path);
-                let real_backend = Arc::new(RealGenerationBackend::new(
-                    request_queue.clone(),
-                    session_manager.clone(),
-                ));
-                Arc::new(RecordingGenerationBackend::new(
-                    real_backend,
-                    output_path.clone(),
-                ))
-            }
-        };
-
         Self {
             model_manager,
             request_queue,
-            generation_backend,
             session_manager,
             mcp_client,
             session_mcp_clients: Arc::new(tokio::sync::RwLock::new(
@@ -1243,10 +1200,31 @@ impl AgentAPI for AgentServer {
         // Security: Validate input before processing
         self.validate_generation_request_with_session(&request, &session)?;
 
-        // Delegate to generation backend (real inference or playback)
-        self.generation_backend
-            .generate_stream(&request, &session)
+        // Render session to prompt
+        let prompt = self.render_session_prompt(&session).await?;
+        debug!("Session rendered to prompt: {} characters", prompt.len());
+
+        // Create streaming request
+        let streaming_request = GenerationRequest {
+            session_id: request.session_id,
+            max_tokens: request.max_tokens,
+            temperature: request.temperature,
+            top_p: request.top_p,
+            stop_tokens: request.stop_tokens,
+            stopping_config: request.stopping_config,
+        };
+
+        // Submit to request queue for streaming
+        let receiver = self
+            .request_queue
+            .submit_streaming_request(streaming_request, &session)
             .await
+            .map_err(AgentError::Queue)?;
+
+        // Convert the receiver to a stream and map QueueError to AgentError
+        let stream = ReceiverStream::new(receiver).map(|result| result.map_err(AgentError::Queue));
+
+        Ok(Box::pin(stream))
     }
 
     async fn create_session(&self) -> Result<Session, AgentError> {
