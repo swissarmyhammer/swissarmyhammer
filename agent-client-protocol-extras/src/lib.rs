@@ -21,6 +21,9 @@
 use agent_client_protocol::Agent;
 use std::path::PathBuf;
 
+pub mod recording;
+pub use recording::RecordingAgent;
+
 /// Trait for agents that support fixture recording and playback
 ///
 /// This trait is called on an agent instance to configure it for fixture mode.

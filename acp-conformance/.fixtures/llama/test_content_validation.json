@@ -1,0 +1,17 @@
+{
+  "exchanges": [
+    {
+      "prompt": "Request for session 01KD82YWYQ96HKJJCX2EK0XX00",
+      "session_id": "01KD82YWYQ96HKJJCX2EK0XX00",
+      "chunks": [],
+      "response": {
+        "generated_text": "",
+        "tokens_generated": 0,
+        "finish_reason": {
+          "Stopped": "Unknown"
+        },
+        "generation_time_ms": 100
+      }
+    }
+  ]
+}
