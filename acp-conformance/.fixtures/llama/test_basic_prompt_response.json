@@ -1,0 +1,1080 @@
+{
+  "calls": [
+    {
+      "method": "initialize",
+      "request": {
+        "clientCapabilities": {
+          "fs": {
+            "readTextFile": false,
+            "writeTextFile": false
+          },
+          "terminal": false
+        },
+        "protocolVersion": 1
+      },
+      "response": {
+        "agentCapabilities": {
+          "_meta": {
+            "streaming": true,
+            "supports_modes": true,
+            "supports_plans": true,
+            "supports_slash_commands": true
+          },
+          "loadSession": true,
+          "mcpCapabilities": {
+            "http": true,
+            "sse": false
+          },
+          "promptCapabilities": {
+            "_meta": {
+              "streaming": true
+            },
+            "audio": false,
+            "embeddedContext": false,
+            "image": false
+          },
+          "sessionCapabilities": {}
+        },
+        "agentInfo": {
+          "name": "llama-agent",
+          "title": "LLaMA Agent v0.3.0",
+          "version": "0.3.0"
+        },
+        "authMethods": [],
+        "protocolVersion": 1
+      },
+      "notifications": []
+    },
+    {
+      "method": "new_session",
+      "request": {
+        "cwd": "/Users/wballard/github/swissarmyhammer/acp-conformance",
+        "mcpServers": []
+      },
+      "response": {
+        "sessionId": "01KDAVHAEY6QC7M097SNEX8YYG"
+      },
+      "notifications": []
+    },
+    {
+      "method": "prompt",
+      "request": {
+        "prompt": [
+          {
+            "text": "Hello, how are you?",
+            "type": "text"
+          }
+        ],
+        "sessionId": "01KDAVHAEY6QC7M097SNEX8YYG"
+      },
+      "response": {
+        "_meta": {
+          "tokens_generated": 5050
+        },
+        "stopReason": "end_turn"
+      },
+      "notifications": [
+        {
+          "sessionId": "01KDAVHAEY6QC7M097SNEX8YYG",
+          "update": {
+            "content": {
+              "text": "<think>",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDAVHAEY6QC7M097SNEX8YYG",
+          "update": {
+            "content": {
+              "text": "\n",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDAVHAEY6QC7M097SNEX8YYG",
+          "update": {
+            "content": {
+              "text": "Okay",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDAVHAEY6QC7M097SNEX8YYG",
+          "update": {
+            "content": {
+              "text": ",",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDAVHAEY6QC7M097SNEX8YYG",
+          "update": {
+            "content": {
+              "text": " the",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDAVHAEY6QC7M097SNEX8YYG",
+          "update": {
+            "content": {
+              "text": " user",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDAVHAEY6QC7M097SNEX8YYG",
+          "update": {
+            "content": {
+              "text": " just",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDAVHAEY6QC7M097SNEX8YYG",
+          "update": {
+            "content": {
+              "text": " asked",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDAVHAEY6QC7M097SNEX8YYG",
+          "update": {
+            "content": {
+              "text": ",",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDAVHAEY6QC7M097SNEX8YYG",
+          "update": {
+            "content": {
+              "text": " \"",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDAVHAEY6QC7M097SNEX8YYG",
+          "update": {
+            "content": {
+              "text": "Hello",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDAVHAEY6QC7M097SNEX8YYG",
+          "update": {
+            "content": {
+              "text": ",",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDAVHAEY6QC7M097SNEX8YYG",
+          "update": {
+            "content": {
+              "text": " how",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDAVHAEY6QC7M097SNEX8YYG",
+          "update": {
+            "content": {
+              "text": " are",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDAVHAEY6QC7M097SNEX8YYG",
+          "update": {
+            "content": {
+              "text": " you",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDAVHAEY6QC7M097SNEX8YYG",
+          "update": {
+            "content": {
+              "text": "?\"",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDAVHAEY6QC7M097SNEX8YYG",
+          "update": {
+            "content": {
+              "text": " I",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDAVHAEY6QC7M097SNEX8YYG",
+          "update": {
+            "content": {
+              "text": " need",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDAVHAEY6QC7M097SNEX8YYG",
+          "update": {
+            "content": {
+              "text": " to",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDAVHAEY6QC7M097SNEX8YYG",
+          "update": {
+            "content": {
+              "text": " respond",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDAVHAEY6QC7M097SNEX8YYG",
+          "update": {
+            "content": {
+              "text": " appropriately",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDAVHAEY6QC7M097SNEX8YYG",
+          "update": {
+            "content": {
+              "text": ".",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDAVHAEY6QC7M097SNEX8YYG",
+          "update": {
+            "content": {
+              "text": " Let",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDAVHAEY6QC7M097SNEX8YYG",
+          "update": {
+            "content": {
+              "text": " me",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDAVHAEY6QC7M097SNEX8YYG",
+          "update": {
+            "content": {
+              "text": " start",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDAVHAEY6QC7M097SNEX8YYG",
+          "update": {
+            "content": {
+              "text": " by",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDAVHAEY6QC7M097SNEX8YYG",
+          "update": {
+            "content": {
+              "text": " acknowledging",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDAVHAEY6QC7M097SNEX8YYG",
+          "update": {
+            "content": {
+              "text": " their",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDAVHAEY6QC7M097SNEX8YYG",
+          "update": {
+            "content": {
+              "text": " greeting",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDAVHAEY6QC7M097SNEX8YYG",
+          "update": {
+            "content": {
+              "text": ".",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDAVHAEY6QC7M097SNEX8YYG",
+          "update": {
+            "content": {
+              "text": " Since",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDAVHAEY6QC7M097SNEX8YYG",
+          "update": {
+            "content": {
+              "text": " they",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDAVHAEY6QC7M097SNEX8YYG",
+          "update": {
+            "content": {
+              "text": "'re",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDAVHAEY6QC7M097SNEX8YYG",
+          "update": {
+            "content": {
+              "text": " just",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDAVHAEY6QC7M097SNEX8YYG",
+          "update": {
+            "content": {
+              "text": " starting",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDAVHAEY6QC7M097SNEX8YYG",
+          "update": {
+            "content": {
+              "text": ",",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDAVHAEY6QC7M097SNEX8YYG",
+          "update": {
+            "content": {
+              "text": " a",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDAVHAEY6QC7M097SNEX8YYG",
+          "update": {
+            "content": {
+              "text": " simple",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDAVHAEY6QC7M097SNEX8YYG",
+          "update": {
+            "content": {
+              "text": " \"",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDAVHAEY6QC7M097SNEX8YYG",
+          "update": {
+            "content": {
+              "text": "Hello",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDAVHAEY6QC7M097SNEX8YYG",
+          "update": {
+            "content": {
+              "text": "\"",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDAVHAEY6QC7M097SNEX8YYG",
+          "update": {
+            "content": {
+              "text": " and",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDAVHAEY6QC7M097SNEX8YYG",
+          "update": {
+            "content": {
+              "text": " \"",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDAVHAEY6QC7M097SNEX8YYG",
+          "update": {
+            "content": {
+              "text": "I",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDAVHAEY6QC7M097SNEX8YYG",
+          "update": {
+            "content": {
+              "text": "'m",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDAVHAEY6QC7M097SNEX8YYG",
+          "update": {
+            "content": {
+              "text": " fine",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDAVHAEY6QC7M097SNEX8YYG",
+          "update": {
+            "content": {
+              "text": "\"",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDAVHAEY6QC7M097SNEX8YYG",
+          "update": {
+            "content": {
+              "text": " would",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDAVHAEY6QC7M097SNEX8YYG",
+          "update": {
+            "content": {
+              "text": " be",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDAVHAEY6QC7M097SNEX8YYG",
+          "update": {
+            "content": {
+              "text": " good",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDAVHAEY6QC7M097SNEX8YYG",
+          "update": {
+            "content": {
+              "text": ".",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDAVHAEY6QC7M097SNEX8YYG",
+          "update": {
+            "content": {
+              "text": " But",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDAVHAEY6QC7M097SNEX8YYG",
+          "update": {
+            "content": {
+              "text": " maybe",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDAVHAEY6QC7M097SNEX8YYG",
+          "update": {
+            "content": {
+              "text": " I",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDAVHAEY6QC7M097SNEX8YYG",
+          "update": {
+            "content": {
+              "text": " should",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDAVHAEY6QC7M097SNEX8YYG",
+          "update": {
+            "content": {
+              "text": " add",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDAVHAEY6QC7M097SNEX8YYG",
+          "update": {
+            "content": {
+              "text": " a",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDAVHAEY6QC7M097SNEX8YYG",
+          "update": {
+            "content": {
+              "text": " bit",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDAVHAEY6QC7M097SNEX8YYG",
+          "update": {
+            "content": {
+              "text": " more",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDAVHAEY6QC7M097SNEX8YYG",
+          "update": {
+            "content": {
+              "text": " to",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDAVHAEY6QC7M097SNEX8YYG",
+          "update": {
+            "content": {
+              "text": " keep",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDAVHAEY6QC7M097SNEX8YYG",
+          "update": {
+            "content": {
+              "text": " the",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDAVHAEY6QC7M097SNEX8YYG",
+          "update": {
+            "content": {
+              "text": " conversation",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDAVHAEY6QC7M097SNEX8YYG",
+          "update": {
+            "content": {
+              "text": " going",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDAVHAEY6QC7M097SNEX8YYG",
+          "update": {
+            "content": {
+              "text": ".",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDAVHAEY6QC7M097SNEX8YYG",
+          "update": {
+            "content": {
+              "text": " Let",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDAVHAEY6QC7M097SNEX8YYG",
+          "update": {
+            "content": {
+              "text": " me",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDAVHAEY6QC7M097SNEX8YYG",
+          "update": {
+            "content": {
+              "text": " check",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDAVHAEY6QC7M097SNEX8YYG",
+          "update": {
+            "content": {
+              "text": " if",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDAVHAEY6QC7M097SNEX8YYG",
+          "update": {
+            "content": {
+              "text": " there",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDAVHAEY6QC7M097SNEX8YYG",
+          "update": {
+            "content": {
+              "text": "'s",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDAVHAEY6QC7M097SNEX8YYG",
+          "update": {
+            "content": {
+              "text": " any",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDAVHAEY6QC7M097SNEX8YYG",
+          "update": {
+            "content": {
+              "text": " specific",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDAVHAEY6QC7M097SNEX8YYG",
+          "update": {
+            "content": {
+              "text": " context",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDAVHAEY6QC7M097SNEX8YYG",
+          "update": {
+            "content": {
+              "text": " I",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDAVHAEY6QC7M097SNEX8YYG",
+          "update": {
+            "content": {
+              "text": " should",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDAVHAEY6QC7M097SNEX8YYG",
+          "update": {
+            "content": {
+              "text": " consider",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDAVHAEY6QC7M097SNEX8YYG",
+          "update": {
+            "content": {
+              "text": ".",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDAVHAEY6QC7M097SNEX8YYG",
+          "update": {
+            "content": {
+              "text": " The",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDAVHAEY6QC7M097SNEX8YYG",
+          "update": {
+            "content": {
+              "text": " user",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDAVHAEY6QC7M097SNEX8YYG",
+          "update": {
+            "content": {
+              "text": " hasn",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDAVHAEY6QC7M097SNEX8YYG",
+          "update": {
+            "content": {
+              "text": "'t",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDAVHAEY6QC7M097SNEX8YYG",
+          "update": {
+            "content": {
+              "text": " mentioned",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDAVHAEY6QC7M097SNEX8YYG",
+          "update": {
+            "content": {
+              "text": " anything",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDAVHAEY6QC7M097SNEX8YYG",
+          "update": {
+            "content": {
+              "text": " else",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDAVHAEY6QC7M097SNEX8YYG",
+          "update": {
+            "content": {
+              "text": ",",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDAVHAEY6QC7M097SNEX8YYG",
+          "update": {
+            "content": {
+              "text": " so",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDAVHAEY6QC7M097SNEX8YYG",
+          "update": {
+            "content": {
+              "text": " keeping",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDAVHAEY6QC7M097SNEX8YYG",
+          "update": {
+            "content": {
+              "text": " it",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDAVHAEY6QC7M097SNEX8YYG",
+          "update": {
+            "content": {
+              "text": " general",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDAVHAEY6QC7M097SNEX8YYG",
+          "update": {
+            "content": {
+              "text": " is",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDAVHAEY6QC7M097SNEX8YYG",
+          "update": {
+            "content": {
+              "text": " best",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDAVHAEY6QC7M097SNEX8YYG",
+          "update": {
+            "content": {
+              "text": ".",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDAVHAEY6QC7M097SNEX8YYG",
+          "update": {
+            "content": {
+              "text": " I",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDAVHAEY6QC7M097SNEX8YYG",
+          "update": {
+            "content": {
+              "text": " should",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDAVHAEY6QC7M097SNEX8YYG",
+          "update": {
+            "content": {
+              "text": " make",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDAVHAEY6QC7M097SNEX8YYG",
+          "update": {
+            "content": {
+              "text": " sure",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDAVHAEY6QC7M097SNEX8YYG",
+          "update": {
+            "content": {
+              "text": " the",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDAVHAEY6QC7M097SNEX8YYG",
+          "update": {
+            "content": {
+              "text": " response",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDAVHAEY6QC7M097SNEX8YYG",
+          "update": {
+            "content": {
+              "text": " is",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        }
+      ]
+    }
+  ]
+}

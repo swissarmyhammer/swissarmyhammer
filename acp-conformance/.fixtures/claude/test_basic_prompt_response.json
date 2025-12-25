@@ -1,0 +1,1245 @@
+{
+  "calls": [
+    {
+      "method": "initialize",
+      "request": {
+        "clientCapabilities": {
+          "fs": {
+            "readTextFile": false,
+            "writeTextFile": false
+          },
+          "terminal": false
+        },
+        "protocolVersion": 1
+      },
+      "response": {
+        "agentCapabilities": {
+          "_meta": {
+            "streaming": true,
+            "tools": [
+              "fs_read",
+              "fs_write",
+              "fs_list"
+            ]
+          },
+          "loadSession": true,
+          "mcpCapabilities": {
+            "http": true,
+            "sse": false
+          },
+          "promptCapabilities": {
+            "_meta": {
+              "streaming": true
+            },
+            "audio": true,
+            "embeddedContext": true,
+            "image": true
+          },
+          "sessionCapabilities": {}
+        },
+        "agentInfo": {
+          "name": "claude-agent",
+          "title": "Claude Agent v0.3.0",
+          "version": "0.3.0"
+        },
+        "authMethods": [],
+        "protocolVersion": 1
+      },
+      "notifications": []
+    },
+    {
+      "method": "new_session",
+      "request": {
+        "cwd": "/Users/wballard/github/swissarmyhammer/acp-conformance",
+        "mcpServers": []
+      },
+      "response": {
+        "sessionId": "01KDAVHC85NMVKSG6BDCGMRRRH"
+      },
+      "notifications": [
+        {
+          "_meta": {
+            "available_agents": [
+              [
+                "general-purpose",
+                "General Purpose",
+                null
+              ],
+              [
+                "statusline-setup",
+                "Statusline Setup",
+                null
+              ],
+              [
+                "Explore",
+                "Explore",
+                null
+              ],
+              [
+                "Plan",
+                "Plan",
+                null
+              ],
+              [
+                "claude-code-guide",
+                "Claude Code Guide",
+                null
+              ]
+            ],
+            "source": "claude_cli_init"
+          },
+          "sessionId": "01KDAVHC85NMVKSG6BDCGMRRRH",
+          "update": {
+            "availableCommands": [
+              {
+                "_meta": {
+                  "category": "claude_builtin",
+                  "source": "claude_cli"
+                },
+                "description": "Claude: compact",
+                "input": null,
+                "name": "compact"
+              },
+              {
+                "_meta": {
+                  "category": "claude_builtin",
+                  "source": "claude_cli"
+                },
+                "description": "Claude: context",
+                "input": null,
+                "name": "context"
+              },
+              {
+                "_meta": {
+                  "category": "claude_builtin",
+                  "source": "claude_cli"
+                },
+                "description": "Claude: cost",
+                "input": null,
+                "name": "cost"
+              },
+              {
+                "_meta": {
+                  "category": "claude_builtin",
+                  "source": "claude_cli"
+                },
+                "description": "Claude: init",
+                "input": null,
+                "name": "init"
+              },
+              {
+                "_meta": {
+                  "category": "claude_builtin",
+                  "source": "claude_cli"
+                },
+                "description": "Claude: pr-comments",
+                "input": null,
+                "name": "pr-comments"
+              },
+              {
+                "_meta": {
+                  "category": "claude_builtin",
+                  "source": "claude_cli"
+                },
+                "description": "Claude: release-notes",
+                "input": null,
+                "name": "release-notes"
+              },
+              {
+                "_meta": {
+                  "category": "claude_builtin",
+                  "source": "claude_cli"
+                },
+                "description": "Claude: review",
+                "input": null,
+                "name": "review"
+              },
+              {
+                "_meta": {
+                  "category": "claude_builtin",
+                  "source": "claude_cli"
+                },
+                "description": "Claude: security-review",
+                "input": null,
+                "name": "security-review"
+              },
+              {
+                "_meta": {
+                  "category": "mcp_prompt",
+                  "source": "claude_cli"
+                },
+                "description": "SAH: are_tests_passing",
+                "input": null,
+                "name": "mcp__sah__are_tests_passing"
+              },
+              {
+                "_meta": {
+                  "category": "mcp_prompt",
+                  "source": "claude_cli"
+                },
+                "description": "SAH: say-hello",
+                "input": null,
+                "name": "mcp__sah__say-hello"
+              },
+              {
+                "_meta": {
+                  "category": "mcp_prompt",
+                  "source": "claude_cli"
+                },
+                "description": "SAH: .system",
+                "input": null,
+                "name": "mcp__sah__.system"
+              },
+              {
+                "_meta": {
+                  "category": "mcp_prompt",
+                  "source": "claude_cli"
+                },
+                "description": "SAH: do_todo",
+                "input": null,
+                "name": "mcp__sah__do_todo"
+              },
+              {
+                "_meta": {
+                  "category": "mcp_prompt",
+                  "source": "claude_cli"
+                },
+                "description": "SAH: plan",
+                "input": null,
+                "name": "mcp__sah__plan"
+              },
+              {
+                "_meta": {
+                  "category": "mcp_prompt",
+                  "source": "claude_cli"
+                },
+                "description": "SAH: docs/readme",
+                "input": null,
+                "name": "mcp__sah__docs/readme"
+              },
+              {
+                "_meta": {
+                  "category": "mcp_prompt",
+                  "source": "claude_cli"
+                },
+                "description": "SAH: are_todos_done",
+                "input": null,
+                "name": "mcp__sah__are_todos_done"
+              },
+              {
+                "_meta": {
+                  "category": "mcp_prompt",
+                  "source": "claude_cli"
+                },
+                "description": "SAH: example",
+                "input": null,
+                "name": "mcp__sah__example"
+              },
+              {
+                "_meta": {
+                  "category": "mcp_prompt",
+                  "source": "claude_cli"
+                },
+                "description": "SAH: coverage",
+                "input": null,
+                "name": "mcp__sah__coverage"
+              },
+              {
+                "_meta": {
+                  "category": "mcp_prompt",
+                  "source": "claude_cli"
+                },
+                "description": "SAH: test",
+                "input": null,
+                "name": "mcp__sah__test"
+              },
+              {
+                "_meta": {
+                  "category": "mcp_prompt",
+                  "source": "claude_cli"
+                },
+                "description": "SAH: abort",
+                "input": null,
+                "name": "mcp__sah__abort"
+              },
+              {
+                "_meta": {
+                  "category": "mcp_prompt",
+                  "source": "claude_cli"
+                },
+                "description": "SAH: double_check",
+                "input": null,
+                "name": "mcp__sah__double_check"
+              },
+              {
+                "_meta": {
+                  "category": "mcp_prompt",
+                  "source": "claude_cli"
+                },
+                "description": "SAH: read_changes",
+                "input": null,
+                "name": "mcp__sah__read_changes"
+              },
+              {
+                "_meta": {
+                  "category": "mcp_prompt",
+                  "source": "claude_cli"
+                },
+                "description": "SAH: commit",
+                "input": null,
+                "name": "mcp__sah__commit"
+              },
+              {
+                "_meta": {
+                  "category": "mcp_prompt",
+                  "source": "claude_cli"
+                },
+                "description": "SAH: .check",
+                "input": null,
+                "name": "mcp__sah__.check"
+              },
+              {
+                "_meta": {
+                  "category": "mcp_prompt",
+                  "source": "claude_cli"
+                },
+                "description": "SAH: are_rules_passing",
+                "input": null,
+                "name": "mcp__sah__are_rules_passing"
+              }
+            ],
+            "sessionUpdate": "available_commands_update"
+          }
+        }
+      ]
+    },
+    {
+      "method": "prompt",
+      "request": {
+        "prompt": [
+          {
+            "text": "Hello, how are you?",
+            "type": "text"
+          }
+        ],
+        "sessionId": "01KDAVHC85NMVKSG6BDCGMRRRH"
+      },
+      "response": {
+        "_meta": {
+          "claude_response": "I'm doing well, thank you! I'm ready to help you with your software engineering tasks in the `acp-conformance` project.\n\nI can see you have some modifications to `test_mcp_server.rs` and some untracked files in `.fixtures/`. Is there something specific you'd like to work on, or would you like me to help with anything related to these changes?",
+          "processed": true,
+          "session_messages": 3,
+          "streaming": false
+        },
+        "stopReason": "end_turn"
+      },
+      "notifications": [
+        {
+          "_meta": {
+            "session_id": "01KDAVHC85NMVKSG6BDCGMRRRH",
+            "timestamp": 1766669731,
+            "update_type": "available_commands"
+          },
+          "sessionId": "01KDAVHC85NMVKSG6BDCGMRRRH",
+          "update": {
+            "availableCommands": [
+              {
+                "_meta": {
+                  "category": "planning",
+                  "source": "core"
+                },
+                "description": "Create an execution plan for complex tasks",
+                "input": null,
+                "name": "create_plan"
+              },
+              {
+                "_meta": {
+                  "category": "analysis",
+                  "source": "core"
+                },
+                "description": "Research and analyze the codebase structure",
+                "input": null,
+                "name": "research_codebase"
+              }
+            ],
+            "sessionUpdate": "available_commands_update"
+          }
+        },
+        {
+          "sessionId": "01KDAVHC85NMVKSG6BDCGMRRRH",
+          "update": {
+            "content": {
+              "text": "Hello, how are you?",
+              "type": "text"
+            },
+            "sessionUpdate": "user_message_chunk"
+          }
+        },
+        {
+          "_meta": {
+            "available_agents": [
+              [
+                "general-purpose",
+                "General Purpose",
+                null
+              ],
+              [
+                "statusline-setup",
+                "Statusline Setup",
+                null
+              ],
+              [
+                "Explore",
+                "Explore",
+                null
+              ],
+              [
+                "Plan",
+                "Plan",
+                null
+              ],
+              [
+                "claude-code-guide",
+                "Claude Code Guide",
+                null
+              ]
+            ],
+            "source": "claude_cli_init"
+          },
+          "sessionId": "01KDAVHC85NMVKSG6BDCGMRRRH",
+          "update": {
+            "availableCommands": [
+              {
+                "_meta": {
+                  "category": "claude_builtin",
+                  "source": "claude_cli"
+                },
+                "description": "Claude: compact",
+                "input": null,
+                "name": "compact"
+              },
+              {
+                "_meta": {
+                  "category": "claude_builtin",
+                  "source": "claude_cli"
+                },
+                "description": "Claude: context",
+                "input": null,
+                "name": "context"
+              },
+              {
+                "_meta": {
+                  "category": "claude_builtin",
+                  "source": "claude_cli"
+                },
+                "description": "Claude: cost",
+                "input": null,
+                "name": "cost"
+              },
+              {
+                "_meta": {
+                  "category": "claude_builtin",
+                  "source": "claude_cli"
+                },
+                "description": "Claude: init",
+                "input": null,
+                "name": "init"
+              },
+              {
+                "_meta": {
+                  "category": "claude_builtin",
+                  "source": "claude_cli"
+                },
+                "description": "Claude: pr-comments",
+                "input": null,
+                "name": "pr-comments"
+              },
+              {
+                "_meta": {
+                  "category": "claude_builtin",
+                  "source": "claude_cli"
+                },
+                "description": "Claude: release-notes",
+                "input": null,
+                "name": "release-notes"
+              },
+              {
+                "_meta": {
+                  "category": "claude_builtin",
+                  "source": "claude_cli"
+                },
+                "description": "Claude: review",
+                "input": null,
+                "name": "review"
+              },
+              {
+                "_meta": {
+                  "category": "claude_builtin",
+                  "source": "claude_cli"
+                },
+                "description": "Claude: security-review",
+                "input": null,
+                "name": "security-review"
+              },
+              {
+                "_meta": {
+                  "category": "mcp_prompt",
+                  "source": "claude_cli"
+                },
+                "description": "SAH: are_tests_passing",
+                "input": null,
+                "name": "mcp__sah__are_tests_passing"
+              },
+              {
+                "_meta": {
+                  "category": "mcp_prompt",
+                  "source": "claude_cli"
+                },
+                "description": "SAH: say-hello",
+                "input": null,
+                "name": "mcp__sah__say-hello"
+              },
+              {
+                "_meta": {
+                  "category": "mcp_prompt",
+                  "source": "claude_cli"
+                },
+                "description": "SAH: .system",
+                "input": null,
+                "name": "mcp__sah__.system"
+              },
+              {
+                "_meta": {
+                  "category": "mcp_prompt",
+                  "source": "claude_cli"
+                },
+                "description": "SAH: do_todo",
+                "input": null,
+                "name": "mcp__sah__do_todo"
+              },
+              {
+                "_meta": {
+                  "category": "mcp_prompt",
+                  "source": "claude_cli"
+                },
+                "description": "SAH: plan",
+                "input": null,
+                "name": "mcp__sah__plan"
+              },
+              {
+                "_meta": {
+                  "category": "mcp_prompt",
+                  "source": "claude_cli"
+                },
+                "description": "SAH: docs/readme",
+                "input": null,
+                "name": "mcp__sah__docs/readme"
+              },
+              {
+                "_meta": {
+                  "category": "mcp_prompt",
+                  "source": "claude_cli"
+                },
+                "description": "SAH: are_todos_done",
+                "input": null,
+                "name": "mcp__sah__are_todos_done"
+              },
+              {
+                "_meta": {
+                  "category": "mcp_prompt",
+                  "source": "claude_cli"
+                },
+                "description": "SAH: example",
+                "input": null,
+                "name": "mcp__sah__example"
+              },
+              {
+                "_meta": {
+                  "category": "mcp_prompt",
+                  "source": "claude_cli"
+                },
+                "description": "SAH: coverage",
+                "input": null,
+                "name": "mcp__sah__coverage"
+              },
+              {
+                "_meta": {
+                  "category": "mcp_prompt",
+                  "source": "claude_cli"
+                },
+                "description": "SAH: test",
+                "input": null,
+                "name": "mcp__sah__test"
+              },
+              {
+                "_meta": {
+                  "category": "mcp_prompt",
+                  "source": "claude_cli"
+                },
+                "description": "SAH: abort",
+                "input": null,
+                "name": "mcp__sah__abort"
+              },
+              {
+                "_meta": {
+                  "category": "mcp_prompt",
+                  "source": "claude_cli"
+                },
+                "description": "SAH: double_check",
+                "input": null,
+                "name": "mcp__sah__double_check"
+              },
+              {
+                "_meta": {
+                  "category": "mcp_prompt",
+                  "source": "claude_cli"
+                },
+                "description": "SAH: read_changes",
+                "input": null,
+                "name": "mcp__sah__read_changes"
+              },
+              {
+                "_meta": {
+                  "category": "mcp_prompt",
+                  "source": "claude_cli"
+                },
+                "description": "SAH: commit",
+                "input": null,
+                "name": "mcp__sah__commit"
+              },
+              {
+                "_meta": {
+                  "category": "mcp_prompt",
+                  "source": "claude_cli"
+                },
+                "description": "SAH: .check",
+                "input": null,
+                "name": "mcp__sah__.check"
+              },
+              {
+                "_meta": {
+                  "category": "mcp_prompt",
+                  "source": "claude_cli"
+                },
+                "description": "SAH: are_rules_passing",
+                "input": null,
+                "name": "mcp__sah__are_rules_passing"
+              }
+            ],
+            "sessionUpdate": "available_commands_update"
+          }
+        },
+        {
+          "sessionId": "01KDAVHC85NMVKSG6BDCGMRRRH",
+          "update": {
+            "content": {
+              "text": "I",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDAVHC85NMVKSG6BDCGMRRRH",
+          "update": {
+            "content": {
+              "text": "I",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDAVHC85NMVKSG6BDCGMRRRH",
+          "update": {
+            "content": {
+              "text": "'m doing well, thank you!",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDAVHC85NMVKSG6BDCGMRRRH",
+          "update": {
+            "content": {
+              "text": "'m doing well, thank you!",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDAVHC85NMVKSG6BDCGMRRRH",
+          "update": {
+            "content": {
+              "text": " I'm ready",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDAVHC85NMVKSG6BDCGMRRRH",
+          "update": {
+            "content": {
+              "text": " I'm ready",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDAVHC85NMVKSG6BDCGMRRRH",
+          "update": {
+            "content": {
+              "text": " to help you with your software engineering tasks",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDAVHC85NMVKSG6BDCGMRRRH",
+          "update": {
+            "content": {
+              "text": " to help you with your software engineering tasks",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDAVHC85NMVKSG6BDCGMRRRH",
+          "update": {
+            "content": {
+              "text": " in",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDAVHC85NMVKSG6BDCGMRRRH",
+          "update": {
+            "content": {
+              "text": " in",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDAVHC85NMVKSG6BDCGMRRRH",
+          "update": {
+            "content": {
+              "text": " the",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDAVHC85NMVKSG6BDCGMRRRH",
+          "update": {
+            "content": {
+              "text": " the",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDAVHC85NMVKSG6BDCGMRRRH",
+          "update": {
+            "content": {
+              "text": " `acp-conformance` project",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDAVHC85NMVKSG6BDCGMRRRH",
+          "update": {
+            "content": {
+              "text": " `acp-conformance` project",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDAVHC85NMVKSG6BDCGMRRRH",
+          "update": {
+            "content": {
+              "text": ".",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDAVHC85NMVKSG6BDCGMRRRH",
+          "update": {
+            "content": {
+              "text": ".",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDAVHC85NMVKSG6BDCGMRRRH",
+          "update": {
+            "content": {
+              "text": "\n\nI can see",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDAVHC85NMVKSG6BDCGMRRRH",
+          "update": {
+            "content": {
+              "text": "\n\nI can see",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDAVHC85NMVKSG6BDCGMRRRH",
+          "update": {
+            "content": {
+              "text": " you have",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDAVHC85NMVKSG6BDCGMRRRH",
+          "update": {
+            "content": {
+              "text": " you have",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDAVHC85NMVKSG6BDCGMRRRH",
+          "update": {
+            "content": {
+              "text": " some",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDAVHC85NMVKSG6BDCGMRRRH",
+          "update": {
+            "content": {
+              "text": " some",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDAVHC85NMVKSG6BDCGMRRRH",
+          "update": {
+            "content": {
+              "text": " modifications",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDAVHC85NMVKSG6BDCGMRRRH",
+          "update": {
+            "content": {
+              "text": " modifications",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDAVHC85NMVKSG6BDCGMRRRH",
+          "update": {
+            "content": {
+              "text": " to `",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDAVHC85NMVKSG6BDCGMRRRH",
+          "update": {
+            "content": {
+              "text": " to `",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDAVHC85NMVKSG6BDCGMRRRH",
+          "update": {
+            "content": {
+              "text": "test",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDAVHC85NMVKSG6BDCGMRRRH",
+          "update": {
+            "content": {
+              "text": "test",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDAVHC85NMVKSG6BDCGMRRRH",
+          "update": {
+            "content": {
+              "text": "_mcp_server.rs`",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDAVHC85NMVKSG6BDCGMRRRH",
+          "update": {
+            "content": {
+              "text": "_mcp_server.rs`",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDAVHC85NMVKSG6BDCGMRRRH",
+          "update": {
+            "content": {
+              "text": " an",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDAVHC85NMVKSG6BDCGMRRRH",
+          "update": {
+            "content": {
+              "text": " an",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDAVHC85NMVKSG6BDCGMRRRH",
+          "update": {
+            "content": {
+              "text": "d some",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDAVHC85NMVKSG6BDCGMRRRH",
+          "update": {
+            "content": {
+              "text": "d some",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDAVHC85NMVKSG6BDCGMRRRH",
+          "update": {
+            "content": {
+              "text": " un",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDAVHC85NMVKSG6BDCGMRRRH",
+          "update": {
+            "content": {
+              "text": " un",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDAVHC85NMVKSG6BDCGMRRRH",
+          "update": {
+            "content": {
+              "text": "tr",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDAVHC85NMVKSG6BDCGMRRRH",
+          "update": {
+            "content": {
+              "text": "tr",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDAVHC85NMVKSG6BDCGMRRRH",
+          "update": {
+            "content": {
+              "text": "acked files in",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDAVHC85NMVKSG6BDCGMRRRH",
+          "update": {
+            "content": {
+              "text": "acked files in",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDAVHC85NMVKSG6BDCGMRRRH",
+          "update": {
+            "content": {
+              "text": " `.",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDAVHC85NMVKSG6BDCGMRRRH",
+          "update": {
+            "content": {
+              "text": " `.",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDAVHC85NMVKSG6BDCGMRRRH",
+          "update": {
+            "content": {
+              "text": "fixtures/`. Is",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDAVHC85NMVKSG6BDCGMRRRH",
+          "update": {
+            "content": {
+              "text": "fixtures/`. Is",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDAVHC85NMVKSG6BDCGMRRRH",
+          "update": {
+            "content": {
+              "text": " there something specific you'd like to",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDAVHC85NMVKSG6BDCGMRRRH",
+          "update": {
+            "content": {
+              "text": " there something specific you'd like to",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDAVHC85NMVKSG6BDCGMRRRH",
+          "update": {
+            "content": {
+              "text": " work on, or would you like me",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDAVHC85NMVKSG6BDCGMRRRH",
+          "update": {
+            "content": {
+              "text": " work on, or would you like me",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDAVHC85NMVKSG6BDCGMRRRH",
+          "update": {
+            "content": {
+              "text": " to help with",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDAVHC85NMVKSG6BDCGMRRRH",
+          "update": {
+            "content": {
+              "text": " to help with",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDAVHC85NMVKSG6BDCGMRRRH",
+          "update": {
+            "content": {
+              "text": " anything",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDAVHC85NMVKSG6BDCGMRRRH",
+          "update": {
+            "content": {
+              "text": " anything",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDAVHC85NMVKSG6BDCGMRRRH",
+          "update": {
+            "content": {
+              "text": " relate",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDAVHC85NMVKSG6BDCGMRRRH",
+          "update": {
+            "content": {
+              "text": " relate",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDAVHC85NMVKSG6BDCGMRRRH",
+          "update": {
+            "content": {
+              "text": "d to these",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDAVHC85NMVKSG6BDCGMRRRH",
+          "update": {
+            "content": {
+              "text": "d to these",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDAVHC85NMVKSG6BDCGMRRRH",
+          "update": {
+            "content": {
+              "text": " changes",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDAVHC85NMVKSG6BDCGMRRRH",
+          "update": {
+            "content": {
+              "text": " changes",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDAVHC85NMVKSG6BDCGMRRRH",
+          "update": {
+            "content": {
+              "text": "?",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDAVHC85NMVKSG6BDCGMRRRH",
+          "update": {
+            "content": {
+              "text": "?",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDAVHC85NMVKSG6BDCGMRRRH",
+          "update": {
+            "content": {
+              "text": "I'm doing well, thank you! I'm ready to help you with your software engineering tasks in the `acp-conformance` project.\n\nI can see you have some modifications to `test_mcp_server.rs` and some untracked files in `.fixtures/`. Is there something specific you'd like to work on, or would you like me to help with anything related to these changes?",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        }
+      ]
+    }
+  ]
+}
