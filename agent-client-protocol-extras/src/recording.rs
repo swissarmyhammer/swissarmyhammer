@@ -205,32 +205,42 @@ impl<A: Agent> Agent for RecordingAgent<A> {
     }
 
     async fn cancel(&self, request: CancelNotification) -> agent_client_protocol::Result<()> {
-        self.inner.cancel(request).await
+        self.inner.cancel(request.clone()).await?;
+        self.record_with_notifications("cancel", &request, &());
+        Ok(())
     }
 
     async fn load_session(
         &self,
         request: LoadSessionRequest,
     ) -> agent_client_protocol::Result<LoadSessionResponse> {
-        self.inner.load_session(request).await
+        let response = self.inner.load_session(request.clone()).await?;
+        self.record_with_notifications("load_session", &request, &response);
+        Ok(response)
     }
 
     async fn set_session_mode(
         &self,
         request: SetSessionModeRequest,
     ) -> agent_client_protocol::Result<SetSessionModeResponse> {
-        self.inner.set_session_mode(request).await
+        let response = self.inner.set_session_mode(request.clone()).await?;
+        self.record_with_notifications("set_session_mode", &request, &response);
+        Ok(response)
     }
 
     async fn ext_method(&self, request: ExtRequest) -> agent_client_protocol::Result<ExtResponse> {
-        self.inner.ext_method(request).await
+        let response = self.inner.ext_method(request.clone()).await?;
+        self.record_with_notifications("ext_method", &request, &response);
+        Ok(response)
     }
 
     async fn ext_notification(
         &self,
         notification: ExtNotification,
     ) -> agent_client_protocol::Result<()> {
-        self.inner.ext_notification(notification).await
+        self.inner.ext_notification(notification.clone()).await?;
+        self.record_with_notifications("ext_notification", &notification, &());
+        Ok(())
     }
 }
 
