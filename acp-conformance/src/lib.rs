@@ -31,6 +31,7 @@ pub mod responses;
 pub mod sessions;
 pub mod slash_commands;
 pub mod terminals;
+pub mod tool_calls;
 pub mod validation;
 
 /// Result type for conformance tests

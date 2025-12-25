@@ -12,6 +12,7 @@ homepage.workspace = true
 agent-client-protocol.workspace = true
 agent-client-protocol-extras = { path = "../agent-client-protocol-extras" }
 tokio.workspace = true
+tokio-stream = { workspace = true, features = ["sync"] }
 serde.workspace = true
 serde_json.workspace = true
 anyhow.workspace = true

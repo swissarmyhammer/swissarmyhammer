@@ -98,7 +98,7 @@ mod acp_write_file_tests {
         };
 
         // Create the ACP server
-        let server = AcpServer::new(agent_server, acp_config);
+        let server = AcpServer::new(agent_server, acp_config).0;
         Ok(Arc::new(server))
     }
 

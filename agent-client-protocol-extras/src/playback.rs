@@ -15,6 +15,8 @@ pub struct PlaybackAgent {
     session: RecordedSession,
     current_call: Mutex<usize>,
     agent_type: &'static str,
+    /// Channel to send notifications during playback
+    notification_tx: tokio::sync::broadcast::Sender<agent_client_protocol::SessionNotification>,
 }
 
 impl PlaybackAgent {
@@ -30,14 +32,22 @@ impl PlaybackAgent {
 
         tracing::info!("PlaybackAgent: Loaded {} calls", session.calls.len());
 
+        let (notification_tx, _) = tokio::sync::broadcast::channel(1000);
+
         Self {
             session,
             current_call: Mutex::new(0),
             agent_type,
+            notification_tx,
         }
     }
 
-    fn get_next_call(&self, method: &str) -> agent_client_protocol::Result<serde_json::Value> {
+    /// Get notification receiver for playback
+    pub fn subscribe_notifications(&self) -> tokio::sync::broadcast::Receiver<agent_client_protocol::SessionNotification> {
+        self.notification_tx.subscribe()
+    }
+
+    fn get_next_call(&self, method: &str) -> agent_client_protocol::Result<(serde_json::Value, Vec<serde_json::Value>)> {
         let mut index = self.current_call.lock().unwrap();
 
         if *index >= self.session.calls.len() {
@@ -51,14 +61,33 @@ impl PlaybackAgent {
         }
 
         *index += 1;
-        Ok(call.response.clone())
+        Ok((call.response.clone(), call.notifications.clone()))
+    }
+
+    fn replay_notifications(&self, notifications: Vec<serde_json::Value>) {
+        if notifications.is_empty() {
+            return;
+        }
+
+        tracing::info!("PlaybackAgent: Replaying {} notifications", notifications.len());
+        let tx = self.notification_tx.clone();
+
+        tokio::spawn(async move {
+            for notif_json in notifications {
+                if let Ok(notification) = serde_json::from_value::<agent_client_protocol::SessionNotification>(notif_json) {
+                    let _ = tx.send(notification);
+                }
+            }
+        });
     }
 }
 
 #[async_trait::async_trait(?Send)]
 impl Agent for PlaybackAgent {
     async fn initialize(&self, _request: InitializeRequest) -> agent_client_protocol::Result<InitializeResponse> {
-        let response_json = self.get_next_call("initialize")?;
+        let (response_json, notifications) = self.get_next_call("initialize")?;
+        self.replay_notifications(notifications);
+
         serde_json::from_value(response_json).map_err(|e| {
             tracing::error!("Failed to deserialize initialize response: {}", e);
             agent_client_protocol::Error::internal_error()
@@ -66,12 +95,14 @@ impl Agent for PlaybackAgent {
     }
 
     async fn authenticate(&self, _request: AuthenticateRequest) -> agent_client_protocol::Result<AuthenticateResponse> {
-        let response_json = self.get_next_call("authenticate")?;
+        let (response_json, _notifications) = self.get_next_call("authenticate")?;
         serde_json::from_value(response_json).map_err(|_| agent_client_protocol::Error::internal_error())
     }
 
     async fn new_session(&self, _request: NewSessionRequest) -> agent_client_protocol::Result<NewSessionResponse> {
-        let response_json = self.get_next_call("new_session")?;
+        let (response_json, notifications) = self.get_next_call("new_session")?;
+        self.replay_notifications(notifications);
+
         serde_json::from_value(response_json).map_err(|e| {
             tracing::error!("Failed to deserialize new_session response: {}", e);
             agent_client_protocol::Error::internal_error()
@@ -79,7 +110,9 @@ impl Agent for PlaybackAgent {
     }
 
     async fn prompt(&self, _request: PromptRequest) -> agent_client_protocol::Result<PromptResponse> {
-        let response_json = self.get_next_call("prompt")?;
+        let (response_json, notifications) = self.get_next_call("prompt")?;
+        self.replay_notifications(notifications);
+
         serde_json::from_value(response_json).map_err(|e| {
             tracing::error!("Failed to deserialize prompt response: {}", e);
             agent_client_protocol::Error::internal_error()

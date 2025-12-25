@@ -107,7 +107,7 @@ async fn main() -> Result<()> {
     tracing::info!("Agent server initialized successfully");
 
     // Create the ACP server
-    let acp_server = Arc::new(AcpServer::new(agent_server, acp_config));
+    let acp_server = Arc::new(AcpServer::new(agent_server, acp_config).0);
 
     tracing::info!("Starting ACP protocol server on stdio...");
 

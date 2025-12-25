@@ -22,6 +22,7 @@ dependencies = [
  "test-log",
  "thiserror 1.0.69",
  "tokio",
+ "tokio-stream",
  "tokio-util",
  "tracing",
  "tracing-subscriber",
@@ -59,6 +60,8 @@ dependencies = [
  "futures",
  "serde",
  "serde_json",
+ "tokio",
+ "tokio-stream",
  "tracing",
 ]
 
@@ -6911,6 +6914,7 @@ dependencies = [
  "futures-core",
  "pin-project-lite",
  "tokio",
+ "tokio-util",
 ]
 
 [[package]]

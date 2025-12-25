@@ -50,8 +50,8 @@ pub struct AcpServer {
 }
 
 impl AcpServer {
-    pub fn new(agent_server: Arc<AgentServer>, config: AcpConfig) -> Self {
-        let (notification_tx, _) = broadcast::channel(1000);
+    pub fn new(agent_server: Arc<AgentServer>, config: AcpConfig) -> (Self, tokio::sync::broadcast::Receiver<agent_client_protocol::SessionNotification>) {
+        let (notification_tx, notification_rx) = broadcast::channel(1000);
 
         // Initialize permission policy engine from config
         let permission_engine = PermissionPolicyEngine::new(config.permission_policy.clone());
@@ -92,7 +92,7 @@ impl AcpServer {
             }
         };
 
-        Self {
+        let server = Self {
             agent_server,
             sessions: Arc::new(RwLock::new(HashMap::new())),
             llama_to_acp: Arc::new(RwLock::new(HashMap::new())),
@@ -103,7 +103,9 @@ impl AcpServer {
             filesystem_ops,
             terminal_manager,
             raw_message_manager,
-        }
+        };
+
+        (server, notification_rx)
     }
 
     /// Start the ACP server with stdio transport
@@ -632,6 +634,8 @@ impl AcpServer {
     ///
     /// * `notification` - The session notification to broadcast
     fn broadcast_notification(&self, notification: SessionNotification) {
+        tracing::info!("Broadcasting notification: {:?}", notification.update);
+
         // Record notification to raw message log for debugging
         if let Some(ref manager) = self.raw_message_manager {
             if let Ok(json) = serde_json::to_string(&notification) {
@@ -641,7 +645,7 @@ impl AcpServer {
 
         match self.notification_tx.send(notification) {
             Ok(subscriber_count) => {
-                tracing::debug!("Notification broadcast to {} subscribers", subscriber_count);
+                tracing::info!("Notification broadcast to {} subscribers", subscriber_count);
             }
             Err(e) => {
                 tracing::warn!(

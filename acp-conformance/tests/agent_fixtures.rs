@@ -41,18 +41,25 @@ pub(crate) fn agent_agent_factory(
 
 /// Create claude-agent for testing
 async fn create_claude_agent() -> Result<Box<dyn AgentWithFixture>> {
-    use agent_client_protocol_extras::get_test_name_from_thread;
+    use agent_client_protocol_extras::{get_fixture_path_for, get_test_name_from_thread, RecordingAgent};
+    use tokio_stream::wrappers::BroadcastStream;
 
     let config = claude_agent::config::AgentConfig::default();
-    let (agent, _receiver) = claude_agent::agent::ClaudeAgent::new(config).await?;
+    let (agent, receiver) = claude_agent::agent::ClaudeAgent::new(config).await?;
 
     let test_name = get_test_name_from_thread();
-    Ok(agent_client_protocol_extras::with_fixture(agent, &test_name))
+    let path = get_fixture_path_for(agent.agent_type(), &test_name);
+
+    // Wrap with notification capture (pass receiver directly)
+    let recording_agent = RecordingAgent::with_notifications(agent, path, receiver);
+
+    Ok(Box::new(recording_agent))
 }
 
 /// Create llama-agent for testing
 async fn create_llama_agent() -> Result<Box<dyn AgentWithFixture>> {
-    use agent_client_protocol_extras::get_test_name_from_thread;
+    use agent_client_protocol_extras::{get_fixture_path_for, get_test_name_from_thread, RecordingAgent};
+    use tokio_stream::wrappers::BroadcastStream;
 
     // Use test model config
     use llama_agent::test_models::{TEST_MODEL_FILE, TEST_MODEL_REPO};
@@ -63,10 +70,14 @@ async fn create_llama_agent() -> Result<Box<dyn AgentWithFixture>> {
         folder: None,
     };
 
-    let agent = llama_agent::acp::test_utils::create_acp_server(config).await?;
+    let (agent, notification_rx) = llama_agent::acp::test_utils::create_acp_server(config).await?;
 
     let test_name = get_test_name_from_thread();
-    Ok(agent_client_protocol_extras::with_fixture(agent, &test_name))
+    let path = get_fixture_path_for(agent.agent_type(), &test_name);
+
+    // Wrap with notification capture (pass receiver directly)
+    let recording_agent = RecordingAgent::with_notifications(agent, path, notification_rx);
+    Ok(Box::new(recording_agent))
 }
 
 /// Create generic agent (uses llama)

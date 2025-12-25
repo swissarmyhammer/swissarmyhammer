@@ -23,9 +23,11 @@ use std::path::PathBuf;
 
 pub mod recording;
 pub mod playback;
+pub mod test_mcp_server;
 
 pub use recording::RecordingAgent;
 pub use playback::PlaybackAgent;
+pub use test_mcp_server::TestMcpServer;
 
 /// Wrap agent with fixture (recording or playback)
 ///

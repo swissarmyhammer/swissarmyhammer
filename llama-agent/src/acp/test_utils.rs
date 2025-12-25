@@ -7,7 +7,15 @@ use crate::types::AgentConfig;
 use std::sync::Arc;
 
 /// Create ACP server for testing with custom config
-pub async fn create_acp_server(config: AgentConfig) -> Result<AcpServer, Box<dyn std::error::Error>> {
+pub async fn create_acp_server(
+    config: AgentConfig,
+) -> Result<
+    (
+        AcpServer,
+        tokio::sync::broadcast::Receiver<agent_client_protocol::SessionNotification>,
+    ),
+    Box<dyn std::error::Error>,
+> {
     let model_manager = Arc::new(crate::model::ModelManager::new(config.model.clone())?);
 
     // Load model

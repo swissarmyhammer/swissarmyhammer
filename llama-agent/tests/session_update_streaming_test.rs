@@ -88,7 +88,7 @@ mod acp_tests {
         ));
 
         let acp_config = llama_agent::acp::config::AcpConfig::default();
-        let server = AcpServer::new(agent_server, acp_config);
+        let server = AcpServer::new(agent_server, acp_config).0;
 
         Ok(Arc::new(server))
     }

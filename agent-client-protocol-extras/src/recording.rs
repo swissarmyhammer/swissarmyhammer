@@ -16,6 +16,9 @@ pub struct RecordedCall {
     pub method: String,
     pub request: serde_json::Value,
     pub response: serde_json::Value,
+    /// Notifications sent during this method call
+    #[serde(default)]
+    pub notifications: Vec<serde_json::Value>,
 }
 
 /// Recorded session
@@ -29,6 +32,10 @@ pub struct RecordingAgent<A> {
     inner: A,
     path: PathBuf,
     calls: Arc<Mutex<Vec<RecordedCall>>>,
+    /// Buffer for notifications received during current method call
+    pub(crate) notification_buffer: Arc<Mutex<Vec<serde_json::Value>>>,
+    /// Task handle for notification capture
+    notification_task: Option<tokio::task::JoinHandle<()>>,
 }
 
 impl<A> RecordingAgent<A> {
@@ -38,7 +45,71 @@ impl<A> RecordingAgent<A> {
             inner,
             path,
             calls: Arc::new(Mutex::new(Vec::new())),
+            notification_buffer: Arc::new(Mutex::new(Vec::new())),
+            notification_task: None,
         }
+    }
+
+    /// Create with notification receiver
+    ///
+    /// Spawns a task to consume notifications from receiver and buffer them.
+    pub fn with_notifications(inner: A, path: PathBuf, mut receiver: tokio::sync::broadcast::Receiver<agent_client_protocol::SessionNotification>) -> Self {
+        let mut agent = Self::new(inner, path);
+        let buffer = Arc::clone(&agent.notification_buffer);
+
+        // Try blocking receive approach
+        std::thread::spawn(move || {
+            tracing::info!("RecordingAgent: Starting notification capture thread");
+            let mut count = 0;
+
+            // Try non-blocking receives for a period
+            let start = std::time::Instant::now();
+            while start.elapsed() < std::time::Duration::from_secs(10) {
+                match receiver.try_recv() {
+                    Ok(notification) => {
+                        count += 1;
+                        tracing::info!("RecordingAgent: Captured notification #{}", count);
+                        if let Ok(json) = serde_json::to_value(&notification) {
+                            buffer.lock().unwrap().push(json);
+                        }
+                    }
+                    Err(tokio::sync::broadcast::error::TryRecvError::Empty) => {
+                        // No message yet, sleep briefly
+                        std::thread::sleep(std::time::Duration::from_millis(1));
+                    }
+                    Err(tokio::sync::broadcast::error::TryRecvError::Lagged(skipped)) => {
+                        tracing::warn!("Receiver lagged by {}", skipped);
+                    }
+                    Err(tokio::sync::broadcast::error::TryRecvError::Closed) => {
+                        tracing::info!("Channel closed");
+                        break;
+                    }
+                }
+            }
+
+            tracing::info!("RecordingAgent: Capture thread complete ({} notifications)", count);
+        });
+
+        agent
+    }
+
+    /// Get access to notification buffer for external capture
+    pub fn notification_buffer(&self) -> Arc<Mutex<Vec<serde_json::Value>>> {
+        Arc::clone(&self.notification_buffer)
+    }
+
+    /// Record a method call with captured notifications
+    fn record_with_notifications(&self, method: &str, req: &impl Serialize, resp: &impl Serialize) {
+        // Take all buffered notifications
+        let notifications = std::mem::take(&mut *self.notification_buffer.lock().unwrap());
+
+        let call = RecordedCall {
+            method: method.to_string(),
+            request: serde_json::to_value(req).unwrap_or_default(),
+            response: serde_json::to_value(resp).unwrap_or_default(),
+            notifications,
+        };
+        self.calls.lock().unwrap().push(call);
     }
 
     fn record(&self, method: &str, req: &impl Serialize, resp: &impl Serialize) {
@@ -46,6 +117,7 @@ impl<A> RecordingAgent<A> {
             method: method.to_string(),
             request: serde_json::to_value(req).unwrap_or_default(),
             response: serde_json::to_value(resp).unwrap_or_default(),
+            notifications: Vec::new(), // TODO: Capture notifications
         };
         self.calls.lock().unwrap().push(call);
     }
@@ -70,6 +142,13 @@ impl<A> RecordingAgent<A> {
 
 impl<A> Drop for RecordingAgent<A> {
     fn drop(&mut self) {
+        // Give task time to consume all notifications
+        // Can't block_on from async context, so just sleep
+        std::thread::sleep(std::time::Duration::from_secs(1));
+
+        tracing::info!("RecordingAgent Drop: saving {} buffered notifications",
+            self.notification_buffer.lock().unwrap().len());
+
         if let Err(e) = self.save() {
             tracing::error!("Failed to save recording: {}", e);
         }
@@ -80,7 +159,7 @@ impl<A> Drop for RecordingAgent<A> {
 impl<A: Agent> Agent for RecordingAgent<A> {
     async fn initialize(&self, request: InitializeRequest) -> agent_client_protocol::Result<InitializeResponse> {
         let response = self.inner.initialize(request.clone()).await?;
-        self.record("initialize", &request, &response);
+        self.record_with_notifications("initialize", &request, &response);
         Ok(response)
     }
 
@@ -90,13 +169,13 @@ impl<A: Agent> Agent for RecordingAgent<A> {
 
     async fn new_session(&self, request: NewSessionRequest) -> agent_client_protocol::Result<NewSessionResponse> {
         let response = self.inner.new_session(request.clone()).await?;
-        self.record("new_session", &request, &response);
+        self.record_with_notifications("new_session", &request, &response);
         Ok(response)
     }
 
     async fn prompt(&self, request: PromptRequest) -> agent_client_protocol::Result<PromptResponse> {
         let response = self.inner.prompt(request.clone()).await?;
-        self.record("prompt", &request, &response);
+        self.record_with_notifications("prompt", &request, &response);
         Ok(response)
     }
 
