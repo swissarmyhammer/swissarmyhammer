@@ -35,9 +35,7 @@ use agent_client_protocol::{
 /// This test verifies that when an agent executes tools, it sends:
 /// - tool_call notification (initial report)
 /// - tool_call_update notifications (progress updates)
-pub async fn test_tool_call_notifications<A: Agent + ?Sized>(
-    agent: &A,
-) -> crate::Result<()> {
+pub async fn test_tool_call_notifications<A: Agent + ?Sized>(agent: &A) -> crate::Result<()> {
     tracing::info!("Testing tool call notifications");
 
     // Initialize
@@ -69,9 +67,7 @@ pub async fn test_tool_call_notifications<A: Agent + ?Sized>(
 }
 
 /// Test that agents send available_commands_update when commands change
-pub async fn test_commands_update_notification<A: Agent + ?Sized>(
-    agent: &A,
-) -> crate::Result<()> {
+pub async fn test_commands_update_notification<A: Agent + ?Sized>(agent: &A) -> crate::Result<()> {
     tracing::info!("Testing available_commands_update notification");
 
     agent

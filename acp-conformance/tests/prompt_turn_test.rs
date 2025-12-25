@@ -15,9 +15,8 @@ use rstest::rstest;
 async fn test_basic_prompt_response(
     #[case]
     #[future]
-agent: Box<dyn AgentWithFixture>,
+    agent: Box<dyn AgentWithFixture>,
 ) {
-
     acp_conformance::prompt_turn::test_basic_prompt_response(&*agent)
         .await
         .expect("Basic prompt response should succeed");
@@ -32,9 +31,8 @@ agent: Box<dyn AgentWithFixture>,
 async fn test_prompt_completion(
     #[case]
     #[future]
-agent: Box<dyn AgentWithFixture>,
+    agent: Box<dyn AgentWithFixture>,
 ) {
-
     acp_conformance::prompt_turn::test_prompt_completion(&*agent)
         .await
         .expect("Prompt completion test should succeed");
@@ -49,9 +47,8 @@ agent: Box<dyn AgentWithFixture>,
 async fn test_stop_reasons(
     #[case]
     #[future]
-agent: Box<dyn AgentWithFixture>,
+    agent: Box<dyn AgentWithFixture>,
 ) {
-
     acp_conformance::prompt_turn::test_stop_reasons(&*agent)
         .await
         .expect("Stop reasons test should succeed");
@@ -66,9 +63,8 @@ agent: Box<dyn AgentWithFixture>,
 async fn test_cancellation(
     #[case]
     #[future]
-agent: Box<dyn AgentWithFixture>,
+    agent: Box<dyn AgentWithFixture>,
 ) {
-
     acp_conformance::prompt_turn::test_cancellation(&*agent)
         .await
         .expect("Cancellation test should succeed");
@@ -83,9 +79,8 @@ agent: Box<dyn AgentWithFixture>,
 async fn test_multiple_prompts(
     #[case]
     #[future]
-agent: Box<dyn AgentWithFixture>,
+    agent: Box<dyn AgentWithFixture>,
 ) {
-
     acp_conformance::prompt_turn::test_multiple_prompts(&*agent)
         .await
         .expect("Multiple prompts test should succeed");

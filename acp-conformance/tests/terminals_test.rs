@@ -15,9 +15,8 @@ use rstest::rstest;
 async fn test_terminal_capability_check(
     #[case]
     #[future]
-agent: Box<dyn AgentWithFixture>,
+    agent: Box<dyn AgentWithFixture>,
 ) {
-
     acp_conformance::terminals::test_terminal_capability_check(&*agent)
         .await
         .expect("test_terminal_capability_check should succeed");
@@ -32,9 +31,8 @@ agent: Box<dyn AgentWithFixture>,
 async fn test_terminal_create(
     #[case]
     #[future]
-agent: Box<dyn AgentWithFixture>,
+    agent: Box<dyn AgentWithFixture>,
 ) {
-
     acp_conformance::terminals::test_terminal_create(&*agent)
         .await
         .expect("test_terminal_create should succeed");
@@ -49,9 +47,8 @@ agent: Box<dyn AgentWithFixture>,
 async fn test_terminal_output(
     #[case]
     #[future]
-agent: Box<dyn AgentWithFixture>,
+    agent: Box<dyn AgentWithFixture>,
 ) {
-
     acp_conformance::terminals::test_terminal_output(&*agent)
         .await
         .expect("test_terminal_output should succeed");
@@ -66,9 +63,8 @@ agent: Box<dyn AgentWithFixture>,
 async fn test_terminal_wait_for_exit(
     #[case]
     #[future]
-agent: Box<dyn AgentWithFixture>,
+    agent: Box<dyn AgentWithFixture>,
 ) {
-
     acp_conformance::terminals::test_terminal_wait_for_exit(&*agent)
         .await
         .expect("test_terminal_wait_for_exit should succeed");
@@ -83,9 +79,8 @@ agent: Box<dyn AgentWithFixture>,
 async fn test_terminal_kill(
     #[case]
     #[future]
-agent: Box<dyn AgentWithFixture>,
+    agent: Box<dyn AgentWithFixture>,
 ) {
-
     acp_conformance::terminals::test_terminal_kill(&*agent)
         .await
         .expect("test_terminal_kill should succeed");
@@ -100,9 +95,8 @@ agent: Box<dyn AgentWithFixture>,
 async fn test_terminal_release(
     #[case]
     #[future]
-agent: Box<dyn AgentWithFixture>,
+    agent: Box<dyn AgentWithFixture>,
 ) {
-
     acp_conformance::terminals::test_terminal_release(&*agent)
         .await
         .expect("test_terminal_release should succeed");
@@ -117,9 +111,8 @@ agent: Box<dyn AgentWithFixture>,
 async fn test_terminal_timeout(
     #[case]
     #[future]
-agent: Box<dyn AgentWithFixture>,
+    agent: Box<dyn AgentWithFixture>,
 ) {
-
     acp_conformance::terminals::test_terminal_timeout(&*agent)
         .await
         .expect("test_terminal_timeout should succeed");

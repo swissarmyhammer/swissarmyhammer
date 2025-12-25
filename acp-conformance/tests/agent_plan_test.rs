@@ -15,9 +15,8 @@ use rstest::rstest;
 async fn test_agent_accepts_planning_prompt(
     #[case]
     #[future]
-agent: Box<dyn AgentWithFixture>,
+    agent: Box<dyn AgentWithFixture>,
 ) {
-
     acp_conformance::agent_plan::test_agent_accepts_planning_prompt(&*agent)
         .await
         .expect("Agent accepts planning prompt should succeed");
@@ -32,9 +31,8 @@ agent: Box<dyn AgentWithFixture>,
 async fn test_plan_entry_structure_validation(
     #[case]
     #[future]
-agent: Box<dyn AgentWithFixture>,
+    agent: Box<dyn AgentWithFixture>,
 ) {
-
     acp_conformance::agent_plan::test_plan_entry_structure_validation(&*agent)
         .await
         .expect("Plan entry structure validation should succeed");
@@ -49,9 +47,8 @@ agent: Box<dyn AgentWithFixture>,
 async fn test_plan_session_update_structure(
     #[case]
     #[future]
-agent: Box<dyn AgentWithFixture>,
+    agent: Box<dyn AgentWithFixture>,
 ) {
-
     acp_conformance::agent_plan::test_plan_session_update_structure(&*agent)
         .await
         .expect("Plan session update structure should succeed");
@@ -66,9 +63,8 @@ agent: Box<dyn AgentWithFixture>,
 async fn test_dynamic_plan_evolution(
     #[case]
     #[future]
-agent: Box<dyn AgentWithFixture>,
+    agent: Box<dyn AgentWithFixture>,
 ) {
-
     acp_conformance::agent_plan::test_dynamic_plan_evolution(&*agent)
         .await
         .expect("Dynamic plan evolution should succeed");

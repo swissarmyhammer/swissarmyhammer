@@ -15,9 +15,8 @@ use rstest::rstest;
 async fn test_read_text_file_capability_check(
     #[case]
     #[future]
-agent: Box<dyn AgentWithFixture>,
+    agent: Box<dyn AgentWithFixture>,
 ) {
-
     acp_conformance::file_system::test_read_text_file_capability_check(&*agent)
         .await
         .expect("test_read_text_file_capability_check should succeed");
@@ -32,9 +31,8 @@ agent: Box<dyn AgentWithFixture>,
 async fn test_write_text_file_capability_check(
     #[case]
     #[future]
-agent: Box<dyn AgentWithFixture>,
+    agent: Box<dyn AgentWithFixture>,
 ) {
-
     acp_conformance::file_system::test_write_text_file_capability_check(&*agent)
         .await
         .expect("test_write_text_file_capability_check should succeed");
@@ -49,9 +47,8 @@ agent: Box<dyn AgentWithFixture>,
 async fn test_read_text_file_basic(
     #[case]
     #[future]
-agent: Box<dyn AgentWithFixture>,
+    agent: Box<dyn AgentWithFixture>,
 ) {
-
     acp_conformance::file_system::test_read_text_file_basic(&*agent)
         .await
         .expect("test_read_text_file_basic should succeed");
@@ -66,9 +63,8 @@ agent: Box<dyn AgentWithFixture>,
 async fn test_read_text_file_with_range(
     #[case]
     #[future]
-agent: Box<dyn AgentWithFixture>,
+    agent: Box<dyn AgentWithFixture>,
 ) {
-
     acp_conformance::file_system::test_read_text_file_with_range(&*agent)
         .await
         .expect("test_read_text_file_with_range should succeed");
@@ -83,9 +79,8 @@ agent: Box<dyn AgentWithFixture>,
 async fn test_write_text_file_basic(
     #[case]
     #[future]
-agent: Box<dyn AgentWithFixture>,
+    agent: Box<dyn AgentWithFixture>,
 ) {
-
     acp_conformance::file_system::test_write_text_file_basic(&*agent)
         .await
         .expect("test_write_text_file_basic should succeed");
@@ -100,9 +95,8 @@ agent: Box<dyn AgentWithFixture>,
 async fn test_write_text_file_creates_new(
     #[case]
     #[future]
-agent: Box<dyn AgentWithFixture>,
+    agent: Box<dyn AgentWithFixture>,
 ) {
-
     acp_conformance::file_system::test_write_text_file_creates_new(&*agent)
         .await
         .expect("test_write_text_file_creates_new should succeed");
@@ -117,9 +111,8 @@ agent: Box<dyn AgentWithFixture>,
 async fn test_read_write_integration(
     #[case]
     #[future]
-agent: Box<dyn AgentWithFixture>,
+    agent: Box<dyn AgentWithFixture>,
 ) {
-
     acp_conformance::file_system::test_read_write_integration(&*agent)
         .await
         .expect("test_read_write_integration should succeed");

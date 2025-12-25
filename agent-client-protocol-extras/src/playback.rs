@@ -1,12 +1,12 @@
 //! PlaybackAgent - Replays recorded Agent method calls
 
+use crate::recording::RecordedSession;
 use agent_client_protocol::{
     Agent, AuthenticateRequest, AuthenticateResponse, CancelNotification, ExtNotification,
     ExtRequest, ExtResponse, InitializeRequest, InitializeResponse, LoadSessionRequest,
     LoadSessionResponse, NewSessionRequest, NewSessionResponse, PromptRequest, PromptResponse,
     SetSessionModeRequest, SetSessionModeResponse,
 };
-use crate::recording::RecordedSession;
 use std::path::PathBuf;
 use std::sync::Mutex;
 
@@ -24,7 +24,10 @@ impl PlaybackAgent {
         tracing::info!("PlaybackAgent: Loading from {:?}", path);
 
         let session = std::fs::read_to_string(&path)
-            .and_then(|content| serde_json::from_str(&content).map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e)))
+            .and_then(|content| {
+                serde_json::from_str(&content)
+                    .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
+            })
             .unwrap_or_else(|e| {
                 tracing::warn!("Failed to load fixture from {:?}: {}, using empty", path, e);
                 RecordedSession { calls: vec![] }
@@ -43,21 +46,34 @@ impl PlaybackAgent {
     }
 
     /// Get notification receiver for playback
-    pub fn subscribe_notifications(&self) -> tokio::sync::broadcast::Receiver<agent_client_protocol::SessionNotification> {
+    pub fn subscribe_notifications(
+        &self,
+    ) -> tokio::sync::broadcast::Receiver<agent_client_protocol::SessionNotification> {
         self.notification_tx.subscribe()
     }
 
-    fn get_next_call(&self, method: &str) -> agent_client_protocol::Result<(serde_json::Value, Vec<serde_json::Value>)> {
+    fn get_next_call(
+        &self,
+        method: &str,
+    ) -> agent_client_protocol::Result<(serde_json::Value, Vec<serde_json::Value>)> {
         let mut index = self.current_call.lock().unwrap();
 
         if *index >= self.session.calls.len() {
-            tracing::error!("PlaybackAgent: No more recorded calls (requested {}, have {})", *index + 1, self.session.calls.len());
+            tracing::error!(
+                "PlaybackAgent: No more recorded calls (requested {}, have {})",
+                *index + 1,
+                self.session.calls.len()
+            );
             return Err(agent_client_protocol::Error::internal_error());
         }
 
         let call = &self.session.calls[*index];
         if call.method != method {
-            tracing::warn!("PlaybackAgent: Method mismatch - expected {}, got {}", method, call.method);
+            tracing::warn!(
+                "PlaybackAgent: Method mismatch - expected {}, got {}",
+                method,
+                call.method
+            );
         }
 
         *index += 1;
@@ -69,12 +85,17 @@ impl PlaybackAgent {
             return;
         }
 
-        tracing::info!("PlaybackAgent: Replaying {} notifications", notifications.len());
+        tracing::info!(
+            "PlaybackAgent: Replaying {} notifications",
+            notifications.len()
+        );
         let tx = self.notification_tx.clone();
 
         tokio::spawn(async move {
             for notif_json in notifications {
-                if let Ok(notification) = serde_json::from_value::<agent_client_protocol::SessionNotification>(notif_json) {
+                if let Ok(notification) =
+                    serde_json::from_value::<agent_client_protocol::SessionNotification>(notif_json)
+                {
                     let _ = tx.send(notification);
                 }
             }
@@ -84,7 +105,10 @@ impl PlaybackAgent {
 
 #[async_trait::async_trait(?Send)]
 impl Agent for PlaybackAgent {
-    async fn initialize(&self, _request: InitializeRequest) -> agent_client_protocol::Result<InitializeResponse> {
+    async fn initialize(
+        &self,
+        _request: InitializeRequest,
+    ) -> agent_client_protocol::Result<InitializeResponse> {
         let (response_json, notifications) = self.get_next_call("initialize")?;
         self.replay_notifications(notifications);
 
@@ -94,12 +118,19 @@ impl Agent for PlaybackAgent {
         })
     }
 
-    async fn authenticate(&self, _request: AuthenticateRequest) -> agent_client_protocol::Result<AuthenticateResponse> {
+    async fn authenticate(
+        &self,
+        _request: AuthenticateRequest,
+    ) -> agent_client_protocol::Result<AuthenticateResponse> {
         let (response_json, _notifications) = self.get_next_call("authenticate")?;
-        serde_json::from_value(response_json).map_err(|_| agent_client_protocol::Error::internal_error())
+        serde_json::from_value(response_json)
+            .map_err(|_| agent_client_protocol::Error::internal_error())
     }
 
-    async fn new_session(&self, _request: NewSessionRequest) -> agent_client_protocol::Result<NewSessionResponse> {
+    async fn new_session(
+        &self,
+        _request: NewSessionRequest,
+    ) -> agent_client_protocol::Result<NewSessionResponse> {
         let (response_json, notifications) = self.get_next_call("new_session")?;
         self.replay_notifications(notifications);
 
@@ -109,7 +140,10 @@ impl Agent for PlaybackAgent {
         })
     }
 
-    async fn prompt(&self, _request: PromptRequest) -> agent_client_protocol::Result<PromptResponse> {
+    async fn prompt(
+        &self,
+        _request: PromptRequest,
+    ) -> agent_client_protocol::Result<PromptResponse> {
         let (response_json, notifications) = self.get_next_call("prompt")?;
         self.replay_notifications(notifications);
 
@@ -123,11 +157,17 @@ impl Agent for PlaybackAgent {
         Ok(())
     }
 
-    async fn load_session(&self, _request: LoadSessionRequest) -> agent_client_protocol::Result<LoadSessionResponse> {
+    async fn load_session(
+        &self,
+        _request: LoadSessionRequest,
+    ) -> agent_client_protocol::Result<LoadSessionResponse> {
         Err(agent_client_protocol::Error::method_not_found())
     }
 
-    async fn set_session_mode(&self, _request: SetSessionModeRequest) -> agent_client_protocol::Result<SetSessionModeResponse> {
+    async fn set_session_mode(
+        &self,
+        _request: SetSessionModeRequest,
+    ) -> agent_client_protocol::Result<SetSessionModeResponse> {
         Err(agent_client_protocol::Error::method_not_found())
     }
 
@@ -135,7 +175,10 @@ impl Agent for PlaybackAgent {
         Err(agent_client_protocol::Error::method_not_found())
     }
 
-    async fn ext_notification(&self, _notification: ExtNotification) -> agent_client_protocol::Result<()> {
+    async fn ext_notification(
+        &self,
+        _notification: ExtNotification,
+    ) -> agent_client_protocol::Result<()> {
         Ok(())
     }
 }

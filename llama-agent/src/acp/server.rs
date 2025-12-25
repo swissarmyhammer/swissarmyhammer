@@ -50,7 +50,13 @@ pub struct AcpServer {
 }
 
 impl AcpServer {
-    pub fn new(agent_server: Arc<AgentServer>, config: AcpConfig) -> (Self, tokio::sync::broadcast::Receiver<agent_client_protocol::SessionNotification>) {
+    pub fn new(
+        agent_server: Arc<AgentServer>,
+        config: AcpConfig,
+    ) -> (
+        Self,
+        tokio::sync::broadcast::Receiver<agent_client_protocol::SessionNotification>,
+    ) {
         let (notification_tx, notification_rx) = broadcast::channel(1000);
 
         // Initialize permission policy engine from config
@@ -3417,4 +3423,3 @@ impl AgentWithFixture for AcpServer {
         "llama"
     }
 }
-

@@ -15,9 +15,8 @@ use rstest::rstest;
 async fn test_command_structure_validation(
     #[case]
     #[future]
-agent: Box<dyn AgentWithFixture>,
+    agent: Box<dyn AgentWithFixture>,
 ) {
-
     acp_conformance::slash_commands::test_command_structure_validation(&*agent)
         .await
         .expect("test_command_structure_validation should succeed");
@@ -32,9 +31,8 @@ agent: Box<dyn AgentWithFixture>,
 async fn test_advertise_commands(
     #[case]
     #[future]
-agent: Box<dyn AgentWithFixture>,
+    agent: Box<dyn AgentWithFixture>,
 ) {
-
     acp_conformance::slash_commands::test_advertise_commands(&*agent)
         .await
         .expect("test_advertise_commands should succeed");
@@ -49,9 +47,8 @@ agent: Box<dyn AgentWithFixture>,
 async fn test_run_command(
     #[case]
     #[future]
-agent: Box<dyn AgentWithFixture>,
+    agent: Box<dyn AgentWithFixture>,
 ) {
-
     acp_conformance::slash_commands::test_run_command(&*agent)
         .await
         .expect("test_run_command should succeed");
@@ -66,9 +63,8 @@ agent: Box<dyn AgentWithFixture>,
 async fn test_command_field_validation(
     #[case]
     #[future]
-agent: Box<dyn AgentWithFixture>,
+    agent: Box<dyn AgentWithFixture>,
 ) {
-
     acp_conformance::slash_commands::test_command_field_validation(&*agent)
         .await
         .expect("test_command_field_validation should succeed");
@@ -83,9 +79,8 @@ agent: Box<dyn AgentWithFixture>,
 async fn test_command_input_hint(
     #[case]
     #[future]
-agent: Box<dyn AgentWithFixture>,
+    agent: Box<dyn AgentWithFixture>,
 ) {
-
     acp_conformance::slash_commands::test_command_input_hint(&*agent)
         .await
         .expect("test_command_input_hint should succeed");
@@ -100,9 +95,8 @@ agent: Box<dyn AgentWithFixture>,
 async fn test_command_with_input(
     #[case]
     #[future]
-agent: Box<dyn AgentWithFixture>,
+    agent: Box<dyn AgentWithFixture>,
 ) {
-
     acp_conformance::slash_commands::test_command_with_input(&*agent)
         .await
         .expect("test_command_with_input should succeed");
@@ -117,9 +111,8 @@ agent: Box<dyn AgentWithFixture>,
 async fn test_command_with_mixed_content(
     #[case]
     #[future]
-agent: Box<dyn AgentWithFixture>,
+    agent: Box<dyn AgentWithFixture>,
 ) {
-
     acp_conformance::slash_commands::test_command_with_mixed_content(&*agent)
         .await
         .expect("test_command_with_mixed_content should succeed");

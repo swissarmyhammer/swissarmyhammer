@@ -53,7 +53,11 @@ impl<A> RecordingAgent<A> {
     /// Create with notification receiver
     ///
     /// Spawns a task to consume notifications from receiver and buffer them.
-    pub fn with_notifications(inner: A, path: PathBuf, mut receiver: tokio::sync::broadcast::Receiver<agent_client_protocol::SessionNotification>) -> Self {
+    pub fn with_notifications(
+        inner: A,
+        path: PathBuf,
+        mut receiver: tokio::sync::broadcast::Receiver<agent_client_protocol::SessionNotification>,
+    ) -> Self {
         let mut agent = Self::new(inner, path);
         let buffer = Arc::clone(&agent.notification_buffer);
 
@@ -87,7 +91,10 @@ impl<A> RecordingAgent<A> {
                 }
             }
 
-            tracing::info!("RecordingAgent: Capture thread complete ({} notifications)", count);
+            tracing::info!(
+                "RecordingAgent: Capture thread complete ({} notifications)",
+                count
+            );
         });
 
         agent
@@ -135,7 +142,11 @@ impl<A> RecordingAgent<A> {
         let json = serde_json::to_string_pretty(&session)?;
         std::fs::write(&self.path, json)?;
 
-        tracing::info!("RecordingAgent: Saved {} calls to {:?}", calls.len(), self.path);
+        tracing::info!(
+            "RecordingAgent: Saved {} calls to {:?}",
+            calls.len(),
+            self.path
+        );
         Ok(())
     }
 }
@@ -146,8 +157,10 @@ impl<A> Drop for RecordingAgent<A> {
         // Can't block_on from async context, so just sleep
         std::thread::sleep(std::time::Duration::from_secs(1));
 
-        tracing::info!("RecordingAgent Drop: saving {} buffered notifications",
-            self.notification_buffer.lock().unwrap().len());
+        tracing::info!(
+            "RecordingAgent Drop: saving {} buffered notifications",
+            self.notification_buffer.lock().unwrap().len()
+        );
 
         if let Err(e) = self.save() {
             tracing::error!("Failed to save recording: {}", e);
@@ -157,23 +170,35 @@ impl<A> Drop for RecordingAgent<A> {
 
 #[async_trait::async_trait(?Send)]
 impl<A: Agent> Agent for RecordingAgent<A> {
-    async fn initialize(&self, request: InitializeRequest) -> agent_client_protocol::Result<InitializeResponse> {
+    async fn initialize(
+        &self,
+        request: InitializeRequest,
+    ) -> agent_client_protocol::Result<InitializeResponse> {
         let response = self.inner.initialize(request.clone()).await?;
         self.record_with_notifications("initialize", &request, &response);
         Ok(response)
     }
 
-    async fn authenticate(&self, request: AuthenticateRequest) -> agent_client_protocol::Result<AuthenticateResponse> {
+    async fn authenticate(
+        &self,
+        request: AuthenticateRequest,
+    ) -> agent_client_protocol::Result<AuthenticateResponse> {
         self.inner.authenticate(request).await
     }
 
-    async fn new_session(&self, request: NewSessionRequest) -> agent_client_protocol::Result<NewSessionResponse> {
+    async fn new_session(
+        &self,
+        request: NewSessionRequest,
+    ) -> agent_client_protocol::Result<NewSessionResponse> {
         let response = self.inner.new_session(request.clone()).await?;
         self.record_with_notifications("new_session", &request, &response);
         Ok(response)
     }
 
-    async fn prompt(&self, request: PromptRequest) -> agent_client_protocol::Result<PromptResponse> {
+    async fn prompt(
+        &self,
+        request: PromptRequest,
+    ) -> agent_client_protocol::Result<PromptResponse> {
         let response = self.inner.prompt(request.clone()).await?;
         self.record_with_notifications("prompt", &request, &response);
         Ok(response)
@@ -183,11 +208,17 @@ impl<A: Agent> Agent for RecordingAgent<A> {
         self.inner.cancel(request).await
     }
 
-    async fn load_session(&self, request: LoadSessionRequest) -> agent_client_protocol::Result<LoadSessionResponse> {
+    async fn load_session(
+        &self,
+        request: LoadSessionRequest,
+    ) -> agent_client_protocol::Result<LoadSessionResponse> {
         self.inner.load_session(request).await
     }
 
-    async fn set_session_mode(&self, request: SetSessionModeRequest) -> agent_client_protocol::Result<SetSessionModeResponse> {
+    async fn set_session_mode(
+        &self,
+        request: SetSessionModeRequest,
+    ) -> agent_client_protocol::Result<SetSessionModeResponse> {
         self.inner.set_session_mode(request).await
     }
 
@@ -195,7 +226,10 @@ impl<A: Agent> Agent for RecordingAgent<A> {
         self.inner.ext_method(request).await
     }
 
-    async fn ext_notification(&self, notification: ExtNotification) -> agent_client_protocol::Result<()> {
+    async fn ext_notification(
+        &self,
+        notification: ExtNotification,
+    ) -> agent_client_protocol::Result<()> {
         self.inner.ext_notification(notification).await
     }
 }

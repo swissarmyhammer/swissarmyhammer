@@ -26,7 +26,9 @@ pub async fn create_acp_server(
         config.queue_config.clone(),
         config.session_config.clone(),
     ));
-    let session_manager = Arc::new(crate::session::SessionManager::new(config.session_config.clone()));
+    let session_manager = Arc::new(crate::session::SessionManager::new(
+        config.session_config.clone(),
+    ));
     let mcp_client: Arc<dyn crate::mcp::MCPClient> = Arc::new(crate::mcp::NoOpMCPClient::new());
     let chat_template = Arc::new(crate::chat_template::ChatTemplateEngine::new());
     let dependency_analyzer = Arc::new(crate::dependency_analysis::DependencyAnalyzer::new(

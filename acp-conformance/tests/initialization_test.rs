@@ -15,9 +15,8 @@ use rstest::rstest;
 async fn test_minimal_initialization(
     #[case]
     #[future]
-agent: Box<dyn AgentWithFixture>,
+    agent: Box<dyn AgentWithFixture>,
 ) {
-
     acp_conformance::initialization::test_minimal_initialization(&*agent)
         .await
         .expect("Minimal initialization should succeed");
@@ -32,9 +31,8 @@ agent: Box<dyn AgentWithFixture>,
 async fn test_full_capabilities_initialization(
     #[case]
     #[future]
-agent: Box<dyn AgentWithFixture>,
+    agent: Box<dyn AgentWithFixture>,
 ) {
-
     acp_conformance::initialization::test_full_capabilities_initialization(&*agent)
         .await
         .expect("Full capabilities initialization should succeed");
@@ -49,9 +47,8 @@ agent: Box<dyn AgentWithFixture>,
 async fn test_protocol_version_negotiation(
     #[case]
     #[future]
-agent: Box<dyn AgentWithFixture>,
+    agent: Box<dyn AgentWithFixture>,
 ) {
-
     acp_conformance::initialization::test_protocol_version_negotiation(&*agent)
         .await
         .expect("Protocol version negotiation should succeed");
@@ -66,9 +63,8 @@ agent: Box<dyn AgentWithFixture>,
 async fn test_minimal_client_capabilities(
     #[case]
     #[future]
-agent: Box<dyn AgentWithFixture>,
+    agent: Box<dyn AgentWithFixture>,
 ) {
-
     acp_conformance::initialization::test_minimal_client_capabilities(&*agent)
         .await
         .expect("Minimal client capabilities should succeed");
@@ -83,9 +79,8 @@ agent: Box<dyn AgentWithFixture>,
 async fn test_initialize_idempotent(
     #[case]
     #[future]
-agent: Box<dyn AgentWithFixture>,
+    agent: Box<dyn AgentWithFixture>,
 ) {
-
     acp_conformance::initialization::test_initialize_idempotent(&*agent)
         .await
         .expect("Initialize idempotent should succeed");
@@ -100,9 +95,8 @@ agent: Box<dyn AgentWithFixture>,
 async fn test_with_client_info(
     #[case]
     #[future]
-agent: Box<dyn AgentWithFixture>,
+    agent: Box<dyn AgentWithFixture>,
 ) {
-
     acp_conformance::initialization::test_with_client_info(&*agent)
         .await
         .expect("With client info should succeed");
