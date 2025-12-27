@@ -59,21 +59,23 @@ impl ClaudeClient {
         session_id: &crate::session::SessionId,
         acp_session_id: &agent_client_protocol::SessionId,
         cwd: &std::path::Path,
+        mcp_servers: Vec<crate::config::McpServerConfig>,
     ) -> Result<(
         Option<Vec<(String, String, Option<String>)>>,
         Option<String>,
     )> {
         tracing::debug!(
-            "Spawning Claude process for session: {} in {}",
+            "Spawning Claude process for session: {} in {} with {} MCP servers",
             session_id,
-            cwd.display()
+            cwd.display(),
+            mcp_servers.len()
         );
 
         // Spawn the process (or get existing) with working directory
         // Note: During init, we don't have a mode yet, so pass None
         let process = self
             .process_manager
-            .get_process(session_id, cwd, None)
+            .get_process(session_id, cwd, None, mcp_servers)
             .await?;
 
         // The Claude CLI emits a system/init message AFTER receiving the first input
@@ -445,9 +447,10 @@ impl ClaudeClient {
         }
 
         // Get the process for this session (will spawn with --agent flag if mode specified)
+        // MCP servers are only configured during session creation, not on subsequent prompts
         let process = self
             .process_manager
-            .get_process(session_id, cwd, agent_mode)
+            .get_process(session_id, cwd, agent_mode, vec![])
             .await?;
 
         // Send prompt to process
@@ -529,9 +532,10 @@ impl ClaudeClient {
         }
 
         // Get the process for this session (will spawn with --agent flag if mode specified)
+        // MCP servers are only configured during session creation, not on subsequent prompts
         let process = self
             .process_manager
-            .get_process(session_id, cwd, agent_mode)
+            .get_process(session_id, cwd, agent_mode, vec![])
             .await?;
 
         // Send prompt to process
@@ -568,6 +572,19 @@ impl ClaudeClient {
                 // Record raw JSON-RPC message
                 if let Some(ref manager) = raw_message_manager_clone {
                     manager.record(line.clone());
+                }
+
+                // DEBUG: Capture ALL stdout to debug file
+                {
+                    use std::io::Write;
+                    let debug_file = std::path::PathBuf::from("/tmp/claude_stdout_debug.jsonl");
+                    if let Ok(mut file) = std::fs::OpenOptions::new()
+                        .create(true)
+                        .append(true)
+                        .open(&debug_file)
+                    {
+                        let _ = writeln!(file, "{}", line);
+                    }
                 }
 
                 // Check if this is a result message (indicates end)

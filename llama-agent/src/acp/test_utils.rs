@@ -48,3 +48,46 @@ pub async fn create_acp_server(
     let acp_config = AcpConfig::default();
     Ok(AcpServer::new(agent_server, acp_config))
 }
+
+/// Create ACP server for testing with custom AgentConfig and AcpConfig
+pub async fn create_acp_server_with_config(
+    agent_config: AgentConfig,
+    acp_config: AcpConfig,
+) -> Result<
+    (
+        AcpServer,
+        tokio::sync::broadcast::Receiver<agent_client_protocol::SessionNotification>,
+    ),
+    Box<dyn std::error::Error>,
+> {
+    let model_manager = Arc::new(crate::model::ModelManager::new(agent_config.model.clone())?);
+
+    // Load model
+    model_manager.load_model().await?;
+
+    let request_queue = Arc::new(crate::queue::RequestQueue::new(
+        model_manager.clone(),
+        agent_config.queue_config.clone(),
+        agent_config.session_config.clone(),
+    ));
+    let session_manager = Arc::new(crate::session::SessionManager::new(
+        agent_config.session_config.clone(),
+    ));
+    let mcp_client: Arc<dyn crate::mcp::MCPClient> = Arc::new(crate::mcp::NoOpMCPClient::new());
+    let chat_template = Arc::new(crate::chat_template::ChatTemplateEngine::new());
+    let dependency_analyzer = Arc::new(crate::dependency_analysis::DependencyAnalyzer::new(
+        agent_config.parallel_execution_config.clone(),
+    ));
+
+    let agent_server = Arc::new(crate::AgentServer::new(
+        model_manager,
+        request_queue,
+        session_manager,
+        mcp_client,
+        chat_template,
+        dependency_analyzer,
+        agent_config,
+    ));
+
+    Ok(AcpServer::new(agent_server, acp_config))
+}

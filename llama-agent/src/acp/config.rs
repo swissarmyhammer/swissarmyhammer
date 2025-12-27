@@ -48,6 +48,13 @@ pub struct AcpConfig {
     /// The mode to use when creating new sessions. Must be in available_modes list.
     #[serde(default = "default_mode_id_value")]
     pub default_mode_id: String,
+
+    /// Default MCP servers to include in all sessions
+    ///
+    /// These servers will be automatically added to every new session,
+    /// in addition to any servers specified in the NewSessionRequest.
+    #[serde(skip, default)]
+    pub default_mcp_servers: Vec<agent_client_protocol::McpServer>,
 }
 
 fn default_mode_id_value() -> String {
@@ -64,6 +71,7 @@ impl Default for AcpConfig {
             terminal: TerminalSettings::default(),
             available_modes: Vec::new(),
             default_mode_id: "general-purpose".to_string(),
+            default_mcp_servers: Vec::new(),
         }
     }
 }

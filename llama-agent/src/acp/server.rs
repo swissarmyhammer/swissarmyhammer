@@ -639,6 +639,20 @@ impl AcpServer {
     /// # Arguments
     ///
     /// * `notification` - The session notification to broadcast
+    /// Clear session context on all MCP clients for a session
+    async fn clear_mcp_session_context(&self, llama_session_id: &crate::types::SessionId) {
+        let session_clients = self.agent_server.session_mcp_clients.read().await;
+        if let Some(clients) = session_clients.get(llama_session_id) {
+            for client in clients {
+                client.clear_session().await;
+            }
+            tracing::debug!(
+                "Cleared ACP session context on {} MCP clients",
+                clients.len()
+            );
+        }
+    }
+
     fn broadcast_notification(&self, notification: SessionNotification) {
         tracing::info!("Broadcasting notification: {:?}", notification.update);
 
@@ -1075,16 +1089,29 @@ impl agent_client_protocol::Agent for AcpServer {
                 Self::convert_error(e)
             })?;
 
+        // Merge default MCP servers from config with request MCP servers
+        let mut all_mcp_servers = self.config.default_mcp_servers.clone();
+        all_mcp_servers.extend(request.mcp_servers.clone());
+
         // Create and store per-session MCP clients
-        if !request.mcp_servers.is_empty() {
+        if !all_mcp_servers.is_empty() {
             tracing::info!(
-                "Creating {} MCP clients for session",
+                "Creating {} MCP clients for session ({} from config, {} from request)",
+                all_mcp_servers.len(),
+                self.config.default_mcp_servers.len(),
                 request.mcp_servers.len()
             );
 
+            // Create notifying handler that forwards MCP notifications as ACP
+            let handler = Arc::new(crate::mcp_client_handler::NotifyingClientHandler::new(
+                self.notification_tx.clone(),
+            ));
+
             let mut clients = Vec::new();
-            for server in &request.mcp_servers {
-                match super::mcp_client_factory::create_mcp_client_from_acp(server).await {
+            for server in &all_mcp_servers {
+                match super::mcp_client_factory::create_mcp_client_from_acp(server, handler.clone())
+                    .await
+                {
                     Ok(client) => {
                         tracing::info!("Successfully created MCP client");
                         clients.push(client);
@@ -1099,6 +1126,50 @@ impl agent_client_protocol::Agent for AcpServer {
 
             if !clients.is_empty() {
                 let client_count = clients.len();
+
+                // Discover tools from all MCP clients
+                let mut all_tools = Vec::new();
+                for client in &clients {
+                    match client.list_tools().await {
+                        Ok(tool_names) => {
+                            tracing::info!("Discovered {} tools from MCP client", tool_names.len());
+                            for tool_name in tool_names {
+                                all_tools.push(crate::types::ToolDefinition {
+                                    name: tool_name.clone(),
+                                    description: format!("MCP tool: {}", tool_name),
+                                    parameters: serde_json::Value::Object(serde_json::Map::new()),
+                                    server_name: "mcp".to_string(),
+                                });
+                            }
+                        }
+                        Err(e) => {
+                            tracing::warn!("Failed to list tools from MCP client: {}", e);
+                        }
+                    }
+                }
+
+                // Update session with discovered tools
+                if !all_tools.is_empty() {
+                    if let Ok(Some(mut session)) = self
+                        .agent_server
+                        .session_manager()
+                        .get_session(&llama_session.id)
+                        .await
+                    {
+                        tracing::info!(
+                            "Adding {} MCP tools to session {}",
+                            all_tools.len(),
+                            llama_session.id
+                        );
+                        session.available_tools.extend(all_tools);
+                        let _ = self
+                            .agent_server
+                            .session_manager()
+                            .update_session(session)
+                            .await;
+                    }
+                }
+
                 self.agent_server
                     .session_mcp_clients
                     .write()
@@ -1260,6 +1331,18 @@ impl agent_client_protocol::Agent for AcpServer {
                     tracing::error!("Failed to add message to session: {}", e);
                     Self::convert_error(e)
                 })?;
+        }
+
+        // Set session context on all MCP clients for this session
+        // This ensures MCP notifications are tagged with the correct ACP session ID
+        {
+            let session_clients = self.agent_server.session_mcp_clients.read().await;
+            if let Some(clients) = session_clients.get(&acp_session.llama_session_id) {
+                for client in clients {
+                    client.set_session(request.session_id.clone()).await;
+                }
+                tracing::debug!("Set ACP session context on {} MCP clients", clients.len());
+            }
         }
 
         // Use AgentServer's streaming generate method
@@ -1439,6 +1522,10 @@ impl agent_client_protocol::Agent for AcpServer {
                 serde_json::json!(tool_calls_count),
             );
 
+            // Clear session context on MCP clients
+            self.clear_mcp_session_context(&acp_session.llama_session_id)
+                .await;
+
             return Ok(agent_client_protocol::PromptResponse::new(stop_reason).meta(meta));
         }
 
@@ -1455,6 +1542,10 @@ impl agent_client_protocol::Agent for AcpServer {
             "tokens_generated".to_string(),
             serde_json::json!(total_tokens),
         );
+
+        // Clear session context on MCP clients
+        self.clear_mcp_session_context(&acp_session.llama_session_id)
+            .await;
 
         Ok(agent_client_protocol::PromptResponse::new(stop_reason).meta(meta))
     }

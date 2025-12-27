@@ -1295,6 +1295,18 @@ enum RequiredCapability {
 fn get_required_capability(tool_name: &str) -> RequiredCapability {
     let name_lower = tool_name.to_lowercase();
 
+    // MCP tools from external servers don't require local filesystem capabilities
+    // Agent built-in tools have specific prefixes: fs_, mcp__, terminal_, shell_
+    // If the tool doesn't have these prefixes, it's an external MCP tool
+    if !name_lower.starts_with("fs_")
+        && !name_lower.starts_with("mcp__")
+        && !name_lower.starts_with("terminal_")
+        && !name_lower.starts_with("shell_")
+    {
+        // External MCP tool - no local capability required
+        return RequiredCapability::None;
+    }
+
     // Network/HTTP operations - check first to avoid false matches with "get", "fetch", etc.
     if name_lower.contains("http")
         || name_lower.contains("web")

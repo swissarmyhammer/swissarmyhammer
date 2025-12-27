@@ -111,12 +111,12 @@ use tokio::sync::Mutex;
 
 /// Claude CLI command-line arguments for stream-json communication
 const CLAUDE_CLI_ARGS: &[&str] = &[
-    "--print", // print mode (non-interactive)
+    "--verbose", // REQUIRED for stream-json output format
+    "--print",   // print mode (non-interactive)
     "--input-format",
     "stream-json", // accept newline-delimited JSON on stdin
     "--output-format",
     "stream-json",                    // emit newline-delimited JSON on stdout
-    "--verbose",                      // REQUIRED for stream-json output format
     "--dangerously-skip-permissions", // ACP server handles permission checks
     "--include-partial-messages",     // Emit partial messages for immediate streaming
     // NOTE: This causes Claude to send a duplicate final combined message and empty terminator
@@ -170,6 +170,7 @@ impl ClaudeProcessManager {
         session_id: SessionId,
         cwd: &std::path::Path,
         agent_mode: Option<String>,
+        mcp_servers: Vec<crate::config::McpServerConfig>,
     ) -> Result<()> {
         // Check if session already exists - use write lock to prevent race
         let mut processes = self.processes.write().map_err(|_| {
@@ -183,14 +184,15 @@ impl ClaudeProcessManager {
         }
 
         // Spawn new process with working directory and optional agent mode
-        let process = ClaudeProcess::spawn(session_id, cwd, agent_mode).map_err(|e| {
-            tracing::error!(
-                "Failed to spawn claude process for session {}: {}",
-                session_id,
+        let process =
+            ClaudeProcess::spawn(session_id, cwd, agent_mode, mcp_servers).map_err(|e| {
+                tracing::error!(
+                    "Failed to spawn claude process for session {}: {}",
+                    session_id,
+                    e
+                );
                 e
-            );
-            e
-        })?;
+            })?;
 
         // Insert into map
         processes.insert(session_id, Arc::new(Mutex::new(process)));
@@ -213,6 +215,7 @@ impl ClaudeProcessManager {
         session_id: &SessionId,
         cwd: &std::path::Path,
         agent_mode: Option<String>,
+        mcp_servers: Vec<crate::config::McpServerConfig>,
     ) -> Result<Arc<Mutex<ClaudeProcess>>> {
         // First try to get existing process
         {
@@ -244,7 +247,8 @@ impl ClaudeProcessManager {
                 cwd.display()
             );
         }
-        self.spawn_for_session(*session_id, cwd, agent_mode).await?;
+        self.spawn_for_session(*session_id, cwd, agent_mode, mcp_servers)
+            .await?;
 
         // Get the newly spawned process
         let processes = self.processes.read().map_err(|_| {
@@ -337,20 +341,17 @@ impl ClaudeProcess {
         session_id: SessionId,
         cwd: &std::path::Path,
         agent_mode: Option<String>,
+        mcp_servers: Vec<crate::config::McpServerConfig>,
     ) -> Result<Self> {
         // Get test name from thread name or backtrace if in test context
         let test_context = std::thread::current().name().map(|n| n.to_string());
 
-        // ⚠️ IMPORTANT: This spawns a real Claude binary (~500MB process)
-        // Consider using RecordedClaudeBackend for tests instead (see claude_backend.rs)
-        tracing::warn!(
-            "🚨 SPAWNING REAL CLAUDE BINARY for session {} (test: {:?}) in directory {} - Consider converting to recorded test!",
-            session_id,
-            test_context,
-            cwd.display()
-        );
-
         let session_uuid_str = session_id.to_uuid_string();
+
+        tracing::info!(
+            "ClaudeProcess::spawn received {} MCP servers",
+            mcp_servers.len()
+        );
 
         // Build command with optional --agent flag
         let mut command = Command::new("claude");
@@ -364,6 +365,65 @@ impl ClaudeProcess {
             tracing::info!("Spawning Claude with agent mode: {}", mode);
             command.arg("--agent").arg(&mode);
         }
+
+        // Build MCP config if servers are specified
+        if !mcp_servers.is_empty() {
+            tracing::info!(
+                "Building MCP config for Claude with {} servers",
+                mcp_servers.len()
+            );
+
+            // Build MCP config JSON
+            let mut mcp_servers_obj = serde_json::Map::new();
+            for server in &mcp_servers {
+                match server {
+                    crate::config::McpServerConfig::Http(http) => {
+                        mcp_servers_obj.insert(
+                            http.name.clone(),
+                            serde_json::json!({
+                                "type": "http",
+                                "url": http.url,
+                                "headers": {}
+                            }),
+                        );
+                    }
+                    crate::config::McpServerConfig::Sse(sse) => {
+                        mcp_servers_obj.insert(
+                            sse.name.clone(),
+                            serde_json::json!({
+                                "type": "sse",
+                                "url": sse.url,
+                                "headers": {}
+                            }),
+                        );
+                    }
+                    crate::config::McpServerConfig::Stdio(_) => {
+                        tracing::warn!("Stdio MCP servers not supported for Claude CLI");
+                    }
+                }
+            }
+
+            let mcp_config = serde_json::json!({
+                "mcpServers": mcp_servers_obj
+            });
+
+            // Write to temp file
+            let temp_dir = std::env::temp_dir();
+            let mcp_config_path = temp_dir.join(format!("claude_mcp_config_{}.json", session_id));
+            if let Err(e) = std::fs::write(
+                &mcp_config_path,
+                serde_json::to_string_pretty(&mcp_config).unwrap(),
+            ) {
+                tracing::error!("Failed to write MCP config: {}", e);
+            } else {
+                tracing::info!("Wrote MCP config to {:?}", mcp_config_path);
+                command.arg("--mcp-config").arg(&mcp_config_path);
+                command.arg("--strict-mcp-config");
+            }
+        }
+
+        // Log the complete command being executed
+        tracing::info!("🚀 Spawning Claude CLI: {:?}", command.as_std());
 
         let mut cmd = command
             .current_dir(cwd)

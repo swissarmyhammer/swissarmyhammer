@@ -31,11 +31,27 @@ pub(crate) fn claude_agent_factory(
 /// Create claude-agent for testing
 async fn create_claude_agent() -> Result<Box<dyn AgentWithFixture>> {
     use agent_client_protocol_extras::{
-        get_fixture_path_for, get_test_name_from_thread, RecordingAgent,
+        get_fixture_path_for, get_test_name_from_thread, start_test_mcp_server, RecordingAgent,
     };
     use tokio_stream::wrappers::BroadcastStream;
 
-    let config = claude_agent::config::AgentConfig::default();
+    // Start TestMcpServer
+    let mcp_url = start_test_mcp_server().await?;
+    tracing::info!("TestMcpServer started at: {}", mcp_url);
+
+    // Add TestMcpServer to claude config
+    let mut config = claude_agent::config::AgentConfig::default();
+    config
+        .mcp_servers
+        .push(claude_agent::config::McpServerConfig::Http(
+            claude_agent::config::HttpTransport {
+                transport_type: "http".to_string(),
+                name: "test-mcp-server".to_string(),
+                url: mcp_url,
+                headers: vec![],
+            },
+        ));
+
     let (agent, receiver) = claude_agent::agent::ClaudeAgent::new(config).await?;
 
     let test_name = get_test_name_from_thread();
@@ -50,9 +66,13 @@ async fn create_claude_agent() -> Result<Box<dyn AgentWithFixture>> {
 /// Create llama-agent for testing
 async fn create_llama_agent() -> Result<Box<dyn AgentWithFixture>> {
     use agent_client_protocol_extras::{
-        get_fixture_path_for, get_test_name_from_thread, RecordingAgent,
+        get_fixture_path_for, get_test_name_from_thread, start_test_mcp_server, RecordingAgent,
     };
     use tokio_stream::wrappers::BroadcastStream;
+
+    // Start TestMcpServer
+    let mcp_url = start_test_mcp_server().await?;
+    tracing::info!("TestMcpServer started at: {}", mcp_url);
 
     // Use test model config
     use llama_agent::test_models::{TEST_MODEL_FILE, TEST_MODEL_REPO};
@@ -63,7 +83,22 @@ async fn create_llama_agent() -> Result<Box<dyn AgentWithFixture>> {
         folder: None,
     };
 
-    let (agent, notification_rx) = llama_agent::acp::test_utils::create_acp_server(config).await?;
+    // Create ACP config with TestMcpServer as default and permissive policy
+    let mut acp_config = llama_agent::acp::AcpConfig::default();
+    // Use rule-based policy that allows all MCP tool calls
+    acp_config.permission_policy =
+        llama_agent::acp::PermissionPolicy::RuleBased(vec![llama_agent::acp::PermissionRule {
+            pattern: llama_agent::acp::ToolPattern::All, // Match all tools
+            action: llama_agent::acp::PermissionAction::Allow,
+        }]);
+    acp_config
+        .default_mcp_servers
+        .push(agent_client_protocol::McpServer::Http(
+            agent_client_protocol::McpServerHttp::new("test-mcp-server", &mcp_url),
+        ));
+
+    let (agent, notification_rx) =
+        llama_agent::acp::test_utils::create_acp_server_with_config(config, acp_config).await?;
 
     let test_name = get_test_name_from_thread();
     let path = get_fixture_path_for(agent.agent_type(), &test_name);

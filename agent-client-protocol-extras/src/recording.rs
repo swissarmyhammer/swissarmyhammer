@@ -58,17 +58,17 @@ impl<A> RecordingAgent<A> {
         path: PathBuf,
         mut receiver: tokio::sync::broadcast::Receiver<agent_client_protocol::SessionNotification>,
     ) -> Self {
-        let mut agent = Self::new(inner, path);
+        let agent = Self::new(inner, path);
         let buffer = Arc::clone(&agent.notification_buffer);
 
-        // Try blocking receive approach
+        // Spawn thread to capture notifications until channel closes
         std::thread::spawn(move || {
             tracing::info!("RecordingAgent: Starting notification capture thread");
             let mut count = 0;
 
-            // Try non-blocking receives for a period
-            let start = std::time::Instant::now();
-            while start.elapsed() < std::time::Duration::from_secs(10) {
+            // Continuously poll for notifications until channel closes
+            // No timeout - we capture for the entire lifetime of the agent
+            loop {
                 match receiver.try_recv() {
                     Ok(notification) => {
                         count += 1;
@@ -78,14 +78,18 @@ impl<A> RecordingAgent<A> {
                         }
                     }
                     Err(tokio::sync::broadcast::error::TryRecvError::Empty) => {
-                        // No message yet, sleep briefly
+                        // No message yet, sleep briefly and continue
                         std::thread::sleep(std::time::Duration::from_millis(1));
                     }
                     Err(tokio::sync::broadcast::error::TryRecvError::Lagged(skipped)) => {
-                        tracing::warn!("Receiver lagged by {}", skipped);
+                        tracing::warn!(
+                            "Receiver lagged by {}, some notifications may be lost",
+                            skipped
+                        );
+                        // Continue capturing even if we lagged
                     }
                     Err(tokio::sync::broadcast::error::TryRecvError::Closed) => {
-                        tracing::info!("Channel closed");
+                        tracing::info!("Notification channel closed, stopping capture");
                         break;
                     }
                 }
@@ -107,14 +111,13 @@ impl<A> RecordingAgent<A> {
 
     /// Record a method call with captured notifications
     fn record_with_notifications(&self, method: &str, req: &impl Serialize, resp: &impl Serialize) {
-        // Take all buffered notifications
-        let notifications = std::mem::take(&mut *self.notification_buffer.lock().unwrap());
-
+        // Don't take notifications here - they arrive asynchronously after method completes
+        // Drop will associate all buffered notifications with the appropriate method
         let call = RecordedCall {
             method: method.to_string(),
             request: serde_json::to_value(req).unwrap_or_default(),
             response: serde_json::to_value(resp).unwrap_or_default(),
-            notifications,
+            notifications: Vec::new(), // Filled in Drop
         };
         self.calls.lock().unwrap().push(call);
     }
@@ -142,10 +145,13 @@ impl<A> RecordingAgent<A> {
         let json = serde_json::to_string_pretty(&session)?;
         std::fs::write(&self.path, json)?;
 
+        let absolute_path = std::fs::canonicalize(&self.path).unwrap_or_else(|_| self.path.clone());
+
         tracing::info!(
-            "RecordingAgent: Saved {} calls to {:?}",
+            "RecordingAgent: Saved {} calls to {:?} (absolute: {:?})",
             calls.len(),
-            self.path
+            self.path,
+            absolute_path
         );
         Ok(())
     }
@@ -153,14 +159,36 @@ impl<A> RecordingAgent<A> {
 
 impl<A> Drop for RecordingAgent<A> {
     fn drop(&mut self) {
-        // Give task time to consume all notifications
-        // Can't block_on from async context, so just sleep
-        std::thread::sleep(std::time::Duration::from_secs(1));
+        // Give capture thread time to receive all async notifications
+        // This ensures notifications sent during Agent method calls are fully captured
+        std::thread::sleep(std::time::Duration::from_secs(2));
 
+        let notification_count = self.notification_buffer.lock().unwrap().len();
         tracing::info!(
-            "RecordingAgent Drop: saving {} buffered notifications",
-            self.notification_buffer.lock().unwrap().len()
+            "RecordingAgent Drop: {} buffered notifications to distribute",
+            notification_count
         );
+
+        // Associate all captured notifications with the prompt method call
+        // (notifications are generated during prompt execution)
+        if notification_count > 0 {
+            let notifications = std::mem::take(&mut *self.notification_buffer.lock().unwrap());
+            let mut calls = self.calls.lock().unwrap();
+
+            // Find the last prompt call and add notifications to it
+            if let Some(call) = calls.iter_mut().rev().find(|c| c.method == "prompt") {
+                tracing::info!(
+                    "Adding {} notifications to prompt call",
+                    notifications.len()
+                );
+                call.notifications = notifications;
+            } else {
+                tracing::warn!(
+                    "No prompt call found to attach {} notifications",
+                    notifications.len()
+                );
+            }
+        }
 
         if let Err(e) = self.save() {
             tracing::error!("Failed to save recording: {}", e);

@@ -1,6 +1,7 @@
 //! Factory for creating MCP clients from ACP McpServer configurations
 
 use crate::mcp::{MCPClient, UnifiedMCPClient};
+use crate::mcp_client_handler::NotifyingClientHandler;
 use crate::types::MCPError;
 use agent_client_protocol::McpServer;
 use std::sync::Arc;
@@ -13,6 +14,7 @@ use std::sync::Arc;
 /// # Arguments
 ///
 /// * `server` - ACP McpServer configuration (Stdio, Http, or Sse)
+/// * `handler` - NotifyingClientHandler for MCP→ACP notification conversion
 ///
 /// # Returns
 ///
@@ -23,6 +25,7 @@ use std::sync::Arc;
 /// Returns MCPError if connection fails
 pub async fn create_mcp_client_from_acp(
     server: &McpServer,
+    handler: Arc<NotifyingClientHandler>,
 ) -> Result<Arc<dyn MCPClient>, MCPError> {
     match server {
         McpServer::Stdio(stdio_config) => {
@@ -48,9 +51,10 @@ pub async fn create_mcp_client_from_acp(
                 http_config.url
             );
 
-            let client = UnifiedMCPClient::with_streamable_http(
+            let client = UnifiedMCPClient::with_streamable_http_and_handler(
                 &http_config.url,
                 None, // Default timeout
+                handler.clone(),
             )
             .await?;
 
@@ -64,9 +68,10 @@ pub async fn create_mcp_client_from_acp(
             );
 
             // SSE uses same transport as HTTP in rmcp
-            let client = UnifiedMCPClient::with_streamable_http(
+            let client = UnifiedMCPClient::with_streamable_http_and_handler(
                 &sse_config.url,
                 None, // Default timeout
+                handler,
             )
             .await?;
 

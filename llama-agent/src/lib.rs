@@ -154,6 +154,7 @@ pub mod echo;
 pub mod echo_real_tests;
 pub mod generation;
 pub mod mcp;
+pub mod mcp_client_handler;
 pub mod mcp_unified_test;
 pub mod model;
 pub mod queue;

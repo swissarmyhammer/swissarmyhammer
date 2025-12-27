@@ -16,9 +16,24 @@ async fn test_tool_call_notifications(
     #[future]
     agent: Box<dyn AgentWithFixture>,
 ) {
+    let agent_type = agent.agent_type();
+
     acp_conformance::tool_calls::test_tool_call_notifications(&*agent)
         .await
         .expect("Tool call notifications test should succeed");
+
+    // Drop agent to trigger recording
+    drop(agent);
+
+    // Wait for recording to flush
+    tokio::time::sleep(tokio::time::Duration::from_millis(1500)).await;
+
+    // Verify fixture was created with expected notifications
+    acp_conformance::tool_calls::verify_tool_call_fixture(
+        agent_type,
+        "test_tool_call_notifications",
+    )
+    .expect("Fixture verification should succeed");
 }
 
 #[rstest]

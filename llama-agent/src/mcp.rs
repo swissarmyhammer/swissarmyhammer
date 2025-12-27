@@ -12,6 +12,7 @@ use rmcp::{
 };
 use serde_json::Value;
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::time::timeout;
 
@@ -25,8 +26,13 @@ impl ClientHandler for SimpleClientHandler {
 
 /// Unified MCP client that works with all rmcp transports
 pub struct UnifiedMCPClient {
-    service: rmcp::service::RunningService<RoleClient, rmcp::model::InitializeRequestParam>,
+    service: rmcp::service::RunningService<
+        RoleClient,
+        crate::mcp_client_handler::NotifyingClientHandler,
+    >,
     default_timeout: Duration,
+    /// Handler for setting session context
+    handler: Arc<crate::mcp_client_handler::NotifyingClientHandler>,
 }
 
 // Note: Now using real rmcp services
@@ -46,6 +52,12 @@ impl UnifiedMCPClient {
         args: &[String],
         timeout_secs: Option<u64>,
     ) -> Result<Self, MCPError> {
+        // Create dummy handler for non-ACP usage
+        let (dummy_tx, _) = tokio::sync::broadcast::channel(1);
+        let handler = Arc::new(crate::mcp_client_handler::NotifyingClientHandler::new(
+            dummy_tx,
+        ));
+
         // Spawn process manually and use tuple transport
         let mut child = tokio::process::Command::new(command)
             .args(args)
@@ -67,19 +79,7 @@ impl UnifiedMCPClient {
         // Use rmcp tuple transport pattern (stdout, stdin)
         let transport = (stdout, stdin);
 
-        let client_info = ClientInfo {
-            protocol_version: Default::default(),
-            capabilities: ClientCapabilities::default(),
-            client_info: Implementation {
-                name: "llama_agent_client".to_string(),
-                title: Some("Llama Agent MCP Client".to_string()),
-                version: env!("CARGO_PKG_VERSION").to_string(),
-                website_url: None,
-                icons: None,
-            },
-        };
-
-        let service = client_info.serve(transport).await.map_err(|e| {
+        let service = (*handler).clone().serve(transport).await.map_err(|e| {
             MCPError::Protocol(format!("Failed to create child process client: {:?}", e))
         })?;
 
@@ -88,25 +88,22 @@ impl UnifiedMCPClient {
         Ok(Self {
             service,
             default_timeout,
+            handler,
         })
     }
 
     /// Create a new client with stdio transport (for existing connections)
     pub async fn with_stdio(timeout_secs: Option<u64>) -> Result<Self, MCPError> {
-        let transport = stdio();
-        let client_info = ClientInfo {
-            protocol_version: Default::default(),
-            capabilities: ClientCapabilities::default(),
-            client_info: Implementation {
-                name: "llama_agent_client".to_string(),
-                title: Some("Llama Agent MCP Client".to_string()),
-                version: env!("CARGO_PKG_VERSION").to_string(),
-                website_url: None,
-                icons: None,
-            },
-        };
+        // Create dummy handler for non-ACP usage
+        let (dummy_tx, _) = tokio::sync::broadcast::channel(1);
+        let handler = Arc::new(crate::mcp_client_handler::NotifyingClientHandler::new(
+            dummy_tx,
+        ));
 
-        let service = client_info
+        let transport = stdio();
+
+        let service = (*handler)
+            .clone()
             .serve(transport)
             .await
             .map_err(|e| MCPError::Protocol(format!("Failed to create MCP client: {:?}", e)))?;
@@ -116,6 +113,7 @@ impl UnifiedMCPClient {
         Ok(Self {
             service,
             default_timeout,
+            handler,
         })
     }
 
@@ -134,21 +132,24 @@ impl UnifiedMCPClient {
         url: &str,
         timeout_secs: Option<u64>,
     ) -> Result<Self, MCPError> {
+        // Create dummy handler for non-ACP usage
+        let (dummy_tx, _) = tokio::sync::broadcast::channel(1);
+        let handler = Arc::new(crate::mcp_client_handler::NotifyingClientHandler::new(
+            dummy_tx,
+        ));
+
+        Self::with_streamable_http_and_handler(url, timeout_secs, handler).await
+    }
+
+    /// Create a new client with streamable HTTP transport and custom handler
+    pub async fn with_streamable_http_and_handler(
+        url: &str,
+        timeout_secs: Option<u64>,
+        handler: Arc<crate::mcp_client_handler::NotifyingClientHandler>,
+    ) -> Result<Self, MCPError> {
         let transport = StreamableHttpClientTransport::from_uri(url);
 
-        let client_info = ClientInfo {
-            protocol_version: Default::default(),
-            capabilities: ClientCapabilities::default(),
-            client_info: Implementation {
-                name: "llama_agent_client".to_string(),
-                title: Some("Llama Agent MCP Client".to_string()),
-                version: env!("CARGO_PKG_VERSION").to_string(),
-                website_url: None,
-                icons: None,
-            },
-        };
-
-        let service = client_info.serve(transport).await.map_err(|e| {
+        let service = (*handler).clone().serve(transport).await.map_err(|e| {
             MCPError::Protocol(format!("Failed to create HTTP MCP client: {:?}", e))
         })?;
 
@@ -157,7 +158,18 @@ impl UnifiedMCPClient {
         Ok(Self {
             service,
             default_timeout,
+            handler,
         })
+    }
+
+    /// Set session context for MCP notification forwarding
+    pub async fn set_session(&self, session_id: agent_client_protocol::SessionId) {
+        self.handler.set_session(session_id).await;
+    }
+
+    /// Clear session context after tool calls
+    pub async fn clear_session(&self) {
+        self.handler.clear_session().await;
     }
 
     /// List available tools
@@ -333,6 +345,12 @@ pub trait MCPClient: Send + Sync {
     ) -> Result<Vec<String>, MCPError>;
     async fn health_check(&self) -> Result<(), MCPError>;
     async fn shutdown_all(&self) -> Result<(), MCPError>;
+
+    /// Set session context for MCP notification forwarding
+    async fn set_session(&self, session_id: agent_client_protocol::SessionId);
+
+    /// Clear session context after tool calls
+    async fn clear_session(&self);
 }
 
 #[async_trait]
@@ -363,6 +381,14 @@ impl MCPClient for UnifiedMCPClient {
 
     async fn shutdown_all(&self) -> Result<(), MCPError> {
         self.shutdown_all().await
+    }
+
+    async fn set_session(&self, session_id: agent_client_protocol::SessionId) {
+        self.set_session(session_id).await
+    }
+
+    async fn clear_session(&self) {
+        self.clear_session().await
     }
 }
 
@@ -534,6 +560,14 @@ impl MCPClient for NoOpMCPClient {
 
     async fn shutdown_all(&self) -> Result<(), MCPError> {
         Ok(())
+    }
+
+    async fn set_session(&self, _session_id: agent_client_protocol::SessionId) {
+        // No-op
+    }
+
+    async fn clear_session(&self) {
+        // No-op
     }
 }
 

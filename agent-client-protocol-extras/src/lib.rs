@@ -27,7 +27,7 @@ pub mod test_mcp_server;
 
 pub use playback::PlaybackAgent;
 pub use recording::RecordingAgent;
-pub use test_mcp_server::TestMcpServer;
+pub use test_mcp_server::{start_test_mcp_server, TestMcpServer};
 
 /// Wrap agent with fixture (recording or playback)
 ///
@@ -57,7 +57,10 @@ pub trait AgentWithFixture: Agent {
 
 /// Get fixture path for a test
 ///
-/// Constructs path as: `.fixtures/<agent_type>/<test_name>.json`
+/// Constructs path as: `<package_root>/.fixtures/<agent_type>/<test_name>.json`
+///
+/// Uses CARGO_MANIFEST_DIR to ensure fixtures are always saved to the package
+/// directory, regardless of current working directory changes during test execution.
 ///
 /// # Example
 ///
@@ -65,10 +68,17 @@ pub trait AgentWithFixture: Agent {
 /// use agent_client_protocol_extras::get_fixture_path_for;
 ///
 /// let path = get_fixture_path_for("claude", "test_basic_prompt");
-/// // Returns: .fixtures/claude/test_basic_prompt.json
+/// // Returns: /path/to/package/.fixtures/claude/test_basic_prompt.json
 /// ```
 pub fn get_fixture_path_for(agent_type: &str, test_name: &str) -> PathBuf {
-    PathBuf::from(".fixtures")
+    // Use CARGO_MANIFEST_DIR if available (set during tests)
+    // Otherwise fall back to current directory
+    let base_dir = std::env::var("CARGO_MANIFEST_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+
+    base_dir
+        .join(".fixtures")
         .join(agent_type)
         .join(format!("{}.json", test_name))
 }

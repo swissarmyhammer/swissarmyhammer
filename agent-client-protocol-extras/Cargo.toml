@@ -11,8 +11,10 @@ homepage.workspace = true
 [dependencies]
 agent-client-protocol.workspace = true
 async-trait.workspace = true
+axum.workspace = true
 futures.workspace = true
-tokio = { workspace = true, features = ["sync", "rt"] }
+rmcp.workspace = true
+tokio = { workspace = true, features = ["sync", "rt", "net"] }
 tokio-stream.workspace = true
 tracing.workspace = true
 serde.workspace = true

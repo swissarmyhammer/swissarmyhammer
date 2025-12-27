@@ -199,6 +199,12 @@ impl AgentServer {
             return Ok(());
         };
 
+        // MCP tools from external servers don't require local filesystem capabilities
+        // Only built-in agent tools require capability checks
+        // MCP tools are identified by being in session.available_tools with server_name != "agent"
+        // For now, skip capability checks for all MCP tools (external tools)
+        // Built-in tools would have specific patterns we check below
+
         // Map tool name to required capability using the robust mapping structure
         let tool_lower = tool_name.to_lowercase();
 
@@ -1385,7 +1391,7 @@ impl AgentAPI for AgentServer {
         }
 
         // Execute the tool call with retry logic for transient failures
-        let tool_result = self.execute_tool_with_retry(&tool_call).await;
+        let tool_result = self.execute_tool_with_retry(&tool_call, session).await;
 
         // Sync session todos if this was a todo-related tool call and it succeeded
 
@@ -2016,7 +2022,7 @@ impl AgentServer {
     /// When running in ACP mode, this method checks client capabilities before
     /// executing tools. Tools requiring capabilities the client hasn't advertised
     /// will fail immediately without retrying.
-    async fn execute_tool_with_retry(&self, tool_call: &ToolCall) -> ToolResult {
+    async fn execute_tool_with_retry(&self, tool_call: &ToolCall, session: &Session) -> ToolResult {
         // Check capabilities before attempting execution (ACP mode)
 
         if let Err(e) = self.check_tool_capability(&tool_call.name).await {
@@ -2067,7 +2073,19 @@ impl AgentServer {
         let tool_name = tool_call.name.clone();
         let tool_args = tool_call.arguments.clone();
         let call_id = tool_call.id;
-        let mcp_client = Arc::clone(&self.mcp_client);
+
+        // Get MCP client for this session (if any), otherwise use agent-level client
+        let mcp_client = {
+            let session_clients = self.session_mcp_clients.read().await;
+            if let Some(clients) = session_clients.get(&session.id) {
+                // Use first MCP client for this session
+                // TODO: Route to specific client based on tool name/server
+                clients.first().cloned()
+            } else {
+                None
+            }
+        }
+        .unwrap_or_else(|| Arc::clone(&self.mcp_client));
 
         // Execute with retry logic
         let result = retry_manager

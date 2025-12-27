@@ -370,6 +370,11 @@ impl NotificationSender {
             .map_err(|_| crate::AgentError::Protocol("Failed to send notification".to_string()))?;
         Ok(())
     }
+
+    /// Get a clone of the underlying broadcast sender
+    pub fn sender(&self) -> broadcast::Sender<SessionNotification> {
+        self.sender.clone()
+    }
 }
 
 /// Global registry of RawMessageManagers keyed by root session ID
@@ -629,12 +634,10 @@ impl ClaudeAgent {
 
         let claude_client = Arc::new(claude_client);
 
-        // Create and initialize MCP manager
-        let mut mcp_manager = crate::mcp::McpServerManager::new();
-        mcp_manager
-            .connect_servers(config.mcp_servers.clone())
-            .await?;
-        let mcp_manager = Arc::new(mcp_manager);
+        // Create MCP manager but don't connect yet
+        // Claude CLI will connect to MCP servers itself via --mcp-config
+        // We only use mcp_manager for listing available tools/prompts
+        let mcp_manager = Arc::new(crate::mcp::McpServerManager::new());
 
         // Create tool handler with MCP support
         let tool_handler = Arc::new(RwLock::new(ToolCallHandler::new_with_mcp_manager(
@@ -3155,10 +3158,17 @@ impl Agent for ClaudeAgent {
         let protocol_session_id = SessionId::new(session_id.to_string());
 
         // Spawn Claude process immediately and read init message with slash_commands and available_agents
+        // Pass agent's configured MCP servers (self.config.mcp_servers) to Claude CLI
+        // These are the MCP servers configured during agent creation, not from the request
         tracing::info!("Spawning Claude process for session: {}", session_id);
         match self
             .claude_client
-            .spawn_process_and_consume_init(&session_id, &protocol_session_id, &request.cwd)
+            .spawn_process_and_consume_init(
+                &session_id,
+                &protocol_session_id,
+                &request.cwd,
+                self.config.mcp_servers.clone(),
+            )
             .await
         {
             Ok((Some(agents), current_agent)) => {
