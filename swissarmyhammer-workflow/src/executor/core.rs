@@ -140,7 +140,12 @@ impl WorkflowExecutor {
             .validate_structure()
             .map_err(|errors| ExecutorError::ValidationFailed(errors.join("; ")))?;
 
-        let run = WorkflowRun::new(workflow);
+        // Create WorkflowRun with agent if available
+        let run = if let Some(agent) = &self._agent {
+            WorkflowRun::new_with_agent(workflow, agent.clone())
+        } else {
+            WorkflowRun::new(workflow)
+        };
 
         // Start metrics tracking for this run
         self.metrics.start_run(run.id, run.workflow.name.clone());

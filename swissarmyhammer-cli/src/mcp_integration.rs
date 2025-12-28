@@ -8,19 +8,15 @@
 use rmcp::model::CallToolResult;
 use rmcp::ErrorData as McpError;
 use serde_json::{Map, Value};
-use std::collections::HashMap;
 use std::sync::Arc;
 
-use swissarmyhammer_config::model::{parse_model_config, ModelConfig, ModelManager};
-use swissarmyhammer_config::ModelUseCase;
-use swissarmyhammer_git::GitOperations;
 use swissarmyhammer_tools::mcp::unified_server::{start_mcp_server, McpServerMode};
+use swissarmyhammer_tools::ToolRegistry;
 use swissarmyhammer_tools::{
     register_file_tools, register_flow_tools, register_rules_tools, register_shell_tools,
     register_todo_tools, register_web_fetch_tools, register_web_search_tools,
 };
-use swissarmyhammer_tools::{ToolContext, ToolRegistry};
-use tokio::sync::{Mutex, RwLock};
+use tokio::sync::RwLock;
 
 /// CLI-specific tool context that can create and execute MCP tools
 pub struct CliToolContext {
@@ -58,15 +54,10 @@ impl CliToolContext {
         working_dir: &std::path::Path,
         model_override: Option<&str>,
     ) -> Result<Self, Box<dyn std::error::Error>> {
+        // Initialize MCP server with model override
+        // The server will create its own tool_context with the correct model configuration
         let mcp_server_handle =
             Self::initialize_mcp_server(model_override, Some(working_dir.to_path_buf())).await?;
-        let mcp_port = mcp_server_handle.info().port;
-
-        let mut tool_context = Self::setup_tool_context(working_dir, mcp_port).await;
-
-        if let Some(model_name) = model_override {
-            Self::apply_model_override(&mut tool_context, model_name)?;
-        }
 
         let tool_registry = Self::create_tool_registry();
         let tool_registry_arc = Arc::new(RwLock::new(tool_registry));
@@ -103,59 +94,6 @@ impl CliToolContext {
         );
 
         Ok(mcp_server_handle)
-    }
-
-    /// Setup tool context with working directory and MCP port
-    async fn setup_tool_context(
-        working_dir: &std::path::Path,
-        mcp_port: Option<u16>,
-    ) -> ToolContext {
-        let git_ops = Self::create_git_operations(working_dir);
-        let tool_handlers = Self::create_tool_handlers();
-        let agent_config = Arc::new(ModelConfig::default());
-
-        let tool_context = ToolContext::new(tool_handlers, git_ops, agent_config)
-            .with_working_dir(working_dir.to_path_buf());
-
-        *tool_context.mcp_server_port.write().await = mcp_port;
-
-        tool_context
-    }
-
-    /// Apply global model override for all use cases
-    fn apply_model_override(
-        tool_context: &mut ToolContext,
-        model_name: &str,
-    ) -> Result<(), Box<dyn std::error::Error>> {
-        tracing::info!(
-            "Applying global model override '{}' for all use cases",
-            model_name
-        );
-
-        let agent_info = ModelManager::find_agent_by_name(model_name)?;
-        let override_config = parse_model_config(&agent_info.content)?;
-        let override_config_arc = Arc::new(override_config);
-
-        let mut use_case_agents = HashMap::new();
-        use_case_agents.insert(ModelUseCase::Root, override_config_arc.clone());
-        use_case_agents.insert(ModelUseCase::Rules, override_config_arc.clone());
-        use_case_agents.insert(ModelUseCase::Workflows, override_config_arc.clone());
-
-        tool_context.use_case_agents = Arc::new(use_case_agents);
-
-        Ok(())
-    }
-
-    /// Create git operations handler
-    fn create_git_operations(working_dir: &std::path::Path) -> Arc<Mutex<Option<GitOperations>>> {
-        Arc::new(Mutex::new(
-            GitOperations::with_work_dir(working_dir.to_path_buf()).ok(),
-        ))
-    }
-
-    /// Create tool handlers for backward compatibility
-    fn create_tool_handlers() -> Arc<swissarmyhammer_tools::mcp::tool_handlers::ToolHandlers> {
-        Arc::new(swissarmyhammer_tools::mcp::tool_handlers::ToolHandlers::new())
     }
 
     /// Create and populate tool registry

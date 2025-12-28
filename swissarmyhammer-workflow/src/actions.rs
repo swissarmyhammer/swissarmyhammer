@@ -1198,8 +1198,11 @@ impl SubWorkflowAction {
         workflow_stack
     }
 
-    /// Load and start the sub-workflow
-    async fn load_and_start_workflow(&self) -> ActionResult<crate::WorkflowRun> {
+    /// Load and start the sub-workflow with agent from parent context
+    async fn load_and_start_workflow(
+        &self,
+        parent_context: &WorkflowTemplateContext,
+    ) -> ActionResult<crate::WorkflowRun> {
         tracing::debug!("Executing sub-workflow '{}' in-process", self.workflow_name);
 
         let storage = if let Some(test_storage) = get_test_storage() {
@@ -1218,7 +1221,13 @@ impl SubWorkflowAction {
             ))
         })?;
 
-        let mut executor = WorkflowExecutor::new();
+        // Get agent config from parent context and create executor with it
+        let agent_config = parent_context.get_agent_config();
+        let working_dir = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+        let mut executor = WorkflowExecutor::with_working_dir_and_agent(
+            working_dir,
+            std::sync::Arc::new(agent_config),
+        );
         executor.start_workflow(workflow).map_err(|e| {
             ActionError::ExecutionError(format!(
                 "Failed to start sub-workflow '{}': {}",
@@ -1724,7 +1733,7 @@ impl Action for SubWorkflowAction {
         self.validate_input_keys(&substituted_inputs)?;
 
         let new_stack = self.build_workflow_stack(context);
-        let mut run = self.load_and_start_workflow().await?;
+        let mut run = self.load_and_start_workflow(context).await?;
 
         self.prepare_sub_workflow_context(
             &mut run.context,

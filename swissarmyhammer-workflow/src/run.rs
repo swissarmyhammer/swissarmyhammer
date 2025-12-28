@@ -3,7 +3,9 @@
 use crate::{StateId, Workflow, WorkflowTemplateContext};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::sync::Arc;
 use swissarmyhammer_common::generate_monotonic_ulid;
+use swissarmyhammer_config::model::ModelConfig;
 use ulid::Ulid;
 
 /// Unique identifier for workflow runs
@@ -77,16 +79,21 @@ pub struct WorkflowRun {
 impl WorkflowRun {
     /// Create a new workflow run
     pub fn new(workflow: Workflow) -> Self {
-        Self::new_impl(workflow, ".swissarmyhammer/.abort")
+        Self::new_impl(workflow, ".swissarmyhammer/.abort", None)
+    }
+
+    /// Create a new workflow run with agent configuration
+    pub fn new_with_agent(workflow: Workflow, agent: Arc<ModelConfig>) -> Self {
+        Self::new_impl(workflow, ".swissarmyhammer/.abort", Some(agent))
     }
 
     #[cfg(test)]
     /// Create a new workflow run with configurable abort file path (test only)
     pub fn new_with_abort_path(workflow: Workflow, abort_path: &str) -> Self {
-        Self::new_impl(workflow, abort_path)
+        Self::new_impl(workflow, abort_path, None)
     }
 
-    fn new_impl(workflow: Workflow, abort_path: &str) -> Self {
+    fn new_impl(workflow: Workflow, abort_path: &str, agent: Option<Arc<ModelConfig>>) -> Self {
         // Clean up any existing abort file to ensure clean slate
         // Abort detection happens at flow command level before WorkflowRun::new() is called
         match std::fs::remove_file(abort_path) {
@@ -104,10 +111,16 @@ impl WorkflowRun {
 
         let now = chrono::Utc::now();
         let initial_state = workflow.initial_state.clone();
-        let context = WorkflowTemplateContext::load().unwrap_or_else(|_| {
+        let mut context = WorkflowTemplateContext::load().unwrap_or_else(|_| {
             WorkflowTemplateContext::with_vars(Default::default())
                 .expect("Failed to create default context")
         });
+
+        // If an agent is provided, set it in the context
+        if let Some(agent_config) = agent {
+            context.set_agent_config((*agent_config).clone());
+        }
+
         Self {
             id: WorkflowRunId::new(),
             workflow,
