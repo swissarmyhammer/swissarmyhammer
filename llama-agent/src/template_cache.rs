@@ -72,12 +72,13 @@
 //! # }
 //! ```
 
+use serde::{Deserialize, Serialize};
 use std::collections::hash_map::DefaultHasher;
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
-use std::time::SystemTime;
-use tracing::debug;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use tracing::{debug, info, warn};
 
 /// Entry in the template cache
 ///
@@ -98,6 +99,90 @@ pub struct TemplateCacheEntry {
     /// Metadata
     pub created_at: SystemTime,
     pub last_used: SystemTime,
+}
+
+/// Serializable version of template cache entry for persistence
+///
+/// SystemTime is converted to seconds since UNIX_EPOCH for JSON serialization.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct TemplateCacheEntryMetadata {
+    /// Template hash (used as key)
+    hash: u64,
+
+    /// Filename of KV cache file (not full path, just filename)
+    kv_cache_filename: String,
+
+    /// Number of tokens in the template
+    token_count: usize,
+
+    /// Raw template content for verification
+    system_prompt: String,
+    tools_json: String,
+
+    /// Metadata (seconds since UNIX_EPOCH)
+    created_at_secs: u64,
+    last_used_secs: u64,
+}
+
+impl TemplateCacheEntryMetadata {
+    /// Convert from runtime entry to serializable metadata
+    fn from_entry(hash: u64, entry: &TemplateCacheEntry) -> Self {
+        let kv_cache_filename = entry
+            .kv_cache_file
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("unknown.kv")
+            .to_string();
+
+        let created_at_secs = entry
+            .created_at
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or(Duration::ZERO)
+            .as_secs();
+
+        let last_used_secs = entry
+            .last_used
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or(Duration::ZERO)
+            .as_secs();
+
+        Self {
+            hash,
+            kv_cache_filename,
+            token_count: entry.token_count,
+            system_prompt: entry.system_prompt.clone(),
+            tools_json: entry.tools_json.clone(),
+            created_at_secs,
+            last_used_secs,
+        }
+    }
+
+    /// Convert from serializable metadata to runtime entry
+    fn to_entry(&self, cache_dir: &Path) -> TemplateCacheEntry {
+        let kv_cache_file = cache_dir.join(&self.kv_cache_filename);
+
+        let created_at = UNIX_EPOCH + Duration::from_secs(self.created_at_secs);
+        let last_used = UNIX_EPOCH + Duration::from_secs(self.last_used_secs);
+
+        TemplateCacheEntry {
+            kv_cache_file,
+            token_count: self.token_count,
+            system_prompt: self.system_prompt.clone(),
+            tools_json: self.tools_json.clone(),
+            created_at,
+            last_used,
+        }
+    }
+}
+
+/// Serializable metadata file format
+#[derive(Debug, Serialize, Deserialize)]
+struct CacheMetadataFile {
+    /// Format version for future compatibility
+    version: u32,
+
+    /// All cache entries
+    entries: Vec<TemplateCacheEntryMetadata>,
 }
 
 /// Global cache mapping template hashes to saved KV cache files
@@ -131,7 +216,11 @@ pub struct TemplateCache {
 
 impl TemplateCache {
     /// Default maximum number of cache entries
-    pub const DEFAULT_MAX_ENTRIES: usize = 100;
+    ///
+    /// Set to 32 to balance cache effectiveness with disk space usage.
+    /// Each entry can be 200KB-4MB depending on model size, so 32 entries
+    /// typically uses 6-128 MB of disk space.
+    pub const DEFAULT_MAX_ENTRIES: usize = 32;
 
     /// Create new template cache with specified directory
     ///
@@ -165,14 +254,24 @@ impl TemplateCache {
     ) -> Result<Self, TemplateCacheError> {
         std::fs::create_dir_all(&cache_dir)?;
 
-        Ok(Self {
+        let mut cache = Self {
             cache: HashMap::new(),
-            cache_dir,
+            cache_dir: cache_dir.clone(),
             max_entries,
             hits: 0,
             misses: 0,
             evictions: 0,
-        })
+        };
+
+        // Load existing metadata from disk if available
+        if let Err(e) = cache.load_metadata() {
+            warn!(
+                "Failed to load template cache metadata (will start fresh): {}",
+                e
+            );
+        }
+
+        Ok(cache)
     }
 
     /// Hash template content to create cache key
@@ -195,6 +294,119 @@ impl TemplateCache {
         hasher.finish()
     }
 
+    /// Get path to metadata file
+    fn metadata_file_path(&self) -> PathBuf {
+        self.cache_dir.join("metadata.json")
+    }
+
+    /// Load cache metadata from disk
+    ///
+    /// Loads previously saved cache entries from the metadata.json file.
+    /// Only loads entries whose KV cache files still exist on disk.
+    /// Respects max_entries limit by loading most recently used entries first.
+    /// Silently skips entries with missing or corrupted KV cache files.
+    fn load_metadata(&mut self) -> Result<(), TemplateCacheError> {
+        let metadata_path = self.metadata_file_path();
+
+        if !metadata_path.exists() {
+            info!("No existing template cache metadata found (this is normal for first run)");
+            return Ok(());
+        }
+
+        let metadata_content = std::fs::read_to_string(&metadata_path)?;
+        let metadata: CacheMetadataFile = serde_json::from_str(&metadata_content)
+            .map_err(|e| TemplateCacheError::SerializationError(e.to_string()))?;
+
+        // Sort entries by last_used (most recent first) to respect LRU when max_entries is set
+        let mut entries = metadata.entries;
+        entries.sort_by(|a, b| b.last_used_secs.cmp(&a.last_used_secs));
+
+        let mut loaded_count = 0;
+        let mut skipped_missing = 0;
+        let mut skipped_over_limit = 0;
+
+        for entry_meta in entries {
+            let entry = entry_meta.to_entry(&self.cache_dir);
+
+            // Check if we've reached the max_entries limit
+            if let Some(max) = self.max_entries {
+                if loaded_count >= max {
+                    debug!(
+                        "Skipping cache entry {} - exceeds max_entries limit ({})",
+                        entry_meta.hash, max
+                    );
+                    // Clean up KV cache file since we won't be tracking this entry
+                    if entry.kv_cache_file.exists() {
+                        if let Err(e) = std::fs::remove_file(&entry.kv_cache_file) {
+                            warn!(
+                                "Failed to delete excess KV cache file {}: {}",
+                                entry.kv_cache_file.display(),
+                                e
+                            );
+                        }
+                    }
+                    skipped_over_limit += 1;
+                    continue;
+                }
+            }
+
+            // Only load entry if KV cache file actually exists
+            if entry.kv_cache_file.exists() {
+                self.cache.insert(entry_meta.hash, entry);
+                loaded_count += 1;
+            } else {
+                debug!(
+                    "Skipping cache entry {} - KV cache file not found: {}",
+                    entry_meta.hash,
+                    entry.kv_cache_file.display()
+                );
+                skipped_missing += 1;
+            }
+        }
+
+        if loaded_count > 0 {
+            info!(
+                "Loaded {} template cache entries from disk (skipped {} missing, {} over limit)",
+                loaded_count, skipped_missing, skipped_over_limit
+            );
+        }
+
+        Ok(())
+    }
+
+    /// Save cache metadata to disk
+    ///
+    /// Persists current cache state to metadata.json file.
+    /// This allows cache entries to survive agent restarts.
+    fn save_metadata(&self) -> Result<(), TemplateCacheError> {
+        let metadata_path = self.metadata_file_path();
+
+        // Convert cache entries to serializable format
+        let entries: Vec<TemplateCacheEntryMetadata> = self
+            .cache
+            .iter()
+            .map(|(hash, entry)| TemplateCacheEntryMetadata::from_entry(*hash, entry))
+            .collect();
+
+        let metadata = CacheMetadataFile {
+            version: 1,
+            entries,
+        };
+
+        let metadata_json = serde_json::to_string_pretty(&metadata)
+            .map_err(|e| TemplateCacheError::SerializationError(e.to_string()))?;
+
+        std::fs::write(&metadata_path, metadata_json)?;
+
+        debug!(
+            "Saved {} template cache entries to {}",
+            self.cache.len(),
+            metadata_path.display()
+        );
+
+        Ok(())
+    }
+
     /// Check if template is cached
     ///
     /// Updates last_used timestamp on cache hit.
@@ -210,7 +422,7 @@ impl TemplateCache {
         if let Some(entry) = self.cache.get_mut(&template_hash) {
             entry.last_used = SystemTime::now();
             self.hits += 1;
-            debug!(
+            info!(
                 "Template cache HIT: {} ({} tokens from {})",
                 template_hash,
                 entry.token_count,
@@ -219,7 +431,7 @@ impl TemplateCache {
             Some(entry)
         } else {
             self.misses += 1;
-            debug!("Template cache MISS: {}", template_hash);
+            info!("Template cache MISS: {}", template_hash);
             None
         }
     }
@@ -268,7 +480,7 @@ impl TemplateCache {
         let filename = format!("template_{:016x}.kv", template_hash);
         let kv_cache_file = self.cache_dir.join(filename);
 
-        debug!(
+        info!(
             "Caching template {} ({} tokens) to {}",
             template_hash,
             token_count,
@@ -292,6 +504,12 @@ impl TemplateCache {
         }
 
         self.cache.insert(template_hash, entry);
+
+        // Persist metadata to disk
+        if let Err(e) = self.save_metadata() {
+            warn!("Failed to save template cache metadata: {}", e);
+        }
+
         Ok(kv_cache_file)
     }
 
@@ -388,6 +606,15 @@ impl TemplateCache {
                 std::fs::remove_file(&entry.kv_cache_file)?;
                 debug!("Deleted KV cache file: {}", entry.kv_cache_file.display());
             }
+
+            // Persist metadata to disk
+            if let Err(e) = self.save_metadata() {
+                warn!(
+                    "Failed to save template cache metadata after deletion: {}",
+                    e
+                );
+            }
+
             Ok(true)
         } else {
             Ok(false)
@@ -449,6 +676,9 @@ pub enum TemplateCacheError {
 
     #[error("Validation error: {0}")]
     ValidationError(String),
+
+    #[error("Serialization error: {0}")]
+    SerializationError(String),
 }
 
 #[cfg(test)]
