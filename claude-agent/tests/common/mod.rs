@@ -6,6 +6,5 @@
 pub mod content_blocks;
 pub mod fixtures;
 pub mod handler_utils;
-pub mod recording;
 pub mod test_client;
 pub mod test_data;
