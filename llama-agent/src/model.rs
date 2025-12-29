@@ -865,13 +865,23 @@ mod tests {
     use tempfile::TempDir;
     use tokio::fs;
 
+    // Test configuration constants
+    const TEST_BATCH_SIZE: u32 = 512;
+    const TEST_N_SEQ_MAX: u32 = 1;
+    const TEST_N_THREADS: i32 = 1;
+    const TEST_N_THREADS_BATCH: i32 = 1;
+    const TEST_TOKEN_COUNT: usize = 50;
+    const TEST_TEMPLATE_HASH_1: u64 = 0x1234567890abcdef;
+    const TEST_TEMPLATE_HASH_2: u64 = 0xabcdef1234567890;
+    const TEST_TEMPLATE_HASH_3: u64 = 0xfedcba9876543210;
+
     fn create_test_config_local(folder: PathBuf, filename: Option<String>) -> ModelConfig {
         ModelConfig {
             source: ModelSource::Local { folder, filename },
-            batch_size: 512,
-            n_seq_max: 1,
-            n_threads: 1,
-            n_threads_batch: 1,
+            batch_size: TEST_BATCH_SIZE,
+            n_seq_max: TEST_N_SEQ_MAX,
+            n_threads: TEST_N_THREADS,
+            n_threads_batch: TEST_N_THREADS_BATCH,
             use_hf_params: false,
             retry_config: crate::types::RetryConfig::default(),
             debug: false,
@@ -885,10 +895,10 @@ mod tests {
                 filename,
                 folder: None,
             },
-            batch_size: 512,
-            n_seq_max: 1,
-            n_threads: 1,
-            n_threads_batch: 1,
+            batch_size: TEST_BATCH_SIZE,
+            n_seq_max: TEST_N_SEQ_MAX,
+            n_threads: TEST_N_THREADS,
+            n_threads_batch: TEST_N_THREADS_BATCH,
             use_hf_params: true,
             retry_config: crate::types::RetryConfig::default(),
             debug: false,
@@ -1088,7 +1098,7 @@ mod tests {
         let debug_str = format!("{:?}", config);
         assert!(debug_str.contains("Local"));
         assert!(debug_str.contains("test.gguf"));
-        assert!(debug_str.contains("512"));
+        assert!(debug_str.contains(&TEST_BATCH_SIZE.to_string()));
     }
 
     #[tokio::test]
@@ -1401,20 +1411,25 @@ mod tests {
                 // Insert entry
                 {
                     let mut c = cache.lock().unwrap();
-                    let _ = c.insert(hash, 50, "sys".to_string(), "tools".to_string());
+                    let _ = c.insert(
+                        hash,
+                        TEST_TOKEN_COUNT,
+                        "sys".to_string(),
+                        "tools".to_string(),
+                    );
                 }
 
                 // Check stats after insert
                 let stats = manager.get_template_cache_stats();
                 assert_eq!(stats.entries, 1);
-                assert_eq!(stats.total_tokens, 50);
+                assert_eq!(stats.total_tokens, TEST_TOKEN_COUNT);
 
                 // Access the entry (cache hit)
                 {
                     let mut c = cache.lock().unwrap();
                     let entry = c.get(hash);
                     assert!(entry.is_some());
-                    assert_eq!(entry.unwrap().token_count, 50);
+                    assert_eq!(entry.unwrap().token_count, TEST_TOKEN_COUNT);
                 }
 
                 // Check stats after hit
@@ -1437,8 +1452,7 @@ mod tests {
         let config = create_test_config_local(temp_dir.path().to_path_buf(), None);
 
         if let Some(manager) = create_test_manager_or_skip(config) {
-            let template_hash: u64 = 0x1234567890abcdef;
-            assert!(!manager.has_template_kv_cache(template_hash));
+            assert!(!manager.has_template_kv_cache(TEST_TEMPLATE_HASH_1));
         }
     }
 
@@ -1448,7 +1462,6 @@ mod tests {
         let config = create_test_config_local(temp_dir.path().to_path_buf(), None);
 
         if let Some(manager) = create_test_manager_or_skip(config) {
-            let _template_hash: u64 = 0x1234567890abcdef;
             let cache = manager.template_cache.lock().unwrap();
             let expected_file = cache.cache_dir().join("template_1234567890abcdef.kv");
             drop(cache);
@@ -1465,12 +1478,11 @@ mod tests {
         let config = create_test_config_local(temp_dir.path().to_path_buf(), None);
 
         if let Some(manager) = create_test_manager_or_skip(config) {
-            let template_hash: u64 = 0xabcdef1234567890;
             let template_file = {
                 let cache = manager.template_cache.lock().unwrap();
                 cache
                     .cache_dir()
-                    .join(format!("template_{:016x}.kv", template_hash))
+                    .join(format!("template_{:016x}.kv", TEST_TEMPLATE_HASH_2))
             };
 
             // Create a dummy template KV cache file
@@ -1479,7 +1491,7 @@ mod tests {
                 .unwrap();
 
             // Should return true for existing template file
-            assert!(manager.has_template_kv_cache(template_hash));
+            assert!(manager.has_template_kv_cache(TEST_TEMPLATE_HASH_2));
 
             // Clean up
             std::fs::remove_file(&template_file).unwrap();
@@ -1492,7 +1504,6 @@ mod tests {
         let config = create_test_config_local(temp_dir.path().to_path_buf(), None);
 
         if let Some(manager) = create_test_manager_or_skip(config) {
-            let template_hash: u64 = 0xfedcba9876543210;
             let expected_file = {
                 let cache = manager.template_cache.lock().unwrap();
                 cache.cache_dir().join("template_fedcba9876543210.kv")
@@ -1502,11 +1513,11 @@ mod tests {
             fs::write(&expected_file, b"test data").await.unwrap();
 
             // Check that has_template_kv_cache finds it
-            assert!(manager.has_template_kv_cache(template_hash));
+            assert!(manager.has_template_kv_cache(TEST_TEMPLATE_HASH_3));
 
             // Clean up
             std::fs::remove_file(&expected_file).unwrap();
-            assert!(!manager.has_template_kv_cache(template_hash));
+            assert!(!manager.has_template_kv_cache(TEST_TEMPLATE_HASH_3));
         }
     }
 }

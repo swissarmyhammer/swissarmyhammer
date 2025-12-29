@@ -9,13 +9,13 @@ use swissarmyhammer_tools::mcp::tool_registry::{
 };
 
 /// Test that verifies all expected MCP tools are registered
-#[test]
-fn test_mcp_tools_are_registered() {
+#[tokio::test]
+async fn test_mcp_tools_are_registered() {
     let mut registry = ToolRegistry::new();
 
     // This mirrors exactly what McpServer does in its constructor
     register_abort_tools(&mut registry);
-    register_file_tools(&mut registry);
+    register_file_tools(&mut registry).await;
     register_shell_tools(&mut registry);
     register_todo_tools(&mut registry);
     register_web_fetch_tools(&mut registry);
@@ -117,13 +117,13 @@ fn test_mcp_tools_are_registered() {
 }
 
 /// Test CLI category mapping works
-#[test]
-fn test_cli_categories_are_available() {
+#[tokio::test]
+async fn test_cli_categories_are_available() {
     let mut registry = ToolRegistry::new();
 
     // Register all tools
     register_abort_tools(&mut registry);
-    register_file_tools(&mut registry);
+    register_file_tools(&mut registry).await;
     register_shell_tools(&mut registry);
     register_todo_tools(&mut registry);
     register_web_fetch_tools(&mut registry);

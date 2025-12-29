@@ -11,7 +11,7 @@ use async_trait::async_trait;
 use rmcp::model::CallToolResult;
 use rmcp::ErrorData as McpError;
 use swissarmyhammer_common::generate_monotonic_ulid_string;
-use swissarmyhammer_config::ModelUseCase;
+use swissarmyhammer_config::AgentUseCase;
 use swissarmyhammer_workflow::{MemoryWorkflowStorage, WorkflowResolver, WorkflowStorageBackend};
 
 /// Validate that all required parameters are provided
@@ -221,7 +221,7 @@ impl FlowTool {
         ),
         McpError,
     > {
-        let workflows_agent = context.get_agent_for_use_case(ModelUseCase::Workflows);
+        let workflows_agent = context.get_agent_for_use_case(AgentUseCase::Workflows);
         tracing::debug!(
             "Using agent for Workflows use case: {:?}",
             workflows_agent.executor_type()

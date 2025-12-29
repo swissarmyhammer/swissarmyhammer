@@ -33,6 +33,7 @@ swissarmyhammer-rules = { path = "../swissarmyhammer-rules" }
 swissarmyhammer-templating = { path = "../swissarmyhammer-templating" }
 swissarmyhammer-agent-executor = { path = "../swissarmyhammer-agent-executor" }
 swissarmyhammer-workflow = { path = "../swissarmyhammer-workflow" }
+llama-agent = { workspace = true, features = ["acp"] }
 
 # CLI dependencies
 clap = { workspace = true }

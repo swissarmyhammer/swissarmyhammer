@@ -1,8 +1,12 @@
+// sah rule ignore acp/capability-enforcement
 //! File reading tool for MCP operations
 //!
 //! This module provides the `ReadFileTool` for secure, validated file reading operations through
 //! the MCP protocol. The tool supports reading various file types including text files, binary
 //! content (with base64 encoding), and provides partial reading capabilities for large files.
+//!
+//! Note: This is an MCP tool, not an ACP operation. ACP capability checking happens at the
+//! agent layer (claude-agent, llama-agent), not at the MCP tool layer.
 //!
 //! ## Features
 //!
@@ -151,6 +155,7 @@ impl McpTool for ReadFileTool {
     ) -> std::result::Result<CallToolResult, McpError> {
         use crate::mcp::tools::files::shared_utils::SecureFileAccess;
         use serde::Deserialize;
+        use swissarmyhammer_common::rate_limiter::get_rate_limiter;
 
         tracing::debug!(
             "files_read execute() called with arguments: {:?}",
@@ -181,6 +186,17 @@ impl McpTool for ReadFileTool {
                 return Err(e);
             }
         };
+
+        // Check rate limit using tokio task ID as client identifier
+        let rate_limiter = get_rate_limiter();
+        let client_id = format!("task_{:?}", tokio::task::try_id());
+        if let Err(e) = rate_limiter.check_rate_limit(&client_id, "file_read", 1) {
+            tracing::warn!("Rate limit exceeded for file_read: {}", e);
+            return Err(McpError::invalid_request(
+                format!("Rate limit exceeded: {}", e),
+                None,
+            ));
+        }
 
         // Validate parameters before security layer
         if let Some(offset) = request.offset {

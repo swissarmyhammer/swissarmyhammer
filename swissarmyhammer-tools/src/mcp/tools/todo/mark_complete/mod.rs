@@ -93,14 +93,7 @@ impl McpTool for MarkCompleteTodoTool {
                     }
                 }
 
-                Ok(BaseToolImpl::create_success_response(
-                    json!({
-                        "message": format!("Marked todo item '{}' as complete", request.id),
-                        "action": "marked_complete",
-                        "id": request.id.as_str()
-                    })
-                    .to_string(),
-                ))
+                Ok(BaseToolImpl::create_success_response("OK".to_string()))
             }
             Err(e) => Err(McpErrorHandler::handle_todo_error(
                 e,

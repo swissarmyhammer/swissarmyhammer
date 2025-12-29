@@ -1,0 +1,556 @@
+{
+  "id": "01KDJGKKHMNS5CQSGJYHDD4XHZ",
+  "created_at": {
+    "secs_since_epoch": 1766926700,
+    "nanos_since_epoch": 84703000
+  },
+  "last_accessed": {
+    "secs_since_epoch": 1766926713,
+    "nanos_since_epoch": 139811000
+  },
+  "context": [
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926706,
+        "nanos_since_epoch": 621781000
+      },
+      "update": {
+        "sessionUpdate": "available_commands_update",
+        "availableCommands": [
+          {
+            "name": "create_plan",
+            "description": "Create an execution plan for complex tasks",
+            "input": null,
+            "_meta": {
+              "category": "planning",
+              "source": "core"
+            }
+          },
+          {
+            "name": "research_codebase",
+            "description": "Research and analyze the codebase structure",
+            "input": null,
+            "_meta": {
+              "category": "analysis",
+              "source": "core"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926706,
+        "nanos_since_epoch": 622528000
+      },
+      "update": {
+        "sessionUpdate": "user_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "\n[Audio content: audio/wav (embedded data)]"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926711,
+        "nanos_since_epoch": 158915000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "I"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926711,
+        "nanos_since_epoch": 354774000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " can see"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926711,
+        "nanos_since_epoch": 358319000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " you've"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926711,
+        "nanos_since_epoch": 676831000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " shared an audio file, but I wasn"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926711,
+        "nanos_since_epoch": 696062000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "'t able to hear"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926711,
+        "nanos_since_epoch": 771571000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " any speech"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926711,
+        "nanos_since_epoch": 779033000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " or"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926711,
+        "nanos_since_epoch": 798686000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " meaningful"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926711,
+        "nanos_since_epoch": 818472000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " content"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926711,
+        "nanos_since_epoch": 834099000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " in it -"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926711,
+        "nanos_since_epoch": 849939000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " it appears to be either"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926711,
+        "nanos_since_epoch": 867541000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " silent"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926711,
+        "nanos_since_epoch": 936682000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " or contains audio"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926711,
+        "nanos_since_epoch": 960325000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " that"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926711,
+        "nanos_since_epoch": 979959000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " didn"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926712,
+        "nanos_since_epoch": 828000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "'t come"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926712,
+        "nanos_since_epoch": 44935000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " through clearly"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926712,
+        "nanos_since_epoch": 96005000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "."
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926712,
+        "nanos_since_epoch": 164565000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "\n\nCoul"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926712,
+        "nanos_since_epoch": 231258000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "d you let"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926712,
+        "nanos_since_epoch": 305168000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " me know what"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926712,
+        "nanos_since_epoch": 369252000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " you'd like help"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926712,
+        "nanos_since_epoch": 370936000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " with?"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926712,
+        "nanos_since_epoch": 396954000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " You"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926712,
+        "nanos_since_epoch": 474261000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " can type"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926712,
+        "nanos_since_epoch": 496631000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " your"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926712,
+        "nanos_since_epoch": 574289000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " question"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926712,
+        "nanos_since_epoch": 650700000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " or request,"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926712,
+        "nanos_since_epoch": 739092000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " and I'll be"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926712,
+        "nanos_since_epoch": 778472000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " happy to assist with"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926712,
+        "nanos_since_epoch": 788805000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " any software"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926712,
+        "nanos_since_epoch": 857539000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " engineering tasks or"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926712,
+        "nanos_since_epoch": 899616000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " other questions"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926712,
+        "nanos_since_epoch": 941215000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " you have"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926713,
+        "nanos_since_epoch": 93974000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "."
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926713,
+        "nanos_since_epoch": 139779000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "I can see you've shared an audio file, but I wasn't able to hear any speech or meaningful content in it - it appears to be either silent or contains audio that didn't come through clearly.\n\nCould you let me know what you'd like help with? You can type your question or request, and I'll be happy to assist with any software engineering tasks or other questions you have."
+        }
+      }
+    }
+  ],
+  "client_capabilities": {
+    "fs": {
+      "readTextFile": false,
+      "writeTextFile": false
+    },
+    "terminal": false
+  },
+  "mcp_servers": [],
+  "cwd": "/Users/wballard/github/swissarmyhammer/acp-conformance",
+  "available_commands": [
+    {
+      "name": "create_plan",
+      "description": "Create an execution plan for complex tasks",
+      "input": null,
+      "_meta": {
+        "category": "planning",
+        "source": "core"
+      }
+    },
+    {
+      "name": "research_codebase",
+      "description": "Research and analyze the codebase structure",
+      "input": null,
+      "_meta": {
+        "category": "analysis",
+        "source": "core"
+      }
+    }
+  ],
+  "turn_request_count": 1,
+  "turn_token_count": 10,
+  "current_mode": null,
+  "todos": []
+}

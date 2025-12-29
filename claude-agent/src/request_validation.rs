@@ -551,7 +551,7 @@ mod tests {
 
     fn create_test_load_session_request() -> LoadSessionRequest {
         LoadSessionRequest {
-            session_id: SessionId("01ARZ3NDEKTSV4RRFFQ69G5FAV".to_string().into()),
+            session_id: SessionId::new("01ARZ3NDEKTSV4RRFFQ69G5FAV".to_string()),
             cwd: std::env::current_dir().unwrap(),
             mcp_servers: vec![],
             meta: None,
@@ -578,7 +578,7 @@ mod tests {
     fn test_validate_load_session_request_invalid_session_id() {
         let validator = RequestValidator::new();
         let mut request = create_test_load_session_request();
-        request.session_id = SessionId("invalid-session-id".to_string().into());
+        request.session_id = SessionId::new("invalid-session-id".to_string());
 
         let result = validator.validate_load_session_request(&request);
         assert!(result.is_err());

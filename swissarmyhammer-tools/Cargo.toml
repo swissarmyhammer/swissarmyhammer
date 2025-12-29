@@ -43,6 +43,9 @@ tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 test-log = { workspace = true }
 
+# ULID for unique identifiers
+ulid = { workspace = true }
+
 # Async traits
 async-trait = { workspace = true }
 

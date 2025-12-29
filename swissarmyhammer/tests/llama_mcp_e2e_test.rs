@@ -58,7 +58,7 @@ fn create_workflow_context_with_llama_config() -> WorkflowTemplateContext {
 fn assert_llama_agent_executor_type(execution_context: &AgentExecutionContext) {
     assert_eq!(
         execution_context.executor_type(),
-        swissarmyhammer_config::model::AgentExecutorType::LlamaAgent
+        swissarmyhammer_config::model::ModelExecutorType::LlamaAgent
     );
 }
 

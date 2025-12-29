@@ -5,7 +5,7 @@
 
 use std::fs;
 use swissarmyhammer_common::test_utils::IsolatedTestEnvironment;
-use swissarmyhammer_config::model::{ModelManager, ModelUseCase};
+use swissarmyhammer_config::model::{AgentUseCase, ModelManager};
 
 /// Test that RuleCheckTool picks up model config changes
 #[tokio::test]
@@ -21,7 +21,7 @@ async fn test_rule_check_uses_configured_model() {
 
     // Write config with rules model set to qwen-coder-flash
     let config_path = sah_dir.join("sah.yaml");
-    fs::write(&config_path, "models:\n  rules: qwen-coder-flash\n").unwrap();
+    fs::write(&config_path, "agents:\n  rules: qwen-coder-flash\n").unwrap();
 
     // Change to temp directory so config is found
     let original_dir = std::env::current_dir().unwrap();
@@ -29,7 +29,7 @@ async fn test_rule_check_uses_configured_model() {
 
     // Verify that ModelManager can read the config
     let model_name =
-        ModelManager::get_agent_for_use_case(ModelUseCase::Rules).expect("Should read config");
+        ModelManager::get_agent_for_use_case(AgentUseCase::Rules).expect("Should read config");
     eprintln!("Model name from config: {:?}", model_name);
     assert_eq!(
         model_name,
@@ -38,7 +38,7 @@ async fn test_rule_check_uses_configured_model() {
     );
 
     // Resolve the full model config
-    let resolved_config = ModelManager::resolve_agent_config_for_use_case(ModelUseCase::Rules)
+    let resolved_config = ModelManager::resolve_agent_config_for_use_case(AgentUseCase::Rules)
         .expect("Should resolve model config");
     eprintln!(
         "Resolved model config executor type: {:?}",
@@ -92,14 +92,14 @@ async fn test_demonstrates_caching_bug() {
     let config_path = sah_dir.join("sah.yaml");
     fs::write(&config_path, "# No model config yet\n").unwrap();
 
-    let model1 = ModelManager::resolve_agent_config_for_use_case(ModelUseCase::Rules)
+    let model1 = ModelManager::resolve_agent_config_for_use_case(AgentUseCase::Rules)
         .expect("Should resolve");
     eprintln!("Step 1 - Initial model: {:?}", model1.executor_type());
 
     // Step 2: Change config to qwen-coder-flash
-    fs::write(&config_path, "models:\n  rules: qwen-coder-flash\n").unwrap();
+    fs::write(&config_path, "agents:\n  rules: qwen-coder-flash\n").unwrap();
 
-    let model2 = ModelManager::resolve_agent_config_for_use_case(ModelUseCase::Rules)
+    let model2 = ModelManager::resolve_agent_config_for_use_case(AgentUseCase::Rules)
         .expect("Should resolve");
     eprintln!("Step 2 - After config change: {:?}", model2.executor_type());
 
@@ -133,11 +133,11 @@ async fn test_fresh_checker_picks_up_config_changes() {
 
     // Write initial config
     let config_path = sah_dir.join("sah.yaml");
-    fs::write(&config_path, "models:\n  rules: qwen-coder-flash\n").unwrap();
+    fs::write(&config_path, "agents:\n  rules: qwen-coder-flash\n").unwrap();
 
     // Read config multiple times - should always reflect current file content
     for i in 1..=3 {
-        let model = ModelManager::resolve_agent_config_for_use_case(ModelUseCase::Rules)
+        let model = ModelManager::resolve_agent_config_for_use_case(AgentUseCase::Rules)
             .expect("Should resolve");
         eprintln!("Read {}: {:?}", i, model.executor_type());
     }
@@ -145,7 +145,7 @@ async fn test_fresh_checker_picks_up_config_changes() {
     // Change config
     fs::write(&config_path, "# No model config\n").unwrap();
 
-    let model_after = ModelManager::resolve_agent_config_for_use_case(ModelUseCase::Rules)
+    let model_after = ModelManager::resolve_agent_config_for_use_case(AgentUseCase::Rules)
         .expect("Should resolve");
     eprintln!("After removing config: {:?}", model_after.executor_type());
 

@@ -84,7 +84,7 @@ fn assert_config_contains(
     assert!(config_path.exists(), "Config file should be created");
 
     let config = fs::read_to_string(config_path)?;
-    assert!(config.contains("models:"), "Should have models section");
+    assert!(config.contains("agents:"), "Should have agents section");
 
     for (key, value) in expected_patterns {
         assert!(
@@ -158,7 +158,7 @@ async fn test_model_show_command_no_config() -> Result<()> {
 async fn test_model_show_command_with_config() -> Result<()> {
     let ctx = TestContext::new()?;
 
-    let config_content = r#"models:
+    let config_content = r#"agents:
   root: "claude-code"
   rules: "qwen-coder"
   workflows: "claude-code"
@@ -579,15 +579,15 @@ async fn test_use_case_configuration_persistence() -> Result<()> {
     let config_value: serde_yaml::Value = serde_yaml::from_str(&config_content)?;
 
     assert!(
-        config_value.get("models").is_some(),
-        "Config should have models map"
+        config_value.get("agents").is_some(),
+        "Config should have agents map"
     );
 
     let agents = config_value
-        .get("models")
-        .expect("models should exist")
+        .get("agents")
+        .expect("agents should exist")
         .as_mapping()
-        .expect("models should be a mapping");
+        .expect("agents should be a mapping");
 
     assert!(
         agents.get(serde_yaml::Value::String("root".to_string()))

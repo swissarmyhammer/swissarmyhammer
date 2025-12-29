@@ -4,7 +4,13 @@
 use crate::context::CliContext;
 use colored::Colorize;
 use swissarmyhammer_config::model::{ModelError as AgentError, ModelManager};
-use swissarmyhammer_config::ModelUseCase as AgentUseCase;
+use swissarmyhammer_config::AgentUseCase;
+
+/// Maximum number of agent name suggestions to display when an agent is not found
+const MAX_SUGGESTIONS: usize = 3;
+
+/// Maximum number of available models to display in error messages
+const MAX_MODELS_TO_DISPLAY: usize = 5;
 
 /// Parse use command arguments into use case and agent name
 fn parse_use_command_args(
@@ -62,83 +68,101 @@ fn display_success_message(agent_name: &str, use_case: AgentUseCase) {
     }
 }
 
+/// Generic error handler that prints formatted error messages
+fn handle_error(
+    primary_message: String,
+    additional_context: Option<String>,
+    error_detail: String,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    eprintln!("{} {}", "✗".red(), primary_message.red());
+
+    if let Some(context) = additional_context {
+        eprintln!("{}", context);
+    }
+
+    Err(error_detail.into())
+}
+
 /// Handle agent not found error with suggestions
 fn handle_agent_not_found(name: String) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    match ModelManager::list_agents() {
+    let primary_message = format!("Agent '{}' not found", name);
+
+    let additional_context = match ModelManager::list_agents() {
         Ok(available_agents) => {
-            eprintln!("{} Agent '{}' not found", "✗".red(), name.red());
+            let mut context_lines = Vec::new();
 
             // Simple suggestion logic - find agents with similar names
             let suggestions: Vec<_> = available_agents
                 .iter()
                 .filter(|agent| agent.name.contains(&name) || name.contains(&agent.name))
-                .take(3)
+                .take(MAX_SUGGESTIONS)
                 .collect();
 
             if !suggestions.is_empty() {
-                eprintln!("\nDid you mean:");
+                context_lines.push("\nDid you mean:".to_string());
                 for suggestion in suggestions {
-                    eprintln!("  • {}", suggestion.name.cyan());
+                    context_lines.push(format!("  • {}", suggestion.name.cyan()));
                 }
             } else {
-                eprintln!("\nAvailable models:");
-                for agent in available_agents.iter().take(5) {
+                context_lines.push("\nAvailable models:".to_string());
+                for agent in available_agents.iter().take(MAX_MODELS_TO_DISPLAY) {
                     let source = format_agent_source(&agent.source);
-                    eprintln!("  • {} ({})", agent.name.cyan(), source.dimmed());
+                    context_lines.push(format!("  • {} ({})", agent.name.cyan(), source.dimmed()));
                 }
-                if available_agents.len() > 5 {
-                    eprintln!("  ... and {} more", available_agents.len() - 5);
+                if available_agents.len() > MAX_MODELS_TO_DISPLAY {
+                    context_lines.push(format!(
+                        "  ... and {} more",
+                        available_agents.len() - MAX_MODELS_TO_DISPLAY
+                    ));
                 }
             }
+
+            Some(context_lines.join("\n"))
         }
-        Err(_) => {
-            eprintln!("{} Agent '{}' not found", "✗".red(), name.red());
-        }
-    }
-    Err(format!("Agent '{}' not found", name).into())
+        Err(_) => None,
+    };
+
+    handle_error(primary_message.clone(), additional_context, primary_message)
 }
 
 /// Handle IO error
 fn handle_io_error(io_err: std::io::Error) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    eprintln!(
-        "{} Failed to update configuration: {}",
-        "✗".red(),
-        io_err.to_string().red()
-    );
-    eprintln!("Check that you have write permissions to the config file and directory.");
-    Err(format!("Configuration update failed: {}", io_err).into())
+    handle_error(
+        format!("Failed to update configuration: {}", io_err),
+        Some("Check that you have write permissions to the config file and directory.".to_string()),
+        format!("Configuration update failed: {}", io_err),
+    )
 }
 
 /// Handle configuration error
 fn handle_config_error(config_err: String) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    eprintln!("{} Configuration error: {}", "✗".red(), config_err.red());
-    eprintln!("The agent configuration may be invalid or corrupted.");
-    Err(format!("Configuration error: {}", config_err).into())
+    handle_error(
+        format!("Configuration error: {}", config_err),
+        Some("The agent configuration may be invalid or corrupted.".to_string()),
+        format!("Configuration error: {}", config_err),
+    )
 }
 
 /// Handle parse error
 fn handle_parse_error(
     serde_err: serde_yaml::Error,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    eprintln!(
-        "{} Failed to process agent configuration: {}",
-        "✗".red(),
-        serde_err.to_string().red()
-    );
-    Err(format!("Configuration processing failed: {}", serde_err).into())
+    handle_error(
+        format!("Failed to process agent configuration: {}", serde_err),
+        None,
+        format!("Configuration processing failed: {}", serde_err),
+    )
 }
 
 /// Handle invalid path error
 fn handle_invalid_path_error(
     path: std::path::PathBuf,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    eprintln!(
-        "{} Invalid agent path: {}",
-        "✗".red(),
-        path.display().to_string().red()
-    );
-    eprintln!("The agent configuration file path is invalid or inaccessible.");
-    Err(format!("Invalid agent path: {}", path.display()).into())
+    handle_error(
+        format!("Invalid agent path: {}", path.display()),
+        Some("The agent configuration file path is invalid or inaccessible.".to_string()),
+        format!("Invalid agent path: {}", path.display()),
+    )
 }
 
 /// Execute the agent use command
@@ -247,8 +271,17 @@ mod tests {
     async fn test_execute_use_command_builtin_agent() {
         let context = create_test_context().await;
 
-        // Test with a known builtin agent (claude-code should always exist)
-        let result = execute_use_command("claude-code".to_string(), None, &context).await;
+        // Get the first available builtin agent dynamically
+        let builtin_agents =
+            ModelManager::load_builtin_models().expect("Should be able to load builtin agents");
+        assert!(
+            !builtin_agents.is_empty(),
+            "Should have at least one builtin agent"
+        );
+
+        let agent_name = &builtin_agents[0].name;
+
+        let result = execute_use_command(agent_name.clone(), None, &context).await;
         // This might fail if no config directory exists, but we test the logic
         match result {
             Ok(()) => {
@@ -270,8 +303,18 @@ mod tests {
     async fn test_execute_use_command_builtin_agent_explicit_empty_validation() {
         let context = create_test_context().await;
 
+        // Get the first available builtin agent dynamically
+        let builtin_agents =
+            ModelManager::load_builtin_models().expect("Should be able to load builtin agents");
+        assert!(
+            !builtin_agents.is_empty(),
+            "Should have at least one builtin agent"
+        );
+
+        let agent_name = &builtin_agents[0].name;
+
         // Test that agent names get properly trimmed
-        let result = execute_use_command("  claude-code  ".to_string(), None, &context).await;
+        let result = execute_use_command(format!("  {}  ", agent_name), None, &context).await;
 
         match result {
             Ok(()) => {
@@ -295,29 +338,40 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let temp_path = temp_dir.path();
 
-        // Set up environment to use temp directory
-        env::set_var("HOME", temp_path);
+        // Change to temp directory so config gets created there
+        let original_dir = env::current_dir().unwrap();
+        env::set_current_dir(temp_path).unwrap();
 
         let context = create_test_context().await;
 
-        // Test with claude-code which should exist as builtin
-        let result = execute_use_command("claude-code".to_string(), None, &context).await;
+        // Get the first available builtin agent dynamically
+        let builtin_agents =
+            ModelManager::load_builtin_models().expect("Should be able to load builtin agents");
+        assert!(
+            !builtin_agents.is_empty(),
+            "Should have at least one builtin agent"
+        );
+
+        let agent_name = &builtin_agents[0].name;
+
+        let result = execute_use_command(agent_name.clone(), None, &context).await;
 
         // This should succeed or fail only due to permission/config issues
         match result {
             Ok(()) => {
-                // Check that config file was created
-                let config_path = temp_path
-                    .join(".config")
-                    .join("swissarmyhammer")
-                    .join("config.yaml");
-                if config_path.exists() {
-                    let config_content = fs::read_to_string(config_path).unwrap();
-                    assert!(
-                        config_content.contains("agent"),
-                        "Config should contain agent section"
-                    );
-                }
+                // Check that config file was created in .swissarmyhammer directory
+                let config_path = temp_path.join(".swissarmyhammer").join("sah.yaml");
+                assert!(
+                    config_path.exists(),
+                    "Config file should exist at {:?}",
+                    config_path
+                );
+                let config_content = fs::read_to_string(&config_path).unwrap();
+                assert!(
+                    config_content.contains("agents:"),
+                    "Config should contain agents map structure, got: {}",
+                    config_content
+                );
             }
             Err(e) => {
                 // Should be a config/permission error, not agent not found
@@ -333,6 +387,9 @@ mod tests {
                 assert!(!error_msg.contains("not found"));
             }
         }
+
+        // Restore original directory
+        env::set_current_dir(original_dir).unwrap();
     }
 
     #[test]
@@ -369,11 +426,30 @@ mod tests {
     async fn test_execute_use_command_with_valid_use_cases() {
         let context = create_test_context().await;
 
-        // Test multiple valid use cases with single test function
-        let valid_use_cases = ["rules", "root", "workflows"];
+        // Get the first available builtin agent dynamically
+        let builtin_agents =
+            ModelManager::load_builtin_models().expect("Should be able to load builtin agents");
+        assert!(
+            !builtin_agents.is_empty(),
+            "Should have at least one builtin agent"
+        );
+
+        let agent_name = &builtin_agents[0].name;
+
+        // Test all valid use cases dynamically from the enum
+        let valid_use_cases = [
+            AgentUseCase::Root,
+            AgentUseCase::Rules,
+            AgentUseCase::Workflows,
+        ];
 
         for use_case in valid_use_cases {
-            assert_use_command_config_only_failure(use_case, Some("claude-code"), &context).await;
+            assert_use_command_config_only_failure(
+                &use_case.to_string(),
+                Some(agent_name),
+                &context,
+            )
+            .await;
         }
     }
 
@@ -396,9 +472,9 @@ mod tests {
     async fn test_use_nonexistent_agent_for_use_case() {
         let context = create_test_context().await;
 
-        // Test setting a nonexistent agent for rules use case
+        // Test setting a nonexistent agent for a use case
         let result = execute_use_command(
-            "rules".to_string(),
+            AgentUseCase::Rules.to_string(),
             Some("nonexistent".to_string()),
             &context,
         )

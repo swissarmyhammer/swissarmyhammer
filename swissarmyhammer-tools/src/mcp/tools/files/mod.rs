@@ -72,10 +72,10 @@ pub mod write;
 use crate::mcp::tool_registry::ToolRegistry;
 
 /// Register all file-related tools with the registry
-pub fn register_file_tools(registry: &mut ToolRegistry) {
+pub async fn register_file_tools(registry: &mut ToolRegistry) {
     registry.register(read::ReadFileTool::new());
     registry.register(edit::EditFileTool::new());
     registry.register(write::WriteFileTool::new());
     registry.register(glob::GlobFileTool::new());
-    registry.register(grep::GrepFileTool::new());
+    registry.register(grep::GrepFileTool::new().await);
 }

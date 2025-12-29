@@ -340,7 +340,7 @@ stateDiagram-v2
     let stored_agent_config = run.context.get_agent_config();
     assert_eq!(
         stored_agent_config.executor_type(),
-        swissarmyhammer_config::model::AgentExecutorType::ClaudeCode
+        swissarmyhammer_config::model::ModelExecutorType::ClaudeCode
     );
 
     Ok(())
@@ -398,7 +398,7 @@ async fn test_update_mcp_port_with_claude_code() -> Result<()> {
     let stored_agent_config = context.get_agent_config();
     assert_eq!(
         stored_agent_config.executor_type(),
-        swissarmyhammer_config::model::AgentExecutorType::ClaudeCode
+        swissarmyhammer_config::model::ModelExecutorType::ClaudeCode
     );
 
     Ok(())

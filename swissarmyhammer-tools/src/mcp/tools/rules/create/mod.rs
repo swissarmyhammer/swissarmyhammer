@@ -196,20 +196,14 @@ impl McpTool for CreateRuleTool {
             request.tags.clone(),
         )?;
 
-        // Format the success response
-        let result_text = format!(
-            "✓ Created rule '{}'\n\nFile: {}\nSeverity: {}{}",
+        tracing::info!(
+            "Created rule '{}' at {} with severity {}",
             request.name,
             file_path.display(),
-            request.severity,
-            request
-                .tags
-                .as_ref()
-                .map(|t| format!("\nTags: {}", t.join(", ")))
-                .unwrap_or_default()
+            request.severity
         );
 
-        Ok(BaseToolImpl::create_success_response(&result_text))
+        Ok(BaseToolImpl::create_success_response("OK"))
     }
 }
 

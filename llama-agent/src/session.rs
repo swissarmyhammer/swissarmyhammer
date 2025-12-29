@@ -136,6 +136,13 @@ impl SessionManager {
             transcript_path: transcript_path.clone(),
             context_state: None,
             template_token_count: None,
+            #[cfg(feature = "acp")]
+            todos: Vec::new(),
+            #[cfg(feature = "acp")]
+            available_commands: Vec::new(),
+            current_mode: None,
+            #[cfg(feature = "acp")]
+            client_capabilities: None,
         };
 
         // If transcript path is provided, initialize the transcript file
@@ -285,11 +292,33 @@ impl SessionManager {
         &self,
         session_id: &SessionId,
     ) -> Result<Option<Session>, SessionError> {
-        let sessions = self.sessions.read().await;
+        // Fast path: check in-memory cache with read lock
+        {
+            let sessions = self.sessions.read().await;
+            if let Some(session) = sessions.get(session_id) {
+                return Ok(Some(session.clone()));
+            }
+        } // Release read lock immediately
 
-        match sessions.get(session_id) {
-            Some(session) => Ok(Some(session.clone())),
-            None => Ok(None),
+        // Slow path: try loading from storage if configured
+        if let Some(ref storage) = self.storage {
+            if let Some(session) = storage.load_session(session_id).await? {
+                // Cache the loaded session in memory
+                let mut sessions = self.sessions.write().await;
+
+                // Double-check in case another task loaded it while we were acquiring write lock
+                if let Some(existing) = sessions.get(session_id) {
+                    return Ok(Some(existing.clone()));
+                }
+
+                sessions.insert(*session_id, session.clone());
+                debug!("Loaded session {} from storage into memory", session_id);
+                Ok(Some(session))
+            } else {
+                Ok(None)
+            }
+        } else {
+            Ok(None)
         }
     }
 
@@ -787,6 +816,103 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_multiple_messages_in_session() {
+        use crate::types::ToolCallId;
+
+        let config = create_test_config();
+        let manager = SessionManager::new(config);
+
+        let session = manager.create_session().await.unwrap();
+        let session_id = session.id;
+
+        // Create a tool call ID for the tool message
+        let tool_call_id = ToolCallId::new();
+
+        // Add multiple messages in sequence
+        let messages = vec![
+            Message {
+                role: MessageRole::User,
+                content: "First user message".to_string(),
+                tool_call_id: None,
+                tool_name: None,
+                timestamp: SystemTime::now(),
+            },
+            Message {
+                role: MessageRole::Assistant,
+                content: "First assistant response".to_string(),
+                tool_call_id: None,
+                tool_name: None,
+                timestamp: SystemTime::now(),
+            },
+            Message {
+                role: MessageRole::User,
+                content: "Second user message".to_string(),
+                tool_call_id: None,
+                tool_name: None,
+                timestamp: SystemTime::now(),
+            },
+            Message {
+                role: MessageRole::Assistant,
+                content: "Second assistant response".to_string(),
+                tool_call_id: None,
+                tool_name: None,
+                timestamp: SystemTime::now(),
+            },
+            Message {
+                role: MessageRole::Tool,
+                content: "Tool result".to_string(),
+                tool_call_id: Some(tool_call_id),
+                tool_name: Some("test_tool".to_string()),
+                timestamp: SystemTime::now(),
+            },
+        ];
+
+        // Add all messages sequentially
+        for message in &messages {
+            let result = manager.add_message(&session_id, message.clone()).await;
+            assert!(result.is_ok(), "Failed to add message: {:?}", result);
+        }
+
+        // Retrieve the session and verify all messages
+        let updated_session = manager.get_session(&session_id).await.unwrap().unwrap();
+        assert_eq!(
+            updated_session.messages.len(),
+            5,
+            "Should have 5 messages in session"
+        );
+
+        // Verify message order and content
+        assert_eq!(updated_session.messages[0].role, MessageRole::User);
+        assert_eq!(updated_session.messages[0].content, "First user message");
+
+        assert_eq!(updated_session.messages[1].role, MessageRole::Assistant);
+        assert_eq!(
+            updated_session.messages[1].content,
+            "First assistant response"
+        );
+
+        assert_eq!(updated_session.messages[2].role, MessageRole::User);
+        assert_eq!(updated_session.messages[2].content, "Second user message");
+
+        assert_eq!(updated_session.messages[3].role, MessageRole::Assistant);
+        assert_eq!(
+            updated_session.messages[3].content,
+            "Second assistant response"
+        );
+
+        assert_eq!(updated_session.messages[4].role, MessageRole::Tool);
+        assert_eq!(updated_session.messages[4].content, "Tool result");
+        assert_eq!(updated_session.messages[4].tool_call_id, Some(tool_call_id));
+        assert_eq!(
+            updated_session.messages[4].tool_name,
+            Some("test_tool".to_string())
+        );
+
+        // Verify updated_at timestamp changed
+        assert!(updated_session.updated_at > session.created_at);
+    }
+
+    #[tokio::test]
     async fn test_add_message_to_non_existent_session() {
         let config = create_test_config();
         let manager = SessionManager::new(config);
@@ -1074,5 +1200,834 @@ mod tests {
         assert!(debug_str.contains("total_sessions: 5"));
         assert!(debug_str.contains("sessions_with_compaction: 2"));
         assert!(debug_str.contains("total_tokens_saved: 1500"));
+    }
+
+    // Session storage and retrieval tests
+    #[tokio::test]
+    async fn test_session_persistence_enabled() {
+        use tempfile::TempDir;
+
+        let temp_dir = TempDir::new().unwrap();
+        let config = SessionConfig {
+            max_sessions: 5,
+            auto_compaction: None,
+            model_context_size: 4096,
+            persistence_enabled: true,
+            session_storage_dir: Some(temp_dir.path().to_path_buf()),
+            session_ttl_hours: 24,
+            auto_save_threshold: 5,
+            max_kv_cache_files: 16,
+            kv_cache_dir: None,
+        };
+
+        let manager = SessionManager::new(config);
+
+        // Verify storage is enabled
+        assert!(manager.storage.is_some());
+    }
+
+    #[tokio::test]
+    async fn test_session_persistence_disabled() {
+        let config = create_test_config();
+        let manager = SessionManager::new(config);
+
+        // Verify storage is disabled
+        assert!(manager.storage.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_save_session_with_persistence() {
+        use tempfile::TempDir;
+
+        let temp_dir = TempDir::new().unwrap();
+        let config = SessionConfig {
+            max_sessions: 5,
+            auto_compaction: None,
+            model_context_size: 4096,
+            persistence_enabled: true,
+            session_storage_dir: Some(temp_dir.path().to_path_buf()),
+            session_ttl_hours: 24,
+            auto_save_threshold: 5,
+            max_kv_cache_files: 16,
+            kv_cache_dir: None,
+        };
+
+        let manager = SessionManager::new(config);
+        let session = manager.create_session().await.unwrap();
+        let session_id = session.id;
+
+        // Add a message to the session
+        let message = create_test_message();
+        manager.add_message(&session_id, message).await.unwrap();
+
+        // Manually save the session
+        manager.save_session(&session_id).await.unwrap();
+
+        // Verify the session file exists
+        let session_file = temp_dir.path().join(format!("{}.json", session_id));
+        assert!(session_file.exists());
+
+        // Verify the session can be loaded from storage
+        if let Some(ref storage) = manager.storage {
+            let loaded = storage.load_session(&session_id).await.unwrap();
+            assert!(loaded.is_some());
+            let loaded_session = loaded.unwrap();
+            assert_eq!(loaded_session.id, session_id);
+            assert_eq!(loaded_session.messages.len(), 1);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_save_session_without_persistence() {
+        let config = create_test_config();
+        let manager = SessionManager::new(config);
+        let session = manager.create_session().await.unwrap();
+        let session_id = session.id;
+
+        // Add a message
+        let message = create_test_message();
+        manager.add_message(&session_id, message).await.unwrap();
+
+        // Save should succeed but not write to disk
+        manager.save_session(&session_id).await.unwrap();
+
+        // Verify storage is None
+        assert!(manager.storage.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_restore_sessions_with_persistence() {
+        use tempfile::TempDir;
+
+        let temp_dir = TempDir::new().unwrap();
+        let config = SessionConfig {
+            max_sessions: 5,
+            auto_compaction: None,
+            model_context_size: 4096,
+            persistence_enabled: true,
+            session_storage_dir: Some(temp_dir.path().to_path_buf()),
+            session_ttl_hours: 24,
+            auto_save_threshold: 5,
+            max_kv_cache_files: 16,
+            kv_cache_dir: None,
+        };
+
+        // Create manager and add sessions
+        let manager1 = SessionManager::new(config.clone());
+        let session1 = manager1.create_session().await.unwrap();
+        let session2 = manager1.create_session().await.unwrap();
+
+        // Add messages to sessions
+        manager1
+            .add_message(&session1.id, create_test_message())
+            .await
+            .unwrap();
+        manager1
+            .add_message(&session2.id, create_test_message())
+            .await
+            .unwrap();
+
+        // Save sessions
+        manager1.save_session(&session1.id).await.unwrap();
+        manager1.save_session(&session2.id).await.unwrap();
+
+        // Create a new manager with the same storage directory
+        let manager2 = SessionManager::new(config);
+
+        // Restore sessions
+        let restored_count = manager2.restore_sessions().await.unwrap();
+        assert_eq!(restored_count, 2);
+
+        // Verify sessions were restored
+        let restored_session1 = manager2.get_session(&session1.id).await.unwrap();
+        let restored_session2 = manager2.get_session(&session2.id).await.unwrap();
+
+        assert!(restored_session1.is_some());
+        assert!(restored_session2.is_some());
+
+        let s1 = restored_session1.unwrap();
+        let s2 = restored_session2.unwrap();
+
+        assert_eq!(s1.id, session1.id);
+        assert_eq!(s1.messages.len(), 1);
+        assert_eq!(s2.id, session2.id);
+        assert_eq!(s2.messages.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_restore_sessions_without_persistence() {
+        let config = create_test_config();
+        let manager = SessionManager::new(config);
+
+        // Restore should return 0 when persistence is disabled
+        let restored_count = manager.restore_sessions().await.unwrap();
+        assert_eq!(restored_count, 0);
+    }
+
+    #[tokio::test]
+    async fn test_restore_sessions_empty_storage() {
+        use tempfile::TempDir;
+
+        let temp_dir = TempDir::new().unwrap();
+        let config = SessionConfig {
+            max_sessions: 5,
+            auto_compaction: None,
+            model_context_size: 4096,
+            persistence_enabled: true,
+            session_storage_dir: Some(temp_dir.path().to_path_buf()),
+            session_ttl_hours: 24,
+            auto_save_threshold: 5,
+            max_kv_cache_files: 16,
+            kv_cache_dir: None,
+        };
+
+        let manager = SessionManager::new(config);
+
+        // Restore from empty storage should return 0
+        let restored_count = manager.restore_sessions().await.unwrap();
+        assert_eq!(restored_count, 0);
+    }
+
+    #[tokio::test]
+    async fn test_auto_save_threshold() {
+        use tempfile::TempDir;
+
+        let temp_dir = TempDir::new().unwrap();
+        let config = SessionConfig {
+            max_sessions: 5,
+            auto_compaction: None,
+            model_context_size: 4096,
+            persistence_enabled: true,
+            session_storage_dir: Some(temp_dir.path().to_path_buf()),
+            session_ttl_hours: 24,
+            auto_save_threshold: 3, // Save after 3 changes
+            max_kv_cache_files: 16,
+            kv_cache_dir: None,
+        };
+
+        let manager = SessionManager::new(config);
+        let session = manager.create_session().await.unwrap();
+        let session_id = session.id;
+
+        // Add messages below threshold
+        manager
+            .add_message(&session_id, create_test_message())
+            .await
+            .unwrap();
+        manager
+            .add_message(&session_id, create_test_message())
+            .await
+            .unwrap();
+
+        // Add one more message to trigger auto-save
+        manager
+            .add_message(&session_id, create_test_message())
+            .await
+            .unwrap();
+
+        // Now the session should be auto-saved
+        // Verify by checking the change counter was reset
+        let changes = manager.changes_since_save.read().await;
+        let change_count = changes.get(&session_id).unwrap_or(&0);
+        assert_eq!(*change_count, 0);
+    }
+
+    #[tokio::test]
+    async fn test_delete_session_removes_from_storage() {
+        use tempfile::TempDir;
+
+        let temp_dir = TempDir::new().unwrap();
+        let config = SessionConfig {
+            max_sessions: 5,
+            auto_compaction: None,
+            model_context_size: 4096,
+            persistence_enabled: true,
+            session_storage_dir: Some(temp_dir.path().to_path_buf()),
+            session_ttl_hours: 24,
+            auto_save_threshold: 5,
+            max_kv_cache_files: 16,
+            kv_cache_dir: None,
+        };
+
+        let manager = SessionManager::new(config);
+        let session = manager.create_session().await.unwrap();
+        let session_id = session.id;
+
+        // Save the session
+        manager.save_session(&session_id).await.unwrap();
+
+        // Verify session file exists
+        let session_file = temp_dir.path().join(format!("{}.json", session_id));
+        assert!(session_file.exists());
+
+        // Delete the session
+        let deleted = manager.delete_session(&session_id).await.unwrap();
+        assert!(deleted);
+
+        // Verify session file no longer exists
+        assert!(!session_file.exists());
+
+        // Verify session is not in storage
+        if let Some(ref storage) = manager.storage {
+            let loaded = storage.load_session(&session_id).await.unwrap();
+            assert!(loaded.is_none());
+        }
+    }
+
+    #[tokio::test]
+    async fn test_cleanup_expired_sessions_with_storage() {
+        use tempfile::TempDir;
+        use tokio::time::{sleep, Duration};
+
+        let temp_dir = TempDir::new().unwrap();
+        let config = SessionConfig {
+            max_sessions: 5,
+            auto_compaction: None,
+            model_context_size: 4096,
+            persistence_enabled: true,
+            session_storage_dir: Some(temp_dir.path().to_path_buf()),
+            session_ttl_hours: 1, // 1 hour TTL (we'll use a very short duration for testing via direct storage call)
+            auto_save_threshold: 5,
+            max_kv_cache_files: 16,
+            kv_cache_dir: None,
+        };
+
+        let manager = SessionManager::new(config);
+        let session = manager.create_session().await.unwrap();
+        let session_id = session.id;
+
+        // Save the session
+        manager.save_session(&session_id).await.unwrap();
+
+        // Verify session exists
+        assert_eq!(manager.get_session_count().await, 1);
+
+        // Wait a small amount to ensure timestamp difference
+        sleep(Duration::from_millis(10)).await;
+
+        // Use storage directly with a very short TTL (in fractions of an hour)
+        // Note: The storage cleanup_expired uses ttl_hours * 3600 seconds
+        // We need to wait long enough for the session to be considered expired
+        // For testing, we'll use the storage layer directly with a very small TTL
+        if let Some(ref storage) = manager.storage {
+            // Cleanup with very short TTL (0.001 hours = 3.6 seconds)
+            // Since we can't pass fractional hours, we'll just verify the mechanism works
+            // by checking that with TTL of 1 hour, no sessions are cleaned
+            let cleaned = storage.cleanup_expired(1).await.unwrap();
+            assert_eq!(cleaned, 0); // Session should not be expired yet
+
+            // Verify session still exists
+            assert_eq!(manager.get_session_count().await, 1);
+        }
+
+        // Now test that sessions can be cleaned up when they should be
+        // We'll delete the session normally to clean up test state
+        let deleted = manager.delete_session(&session_id).await.unwrap();
+        assert!(deleted);
+
+        // Verify session file is removed
+        let session_file = temp_dir.path().join(format!("{}.json", session_id));
+        assert!(!session_file.exists());
+    }
+
+    #[tokio::test]
+    async fn test_update_session_triggers_auto_save() {
+        use tempfile::TempDir;
+
+        let temp_dir = TempDir::new().unwrap();
+        let config = SessionConfig {
+            max_sessions: 5,
+            auto_compaction: None,
+            model_context_size: 4096,
+            persistence_enabled: true,
+            session_storage_dir: Some(temp_dir.path().to_path_buf()),
+            session_ttl_hours: 24,
+            auto_save_threshold: 2, // Low threshold for testing
+            max_kv_cache_files: 16,
+            kv_cache_dir: None,
+        };
+
+        let manager = SessionManager::new(config);
+        let session = manager.create_session().await.unwrap();
+        let session_id = session.id;
+
+        // Update session twice to trigger auto-save
+        let updated_session = session.clone();
+        manager.update_session(updated_session).await.unwrap();
+
+        let updated_session2 = manager.get_session(&session_id).await.unwrap().unwrap();
+        manager.update_session(updated_session2).await.unwrap();
+
+        // Verify change counter was reset after auto-save
+        let changes = manager.changes_since_save.read().await;
+        let change_count = changes.get(&session_id).unwrap_or(&0);
+        assert_eq!(*change_count, 0);
+    }
+
+    #[tokio::test]
+    async fn test_session_persistence_roundtrip() {
+        use tempfile::TempDir;
+
+        let temp_dir = TempDir::new().unwrap();
+        let config = SessionConfig {
+            max_sessions: 5,
+            auto_compaction: None,
+            model_context_size: 4096,
+            persistence_enabled: true,
+            session_storage_dir: Some(temp_dir.path().to_path_buf()),
+            session_ttl_hours: 24,
+            auto_save_threshold: 1,
+            max_kv_cache_files: 16,
+            kv_cache_dir: None,
+        };
+
+        let manager = SessionManager::new(config);
+        let session = manager.create_session().await.unwrap();
+        let session_id = session.id;
+
+        // Add multiple messages
+        for i in 0..5 {
+            let message = Message {
+                role: MessageRole::User,
+                content: format!("Message {}", i),
+                tool_call_id: None,
+                tool_name: None,
+                timestamp: SystemTime::now(),
+            };
+            manager.add_message(&session_id, message).await.unwrap();
+        }
+
+        // Manually save to ensure it's persisted
+        manager.save_session(&session_id).await.unwrap();
+
+        // Load directly from storage to verify persistence
+        if let Some(ref storage) = manager.storage {
+            let loaded = storage.load_session(&session_id).await.unwrap();
+            assert!(loaded.is_some());
+            let loaded_session = loaded.unwrap();
+            assert_eq!(loaded_session.id, session_id);
+            assert_eq!(loaded_session.messages.len(), 5);
+
+            // Verify message content
+            for (i, message) in loaded_session.messages.iter().enumerate() {
+                assert_eq!(message.content, format!("Message {}", i));
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_session_current_mode_initialization() {
+        let config = create_test_config();
+        let manager = SessionManager::new(config);
+
+        let session = manager.create_session().await.unwrap();
+
+        // New sessions should have no current_mode set
+        assert_eq!(session.current_mode, None);
+    }
+
+    #[tokio::test]
+    async fn test_session_current_mode_update() {
+        let config = create_test_config();
+        let manager = SessionManager::new(config);
+
+        let session = manager.create_session().await.unwrap();
+        let session_id = session.id;
+
+        // Update session with a current_mode
+        let mut updated_session = session.clone();
+        updated_session.current_mode = Some("planning".to_string());
+        manager.update_session(updated_session).await.unwrap();
+
+        // Retrieve and verify
+        let retrieved = manager.get_session(&session_id).await.unwrap().unwrap();
+        assert_eq!(retrieved.current_mode, Some("planning".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_session_current_mode_change() {
+        let config = create_test_config();
+        let manager = SessionManager::new(config);
+
+        let session = manager.create_session().await.unwrap();
+        let session_id = session.id;
+
+        // Set initial mode
+        let mut updated_session = session.clone();
+        updated_session.current_mode = Some("coding".to_string());
+        manager.update_session(updated_session).await.unwrap();
+
+        // Change to different mode
+        let retrieved = manager.get_session(&session_id).await.unwrap().unwrap();
+        let mut changed_session = retrieved.clone();
+        changed_session.current_mode = Some("debugging".to_string());
+        manager.update_session(changed_session).await.unwrap();
+
+        // Verify the change
+        let final_session = manager.get_session(&session_id).await.unwrap().unwrap();
+        assert_eq!(final_session.current_mode, Some("debugging".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_session_current_mode_clear() {
+        let config = create_test_config();
+        let manager = SessionManager::new(config);
+
+        let session = manager.create_session().await.unwrap();
+        let session_id = session.id;
+
+        // Set a mode
+        let mut updated_session = session.clone();
+        updated_session.current_mode = Some("research".to_string());
+        manager.update_session(updated_session).await.unwrap();
+
+        // Clear the mode
+        let retrieved = manager.get_session(&session_id).await.unwrap().unwrap();
+        let mut cleared_session = retrieved.clone();
+        cleared_session.current_mode = None;
+        manager.update_session(cleared_session).await.unwrap();
+
+        // Verify it's cleared
+        let final_session = manager.get_session(&session_id).await.unwrap().unwrap();
+        assert_eq!(final_session.current_mode, None);
+    }
+
+    #[tokio::test]
+    async fn test_session_current_mode_persistence() {
+        use tempfile::TempDir;
+
+        let temp_dir = TempDir::new().unwrap();
+        let config = SessionConfig {
+            max_sessions: 5,
+            auto_compaction: None,
+            model_context_size: 4096,
+            persistence_enabled: true,
+            session_storage_dir: Some(temp_dir.path().to_path_buf()),
+            session_ttl_hours: 24,
+            auto_save_threshold: 1,
+            max_kv_cache_files: 16,
+            kv_cache_dir: None,
+        };
+
+        let manager = SessionManager::new(config.clone());
+        let session = manager.create_session().await.unwrap();
+        let session_id = session.id;
+
+        // Set current_mode
+        let mut updated_session = session.clone();
+        updated_session.current_mode = Some("interactive".to_string());
+        manager.update_session(updated_session).await.unwrap();
+
+        // Save to disk
+        manager.save_session(&session_id).await.unwrap();
+
+        // Create new manager and restore sessions
+        let manager2 = SessionManager::new(config);
+        manager2.restore_sessions().await.unwrap();
+
+        // Verify current_mode was persisted
+        let restored = manager2.get_session(&session_id).await.unwrap().unwrap();
+        assert_eq!(restored.current_mode, Some("interactive".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_session_current_mode_multiple_sessions() {
+        let config = create_test_config();
+        let manager = SessionManager::new(config);
+
+        // Create multiple sessions with different modes
+        let session1 = manager.create_session().await.unwrap();
+        let session2 = manager.create_session().await.unwrap();
+        let session3 = manager.create_session().await.unwrap();
+
+        // Set different modes
+        let mut s1 = session1.clone();
+        s1.current_mode = Some("planning".to_string());
+        manager.update_session(s1).await.unwrap();
+
+        let mut s2 = session2.clone();
+        s2.current_mode = Some("coding".to_string());
+        manager.update_session(s2).await.unwrap();
+
+        let mut s3 = session3.clone();
+        s3.current_mode = Some("testing".to_string());
+        manager.update_session(s3).await.unwrap();
+
+        // Verify each session has its own mode
+        let retrieved1 = manager.get_session(&session1.id).await.unwrap().unwrap();
+        let retrieved2 = manager.get_session(&session2.id).await.unwrap().unwrap();
+        let retrieved3 = manager.get_session(&session3.id).await.unwrap().unwrap();
+
+        assert_eq!(retrieved1.current_mode, Some("planning".to_string()));
+        assert_eq!(retrieved2.current_mode, Some("coding".to_string()));
+        assert_eq!(retrieved3.current_mode, Some("testing".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_multiple_concurrent_sessions() {
+        use tokio::task::JoinSet;
+
+        let config = create_test_config();
+        let manager = Arc::new(SessionManager::new(config));
+
+        // Test 1: Create multiple sessions concurrently
+        let mut create_tasks = JoinSet::new();
+        for _ in 0..5 {
+            let manager_clone = manager.clone();
+            create_tasks.spawn(async move { manager_clone.create_session().await });
+        }
+
+        let mut session_ids = Vec::new();
+        while let Some(result) = create_tasks.join_next().await {
+            let session = result.unwrap().unwrap();
+            session_ids.push(session.id);
+        }
+
+        assert_eq!(session_ids.len(), 5);
+        assert_eq!(manager.get_session_count().await, 5);
+
+        // Test 2: Add messages to multiple sessions concurrently
+        let mut add_message_tasks = JoinSet::new();
+        for (i, session_id) in session_ids.iter().enumerate() {
+            let manager_clone = manager.clone();
+            let session_id = *session_id;
+            add_message_tasks.spawn(async move {
+                for j in 0..3 {
+                    let message = Message {
+                        role: MessageRole::User,
+                        content: format!("Session {} message {}", i, j),
+                        tool_call_id: None,
+                        tool_name: None,
+                        timestamp: SystemTime::now(),
+                    };
+                    manager_clone
+                        .add_message(&session_id, message)
+                        .await
+                        .unwrap();
+                }
+                session_id
+            });
+        }
+
+        while let Some(result) = add_message_tasks.join_next().await {
+            result.unwrap();
+        }
+
+        // Test 3: Read all sessions concurrently and verify message counts
+        let mut read_tasks = JoinSet::new();
+        for session_id in session_ids.iter() {
+            let manager_clone = manager.clone();
+            let session_id = *session_id;
+            read_tasks.spawn(async move {
+                manager_clone
+                    .get_session(&session_id)
+                    .await
+                    .unwrap()
+                    .unwrap()
+            });
+        }
+
+        let mut message_counts = Vec::new();
+        while let Some(result) = read_tasks.join_next().await {
+            let session = result.unwrap();
+            message_counts.push(session.messages.len());
+        }
+
+        // Each session should have 3 messages
+        for count in message_counts {
+            assert_eq!(count, 3);
+        }
+
+        // Test 4: Update sessions concurrently
+        let mut update_tasks = JoinSet::new();
+        for (i, session_id) in session_ids.iter().enumerate() {
+            let manager_clone = manager.clone();
+            let session_id = *session_id;
+            update_tasks.spawn(async move {
+                let session = manager_clone
+                    .get_session(&session_id)
+                    .await
+                    .unwrap()
+                    .unwrap();
+                let mut updated = session.clone();
+                updated.current_mode = Some(format!("mode_{}", i));
+                manager_clone.update_session(updated).await.unwrap();
+                session_id
+            });
+        }
+
+        while let Some(result) = update_tasks.join_next().await {
+            result.unwrap();
+        }
+
+        // Test 5: Verify all updates were applied correctly
+        for (i, session_id) in session_ids.iter().enumerate() {
+            let session = manager.get_session(session_id).await.unwrap().unwrap();
+            assert_eq!(session.current_mode, Some(format!("mode_{}", i)));
+        }
+
+        // Test 6: Get session stats with concurrent access
+        let mut stats_tasks = JoinSet::new();
+        for _ in 0..10 {
+            let manager_clone = manager.clone();
+            stats_tasks.spawn(async move { manager_clone.get_session_stats().await });
+        }
+
+        while let Some(result) = stats_tasks.join_next().await {
+            let stats = result.unwrap();
+            assert_eq!(stats.total_sessions, 5);
+            assert_eq!(stats.active_sessions, 5);
+            assert_eq!(stats.total_messages, 15); // 5 sessions * 3 messages
+        }
+
+        // Test 7: Delete sessions concurrently
+        let mut delete_tasks = JoinSet::new();
+        for session_id in session_ids.iter().take(3) {
+            let manager_clone = manager.clone();
+            let session_id = *session_id;
+            delete_tasks
+                .spawn(async move { manager_clone.delete_session(&session_id).await.unwrap() });
+        }
+
+        let mut deleted_count = 0;
+        while let Some(result) = delete_tasks.join_next().await {
+            if result.unwrap() {
+                deleted_count += 1;
+            }
+        }
+
+        assert_eq!(deleted_count, 3);
+        assert_eq!(manager.get_session_count().await, 2);
+
+        // Test 8: List sessions with concurrent access
+        let mut list_tasks = JoinSet::new();
+        for _ in 0..5 {
+            let manager_clone = manager.clone();
+            list_tasks.spawn(async move { manager_clone.list_sessions().await.unwrap() });
+        }
+
+        while let Some(result) = list_tasks.join_next().await {
+            let sessions = result.unwrap();
+            assert_eq!(sessions.len(), 2);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_concurrent_sessions_with_persistence() {
+        use tempfile::TempDir;
+        use tokio::task::JoinSet;
+
+        let temp_dir = TempDir::new().unwrap();
+        let config = SessionConfig {
+            max_sessions: 10,
+            auto_compaction: None,
+            model_context_size: 4096,
+            persistence_enabled: true,
+            session_storage_dir: Some(temp_dir.path().to_path_buf()),
+            session_ttl_hours: 24,
+            auto_save_threshold: 2,
+            max_kv_cache_files: 16,
+            kv_cache_dir: None,
+        };
+
+        let manager = Arc::new(SessionManager::new(config));
+
+        // Create sessions concurrently
+        let mut create_tasks = JoinSet::new();
+        for _ in 0..5 {
+            let manager_clone = manager.clone();
+            create_tasks.spawn(async move { manager_clone.create_session().await });
+        }
+
+        let mut session_ids = Vec::new();
+        while let Some(result) = create_tasks.join_next().await {
+            let session = result.unwrap().unwrap();
+            session_ids.push(session.id);
+        }
+
+        // Add messages to trigger auto-save
+        let mut message_tasks = JoinSet::new();
+        for session_id in session_ids.iter() {
+            let manager_clone = manager.clone();
+            let session_id = *session_id;
+            message_tasks.spawn(async move {
+                for i in 0..3 {
+                    let message = Message {
+                        role: MessageRole::User,
+                        content: format!("Message {}", i),
+                        tool_call_id: None,
+                        tool_name: None,
+                        timestamp: SystemTime::now(),
+                    };
+                    manager_clone
+                        .add_message(&session_id, message)
+                        .await
+                        .unwrap();
+                }
+            });
+        }
+
+        while let Some(result) = message_tasks.join_next().await {
+            result.unwrap();
+        }
+
+        // Save all sessions concurrently
+        let mut save_tasks = JoinSet::new();
+        for session_id in session_ids.iter() {
+            let manager_clone = manager.clone();
+            let session_id = *session_id;
+            save_tasks.spawn(async move { manager_clone.save_session(&session_id).await });
+        }
+
+        while let Some(result) = save_tasks.join_next().await {
+            result.unwrap().unwrap();
+        }
+
+        // Verify all session files exist
+        for session_id in session_ids.iter() {
+            let session_file = temp_dir.path().join(format!("{}.json", session_id));
+            assert!(session_file.exists());
+        }
+
+        // Create new manager and restore sessions
+        let config2 = SessionConfig {
+            max_sessions: 10,
+            auto_compaction: None,
+            model_context_size: 4096,
+            persistence_enabled: true,
+            session_storage_dir: Some(temp_dir.path().to_path_buf()),
+            session_ttl_hours: 24,
+            auto_save_threshold: 2,
+            max_kv_cache_files: 16,
+            kv_cache_dir: None,
+        };
+        let manager2 = Arc::new(SessionManager::new(config2));
+
+        let restored_count = manager2.restore_sessions().await.unwrap();
+        assert_eq!(restored_count, 5);
+
+        // Verify restored sessions have correct data
+        let mut verify_tasks = JoinSet::new();
+        for session_id in session_ids.iter() {
+            let manager_clone = manager2.clone();
+            let session_id = *session_id;
+            verify_tasks.spawn(async move {
+                let session = manager_clone
+                    .get_session(&session_id)
+                    .await
+                    .unwrap()
+                    .unwrap();
+                assert_eq!(session.messages.len(), 3);
+                session_id
+            });
+        }
+
+        let mut verified_count = 0;
+        while let Some(result) = verify_tasks.join_next().await {
+            result.unwrap();
+            verified_count += 1;
+        }
+
+        assert_eq!(verified_count, 5);
     }
 }

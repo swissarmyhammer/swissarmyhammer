@@ -20,6 +20,13 @@ pub fn create_test_session_with_messages(message_count: usize) -> Session {
         transcript_path: None,
         context_state: None,
         template_token_count: None,
+        #[cfg(feature = "acp")]
+        todos: Vec::new(),
+        #[cfg(feature = "acp")]
+        available_commands: Vec::new(),
+        current_mode: None,
+        #[cfg(feature = "acp")]
+        client_capabilities: None,
     };
 
     // Add alternating user/assistant messages
@@ -57,6 +64,13 @@ pub fn create_large_content_session(message_count: usize, words_per_message: usi
         transcript_path: None,
         context_state: None,
         template_token_count: None,
+        #[cfg(feature = "acp")]
+        todos: Vec::new(),
+        #[cfg(feature = "acp")]
+        available_commands: Vec::new(),
+        current_mode: None,
+        #[cfg(feature = "acp")]
+        client_capabilities: None,
     };
 
     for i in 0..message_count {
@@ -91,6 +105,13 @@ pub fn create_session_with_tool_calls() -> Session {
         transcript_path: None,
         context_state: None,
         template_token_count: None,
+        #[cfg(feature = "acp")]
+        todos: Vec::new(),
+        #[cfg(feature = "acp")]
+        available_commands: Vec::new(),
+        current_mode: None,
+        #[cfg(feature = "acp")]
+        client_capabilities: None,
     };
 
     // Add user message
@@ -138,6 +159,13 @@ pub fn create_session_with_incomplete_tool_calls() -> Session {
         transcript_path: None,
         context_state: None,
         template_token_count: None,
+        #[cfg(feature = "acp")]
+        todos: Vec::new(),
+        #[cfg(feature = "acp")]
+        available_commands: Vec::new(),
+        current_mode: None,
+        #[cfg(feature = "acp")]
+        client_capabilities: None,
     };
 
     // Add user message
@@ -441,6 +469,13 @@ pub fn create_session_with_messages(count: usize) -> Session {
         transcript_path: None,
         context_state: None,
         template_token_count: None,
+        #[cfg(feature = "acp")]
+        todos: Vec::new(),
+        #[cfg(feature = "acp")]
+        available_commands: Vec::new(),
+        current_mode: None,
+        #[cfg(feature = "acp")]
+        client_capabilities: None,
     }
 }
 
@@ -482,6 +517,13 @@ pub fn create_session_with_sample_conversation() -> Session {
         transcript_path: None,
         context_state: None,
         template_token_count: None,
+        #[cfg(feature = "acp")]
+        todos: Vec::new(),
+        #[cfg(feature = "acp")]
+        available_commands: Vec::new(),
+        current_mode: None,
+        #[cfg(feature = "acp")]
+        client_capabilities: None,
     }
 }
 

@@ -145,11 +145,11 @@ fn verify_model_config(config_path: &Path, expected_agent: &str) -> Result<bool>
     // Parse YAML to verify structure
     let config: serde_yaml::Value = serde_yaml::from_str(&config_content)?;
 
-    // Check for new models map structure
-    if let Some(models_section) = config.get("models") {
-        if let Some(models_map) = models_section.as_mapping() {
+    // Check for agents map structure
+    if let Some(agents_section) = config.get("agents") {
+        if let Some(agents_map) = agents_section.as_mapping() {
             // Check if any use case is assigned to the expected model
-            for (_use_case, model_name) in models_map {
+            for (_use_case, model_name) in agents_map {
                 if let Some(name_str) = model_name.as_str() {
                     if name_str == expected_agent {
                         return Ok(true);
@@ -246,7 +246,7 @@ async fn verify_builtin_model(
 async fn use_and_verify_custom_model(
     model_name: &str,
     project_root: &Path,
-    expected_pattern: &str,
+    _expected_pattern: &str,
 ) -> Result<()> {
     let use_output = run_sah_command(&["model", "use", model_name], Some(project_root)).await?;
 
@@ -255,12 +255,10 @@ async fn use_and_verify_custom_model(
     }
 
     let config_path = project_root.join(".swissarmyhammer").join("sah.yaml");
-    let config_content = fs::read_to_string(&config_path)?;
     anyhow::ensure!(
-        config_content.contains(expected_pattern) || config_content.contains("models:"),
-        "Config should contain {} reference. Actual: {}",
-        model_name,
-        config_content
+        verify_model_config(&config_path, model_name)?,
+        "Config should contain {} reference",
+        model_name
     );
 
     Ok(())
@@ -275,13 +273,15 @@ fn verify_config_preserves_sections(config_content: &str) -> Result<()> {
         ("default_timeout", "workflow settings"),
         ("other_settings:", "other settings"),
         ("deep_setting", "deeply nested settings"),
+        ("agents:", "agents section"),
     ];
 
     for (pattern, description) in &sections {
         anyhow::ensure!(
             config_content.contains(pattern),
-            "Should preserve {}",
-            description
+            "Should preserve {}. Actual: {}",
+            description,
+            config_content
         );
     }
 
@@ -305,13 +305,13 @@ async fn verify_model_switch_preserves_yaml(
         .map_err(|e| anyhow::anyhow!("Invalid YAML after using {}: {}", model_name, e))?;
 
     anyhow::ensure!(
-        parsed.get("models").is_some(),
-        "Should have models section after using {}. Actual: {:?}",
+        parsed.get("agents").is_some(),
+        "Should have agents section after using {}. Actual: {:?}",
         model_name,
         parsed
     );
 
-    if let Some(agents_map) = parsed.get("models").and_then(|v| v.as_mapping()) {
+    if let Some(agents_map) = parsed.get("agents").and_then(|v| v.as_mapping()) {
         anyhow::ensure!(
             !agents_map.is_empty(),
             "Agents map should not be empty after using {}",
@@ -603,8 +603,8 @@ async fn test_initial_config_update(project_root: &Path, config_path: &Path) -> 
 
     let updated_config = fs::read_to_string(config_path)?;
     anyhow::ensure!(
-        updated_config.contains("models:"),
-        "Should have models section. Actual: {}",
+        updated_config.contains("agents:"),
+        "Should have agents section. Actual: {}",
         updated_config
     );
     anyhow::ensure!(
@@ -680,8 +680,8 @@ async fn test_config_file_format_consistency() -> Result<()> {
         serde_yaml::from_str(&config_content).expect("Config should be valid YAML after first use");
 
     anyhow::ensure!(
-        parsed.get("models").is_some(),
-        "Should have models section. Actual: {:?}",
+        parsed.get("agents").is_some(),
+        "Should have agents section. Actual: {:?}",
         parsed
     );
 
@@ -731,11 +731,9 @@ async fn test_project_initialization_workflow(project_root: &Path) -> Result<()>
     }
 
     let config_path = project_root.join(".swissarmyhammer").join("sah.yaml");
-    let config_content = fs::read_to_string(&config_path)?;
     anyhow::ensure!(
-        config_content.contains("dev-agent") || config_content.contains("models:"),
-        "Should contain model reference. Actual: {}",
-        config_content
+        verify_model_config(&config_path, "project-dev")?,
+        "Should contain model reference"
     );
 
     Ok(())
@@ -751,11 +749,9 @@ async fn test_model_switching_workflow(project_root: &Path) -> Result<()> {
         return Ok(());
     }
 
-    let config_content = fs::read_to_string(&config_path)?;
     anyhow::ensure!(
-        config_content.contains("qwen") || config_content.contains("models:"),
-        "Should contain qwen model reference. Actual: {}",
-        config_content
+        verify_model_config(&config_path, "qwen-coder")?,
+        "Should contain qwen model reference"
     );
 
     let mid_list =
@@ -775,11 +771,9 @@ async fn test_final_verification_workflow(project_root: &Path) -> Result<()> {
         return Ok(());
     }
 
-    let config_content = fs::read_to_string(&config_path)?;
     anyhow::ensure!(
-        config_content.contains("claude") || config_content.contains("models:"),
-        "Should contain claude model reference. Actual: {}",
-        config_content
+        verify_model_config(&config_path, "claude-code")?,
+        "Should contain claude model reference"
     );
 
     let final_list =

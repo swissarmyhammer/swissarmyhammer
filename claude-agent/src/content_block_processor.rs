@@ -393,6 +393,12 @@ impl ContentBlockProcessor {
                     ));
                 }
             }
+            _ => {
+                // Unknown or unsupported content block type
+                return Err(ContentBlockProcessorError::InvalidContentStructure {
+                    details: "Unsupported content block type".to_string(),
+                });
+            }
         }
         Ok(())
     }
@@ -626,6 +632,12 @@ impl ContentBlockProcessor {
                             size_bytes: blob_resource.blob.len(),
                         })
                     }
+                    _ => {
+                        // Unknown or unsupported resource type
+                        Err(ContentBlockProcessorError::InvalidContentStructure {
+                            details: "Unsupported resource type".to_string(),
+                        })
+                    }
                 }
             }
             ContentBlock::ResourceLink(resource_link) => {
@@ -649,6 +661,12 @@ impl ContentBlockProcessor {
                     binary_data: None,
                     metadata,
                     size_bytes: 0, // ResourceLink doesn't contain actual content data
+                })
+            }
+            _ => {
+                // Unknown or unsupported content block type
+                Err(ContentBlockProcessorError::InvalidContentStructure {
+                    details: "Unsupported content block type".to_string(),
                 })
             }
         }
@@ -730,6 +748,12 @@ impl ContentBlockProcessor {
                 if self.enable_uri_validation && !blob_resource.uri.is_empty() {
                     self.validate_uri(&blob_resource.uri)?;
                 }
+            }
+            _ => {
+                // Unknown or unsupported resource type
+                return Err(ContentBlockProcessorError::InvalidContentStructure {
+                    details: "Unsupported resource type".to_string(),
+                });
             }
         }
 

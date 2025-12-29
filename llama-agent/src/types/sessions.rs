@@ -16,6 +16,9 @@ use crate::types::messages::{Message, MessageRole, SimpleTokenCounter, TokenCoun
 use crate::types::prompts::PromptDefinition;
 use crate::types::tools::ToolDefinition;
 
+#[cfg(feature = "acp")]
+use swissarmyhammer_todo::TodoItem;
+
 /// Context state tracking for incremental prompt processing.
 ///
 /// This struct tracks the state of processed tokens to enable efficient incremental
@@ -267,6 +270,78 @@ pub struct Session {
     /// tools and system prompt, as the template only needs to be processed once and can be
     /// reused across multiple sessions via KV cache sharing.
     pub template_token_count: Option<usize>,
+    /// Todo items associated with this session
+    ///
+    /// Tracks tasks and plan entries for this session. Used by the ACP server to send
+    /// Plan notifications to clients showing the agent's execution plan.
+    ///
+    /// # ACP Integration
+    ///
+    /// When ACP feature is enabled, these todos are automatically converted to ACP Plan
+    /// format and sent to clients via SessionNotification::Plan updates. The conversion
+    /// is handled by the `llama_agent::acp::plan::todos_to_acp_plan` function.
+    ///
+    /// # Todo Management
+    ///
+    /// - Todos are created when the agent calls `mcp__swissarmyhammer__todo_create`
+    /// - Todos are marked complete when `mcp__swissarmyhammer__todo_mark_complete` is called
+    /// - The list is maintained per-session to isolate task tracking between different conversations
+    #[cfg(feature = "acp")]
+    pub todos: Vec<TodoItem>,
+    /// Available commands that can be invoked during this session
+    ///
+    /// Tracks slash commands that are available to the user in this session.
+    /// Commands can be dynamically added/removed based on context, MCP server state,
+    /// and session mode. This field is updated when:
+    ///
+    /// - Session is created (initialized with core commands)
+    /// - MCP servers are connected/disconnected (adds/removes server-specific commands)
+    /// - Session mode changes (enables/disables mode-specific commands)
+    /// - Custom commands are registered via agent configuration
+    ///
+    /// # ACP Integration
+    ///
+    /// When ACP feature is enabled, changes to available_commands trigger
+    /// AvailableCommandsUpdate notifications to inform clients of the current
+    /// command set.
+    #[cfg(feature = "acp")]
+    pub available_commands: Vec<agent_client_protocol::AvailableCommand>,
+    /// Current session mode identifier for ACP current mode updates
+    ///
+    /// Tracks the active mode for this session. When the mode changes,
+    /// an ACP CurrentModeUpdate notification is sent to clients to update
+    /// their UI and available functionality based on the new mode.
+    ///
+    /// # Mode Examples
+    ///
+    /// - `None`: Default/unspecified mode
+    /// - `Some("planning")`: Agent is in planning/analysis mode
+    /// - `Some("coding")`: Agent is actively writing code
+    /// - `Some("debugging")`: Agent is debugging issues
+    /// - `Some("research")`: Agent is researching the codebase
+    ///
+    /// # ACP Integration
+    ///
+    /// When ACP feature is enabled and this field changes, the agent should
+    /// send a CurrentModeUpdate notification to inform clients of the mode transition.
+    pub current_mode: Option<String>,
+    /// Client capabilities from ACP initialize request
+    ///
+    /// Stores the client's declared capabilities for file system and terminal operations.
+    /// These capabilities must be checked before performing any file or terminal operations
+    /// to ensure the client supports the requested functionality.
+    ///
+    /// # Capability Enforcement
+    ///
+    /// - `fs.read_text_file`: Must be true before reading files
+    /// - `fs.write_text_file`: Must be true before writing, creating, or deleting files
+    /// - `terminal`: Must be true before terminal operations
+    ///
+    /// When capabilities are not available (None), file operations should not be performed
+    /// in ACP contexts. For non-ACP contexts (MCP mode), this field is None and operations
+    /// proceed without capability checks.
+    #[cfg(feature = "acp")]
+    pub client_capabilities: Option<agent_client_protocol::ClientCapabilities>,
 }
 
 /// Prompt template for session compaction.

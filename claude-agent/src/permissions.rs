@@ -365,6 +365,63 @@ impl PermissionPolicyEngine {
         self.storage.store_permission(stored_permission).await
     }
 
+    /// Check if a tool call is allowed by stored permissions
+    pub async fn is_tool_allowed(&self, tool_name: &str) -> Result<bool> {
+        if let Some(stored) = self.storage.lookup_permission(tool_name).await? {
+            // Check if stored permission is still valid
+            if let Some(expires_at) = stored.expires_at {
+                if current_timestamp() >= expires_at {
+                    return Ok(false);
+                }
+            }
+
+            Ok(matches!(stored.decision, PermissionDecision::AllowAlways))
+        } else {
+            Ok(false)
+        }
+    }
+
+    /// Check if a tool call is denied by stored permissions
+    pub async fn is_tool_denied(&self, tool_name: &str) -> Result<bool> {
+        if let Some(stored) = self.storage.lookup_permission(tool_name).await? {
+            // Check if stored permission is still valid
+            if let Some(expires_at) = stored.expires_at {
+                if current_timestamp() >= expires_at {
+                    return Ok(false);
+                }
+            }
+
+            Ok(matches!(stored.decision, PermissionDecision::DenyAlways))
+        } else {
+            Ok(false)
+        }
+    }
+
+    /// Lookup a stored permission for a tool
+    pub async fn lookup_permission(&self, tool_name: &str) -> Result<Option<StoredPermission>> {
+        self.storage.lookup_permission(tool_name).await
+    }
+
+    /// List all stored permissions
+    pub async fn list_permissions(&self) -> Result<Vec<StoredPermission>> {
+        self.storage.list_permissions().await
+    }
+
+    /// Remove a specific permission
+    pub async fn remove_permission(&self, tool_pattern: &str) -> Result<bool> {
+        self.storage.remove_permission(tool_pattern).await
+    }
+
+    /// Clear all stored permissions
+    pub async fn clear_all_permissions(&self) -> Result<()> {
+        self.storage.clear_all().await
+    }
+
+    /// Remove expired permissions and return the count of removed items
+    pub async fn cleanup_expired_permissions(&self) -> Result<usize> {
+        self.storage.cleanup_expired().await
+    }
+
     /// Apply a specific policy to a tool call
     fn apply_policy(
         &self,
@@ -659,5 +716,849 @@ mod tests {
             .await
             .unwrap();
         assert!(matches!(result, PolicyEvaluation::Denied { .. }));
+    }
+
+    #[tokio::test]
+    async fn test_is_tool_allowed() {
+        let storage = create_test_storage();
+        let engine = PermissionPolicyEngine::new(Box::new(storage));
+
+        // Initially, tool should not be allowed
+        let result = engine.is_tool_allowed("test_tool").await.unwrap();
+        assert!(!result);
+
+        // Store an allow-always permission
+        engine
+            .store_permission_decision("test_tool", PermissionDecision::AllowAlways, None)
+            .await
+            .unwrap();
+
+        // Now tool should be allowed
+        let result = engine.is_tool_allowed("test_tool").await.unwrap();
+        assert!(result);
+
+        // Store a deny-always permission
+        engine
+            .store_permission_decision("test_tool", PermissionDecision::DenyAlways, None)
+            .await
+            .unwrap();
+
+        // Now tool should not be allowed
+        let result = engine.is_tool_allowed("test_tool").await.unwrap();
+        assert!(!result);
+    }
+
+    #[tokio::test]
+    async fn test_is_tool_denied() {
+        let storage = create_test_storage();
+        let engine = PermissionPolicyEngine::new(Box::new(storage));
+
+        // Initially, tool should not be denied
+        let result = engine.is_tool_denied("test_tool").await.unwrap();
+        assert!(!result);
+
+        // Store a deny-always permission
+        engine
+            .store_permission_decision("test_tool", PermissionDecision::DenyAlways, None)
+            .await
+            .unwrap();
+
+        // Now tool should be denied
+        let result = engine.is_tool_denied("test_tool").await.unwrap();
+        assert!(result);
+
+        // Store an allow-always permission
+        engine
+            .store_permission_decision("test_tool", PermissionDecision::AllowAlways, None)
+            .await
+            .unwrap();
+
+        // Now tool should not be denied
+        let result = engine.is_tool_denied("test_tool").await.unwrap();
+        assert!(!result);
+    }
+
+    #[tokio::test]
+    async fn test_is_tool_allowed_with_expiration() {
+        let storage = create_test_storage();
+        let engine = PermissionPolicyEngine::new(Box::new(storage));
+
+        // Store an expired allow-always permission
+        engine
+            .store_permission_decision(
+                "test_tool",
+                PermissionDecision::AllowAlways,
+                Some(Duration::from_secs(0)), // Already expired
+            )
+            .await
+            .unwrap();
+
+        // Tool should not be allowed due to expiration
+        let result = engine.is_tool_allowed("test_tool").await.unwrap();
+        assert!(!result);
+
+        // Store a valid allow-always permission
+        engine
+            .store_permission_decision(
+                "test_tool",
+                PermissionDecision::AllowAlways,
+                Some(Duration::from_secs(3600)), // Expires in 1 hour
+            )
+            .await
+            .unwrap();
+
+        // Now tool should be allowed
+        let result = engine.is_tool_allowed("test_tool").await.unwrap();
+        assert!(result);
+    }
+
+    #[tokio::test]
+    async fn test_lookup_permission() {
+        let storage = create_test_storage();
+        let engine = PermissionPolicyEngine::new(Box::new(storage));
+
+        // Initially, no permission should be found
+        let result = engine.lookup_permission("test_tool").await.unwrap();
+        assert!(result.is_none());
+
+        // Store a permission
+        engine
+            .store_permission_decision("test_tool", PermissionDecision::AllowAlways, None)
+            .await
+            .unwrap();
+
+        // Now permission should be found
+        let result = engine.lookup_permission("test_tool").await.unwrap();
+        assert!(result.is_some());
+        let perm = result.unwrap();
+        assert_eq!(perm.tool_pattern, "test_tool");
+        assert!(matches!(perm.decision, PermissionDecision::AllowAlways));
+    }
+
+    #[tokio::test]
+    async fn test_list_permissions() {
+        let storage = create_test_storage();
+        let engine = PermissionPolicyEngine::new(Box::new(storage));
+
+        // Initially, list should be empty
+        let result = engine.list_permissions().await.unwrap();
+        assert_eq!(result.len(), 0);
+
+        // Store multiple permissions
+        engine
+            .store_permission_decision("tool1", PermissionDecision::AllowAlways, None)
+            .await
+            .unwrap();
+        engine
+            .store_permission_decision("tool2", PermissionDecision::DenyAlways, None)
+            .await
+            .unwrap();
+
+        // List should now have 2 items
+        let result = engine.list_permissions().await.unwrap();
+        assert_eq!(result.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn test_remove_permission() {
+        let storage = create_test_storage();
+        let engine = PermissionPolicyEngine::new(Box::new(storage));
+
+        // Store a permission
+        engine
+            .store_permission_decision("test_tool", PermissionDecision::AllowAlways, None)
+            .await
+            .unwrap();
+
+        // Verify it exists
+        let result = engine.lookup_permission("test_tool").await.unwrap();
+        assert!(result.is_some());
+
+        // Remove it
+        let removed = engine.remove_permission("test_tool").await.unwrap();
+        assert!(removed);
+
+        // Verify it's gone
+        let result = engine.lookup_permission("test_tool").await.unwrap();
+        assert!(result.is_none());
+
+        // Try to remove again, should return false
+        let removed = engine.remove_permission("test_tool").await.unwrap();
+        assert!(!removed);
+    }
+
+    #[tokio::test]
+    async fn test_clear_all_permissions() {
+        let storage = create_test_storage();
+        let engine = PermissionPolicyEngine::new(Box::new(storage));
+
+        // Store multiple permissions
+        engine
+            .store_permission_decision("tool1", PermissionDecision::AllowAlways, None)
+            .await
+            .unwrap();
+        engine
+            .store_permission_decision("tool2", PermissionDecision::DenyAlways, None)
+            .await
+            .unwrap();
+
+        // Verify they exist
+        let result = engine.list_permissions().await.unwrap();
+        assert_eq!(result.len(), 2);
+
+        // Clear all
+        engine.clear_all_permissions().await.unwrap();
+
+        // Verify they're all gone
+        let result = engine.list_permissions().await.unwrap();
+        assert_eq!(result.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_cleanup_expired_permissions() {
+        let storage = create_test_storage();
+        let engine = PermissionPolicyEngine::new(Box::new(storage));
+
+        // Store an expired permission
+        engine
+            .store_permission_decision(
+                "expired_tool",
+                PermissionDecision::AllowAlways,
+                Some(Duration::from_secs(0)), // Already expired
+            )
+            .await
+            .unwrap();
+
+        // Store a valid permission
+        engine
+            .store_permission_decision(
+                "valid_tool",
+                PermissionDecision::AllowAlways,
+                Some(Duration::from_secs(3600)), // Expires in 1 hour
+            )
+            .await
+            .unwrap();
+
+        // Cleanup expired permissions
+        let removed_count = engine.cleanup_expired_permissions().await.unwrap();
+        assert_eq!(removed_count, 1);
+
+        // Verify expired permission is gone
+        let result = engine.lookup_permission("expired_tool").await.unwrap();
+        assert!(result.is_none());
+
+        // Verify valid permission remains
+        let result = engine.lookup_permission("valid_tool").await.unwrap();
+        assert!(result.is_some());
+    }
+
+    #[tokio::test]
+    async fn test_evaluate_tool_call_with_custom_policies() {
+        let storage = create_test_storage();
+
+        // Create custom policies
+        let custom_policies = vec![
+            PermissionPolicy {
+                tool_pattern: "custom_*".to_string(),
+                default_action: PolicyAction::Allow,
+                require_user_consent: false,
+                allow_always_option: true,
+                risk_level: RiskLevel::Low,
+            },
+            PermissionPolicy {
+                tool_pattern: "dangerous_*".to_string(),
+                default_action: PolicyAction::Deny,
+                require_user_consent: false,
+                allow_always_option: false,
+                risk_level: RiskLevel::Critical,
+            },
+        ];
+
+        let engine = PermissionPolicyEngine::with_policies(Box::new(storage), custom_policies);
+
+        // Test custom allow policy
+        let result = engine
+            .evaluate_tool_call("custom_read", &serde_json::json!({}))
+            .await
+            .unwrap();
+        assert!(matches!(result, PolicyEvaluation::Allowed));
+
+        // Test custom deny policy
+        let result = engine
+            .evaluate_tool_call("dangerous_operation", &serde_json::json!({}))
+            .await
+            .unwrap();
+        assert!(matches!(result, PolicyEvaluation::Denied { .. }));
+
+        // Test tool not matching any custom policy (should default to requiring user consent)
+        let result = engine
+            .evaluate_tool_call("unknown_tool", &serde_json::json!({}))
+            .await
+            .unwrap();
+        assert!(matches!(
+            result,
+            PolicyEvaluation::RequireUserConsent { .. }
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_evaluate_tool_call_risk_levels() {
+        let storage = create_test_storage();
+        let engine = PermissionPolicyEngine::new(Box::new(storage));
+
+        // Test different tools and check their permission options based on risk level
+
+        // fs_read should be allowed (Low risk)
+        let result = engine
+            .evaluate_tool_call("fs_read_file", &serde_json::json!({}))
+            .await
+            .unwrap();
+        assert!(matches!(result, PolicyEvaluation::Allowed));
+
+        // fs_write should require consent (Medium risk)
+        let result = engine
+            .evaluate_tool_call("fs_write_file", &serde_json::json!({}))
+            .await
+            .unwrap();
+        if let PolicyEvaluation::RequireUserConsent { options } = result {
+            // Medium risk should have: allow-once, allow-always, reject-once, reject-always
+            assert_eq!(options.len(), 4);
+            assert!(options.iter().any(|o| o.option_id == "allow-once"));
+            assert!(options.iter().any(|o| o.option_id == "allow-always"));
+            assert!(options.iter().any(|o| o.option_id == "reject-once"));
+            assert!(options.iter().any(|o| o.option_id == "reject-always"));
+        } else {
+            panic!("Expected RequireUserConsent for fs_write");
+        }
+
+        // terminal should require consent (High risk)
+        let result = engine
+            .evaluate_tool_call("terminal_create", &serde_json::json!({}))
+            .await
+            .unwrap();
+        if let PolicyEvaluation::RequireUserConsent { options } = result {
+            // High risk should not have allow-always option
+            assert!(!options.iter().any(|o| o.option_id == "allow-always"));
+            assert!(options.iter().any(|o| o.option_id == "allow-once"));
+            assert!(options.iter().any(|o| o.option_id == "reject-once"));
+            assert!(options.iter().any(|o| o.option_id == "reject-always"));
+        } else {
+            panic!("Expected RequireUserConsent for terminal");
+        }
+
+        // http should require consent (High risk)
+        let result = engine
+            .evaluate_tool_call("http_request", &serde_json::json!({}))
+            .await
+            .unwrap();
+        if let PolicyEvaluation::RequireUserConsent { options } = result {
+            // High risk should not have allow-always option
+            assert!(!options.iter().any(|o| o.option_id == "allow-always"));
+        } else {
+            panic!("Expected RequireUserConsent for http");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_evaluate_tool_call_policy_matching_priority() {
+        let storage = create_test_storage();
+
+        // Create policies where order matters
+        let policies = vec![
+            // More specific policy first
+            PermissionPolicy {
+                tool_pattern: "fs_read_secure".to_string(),
+                default_action: PolicyAction::AskUser,
+                require_user_consent: true,
+                allow_always_option: false,
+                risk_level: RiskLevel::High,
+            },
+            // More general policy second
+            PermissionPolicy {
+                tool_pattern: "fs_read*".to_string(),
+                default_action: PolicyAction::Allow,
+                require_user_consent: false,
+                allow_always_option: true,
+                risk_level: RiskLevel::Low,
+            },
+        ];
+
+        let engine = PermissionPolicyEngine::with_policies(Box::new(storage), policies);
+
+        // Test that specific policy is matched first
+        let result = engine
+            .evaluate_tool_call("fs_read_secure", &serde_json::json!({}))
+            .await
+            .unwrap();
+        assert!(matches!(
+            result,
+            PolicyEvaluation::RequireUserConsent { .. }
+        ));
+
+        // Test that general policy is still matched for other tools
+        let result = engine
+            .evaluate_tool_call("fs_read_file", &serde_json::json!({}))
+            .await
+            .unwrap();
+        assert!(matches!(result, PolicyEvaluation::Allowed));
+    }
+
+    #[tokio::test]
+    async fn test_evaluate_tool_call_with_expired_stored_permission() {
+        let storage = create_test_storage();
+        let engine = PermissionPolicyEngine::new(Box::new(storage));
+
+        // Store an expired permission
+        engine
+            .store_permission_decision(
+                "fs_write_file",
+                PermissionDecision::AllowAlways,
+                Some(Duration::from_secs(0)), // Already expired
+            )
+            .await
+            .unwrap();
+
+        // Should fall through to policy evaluation since permission is expired
+        let result = engine
+            .evaluate_tool_call("fs_write_file", &serde_json::json!({}))
+            .await
+            .unwrap();
+        assert!(matches!(
+            result,
+            PolicyEvaluation::RequireUserConsent { .. }
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_evaluate_tool_call_pattern_matching_variants() {
+        let storage = create_test_storage();
+        let engine = PermissionPolicyEngine::new(Box::new(storage));
+
+        // Test prefix wildcard matching
+        let result = engine
+            .evaluate_tool_call("fs_read_anything", &serde_json::json!({}))
+            .await
+            .unwrap();
+        assert!(matches!(result, PolicyEvaluation::Allowed));
+
+        // Test prefix wildcard for different operations
+        let result = engine
+            .evaluate_tool_call("fs_write_anything", &serde_json::json!({}))
+            .await
+            .unwrap();
+        assert!(matches!(
+            result,
+            PolicyEvaluation::RequireUserConsent { .. }
+        ));
+
+        let result = engine
+            .evaluate_tool_call("terminal_anything", &serde_json::json!({}))
+            .await
+            .unwrap();
+        assert!(matches!(
+            result,
+            PolicyEvaluation::RequireUserConsent { .. }
+        ));
+
+        let result = engine
+            .evaluate_tool_call("http_anything", &serde_json::json!({}))
+            .await
+            .unwrap();
+        assert!(matches!(
+            result,
+            PolicyEvaluation::RequireUserConsent { .. }
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_evaluate_tool_call_stored_permission_takes_precedence() {
+        let storage = create_test_storage();
+        let engine = PermissionPolicyEngine::new(Box::new(storage));
+
+        // Store an allow permission for a tool that would normally be denied
+        engine
+            .store_permission_decision("terminal_create", PermissionDecision::AllowAlways, None)
+            .await
+            .unwrap();
+
+        // Should be allowed by stored permission, overriding policy
+        let result = engine
+            .evaluate_tool_call("terminal_create", &serde_json::json!({}))
+            .await
+            .unwrap();
+        assert!(matches!(result, PolicyEvaluation::Allowed));
+
+        // Store a deny permission for a tool that would normally be allowed
+        engine
+            .store_permission_decision("fs_read_file", PermissionDecision::DenyAlways, None)
+            .await
+            .unwrap();
+
+        // Should be denied by stored permission, overriding policy
+        let result = engine
+            .evaluate_tool_call("fs_read_file", &serde_json::json!({}))
+            .await
+            .unwrap();
+        assert!(matches!(result, PolicyEvaluation::Denied { .. }));
+    }
+
+    #[tokio::test]
+    async fn test_evaluate_tool_call_wildcard_policy() {
+        let storage = create_test_storage();
+
+        // Create policies with wildcard as catch-all
+        let policies = vec![
+            PermissionPolicy {
+                tool_pattern: "safe_*".to_string(),
+                default_action: PolicyAction::Allow,
+                require_user_consent: false,
+                allow_always_option: true,
+                risk_level: RiskLevel::Low,
+            },
+            PermissionPolicy {
+                tool_pattern: "*".to_string(),
+                default_action: PolicyAction::AskUser,
+                require_user_consent: true,
+                allow_always_option: true,
+                risk_level: RiskLevel::Medium,
+            },
+        ];
+
+        let engine = PermissionPolicyEngine::with_policies(Box::new(storage), policies);
+
+        // Test specific policy match
+        let result = engine
+            .evaluate_tool_call("safe_operation", &serde_json::json!({}))
+            .await
+            .unwrap();
+        assert!(matches!(result, PolicyEvaluation::Allowed));
+
+        // Test wildcard catch-all
+        let result = engine
+            .evaluate_tool_call("random_tool", &serde_json::json!({}))
+            .await
+            .unwrap();
+        assert!(matches!(
+            result,
+            PolicyEvaluation::RequireUserConsent { .. }
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_permission_options_for_different_risk_levels() {
+        let storage = create_test_storage();
+        let engine = PermissionPolicyEngine::new(Box::new(storage));
+
+        // Test Low risk - should have allow-always
+        let options = engine.generate_permission_options("test_tool", RiskLevel::Low);
+        assert_eq!(options.len(), 3); // allow-once, allow-always, reject-once
+        assert!(options.iter().any(|o| o.option_id == "allow-always"));
+        assert!(!options.iter().any(|o| o.option_id == "reject-always"));
+
+        // Test Medium risk - should have both always options
+        let options = engine.generate_permission_options("test_tool", RiskLevel::Medium);
+        assert_eq!(options.len(), 4); // allow-once, allow-always, reject-once, reject-always
+        assert!(options.iter().any(|o| o.option_id == "allow-always"));
+        assert!(options.iter().any(|o| o.option_id == "reject-always"));
+
+        // Test High risk - should not have allow-always
+        let options = engine.generate_permission_options("test_tool", RiskLevel::High);
+        assert_eq!(options.len(), 3); // allow-once, reject-once, reject-always
+        assert!(!options.iter().any(|o| o.option_id == "allow-always"));
+        assert!(options.iter().any(|o| o.option_id == "reject-always"));
+
+        // Test Critical risk - should not have allow-always
+        let options = engine.generate_permission_options("test_tool", RiskLevel::Critical);
+        assert_eq!(options.len(), 3); // allow-once, reject-once, reject-always
+        assert!(!options.iter().any(|o| o.option_id == "allow-always"));
+        assert!(options.iter().any(|o| o.option_id == "reject-always"));
+    }
+
+    #[tokio::test]
+    async fn test_permission_decision_caching_allow() {
+        let storage = create_test_storage();
+        let engine = PermissionPolicyEngine::new(Box::new(storage));
+
+        // First evaluation should require user consent (fs_write is medium risk)
+        let result = engine
+            .evaluate_tool_call("fs_write_file", &serde_json::json!({}))
+            .await
+            .unwrap();
+        assert!(matches!(
+            result,
+            PolicyEvaluation::RequireUserConsent { .. }
+        ));
+
+        // Store an allow-always decision (simulating user granting permission)
+        engine
+            .store_permission_decision("fs_write_file", PermissionDecision::AllowAlways, None)
+            .await
+            .unwrap();
+
+        // Second evaluation should use cached decision and allow without prompting
+        let result = engine
+            .evaluate_tool_call("fs_write_file", &serde_json::json!({}))
+            .await
+            .unwrap();
+        assert!(matches!(result, PolicyEvaluation::Allowed));
+
+        // Third evaluation should also use cached decision
+        let result = engine
+            .evaluate_tool_call("fs_write_file", &serde_json::json!({}))
+            .await
+            .unwrap();
+        assert!(matches!(result, PolicyEvaluation::Allowed));
+
+        // Verify the cached decision is retrievable
+        let cached = engine.lookup_permission("fs_write_file").await.unwrap();
+        assert!(cached.is_some());
+        assert!(matches!(
+            cached.unwrap().decision,
+            PermissionDecision::AllowAlways
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_permission_decision_caching_deny() {
+        let storage = create_test_storage();
+        let engine = PermissionPolicyEngine::new(Box::new(storage));
+
+        // First evaluation should require user consent
+        let result = engine
+            .evaluate_tool_call("terminal_exec", &serde_json::json!({}))
+            .await
+            .unwrap();
+        assert!(matches!(
+            result,
+            PolicyEvaluation::RequireUserConsent { .. }
+        ));
+
+        // Store a deny-always decision (simulating user denying permission)
+        engine
+            .store_permission_decision("terminal_exec", PermissionDecision::DenyAlways, None)
+            .await
+            .unwrap();
+
+        // Second evaluation should use cached decision and deny
+        let result = engine
+            .evaluate_tool_call("terminal_exec", &serde_json::json!({}))
+            .await
+            .unwrap();
+        assert!(matches!(result, PolicyEvaluation::Denied { .. }));
+
+        // Third evaluation should also use cached decision
+        let result = engine
+            .evaluate_tool_call("terminal_exec", &serde_json::json!({}))
+            .await
+            .unwrap();
+        assert!(matches!(result, PolicyEvaluation::Denied { .. }));
+
+        // Verify the cached decision is retrievable
+        let cached = engine.lookup_permission("terminal_exec").await.unwrap();
+        assert!(cached.is_some());
+        assert!(matches!(
+            cached.unwrap().decision,
+            PermissionDecision::DenyAlways
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_permission_decision_caching_with_expiration() {
+        let storage = create_test_storage();
+        let engine = PermissionPolicyEngine::new(Box::new(storage));
+
+        // Store a permission with very short expiration
+        engine
+            .store_permission_decision(
+                "test_tool",
+                PermissionDecision::AllowAlways,
+                Some(Duration::from_secs(1)),
+            )
+            .await
+            .unwrap();
+
+        // Should be allowed immediately
+        let result = engine
+            .evaluate_tool_call("test_tool", &serde_json::json!({}))
+            .await
+            .unwrap();
+        assert!(matches!(result, PolicyEvaluation::Allowed));
+
+        // Wait for expiration
+        tokio::time::sleep(Duration::from_secs(2)).await;
+
+        // Should now require consent again since cached decision expired
+        let result = engine
+            .evaluate_tool_call("test_tool", &serde_json::json!({}))
+            .await
+            .unwrap();
+        assert!(matches!(
+            result,
+            PolicyEvaluation::RequireUserConsent { .. }
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_permission_decision_caching_pattern_matching() {
+        let storage = create_test_storage();
+        let engine = PermissionPolicyEngine::new(Box::new(storage));
+
+        // Store a permission with wildcard pattern
+        engine
+            .store_permission_decision("fs_write*", PermissionDecision::AllowAlways, None)
+            .await
+            .unwrap();
+
+        // All fs_write* tools should use the cached decision
+        let result = engine
+            .evaluate_tool_call("fs_write_file", &serde_json::json!({}))
+            .await
+            .unwrap();
+        assert!(matches!(result, PolicyEvaluation::Allowed));
+
+        let result = engine
+            .evaluate_tool_call("fs_write_dir", &serde_json::json!({}))
+            .await
+            .unwrap();
+        assert!(matches!(result, PolicyEvaluation::Allowed));
+
+        let result = engine
+            .evaluate_tool_call("fs_write_anything", &serde_json::json!({}))
+            .await
+            .unwrap();
+        assert!(matches!(result, PolicyEvaluation::Allowed));
+
+        // Non-matching tool should not use the cached decision
+        let result = engine
+            .evaluate_tool_call("fs_read_file", &serde_json::json!({}))
+            .await
+            .unwrap();
+        // fs_read is allowed by default policy, not by cached decision
+        assert!(matches!(result, PolicyEvaluation::Allowed));
+    }
+
+    #[tokio::test]
+    async fn test_permission_decision_caching_overrides_policy() {
+        let storage = create_test_storage();
+
+        // Create a policy that denies a tool
+        let policies = vec![PermissionPolicy {
+            tool_pattern: "dangerous_tool".to_string(),
+            default_action: PolicyAction::Deny,
+            require_user_consent: false,
+            allow_always_option: false,
+            risk_level: RiskLevel::Critical,
+        }];
+
+        let engine = PermissionPolicyEngine::with_policies(Box::new(storage), policies);
+
+        // First evaluation should be denied by policy
+        let result = engine
+            .evaluate_tool_call("dangerous_tool", &serde_json::json!({}))
+            .await
+            .unwrap();
+        assert!(matches!(result, PolicyEvaluation::Denied { .. }));
+
+        // Store an allow decision (overriding the deny policy)
+        engine
+            .store_permission_decision("dangerous_tool", PermissionDecision::AllowAlways, None)
+            .await
+            .unwrap();
+
+        // Cached decision should override the deny policy
+        let result = engine
+            .evaluate_tool_call("dangerous_tool", &serde_json::json!({}))
+            .await
+            .unwrap();
+        assert!(matches!(result, PolicyEvaluation::Allowed));
+    }
+
+    #[tokio::test]
+    async fn test_permission_decision_caching_multiple_tools() {
+        let storage = create_test_storage();
+        let engine = PermissionPolicyEngine::new(Box::new(storage));
+
+        // Store decisions for multiple tools
+        engine
+            .store_permission_decision("tool_a", PermissionDecision::AllowAlways, None)
+            .await
+            .unwrap();
+        engine
+            .store_permission_decision("tool_b", PermissionDecision::DenyAlways, None)
+            .await
+            .unwrap();
+        engine
+            .store_permission_decision("tool_c", PermissionDecision::AllowAlways, None)
+            .await
+            .unwrap();
+
+        // Each tool should use its own cached decision
+        let result_a = engine
+            .evaluate_tool_call("tool_a", &serde_json::json!({}))
+            .await
+            .unwrap();
+        assert!(matches!(result_a, PolicyEvaluation::Allowed));
+
+        let result_b = engine
+            .evaluate_tool_call("tool_b", &serde_json::json!({}))
+            .await
+            .unwrap();
+        assert!(matches!(result_b, PolicyEvaluation::Denied { .. }));
+
+        let result_c = engine
+            .evaluate_tool_call("tool_c", &serde_json::json!({}))
+            .await
+            .unwrap();
+        assert!(matches!(result_c, PolicyEvaluation::Allowed));
+
+        // Uncached tool should require consent
+        let result_d = engine
+            .evaluate_tool_call("tool_d", &serde_json::json!({}))
+            .await
+            .unwrap();
+        assert!(matches!(
+            result_d,
+            PolicyEvaluation::RequireUserConsent { .. }
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_permission_decision_caching_persistence() {
+        let temp_dir = tempdir().unwrap();
+        let storage_path = temp_dir.path().to_path_buf();
+
+        // Create engine and store a decision
+        {
+            let storage = FilePermissionStorage::new(storage_path.clone());
+            let engine = PermissionPolicyEngine::new(Box::new(storage));
+
+            engine
+                .store_permission_decision("persistent_tool", PermissionDecision::AllowAlways, None)
+                .await
+                .unwrap();
+
+            let result = engine
+                .evaluate_tool_call("persistent_tool", &serde_json::json!({}))
+                .await
+                .unwrap();
+            assert!(matches!(result, PolicyEvaluation::Allowed));
+        }
+
+        // Create a new engine with the same storage path
+        // Cached decision should be loaded from disk
+        {
+            let storage = FilePermissionStorage::new(storage_path);
+            let engine = PermissionPolicyEngine::new(Box::new(storage));
+
+            let result = engine
+                .evaluate_tool_call("persistent_tool", &serde_json::json!({}))
+                .await
+                .unwrap();
+            assert!(matches!(result, PolicyEvaluation::Allowed));
+
+            // Verify it was loaded from disk
+            let cached = engine.lookup_permission("persistent_tool").await.unwrap();
+            assert!(cached.is_some());
+        }
     }
 }

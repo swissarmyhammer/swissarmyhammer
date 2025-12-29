@@ -83,6 +83,13 @@ mod session_kv_cache_tests {
             transcript_path: None,
             context_state: None,
             template_token_count: None,
+            #[cfg(feature = "acp")]
+            todos: Vec::new(),
+            #[cfg(feature = "acp")]
+            available_commands: Vec::new(),
+            current_mode: None,
+            #[cfg(feature = "acp")]
+            client_capabilities: None,
         }
     }
 

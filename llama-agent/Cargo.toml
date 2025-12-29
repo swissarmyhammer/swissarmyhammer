@@ -61,7 +61,20 @@ llama-common = { workspace = true }
 jsonschema = { workspace = true }
 md5 = { workspace = true }
 
+# Agent Client Protocol
+agent-client-protocol = { workspace = true, optional = true }
+
+# Todo system integration for ACP
+swissarmyhammer-todo = { path = "../swissarmyhammer-todo", optional = true }
+chrono = { workspace = true, optional = true }
+
+# Unix signal handling for graceful shutdown
+[target.'cfg(unix)'.dependencies]
+nix = { version = "0.29", features = ["signal", "process"] }
+
 [features]
+default = []
+acp = ["agent-client-protocol", "swissarmyhammer-todo", "chrono"]
 test-utils = []
 
 [dev-dependencies]
@@ -117,3 +130,8 @@ path = "src/examples/echo_sse.rs"
 [[example]]
 name = "echo_streamable"
 path = "src/examples/echo_streamable.rs"
+
+[[example]]
+name = "acp_stdio"
+path = "src/examples/acp_stdio.rs"
+required-features = ["acp"]

@@ -20,11 +20,11 @@ const EXPECTED_CORE_TOOLS: &[&str] = &[
 ];
 
 /// Helper function to set up tool comparison tests
-fn setup_tool_comparison_test(test_name: &str) -> (Vec<String>, Vec<String>) {
+async fn setup_tool_comparison_test(test_name: &str) -> (Vec<String>, Vec<String>) {
     let _ = tracing_subscriber::fmt::try_init();
     info!("🧪 Testing {}", test_name);
-    let http_tools = get_mcp_tools();
-    let stdin_tools = get_mcp_tools();
+    let http_tools = get_mcp_tools().await;
+    let stdin_tools = get_mcp_tools().await;
     (http_tools, stdin_tools)
 }
 
@@ -156,11 +156,15 @@ fn assert_minimum_tool_count(tools: &[String], context: &str, minimum: usize) {
 /// # Returns
 ///
 /// * `Result<()>` - Ok if assertions pass, error otherwise
-fn run_dual_tool_test<F>(test_name: &str, success_message: &str, assertion_fn: F) -> Result<()>
+async fn run_dual_tool_test<F>(
+    test_name: &str,
+    success_message: &str,
+    assertion_fn: F,
+) -> Result<()>
 where
     F: Fn(&[String], &str),
 {
-    let (http_tools, stdin_tools) = setup_tool_comparison_test(test_name);
+    let (http_tools, stdin_tools) = setup_tool_comparison_test(test_name).await;
     assertion_fn(&http_tools, "HTTP static definition");
     assertion_fn(&stdin_tools, "STDIN registry");
     info!("{}", success_message);
@@ -171,7 +175,7 @@ where
 #[tokio::test]
 async fn test_http_stdin_mcp_tool_parity() -> Result<()> {
     let (http_tools, stdin_tools) =
-        setup_tool_comparison_test("MCP server tool parity between HTTP and STDIN modes");
+        setup_tool_comparison_test("MCP server tool parity between HTTP and STDIN modes").await;
 
     compare_tool_sets(http_tools, stdin_tools)
 }
@@ -180,8 +184,8 @@ async fn test_http_stdin_mcp_tool_parity() -> Result<()> {
 ///
 /// This function is used by both HTTP and STDIN server tests to ensure
 /// they validate against the same authoritative tool list.
-fn get_mcp_tools() -> Vec<String> {
-    let registry = create_fully_registered_tool_registry();
+async fn get_mcp_tools() -> Vec<String> {
+    let registry = create_fully_registered_tool_registry().await;
 
     // Get MCP tool names with sah__ prefix to match MCP protocol
     registry
@@ -201,6 +205,7 @@ async fn test_mcp_tool_definitions_return_sufficient_tools() -> Result<()> {
             assert_minimum_tool_count(tools, context, 19);
         },
     )
+    .await
 }
 
 /// Test that both tool definitions include expected core tools
@@ -213,4 +218,5 @@ async fn test_mcp_tool_definitions_include_core_tools() -> Result<()> {
             assert_tools_present(tools, EXPECTED_CORE_TOOLS, context);
         },
     )
+    .await
 }

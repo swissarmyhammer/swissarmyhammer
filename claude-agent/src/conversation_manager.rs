@@ -313,20 +313,30 @@ impl ConversationManager {
                 .execute_tools(session_id, lm_result.tool_calls.clone())
                 .await?;
 
-            // Add tool calls and results to conversation history
+            // Add tool calls and results to conversation history in chronological order
+            // Each tool call should be immediately followed by its result to maintain
+            // the actual execution order
             for tool_call in &lm_result.tool_calls {
+                // Add the tool call
                 conversation_history.push(LmMessage::ToolCall {
                     id: tool_call.id.clone(),
                     name: tool_call.name.clone(),
                     arguments: tool_call.arguments.clone(),
                 });
-            }
 
-            for result in &tool_results {
-                conversation_history.push(LmMessage::ToolResult {
-                    tool_call_id: result.tool_call_id.clone(),
-                    output: result.output.clone(),
-                });
+                // Find and add the corresponding tool result
+                if let Some(result) = tool_results.iter().find(|r| r.tool_call_id == tool_call.id) {
+                    conversation_history.push(LmMessage::ToolResult {
+                        tool_call_id: result.tool_call_id.clone(),
+                        output: result.output.clone(),
+                    });
+                } else {
+                    tracing::warn!(
+                        "No result found for tool call: {} ({})",
+                        tool_call.name,
+                        tool_call.id
+                    );
+                }
             }
 
             // Continue loop to send tool results back to LM
@@ -392,7 +402,7 @@ impl ConversationManager {
                     if let Err(e) = self
                         .notification_sender
                         .send_update(SessionNotification {
-                            session_id: agent_client_protocol::SessionId(
+                            session_id: agent_client_protocol::SessionId::new(
                                 session_id.to_string().into(),
                             ),
                             update: SessionUpdate::AgentMessageChunk(
@@ -592,7 +602,7 @@ impl ConversationManager {
                 let tool_handler = self.tool_handler.write().await;
                 tool_handler
                     .handle_tool_request(
-                        &agent_client_protocol::SessionId(session_id.to_string().into()),
+                        &agent_client_protocol::SessionId::new(session_id.to_string().into()),
                         internal_request,
                     )
                     .await

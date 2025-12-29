@@ -165,6 +165,9 @@ pub mod template_cache;
 pub mod types;
 pub mod validation;
 
+#[cfg(feature = "acp")]
+pub mod acp;
+
 #[cfg(any(test, feature = "test-utils"))]
 pub mod tests;
 
@@ -195,8 +198,13 @@ pub use resources::{ResourceError, ResourceLoader};
 // Re-export generation functionality
 pub use generation::{GenerationConfig, GenerationError, LlamaCppGenerator, TextGenerator};
 
-// Re-export session compaction functionality
-pub use session::{CompactionResult, CompactionStats, CompactionSummary};
+// Re-export session management and compaction functionality
+pub use session::{
+    CompactionResult, CompactionStats, CompactionSummary, SessionManager, SessionStats,
+};
+
+// Re-export storage functionality for session persistence
+pub use storage::{FileSessionStorage, SessionStorage};
 
 // Re-export template cache functionality
 pub use template_cache::{CacheStats, TemplateCache, TemplateCacheEntry, TemplateCacheError};
@@ -208,3 +216,10 @@ pub use template_cache::{CacheStats, TemplateCache, TemplateCacheEntry, Template
 /// duplication. Use this when you need fine-grained control over HTTP transport
 /// settings or when integrating with existing rmcp-based infrastructure.
 pub use rmcp::transport::StreamableHttpServerConfig;
+
+// Re-export ACP functionality when feature enabled
+#[cfg(feature = "acp")]
+pub use acp::{
+    AcpCapabilities, AcpConfig, AcpServer, AcpSessionState, FilesystemSettings, PermissionPolicy,
+    PermissionStorage, SessionMode, TerminalSettings,
+};

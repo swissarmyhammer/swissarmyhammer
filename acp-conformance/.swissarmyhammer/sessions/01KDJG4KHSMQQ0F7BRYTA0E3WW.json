@@ -1,0 +1,20 @@
+{
+  "id": "01KDJG4KHSMQQ0F7BRYTA0E3WW",
+  "created_at": {
+    "secs_since_epoch": 1766926208,
+    "nanos_since_epoch": 569806000
+  },
+  "last_accessed": {
+    "secs_since_epoch": 1766926208,
+    "nanos_since_epoch": 569806000
+  },
+  "context": [],
+  "client_capabilities": null,
+  "mcp_servers": [],
+  "cwd": "/var/folders/3k/6b488x1j6rg1f6w8fnyfwm9w0000gn/T/",
+  "available_commands": [],
+  "turn_request_count": 0,
+  "turn_token_count": 0,
+  "current_mode": null,
+  "todos": []
+}

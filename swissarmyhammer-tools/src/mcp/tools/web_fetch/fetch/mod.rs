@@ -312,7 +312,7 @@ impl McpTool for WebFetchTool {
                 .send_progress_with_metadata(
                     &progress_token,
                     Some(0),
-                    format!("Fetching: {}", request.url),
+                    format!("Web fetch: Fetching: {}", request.url),
                     json!({
                         "url": request.url,
                         "timeout": config.http.timeout.as_secs()
@@ -337,7 +337,7 @@ impl McpTool for WebFetchTool {
                             &progress_token,
                             Some(100),
                             format!(
-                                "Fetch complete: {} chars markdown in {:.1}s",
+                                "Web fetch: Complete - {} chars in {:.1}s",
                                 markdown_content.len(),
                                 response_time_ms as f64 / 1000.0
                             ),
@@ -360,7 +360,7 @@ impl McpTool for WebFetchTool {
                         .send_progress_with_metadata(
                             &progress_token,
                             None,
-                            format!("Fetch failed: {}", e),
+                            format!("Web fetch: Failed - {}", e),
                             json!({
                                 "error": e.to_string(),
                                 "url": request.url,
@@ -568,7 +568,7 @@ mod tests {
         // Last notification should be error (None progress)
         let error_notif = &notifications[notifications.len() - 1];
         assert_eq!(error_notif.progress, None);
-        assert!(error_notif.message.contains("failed"));
+        assert!(error_notif.message.contains("Failed"));
     }
 
     #[tokio::test]

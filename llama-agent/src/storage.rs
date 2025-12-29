@@ -3,9 +3,11 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::SystemTime;
 use tokio::fs;
 use tokio::io::AsyncWriteExt;
+use tokio::sync::Mutex;
 use tracing::{debug, info};
 
 /// Trait for session storage backends that provide persistent storage for sessions.
@@ -120,6 +122,7 @@ struct SessionMetadata {
 pub struct FileSessionStorage {
     storage_dir: PathBuf,
     metadata_file: PathBuf,
+    metadata_lock: Arc<Mutex<()>>,
 }
 
 impl FileSessionStorage {
@@ -143,6 +146,7 @@ impl FileSessionStorage {
         Self {
             storage_dir,
             metadata_file,
+            metadata_lock: Arc::new(Mutex::new(())),
         }
     }
 
@@ -194,6 +198,17 @@ impl FileSessionStorage {
         &self,
         metadata: &HashMap<SessionId, SessionMetadata>,
     ) -> Result<(), SessionError> {
+        // Acquire lock to prevent concurrent metadata writes
+        let _lock = self.metadata_lock.lock().await;
+
+        self.save_metadata_locked(metadata).await
+    }
+
+    /// Internal method to save metadata - must be called with metadata_lock held
+    async fn save_metadata_locked(
+        &self,
+        metadata: &HashMap<SessionId, SessionMetadata>,
+    ) -> Result<(), SessionError> {
         self.ensure_storage_dir().await?;
 
         let metadata_vec: Vec<&SessionMetadata> = metadata.values().collect();
@@ -201,10 +216,21 @@ impl FileSessionStorage {
             SessionError::InvalidState(format!("Failed to serialize metadata: {}", e))
         })?;
 
-        // Atomic write using temporary file
-        let temp_file = self.metadata_file.with_extension("tmp");
+        // Atomic write using temporary file with unique name in same directory
+        // Use ULID which is guaranteed to be unique and sortable
+        let temp_file = self
+            .storage_dir
+            .join(format!("metadata.tmp.{}", ulid::Ulid::new()));
+
+        debug!("Creating temp metadata file: {}", temp_file.display());
+
         let mut file = fs::File::create(&temp_file).await.map_err(|e| {
-            SessionError::InvalidState(format!("Failed to create temp metadata file: {}", e))
+            SessionError::InvalidState(format!(
+                "Failed to create temp metadata file {} (storage_dir: {}): {}",
+                temp_file.display(),
+                self.storage_dir.display(),
+                e
+            ))
         })?;
 
         file.write_all(json_content.as_bytes())
@@ -215,12 +241,38 @@ impl FileSessionStorage {
             .await
             .map_err(|e| SessionError::InvalidState(format!("Failed to flush metadata: {}", e)))?;
 
+        file.sync_all()
+            .await
+            .map_err(|e| SessionError::InvalidState(format!("Failed to sync metadata: {}", e)))?;
+
         drop(file);
+
+        // Verify temp file exists before rename
+        if !temp_file.exists() {
+            return Err(SessionError::InvalidState(format!(
+                "Temp metadata file {} does not exist before rename (storage_dir: {}, metadata_file: {})",
+                temp_file.display(),
+                self.storage_dir.display(),
+                self.metadata_file.display()
+            )));
+        }
+
+        debug!(
+            "Renaming {} to {}",
+            temp_file.display(),
+            self.metadata_file.display()
+        );
 
         fs::rename(&temp_file, &self.metadata_file)
             .await
             .map_err(|e| {
-                SessionError::InvalidState(format!("Failed to rename metadata file: {}", e))
+                SessionError::InvalidState(format!(
+                    "Failed to rename metadata file from {} to {} (storage_dir: {}): {}",
+                    temp_file.display(),
+                    self.metadata_file.display(),
+                    self.storage_dir.display(),
+                    e
+                ))
             })?;
 
         Ok(())
@@ -261,21 +313,25 @@ impl SessionStorage for FileSessionStorage {
             SessionError::InvalidState(format!("Failed to rename session file: {}", e))
         })?;
 
-        // Update metadata
-        let mut metadata = self.load_metadata().await?;
-        let usage = session.token_usage();
-        metadata.insert(
-            session.id,
-            SessionMetadata {
-                session_id: session.id,
-                last_saved: SystemTime::now(),
-                message_count: session.messages.len(),
-                token_count: usage.total,
-                file_path: session_file,
-            },
-        );
+        // Update metadata with lock held
+        {
+            let _lock = self.metadata_lock.lock().await;
+            let mut metadata = self.load_metadata().await?;
+            let usage = session.token_usage();
+            metadata.insert(
+                session.id,
+                SessionMetadata {
+                    session_id: session.id,
+                    last_saved: SystemTime::now(),
+                    message_count: session.messages.len(),
+                    token_count: usage.total,
+                    file_path: session_file,
+                },
+            );
 
-        self.save_metadata(&metadata).await?;
+            // Call save_metadata_locked since we already hold the lock
+            self.save_metadata_locked(&metadata).await?;
+        }
 
         debug!("Saved session {} to disk", session.id);
         Ok(())
@@ -403,6 +459,13 @@ mod tests {
             transcript_path: None,
             context_state: None,
             template_token_count: None,
+            #[cfg(feature = "acp")]
+            todos: Vec::new(),
+            #[cfg(feature = "acp")]
+            available_commands: Vec::new(),
+            current_mode: None,
+            #[cfg(feature = "acp")]
+            client_capabilities: None,
         }
     }
 

@@ -70,6 +70,13 @@ async fn test_session_template_caching_workflow() {
                 transcript_path: None,
                 context_state: None,
                 template_token_count: None,
+                #[cfg(feature = "acp")]
+                todos: Vec::new(),
+                #[cfg(feature = "acp")]
+                available_commands: Vec::new(),
+                current_mode: None,
+                #[cfg(feature = "acp")]
+                client_capabilities: None,
             };
 
             // Note: Full test would require loaded model and context
@@ -154,6 +161,13 @@ async fn test_chat_engine_extract_template_components() {
         transcript_path: None,
         context_state: None,
         template_token_count: None,
+        #[cfg(feature = "acp")]
+        todos: Vec::new(),
+        #[cfg(feature = "acp")]
+        available_commands: Vec::new(),
+        current_mode: None,
+        #[cfg(feature = "acp")]
+        client_capabilities: None,
     };
 
     let result = engine.extract_template_components(&session);
@@ -187,6 +201,13 @@ async fn test_chat_engine_extract_template_components_no_tools() {
         transcript_path: None,
         context_state: None,
         template_token_count: None,
+        #[cfg(feature = "acp")]
+        todos: Vec::new(),
+        #[cfg(feature = "acp")]
+        available_commands: Vec::new(),
+        current_mode: None,
+        #[cfg(feature = "acp")]
+        client_capabilities: None,
     };
 
     let result = engine.extract_template_components(&session);
@@ -228,6 +249,13 @@ async fn test_chat_engine_extract_template_with_multiple_system_messages() {
         transcript_path: None,
         context_state: None,
         template_token_count: None,
+        #[cfg(feature = "acp")]
+        todos: Vec::new(),
+        #[cfg(feature = "acp")]
+        available_commands: Vec::new(),
+        current_mode: None,
+        #[cfg(feature = "acp")]
+        client_capabilities: None,
     };
 
     let result = engine.extract_template_components(&session);
@@ -314,6 +342,13 @@ async fn test_session_template_token_count_field() {
         transcript_path: None,
         context_state: None,
         template_token_count: None,
+        #[cfg(feature = "acp")]
+        todos: Vec::new(),
+        #[cfg(feature = "acp")]
+        available_commands: Vec::new(),
+        current_mode: None,
+        #[cfg(feature = "acp")]
+        client_capabilities: None,
     };
 
     assert_eq!(session_without_cache.template_token_count, None);
@@ -336,6 +371,13 @@ async fn test_session_template_token_count_field() {
         transcript_path: None,
         context_state: None,
         template_token_count: Some(42),
+        #[cfg(feature = "acp")]
+        todos: Vec::new(),
+        #[cfg(feature = "acp")]
+        available_commands: Vec::new(),
+        current_mode: None,
+        #[cfg(feature = "acp")]
+        client_capabilities: None,
     };
 
     assert_eq!(session_with_cache.template_token_count, Some(42));
@@ -392,6 +434,13 @@ async fn test_template_components_extraction_consistency() {
         transcript_path: None,
         context_state: None,
         template_token_count: None,
+        #[cfg(feature = "acp")]
+        todos: Vec::new(),
+        #[cfg(feature = "acp")]
+        available_commands: Vec::new(),
+        current_mode: None,
+        #[cfg(feature = "acp")]
+        client_capabilities: None,
     };
 
     // Extract twice and verify consistency
@@ -424,6 +473,13 @@ async fn test_template_token_count_optional_behavior() {
         transcript_path: None,
         context_state: None,
         template_token_count: None,
+        #[cfg(feature = "acp")]
+        todos: Vec::new(),
+        #[cfg(feature = "acp")]
+        available_commands: Vec::new(),
+        current_mode: None,
+        #[cfg(feature = "acp")]
+        client_capabilities: None,
     };
 
     let session_zero = Session {
@@ -438,6 +494,13 @@ async fn test_template_token_count_optional_behavior() {
         transcript_path: None,
         context_state: None,
         template_token_count: Some(0),
+        #[cfg(feature = "acp")]
+        todos: Vec::new(),
+        #[cfg(feature = "acp")]
+        available_commands: Vec::new(),
+        current_mode: None,
+        #[cfg(feature = "acp")]
+        client_capabilities: None,
     };
 
     // None means no cache

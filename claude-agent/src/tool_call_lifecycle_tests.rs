@@ -16,7 +16,7 @@ mod tests {
     use std::sync::Arc;
     use tokio::sync::broadcast;
 
-    /// Helper to create a test tool call handler with notification sender
+    /// Helper to create a test tool call handler with notification sender and full capabilities
     async fn create_test_handler() -> (ToolCallHandler, broadcast::Receiver<SessionNotification>) {
         let permissions = ToolPermissions {
             require_permission_for: vec![],
@@ -29,6 +29,19 @@ mod tests {
         let permission_engine = Arc::new(PermissionPolicyEngine::new(Box::new(storage)));
 
         let mut handler = ToolCallHandler::new(permissions, session_manager, permission_engine);
+
+        // Set full client capabilities for tests to ensure ACP compliance
+        let capabilities = agent_client_protocol::ClientCapabilities {
+            fs: agent_client_protocol::FileSystemCapability {
+                read_text_file: true,
+                write_text_file: true,
+                meta: None,
+            },
+            terminal: true,
+            meta: None,
+        };
+        handler.set_client_capabilities(capabilities);
+
         let (sender, receiver) = NotificationSender::new(32);
         handler.set_notification_sender(sender);
 
@@ -38,7 +51,7 @@ mod tests {
     #[tokio::test]
     async fn test_complete_tool_call_lifecycle_success() {
         let (handler, mut receiver) = create_test_handler().await;
-        let session_id = SessionId("test_session_123".into());
+        let session_id = SessionId::new("test_session_123");
         let tool_name = "test_tool";
         let arguments = json!({"param": "value"});
 
@@ -127,7 +140,7 @@ mod tests {
     #[tokio::test]
     async fn test_tool_call_failure_lifecycle() {
         let (handler, mut receiver) = create_test_handler().await;
-        let session_id = SessionId("test_session_456".into());
+        let session_id = SessionId::new("test_session_456");
         let tool_name = "failing_tool";
         let arguments = json!({"will_fail": true});
 
@@ -184,7 +197,7 @@ mod tests {
     #[tokio::test]
     async fn test_tool_call_cancellation() {
         let (handler, mut receiver) = create_test_handler().await;
-        let session_id = SessionId("test_session_789".into());
+        let session_id = SessionId::new("test_session_789");
         let tool_name = "long_running_tool";
         let arguments = json!({"duration": 3600});
 
@@ -239,7 +252,7 @@ mod tests {
     #[tokio::test]
     async fn test_concurrent_tool_execution() {
         let (handler, mut receiver) = create_test_handler().await;
-        let session_id = SessionId("test_session_concurrent".into());
+        let session_id = SessionId::new("test_session_concurrent");
 
         // Create multiple tool calls concurrently
         let mut tasks = vec![];
@@ -294,7 +307,7 @@ mod tests {
     #[tokio::test]
     async fn test_tool_call_with_content_and_locations() {
         let (handler, mut receiver) = create_test_handler().await;
-        let session_id = SessionId("test_session_content".into());
+        let session_id = SessionId::new("test_session_content");
         let tool_name = "file_operation_tool";
         let arguments = json!({"file_path": "/test/file.txt"});
 
@@ -372,8 +385,21 @@ mod tests {
         let temp_dir = tempfile::tempdir().unwrap();
         let storage = FilePermissionStorage::new(temp_dir.path().to_path_buf());
         let permission_engine = Arc::new(PermissionPolicyEngine::new(Box::new(storage)));
-        let handler = ToolCallHandler::new(permissions, session_manager, permission_engine);
-        let session_id = SessionId("test_session_no_sender".into());
+        let mut handler = ToolCallHandler::new(permissions, session_manager, permission_engine);
+
+        // Set client capabilities for ACP compliance
+        let capabilities = agent_client_protocol::ClientCapabilities {
+            fs: agent_client_protocol::FileSystemCapability {
+                read_text_file: true,
+                write_text_file: true,
+                meta: None,
+            },
+            terminal: true,
+            meta: None,
+        };
+        handler.set_client_capabilities(capabilities);
+
+        let session_id = SessionId::new("test_session_no_sender");
 
         // Tool call operations should still work without notification sender
         let report = handler
@@ -397,7 +423,7 @@ mod tests {
     #[tokio::test]
     async fn test_terminal_embedding_in_tool_call() {
         let (handler, mut receiver) = create_test_handler().await;
-        let session_id = SessionId("test_session_terminal".into());
+        let session_id = SessionId::new("test_session_terminal");
         let tool_name = "execute_command";
         let arguments = json!({"command": "echo", "args": ["hello"]});
 
@@ -451,7 +477,7 @@ mod tests {
     #[tokio::test]
     async fn test_terminal_embedding_with_nonexistent_tool_call() {
         let (handler, _receiver) = create_test_handler().await;
-        let session_id = SessionId("test_session_invalid".into());
+        let session_id = SessionId::new("test_session_invalid");
         let nonexistent_tool_call_id = "call_nonexistent";
         let terminal_id = "term_01234567890ABCDEFGHIJK".to_string();
 
@@ -478,7 +504,7 @@ mod tests {
     #[tokio::test]
     async fn test_multiple_terminals_in_tool_call() {
         let (handler, mut receiver) = create_test_handler().await;
-        let session_id = SessionId("test_session_multi_terminal".into());
+        let session_id = SessionId::new("test_session_multi_terminal");
         let tool_name = "parallel_execute";
         let arguments = json!({"commands": ["echo hello", "echo world"]});
 
@@ -564,7 +590,7 @@ mod tests {
             .expect("Should create session");
 
         // Internal session ID already has proper ACP format
-        let session_id = SessionId(internal_session_id.to_string().into());
+        let session_id = SessionId::new(internal_session_id.to_string());
 
         // Create tool call
         let report = handler
@@ -628,7 +654,7 @@ mod tests {
     #[tokio::test]
     async fn test_terminal_embedding_with_tool_call_completion() {
         let (handler, mut receiver) = create_test_handler().await;
-        let session_id = SessionId("test_session_terminal_complete".into());
+        let session_id = SessionId::new("test_session_terminal_complete");
         let tool_name = "execute_with_result";
         let arguments = json!({"command": "ls"});
 
@@ -689,6 +715,346 @@ mod tests {
                 );
             }
             _ => panic!("Expected ToolCallUpdate completion notification"),
+        }
+    }
+
+    /// ACP Capability Enforcement Tests
+    ///
+    /// These tests verify that operations fail gracefully when client capabilities
+    /// are not advertised, as required by the ACP specification.
+
+    #[tokio::test]
+    async fn test_terminal_operation_without_capability() {
+        // Create handler without terminal capability
+        let permissions = ToolPermissions {
+            require_permission_for: vec![],
+            auto_approved: vec!["bash_execute".to_string()],
+            forbidden_paths: vec![],
+        };
+        let session_manager = Arc::new(SessionManager::new());
+        let temp_dir = tempfile::tempdir().unwrap();
+        let storage = FilePermissionStorage::new(temp_dir.path().to_path_buf());
+        let permission_engine = Arc::new(PermissionPolicyEngine::new(Box::new(storage)));
+
+        let mut handler =
+            ToolCallHandler::new(permissions, session_manager.clone(), permission_engine);
+
+        // Set client capabilities WITHOUT terminal capability
+        let capabilities = agent_client_protocol::ClientCapabilities {
+            fs: agent_client_protocol::FileSystemCapability {
+                read_text_file: true,
+                write_text_file: true,
+                meta: None,
+            },
+            terminal: false, // Explicitly disable terminal capability
+            meta: None,
+        };
+        handler.set_client_capabilities(capabilities);
+
+        // Create a session
+        let internal_session_id = session_manager
+            .create_session(std::path::PathBuf::from("/tmp"), None)
+            .expect("Should create session");
+        let session_id = SessionId::new(internal_session_id.to_string());
+
+        // Create tool call
+        let tool_name = "bash_execute";
+        let arguments = json!({"command": "echo test"});
+        let report = handler
+            .create_tool_call_report(&session_id, tool_name, &arguments)
+            .await;
+        let tool_call_id = report.tool_call_id.clone();
+
+        // Attempt to execute with embedded terminal - should fail
+        let params = crate::terminal_manager::TerminalCreateParams {
+            session_id: session_id.0.to_string(),
+            command: "echo".to_string(),
+            args: Some(vec!["test".to_string()]),
+            env: None,
+            cwd: None,
+            output_byte_limit: None,
+        };
+
+        let result = handler
+            .execute_with_embedded_terminal(&session_id, &tool_call_id, params)
+            .await;
+
+        // Verify that operation fails with appropriate error
+        assert!(
+            result.is_err(),
+            "Terminal operation should fail without terminal capability"
+        );
+
+        match result {
+            Err(crate::AgentError::Protocol(msg)) => {
+                assert!(
+                    msg.contains("terminal capability") || msg.contains("terminal operations"),
+                    "Error should mention terminal capability requirement, got: {}",
+                    msg
+                );
+            }
+            Err(other) => panic!(
+                "Expected Protocol error for capability violation, got: {:?}",
+                other
+            ),
+            Ok(_) => panic!("Operation should have failed"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_terminal_embedding_without_capability() {
+        // Create handler without terminal capability
+        let permissions = ToolPermissions {
+            require_permission_for: vec![],
+            auto_approved: vec!["test_tool".to_string()],
+            forbidden_paths: vec![],
+        };
+        let session_manager = Arc::new(SessionManager::new());
+        let temp_dir = tempfile::tempdir().unwrap();
+        let storage = FilePermissionStorage::new(temp_dir.path().to_path_buf());
+        let permission_engine = Arc::new(PermissionPolicyEngine::new(Box::new(storage)));
+
+        let mut handler = ToolCallHandler::new(permissions, session_manager, permission_engine);
+
+        // Set client capabilities WITHOUT terminal capability
+        let capabilities = agent_client_protocol::ClientCapabilities {
+            fs: agent_client_protocol::FileSystemCapability {
+                read_text_file: true,
+                write_text_file: true,
+                meta: None,
+            },
+            terminal: false,
+            meta: None,
+        };
+        handler.set_client_capabilities(capabilities);
+
+        let session_id = SessionId::new("test_session_no_terminal");
+        let tool_name = "test_tool";
+        let arguments = json!({"param": "value"});
+
+        // Create tool call
+        let report = handler
+            .create_tool_call_report(&session_id, tool_name, &arguments)
+            .await;
+        let tool_call_id = report.tool_call_id.clone();
+
+        // Attempt to embed terminal - should succeed at this level
+        // (The actual terminal creation would be blocked at the TerminalManager level)
+        let terminal_id = "term_01234567890ABCDEFGHIJK".to_string();
+        let result = handler
+            .embed_terminal_in_tool_call(&session_id, &tool_call_id, terminal_id)
+            .await;
+
+        // The embed operation itself should succeed - it's just recording the terminal ID
+        // The actual capability check happens when creating the terminal
+        assert!(
+            result.is_ok(),
+            "Embedding terminal ID should succeed (capability check happens at terminal creation)"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_terminal_operation_without_capabilities_initialized() {
+        // Create handler without setting any client capabilities
+        let permissions = ToolPermissions {
+            require_permission_for: vec![],
+            auto_approved: vec!["bash_execute".to_string()],
+            forbidden_paths: vec![],
+        };
+        let session_manager = Arc::new(SessionManager::new());
+        let temp_dir = tempfile::tempdir().unwrap();
+        let storage = FilePermissionStorage::new(temp_dir.path().to_path_buf());
+        let permission_engine = Arc::new(PermissionPolicyEngine::new(Box::new(storage)));
+
+        let handler = ToolCallHandler::new(permissions, session_manager.clone(), permission_engine);
+
+        // Do NOT set client capabilities at all
+
+        // Create a session
+        let internal_session_id = session_manager
+            .create_session(std::path::PathBuf::from("/tmp"), None)
+            .expect("Should create session");
+        let session_id = SessionId::new(internal_session_id.to_string());
+
+        // Create tool call
+        let tool_name = "bash_execute";
+        let arguments = json!({"command": "echo test"});
+        let report = handler
+            .create_tool_call_report(&session_id, tool_name, &arguments)
+            .await;
+        let tool_call_id = report.tool_call_id.clone();
+
+        // Attempt to execute with embedded terminal - should fail
+        let params = crate::terminal_manager::TerminalCreateParams {
+            session_id: session_id.0.to_string(),
+            command: "echo".to_string(),
+            args: Some(vec!["test".to_string()]),
+            env: None,
+            cwd: None,
+            output_byte_limit: None,
+        };
+
+        let result = handler
+            .execute_with_embedded_terminal(&session_id, &tool_call_id, params)
+            .await;
+
+        // Verify that operation fails when no capabilities are set
+        assert!(
+            result.is_err(),
+            "Terminal operation should fail when client capabilities not initialized"
+        );
+
+        match result {
+            Err(crate::AgentError::Protocol(msg)) => {
+                assert!(
+                    msg.contains("capabilities") || msg.contains("terminal"),
+                    "Error should mention capabilities or terminal requirement, got: {}",
+                    msg
+                );
+            }
+            Err(other) => panic!(
+                "Expected Protocol error for missing capabilities, got: {:?}",
+                other
+            ),
+            Ok(_) => panic!("Operation should have failed"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_file_read_without_capability() {
+        // Create handler without file read capability
+        let permissions = ToolPermissions {
+            require_permission_for: vec![],
+            auto_approved: vec!["fs_read".to_string()],
+            forbidden_paths: vec![],
+        };
+        let session_manager = Arc::new(SessionManager::new());
+        let temp_dir = tempfile::tempdir().unwrap();
+        let storage = FilePermissionStorage::new(temp_dir.path().to_path_buf());
+        let permission_engine = Arc::new(PermissionPolicyEngine::new(Box::new(storage)));
+
+        let mut handler =
+            ToolCallHandler::new(permissions, session_manager.clone(), permission_engine);
+
+        // Set client capabilities WITHOUT file read capability
+        let capabilities = agent_client_protocol::ClientCapabilities {
+            fs: agent_client_protocol::FileSystemCapability {
+                read_text_file: false, // Explicitly disable read capability
+                write_text_file: true,
+                meta: None,
+            },
+            terminal: false,
+            meta: None,
+        };
+        handler.set_client_capabilities(capabilities);
+
+        // Create a session with a test file
+        let session_dir = temp_dir.path().to_path_buf();
+        let test_file = session_dir.join("test.txt");
+        std::fs::write(&test_file, "test content").expect("Failed to write test file");
+
+        let internal_session_id = session_manager
+            .create_session(session_dir, None)
+            .expect("Should create session");
+        let session_id = SessionId::new(internal_session_id.to_string());
+
+        // Attempt to handle file read - should fail
+        let request = crate::tools::InternalToolRequest {
+            id: "test_read".to_string(),
+            name: "fs_read".to_string(),
+            arguments: json!({"path": test_file.to_str().unwrap()}),
+        };
+
+        let result = handler.handle_tool_request(&session_id, request).await;
+
+        // Verify that operation fails with appropriate error
+        assert!(
+            result.is_ok(),
+            "handle_tool_request should return Ok with Error result"
+        );
+
+        match result.unwrap() {
+            crate::tools::ToolCallResult::Error(msg) => {
+                assert!(
+                    msg.contains("fs.read_text_file capability") || msg.contains("read_text_file"),
+                    "Error should mention read_text_file capability requirement, got: {}",
+                    msg
+                );
+            }
+            other => panic!(
+                "Expected Error result for capability violation, got: {:?}",
+                other
+            ),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_file_write_without_capability() {
+        // Create handler without file write capability
+        let permissions = ToolPermissions {
+            require_permission_for: vec![],
+            auto_approved: vec!["fs_write".to_string()],
+            forbidden_paths: vec![],
+        };
+        let session_manager = Arc::new(SessionManager::new());
+        let temp_dir = tempfile::tempdir().unwrap();
+        let storage = FilePermissionStorage::new(temp_dir.path().to_path_buf());
+        let permission_engine = Arc::new(PermissionPolicyEngine::new(Box::new(storage)));
+
+        let mut handler =
+            ToolCallHandler::new(permissions, session_manager.clone(), permission_engine);
+
+        // Set client capabilities WITHOUT file write capability
+        let capabilities = agent_client_protocol::ClientCapabilities {
+            fs: agent_client_protocol::FileSystemCapability {
+                read_text_file: true,
+                write_text_file: false, // Explicitly disable write capability
+                meta: None,
+            },
+            terminal: false,
+            meta: None,
+        };
+        handler.set_client_capabilities(capabilities);
+
+        // Create a session
+        let session_dir = temp_dir.path().to_path_buf();
+        let internal_session_id = session_manager
+            .create_session(session_dir.clone(), None)
+            .expect("Should create session");
+        let session_id = SessionId::new(internal_session_id.to_string());
+
+        // Attempt to handle file write - should fail
+        let test_file = session_dir.join("output.txt");
+        let request = crate::tools::InternalToolRequest {
+            id: "test_write".to_string(),
+            name: "fs_write".to_string(),
+            arguments: json!({
+                "path": test_file.to_str().unwrap(),
+                "content": "test content"
+            }),
+        };
+
+        let result = handler.handle_tool_request(&session_id, request).await;
+
+        // Verify that operation fails with appropriate error
+        assert!(
+            result.is_ok(),
+            "handle_tool_request should return Ok with Error result"
+        );
+
+        match result.unwrap() {
+            crate::tools::ToolCallResult::Error(msg) => {
+                assert!(
+                    msg.contains("fs.write_text_file capability")
+                        || msg.contains("write_text_file"),
+                    "Error should mention write_text_file capability requirement, got: {}",
+                    msg
+                );
+            }
+            other => panic!(
+                "Expected Error result for capability violation, got: {:?}",
+                other
+            ),
         }
     }
 }

@@ -61,14 +61,31 @@ impl ProcessGuard {
 
         // If the process didn't exit gracefully, force kill it
         self.0.kill()?;
-        self.0.wait()?;
+        // Use try_wait in a loop instead of blocking wait
+        let wait_start = Instant::now();
+        while wait_start.elapsed() < std::time::Duration::from_secs(1) {
+            match self.0.try_wait() {
+                Ok(Some(_)) => return Ok(()),
+                Ok(None) => std::thread::sleep(std::time::Duration::from_millis(10)),
+                Err(e) => return Err(e.into()),
+            }
+        }
         Ok(())
     }
 
     /// Force kill the process immediately
     pub fn force_kill(&mut self) -> Result<(), Box<dyn std::error::Error>> {
         self.0.kill()?;
-        self.0.wait()?;
+        // Use try_wait in a loop instead of blocking wait
+        use std::time::Instant;
+        let start = Instant::now();
+        while start.elapsed() < std::time::Duration::from_secs(1) {
+            match self.0.try_wait() {
+                Ok(Some(_)) => return Ok(()),
+                Ok(None) => std::thread::sleep(std::time::Duration::from_millis(10)),
+                Err(e) => return Err(e.into()),
+            }
+        }
         Ok(())
     }
 }

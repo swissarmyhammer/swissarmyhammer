@@ -56,8 +56,8 @@ use tokio::sync::mpsc;
 /// let notification = ProgressNotification {
 ///     progress_token: "01K7SMD16Z48DXJCQN0XJJ66N9".to_string(),
 ///     progress: Some(50),
-///     message: "Indexing files: 50/100".to_string(),
-///     metadata: Some(serde_json::json!({"files_processed": 50, "total_files": 100})),
+///     message: "File indexing: 50/100 - Processing files - ETA: 30s".to_string(),
+///     metadata: Some(serde_json::json!({"current": 50, "total": 100, "eta_seconds": 30})),
 /// };
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]

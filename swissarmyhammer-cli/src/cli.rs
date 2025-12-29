@@ -228,6 +228,13 @@ Examples:
         #[command(subcommand)]
         subcommand: Option<ModelSubcommand>,
     },
+
+    /// Manage and interact with Agent Client Protocol server
+    #[command(long_about = commands::agent::DESCRIPTION)]
+    Agent {
+        #[command(subcommand)]
+        subcommand: Option<AgentSubcommand>,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -398,6 +405,74 @@ Examples:
         /// Second argument: model name (required when first argument is a use case)
         #[arg(id = "second")]
         second: Option<String>,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+pub enum AgentSubcommand {
+    /// Start ACP server over stdio
+    #[command(long_about = "
+Start Agent Client Protocol (ACP) server for code editor integration.
+
+The ACP server enables SwissArmyHammer to work with ACP-compatible code editors
+like Zed and JetBrains IDEs. The server communicates over stdin/stdout using
+JSON-RPC 2.0 protocol.
+
+Features:
+• Local LLaMA model execution for coding assistance
+• Session management with conversation history
+• File system operations (read/write)
+• Terminal execution
+• Tool integration via MCP servers
+• Permission-based security model
+
+Examples:
+  sah agent acp                        # Start with default config
+  sah agent acp --config acp.yaml      # Start with custom config
+  sah agent acp --permission-policy auto-approve-reads
+  sah agent acp --allow-path /home/user/projects --block-path /home/user/.ssh
+  sah agent acp --max-file-size 5242880 --terminal-buffer-size 2097152
+
+Configuration:
+Options can be specified via:
+1. Command-line flags (highest priority)
+2. Configuration file (--config)
+3. Default values (lowest priority)
+
+Command-line flags override configuration file settings.
+
+For editor configuration:
+• Zed: Add to agents section in settings
+• JetBrains: Install ACP plugin and configure
+")]
+    Acp {
+        /// Path to ACP configuration file (optional)
+        #[arg(short, long)]
+        config: Option<std::path::PathBuf>,
+
+        /// Permission policy: always-ask, auto-approve-reads
+        #[arg(long, value_name = "POLICY")]
+        permission_policy: Option<String>,
+
+        /// Allowed filesystem paths (can be specified multiple times)
+        #[arg(long, value_name = "PATH")]
+        allow_path: Vec<std::path::PathBuf>,
+
+        /// Blocked filesystem paths (can be specified multiple times)
+        #[arg(long, value_name = "PATH")]
+        block_path: Vec<std::path::PathBuf>,
+
+        /// Maximum file size for read operations in bytes
+        #[arg(long, value_name = "BYTES")]
+        max_file_size: Option<u64>,
+
+        /// Terminal output buffer size in bytes
+        #[arg(long, value_name = "BYTES")]
+        terminal_buffer_size: Option<usize>,
+
+        /// Graceful shutdown timeout in seconds
+        #[arg(long, value_name = "SECONDS")]
+        graceful_shutdown_timeout: Option<u64>,
     },
 }
 

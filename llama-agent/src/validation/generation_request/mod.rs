@@ -42,6 +42,13 @@ mod integration_tests {
             transcript_path: None,
             context_state: None,
             template_token_count: None,
+            #[cfg(feature = "acp")]
+            todos: Vec::new(),
+            #[cfg(feature = "acp")]
+            available_commands: Vec::new(),
+            current_mode: None,
+            #[cfg(feature = "acp")]
+            client_capabilities: None,
         };
 
         // Create a realistic generation request
@@ -97,6 +104,13 @@ mod integration_tests {
             transcript_path: None,
             context_state: None,
             template_token_count: None,
+            #[cfg(feature = "acp")]
+            todos: Vec::new(),
+            #[cfg(feature = "acp")]
+            available_commands: Vec::new(),
+            current_mode: None,
+        #[cfg(feature = "acp")]
+        client_capabilities: None,
         };
 
         let request = GenerationRequest {
@@ -131,6 +145,13 @@ mod integration_tests {
             transcript_path: None,
             context_state: None,
             template_token_count: None,
+            #[cfg(feature = "acp")]
+            todos: Vec::new(),
+            #[cfg(feature = "acp")]
+            available_commands: Vec::new(),
+            current_mode: None,
+            #[cfg(feature = "acp")]
+            client_capabilities: None,
         };
 
         let request = GenerationRequest {
@@ -181,6 +202,13 @@ mod integration_tests {
             transcript_path: None,
             context_state: None,
             template_token_count: None,
+            #[cfg(feature = "acp")]
+            todos: Vec::new(),
+            #[cfg(feature = "acp")]
+            available_commands: Vec::new(),
+            current_mode: None,
+        #[cfg(feature = "acp")]
+        client_capabilities: None,
         };
 
         let request = GenerationRequest {

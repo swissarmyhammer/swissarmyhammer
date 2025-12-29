@@ -199,9 +199,9 @@ pub use discovery::{ConfigurationDiscovery, DiscoveryPaths};
 pub use env_vars::EnvVarSubstitution;
 pub use error::{ConfigurationError, ConfigurationResult};
 pub use model::{
-    parse_model_config, parse_model_description, AgentExecutorType, ClaudeCodeConfig,
-    LlamaAgentConfig, LlmModelConfig, McpServerConfig, ModelConfig, ModelConfigSource, ModelError,
-    ModelExecutorConfig, ModelInfo, ModelManager, ModelSource, ModelUseCase,
+    parse_model_config, parse_model_description, AgentUseCase, ClaudeCodeConfig, LlamaAgentConfig,
+    LlmModelConfig, McpServerConfig, ModelConfig, ModelConfigSource, ModelError,
+    ModelExecutorConfig, ModelExecutorType, ModelInfo, ModelManager, ModelSource,
 };
 pub use provider::ConfigurationProvider;
 pub use template_context::TemplateContext;
@@ -388,10 +388,69 @@ pub const DEFAULT_TEST_LLM_MODEL_FILENAME: &str = "Qwen3-4B-Instruct-2507-Q4_K_M
 /// and semantic behavior across the test suite.
 pub const DEFAULT_TEST_EMBEDDING_MODEL: &str = "BAAI/bge-small-en-v1.5";
 
+// Model configuration constants
+
+/// Default production LLM model repository
+///
+/// This constant specifies the Hugging Face repository for the default production LLM model.
+pub const DEFAULT_LLM_MODEL_REPO: &str = "unsloth/Qwen3-Coder-30B-A3B-Instruct-GGUF";
+
+/// Default production LLM model filename
+///
+/// This constant specifies the specific GGUF file for production use.
+pub const DEFAULT_LLM_MODEL_FILENAME: &str = "Qwen3-Coder-30B-A3B-Instruct-UD-Q6_K_XL.gguf";
+
+/// Default batch size for model inference
+pub const DEFAULT_BATCH_SIZE: u32 = 512;
+
+/// Default batch size for testing
+pub const DEFAULT_TEST_BATCH_SIZE: u32 = 256;
+
+/// Default flag for using HuggingFace parameters
+pub const DEFAULT_USE_HF_PARAMS: bool = true;
+
+/// Default debug mode flag
+pub const DEFAULT_DEBUG_MODE: bool = false;
+
+/// Default quiet mode flag
+pub const DEFAULT_QUIET_MODE: bool = false;
+
+/// Default MCP server port (0 = random)
+pub const DEFAULT_MCP_PORT: u16 = 0;
+
+/// Default MCP server timeout in seconds (15 minutes)
+pub const DEFAULT_MCP_TIMEOUT_SECONDS: u64 = 900;
+
+/// Default test MCP server timeout in seconds (30 seconds)
+pub const DEFAULT_TEST_MCP_TIMEOUT_SECONDS: u64 = 30;
+
+// Repetition detection constants
+
+/// Default repetition detection enabled flag
+pub const DEFAULT_REPETITION_ENABLED: bool = true;
+
+/// Default repetition penalty factor
+pub const DEFAULT_REPETITION_PENALTY: f64 = 1.1;
+
+/// Default repetition threshold
+pub const DEFAULT_REPETITION_THRESHOLD: usize = 50;
+
+/// Default repetition window size
+pub const DEFAULT_REPETITION_WINDOW: usize = 64;
+
+/// Test repetition penalty (lower for small models)
+pub const DEFAULT_TEST_REPETITION_PENALTY: f64 = 1.05;
+
+/// Test repetition threshold (higher to be more permissive)
+pub const DEFAULT_TEST_REPETITION_THRESHOLD: usize = 150;
+
+/// Test repetition window size (larger for better context)
+pub const DEFAULT_TEST_REPETITION_WINDOW: usize = 128;
+
 /// Test configuration utilities for LlamaAgent testing
 pub mod test_config {
     use crate::model::{
-        AgentExecutorType, LlamaAgentConfig, LlmModelConfig, McpServerConfig, ModelConfig,
+        LlamaAgentConfig, LlmModelConfig, McpServerConfig, ModelConfig, ModelExecutorType,
         ModelSource,
     };
     use std::env;
@@ -425,13 +484,13 @@ pub mod test_config {
                         filename: Some(self.llama_model_filename.clone()),
                         folder: None,
                     },
-                    batch_size: 256, // Smaller batch size for testing
-                    use_hf_params: true,
+                    batch_size: crate::DEFAULT_TEST_BATCH_SIZE,
+                    use_hf_params: crate::DEFAULT_USE_HF_PARAMS,
                     debug: true, // Enable debug for testing
                 },
                 mcp_server: McpServerConfig {
-                    port: 0,
-                    timeout_seconds: 30,
+                    port: crate::DEFAULT_MCP_PORT,
+                    timeout_seconds: crate::DEFAULT_TEST_MCP_TIMEOUT_SECONDS,
                 },
 
                 repetition_detection: Default::default(),
@@ -467,14 +526,14 @@ pub mod test_config {
     }
 
     /// Get enabled executor types for testing
-    pub fn get_enabled_executors() -> Vec<AgentExecutorType> {
+    pub fn get_enabled_executors() -> Vec<ModelExecutorType> {
         let mut executors = Vec::new();
 
         if is_claude_enabled() {
-            executors.push(AgentExecutorType::ClaudeCode);
+            executors.push(ModelExecutorType::ClaudeCode);
         }
 
-        executors.push(AgentExecutorType::LlamaAgent);
+        executors.push(ModelExecutorType::LlamaAgent);
 
         executors
     }

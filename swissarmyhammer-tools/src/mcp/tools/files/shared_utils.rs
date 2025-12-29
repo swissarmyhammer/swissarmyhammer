@@ -1,8 +1,13 @@
+// sah rule ignore acp/capability-enforcement
 //! Shared utilities for file operations
 //!
 //! This module provides common functionality used by all file tools to ensure
 //! consistent behavior, security validation, and error handling across the
 //! file tools suite.
+//!
+//! Note: This is an MCP utilities module, not an ACP operation. ACP capability
+//! checking happens at the agent layer (claude-agent, llama-agent), not at the
+//! MCP tool utilities layer.
 //!
 //! ## Security & Validation
 //!
@@ -600,17 +605,69 @@ impl FilePathValidator {
 pub fn check_file_permissions(path: &Path, operation: FileOperation) -> Result<(), McpError> {
     match operation {
         FileOperation::Read => {
-            // Check if file is readable
+            // Check read permissions only if file exists
+            // The actual read operation will handle file-not-found errors appropriately
             if path.exists() {
                 let metadata = get_file_metadata(path)?;
 
-                // On Unix systems, we could check specific permission bits
-                // For now, we'll use a simple existence and metadata check
-                if metadata.len() == 0 && metadata.is_file() {
-                    // Empty files might be readable, let the actual read operation handle it
+                // Check if it's a regular file (not a directory or special file)
+                if !metadata.is_file() {
+                    return Err(McpError::invalid_request(
+                        format!("Path is not a regular file: {}", path.display()),
+                        None,
+                    ));
                 }
 
-                // Additional permission checks could be added here based on platform
+                // On Unix systems, check read permission bits
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    let permissions = metadata.permissions();
+                    let mode = permissions.mode();
+
+                    // Check if owner, group, or others have read permission
+                    // User read: 0o400, Group read: 0o040, Others read: 0o004
+                    let is_readable = (mode & 0o444) != 0;
+
+                    if !is_readable {
+                        return Err(McpError::invalid_request(
+                            format!(
+                                "File is not readable (no read permissions): {}",
+                                path.display()
+                            ),
+                            None,
+                        ));
+                    }
+                }
+
+                // On non-Unix systems, attempt to open the file for reading as a permission check
+                #[cfg(not(unix))]
+                {
+                    use std::fs::File;
+                    match File::open(path) {
+                        Ok(_) => {
+                            // File is readable
+                        }
+                        Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => {
+                            return Err(McpError::invalid_request(
+                                format!(
+                                    "File is not readable (permission denied): {}",
+                                    path.display()
+                                ),
+                                None,
+                            ));
+                        }
+                        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                            // File doesn't exist, let the read operation handle this
+                        }
+                        Err(e) => {
+                            return Err(McpError::invalid_request(
+                                format!("Cannot access file: {}", e),
+                                None,
+                            ));
+                        }
+                    }
+                }
             }
         }
 

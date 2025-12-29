@@ -1,7 +1,13 @@
+// sah rule ignore acp/capability-enforcement
 //! Content-based search tool for MCP operations
 //!
 //! This module provides the GrepFileTool for fast text searching with ripgrep integration.
 //! Falls back to regex-based search when ripgrep is not available.
+//!
+//! Note: This is an MCP tool, not an ACP operation. ACP capability checking happens at the
+//! agent layer (claude-agent, llama-agent), not at the MCP tool layer. The grep tool performs
+//! file read operations (for content sampling and fallback search) and terminal operations
+//! (for ripgrep execution), but capability enforcement is the responsibility of the calling agent.
 
 use crate::mcp::progress_notifications::generate_progress_token;
 use crate::mcp::tool_registry::{BaseToolImpl, McpTool, ToolContext};
@@ -12,8 +18,8 @@ use rmcp::ErrorData as McpError;
 use serde_json::json;
 use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::time::Instant;
+use tokio::process::Command;
 
 /// Check if a file type matches the requested type filter
 fn matches_file_type(path: &Path, file_type: &str) -> bool {
@@ -135,16 +141,10 @@ pub struct GrepFileTool {
     ripgrep_version: Option<String>,
 }
 
-impl Default for GrepFileTool {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl GrepFileTool {
     /// Creates a new instance of the GrepFileTool and checks for ripgrep availability
-    pub fn new() -> Self {
-        let (ripgrep_available, ripgrep_version) = Self::check_ripgrep_availability();
+    pub async fn new() -> Self {
+        let (ripgrep_available, ripgrep_version) = Self::check_ripgrep_availability().await;
         Self {
             ripgrep_available,
             ripgrep_version,
@@ -152,8 +152,8 @@ impl GrepFileTool {
     }
 
     /// Check if ripgrep is available and get version
-    fn check_ripgrep_availability() -> (bool, Option<String>) {
-        match Command::new("rg").arg("--version").output() {
+    async fn check_ripgrep_availability() -> (bool, Option<String>) {
+        match Command::new("rg").arg("--version").output().await {
             Ok(output) => {
                 if output.status.success() {
                     let version_output = String::from_utf8_lossy(&output.stdout);
@@ -177,6 +177,9 @@ impl GrepFileTool {
 
         let mut cmd = Command::new("rg");
         cmd.arg(&request.pattern);
+
+        // Always exclude temporary files created by write operations
+        cmd.arg("--glob").arg("!*.tmp.*");
 
         // Configure ripgrep arguments based on request
         if let Some(ref glob_pattern) = request.glob {
@@ -234,7 +237,7 @@ impl GrepFileTool {
         cmd.arg(search_path);
 
         // Execute ripgrep command
-        let output = cmd.output().map_err(|e| {
+        let output = cmd.output().await.map_err(|e| {
             McpError::internal_error(format!("Failed to execute ripgrep: {}", e), None)
         })?;
 
@@ -566,6 +569,18 @@ impl McpTool for GrepFileTool {
         // Parse arguments
         let request: GrepRequest = BaseToolImpl::parse_arguments(arguments)?;
 
+        // Check rate limit (grep is an expensive search operation) using tokio task ID as client identifier
+        use swissarmyhammer_common::rate_limiter::get_rate_limiter;
+        let rate_limiter = get_rate_limiter();
+        let client_id = format!("task_{:?}", tokio::task::try_id());
+        if let Err(e) = rate_limiter.check_rate_limit(&client_id, "file_grep", 2) {
+            tracing::warn!("Rate limit exceeded for file_grep: {}", e);
+            return Err(McpError::invalid_request(
+                format!("Rate limit exceeded: {}", e),
+                None,
+            ));
+        }
+
         // Use FilePathValidator for comprehensive security validation
         let validator = FilePathValidator::new();
 
@@ -596,12 +611,14 @@ impl McpTool for GrepFileTool {
                 .send_progress_with_metadata(
                     &token,
                     Some(0),
-                    format!("Searching for pattern: {}", request.pattern),
+                    format!("File grep: 0/3 - Searching for: {}", request.pattern),
                     json!({
                         "pattern": request.pattern,
                         "path": search_dir.display().to_string(),
                         "output_mode": request.output_mode.as_deref().unwrap_or("content"),
-                        "case_insensitive": request.case_insensitive.unwrap_or(false)
+                        "case_insensitive": request.case_insensitive.unwrap_or(false),
+                        "current": 0,
+                        "total": 3
                     }),
                 )
                 .ok();
@@ -610,15 +627,42 @@ impl McpTool for GrepFileTool {
         // Send searching notification
         if let Some(sender) = &context.progress_sender {
             sender
-                .send_progress(&token, Some(25), "Searching files...")
+                .send_progress_with_metadata(
+                    &token,
+                    Some(25),
+                    "File grep: 1/3 - Searching files...",
+                    json!({
+                        "current": 1,
+                        "total": 3
+                    }),
+                )
                 .ok();
         }
 
         // Execute search using ripgrep if available, otherwise fallback to regex
-        let results = if self.ripgrep_available {
-            self.execute_with_ripgrep(&request, &search_dir).await?
+        let results = match if self.ripgrep_available {
+            self.execute_with_ripgrep(&request, &search_dir).await
         } else {
-            self.execute_with_fallback(&request, &search_dir).await?
+            self.execute_with_fallback(&request, &search_dir).await
+        } {
+            Ok(results) => results,
+            Err(e) => {
+                // Send error notification
+                if let Some(sender) = &context.progress_sender {
+                    sender
+                        .send_progress_with_metadata(
+                            &token,
+                            None,
+                            format!("File grep: Failed - {}", e),
+                            json!({
+                                "error": e.to_string(),
+                                "pattern": request.pattern
+                            }),
+                        )
+                        .ok();
+                }
+                return Err(e);
+            }
         };
 
         // Send processing notification
@@ -627,10 +671,15 @@ impl McpTool for GrepFileTool {
                 .send_progress_with_metadata(
                     &token,
                     Some(75),
-                    format!("Processing {} matches", results.total_matches),
+                    format!(
+                        "File grep: 2/3 - Processing {} matches",
+                        results.total_matches
+                    ),
                     json!({
                         "matches_found": results.total_matches,
-                        "files_with_matches": results.files_searched
+                        "files_with_matches": results.files_searched,
+                        "current": 2,
+                        "total": 3
                     }),
                 )
                 .ok();
@@ -638,7 +687,26 @@ impl McpTool for GrepFileTool {
 
         // Format response based on output mode and results
         let output_mode = request.output_mode.as_deref().unwrap_or("content");
-        let response = self.format_response(&results, output_mode)?;
+        let response = match self.format_response(&results, output_mode) {
+            Ok(response) => response,
+            Err(e) => {
+                // Send error notification
+                if let Some(sender) = &context.progress_sender {
+                    sender
+                        .send_progress_with_metadata(
+                            &token,
+                            None,
+                            format!("File grep: Failed - {}", e),
+                            json!({
+                                "error": e.to_string(),
+                                "pattern": request.pattern
+                            }),
+                        )
+                        .ok();
+                }
+                return Err(e);
+            }
+        };
 
         // Send completion notification
         if let Some(sender) = &context.progress_sender {
@@ -647,14 +715,16 @@ impl McpTool for GrepFileTool {
                     &token,
                     Some(100),
                     format!(
-                        "Search complete: {} matches in {} files",
+                        "File grep: 3/3 - Complete ({} matches in {} files)",
                         results.total_matches, results.files_searched
                     ),
                     json!({
                         "total_matches": results.total_matches,
                         "files_with_matches": results.files_searched,
                         "duration_ms": results.search_time_ms,
-                        "engine": if results.used_ripgrep { "ripgrep" } else { "fallback" }
+                        "engine": if results.used_ripgrep { "ripgrep" } else { "fallback" },
+                        "current": 3,
+                        "total": 3
                     }),
                 )
                 .ok();
@@ -752,16 +822,16 @@ mod tests {
     use crate::test_utils::create_test_context;
     use tokio::sync::mpsc;
 
-    #[test]
-    fn test_grep_file_tool_new() {
-        let tool = GrepFileTool::new();
+    #[tokio::test]
+    async fn test_grep_file_tool_new() {
+        let tool = GrepFileTool::new().await;
         assert_eq!(tool.name(), "files_grep");
         assert!(!tool.description().is_empty());
     }
 
-    #[test]
-    fn test_grep_file_tool_schema() {
-        let tool = GrepFileTool::new();
+    #[tokio::test]
+    async fn test_grep_file_tool_schema() {
+        let tool = GrepFileTool::new().await;
         let schema = tool.schema();
 
         assert_eq!(schema["type"], "object");
@@ -796,7 +866,7 @@ mod tests {
             .expect("Failed to write test file");
         }
 
-        let tool = GrepFileTool::new();
+        let tool = GrepFileTool::new().await;
         let mut arguments = serde_json::Map::new();
         arguments.insert(
             "pattern".to_string(),
@@ -827,26 +897,32 @@ mod tests {
         // Verify start notification
         let start = &notifications[0];
         assert_eq!(start.progress, Some(0));
-        assert!(start.message.contains("Searching for pattern"));
+        assert!(start.message.contains("File grep"));
+        assert!(start.message.contains("0/3"));
         assert!(start.metadata.is_some());
         let start_meta = start.metadata.as_ref().unwrap();
         assert_eq!(start_meta["pattern"], "test");
+        assert_eq!(start_meta["current"], 0);
+        assert_eq!(start_meta["total"], 3);
 
         // Verify searching notification
         let searching = &notifications[1];
         assert_eq!(searching.progress, Some(25));
+        assert!(searching.message.contains("1/3"));
         assert!(searching.message.contains("Searching files"));
 
         // Verify processing notification
         let processing = &notifications[2];
         assert_eq!(processing.progress, Some(75));
+        assert!(processing.message.contains("2/3"));
         assert!(processing.message.contains("Processing"));
         assert!(processing.metadata.is_some());
 
         // Verify completion notification
         let complete = &notifications[3];
         assert_eq!(complete.progress, Some(100));
-        assert!(complete.message.contains("Search complete"));
+        assert!(complete.message.contains("3/3"));
+        assert!(complete.message.contains("Complete"));
         assert!(complete.metadata.is_some());
         let complete_meta = complete.metadata.as_ref().unwrap();
         assert!(complete_meta["total_matches"].is_number());
@@ -866,7 +942,7 @@ mod tests {
         let test_file = test_dir.join("test.txt");
         std::fs::write(&test_file, "test content\n").expect("Failed to write test file");
 
-        let tool = GrepFileTool::new();
+        let tool = GrepFileTool::new().await;
         let mut arguments = serde_json::Map::new();
         arguments.insert(
             "pattern".to_string(),
@@ -886,7 +962,7 @@ mod tests {
     async fn test_grep_file_tool_invalid_pattern() {
         let context = create_test_context().await;
 
-        let tool = GrepFileTool::new();
+        let tool = GrepFileTool::new().await;
         let arguments = serde_json::Map::new(); // Missing pattern field
 
         let result = tool.execute(arguments, &context).await;
@@ -897,7 +973,7 @@ mod tests {
     async fn test_grep_file_tool_nonexistent_path() {
         let context = create_test_context().await;
 
-        let tool = GrepFileTool::new();
+        let tool = GrepFileTool::new().await;
         let mut arguments = serde_json::Map::new();
         arguments.insert(
             "pattern".to_string(),

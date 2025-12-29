@@ -364,7 +364,7 @@ impl ToolCallReport {
     /// Convert to agent_client_protocol::ToolCall for session notifications
     pub fn to_acp_tool_call(&self) -> agent_client_protocol::ToolCall {
         agent_client_protocol::ToolCall {
-            id: agent_client_protocol::ToolCallId(self.tool_call_id.clone().into()),
+            id: agent_client_protocol::ToolCallId::new(self.tool_call_id.clone().into()),
             title: self.title.clone(),
             kind: self.kind.to_acp_kind(),
             status: self.status.to_acp_status(),
@@ -455,7 +455,7 @@ impl ToolCallReport {
         };
 
         agent_client_protocol::ToolCallUpdate {
-            id: agent_client_protocol::ToolCallId(self.tool_call_id.clone().into()),
+            id: agent_client_protocol::ToolCallId::new(self.tool_call_id.clone().into()),
             fields,
             meta: None,
         }
@@ -527,7 +527,7 @@ impl ToolCallContent {
             }
             ToolCallContent::Terminal { terminal_id } => {
                 agent_client_protocol::ToolCallContent::Terminal {
-                    terminal_id: agent_client_protocol::TerminalId(terminal_id.clone().into()),
+                    terminal_id: agent_client_protocol::TerminalId::new(terminal_id.clone().into()),
                 }
             }
         }

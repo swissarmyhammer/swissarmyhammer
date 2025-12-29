@@ -1,0 +1,530 @@
+{
+  "id": "01KDJG2GVQ3729X5EZNW9PT5GP",
+  "created_at": {
+    "secs_since_epoch": 1766926140,
+    "nanos_since_epoch": 279026000
+  },
+  "last_accessed": {
+    "secs_since_epoch": 1766926152,
+    "nanos_since_epoch": 56449000
+  },
+  "context": [
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926146,
+        "nanos_since_epoch": 379252000
+      },
+      "update": {
+        "sessionUpdate": "available_commands_update",
+        "availableCommands": [
+          {
+            "name": "create_plan",
+            "description": "Create an execution plan for complex tasks",
+            "input": null,
+            "_meta": {
+              "category": "planning",
+              "source": "core"
+            }
+          },
+          {
+            "name": "research_codebase",
+            "description": "Research and analyze the codebase structure",
+            "input": null,
+            "_meta": {
+              "category": "analysis",
+              "source": "core"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926146,
+        "nanos_since_epoch": 379531000
+      },
+      "update": {
+        "sessionUpdate": "user_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "Hello"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926148,
+        "nanos_since_epoch": 92932000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "Hi"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926148,
+        "nanos_since_epoch": 182629000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " there"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926148,
+        "nanos_since_epoch": 316761000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "! Is"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926148,
+        "nanos_since_epoch": 340931000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " there something"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926148,
+        "nanos_since_epoch": 428997000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " I can help"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926148,
+        "nanos_since_epoch": 464281000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " you with?"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926148,
+        "nanos_since_epoch": 507911000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " I'm ready"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926148,
+        "nanos_since_epoch": 583537000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " to assist with software"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926148,
+        "nanos_since_epoch": 583859000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " engineering"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926148,
+        "nanos_since_epoch": 604922000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " tasks"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926148,
+        "nanos_since_epoch": 690551000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " like"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926148,
+        "nanos_since_epoch": 716734000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " debugging"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926148,
+        "nanos_since_epoch": 761927000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": ","
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926148,
+        "nanos_since_epoch": 814963000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " writing"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926148,
+        "nanos_since_epoch": 930480000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " code, explaining"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926149,
+        "nanos_since_epoch": 65641000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " concepts, or exploring"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926149,
+        "nanos_since_epoch": 66112000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " this"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926149,
+        "nanos_since_epoch": 69504000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " c"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926149,
+        "nanos_since_epoch": 164325000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "odebase."
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926149,
+        "nanos_since_epoch": 224214000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "Hi there! Is there something I can help you with? I'm ready to assist with software engineering tasks like debugging, writing code, explaining concepts, or exploring this codebase."
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926149,
+        "nanos_since_epoch": 224766000
+      },
+      "update": {
+        "sessionUpdate": "user_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "How are you?"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926151,
+        "nanos_since_epoch": 66884000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "I'm doing well,"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926151,
+        "nanos_since_epoch": 243839000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " thanks"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926151,
+        "nanos_since_epoch": 253143000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " for asking! Ready"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926151,
+        "nanos_since_epoch": 257413000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " to help whenever"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926151,
+        "nanos_since_epoch": 365195000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " you need assistance"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926151,
+        "nanos_since_epoch": 371237000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " with your"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926151,
+        "nanos_since_epoch": 374413000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " project"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926151,
+        "nanos_since_epoch": 607616000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "."
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926151,
+        "nanos_since_epoch": 617811000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " What"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926151,
+        "nanos_since_epoch": 640266000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " can"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926151,
+        "nanos_since_epoch": 651903000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " I "
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926151,
+        "nanos_since_epoch": 684210000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "do for you today?"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926152,
+        "nanos_since_epoch": 56431000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "I'm doing well, thanks for asking! Ready to help whenever you need assistance with your project. What can I do for you today?"
+        }
+      }
+    }
+  ],
+  "client_capabilities": {
+    "fs": {
+      "readTextFile": false,
+      "writeTextFile": false
+    },
+    "terminal": false
+  },
+  "mcp_servers": [],
+  "cwd": "/Users/wballard/github/swissarmyhammer/acp-conformance",
+  "available_commands": [
+    {
+      "name": "create_plan",
+      "description": "Create an execution plan for complex tasks",
+      "input": null,
+      "_meta": {
+        "category": "planning",
+        "source": "core"
+      }
+    },
+    {
+      "name": "research_codebase",
+      "description": "Research and analyze the codebase structure",
+      "input": null,
+      "_meta": {
+        "category": "analysis",
+        "source": "core"
+      }
+    }
+  ],
+  "turn_request_count": 1,
+  "turn_token_count": 3,
+  "current_mode": null,
+  "todos": []
+}

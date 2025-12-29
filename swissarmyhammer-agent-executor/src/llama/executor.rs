@@ -8,7 +8,7 @@ use async_trait::async_trait;
 
 use std::sync::Arc;
 
-use swissarmyhammer_config::model::AgentExecutorType;
+use swissarmyhammer_config::model::ModelExecutorType;
 use swissarmyhammer_config::{LlamaAgentConfig, ModelSource};
 use tokio::sync::OnceCell;
 
@@ -650,8 +650,8 @@ impl AgentExecutor for LlamaAgentExecutor {
         Ok(())
     }
 
-    fn executor_type(&self) -> AgentExecutorType {
-        AgentExecutorType::LlamaAgent
+    fn executor_type(&self) -> ModelExecutorType {
+        ModelExecutorType::LlamaAgent
     }
 
     async fn execute_prompt(
@@ -890,8 +890,8 @@ impl AgentExecutor for LlamaAgentExecutorWrapper {
         Ok(())
     }
 
-    fn executor_type(&self) -> AgentExecutorType {
-        AgentExecutorType::LlamaAgent
+    fn executor_type(&self) -> ModelExecutorType {
+        ModelExecutorType::LlamaAgent
     }
 
     async fn execute_prompt(
@@ -956,11 +956,20 @@ mod tests {
         let executor = create_test_executor(8080);
 
         assert!(!executor.initialized);
-        assert_eq!(executor.executor_type(), AgentExecutorType::LlamaAgent);
+        assert_eq!(executor.executor_type(), ModelExecutorType::LlamaAgent);
     }
 
+    /// Integration test that downloads and loads a real LLM model (~4.3GB)
+    ///
+    /// This test is ignored by default because it:
+    /// - Downloads a 4.3GB model from HuggingFace (Phi-4-mini-instruct-GGUF)
+    /// - Takes 10+ minutes to complete depending on network and hardware
+    /// - Requires significant disk space and memory
+    ///
+    /// Run with: `cargo test --ignored test_llama_agent_executor_initialization`
     #[test_log::test(tokio::test)]
     #[serial]
+    #[ignore = "Integration test that downloads real LLM model - very slow"]
     async fn test_llama_agent_executor_initialization() {
         let tools_handle = start_test_mcp_server().await;
         let port = tools_handle.info().port.unwrap_or(0);
@@ -1056,8 +1065,17 @@ mod tests {
         );
     }
 
+    /// Integration test that downloads and loads a real LLM model (~4.3GB)
+    ///
+    /// This test is ignored by default because it:
+    /// - Downloads a 4.3GB model from HuggingFace (Phi-4-mini-instruct-GGUF)
+    /// - Takes 10+ minutes to complete depending on network and hardware
+    /// - Requires significant disk space and memory
+    ///
+    /// Run with: `cargo test --ignored test_llama_agent_executor_initialization_with_validation`
     #[test_log::test(tokio::test)]
     #[serial]
+    #[ignore = "Integration test that downloads real LLM model - very slow"]
     async fn test_llama_agent_executor_initialization_with_validation() {
         let tools_handle = start_test_mcp_server().await;
         let port = tools_handle.info().port.unwrap_or(0);
@@ -1305,7 +1323,7 @@ mod tests {
         let mcp_server = create_test_mcp_server(8080);
         let wrapper = LlamaAgentExecutorWrapper::new(config, mcp_server);
 
-        assert_eq!(wrapper.executor_type(), AgentExecutorType::LlamaAgent);
+        assert_eq!(wrapper.executor_type(), ModelExecutorType::LlamaAgent);
         assert!(wrapper.global_executor.is_none());
     }
 

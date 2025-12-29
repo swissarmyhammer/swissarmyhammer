@@ -18,7 +18,7 @@ use std::collections::HashMap;
 use ulid::Ulid;
 
 /// Plan entry status lifecycle according to ACP specification
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum PlanEntryStatus {
     /// Entry is pending execution
@@ -59,7 +59,7 @@ impl PlanEntryStatus {
 }
 
 /// Priority levels for plan entries
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 #[serde(rename_all = "lowercase")]
 pub enum Priority {
     /// High priority - critical for task completion
@@ -162,12 +162,13 @@ impl PlanEntry {
             priority: self.priority.to_acp_priority(),
             status: self.status.to_acp_status(),
             meta: self.notes.as_ref().map(|notes| {
-                serde_json::json!({
+                let value = serde_json::json!({
                     "id": self.id,
                     "notes": notes,
                     "created_at": self.created_at,
                     "updated_at": self.updated_at
-                })
+                });
+                value.as_object().cloned().unwrap()
             }),
         }
     }
@@ -276,7 +277,7 @@ impl AgentPlan {
                 .iter()
                 .map(|entry| entry.to_acp_entry())
                 .collect(),
-            meta: self.metadata.clone(),
+            meta: self.metadata.as_ref().and_then(|v| v.as_object().cloned()),
         }
     }
 
@@ -302,10 +303,9 @@ impl Default for AgentPlan {
     }
 }
 
-/// Convert TodoWrite tool parameters to ACP Plan format
+/// Convert TodoWrite tool parameters to AgentPlan
 ///
-/// This function parses TodoWrite tool call parameters (as used by Claude LLM)
-/// and converts them to ACP-compliant Plan format for client notifications.
+/// This is the internal conversion function that creates an AgentPlan from TodoWrite parameters.
 ///
 /// # TodoWrite Format
 /// ```json
@@ -324,16 +324,17 @@ impl Default for AgentPlan {
 /// - status "pending" → PlanEntryStatus::Pending, Priority::Medium
 /// - status "in_progress" → PlanEntryStatus::InProgress, Priority::High
 /// - status "completed" → PlanEntryStatus::Completed, Priority::Low
-/// - activeForm is stored in entry notes
+/// - For in-progress items: activeForm is used as content (present continuous shows current activity)
+/// - For other statuses: activeForm is stored in entry notes
 ///
 /// # Errors
 /// Returns error if:
 /// - Missing "todos" field
 /// - Invalid todo item structure
 /// - Invalid status value
-pub fn todowrite_to_acp_plan(
+pub fn todowrite_to_agent_plan(
     todowrite_params: &serde_json::Value,
-) -> Result<AcpPlan, crate::error::AgentError> {
+) -> Result<AgentPlan, crate::error::AgentError> {
     // Extract todos array
     let todos_array = todowrite_params
         .get("todos")
@@ -379,12 +380,30 @@ pub fn todowrite_to_acp_plan(
         };
 
         // Create plan entry
-        let mut entry = PlanEntry::new(content, priority);
+        // For in-progress items, use activeForm as content if present (present continuous tense)
+        // For other statuses, keep the base content and store activeForm in notes
+        let display_content = if status == PlanEntryStatus::InProgress {
+            todo_item
+                .get("activeForm")
+                .and_then(|v| v.as_str())
+                .unwrap_or(&content)
+                .to_string()
+        } else {
+            content.clone()
+        };
+
+        let mut entry = PlanEntry::new(display_content, priority);
         entry.update_status(status);
 
-        // Store activeForm in notes if present
+        // Store original content and activeForm in notes for reference
         if let Some(active_form) = todo_item.get("activeForm").and_then(|v| v.as_str()) {
-            entry.set_notes(format!("Active form: {}", active_form));
+            if status == PlanEntryStatus::InProgress {
+                // For in-progress items, store the original content in notes
+                entry.set_notes(format!("Original: {}", content));
+            } else {
+                // For other statuses, store the activeForm in notes
+                entry.set_notes(format!("Active form: {}", active_form));
+            }
         }
 
         plan.add_entry(entry);
@@ -396,7 +415,44 @@ pub fn todowrite_to_acp_plan(
         "tool": "TodoWrite"
     }));
 
-    Ok(plan.to_acp_plan())
+    Ok(plan)
+}
+
+/// Convert TodoWrite tool parameters to ACP Plan format
+///
+/// This function parses TodoWrite tool call parameters (as used by Claude LLM)
+/// and converts them to ACP-compliant Plan format for client notifications.
+///
+/// # TodoWrite Format
+/// ```json
+/// {
+///   "todos": [
+///     {
+///       "content": "Task description",
+///       "status": "pending" | "in_progress" | "completed",
+///       "activeForm": "Present continuous form of task"
+///     }
+///   ]
+/// }
+/// ```
+///
+/// # Mapping Rules
+/// - status "pending" → PlanEntryStatus::Pending, Priority::Medium
+/// - status "in_progress" → PlanEntryStatus::InProgress, Priority::High
+/// - status "completed" → PlanEntryStatus::Completed, Priority::Low
+/// - For in-progress items: activeForm is used as content (present continuous shows current activity)
+/// - For other statuses: activeForm is stored in entry notes
+///
+/// # Errors
+/// Returns error if:
+/// - Missing "todos" field
+/// - Invalid todo item structure
+/// - Invalid status value
+pub fn todowrite_to_acp_plan(
+    todowrite_params: &serde_json::Value,
+) -> Result<AcpPlan, crate::error::AgentError> {
+    let agent_plan = todowrite_to_agent_plan(todowrite_params)?;
+    Ok(agent_plan.to_acp_plan())
 }
 
 /// Plan manager for tracking plan state across sessions
@@ -414,8 +470,54 @@ impl PlanManager {
     }
 
     /// Store a plan for a session
+    ///
+    /// If a plan already exists for this session, this will replace it entirely.
+    /// Use `update_plan` to merge changes while preserving entry IDs.
     pub fn set_plan(&mut self, session_id: String, plan: AgentPlan) {
         self.active_plans.insert(session_id, plan);
+    }
+
+    /// Update an existing plan with new data, preserving entry IDs where possible
+    ///
+    /// This method attempts to match entries from the new plan to existing entries
+    /// by content, preserving the original entry IDs and only updating the status
+    /// and other fields. New entries are added, and entries not in the new plan
+    /// are removed.
+    ///
+    /// Returns true if the plan was updated, false if no plan exists for this session.
+    pub fn update_plan(&mut self, session_id: &str, new_plan: AgentPlan) -> bool {
+        if let Some(existing_plan) = self.active_plans.get_mut(session_id) {
+            // Create a map of content -> existing entry for matching
+            let mut existing_by_content: HashMap<String, PlanEntry> = existing_plan
+                .entries
+                .drain(..)
+                .map(|entry| (entry.content.clone(), entry))
+                .collect();
+
+            // Process new plan entries
+            for new_entry in new_plan.entries {
+                if let Some(mut existing_entry) = existing_by_content.remove(&new_entry.content) {
+                    // Entry exists - update it while preserving ID and created_at
+                    existing_entry.status = new_entry.status;
+                    existing_entry.priority = new_entry.priority;
+                    existing_entry.notes = new_entry.notes;
+                    existing_entry.updated_at = Some(std::time::SystemTime::now());
+                    existing_plan.entries.push(existing_entry);
+                } else {
+                    // New entry - add it as-is
+                    existing_plan.entries.push(new_entry);
+                }
+            }
+
+            // Update plan metadata
+            existing_plan.metadata = new_plan.metadata;
+
+            true
+        } else {
+            // No existing plan - just set it
+            self.active_plans.insert(session_id.to_string(), new_plan);
+            false
+        }
     }
 
     /// Get the current plan for a session
@@ -706,7 +808,11 @@ mod tests {
         assert_eq!(acp_plan.entries.len(), 3);
 
         // Check first entry (in_progress should map to InProgress)
-        assert_eq!(acp_plan.entries[0].content, "Discover changed files in git");
+        // For in-progress items, activeForm should be used as content
+        assert_eq!(
+            acp_plan.entries[0].content,
+            "Discovering changed files in git"
+        );
         let status_json = serde_json::to_value(&acp_plan.entries[0].status).unwrap();
         assert_eq!(status_json, "in_progress");
         let priority_json = serde_json::to_value(&acp_plan.entries[0].priority).unwrap();
@@ -749,5 +855,124 @@ mod tests {
 
         let result = todowrite_to_acp_plan(&invalid_json);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_plan_manager_update_preserves_ids() {
+        let mut manager = PlanManager::new();
+        let session_id = "test_session";
+
+        // Create initial plan with 3 entries
+        let mut initial_plan = AgentPlan::new();
+        initial_plan.add_entry(PlanEntry::new("Task 1".to_string(), Priority::High));
+        initial_plan.add_entry(PlanEntry::new("Task 2".to_string(), Priority::Medium));
+        initial_plan.add_entry(PlanEntry::new("Task 3".to_string(), Priority::Low));
+
+        // Store initial plan
+        manager.set_plan(session_id.to_string(), initial_plan);
+
+        // Get the stored plan and capture entry IDs
+        let stored_plan = manager.get_plan(session_id).unwrap();
+        let task1_id = stored_plan.entries[0].id.clone();
+        let task2_id = stored_plan.entries[1].id.clone();
+        let task3_id = stored_plan.entries[2].id.clone();
+
+        assert_eq!(stored_plan.entries[0].status, PlanEntryStatus::Pending);
+        assert_eq!(stored_plan.entries[1].status, PlanEntryStatus::Pending);
+        assert_eq!(stored_plan.entries[2].status, PlanEntryStatus::Pending);
+
+        // Create updated plan with status changes
+        let mut updated_plan = AgentPlan::new();
+        let mut entry1 = PlanEntry::new("Task 1".to_string(), Priority::High);
+        entry1.update_status(PlanEntryStatus::Completed);
+        updated_plan.add_entry(entry1);
+
+        let mut entry2 = PlanEntry::new("Task 2".to_string(), Priority::High);
+        entry2.update_status(PlanEntryStatus::InProgress);
+        updated_plan.add_entry(entry2);
+
+        updated_plan.add_entry(PlanEntry::new("Task 3".to_string(), Priority::Low));
+
+        // Update the plan
+        let was_updated = manager.update_plan(session_id, updated_plan);
+        assert!(was_updated);
+
+        // Verify IDs are preserved but status is updated
+        let final_plan = manager.get_plan(session_id).unwrap();
+        assert_eq!(final_plan.entries.len(), 3);
+
+        // Find entries by content and verify IDs and status
+        let task1 = final_plan
+            .entries
+            .iter()
+            .find(|e| e.content == "Task 1")
+            .unwrap();
+        assert_eq!(task1.id, task1_id); // ID preserved
+        assert_eq!(task1.status, PlanEntryStatus::Completed); // Status updated
+
+        let task2 = final_plan
+            .entries
+            .iter()
+            .find(|e| e.content == "Task 2")
+            .unwrap();
+        assert_eq!(task2.id, task2_id); // ID preserved
+        assert_eq!(task2.status, PlanEntryStatus::InProgress); // Status updated
+        assert_eq!(task2.priority, Priority::High); // Priority updated
+
+        let task3 = final_plan
+            .entries
+            .iter()
+            .find(|e| e.content == "Task 3")
+            .unwrap();
+        assert_eq!(task3.id, task3_id); // ID preserved
+        assert_eq!(task3.status, PlanEntryStatus::Pending); // Status unchanged
+    }
+
+    #[test]
+    fn test_plan_manager_update_adds_new_entries() {
+        let mut manager = PlanManager::new();
+        let session_id = "test_session";
+
+        // Create initial plan with 2 entries
+        let mut initial_plan = AgentPlan::new();
+        initial_plan.add_entry(PlanEntry::new("Task 1".to_string(), Priority::High));
+        initial_plan.add_entry(PlanEntry::new("Task 2".to_string(), Priority::Medium));
+        manager.set_plan(session_id.to_string(), initial_plan);
+
+        // Create updated plan with 3 entries (1 new)
+        let mut updated_plan = AgentPlan::new();
+        updated_plan.add_entry(PlanEntry::new("Task 1".to_string(), Priority::High));
+        updated_plan.add_entry(PlanEntry::new("Task 2".to_string(), Priority::Medium));
+        updated_plan.add_entry(PlanEntry::new("Task 3".to_string(), Priority::Low));
+
+        manager.update_plan(session_id, updated_plan);
+
+        let final_plan = manager.get_plan(session_id).unwrap();
+        assert_eq!(final_plan.entries.len(), 3);
+        assert!(final_plan.entries.iter().any(|e| e.content == "Task 3"));
+    }
+
+    #[test]
+    fn test_plan_manager_update_removes_old_entries() {
+        let mut manager = PlanManager::new();
+        let session_id = "test_session";
+
+        // Create initial plan with 3 entries
+        let mut initial_plan = AgentPlan::new();
+        initial_plan.add_entry(PlanEntry::new("Task 1".to_string(), Priority::High));
+        initial_plan.add_entry(PlanEntry::new("Task 2".to_string(), Priority::Medium));
+        initial_plan.add_entry(PlanEntry::new("Task 3".to_string(), Priority::Low));
+        manager.set_plan(session_id.to_string(), initial_plan);
+
+        // Create updated plan with only 2 entries
+        let mut updated_plan = AgentPlan::new();
+        updated_plan.add_entry(PlanEntry::new("Task 1".to_string(), Priority::High));
+        updated_plan.add_entry(PlanEntry::new("Task 2".to_string(), Priority::Medium));
+
+        manager.update_plan(session_id, updated_plan);
+
+        let final_plan = manager.get_plan(session_id).unwrap();
+        assert_eq!(final_plan.entries.len(), 2);
+        assert!(!final_plan.entries.iter().any(|e| e.content == "Task 3"));
     }
 }

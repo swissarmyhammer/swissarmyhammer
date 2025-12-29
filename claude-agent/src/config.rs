@@ -164,7 +164,7 @@ impl McpServerConfig {
 }
 
 impl StdioTransport {
-    /// Validate stdio transport configuration
+    /// Validate stdio transport configuration with basic checks
     pub fn validate(&self) -> crate::error::Result<()> {
         if self.name.is_empty() {
             return Err(crate::error::AgentError::Config(
@@ -178,31 +178,6 @@ impl StdioTransport {
             )));
         }
 
-        // Validate working directory if provided
-        if let Some(cwd) = &self.cwd {
-            if cwd.is_empty() {
-                return Err(crate::error::AgentError::Config(format!(
-                    "MCP server '{}' working directory cannot be empty",
-                    self.name
-                )));
-            }
-
-            let cwd_path = std::path::Path::new(cwd);
-            if !cwd_path.exists() {
-                return Err(crate::error::AgentError::Config(format!(
-                    "MCP server '{}' working directory does not exist: {}",
-                    self.name, cwd
-                )));
-            }
-
-            if !cwd_path.is_dir() {
-                return Err(crate::error::AgentError::Config(format!(
-                    "MCP server '{}' working directory is not a directory: {}",
-                    self.name, cwd
-                )));
-            }
-        }
-
         // Validate environment variables
         for env_var in &self.env {
             if env_var.name.is_empty() {
@@ -212,6 +187,243 @@ impl StdioTransport {
                 )));
             }
         }
+
+        Ok(())
+    }
+
+    /// Validate working directory with ACP file security requirements
+    ///
+    /// This method validates that the working directory for an MCP server meets
+    /// security requirements including:
+    /// - Only absolute paths are accepted
+    /// - Path traversal attacks are prevented via canonicalization
+    /// - Forbidden paths from SecurityConfig are enforced
+    /// - Basic permissions are checked
+    ///
+    /// Note: File size validation is not performed here as this validates directories,
+    /// not files. File size limits must be enforced by callers when performing actual
+    /// file read operations within the working directory.
+    pub fn validate_working_directory(
+        &self,
+        security_config: &SecurityConfig,
+    ) -> crate::error::Result<()> {
+        // Only validate if working directory is provided
+        let Some(cwd) = &self.cwd else {
+            return Ok(());
+        };
+
+        // Check for empty working directory
+        if cwd.is_empty() {
+            tracing::warn!(
+                security_event = "invalid_working_directory",
+                server = %self.name,
+                reason = "empty_path",
+                "MCP server working directory cannot be empty"
+            );
+            return Err(crate::error::AgentError::Config(format!(
+                "MCP server '{}' working directory cannot be empty",
+                self.name
+            )));
+        }
+
+        tracing::info!(
+            security_event = "validating_working_directory",
+            server = %self.name,
+            path = %cwd,
+            "Validating MCP server working directory"
+        );
+
+        let cwd_path = std::path::Path::new(cwd);
+
+        // Requirement 1: Only accept absolute paths
+        if !cwd_path.is_absolute() {
+            tracing::warn!(
+                security_event = "invalid_working_directory",
+                server = %self.name,
+                path = %cwd,
+                reason = "not_absolute",
+                "MCP server working directory must be an absolute path"
+            );
+            return Err(crate::error::AgentError::Config(format!(
+                "MCP server '{}' working directory must be an absolute path: {}",
+                self.name, cwd
+            )));
+        }
+
+        // Requirement 2: Canonicalize path to prevent symlink attacks
+        // Note: canonicalize() will fail if path doesn't exist, which also validates existence
+        let canonical_cwd = cwd_path.canonicalize().map_err(|e| {
+            tracing::warn!(
+                security_event = "invalid_working_directory",
+                server = %self.name,
+                path = %cwd,
+                reason = "canonicalization_failed",
+                error = %e,
+                "Failed to canonicalize MCP server working directory (path may not exist or is inaccessible)"
+            );
+            crate::error::AgentError::Config(format!(
+                "MCP server '{}' cannot canonicalize working directory {}: {}",
+                self.name, cwd, e
+            ))
+        })?;
+
+        // Validate it's a directory
+        if !canonical_cwd.is_dir() {
+            tracing::warn!(
+                security_event = "invalid_working_directory",
+                server = %self.name,
+                path = %cwd,
+                canonical_path = %canonical_cwd.display(),
+                reason = "not_directory",
+                "MCP server working directory is not a directory"
+            );
+            return Err(crate::error::AgentError::Config(format!(
+                "MCP server '{}' working directory is not a directory: {}",
+                self.name, cwd
+            )));
+        }
+
+        // Requirement 3: Enforce blocked path lists from SecurityConfig
+        for forbidden_path in &security_config.forbidden_paths {
+            let forbidden = std::path::Path::new(forbidden_path);
+
+            // Canonicalize forbidden path to prevent bypass through symlinks
+            // All forbidden paths are validated during configuration loading to ensure they exist
+            // and are canonicalizable. This prevents ambiguous security checks and bypass attacks.
+            let canonical_forbidden = forbidden.canonicalize().map_err(|e| {
+                tracing::error!(
+                    security_event = "forbidden_path_canonicalization_failed",
+                    forbidden_path = %forbidden_path,
+                    error = %e,
+                    "Failed to canonicalize forbidden path that should have been validated during config load"
+                );
+                crate::error::AgentError::Config(format!(
+                    "Forbidden path became invalid after configuration load: {} - {}",
+                    forbidden_path, e
+                ))
+            })?;
+
+            // Check if working directory is within or equal to forbidden path.
+            // Using starts_with() on canonical paths correctly prevents access to
+            // forbidden directories and all their subdirectories. For example:
+            // - If forbidden_path is "/etc", this blocks "/etc", "/etc/passwd", "/etc/nginx/conf", etc.
+            // - Canonicalization ensures symlinks cannot bypass this check
+            // Note: starts_with() on Path types does proper component-wise comparison,
+            // so "/usr/local" will NOT match "/usr/loc" (unlike string starts_with)
+            if canonical_cwd.starts_with(&canonical_forbidden) {
+                tracing::warn!(
+                    security_event = "blocked_working_directory",
+                    server = %self.name,
+                    path = %cwd,
+                    canonical_path = %canonical_cwd.display(),
+                    forbidden_prefix = %forbidden_path,
+                    canonical_forbidden = %canonical_forbidden.display(),
+                    "MCP server working directory is in forbidden path"
+                );
+                return Err(crate::error::AgentError::Config(format!(
+                    "MCP server '{}' working directory is in forbidden path {}: {}",
+                    self.name, forbidden_path, cwd
+                )));
+            }
+        }
+
+        // Requirement 4: Check permissions before file operations
+        // We need to verify that the process has at least read and execute permissions
+        // for the directory. On Unix systems, execute permission is required to traverse
+        // directories and list their contents. The canonicalize() call above provides
+        // an implicit check, but we should be explicit about permission requirements.
+        let metadata = std::fs::metadata(&canonical_cwd).map_err(|e| {
+            tracing::warn!(
+                security_event = "invalid_working_directory",
+                server = %self.name,
+                path = %cwd,
+                canonical_path = %canonical_cwd.display(),
+                reason = "permission_check_failed",
+                error = %e,
+                "Failed to check permissions for MCP server working directory"
+            );
+            crate::error::AgentError::Config(format!(
+                "MCP server '{}' cannot check permissions for working directory {}: {}",
+                self.name, cwd, e
+            ))
+        })?;
+
+        // Platform-specific permission checks
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let perms = metadata.permissions();
+            let mode = perms.mode();
+
+            // Check for read permission (0o400 for owner, 0o040 for group, 0o004 for other)
+            let has_read = (mode & 0o444) != 0;
+            // Check for execute permission (0o100 for owner, 0o010 for group, 0o001 for other)
+            let has_execute = (mode & 0o111) != 0;
+
+            if !has_read || !has_execute {
+                tracing::warn!(
+                    security_event = "invalid_working_directory",
+                    server = %self.name,
+                    path = %cwd,
+                    canonical_path = %canonical_cwd.display(),
+                    reason = "insufficient_permissions",
+                    has_read = has_read,
+                    has_execute = has_execute,
+                    mode = format!("{:o}", mode),
+                    "MCP server working directory has insufficient permissions (need read and execute)"
+                );
+                return Err(crate::error::AgentError::Config(format!(
+                    "MCP server '{}' working directory has insufficient permissions (need read and execute): {}",
+                    self.name, cwd
+                )));
+            }
+        }
+
+        // On Windows, check if we can actually access the directory by attempting to read it
+        #[cfg(windows)]
+        {
+            match std::fs::read_dir(&canonical_cwd) {
+                Ok(_) => {
+                    // Successfully accessed directory, permissions are sufficient
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        security_event = "invalid_working_directory",
+                        server = %self.name,
+                        path = %cwd,
+                        canonical_path = %canonical_cwd.display(),
+                        reason = "insufficient_permissions",
+                        error = %e,
+                        "MCP server working directory is not accessible"
+                    );
+                    return Err(crate::error::AgentError::Config(format!(
+                        "MCP server '{}' working directory is not accessible: {}",
+                        self.name, cwd
+                    )));
+                }
+            }
+        }
+
+        // Check if directory is readonly (which may indicate write restrictions)
+        if metadata.permissions().readonly() {
+            tracing::info!(
+                security_event = "readonly_working_directory",
+                server = %self.name,
+                path = %cwd,
+                canonical_path = %canonical_cwd.display(),
+                "MCP server working directory is read-only (write operations will fail if attempted)"
+            );
+            // Note: This is informational only. Some MCP servers may not need write access.
+            // If write operations are required, they will fail at runtime with appropriate errors.
+        }
+
+        tracing::info!(
+            security_event = "working_directory_validated",
+            server = %self.name,
+            path = %cwd,
+            canonical_path = %canonical_cwd.display(),
+            "MCP server working directory validated successfully"
+        );
 
         Ok(())
     }
@@ -382,9 +594,81 @@ impl AgentConfig {
             )));
         }
 
+        // Validate max_prompt_length
+        if self.max_prompt_length == 0 {
+            return Err(crate::error::AgentError::Config(
+                "max_prompt_length must be greater than 0".to_string(),
+            ));
+        }
+        if self.max_prompt_length > 10_000_000 {
+            return Err(crate::error::AgentError::Config(format!(
+                "max_prompt_length too large: {} (maximum: 10,000,000)",
+                self.max_prompt_length
+            )));
+        }
+
+        // Validate notification_buffer_size
+        if self.notification_buffer_size == 0 {
+            return Err(crate::error::AgentError::Config(
+                "notification_buffer_size must be greater than 0".to_string(),
+            ));
+        }
+        if self.notification_buffer_size > 1_000_000 {
+            return Err(crate::error::AgentError::Config(format!(
+                "notification_buffer_size too large: {} (maximum: 1,000,000)",
+                self.notification_buffer_size
+            )));
+        }
+
+        // Validate cancellation_buffer_size
+        if self.cancellation_buffer_size == 0 {
+            return Err(crate::error::AgentError::Config(
+                "cancellation_buffer_size must be greater than 0".to_string(),
+            ));
+        }
+        if self.cancellation_buffer_size > 1_000_000 {
+            return Err(crate::error::AgentError::Config(format!(
+                "cancellation_buffer_size too large: {} (maximum: 1,000,000)",
+                self.cancellation_buffer_size
+            )));
+        }
+
+        // Validate max_tokens_per_turn
+        if self.max_tokens_per_turn == 0 {
+            return Err(crate::error::AgentError::Config(
+                "max_tokens_per_turn must be greater than 0".to_string(),
+            ));
+        }
+
+        // Validate max_turn_requests
+        if self.max_turn_requests == 0 {
+            return Err(crate::error::AgentError::Config(
+                "max_turn_requests must be greater than 0".to_string(),
+            ));
+        }
+
+        // Validate forbidden paths are all canonicalizable to prevent ambiguous security checks
+        // This ensures that all forbidden paths exist and are valid, preventing bypass attacks
+        // through non-existent paths with unusual characters or mixed separators
+        for forbidden_path in &self.security.forbidden_paths {
+            std::path::Path::new(forbidden_path)
+                .canonicalize()
+                .map_err(|e| {
+                    crate::error::AgentError::Config(format!(
+                        "Forbidden path must exist and be valid: {} - {}",
+                        forbidden_path, e
+                    ))
+                })?;
+        }
+
         // Validate MCP server configurations
         for server in &self.mcp_servers {
             server.validate()?;
+
+            // Validate working directory with security checks for stdio transports
+            if let McpServerConfig::Stdio(stdio_config) = server {
+                stdio_config.validate_working_directory(&self.security)?;
+            }
         }
 
         Ok(())
@@ -654,17 +938,47 @@ mod tests {
         };
         assert!(invalid_stdio.validate().is_err());
 
-        // Test working directory validation
-        let stdio_with_cwd = StdioTransport {
+        // Note: Working directory validation is now done separately via validate_working_directory()
+        // which requires SecurityConfig. See test_working_directory_validation() for those tests.
+    }
+
+    #[test]
+    fn test_working_directory_validation() {
+        let security_config = SecurityConfig {
+            allowed_file_patterns: vec![],
+            forbidden_paths: vec!["/etc".to_string(), "/usr".to_string()],
+            require_permission_for: vec![],
+        };
+
+        // Test with absolute path (current directory)
+        let current_dir = std::env::current_dir().unwrap();
+        let stdio_with_absolute_cwd = StdioTransport {
             name: "test".to_string(),
             command: "/bin/echo".to_string(),
             args: vec![],
             env: vec![],
-            cwd: Some(".".to_string()), // Current directory should exist
+            cwd: Some(current_dir.to_string_lossy().to_string()),
         };
-        assert!(stdio_with_cwd.validate().is_ok());
+        assert!(stdio_with_absolute_cwd
+            .validate_working_directory(&security_config)
+            .is_ok());
 
-        // Test invalid working directory
+        // Test with relative path (should fail)
+        let stdio_with_relative_cwd = StdioTransport {
+            name: "test".to_string(),
+            command: "/bin/echo".to_string(),
+            args: vec![],
+            env: vec![],
+            cwd: Some(".".to_string()),
+        };
+        let result = stdio_with_relative_cwd.validate_working_directory(&security_config);
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("must be an absolute path"));
+
+        // Test with non-existent directory
         let stdio_invalid_cwd = StdioTransport {
             name: "test".to_string(),
             command: "/bin/echo".to_string(),
@@ -672,7 +986,9 @@ mod tests {
             env: vec![],
             cwd: Some("/nonexistent/directory/path".to_string()),
         };
-        assert!(stdio_invalid_cwd.validate().is_err());
+        assert!(stdio_invalid_cwd
+            .validate_working_directory(&security_config)
+            .is_err());
 
         // Test empty working directory
         let stdio_empty_cwd = StdioTransport {
@@ -682,7 +998,21 @@ mod tests {
             env: vec![],
             cwd: Some(String::new()),
         };
-        assert!(stdio_empty_cwd.validate().is_err());
+        assert!(stdio_empty_cwd
+            .validate_working_directory(&security_config)
+            .is_err());
+
+        // Test None working directory (should pass)
+        let stdio_no_cwd = StdioTransport {
+            name: "test".to_string(),
+            command: "/bin/echo".to_string(),
+            args: vec![],
+            env: vec![],
+            cwd: None,
+        };
+        assert!(stdio_no_cwd
+            .validate_working_directory(&security_config)
+            .is_ok());
     }
 
     #[test]
@@ -833,5 +1163,167 @@ mod tests {
         assert_eq!(parsed.headers.len(), 1);
         assert_eq!(parsed.headers[0].name, "X-API-Key");
         assert_eq!(parsed.headers[0].value, "apikey456");
+    }
+
+    #[test]
+    fn test_config_validation_max_prompt_length_zero() {
+        let mut config = AgentConfig::default();
+        config.max_prompt_length = 0;
+
+        let result = config.validate();
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("max_prompt_length must be greater than 0"));
+    }
+
+    #[test]
+    fn test_config_validation_max_prompt_length_too_large() {
+        let mut config = AgentConfig::default();
+        config.max_prompt_length = 10_000_001;
+
+        let result = config.validate();
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("max_prompt_length too large"));
+    }
+
+    #[test]
+    fn test_config_validation_max_prompt_length_valid() {
+        let mut config = AgentConfig::default();
+        config.max_prompt_length = 100_000;
+
+        let result = config.validate();
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_config_validation_notification_buffer_size_zero() {
+        let mut config = AgentConfig::default();
+        config.notification_buffer_size = 0;
+
+        let result = config.validate();
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("notification_buffer_size must be greater than 0"));
+    }
+
+    #[test]
+    fn test_config_validation_notification_buffer_size_too_large() {
+        let mut config = AgentConfig::default();
+        config.notification_buffer_size = 1_000_001;
+
+        let result = config.validate();
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("notification_buffer_size too large"));
+    }
+
+    #[test]
+    fn test_config_validation_notification_buffer_size_valid() {
+        let mut config = AgentConfig::default();
+        config.notification_buffer_size = 1_000;
+
+        let result = config.validate();
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_config_validation_cancellation_buffer_size_zero() {
+        let mut config = AgentConfig::default();
+        config.cancellation_buffer_size = 0;
+
+        let result = config.validate();
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("cancellation_buffer_size must be greater than 0"));
+    }
+
+    #[test]
+    fn test_config_validation_cancellation_buffer_size_too_large() {
+        let mut config = AgentConfig::default();
+        config.cancellation_buffer_size = 1_000_001;
+
+        let result = config.validate();
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("cancellation_buffer_size too large"));
+    }
+
+    #[test]
+    fn test_config_validation_cancellation_buffer_size_valid() {
+        let mut config = AgentConfig::default();
+        config.cancellation_buffer_size = 100;
+
+        let result = config.validate();
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_config_validation_max_tokens_per_turn_zero() {
+        let mut config = AgentConfig::default();
+        config.max_tokens_per_turn = 0;
+
+        let result = config.validate();
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("max_tokens_per_turn must be greater than 0"));
+    }
+
+    #[test]
+    fn test_config_validation_max_tokens_per_turn_valid() {
+        let mut config = AgentConfig::default();
+        config.max_tokens_per_turn = 100_000;
+
+        let result = config.validate();
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_config_validation_max_turn_requests_zero() {
+        let mut config = AgentConfig::default();
+        config.max_turn_requests = 0;
+
+        let result = config.validate();
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("max_turn_requests must be greater than 0"));
+    }
+
+    #[test]
+    fn test_config_validation_max_turn_requests_valid() {
+        let mut config = AgentConfig::default();
+        config.max_turn_requests = 50;
+
+        let result = config.validate();
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_config_validation_all_numeric_fields_valid() {
+        let mut config = AgentConfig::default();
+        config.max_prompt_length = 500_000;
+        config.notification_buffer_size = 2_000;
+        config.cancellation_buffer_size = 200;
+        config.max_tokens_per_turn = 200_000;
+        config.max_turn_requests = 100;
+
+        let result = config.validate();
+        assert!(result.is_ok());
     }
 }

@@ -417,6 +417,12 @@ impl ContentSecurityValidator {
             ContentBlock::ResourceLink(resource_link) => {
                 self.validate_uri_security(&resource_link.uri)?;
             }
+            _ => {
+                // Unknown or unsupported content block type - reject for security
+                return Err(ContentSecurityError::UnsupportedContentType {
+                    content_type: "unknown".to_string(),
+                });
+            }
         }
 
         Ok(())
@@ -456,6 +462,10 @@ impl ContentSecurityValidator {
                 ContentBlock::ResourceLink(_) => {
                     // URI-based content has minimal memory impact
                     total_estimated_size += 512; // 512B estimate
+                }
+                _ => {
+                    // Unknown content type - use conservative estimate
+                    total_estimated_size += 1024; // 1KB estimate
                 }
             }
         }
@@ -649,6 +659,12 @@ impl ContentSecurityValidator {
                         }
                     }
                 }
+            }
+            _ => {
+                // Unknown or unsupported resource type - reject for security
+                return Err(ContentSecurityError::UnsupportedContentType {
+                    content_type: "unknown resource type".to_string(),
+                });
             }
         }
 

@@ -8,6 +8,7 @@ use crate::types::{
 };
 use llama_common::async_utils;
 use llama_cpp_2::model::LlamaModel;
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -147,6 +148,8 @@ pub struct RequestQueue {
     metrics: Arc<QueueMetrics>,
     _chat_template: Arc<ChatTemplateEngine>,
     _session_config: crate::types::SessionConfig,
+    /// Track active requests by session ID for cancellation support
+    active_requests: Arc<TokioMutex<HashMap<crate::types::SessionId, CancellationToken>>>,
 }
 
 impl RequestQueue {
@@ -198,6 +201,7 @@ impl RequestQueue {
             metrics,
             _chat_template: chat_template,
             _session_config: session_config,
+            active_requests: Arc::new(TokioMutex::new(HashMap::new())),
         }
     }
 
@@ -208,6 +212,15 @@ impl RequestQueue {
     ) -> Result<GenerationResponse, QueueError> {
         let (response_sender, response_receiver) = oneshot::channel();
 
+        let cancellation_token = CancellationToken::new();
+        let session_id = request.session_id;
+
+        // Track the cancellation token for this session
+        {
+            let mut active = self.active_requests.lock().await;
+            active.insert(session_id, cancellation_token.clone());
+        }
+
         let queued_request = QueuedRequest {
             id: Ulid::new().to_string(),
             request,
@@ -215,7 +228,7 @@ impl RequestQueue {
             response_sender,
             stream_sender: None,
             submitted_at: Instant::now(),
-            cancellation_token: CancellationToken::new(),
+            cancellation_token: cancellation_token.clone(),
         };
 
         debug!("Submitting request to queue: {}", queued_request.id);
@@ -231,10 +244,18 @@ impl RequestQueue {
         }
 
         // Wait for response from worker
+        let active_requests: Arc<TokioMutex<HashMap<crate::types::SessionId, CancellationToken>>> =
+            Arc::clone(&self.active_requests);
         let response_future = async move {
-            response_receiver
+            let result = response_receiver
                 .await
-                .map_err(|_| QueueError::WorkerError("Response channel closed".to_string()))?
+                .map_err(|_| QueueError::WorkerError("Response channel closed".to_string()))?;
+
+            // Clean up the cancellation token tracking
+            let mut active = active_requests.lock().await;
+            active.remove(&session_id);
+
+            result
         };
         response_future.await
     }
@@ -247,6 +268,14 @@ impl RequestQueue {
         let (response_sender, _) = oneshot::channel();
         let (stream_sender, stream_receiver) = mpsc::channel(100);
 
+        let cancellation_token = CancellationToken::new();
+
+        // Track the cancellation token for this session
+        {
+            let mut active = self.active_requests.lock().await;
+            active.insert(request.session_id, cancellation_token.clone());
+        }
+
         let queued_request = QueuedRequest {
             id: Ulid::new().to_string(),
             request,
@@ -254,7 +283,7 @@ impl RequestQueue {
             response_sender,
             stream_sender: Some(stream_sender),
             submitted_at: Instant::now(),
-            cancellation_token: CancellationToken::new(),
+            cancellation_token: cancellation_token.clone(),
         };
 
         debug!(
@@ -278,6 +307,32 @@ impl RequestQueue {
     pub fn get_queue_size(&self) -> usize {
         // Use metrics for more accurate queue size
         self.metrics.current_queue_size.load(Ordering::Relaxed)
+    }
+
+    /// Cancel an active request for a session
+    ///
+    /// This triggers the cancellation token for any active request associated with
+    /// the given session ID. If the session has an active request, the generation
+    /// will be cancelled gracefully.
+    ///
+    /// # Arguments
+    ///
+    /// * `session_id` - The session ID whose request should be cancelled
+    ///
+    /// # Returns
+    ///
+    /// * `true` if an active request was found and cancelled
+    /// * `false` if no active request was found for this session
+    pub async fn cancel_session(&self, session_id: &crate::types::SessionId) -> bool {
+        let mut active = self.active_requests.lock().await;
+        if let Some(token) = active.remove(session_id) {
+            debug!("Cancelling request for session: {}", session_id);
+            token.cancel();
+            true
+        } else {
+            debug!("No active request found for session: {}", session_id);
+            false
+        }
     }
 
     pub fn get_stats(&self) -> QueueStats {
@@ -452,6 +507,40 @@ impl RequestQueue {
         );
     }
 
+    /// Check if client has file read capability (ACP mode only)
+    ///
+    /// Returns Ok(()) if capability is available or if not in ACP mode.
+    /// Returns Err if in ACP mode and capability is missing.
+    #[cfg(feature = "acp")]
+    fn check_file_read_capability(session: &Session) -> Result<(), QueueError> {
+        if let Some(ref caps) = session.client_capabilities {
+            if !caps.fs.read_text_file {
+                return Err(QueueError::WorkerError(
+                    "Client does not support fs.read_text_file capability required for KV cache operations".to_string()
+                ));
+            }
+        }
+        // If no capabilities set, assume non-ACP mode and allow operation
+        Ok(())
+    }
+
+    /// Check if client has file write capability (ACP mode only)
+    ///
+    /// Returns Ok(()) if capability is available or if not in ACP mode.
+    /// Returns Err if in ACP mode and capability is missing.
+    #[cfg(feature = "acp")]
+    fn check_file_write_capability(session: &Session) -> Result<(), QueueError> {
+        if let Some(ref caps) = session.client_capabilities {
+            if !caps.fs.write_text_file {
+                return Err(QueueError::WorkerError(
+                    "Client does not support fs.write_text_file capability required for KV cache operations".to_string()
+                ));
+            }
+        }
+        // If no capabilities set, assume non-ACP mode and allow operation
+        Ok(())
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn process_batch_request_sync(
         worker_id: usize,
@@ -545,6 +634,10 @@ impl RequestQueue {
 
             let should_load_cache = if tokens_file.exists() {
                 info!("Worker {} found token metadata file", worker_id);
+                // Check file read capability before reading token metadata
+                #[cfg(feature = "acp")]
+                Self::check_file_read_capability(session)?;
+
                 // Read the cached token sequence
                 match std::fs::read(&tokens_file) {
                     Ok(bytes) => {
@@ -575,10 +668,24 @@ impl RequestQueue {
                                 "Worker {} cached tokens don't match current prompt - deleting old cache",
                                 worker_id
                             );
+                            // Check file write capability before deleting token metadata
+                            #[cfg(feature = "acp")]
+                            if Self::check_file_write_capability(session).is_err() {
+                                warn!(
+                                    "Worker {} skipping token metadata deletion due to capability check",
+                                    worker_id
+                                );
+                            } else {
+                                let _ = std::fs::remove_file(&tokens_file);
+                            }
+                            #[cfg(not(feature = "acp"))]
+                            {
+                                let _ = std::fs::remove_file(&tokens_file);
+                            }
+
                             // Delete the mismatched cache files
                             let _ =
                                 model_manager.delete_session_kv_cache(&session.id, &kv_cache_dir);
-                            let _ = std::fs::remove_file(&tokens_file);
                             false
                         }
                     }
@@ -587,9 +694,23 @@ impl RequestQueue {
                             "Worker {} failed to read token metadata: {}, deleting cache",
                             worker_id, e
                         );
+                        // Check file write capability before deleting token metadata
+                        #[cfg(feature = "acp")]
+                        if Self::check_file_write_capability(session).is_err() {
+                            warn!(
+                                "Worker {} skipping token metadata deletion due to capability check",
+                                worker_id
+                            );
+                        } else {
+                            let _ = std::fs::remove_file(&tokens_file);
+                        }
+                        #[cfg(not(feature = "acp"))]
+                        {
+                            let _ = std::fs::remove_file(&tokens_file);
+                        }
+
                         // Delete corrupted cache
                         let _ = model_manager.delete_session_kv_cache(&session.id, &kv_cache_dir);
-                        let _ = std::fs::remove_file(&tokens_file);
                         false
                     }
                 }
@@ -809,6 +930,22 @@ impl RequestQueue {
                         cache_file.display(),
                         request_id
                     );
+
+                    // Check file write capability before saving token metadata
+                    #[cfg(feature = "acp")]
+                    if let Err(e) = Self::check_file_write_capability(session) {
+                        warn!(
+                            "Worker {} skipping token metadata save due to capability check: {}",
+                            worker_id, e
+                        );
+                        return Ok(GenerationResponse {
+                            generated_text,
+                            tokens_generated,
+                            generation_time,
+                            finish_reason: final_finish_reason,
+                            complete_token_sequence: generation_result.complete_token_sequence,
+                        });
+                    }
 
                     // Also save the token sequence for validation on next load
                     let tokens_file = kv_cache_dir.join(format!("{}.tokens", session.id));
@@ -1101,6 +1238,13 @@ mod tests {
             transcript_path: None,
             context_state: None,
             template_token_count: None,
+            #[cfg(feature = "acp")]
+            todos: Vec::new(),
+            #[cfg(feature = "acp")]
+            available_commands: Vec::new(),
+            current_mode: None,
+            #[cfg(feature = "acp")]
+            client_capabilities: None,
         }
     }
 

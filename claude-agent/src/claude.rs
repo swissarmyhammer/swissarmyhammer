@@ -18,6 +18,7 @@ use crate::{
 /// Claude client wrapper with session management
 pub struct ClaudeClient {
     process_manager: Arc<ClaudeProcessManager>,
+    protocol_translator: Arc<ProtocolTranslator>,
     notification_sender: Option<Arc<crate::agent::NotificationSender>>,
     raw_message_manager: Option<crate::agent::RawMessageManager>,
 }
@@ -92,7 +93,11 @@ impl ClaudeClient {
                 }
 
                 // Parse through protocol_translator
-                match ProtocolTranslator::stream_json_to_acp(&line, acp_session_id) {
+                match self
+                    .protocol_translator
+                    .stream_json_to_acp(&line, acp_session_id)
+                    .await
+                {
                     Ok(Some(notification)) => {
                         tracing::info!(
                             "Protocol translator created notification from init message"
@@ -268,20 +273,25 @@ pub enum ChunkType {
 }
 
 impl ClaudeClient {
-    /// Create a new Claude client with default configuration
-    pub fn new() -> Result<Self> {
+    /// Create a new Claude client with protocol translator
+    pub fn new(protocol_translator: Arc<ProtocolTranslator>) -> Result<Self> {
         Ok(Self {
             process_manager: Arc::new(ClaudeProcessManager::new()),
+            protocol_translator,
             notification_sender: None,
             raw_message_manager: None,
         })
     }
 
-    /// Create a new Claude client with custom configuration
-    pub fn new_with_config(_claude_config: &ClaudeConfig) -> Result<Self> {
+    /// Create a new Claude client with custom configuration and protocol translator
+    pub fn new_with_config(
+        _claude_config: &ClaudeConfig,
+        protocol_translator: Arc<ProtocolTranslator>,
+    ) -> Result<Self> {
         tracing::info!("Created ClaudeClient with process manager");
         Ok(Self {
             process_manager: Arc::new(ClaudeProcessManager::new()),
+            protocol_translator,
             notification_sender: None,
             raw_message_manager: None,
         })
@@ -299,7 +309,7 @@ impl ClaudeClient {
 
     /// Convert session::SessionId to agent_client_protocol::SessionId
     fn to_acp_session_id(session_id: &SessionId) -> agent_client_protocol::SessionId {
-        agent_client_protocol::SessionId(Arc::from(session_id.to_string().as_str()))
+        agent_client_protocol::SessionId::new(session_id.to_string())
     }
 
     /// Convert ContentBlock to MessageChunk
@@ -334,7 +344,7 @@ impl ClaudeClient {
             annotations: None,
             meta: None,
         })];
-        let stream_json = ProtocolTranslator::acp_to_stream_json(content)?;
+        let stream_json = self.protocol_translator.acp_to_stream_json(content)?;
 
         // Debug logging to trace what's actually sent to Claude CLI
         tracing::debug!("📤 Sending to Claude CLI stdin:");
@@ -407,8 +417,10 @@ impl ClaudeClient {
                         }
                     }
 
-                    if let Ok(Some(notification)) =
-                        ProtocolTranslator::stream_json_to_acp(&line, &acp_session_id)
+                    if let Ok(Some(notification)) = self
+                        .protocol_translator
+                        .stream_json_to_acp(&line, &acp_session_id)
+                        .await
                     {
                         if let SessionUpdate::AgentMessageChunk(chunk) = notification.update {
                             if let ContentBlock::Text(text) = chunk.content {
@@ -468,6 +480,7 @@ impl ClaudeClient {
         let acp_session_id = Self::to_acp_session_id(session_id);
         let notification_sender_clone = self.notification_sender.clone();
         let raw_message_manager_clone = self.raw_message_manager.clone();
+        let protocol_translator = self.protocol_translator.clone();
 
         // Spawn an async task to read from the process and send chunks
         tokio::task::spawn(async move {
@@ -497,7 +510,7 @@ impl ClaudeClient {
                 // Check if this is a result message (indicates end)
                 if Self::is_end_of_stream(&line) {
                     // Parse the result message to extract stop_reason
-                    if let Ok(Some(result)) = ProtocolTranslator::parse_result_message(&line) {
+                    if let Ok(Some(result)) = self.protocol_translator.parse_result_message(&line) {
                         // Send a final chunk with the stop_reason
                         let final_chunk = MessageChunk {
                             content: String::new(),
@@ -523,8 +536,9 @@ impl ClaudeClient {
                 }
 
                 // Translate to ACP notification
-                if let Ok(Some(notification)) =
-                    ProtocolTranslator::stream_json_to_acp(&line, &acp_session_id)
+                if let Ok(Some(notification)) = protocol_translator
+                    .stream_json_to_acp(&line, &acp_session_id)
+                    .await
                 {
                     // Forward notification first (if sender configured)
                     // This must clone to avoid moving from borrowed content

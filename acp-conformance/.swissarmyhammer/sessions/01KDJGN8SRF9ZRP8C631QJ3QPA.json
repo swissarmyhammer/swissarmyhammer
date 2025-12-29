@@ -1,0 +1,296 @@
+{
+  "id": "01KDJGN8SRF9ZRP8C631QJ3QPA",
+  "created_at": {
+    "secs_since_epoch": 1766926754,
+    "nanos_since_epoch": 616961000
+  },
+  "last_accessed": {
+    "secs_since_epoch": 1766926764,
+    "nanos_since_epoch": 85271000
+  },
+  "context": [
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926758,
+        "nanos_since_epoch": 378311000
+      },
+      "update": {
+        "sessionUpdate": "available_commands_update",
+        "availableCommands": [
+          {
+            "name": "create_plan",
+            "description": "Create an execution plan for complex tasks",
+            "input": null,
+            "_meta": {
+              "category": "planning",
+              "source": "core"
+            }
+          },
+          {
+            "name": "research_codebase",
+            "description": "Research and analyze the codebase structure",
+            "input": null,
+            "_meta": {
+              "category": "analysis",
+              "source": "core"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926758,
+        "nanos_since_epoch": 378555000
+      },
+      "update": {
+        "sessionUpdate": "user_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "Hello, this is a test message"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926763,
+        "nanos_since_epoch": 37644000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "Hello"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926763,
+        "nanos_since_epoch": 226457000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "! Thanks"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926763,
+        "nanos_since_epoch": 226847000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " for the"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926763,
+        "nanos_since_epoch": 227414000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " test"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926763,
+        "nanos_since_epoch": 392024000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " message. Everything"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926763,
+        "nanos_since_epoch": 393410000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " is"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926763,
+        "nanos_since_epoch": 404866000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " working"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926763,
+        "nanos_since_epoch": 524396000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " well on"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926763,
+        "nanos_since_epoch": 669538000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " my end. Let"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926763,
+        "nanos_since_epoch": 790799000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " me know if you have"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926763,
+        "nanos_since_epoch": 806047000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " any questions"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926763,
+        "nanos_since_epoch": 855119000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " or need help with anything in"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926763,
+        "nanos_since_epoch": 870605000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " your"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926763,
+        "nanos_since_epoch": 881271000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " project"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926763,
+        "nanos_since_epoch": 929848000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "."
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926764,
+        "nanos_since_epoch": 85253000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "Hello! Thanks for the test message. Everything is working well on my end. Let me know if you have any questions or need help with anything in your project."
+        }
+      }
+    }
+  ],
+  "client_capabilities": {
+    "fs": {
+      "readTextFile": false,
+      "writeTextFile": false
+    },
+    "terminal": false
+  },
+  "mcp_servers": [],
+  "cwd": "/Users/wballard/github/swissarmyhammer/acp-conformance",
+  "available_commands": [
+    {
+      "name": "create_plan",
+      "description": "Create an execution plan for complex tasks",
+      "input": null,
+      "_meta": {
+        "category": "planning",
+        "source": "core"
+      }
+    },
+    {
+      "name": "research_codebase",
+      "description": "Research and analyze the codebase structure",
+      "input": null,
+      "_meta": {
+        "category": "analysis",
+        "source": "core"
+      }
+    }
+  ],
+  "turn_request_count": 1,
+  "turn_token_count": 7,
+  "current_mode": null,
+  "todos": []
+}

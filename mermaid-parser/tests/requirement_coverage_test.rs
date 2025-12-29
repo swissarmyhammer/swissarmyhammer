@@ -347,6 +347,7 @@ requirement missing_id {
     } else {
         // Parser rejects it, which is also valid
     }
+    // Parser rejects it, which is also valid
 
     // Test requirement without text
     let input2 = r#"requirementDiagram
@@ -364,6 +365,7 @@ requirement missing_text {
     } else {
         // Parser rejects it, which is also valid
     }
+    // Parser rejects it, which is also valid
 }
 
 #[test]
@@ -381,10 +383,8 @@ element missing_type {
         let elem = &diagram.elements["missing_type"];
         assert_eq!(elem.element_type, ""); // Empty type
         assert_eq!(elem.doc_ref, Some("some/path".to_string()));
-    } else {
-        // Or it may reject it
-        assert!(result.is_err());
     }
+    // Or it may reject it
 }
 
 #[test]

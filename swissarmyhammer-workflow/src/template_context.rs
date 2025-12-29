@@ -7,7 +7,7 @@ use crate::action_parser::ActionParser;
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use swissarmyhammer_config::{
-    model::{AgentExecutorType, LlamaAgentConfig, ModelConfig, ModelSource},
+    model::{LlamaAgentConfig, ModelConfig, ModelExecutorType, ModelSource},
     ConfigurationResult, TemplateContext,
 };
 
@@ -422,7 +422,7 @@ impl WorkflowTemplateContext {
     }
 
     /// Get the executor type from agent configuration
-    pub fn get_executor_type(&self) -> AgentExecutorType {
+    pub fn get_executor_type(&self) -> ModelExecutorType {
         self.get_agent_config().executor_type()
     }
 
@@ -449,8 +449,8 @@ impl WorkflowTemplateContext {
     /// Get model name for prompt rendering
     pub fn get_model_name(&self) -> String {
         match self.get_executor_type() {
-            AgentExecutorType::ClaudeCode => "claude".to_string(),
-            AgentExecutorType::LlamaAgent => self
+            ModelExecutorType::ClaudeCode => "claude".to_string(),
+            ModelExecutorType::LlamaAgent => self
                 .get_llama_config()
                 .map(|config| match &config.model.source {
                     ModelSource::HuggingFace { repo, .. } => repo.clone(),
@@ -718,7 +718,7 @@ mod tests {
         let context = create_empty_test_context();
 
         // Should default to Claude Code
-        assert_eq!(context.get_executor_type(), AgentExecutorType::ClaudeCode);
+        assert_eq!(context.get_executor_type(), ModelExecutorType::ClaudeCode);
         assert_eq!(context.get_model_name(), "claude");
         assert!(!context.is_quiet());
     }
@@ -743,7 +743,7 @@ mod tests {
 
         context.set_agent_config(agent_config);
 
-        assert_eq!(context.get_executor_type(), AgentExecutorType::LlamaAgent);
+        assert_eq!(context.get_executor_type(), ModelExecutorType::LlamaAgent);
         assert!(context.get_llama_config().is_some());
         assert!(!context.is_quiet());
 
@@ -760,7 +760,7 @@ mod tests {
 
         context.set_agent_config(agent_config);
 
-        assert_eq!(context.get_executor_type(), AgentExecutorType::LlamaAgent);
+        assert_eq!(context.get_executor_type(), ModelExecutorType::LlamaAgent);
         assert!(context.get_llama_config().is_some());
         assert!(context.is_quiet());
     }

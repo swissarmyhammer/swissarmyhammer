@@ -760,6 +760,7 @@ impl<'a> TextGenerator for LlamaCppGenerator<'a> {
                 text: token_text.clone(),
                 is_complete: false,
                 token_count: tokens_generated,
+                finish_reason: None,
             };
 
             if stream_sender.send(Ok(chunk)).is_err() {
@@ -1083,6 +1084,7 @@ impl<'a> TextGenerator for LlamaCppGenerator<'a> {
                 text: token_text.clone(),
                 is_complete: false,
                 token_count: tokens_generated,
+                finish_reason: None,
             };
 
             if stream_sender.send(Ok(chunk)).is_err() {
@@ -1189,6 +1191,7 @@ impl<'a> LlamaCppGenerator<'a> {
             text: String::new(), // Final chunk has empty text
             is_complete: true,
             token_count: tokens_generated,
+            finish_reason: Some(FinishReason::Stopped(finish_reason.to_string())),
         };
 
         if stream_sender.send(Ok(final_chunk)).is_err() {

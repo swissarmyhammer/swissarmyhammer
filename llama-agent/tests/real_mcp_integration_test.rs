@@ -17,9 +17,9 @@ use rstest::*;
 use serde_json::json;
 
 use std::path::PathBuf;
-use std::process::{Child, Command, Stdio};
 use std::time::Duration;
 use tokio::fs;
+use tokio::process::{Child, Command};
 use tokio::time::timeout;
 use tracing::{info, warn};
 
@@ -63,16 +63,16 @@ impl RealEchoServerFixture {
             .args(["run", "--example", &format!("echo_{}", transport_name)])
             .current_dir(env!("CARGO_MANIFEST_DIR"))
             .stdin(if matches!(transport_type, TransportType::Stdio) {
-                Stdio::piped()
+                std::process::Stdio::piped()
             } else {
-                Stdio::null()
+                std::process::Stdio::null()
             })
             .stdout(if matches!(transport_type, TransportType::Stdio) {
-                Stdio::piped()
+                std::process::Stdio::piped()
             } else {
-                Stdio::inherit()
+                std::process::Stdio::inherit()
             })
-            .stderr(Stdio::inherit())
+            .stderr(std::process::Stdio::inherit())
             .spawn()
             .unwrap_or_else(|_| panic!("Failed to spawn real echo_{} server", transport_name));
 
@@ -130,8 +130,20 @@ impl Drop for RealEchoServerFixture {
             "Shutting down real {} EchoService server",
             self.transport_type.name()
         );
-        let _ = self.server_process.kill();
-        let _ = self.server_process.wait();
+        let _ = self.server_process.start_kill();
+    }
+}
+
+impl RealEchoServerFixture {
+    /// Async cleanup method to properly wait for process exit
+    #[allow(dead_code)]
+    async fn cleanup(mut self) {
+        info!(
+            "Cleaning up real {} EchoService server",
+            self.transport_type.name()
+        );
+        let _ = self.server_process.kill().await;
+        let _ = self.server_process.wait().await;
     }
 }
 

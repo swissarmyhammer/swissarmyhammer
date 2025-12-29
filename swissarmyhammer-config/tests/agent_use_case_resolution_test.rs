@@ -1,7 +1,8 @@
 // sah rule ignore test_rule_with_allow
 use std::fs;
 use swissarmyhammer_common::test_utils::IsolatedTestEnvironment;
-use swissarmyhammer_config::model::{ModelManager, ModelUseCase};
+use swissarmyhammer_config::model::ModelManager;
+use swissarmyhammer_config::AgentUseCase;
 
 #[test]
 fn test_resolve_rules_model_from_config() {
@@ -16,14 +17,14 @@ fn test_resolve_rules_model_from_config() {
 
     // Write config with rules agent
     let config_path = sah_dir.join("sah.yaml");
-    fs::write(&config_path, "models:\n  rules: qwen-coder-flash\n").unwrap();
+    fs::write(&config_path, "agents:\n  rules: qwen-coder-flash\n").unwrap();
 
     // Change to temp directory
     let original_dir = std::env::current_dir().unwrap();
     std::env::set_current_dir(&temp_path).unwrap();
 
     // Test get_agent_for_use_case
-    let result = ModelManager::get_agent_for_use_case(ModelUseCase::Rules);
+    let result = ModelManager::get_agent_for_use_case(AgentUseCase::Rules);
     eprintln!("get_agent_for_use_case result: {:?}", result);
 
     match result {
@@ -50,7 +51,7 @@ fn test_resolve_rules_model_from_config() {
     }
 
     // Test resolve_agent_config_for_use_case
-    let config_result = ModelManager::resolve_agent_config_for_use_case(ModelUseCase::Rules);
+    let config_result = ModelManager::resolve_agent_config_for_use_case(AgentUseCase::Rules);
     eprintln!(
         "resolve_agent_config_for_use_case result: {:?}",
         config_result

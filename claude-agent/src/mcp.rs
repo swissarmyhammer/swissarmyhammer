@@ -1555,6 +1555,100 @@ impl McpServerManager {
         all_prompts
     }
 
+    /// Start monitoring MCP server notifications for capability changes
+    ///
+    /// Spawns background tasks to monitor each MCP server connection for
+    /// `tools/list_changed` and `prompts/list_changed` notifications.
+    /// When these notifications are received, invokes the provided callback.
+    ///
+    /// # Arguments
+    ///
+    /// * `on_commands_changed` - Async callback invoked when commands change
+    ///
+    /// # Returns
+    ///
+    /// Returns a vector of join handles for the spawned monitoring tasks
+    pub fn start_monitoring_notifications<F>(
+        self: Arc<Self>,
+        on_commands_changed: F,
+    ) -> Vec<tokio::task::JoinHandle<()>>
+    where
+        F: Fn() -> futures::future::BoxFuture<'static, ()> + Send + Sync + 'static,
+    {
+        let callback = Arc::new(on_commands_changed);
+        let mut handles = Vec::new();
+
+        // For each SSE connection, spawn a task to monitor notifications
+        let connections = futures::executor::block_on(self.connections.read());
+
+        for (server_name, connection) in connections.iter() {
+            if let TransportConnection::Sse { response_rx, .. } = &connection.transport {
+                let response_rx = Arc::clone(response_rx);
+                let callback = Arc::clone(&callback);
+                let server_name = server_name.clone();
+
+                let handle = tokio::spawn(async move {
+                    loop {
+                        let mut rx_guard = response_rx.write().await;
+
+                        if let Some(rx) = rx_guard.as_mut() {
+                            match rx.recv().await {
+                                Some(message) => {
+                                    // Try to parse as JSON-RPC notification
+                                    if let Ok(json) =
+                                        serde_json::from_str::<serde_json::Value>(&message)
+                                    {
+                                        if let Some(method) =
+                                            json.get("method").and_then(|m| m.as_str())
+                                        {
+                                            match method {
+                                                "notifications/tools/list_changed" => {
+                                                    tracing::info!(
+                                                        "MCP server {} reported tools changed, refreshing commands",
+                                                        server_name
+                                                    );
+                                                    callback().await;
+                                                }
+                                                "notifications/prompts/list_changed" => {
+                                                    tracing::info!(
+                                                        "MCP server {} reported prompts changed, refreshing commands",
+                                                        server_name
+                                                    );
+                                                    callback().await;
+                                                }
+                                                _ => {
+                                                    // Other notifications are ignored
+                                                    tracing::trace!(
+                                                        "Ignoring MCP notification: {} from {}",
+                                                        method,
+                                                        server_name
+                                                    );
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                                None => {
+                                    tracing::debug!(
+                                        "MCP notification channel closed for server: {}",
+                                        server_name
+                                    );
+                                    break;
+                                }
+                            }
+                        } else {
+                            break;
+                        }
+                    }
+                });
+
+                handles.push(handle);
+            }
+        }
+
+        handles
+    }
+
     /// Shutdown all MCP server connections
     pub async fn shutdown(&self) -> crate::Result<()> {
         let mut connections = self.connections.write().await;

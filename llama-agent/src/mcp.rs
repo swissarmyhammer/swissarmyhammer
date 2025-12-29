@@ -7,7 +7,7 @@ use crate::types::errors::MCPError;
 use async_trait::async_trait;
 use rmcp::{
     model::*,
-    transport::{stdio, SseClientTransport, StreamableHttpClientTransport},
+    transport::{stdio, StreamableHttpClientTransport},
     ClientHandler, RoleClient, ServiceExt,
 };
 use serde_json::Value;
@@ -119,35 +119,14 @@ impl UnifiedMCPClient {
         })
     }
 
-    /// Create a new client with SSE transport
+    /// Create a new client with SSE transport (deprecated - use with_streamable_http instead)
+    #[deprecated(
+        note = "SSE transport was removed in rmcp 0.11.0, use with_streamable_http instead"
+    )]
     pub async fn with_sse(url: &str, timeout_secs: Option<u64>) -> Result<Self, MCPError> {
-        let transport = SseClientTransport::start(url.to_string())
-            .await
-            .map_err(|e| MCPError::Protocol(format!("Failed to start SSE transport: {:?}", e)))?;
-
-        let client_info = ClientInfo {
-            protocol_version: Default::default(),
-            capabilities: ClientCapabilities::default(),
-            client_info: Implementation {
-                name: "llama_agent_client".to_string(),
-                title: Some("Llama Agent MCP Client".to_string()),
-                version: env!("CARGO_PKG_VERSION").to_string(),
-                website_url: None,
-                icons: None,
-            },
-        };
-
-        let service = client_info
-            .serve(transport)
-            .await
-            .map_err(|e| MCPError::Protocol(format!("Failed to create SSE MCP client: {:?}", e)))?;
-
-        let default_timeout = Duration::from_secs(timeout_secs.unwrap_or(30));
-
-        Ok(Self {
-            service,
-            default_timeout,
-        })
+        // SSE transport was removed in rmcp 0.11.0
+        // Fall back to StreamableHttp which supports SSE-like streaming
+        Self::with_streamable_http(url, timeout_secs).await
     }
 
     /// Create a new client with streamable HTTP transport
@@ -223,17 +202,13 @@ impl UnifiedMCPClient {
     }
 
     /// List available prompts
-    pub async fn list_prompts(&self) -> Result<Vec<String>, MCPError> {
+    pub async fn list_prompts(&self) -> Result<Vec<Prompt>, MCPError> {
         let result = timeout(self.default_timeout, self.service.list_prompts(None))
             .await
             .map_err(|_| MCPError::Timeout("list_prompts timed out".to_string()))?
             .map_err(|e| MCPError::Protocol(format!("list_prompts failed: {:?}", e)))?;
 
-        Ok(result
-            .prompts
-            .into_iter()
-            .map(|prompt| prompt.name)
-            .collect())
+        Ok(result.prompts)
     }
 
     /// Get a prompt with arguments
@@ -350,7 +325,7 @@ impl Default for RetryConfig {
 pub trait MCPClient: Send + Sync {
     async fn list_tools(&self) -> Result<Vec<String>, MCPError>;
     async fn call_tool(&self, name: &str, arguments: Value) -> Result<String, MCPError>;
-    async fn list_prompts(&self) -> Result<Vec<String>, MCPError>;
+    async fn list_prompts(&self) -> Result<Vec<Prompt>, MCPError>;
     async fn get_prompt(
         &self,
         name: &str,
@@ -370,7 +345,7 @@ impl MCPClient for UnifiedMCPClient {
         self.call_tool(name, arguments).await
     }
 
-    async fn list_prompts(&self) -> Result<Vec<String>, MCPError> {
+    async fn list_prompts(&self) -> Result<Vec<Prompt>, MCPError> {
         self.list_prompts().await
     }
 
@@ -490,7 +465,7 @@ impl MCPClientBuilder {
             let client = match server.connection {
                 ServerConnectionConfig::Stdio => UnifiedMCPClient::with_stdio(None).await?,
                 ServerConnectionConfig::Sse { url } => {
-                    UnifiedMCPClient::with_sse(&url, None).await?
+                    UnifiedMCPClient::with_streamable_http(&url, None).await?
                 }
                 ServerConnectionConfig::StreamableHttp { url } => {
                     UnifiedMCPClient::with_streamable_http(&url, None).await?
@@ -539,7 +514,7 @@ impl MCPClient for NoOpMCPClient {
         ))
     }
 
-    async fn list_prompts(&self) -> Result<Vec<String>, MCPError> {
+    async fn list_prompts(&self) -> Result<Vec<Prompt>, MCPError> {
         Ok(vec![])
     }
 

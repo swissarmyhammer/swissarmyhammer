@@ -4,12 +4,12 @@
 //! getting recommended timeouts, and other executor-related functionality.
 
 use crate::actions::{ActionError, ActionResult};
-use swissarmyhammer_config::model::AgentExecutorType;
+use swissarmyhammer_config::model::ModelExecutorType;
 
 /// Validate that a specific executor type is available
-pub async fn validate_executor_availability(executor_type: AgentExecutorType) -> ActionResult<()> {
+pub async fn validate_executor_availability(executor_type: ModelExecutorType) -> ActionResult<()> {
     match executor_type {
-        AgentExecutorType::ClaudeCode => {
+        ModelExecutorType::ClaudeCode => {
             // Check if Claude CLI binary exists in PATH by checking common locations
             // This is a basic check that doesn't execute the binary
             let path_var = std::env::var("PATH").unwrap_or_default();
@@ -25,7 +25,7 @@ pub async fn validate_executor_availability(executor_type: AgentExecutorType) ->
                 ))
             }
         }
-        AgentExecutorType::LlamaAgent => {
+        ModelExecutorType::LlamaAgent => {
             // Validate LlamaAgent configuration and availability
             validate_llama_agent_configuration().await
         }

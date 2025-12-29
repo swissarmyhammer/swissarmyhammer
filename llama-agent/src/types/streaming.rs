@@ -15,11 +15,13 @@ use crate::types::messages::Message;
 use crate::types::tools::{ToolCall, ToolResult};
 
 /// A chunk of streaming text response.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct StreamChunk {
     pub text: String,
     pub is_complete: bool,
     pub token_count: u32,
+    /// Finish reason, only present when is_complete is true
+    pub finish_reason: Option<crate::types::generation::FinishReason>,
 }
 
 /// Main agent API trait for implementing agent functionality.
@@ -85,4 +87,25 @@ pub trait AgentAPI {
         &self,
         config: &crate::types::sessions::CompactionConfig,
     ) -> Result<crate::session::CompactionSummary, AgentError>;
+
+    /// Load an existing session by ID
+    ///
+    /// Retrieves a session from persistent storage and restores its state,
+    /// allowing continuation of a previous conversation.
+    ///
+    /// # Arguments
+    ///
+    /// * `session_id` - The ID of the session to load
+    ///
+    /// # Returns
+    ///
+    /// The loaded session with full conversation history
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the session doesn't exist or cannot be loaded
+    async fn load_session(
+        &self,
+        session_id: &SessionId,
+    ) -> Result<crate::types::sessions::Session, AgentError>;
 }

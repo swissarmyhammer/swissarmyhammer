@@ -4,7 +4,7 @@
 //! and delegates to the agent-executor crate's implementation.
 
 use async_trait::async_trait;
-use swissarmyhammer_config::model::AgentExecutorType;
+use swissarmyhammer_config::model::ModelExecutorType;
 
 // Import types from agent-executor
 use swissarmyhammer_agent_executor::{
@@ -39,7 +39,7 @@ impl AgentExecutor for ClaudeCodeExecutor {
         self.inner.shutdown().await
     }
 
-    fn executor_type(&self) -> AgentExecutorType {
+    fn executor_type(&self) -> ModelExecutorType {
         self.inner.executor_type()
     }
 

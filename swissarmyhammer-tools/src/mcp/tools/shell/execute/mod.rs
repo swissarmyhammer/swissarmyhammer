@@ -111,7 +111,7 @@ struct ShellExecuteRequest {
 
 /// Result structure for shell command execution
 #[derive(Debug, Serialize)]
-struct ShellExecutionResult {
+pub struct ShellExecutionResult {
     /// The command that was executed
     pub command: String,
     /// Exit code returned by the command
@@ -743,8 +743,65 @@ impl Drop for AsyncProcessGuard {
                 }
             }
 
-            // Use blocking kill for cleanup - not ideal but necessary in Drop
+            // Kill the process
             let _ = child.start_kill();
+
+            // IMPORTANT: Wait for the process to prevent zombie processes
+            // We must call wait() after kill to reap the process and allow the OS
+            // to clean up resources. Without this, killed processes become zombies.
+            //
+            // We use try_wait() in a loop with a timeout rather than blocking wait()
+            // to avoid hanging Drop. The tokio Child doesn't have a blocking wait(),
+            // but try_wait() will eventually succeed after start_kill().
+            let start = std::time::Instant::now();
+            let timeout = std::time::Duration::from_millis(100);
+
+            while start.elapsed() < timeout {
+                match child.try_wait() {
+                    Ok(Some(_status)) => {
+                        // Process has been reaped successfully
+                        tracing::debug!("Process reaped in Drop for command: {}", self.command);
+                        return;
+                    }
+                    Ok(None) => {
+                        // Process still running, wait a bit and try again
+                        std::thread::sleep(std::time::Duration::from_millis(10));
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            "Error waiting for process in Drop for command {}: {}",
+                            self.command,
+                            e
+                        );
+                        return;
+                    }
+                }
+            }
+
+            // If we get here, the process didn't exit within timeout
+            // One final try_wait() to reap if it finished during the last iteration
+            match child.try_wait() {
+                Ok(Some(_)) => {
+                    tracing::debug!(
+                        "Process reaped on final attempt in Drop for command: {}",
+                        self.command
+                    );
+                }
+                Ok(None) => {
+                    tracing::warn!(
+                        "Process still running after timeout in Drop for command: {}. \
+                         This may result in a zombie process.",
+                        self.command
+                    );
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        "Final wait failed in Drop for command {}: {}",
+                        self.command,
+                        e
+                    );
+                }
+            }
         }
     }
 }
@@ -788,7 +845,7 @@ fn process_output_line(
                 .send_progress(
                     ctx.progress_token,
                     Some(*ctx.line_count),
-                    format!("Processing output: {} lines", ctx.line_count),
+                    format!("Shell output: {} lines processed", ctx.line_count),
                 )
                 .ok();
         }
@@ -811,7 +868,7 @@ fn process_output_line(
                 .send_progress(
                     ctx.progress_token,
                     Some(*ctx.line_count),
-                    "Binary output detected",
+                    "Shell output: Binary content detected",
                 )
                 .ok();
         }
@@ -1418,7 +1475,11 @@ fn send_start_notification(
 ) {
     if let Some(sender) = progress_sender {
         sender
-            .send_progress(progress_token, Some(0), format!("Executing: {}", command))
+            .send_progress(
+                progress_token,
+                Some(0),
+                format!("Shell: Executing: {}", command),
+            )
             .ok();
     }
 }
@@ -1541,7 +1602,23 @@ impl McpTool for ShellExecuteTool {
         .await
         {
             Ok(result) => format_success_result(result),
-            Err(shell_error) => format_error_result(shell_error),
+            Err(shell_error) => {
+                // Send error notification before returning error result
+                if let Some(sender) = &_context.progress_sender {
+                    sender
+                        .send_progress_with_metadata(
+                            &progress_token,
+                            None,
+                            format!("Shell: Failed - {}", shell_error),
+                            json!({
+                                "error": shell_error.to_string(),
+                                "command": request.command
+                            }),
+                        )
+                        .ok();
+                }
+                format_error_result(shell_error)
+            }
         }
     }
 }
@@ -2051,6 +2128,95 @@ mod tests {
         assert_eq!(call_result.is_error, Some(true));
 
         ResultValidator::new(&call_result).assert_failure();
+    }
+
+    #[tokio::test]
+    async fn test_command_exit_status_zero() {
+        // Test that successful commands return exit code 0
+        let result = TestCommandBuilder::new("true").execute().await;
+        assert!(result.is_ok(), "Command execution should succeed");
+
+        let call_result = result.unwrap();
+        assert_eq!(call_result.is_error, Some(false));
+
+        ResultValidator::new(&call_result).assert_exit_code(0);
+    }
+
+    #[tokio::test]
+    async fn test_command_exit_status_nonzero() {
+        // Test that failed commands return non-zero exit code
+        let result = TestCommandBuilder::new("false").execute().await;
+        assert!(
+            result.is_ok(),
+            "Tool should return result even for failed commands"
+        );
+
+        let call_result = result.unwrap();
+        assert_eq!(call_result.is_error, Some(true));
+
+        ResultValidator::new(&call_result).assert_exit_code_nonzero();
+    }
+
+    #[tokio::test]
+    async fn test_command_exit_status_specific_codes() {
+        // Test various specific exit codes using exit command
+        let test_cases = vec![
+            (1, "exit 1"),
+            (2, "exit 2"),
+            (42, "exit 42"),
+            (127, "exit 127"),
+            (255, "exit 255"),
+        ];
+
+        for (expected_code, command) in test_cases {
+            let result = TestCommandBuilder::new(command).execute().await;
+            assert!(
+                result.is_ok(),
+                "Tool should return result for exit code {}",
+                expected_code
+            );
+
+            let call_result = result.unwrap();
+            assert_eq!(call_result.is_error, Some(true));
+
+            ResultValidator::new(&call_result).assert_exit_code(expected_code);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_command_exit_status_in_response() {
+        // Test that exit_code field is present and correct in response
+        let result = TestCommandBuilder::new("exit 7").execute().await;
+        assert!(result.is_ok());
+
+        let call_result = result.unwrap();
+        let response_json = parse_execution_result(&call_result);
+
+        if let response_json @ serde_json::Value::Object(_) = response_json {
+            let exit_code = response_json
+                .get("exit_code")
+                .and_then(|v| v.as_i64())
+                .expect("exit_code should be present and an integer");
+            assert_eq!(exit_code, 7, "Exit code should match command exit status");
+        } else {
+            panic!("Response should be a JSON object");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_command_exit_status_with_output() {
+        // Test that exit status is preserved even when command produces output
+        let result = TestCommandBuilder::new("echo 'output before exit'; exit 3")
+            .execute()
+            .await;
+        assert!(result.is_ok());
+
+        let call_result = result.unwrap();
+        assert_eq!(call_result.is_error, Some(true));
+
+        ResultValidator::new(&call_result)
+            .assert_exit_code(3)
+            .assert_stdout_contains("output before exit");
     }
 
     #[tokio::test]
@@ -2803,6 +2969,90 @@ mod tests {
         // We can't directly test if the process was killed since we dropped the guard,
         // but the Drop implementation should have attempted cleanup
         // This test mainly ensures Drop doesn't panic
+    }
+
+    #[tokio::test]
+    async fn test_async_process_guard_prevents_zombie_processes() {
+        // This test verifies that the Drop implementation properly reaps processes
+        // to prevent zombie processes
+
+        // Get initial zombie count on Unix systems
+        #[cfg(unix)]
+        let initial_zombies = count_zombie_processes();
+
+        // Create a scope to ensure guard is dropped
+        {
+            let mut cmd = Command::new("sleep");
+            cmd.arg("10"); // Long enough that it won't exit naturally
+            cmd.stdout(std::process::Stdio::null());
+            cmd.stderr(std::process::Stdio::null());
+
+            let child = cmd.spawn().expect("Failed to spawn sleep process");
+            let pid = child.id().expect("Failed to get process ID");
+
+            let guard = AsyncProcessGuard::new(child, "sleep 10".to_string());
+
+            // Verify process is running
+            #[cfg(unix)]
+            assert!(is_process_running(pid), "Process should be running");
+
+            // Drop the guard - this should kill and reap the process
+            drop(guard);
+        } // Guard dropped here
+
+        // Give the Drop implementation time to complete
+        tokio::time::sleep(Duration::from_millis(200)).await;
+
+        // Check that we didn't create any NEW zombie processes
+        // The final count should be less than or equal to initial (our Drop cleaned up)
+        // or equal to initial (no zombies created)
+        #[cfg(unix)]
+        {
+            let final_zombies = count_zombie_processes();
+            assert!(
+                final_zombies <= initial_zombies,
+                "Drop should not create zombie processes: initial={}, final={}. \
+                 Final should be <= initial (our process was reaped).",
+                initial_zombies,
+                final_zombies
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    fn count_zombie_processes() -> usize {
+        // Count zombie processes owned by current user
+        use std::process::Command as StdCommand;
+
+        let output = StdCommand::new("ps")
+            .arg("-eo")
+            .arg("stat,uid")
+            .output()
+            .expect("Failed to run ps command");
+
+        let output_str = String::from_utf8_lossy(&output.stdout);
+        let current_uid = unsafe { libc::getuid() };
+
+        output_str
+            .lines()
+            .filter(|line| {
+                let parts: Vec<&str> = line.split_whitespace().collect();
+                if parts.len() >= 2 {
+                    // Check if status contains 'Z' (zombie) and UID matches
+                    let stat = parts[0];
+                    let uid = parts[1].parse::<u32>().unwrap_or(0);
+                    stat.contains('Z') && uid == current_uid
+                } else {
+                    false
+                }
+            })
+            .count()
+    }
+
+    #[cfg(unix)]
+    fn is_process_running(pid: u32) -> bool {
+        // Send signal 0 to check if process exists
+        unsafe { libc::kill(pid as i32, 0) == 0 }
     }
 
     #[tokio::test]
@@ -3601,7 +3851,7 @@ mod tests {
                 n.progress.is_some()
                     && n.progress.unwrap() % 10 == 0
                     && n.progress.unwrap() > 0
-                    && n.message.contains("Processing output")
+                    && n.message.contains("Shell output")
             })
             .collect();
 
@@ -3629,7 +3879,7 @@ mod tests {
         // Check if any notification mentions binary detection
         let binary_notification = notifications
             .iter()
-            .find(|n| n.message.contains("Binary output detected"));
+            .find(|n| n.message.contains("Binary content detected"));
 
         assert!(
             binary_notification.is_some(),
@@ -3639,7 +3889,7 @@ mod tests {
         // Verify binary notification only appears once
         let binary_count = notifications
             .iter()
-            .filter(|n| n.message.contains("Binary output detected"))
+            .filter(|n| n.message.contains("Binary content detected"))
             .count();
 
         assert_eq!(
@@ -3664,5 +3914,73 @@ mod tests {
 
         let call_result = result.unwrap();
         assert_eq!(call_result.is_error, Some(false));
+    }
+
+    #[tokio::test]
+    async fn test_kill_long_running_command() {
+        // This test verifies that a long-running command spawned through shell_execute
+        // is properly managed and killed when the AsyncProcessGuard is dropped
+
+        let context = create_test_context().await;
+        let tool = ShellExecuteTool::new();
+
+        // Platform-specific long-running command
+        #[cfg(unix)]
+        let command = "sleep 30";
+        #[cfg(windows)]
+        let command = "timeout /t 30";
+
+        // Spawn the long-running command
+        let mut args = serde_json::Map::new();
+        args.insert("command".to_string(), json!(command));
+
+        // Execute the command in a separate task so we can test killing it
+        let handle = tokio::spawn(async move { tool.execute(args, &context).await });
+
+        // Give the process time to start
+        tokio::time::sleep(Duration::from_millis(100)).await;
+
+        // Cancel the task (simulating a kill)
+        handle.abort();
+
+        // Give time for cleanup
+        tokio::time::sleep(Duration::from_millis(100)).await;
+
+        // If we reach here without hanging, the test passed
+        // The AsyncProcessGuard should have cleaned up the process when dropped
+    }
+
+    #[tokio::test]
+    async fn test_long_running_command_completes_with_timeout() {
+        // This test verifies that a command that takes a moderate amount of time
+        // can complete successfully without being killed prematurely
+
+        let context = create_test_context().await;
+
+        // Platform-specific command that sleeps for a short time
+        #[cfg(unix)]
+        let command = "sleep 0.5";
+        #[cfg(windows)]
+        let command = "timeout /t 1";
+
+        let result = TestCommandBuilder::new(command)
+            .with_context(context)
+            .execute()
+            .await;
+
+        // Command should complete successfully
+        assert!(
+            result.is_ok(),
+            "Command should complete successfully: {:?}",
+            result
+        );
+
+        let call_result = result.unwrap();
+        assert_eq!(call_result.is_error, Some(false));
+
+        // Use ResultValidator to check exit code
+        ResultValidator::new(&call_result)
+            .assert_exit_code(0)
+            .assert_field_exists("execution_time_ms");
     }
 }

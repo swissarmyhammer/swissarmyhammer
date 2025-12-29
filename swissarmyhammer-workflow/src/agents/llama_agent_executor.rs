@@ -4,7 +4,7 @@
 //! and delegate to the actual implementations from agent-executor crate.
 
 use async_trait::async_trait;
-use swissarmyhammer_config::model::AgentExecutorType;
+use swissarmyhammer_config::model::ModelExecutorType;
 use swissarmyhammer_config::LlamaAgentConfig;
 
 // Import types from agent-executor
@@ -43,7 +43,7 @@ impl AgentExecutor for LlamaAgentExecutor {
         self.inner.shutdown().await
     }
 
-    fn executor_type(&self) -> AgentExecutorType {
+    fn executor_type(&self) -> ModelExecutorType {
         self.inner.executor_type()
     }
 
@@ -146,7 +146,7 @@ impl AgentExecutor for LlamaAgentExecutorWrapper {
         self.inner.shutdown().await
     }
 
-    fn executor_type(&self) -> AgentExecutorType {
+    fn executor_type(&self) -> ModelExecutorType {
         self.inner.executor_type()
     }
 

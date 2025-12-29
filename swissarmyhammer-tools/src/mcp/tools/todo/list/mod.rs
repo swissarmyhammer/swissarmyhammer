@@ -66,16 +66,26 @@ impl McpTool for ListTodoTool {
                     Some(done) => list
                         .todo
                         .iter()
-                        .filter(|t| t.done == done)
+                        .filter(|t| t.is_complete() == done)
                         .cloned()
                         .collect(),
                 };
 
-                // Sort: incomplete first, then by ID (which is time-ordered via ULID)
+                // Sort: incomplete first, then by creation time (via created_at timestamp)
+                // ULIDs in the id field are time-ordered, but we use created_at for explicit ordering
                 let mut sorted_todos = filtered_todos;
-                sorted_todos.sort_by_key(|t| (t.done, t.id.clone()));
+                sorted_todos.sort_by(|a, b| {
+                    // First sort by completion status (incomplete before complete)
+                    match a.is_complete().cmp(&b.is_complete()) {
+                        std::cmp::Ordering::Equal => {
+                            // Then by creation timestamp (older first)
+                            a.created_at.cmp(&b.created_at)
+                        }
+                        other => other,
+                    }
+                });
 
-                let completed_count = sorted_todos.iter().filter(|t| t.done).count();
+                let completed_count = sorted_todos.iter().filter(|t| t.is_complete()).count();
                 let pending_count = sorted_todos.len() - completed_count;
 
                 tracing::info!(
@@ -89,9 +99,11 @@ impl McpTool for ListTodoTool {
                     json!({
                         "todos": sorted_todos.iter().map(|item| json!({
                             "id": item.id.as_str(),
-                            "task": item.task,
-                            "context": item.context,
-                            "done": item.done
+                            "task": &item.content,
+                            "context": &item.notes,
+                            "done": item.is_complete(),
+                            "status": format!("{:?}", item.status).to_lowercase(),
+                            "priority": format!("{:?}", item.priority).to_lowercase()
                         })).collect::<Vec<_>>(),
                         "total": sorted_todos.len(),
                         "completed": completed_count,

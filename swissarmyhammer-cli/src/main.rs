@@ -556,6 +556,7 @@ async fn route_subcommand(context: &CliContext, cli_tool_context: Arc<CliToolCon
         }
         Some(("validate", sub_matches)) => handle_validate_command(sub_matches, context).await,
         Some(("model", sub_matches)) => handle_model_command(sub_matches, context).await,
+        Some(("agent", sub_matches)) => handle_agent_command(sub_matches, context).await,
         Some((category, sub_matches)) => {
             route_category_command(category, sub_matches, context, cli_tool_context).await
         }
@@ -1143,10 +1144,50 @@ async fn handle_model_command(matches: &clap::ArgMatches, context: &CliContext) 
         }
         // Default to show when no subcommand is provided
         None => None,
-        _ => return report_error_and_exit("Unknown agent subcommand"),
+        _ => return report_error_and_exit("Unknown model subcommand"),
     };
 
     commands::model::handle_command(subcommand, context).await
+}
+
+async fn handle_agent_command(matches: &clap::ArgMatches, context: &CliContext) -> i32 {
+    use crate::cli::AgentSubcommand;
+
+    let subcommand = match matches.subcommand() {
+        Some(("acp", sub_matches)) => {
+            let config = sub_matches.get_one::<std::path::PathBuf>("config").cloned();
+            let permission_policy = sub_matches.get_one::<String>("permission_policy").cloned();
+            let allow_path = sub_matches
+                .get_many::<std::path::PathBuf>("allow_path")
+                .map(|vals| vals.cloned().collect())
+                .unwrap_or_default();
+            let block_path = sub_matches
+                .get_many::<std::path::PathBuf>("block_path")
+                .map(|vals| vals.cloned().collect())
+                .unwrap_or_default();
+            let max_file_size = sub_matches.get_one::<u64>("max_file_size").copied();
+            let terminal_buffer_size = sub_matches
+                .get_one::<usize>("terminal_buffer_size")
+                .copied();
+            let graceful_shutdown_timeout = sub_matches
+                .get_one::<u64>("graceful_shutdown_timeout")
+                .copied();
+
+            Some(AgentSubcommand::Acp {
+                config,
+                permission_policy,
+                allow_path,
+                block_path,
+                max_file_size,
+                terminal_buffer_size,
+                graceful_shutdown_timeout,
+            })
+        }
+        None => None,
+        _ => return report_error_and_exit("Unknown agent subcommand"),
+    };
+
+    commands::agent::handle_command(subcommand, context).await
 }
 
 /// Determine the appropriate log level based on configuration flags

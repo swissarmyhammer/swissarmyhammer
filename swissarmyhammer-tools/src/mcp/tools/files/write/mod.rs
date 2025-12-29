@@ -7,7 +7,7 @@ use crate::mcp::tool_registry::{BaseToolImpl, McpTool, ToolContext};
 use async_trait::async_trait;
 use rmcp::model::CallToolResult;
 use rmcp::ErrorData as McpError;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use tracing::{debug, info};
 
 /// Tool for creating new files or completely overwriting existing files with atomic operations
@@ -23,10 +23,12 @@ impl WriteFileTool {
     /// Performs atomic file write operation using temporary file strategy
     ///
     /// This method implements the atomic write pattern:
-    /// 1. Write content to temporary file in target directory
-    /// 2. Validate the written content
-    /// 3. Atomically rename temporary file to target filename
-    /// 4. Clean up temporary file on any failure
+    /// 1. Write content to temporary file with unique name in target directory
+    /// 2. Atomically rename temporary file to target filename
+    /// 3. Clean up temporary file on any failure
+    ///
+    /// The temporary file uses a ULID suffix to ensure uniqueness and avoid
+    /// race conditions with concurrent writes to the same file.
     ///
     /// # Arguments
     ///
@@ -36,17 +38,18 @@ impl WriteFileTool {
     /// # Returns
     ///
     /// * `Result<usize, McpError>` - Number of bytes written or error
-    fn write_file_atomic(file_path: &Path, content: &str) -> Result<usize, McpError> {
+    async fn write_file_atomic(file_path: &Path, content: &str) -> Result<usize, McpError> {
         use crate::mcp::tools::files::shared_utils::{ensure_directory_exists, handle_file_error};
-        use std::fs;
+        use tokio::fs;
+        use ulid::Ulid;
 
         // Ensure parent directory exists
         if let Some(parent) = file_path.parent() {
             ensure_directory_exists(parent)?;
         }
 
-        // Create temporary file in same directory as target
-        let temp_file_name = format!("{}.tmp", file_path.display());
+        // Create temporary file with unique name in same directory as target
+        let temp_file_name = format!("{}.tmp.{}", file_path.display(), Ulid::new());
         let temp_path = Path::new(&temp_file_name);
 
         debug!(
@@ -58,25 +61,14 @@ impl WriteFileTool {
 
         // Write content to temporary file
         let write_result = fs::write(temp_path, content.as_bytes())
+            .await
             .map_err(|e| handle_file_error(e, "write temporary file", temp_path));
 
         match write_result {
             Ok(()) => {
-                // Verify the content was written correctly
-                let written_content = fs::read_to_string(temp_path)
-                    .map_err(|e| handle_file_error(e, "verify temporary file", temp_path))?;
-
-                if written_content != content {
-                    // Clean up temporary file on verification failure
-                    let _ = fs::remove_file(temp_path);
-                    return Err(McpError::internal_error(
-                        "Content verification failed after write".to_string(),
-                        None,
-                    ));
-                }
-
                 // Atomically move temporary file to target location
                 let rename_result = fs::rename(temp_path, file_path)
+                    .await
                     .map_err(|e| handle_file_error(e, "rename to target", file_path));
 
                 match rename_result {
@@ -90,14 +82,14 @@ impl WriteFileTool {
                     }
                     Err(e) => {
                         // Clean up temporary file on rename failure
-                        let _ = fs::remove_file(temp_path);
+                        let _ = fs::remove_file(temp_path).await;
                         Err(e)
                     }
                 }
             }
             Err(e) => {
                 // Clean up temporary file on write failure
-                let _ = fs::remove_file(temp_path);
+                let _ = fs::remove_file(temp_path).await;
                 Err(e)
             }
         }
@@ -147,6 +139,18 @@ impl McpTool for WriteFileTool {
         // Parse arguments
         let request: WriteRequest = BaseToolImpl::parse_arguments(arguments)?;
 
+        // Check rate limit using tokio task ID as client identifier
+        use swissarmyhammer_common::rate_limiter::get_rate_limiter;
+        let rate_limiter = get_rate_limiter();
+        let client_id = format!("task_{:?}", tokio::task::try_id());
+        if let Err(e) = rate_limiter.check_rate_limit(&client_id, "file_write", 1) {
+            tracing::warn!("Rate limit exceeded for file_write: {}", e);
+            return Err(McpError::invalid_request(
+                format!("Rate limit exceeded: {}", e),
+                None,
+            ));
+        }
+
         // Validate parameters
         if request.file_path.trim().is_empty() {
             return Err(McpError::invalid_request(
@@ -155,33 +159,70 @@ impl McpTool for WriteFileTool {
             ));
         }
 
-        if request.content.len() > 10_000_000 {
+        const MAX_FILE_SIZE: usize = 10 * 1024 * 1024; // 10 MB
+
+        if request.content.len() > MAX_FILE_SIZE {
             return Err(McpError::invalid_request(
                 "content exceeds maximum size limit of 10MB".to_string(),
                 None,
             ));
         }
 
-        // Basic path validation for write operations
-        let path_buf = PathBuf::from(&request.file_path);
+        // First, do basic path security validation without requiring parent to exist
+        use crate::mcp::tools::files::shared_utils::ensure_directory_exists;
+        use std::path::PathBuf;
 
-        // Check for dangerous patterns
-        if request.file_path.contains("..") || request.file_path.contains("./") {
+        // Basic path validation
+        if request.file_path.trim().is_empty() {
             return Err(McpError::invalid_request(
-                "Path contains dangerous traversal sequences".to_string(),
+                "File path cannot be empty".to_string(),
                 None,
             ));
         }
 
+        // Resolve to absolute path
+        let path_buf = PathBuf::from(&request.file_path);
+        let validated_path = if path_buf.is_absolute() {
+            path_buf
+        } else {
+            std::env::current_dir()
+                .map_err(|e| {
+                    McpError::invalid_request(
+                        format!("Failed to get current working directory: {}", e),
+                        None,
+                    )
+                })?
+                .join(path_buf)
+        };
+
+        // Check for path traversal attempts
+        for component in validated_path.components() {
+            if matches!(component, std::path::Component::ParentDir) {
+                return Err(McpError::invalid_request(
+                    format!("Path traversal detected: {}", validated_path.display()),
+                    None,
+                ));
+            }
+        }
+
+        // Ensure parent directory exists before checking permissions
+        if let Some(parent) = validated_path.parent() {
+            ensure_directory_exists(parent)?;
+        }
+
+        // Check write permissions after ensuring parent directory exists
+        use crate::mcp::tools::files::shared_utils::{check_file_permissions, FileOperation};
+        check_file_permissions(&validated_path, FileOperation::Write)?;
+
         // Log file write attempt for security auditing
         info!(
-            path = %request.file_path,
+            path = %validated_path.display(),
             content_length = request.content.len(),
             "Attempting to write file"
         );
 
         // Perform atomic write operation
-        let bytes_written = Self::write_file_atomic(&path_buf, &request.content)?;
+        let bytes_written = Self::write_file_atomic(&validated_path, &request.content).await?;
 
         let success_message = "OK".to_string();
 
@@ -260,7 +301,14 @@ mod tests {
         let args = create_test_arguments(&test_file.to_string_lossy(), test_content);
 
         let result = tool.execute(args, &context).await;
-        assert!(result.is_ok());
+        if let Err(e) = &result {
+            eprintln!("Test failed with error: {:?}", e);
+        }
+        assert!(
+            result.is_ok(),
+            "Expected write to succeed but got error: {:?}",
+            result.err()
+        );
 
         let call_result = result.unwrap();
         assert_eq!(call_result.is_error, Some(false));
@@ -375,8 +423,8 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let test_file = temp_dir.path().join("large_file.txt");
 
-        // Create content larger than 10MB limit
-        let large_content = "x".repeat(10_000_001);
+        // Create content larger than 10MB limit (10 * 1024 * 1024 = 10,485,760 bytes)
+        let large_content = "x".repeat(10 * 1024 * 1024 + 1);
 
         let tool = WriteFileTool::new();
         let context = crate::test_utils::create_test_context().await;
@@ -436,7 +484,7 @@ mod tests {
         let test_content = "Atomic write test content";
 
         // Test that the atomic write method works correctly
-        let result = WriteFileTool::write_file_atomic(&test_file, test_content);
+        let result = WriteFileTool::write_file_atomic(&test_file, test_content).await;
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), test_content.len());
 
@@ -445,9 +493,19 @@ mod tests {
         let written_content = fs::read_to_string(&test_file).unwrap();
         assert_eq!(written_content, test_content);
 
-        // Verify no temporary file remains
-        let temp_file_name = format!("{}.tmp", test_file.display());
-        assert!(!Path::new(&temp_file_name).exists());
+        // Verify no temporary files remain (checking for any .tmp.* pattern)
+        let parent_dir = test_file.parent().unwrap();
+        let entries: Vec<_> = fs::read_dir(parent_dir)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| {
+                e.file_name().to_string_lossy().contains(&format!(
+                    "{}.tmp.",
+                    test_file.file_name().unwrap().to_string_lossy()
+                ))
+            })
+            .collect();
+        assert!(entries.is_empty(), "Temporary files should be cleaned up");
     }
 
     #[tokio::test]
@@ -470,12 +528,21 @@ mod tests {
         let test_content = "This should fail to write";
 
         // The atomic write should fail but clean up temporary file
-        let _result = WriteFileTool::write_file_atomic(&test_file, test_content);
+        let _result = WriteFileTool::write_file_atomic(&test_file, test_content).await;
 
         // Note: This test may pass on some systems where rename succeeds despite readonly target
         // The key is that temporary file should be cleaned up regardless
-        let temp_file_name = format!("{}.tmp", test_file.display());
-        assert!(!Path::new(&temp_file_name).exists());
+        // Check for any .tmp.* files in the directory
+        let parent_dir = test_file.parent().unwrap();
+        let temp_files: Vec<_> = fs::read_dir(parent_dir)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_name().to_string_lossy().contains(".tmp."))
+            .collect();
+        assert!(
+            temp_files.is_empty(),
+            "Temporary files should be cleaned up after failure"
+        );
     }
 
     #[tokio::test]
@@ -541,5 +608,34 @@ mod tests {
         };
 
         assert_eq!(response_text, "OK");
+    }
+
+    #[tokio::test]
+    async fn test_write_readonly_file_fails() {
+        use std::fs::{self, Permissions};
+        use std::os::unix::fs::PermissionsExt;
+
+        let temp_dir = TempDir::new().unwrap();
+        let test_file = temp_dir.path().join("readonly_file.txt");
+
+        // Create a file and make it read-only
+        fs::write(&test_file, "initial content").unwrap();
+        let readonly_permissions = Permissions::from_mode(0o444);
+        fs::set_permissions(&test_file, readonly_permissions).unwrap();
+
+        let tool = WriteFileTool::new();
+        let context = crate::test_utils::create_test_context().await;
+        let args = create_test_arguments(&test_file.to_string_lossy(), "new content");
+
+        let result = tool.execute(args, &context).await;
+        assert!(result.is_err(), "Writing to read-only file should fail");
+
+        let error = result.unwrap_err();
+        let error_message = format!("{:?}", error);
+        assert!(
+            error_message.contains("read-only") || error_message.contains("readonly"),
+            "Error should mention read-only permission: {}",
+            error_message
+        );
     }
 }

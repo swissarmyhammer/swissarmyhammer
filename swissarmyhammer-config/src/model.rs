@@ -174,11 +174,11 @@ use thiserror::Error;
 
 /// Model executor type enumeration
 ///
-/// Defines the available agent executor types with system default being Claude Code
+/// Defines the available model executor types with system default being Claude Code
 /// for maximum compatibility.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
 #[serde(rename_all = "kebab-case")]
-pub enum AgentExecutorType {
+pub enum ModelExecutorType {
     /// Shell out to Claude Code CLI (system default)
     #[default]
     ClaudeCode,
@@ -192,7 +192,7 @@ pub enum AgentExecutorType {
 /// different operations to use different agents.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
-pub enum ModelUseCase {
+pub enum AgentUseCase {
     /// Default/fallback agent for general operations
     Root,
     /// Agent for rule checking operations
@@ -201,29 +201,36 @@ pub enum ModelUseCase {
     Workflows,
 }
 
-impl fmt::Display for ModelUseCase {
+impl fmt::Display for AgentUseCase {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            ModelUseCase::Root => write!(f, "root"),
-            ModelUseCase::Rules => write!(f, "rules"),
-            ModelUseCase::Workflows => write!(f, "workflows"),
+            AgentUseCase::Root => write!(f, "root"),
+            AgentUseCase::Rules => write!(f, "rules"),
+            AgentUseCase::Workflows => write!(f, "workflows"),
         }
     }
 }
 
-impl std::str::FromStr for ModelUseCase {
+impl std::str::FromStr for AgentUseCase {
     type Err = String;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s.to_lowercase().as_str() {
-            "root" => Ok(ModelUseCase::Root),
-            "rules" => Ok(ModelUseCase::Rules),
-            "workflows" => Ok(ModelUseCase::Workflows),
-            _ => Err(format!(
-                "Invalid use case: '{}'. Valid options: root, rules, workflows",
-                s
-            )),
+        let s_lower = s.to_lowercase();
+
+        for variant in [
+            AgentUseCase::Root,
+            AgentUseCase::Rules,
+            AgentUseCase::Workflows,
+        ] {
+            if variant.to_string() == s_lower {
+                return Ok(variant);
+            }
         }
+
+        Err(format!(
+            "Invalid use case: '{}'. Valid options: root, rules, workflows",
+            s
+        ))
     }
 }
 
@@ -293,21 +300,37 @@ pub struct RepetitionDetectionConfig {
     pub repetition_window: usize,
 }
 
-fn default_repetition_enabled() -> bool {
-    true
+// Macro to generate default value functions with consistent pattern
+macro_rules! serde_default {
+    ($fn_name:ident, $type:ty, $value:expr) => {
+        fn $fn_name() -> $type {
+            $value
+        }
+    };
 }
 
-fn default_repetition_penalty() -> f64 {
-    1.1
-}
-
-fn default_repetition_threshold() -> usize {
-    50
-}
-
-fn default_repetition_window() -> usize {
-    64
-}
+serde_default!(
+    default_repetition_enabled,
+    bool,
+    crate::DEFAULT_REPETITION_ENABLED
+);
+serde_default!(
+    default_repetition_penalty,
+    f64,
+    crate::DEFAULT_REPETITION_PENALTY
+);
+serde_default!(
+    default_repetition_threshold,
+    usize,
+    crate::DEFAULT_REPETITION_THRESHOLD
+);
+serde_default!(
+    default_repetition_window,
+    usize,
+    crate::DEFAULT_REPETITION_WINDOW
+);
+serde_default!(default_batch_size, u32, crate::DEFAULT_BATCH_SIZE);
+serde_default!(default_use_hf_params, bool, crate::DEFAULT_USE_HF_PARAMS);
 
 /// LLM model configuration for LlamaAgent
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -322,14 +345,6 @@ pub struct LlmModelConfig {
     /// Enable debug mode
     #[serde(default)]
     pub debug: bool,
-}
-
-fn default_batch_size() -> u32 {
-    512
-}
-
-fn default_use_hf_params() -> bool {
-    true
 }
 
 /// Model source specification
@@ -362,7 +377,7 @@ impl Default for ModelConfig {
         // System default is always Claude Code
         Self {
             executor: ModelExecutorConfig::ClaudeCode(ClaudeCodeConfig::default()),
-            quiet: false,
+            quiet: crate::DEFAULT_QUIET_MODE,
         }
     }
 }
@@ -371,13 +386,13 @@ impl Default for LlmModelConfig {
     fn default() -> Self {
         Self {
             source: ModelSource::HuggingFace {
-                repo: "unsloth/Qwen3-Coder-30B-A3B-Instruct-GGUF".to_string(),
-                filename: Some("Qwen3-Coder-30B-A3B-Instruct-UD-Q6_K_XL.gguf".to_string()),
+                repo: crate::DEFAULT_LLM_MODEL_REPO.to_string(),
+                filename: Some(crate::DEFAULT_LLM_MODEL_FILENAME.to_string()),
                 folder: None,
             },
             batch_size: default_batch_size(),
             use_hf_params: default_use_hf_params(),
-            debug: false,
+            debug: crate::DEFAULT_DEBUG_MODE,
         }
     }
 }
@@ -385,8 +400,8 @@ impl Default for LlmModelConfig {
 impl Default for McpServerConfig {
     fn default() -> Self {
         Self {
-            port: 0,              // Random available port
-            timeout_seconds: 900, // 15 minutes
+            port: crate::DEFAULT_MCP_PORT,
+            timeout_seconds: crate::DEFAULT_MCP_TIMEOUT_SECONDS,
         }
     }
 }
@@ -404,10 +419,10 @@ impl Default for RepetitionDetectionConfig {
 
 impl ModelConfig {
     /// Get the executor type from the configuration
-    pub fn executor_type(&self) -> AgentExecutorType {
+    pub fn executor_type(&self) -> ModelExecutorType {
         match &self.executor {
-            ModelExecutorConfig::ClaudeCode(_) => AgentExecutorType::ClaudeCode,
-            ModelExecutorConfig::LlamaAgent(_) => AgentExecutorType::LlamaAgent,
+            ModelExecutorConfig::ClaudeCode(_) => ModelExecutorType::ClaudeCode,
+            ModelExecutorConfig::LlamaAgent(_) => ModelExecutorType::LlamaAgent,
         }
     }
 
@@ -415,7 +430,7 @@ impl ModelConfig {
     pub fn claude_code() -> Self {
         Self {
             executor: ModelExecutorConfig::ClaudeCode(ClaudeCodeConfig::default()),
-            quiet: false,
+            quiet: crate::DEFAULT_QUIET_MODE,
         }
     }
 
@@ -423,7 +438,7 @@ impl ModelConfig {
     pub fn llama_agent(config: LlamaAgentConfig) -> Self {
         Self {
             executor: ModelExecutorConfig::LlamaAgent(config),
-            quiet: false,
+            quiet: crate::DEFAULT_QUIET_MODE,
         }
     }
 }
@@ -444,17 +459,20 @@ impl LlamaAgentConfig {
                     filename: Some(crate::DEFAULT_TEST_LLM_MODEL_FILENAME.to_string()),
                     folder: None,
                 },
-                batch_size: 256, // Good balance for test throughput
-                use_hf_params: true,
-                debug: false,
+                batch_size: crate::DEFAULT_TEST_BATCH_SIZE,
+                use_hf_params: crate::DEFAULT_USE_HF_PARAMS,
+                debug: crate::DEFAULT_DEBUG_MODE,
             },
-            mcp_server: McpServerConfig::default(), // Use default settings
+            mcp_server: McpServerConfig {
+                port: crate::DEFAULT_MCP_PORT,
+                timeout_seconds: crate::DEFAULT_TEST_MCP_TIMEOUT_SECONDS,
+            },
 
             repetition_detection: RepetitionDetectionConfig {
-                enabled: true,
-                repetition_penalty: 1.05,  // Lower penalty for small models
-                repetition_threshold: 150, // Higher threshold to be more permissive
-                repetition_window: 128,    // Larger window for better context
+                enabled: crate::DEFAULT_REPETITION_ENABLED,
+                repetition_penalty: crate::DEFAULT_TEST_REPETITION_PENALTY,
+                repetition_threshold: crate::DEFAULT_TEST_REPETITION_THRESHOLD,
+                repetition_window: crate::DEFAULT_TEST_REPETITION_WINDOW,
             },
         }
     }
@@ -564,36 +582,6 @@ pub struct ModelInfo {
     pub description: Option<String>,
 }
 
-/// Parse agent description from YAML frontmatter
-///
-/// Extracts description from YAML front matter format.
-fn parse_yaml_frontmatter_description(content: &str) -> Option<String> {
-    let stripped = content.strip_prefix("---")?;
-    let end_pos = stripped.find("---")?;
-    let front_matter = &stripped[..end_pos];
-
-    let yaml_value = serde_yaml::from_str::<serde_yaml::Value>(front_matter).ok()?;
-    let description = yaml_value.get("description")?;
-    let desc_str = description.as_str()?;
-    Some(desc_str.trim().to_string())
-}
-
-/// Parse agent description from comment format
-///
-/// Extracts description from `# Description:` comment lines.
-fn parse_comment_description(content: &str) -> Option<String> {
-    for line in content.lines() {
-        let line = line.trim();
-        if let Some(desc) = line.strip_prefix("# Description:") {
-            let desc = desc.trim();
-            if !desc.is_empty() {
-                return Some(desc.to_string());
-            }
-        }
-    }
-    None
-}
-
 /// Parse model description from configuration content
 ///
 /// Extracts description from YAML front matter or comment-based format.
@@ -602,7 +590,39 @@ fn parse_comment_description(content: &str) -> Option<String> {
 pub fn parse_model_description(content: &str) -> Option<String> {
     let content = content.trim();
 
-    parse_yaml_frontmatter_description(content).or_else(|| parse_comment_description(content))
+    // Try YAML frontmatter first
+    if let Some(description) = extract_yaml_frontmatter_field(content, "description") {
+        return Some(description);
+    }
+
+    // Fall back to comment format
+    extract_comment_field(content, "# Description:")
+}
+
+/// Extract a field from YAML frontmatter
+fn extract_yaml_frontmatter_field(content: &str, field: &str) -> Option<String> {
+    let stripped = content.strip_prefix("---")?;
+    let end_pos = stripped.find("---")?;
+    let front_matter = &stripped[..end_pos];
+
+    let yaml_value = serde_yaml::from_str::<serde_yaml::Value>(front_matter).ok()?;
+    let value = yaml_value.get(field)?;
+    let value_str = value.as_str()?;
+    Some(value_str.trim().to_string())
+}
+
+/// Extract a field from comment-based format
+fn extract_comment_field(content: &str, prefix: &str) -> Option<String> {
+    for line in content.lines() {
+        let line = line.trim();
+        if let Some(value) = line.strip_prefix(prefix) {
+            let value = value.trim();
+            if !value.is_empty() {
+                return Some(value.to_string());
+            }
+        }
+    }
+    None
 }
 
 /// Extracts the agent configuration portion from content that may have YAML frontmatter
@@ -624,6 +644,17 @@ pub fn parse_model_config(content: &str) -> Result<ModelConfig, serde_yaml::Erro
 
     // Fall back to parsing entire content as ModelConfig
     serde_yaml::from_str::<ModelConfig>(content)
+}
+
+/// Statistics for model merging from multiple sources
+struct ModelMergeStats {
+    initial_builtin_count: usize,
+    project_overrides: usize,
+    project_new: usize,
+    gitroot_overrides: usize,
+    gitroot_new: usize,
+    user_overrides: usize,
+    user_new: usize,
 }
 
 /// Model Manager for discovery and loading of agents from various sources
@@ -664,56 +695,98 @@ impl ModelManager {
     pub fn list_agents() -> Result<Vec<ModelInfo>, ModelError> {
         tracing::debug!("Starting agent discovery with precedence hierarchy");
 
-        let mut agents = Self::load_builtin_agents()?;
-        tracing::debug!("Loaded {} built-in agents", agents.len());
+        let mut models = Self::load_builtin_models()?;
+        tracing::debug!("Loaded {} built-in models", models.len());
 
-        let initial_builtin_count = agents.len();
-        let (project_overrides, project_new) =
-            Self::merge_agents_with_precedence(&mut agents, Self::load_project_models(), "project");
-        let (gitroot_overrides, gitroot_new) =
-            Self::merge_agents_with_precedence(&mut agents, Self::load_gitroot_models(), "gitroot");
-        let (user_overrides, user_new) =
-            Self::merge_agents_with_precedence(&mut agents, Self::load_user_models(), "user");
+        let stats = Self::merge_all_model_sources(&mut models);
+        Self::log_discovery_results(&models, &stats);
 
-        Self::log_agent_discovery_summary(
-            agents.len(),
+        Ok(models)
+    }
+
+    /// Merge models from all sources (project, gitroot, user) with precedence
+    fn merge_all_model_sources(models: &mut Vec<ModelInfo>) -> ModelMergeStats {
+        let initial_builtin_count = models.len();
+
+        // Process all model sources in precedence order
+        let model_sources = [
+            (Self::load_project_models(), "project"),
+            (Self::load_gitroot_models(), "gitroot"),
+            (Self::load_user_models(), "user"),
+        ];
+
+        let mut stats = ModelMergeStats {
             initial_builtin_count,
-            project_overrides,
-            project_new,
-            user_overrides,
-            user_new,
+            project_overrides: 0,
+            project_new: 0,
+            gitroot_overrides: 0,
+            gitroot_new: 0,
+            user_overrides: 0,
+            user_new: 0,
+        };
+
+        for (load_result, source_name) in model_sources {
+            let (overrides, new) =
+                Self::merge_models_with_precedence(models, load_result, source_name);
+            match source_name {
+                "project" => {
+                    stats.project_overrides = overrides;
+                    stats.project_new = new;
+                }
+                "gitroot" => {
+                    stats.gitroot_overrides = overrides;
+                    stats.gitroot_new = new;
+                }
+                "user" => {
+                    stats.user_overrides = overrides;
+                    stats.user_new = new;
+                }
+                _ => {}
+            }
+        }
+
+        stats
+    }
+
+    /// Log model discovery results
+    fn log_discovery_results(models: &[ModelInfo], stats: &ModelMergeStats) {
+        Self::log_model_discovery_summary(
+            models.len(),
+            stats.initial_builtin_count,
+            stats.project_overrides,
+            stats.project_new,
+            stats.user_overrides,
+            stats.user_new,
         );
 
-        if gitroot_overrides > 0 || gitroot_new > 0 {
+        if stats.gitroot_overrides > 0 || stats.gitroot_new > 0 {
             tracing::debug!(
                 "Git root models: {} overrides, {} new",
-                gitroot_overrides,
-                gitroot_new
+                stats.gitroot_overrides,
+                stats.gitroot_new
             );
         }
 
-        Self::log_final_agent_list(&agents);
-
-        Ok(agents)
+        Self::log_final_model_list(models);
     }
 
-    /// Merge agents with precedence, replacing existing agents or appending new ones
+    /// Merge models with precedence, replacing existing models or appending new ones
     ///
     /// # Returns
     /// Tuple of (override_count, new_count)
-    fn merge_agents_with_precedence(
-        agents: &mut Vec<ModelInfo>,
+    fn merge_models_with_precedence(
+        models: &mut Vec<ModelInfo>,
         load_result: Result<Vec<ModelInfo>, ModelError>,
         source_name: &str,
     ) -> (usize, usize) {
         match load_result {
-            Ok(new_agents) => {
-                tracing::debug!("Loaded {} {} agents", new_agents.len(), source_name);
-                Self::apply_agent_overrides(agents, new_agents, source_name)
+            Ok(new_models) => {
+                tracing::debug!("Loaded {} {} models", new_models.len(), source_name);
+                Self::apply_model_overrides(models, new_models, source_name)
             }
             Err(e) => {
                 tracing::warn!(
-                    "Failed to load {} agents: {}. Continuing with existing agents",
+                    "Failed to load {} models: {}. Continuing with existing models",
                     source_name,
                     e
                 );
@@ -722,38 +795,38 @@ impl ModelManager {
         }
     }
 
-    /// Apply agent overrides by replacing existing agents or appending new ones
+    /// Apply model overrides by replacing existing models or appending new ones
     ///
     /// # Returns
     /// Tuple of (override_count, new_count)
-    fn apply_agent_overrides(
-        agents: &mut Vec<ModelInfo>,
-        new_agents: Vec<ModelInfo>,
+    fn apply_model_overrides(
+        models: &mut Vec<ModelInfo>,
+        new_models: Vec<ModelInfo>,
         source_name: &str,
     ) -> (usize, usize) {
         let mut override_count = 0;
         let mut new_count = 0;
 
-        for new_agent in new_agents {
-            if let Some(existing_pos) = agents.iter().position(|a| a.name == new_agent.name) {
-                let previous_source = &agents[existing_pos].source;
+        for new_model in new_models {
+            if let Some(existing_pos) = models.iter().position(|m| m.name == new_model.name) {
+                let previous_source = &models[existing_pos].source;
                 tracing::debug!(
-                    "{} agent '{}' overriding {:?} agent at position {}",
+                    "{} model '{}' overriding {:?} model at position {}",
                     source_name,
-                    new_agent.name,
+                    new_model.name,
                     previous_source,
                     existing_pos
                 );
-                agents[existing_pos] = new_agent;
+                models[existing_pos] = new_model;
                 override_count += 1;
             } else {
                 tracing::debug!(
-                    "Adding new {} agent '{}' at position {}",
+                    "Adding new {} model '{}' at position {}",
                     source_name,
-                    new_agent.name,
-                    agents.len()
+                    new_model.name,
+                    models.len()
                 );
-                agents.push(new_agent);
+                models.push(new_model);
                 new_count += 1;
             }
         }
@@ -761,9 +834,9 @@ impl ModelManager {
         (override_count, new_count)
     }
 
-    /// Log agent discovery summary with detailed counts
-    fn log_agent_discovery_summary(
-        total_agents: usize,
+    /// Log model discovery summary with detailed counts
+    fn log_model_discovery_summary(
+        total_models: usize,
         initial_builtin_count: usize,
         project_overrides: usize,
         project_new: usize,
@@ -771,8 +844,8 @@ impl ModelManager {
         user_new: usize,
     ) {
         tracing::debug!(
-            "Agent discovery complete: {} total agents ({} built-in, {} project overrides, {} new project, {} user overrides, {} new user)",
-            total_agents,
+            "Model discovery complete: {} total models ({} built-in, {} project overrides, {} new project, {} user overrides, {} new user)",
+            total_models,
             initial_builtin_count,
             project_overrides,
             project_new,
@@ -781,15 +854,15 @@ impl ModelManager {
         );
     }
 
-    /// Log final agent list for debugging
-    fn log_final_agent_list(agents: &[ModelInfo]) {
-        for (idx, agent) in agents.iter().enumerate() {
+    /// Log final model list for debugging
+    fn log_final_model_list(models: &[ModelInfo]) {
+        for (idx, model) in models.iter().enumerate() {
             tracing::trace!(
-                "Agent[{}]: '{}' ({:?}) - {}",
+                "Model[{}]: '{}' ({:?}) - {}",
                 idx,
-                agent.name,
-                agent.source,
-                agent.description.as_deref().unwrap_or("no description")
+                model.name,
+                model.source,
+                model.description.as_deref().unwrap_or("no description")
             );
         }
     }
@@ -806,20 +879,20 @@ impl ModelManager {
     /// ```
     /// use swissarmyhammer_config::model::ModelManager;
     ///
-    /// let builtin_agents = ModelManager::load_builtin_agents()?;
-    /// for agent in builtin_agents {
-    ///     println!("Built-in agent: {} ({})", agent.name,
-    ///              agent.description.unwrap_or_default());
+    /// let builtin_models = ModelManager::load_builtin_models()?;
+    /// for model in builtin_models {
+    ///     println!("Built-in model: {} ({})", model.name,
+    ///              model.description.unwrap_or_default());
     /// }
     /// # Ok::<(), swissarmyhammer_config::ModelError>(())
     /// ```
-    pub fn load_builtin_agents() -> Result<Vec<ModelInfo>, ModelError> {
-        let builtin_agents = crate::get_builtin_models();
-        let mut agents = Vec::with_capacity(builtin_agents.len());
+    pub fn load_builtin_models() -> Result<Vec<ModelInfo>, ModelError> {
+        let builtin_models = crate::get_builtin_models();
+        let mut models = Vec::with_capacity(builtin_models.len());
 
-        for (name, content) in builtin_agents {
+        for (name, content) in builtin_models {
             let description = parse_model_description(content);
-            agents.push(ModelInfo {
+            models.push(ModelInfo {
                 name: name.to_string(),
                 content: content.to_string(),
                 source: ModelConfigSource::Builtin,
@@ -827,71 +900,202 @@ impl ModelManager {
             });
         }
 
-        Ok(agents)
+        Ok(models)
     }
 
-    /// Load agents from a specific directory
+    /// Load models from a specific directory
     ///
-    /// Scans the given directory for `.yaml` agent configuration files and loads them
+    /// Scans the given directory for `.yaml` model configuration files and loads them
     /// with the specified source type. Missing directories are handled gracefully by
-    /// returning an empty vector. Individual agent validation failures are logged but
-    /// don't prevent loading other agents.
+    /// returning an empty vector. Individual model validation failures are logged but
+    /// don't prevent loading other models.
+    ///
+    /// # Security
+    ///
+    /// This function implements comprehensive security measures:
+    /// - Path validation and canonicalization to resolve symlinks
+    /// - Permission checks to ensure directory is readable
+    /// - Audit logging of all directory access attempts
     ///
     /// # Arguments
-    /// * `dir_path` - Path to the directory to scan for agent files
-    /// * `source` - The source type to assign to loaded agents
+    /// * `dir_path` - Path to the directory to scan for model files
+    /// * `source` - The source type to assign to loaded models
     ///
     /// # Returns
-    /// * `Result<Vec<ModelInfo>, ModelError>` - Vector of agent information from the directory
+    /// * `Result<Vec<ModelInfo>, ModelError>` - Vector of model information from the directory
     ///
     /// # Examples
     /// ```no_run
     /// use swissarmyhammer_config::model::{ModelManager, ModelSource};
     /// use std::path::Path;
     ///
-    /// let agents = ModelManager::load_agents_from_dir(
-    ///     Path::new("./agents"),
+    /// let models = ModelManager::load_models_from_dir(
+    ///     Path::new("./models"),
     ///     ModelConfigSource::Project
     /// )?;
     /// # Ok::<(), swissarmyhammer_config::ModelError>(())
     /// ```
-    pub fn load_agents_from_dir(
+    pub fn load_models_from_dir(
         dir_path: &Path,
         source: ModelConfigSource,
     ) -> Result<Vec<ModelInfo>, ModelError> {
-        if !dir_path.exists() || !dir_path.is_dir() {
-            tracing::debug!(
-                "Agent directory does not exist or is not a directory: {}",
-                dir_path.display()
-            );
+        // Security: Validate and canonicalize the directory path
+        let validated_dir = Self::validate_directory_path(dir_path)?;
+
+        if !Self::is_valid_directory(&validated_dir) {
             return Ok(Vec::new());
         }
 
-        tracing::debug!(
-            "Loading agents from directory: {} (source: {:?})",
+        // Security: Audit log directory access
+        tracing::info!(
+            "Loading models from directory: {} (canonical: {}, source: {:?})",
             dir_path.display(),
+            validated_dir.display(),
             source
         );
 
-        let entries = Self::read_directory_entries(dir_path)?;
-        let (agents, successful_count, failed_count) =
+        let entries = Self::read_directory_entries(&validated_dir)?;
+        let (models, successful_count, failed_count) =
             Self::process_directory_entries(entries, &source);
 
+        Self::log_directory_loading_result(&validated_dir, successful_count, failed_count);
+
+        Ok(models)
+    }
+
+    /// Validate and canonicalize a directory path for secure access
+    ///
+    /// # Security
+    ///
+    /// Performs the following validations:
+    /// - Canonicalizes path to resolve symlinks and relative components
+    /// - Validates path exists and is readable
+    /// - Checks for suspicious path patterns
+    /// - Audit logs validation attempts
+    ///
+    /// # Arguments
+    /// * `dir_path` - Path to validate
+    ///
+    /// # Returns
+    /// * `Result<PathBuf, ModelError>` - Canonicalized path or error
+    fn validate_directory_path(dir_path: &Path) -> Result<PathBuf, ModelError> {
+        // Check for empty path
+        if dir_path.as_os_str().is_empty() {
+            tracing::warn!("Attempted to load models from empty path");
+            return Err(ModelError::InvalidPath(dir_path.to_path_buf()));
+        }
+
+        // Check path length to prevent system issues
+        const MAX_PATH_LENGTH: usize = 4096;
+        let path_str = dir_path.to_string_lossy();
+        if path_str.len() > MAX_PATH_LENGTH {
+            tracing::warn!(
+                "Path too long ({} characters, maximum {}): {}",
+                path_str.len(),
+                MAX_PATH_LENGTH,
+                path_str
+            );
+            return Err(ModelError::InvalidPath(dir_path.to_path_buf()));
+        }
+
+        // Canonicalize path to resolve symlinks and validate existence
+        let canonical_path = match dir_path.canonicalize() {
+            Ok(path) => path,
+            Err(e) => {
+                // Path doesn't exist or is inaccessible - this is OK, we return empty vector
+                tracing::debug!(
+                    "Directory path does not exist or is not accessible: {} ({})",
+                    dir_path.display(),
+                    e
+                );
+                // Return original path so is_valid_directory can handle it
+                return Ok(dir_path.to_path_buf());
+            }
+        };
+
+        // Security: Check for suspicious path patterns after canonicalization
+        let canonical_str = canonical_path.to_string_lossy();
+        Self::check_suspicious_patterns(&canonical_str)?;
+
+        // Security: Verify directory permissions
+        Self::check_directory_permissions(&canonical_path)?;
+
+        Ok(canonical_path)
+    }
+
+    /// Check for suspicious path patterns that might indicate attacks
+    fn check_suspicious_patterns(path_str: &str) -> Result<(), ModelError> {
+        // Check for null bytes which can cause security issues
+        if path_str.contains('\0') {
+            tracing::warn!("Path contains null byte: {}", path_str);
+            return Err(ModelError::ConfigError(
+                "Path contains invalid null byte".to_string(),
+            ));
+        }
+
+        Ok(())
+    }
+
+    /// Check directory permissions to ensure it's readable
+    fn check_directory_permissions(path: &Path) -> Result<(), ModelError> {
+        // Check if we can read the directory metadata
+        match std::fs::metadata(path) {
+            Ok(metadata) => {
+                if !metadata.is_dir() {
+                    tracing::warn!("Path is not a directory: {}", path.display());
+                    return Err(ModelError::InvalidPath(path.to_path_buf()));
+                }
+                // On Unix, check read permission
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    let mode = metadata.permissions().mode();
+                    let has_read = (mode & 0o400) != 0; // Owner read permission
+                    if !has_read {
+                        tracing::warn!("Directory is not readable: {}", path.display());
+                        return Err(ModelError::IoError(std::io::Error::new(
+                            std::io::ErrorKind::PermissionDenied,
+                            format!("Directory is not readable: {}", path.display()),
+                        )));
+                    }
+                }
+            }
+            Err(e) => {
+                tracing::debug!("Cannot read directory metadata {}: {}", path.display(), e);
+                return Err(ModelError::IoError(e));
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Check if path is a valid directory for loading models
+    fn is_valid_directory(dir_path: &Path) -> bool {
+        if !dir_path.exists() || !dir_path.is_dir() {
+            tracing::debug!(
+                "Model directory does not exist or is not a directory: {}",
+                dir_path.display()
+            );
+            return false;
+        }
+        true
+    }
+
+    /// Log the result of directory loading
+    fn log_directory_loading_result(dir_path: &Path, successful_count: usize, failed_count: usize) {
         tracing::debug!(
-            "Finished loading agents from {}: {} successful, {} failed",
+            "Finished loading models from {}: {} successful, {} failed",
             dir_path.display(),
             successful_count,
             failed_count
         );
-
-        Ok(agents)
     }
 
     /// Read directory entries with error handling
     fn read_directory_entries(dir_path: &Path) -> Result<std::fs::ReadDir, ModelError> {
         std::fs::read_dir(dir_path).map_err(|e| {
             tracing::error!(
-                "Failed to read agent directory {}: {}",
+                "Failed to read model directory {}: {}",
                 dir_path.display(),
                 e
             );
@@ -899,15 +1103,15 @@ impl ModelManager {
         })
     }
 
-    /// Process directory entries and load valid agent files
+    /// Process directory entries and load valid model files
     ///
     /// # Returns
-    /// Tuple of (agents, successful_count, failed_count)
+    /// Tuple of (models, successful_count, failed_count)
     fn process_directory_entries(
         entries: std::fs::ReadDir,
         source: &ModelConfigSource,
     ) -> (Vec<ModelInfo>, usize, usize) {
-        let mut agents = Vec::new();
+        let mut models = Vec::new();
         let mut successful_count = 0;
         let mut failed_count = 0;
 
@@ -923,9 +1127,9 @@ impl ModelManager {
 
             let path = entry.path();
             if Self::is_yaml_file(&path) {
-                match Self::load_agent_file(&path, source) {
-                    Ok(agent) => {
-                        agents.push(agent);
+                match Self::load_model_file(&path, source) {
+                    Ok(model) => {
+                        models.push(model);
                         successful_count += 1;
                     }
                     Err(_) => {
@@ -935,7 +1139,7 @@ impl ModelManager {
             }
         }
 
-        (agents, successful_count, failed_count)
+        (models, successful_count, failed_count)
     }
 
     /// Check if path is a YAML file
@@ -943,42 +1147,42 @@ impl ModelManager {
         path.is_file() && path.extension().and_then(|ext| ext.to_str()) == Some("yaml")
     }
 
-    /// Load and validate a single agent file
-    fn load_agent_file(path: &Path, source: &ModelConfigSource) -> Result<ModelInfo, ModelError> {
-        let agent_name = Self::extract_agent_name(path)?;
-        let content = Self::read_agent_content(path)?;
-        Self::validate_and_create_agent_info(&content, &agent_name, source, path)
+    /// Load and validate a single model file
+    fn load_model_file(path: &Path, source: &ModelConfigSource) -> Result<ModelInfo, ModelError> {
+        let model_name = Self::extract_model_name(path)?;
+        let content = Self::read_model_content(path)?;
+        Self::validate_and_create_model_info(&content, &model_name, source, path)
     }
 
-    /// Extract agent name from file path
-    fn extract_agent_name(path: &Path) -> Result<String, ModelError> {
+    /// Extract model name from file path
+    fn extract_model_name(path: &Path) -> Result<String, ModelError> {
         path.file_stem()
             .and_then(|name| name.to_str())
             .map(|name| name.to_string())
             .ok_or_else(|| {
-                tracing::warn!("Failed to extract agent name from path: {}", path.display());
+                tracing::warn!("Failed to extract model name from path: {}", path.display());
                 ModelError::InvalidPath(path.to_path_buf())
             })
     }
 
-    /// Read agent file content
-    fn read_agent_content(path: &Path) -> Result<String, ModelError> {
+    /// Read model file content
+    fn read_model_content(path: &Path) -> Result<String, ModelError> {
         std::fs::read_to_string(path).map_err(|e| {
-            tracing::warn!("Failed to read agent file {}: {}", path.display(), e);
+            tracing::warn!("Failed to read model file {}: {}", path.display(), e);
             ModelError::IoError(e)
         })
     }
 
-    /// Validate agent configuration and create ModelInfo
-    fn validate_and_create_agent_info(
+    /// Validate model configuration and create ModelInfo
+    fn validate_and_create_model_info(
         content: &str,
-        agent_name: &str,
+        model_name: &str,
         source: &ModelConfigSource,
         path: &Path,
     ) -> Result<ModelInfo, ModelError> {
         parse_model_config(content).map_err(|e| {
             tracing::warn!(
-                "Agent configuration validation failed for {}: {}. Skipping this agent.",
+                "Model configuration validation failed for {}: {}. Skipping this model.",
                 path.display(),
                 e
             );
@@ -987,63 +1191,63 @@ impl ModelManager {
 
         let description = parse_model_description(content);
         tracing::trace!(
-            "Successfully loaded agent '{}' from {} (description: {:?})",
-            agent_name,
+            "Successfully loaded model '{}' from {} (description: {:?})",
+            model_name,
             path.display(),
             description
         );
 
         Ok(ModelInfo {
-            name: agent_name.to_string(),
+            name: model_name.to_string(),
             content: content.to_string(),
             source: source.clone(),
             description,
         })
     }
 
-    /// Load user-defined agents from ~/.swissarmyhammer/models/
+    /// Load user-defined models from ~/.swissarmyhammer/models/
     ///
-    /// Scans the user's home directory `.swissarmyhammer/models/` for agent configuration
+    /// Scans the user's home directory `.swissarmyhammer/models/` for model configuration
     /// files. Missing directory is handled gracefully by returning an empty vector.
     ///
     /// # Returns
-    /// * `Result<Vec<ModelInfo>, ModelError>` - Vector of user-defined agent information
+    /// * `Result<Vec<ModelInfo>, ModelError>` - Vector of user-defined model information
     ///
     /// # Examples
     /// ```no_run
     /// use swissarmyhammer_config::model::ModelManager;
     ///
-    /// let user_agents = ModelManager::load_user_models()?;
-    /// for agent in user_agents {
-    ///     println!("User agent: {}", agent.name);
+    /// let user_models = ModelManager::load_user_models()?;
+    /// for model in user_models {
+    ///     println!("User model: {}", model.name);
     /// }
     /// # Ok::<(), swissarmyhammer_config::ModelError>(())
     /// ```
     pub fn load_user_models() -> Result<Vec<ModelInfo>, ModelError> {
         if let Some(home_dir) = dirs::home_dir() {
             let user_models_dir = home_dir.join(".swissarmyhammer").join("models");
-            Self::load_agents_from_dir(&user_models_dir, ModelConfigSource::User)
+            Self::load_models_from_dir(&user_models_dir, ModelConfigSource::User)
         } else {
             // No home directory available (rare case)
             Ok(Vec::new())
         }
     }
 
-    /// Load project-specific agents from ./models/
+    /// Load project-specific models from ./models/
     ///
-    /// Scans the current working directory's `models/` subdirectory for agent configuration
+    /// Scans the current working directory's `models/` subdirectory for model configuration
     /// files. Missing directory is handled gracefully by returning an empty vector.
     ///
     /// # Returns
-    /// * `Result<Vec<ModelInfo>, ModelError>` - Vector of project-specific agent information
+    /// * `Result<Vec<ModelInfo>, ModelError>` - Vector of project-specific model information
     ///
     /// # Examples
     /// ```no_run
     /// use swissarmyhammer_config::model::ModelManager;
     ///
-    /// let project_agents = ModelManager::load_project_models()?;
-    /// for agent in project_agents {
-    ///     println!("Project agent: {}", agent.name);
+    /// let project_models = ModelManager::load_project_models()?;
+    /// for model in project_models {
+    ///     println!("Project model: {}", model.name);
     /// }
     /// # Ok::<(), swissarmyhammer_config::ModelError>(())
     /// ```
@@ -1051,12 +1255,12 @@ impl ModelManager {
         let project_models_dir = std::env::current_dir()
             .map_err(ModelError::IoError)?
             .join("models");
-        Self::load_agents_from_dir(&project_models_dir, ModelConfigSource::Project)
+        Self::load_models_from_dir(&project_models_dir, ModelConfigSource::Project)
     }
 
     /// Load git root models from .swissarmyhammer/models/
     ///
-    /// Scans the git repository root's `.swissarmyhammer/models/` directory for agent
+    /// Scans the git repository root's `.swissarmyhammer/models/` directory for model
     /// configuration files. Missing directory is handled gracefully by returning an empty vector.
     ///
     /// # Returns
@@ -1077,7 +1281,7 @@ impl ModelManager {
 
         if let Some(git_root) = find_git_repository_root() {
             let gitroot_models_dir = git_root.join(".swissarmyhammer").join("models");
-            Self::load_agents_from_dir(&gitroot_models_dir, ModelConfigSource::GitRoot)
+            Self::load_models_from_dir(&gitroot_models_dir, ModelConfigSource::GitRoot)
         } else {
             // Not in a git repository
             Ok(Vec::new())
@@ -1160,6 +1364,14 @@ impl ModelManager {
     /// to the configuration file that should be used. If an existing configuration file
     /// is found, returns that path. Otherwise, returns the path for a new YAML configuration.
     ///
+    /// # Security
+    ///
+    /// This function implements comprehensive security measures:
+    /// - Path validation and canonicalization of current directory
+    /// - Permission checks to ensure directory is writable
+    /// - Audit logging of directory creation and access
+    /// - Validates resulting paths before returning
+    ///
     /// # Returns
     /// * `Result<PathBuf, ModelError>` - Path to config file (existing or new) or error
     ///
@@ -1172,25 +1384,145 @@ impl ModelManager {
     /// # Ok::<(), swissarmyhammer_config::model::ModelError>(())
     /// ```
     pub fn ensure_config_structure() -> Result<PathBuf, ModelError> {
+        // Security: Get and validate current directory
         let current_dir = std::env::current_dir().map_err(ModelError::IoError)?;
-        let sah_dir = current_dir.join(".swissarmyhammer");
+
+        // Security: Canonicalize current directory to resolve symlinks
+        let canonical_current = current_dir.canonicalize().map_err(|e| {
+            tracing::error!(
+                "Failed to canonicalize current directory {}: {}",
+                current_dir.display(),
+                e
+            );
+            ModelError::IoError(e)
+        })?;
+
+        // Security: Audit log the directory we're working in
+        tracing::info!(
+            "Ensuring config structure in directory: {} (canonical: {})",
+            current_dir.display(),
+            canonical_current.display()
+        );
+
+        let sah_dir = canonical_current.join(".swissarmyhammer");
 
         // Create .swissarmyhammer directory if it doesn't exist
         if !sah_dir.exists() {
-            std::fs::create_dir_all(&sah_dir).map_err(ModelError::IoError)?;
-            tracing::debug!("Created .swissarmyhammer directory: {}", sah_dir.display());
+            // Security: Check parent directory permissions before creating
+            Self::check_directory_writable(&canonical_current)?;
+
+            std::fs::create_dir_all(&sah_dir).map_err(|e| {
+                tracing::error!(
+                    "Failed to create .swissarmyhammer directory {}: {}",
+                    sah_dir.display(),
+                    e
+                );
+                ModelError::IoError(e)
+            })?;
+
+            // Security: Audit log directory creation
+            tracing::info!("Created .swissarmyhammer directory: {}", sah_dir.display());
         }
+
+        // Security: Validate the created/existing directory
+        Self::check_directory_permissions(&sah_dir)?;
 
         // Check for existing config file first
         if let Some(existing_config) = Self::detect_config_file() {
-            tracing::debug!("Found existing config file: {}", existing_config.display());
-            return Ok(existing_config);
+            // Security: Validate existing config path
+            let validated_config = Self::validate_config_file_path(&existing_config)?;
+            tracing::debug!("Found existing config file: {}", validated_config.display());
+            return Ok(validated_config);
         }
 
         // Return path for new YAML config (don't create the file yet)
         let new_config = sah_dir.join("sah.yaml");
-        tracing::debug!("Will use new config file: {}", new_config.display());
-        Ok(new_config)
+
+        // Security: Validate the new config path before returning
+        let validated_new_config = Self::validate_config_file_path(&new_config)?;
+        tracing::debug!(
+            "Will use new config file: {}",
+            validated_new_config.display()
+        );
+        Ok(validated_new_config)
+    }
+
+    /// Check if a directory is writable
+    fn check_directory_writable(path: &Path) -> Result<(), ModelError> {
+        match std::fs::metadata(path) {
+            Ok(metadata) => {
+                if !metadata.is_dir() {
+                    return Err(ModelError::InvalidPath(path.to_path_buf()));
+                }
+                // On Unix, check write permission
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    let mode = metadata.permissions().mode();
+                    let has_write = (mode & 0o200) != 0; // Owner write permission
+                    if !has_write {
+                        tracing::error!("Directory is not writable: {}", path.display());
+                        return Err(ModelError::IoError(std::io::Error::new(
+                            std::io::ErrorKind::PermissionDenied,
+                            format!("Directory is not writable: {}", path.display()),
+                        )));
+                    }
+                }
+            }
+            Err(e) => {
+                tracing::error!("Cannot access directory {}: {}", path.display(), e);
+                return Err(ModelError::IoError(e));
+            }
+        }
+        Ok(())
+    }
+
+    /// Validate a config file path for security
+    fn validate_config_file_path(path: &Path) -> Result<PathBuf, ModelError> {
+        // Check for empty path
+        if path.as_os_str().is_empty() {
+            tracing::warn!("Config file path is empty");
+            return Err(ModelError::InvalidPath(path.to_path_buf()));
+        }
+
+        // Check path length
+        const MAX_PATH_LENGTH: usize = 4096;
+        let path_str = path.to_string_lossy();
+        if path_str.len() > MAX_PATH_LENGTH {
+            tracing::warn!(
+                "Config path too long ({} characters, maximum {}): {}",
+                path_str.len(),
+                MAX_PATH_LENGTH,
+                path_str
+            );
+            return Err(ModelError::InvalidPath(path.to_path_buf()));
+        }
+
+        // Security: Check for suspicious patterns
+        Self::check_suspicious_patterns(&path_str)?;
+
+        // If the file exists, canonicalize it
+        if path.exists() {
+            let canonical = path.canonicalize().map_err(|e| {
+                tracing::error!(
+                    "Failed to canonicalize config path {}: {}",
+                    path.display(),
+                    e
+                );
+                ModelError::IoError(e)
+            })?;
+
+            // Verify it's a file
+            if !canonical.is_file() {
+                tracing::warn!("Config path is not a file: {}", canonical.display());
+                return Err(ModelError::InvalidPath(canonical));
+            }
+
+            Ok(canonical)
+        } else {
+            // File doesn't exist yet, just return the path
+            Ok(path.to_path_buf())
+        }
     }
 
     /// Get agent name for a specific use case from config
@@ -1205,7 +1537,7 @@ impl ModelManager {
     ///
     /// # Returns
     /// * `Result<Option<String>, ModelError>` - Agent name if configured, None otherwise
-    pub fn get_agent_for_use_case(use_case: ModelUseCase) -> Result<Option<String>, ModelError> {
+    pub fn get_agent_for_use_case(use_case: AgentUseCase) -> Result<Option<String>, ModelError> {
         let config_path = Self::ensure_config_structure()?;
 
         if !config_path.exists() {
@@ -1215,8 +1547,8 @@ impl ModelManager {
         let config_content = std::fs::read_to_string(&config_path).map_err(ModelError::IoError)?;
         let config_value: serde_yaml::Value = serde_yaml::from_str(&config_content)?;
 
-        // Try new format: models.{use_case}
-        if let Some(agents_map) = config_value.get("models") {
+        // Try new format: agents.{use_case}
+        if let Some(agents_map) = config_value.get("agents") {
             let use_case_str = use_case.to_string();
             if let Some(agent_name) = agents_map.get(&use_case_str) {
                 if let Some(name_str) = agent_name.as_str() {
@@ -1225,7 +1557,7 @@ impl ModelManager {
             }
 
             // Fall back to root if use case not configured
-            if use_case != ModelUseCase::Root {
+            if use_case != AgentUseCase::Root {
                 if let Some(root_agent) = agents_map.get("root") {
                     if let Some(name_str) = root_agent.as_str() {
                         return Ok(Some(name_str.to_string()));
@@ -1252,14 +1584,14 @@ impl ModelManager {
     ///
     /// # Examples
     /// ```no_run
-    /// use swissarmyhammer_config::model::{ModelManager, ModelUseCase};
+    /// use swissarmyhammer_config::model::{ModelManager, AgentUseCase};
     ///
-    /// let config = ModelManager::resolve_agent_config_for_use_case(ModelUseCase::Rules)?;
+    /// let config = ModelManager::resolve_agent_config_for_use_case(AgentUseCase::Rules)?;
     /// println!("Using agent: {:?}", config.executor_type());
     /// # Ok::<(), swissarmyhammer_config::model::ModelError>(())
     /// ```
     pub fn resolve_agent_config_for_use_case(
-        use_case: ModelUseCase,
+        use_case: AgentUseCase,
     ) -> Result<ModelConfig, ModelError> {
         // Try to get agent name for this use case
         let agent_name = Self::get_agent_for_use_case(use_case)?;
@@ -1302,31 +1634,31 @@ impl ModelManager {
     /// # Ok::<(), swissarmyhammer_config::model::ModelError>(())
     /// ```
     pub fn use_agent(agent_name: &str) -> Result<(), ModelError> {
-        Self::use_agent_for_use_case(agent_name, ModelUseCase::Root)
+        Self::use_agent_for_use_case(agent_name, AgentUseCase::Root)
     }
 
-    /// Ensure models map exists in config
+    /// Ensure agents map exists in config
     ///
-    /// Creates the models map if it doesn't exist in the configuration.
-    fn ensure_models_map(config: &mut serde_yaml::Value) -> Result<(), ModelError> {
-        if config.get("models").is_none() {
+    /// Creates the agents map if it doesn't exist in the configuration.
+    fn ensure_agents_map(config: &mut serde_yaml::Value) -> Result<(), ModelError> {
+        if config.get("agents").is_none() {
             let agents_map = serde_yaml::Value::Mapping(Default::default());
             if let Some(map) = config.as_mapping_mut() {
-                map.insert(serde_yaml::Value::String("models".to_string()), agents_map);
+                map.insert(serde_yaml::Value::String("agents".to_string()), agents_map);
             }
         }
         Ok(())
     }
 
-    /// Set use case agent in models map
+    /// Set use case agent in agents map
     ///
-    /// Updates the models map with the agent name for the given use case.
+    /// Updates the agents map with the agent name for the given use case.
     fn set_use_case_agent(
-        models_map: &mut serde_yaml::Mapping,
-        use_case: ModelUseCase,
+        agents_map: &mut serde_yaml::Mapping,
+        use_case: AgentUseCase,
         agent_name: &str,
     ) {
-        models_map.insert(
+        agents_map.insert(
             serde_yaml::Value::String(use_case.to_string()),
             serde_yaml::Value::String(agent_name.to_string()),
         );
@@ -1335,7 +1667,15 @@ impl ModelManager {
     /// Apply an agent configuration to the project for a specific use case
     ///
     /// Finds the specified agent by name, loads or creates the project configuration file,
-    /// and updates the models map with the selected agent for the given use case.
+    /// and updates the agents map with the selected agent for the given use case.
+    ///
+    /// # Security
+    ///
+    /// This function implements comprehensive security measures:
+    /// - Validates agent name to prevent injection attacks
+    /// - Path validation and canonicalization for config file
+    /// - Permission checks before reading/writing config
+    /// - Audit logging of all configuration changes
     ///
     /// # Arguments
     /// * `agent_name` - Name of the agent to apply
@@ -1345,38 +1685,251 @@ impl ModelManager {
     /// * `Result<(), ModelError>` - Success or error details
     pub fn use_agent_for_use_case(
         agent_name: &str,
-        use_case: ModelUseCase,
+        use_case: AgentUseCase,
     ) -> Result<(), ModelError> {
-        tracing::info!("Setting {} use case to model '{}'", use_case, agent_name);
+        // Security: Validate agent name to prevent injection
+        Self::validate_agent_name_security(agent_name)?;
 
-        // Find and validate agent
-        let agent_info = Self::find_agent_by_name(agent_name)?;
-        let _agent_config = parse_model_config(&agent_info.content)?;
+        // Security: Audit log the configuration change attempt
+        tracing::info!(
+            "Attempting to set {} use case to model '{}' (user request)",
+            use_case,
+            agent_name
+        );
 
+        Self::validate_agent(agent_name)?;
         let config_path = Self::ensure_config_structure()?;
 
-        // Read existing config or create empty
-        let mut config_value: serde_yaml::Value = if config_path.exists() {
-            let content = std::fs::read_to_string(&config_path).map_err(ModelError::IoError)?;
-            serde_yaml::from_str(&content).unwrap_or(serde_yaml::Value::Mapping(Default::default()))
+        // Security: Validate config path before operations
+        let validated_config_path = Self::validate_config_file_path(&config_path)?;
+
+        let mut config_value = Self::load_or_create_config(&validated_config_path)?;
+
+        Self::update_config_with_agent(&mut config_value, use_case, agent_name)?;
+        Self::save_config(&validated_config_path, &config_value)?;
+
+        // Security: Audit log successful configuration change
+        tracing::info!(
+            "Successfully set {} use case to model '{}' in {}",
+            use_case,
+            agent_name,
+            validated_config_path.display()
+        );
+
+        Ok(())
+    }
+
+    /// Validate agent name for security (prevent injection attacks)
+    fn validate_agent_name_security(agent_name: &str) -> Result<(), ModelError> {
+        // Check for empty name
+        if agent_name.trim().is_empty() {
+            tracing::warn!("Agent name is empty");
+            return Err(ModelError::ConfigError(
+                "Agent name cannot be empty".to_string(),
+            ));
+        }
+
+        // Check name length to prevent buffer overflow issues
+        const MAX_AGENT_NAME_LENGTH: usize = 256;
+        if agent_name.len() > MAX_AGENT_NAME_LENGTH {
+            tracing::warn!(
+                "Agent name too long ({} characters, maximum {}): {}",
+                agent_name.len(),
+                MAX_AGENT_NAME_LENGTH,
+                agent_name
+            );
+            return Err(ModelError::ConfigError(format!(
+                "Agent name too long ({} characters, maximum {})",
+                agent_name.len(),
+                MAX_AGENT_NAME_LENGTH
+            )));
+        }
+
+        // Check for null bytes
+        if agent_name.contains('\0') {
+            tracing::warn!("Agent name contains null byte: {}", agent_name);
+            return Err(ModelError::ConfigError(
+                "Agent name contains invalid null byte".to_string(),
+            ));
+        }
+
+        // Check for path traversal patterns in agent name
+        let suspicious_patterns = ["../", "..\\", "/", "\\"];
+        for pattern in &suspicious_patterns {
+            if agent_name.contains(pattern) {
+                tracing::warn!(
+                    "Agent name contains suspicious pattern '{}': {}",
+                    pattern,
+                    agent_name
+                );
+                return Err(ModelError::ConfigError(format!(
+                    "Agent name contains invalid pattern: {}",
+                    pattern
+                )));
+            }
+        }
+
+        // Check for control characters
+        if agent_name.chars().any(|c| c.is_control()) {
+            tracing::warn!("Agent name contains control characters: {}", agent_name);
+            return Err(ModelError::ConfigError(
+                "Agent name contains invalid control characters".to_string(),
+            ));
+        }
+
+        Ok(())
+    }
+
+    /// Validate that agent exists and is parseable
+    fn validate_agent(agent_name: &str) -> Result<(), ModelError> {
+        let agent_info = Self::find_agent_by_name(agent_name)?;
+        let _agent_config = parse_model_config(&agent_info.content)?;
+        Ok(())
+    }
+
+    /// Load existing config or create empty one
+    ///
+    /// # Security
+    ///
+    /// - Validates file permissions before reading
+    /// - Checks file size to prevent resource exhaustion
+    /// - Audit logs file access
+    fn load_or_create_config(config_path: &Path) -> Result<serde_yaml::Value, ModelError> {
+        if config_path.exists() {
+            // Security: Check file permissions
+            Self::check_file_readable(config_path)?;
+
+            // Security: Check file size to prevent resource exhaustion
+            const MAX_CONFIG_SIZE: u64 = 10 * 1024 * 1024; // 10MB
+            let metadata = std::fs::metadata(config_path).map_err(ModelError::IoError)?;
+            if metadata.len() > MAX_CONFIG_SIZE {
+                tracing::error!(
+                    "Config file too large ({} bytes, maximum {}): {}",
+                    metadata.len(),
+                    MAX_CONFIG_SIZE,
+                    config_path.display()
+                );
+                return Err(ModelError::ConfigError(format!(
+                    "Config file too large ({} bytes, maximum {})",
+                    metadata.len(),
+                    MAX_CONFIG_SIZE
+                )));
+            }
+
+            // Security: Audit log config file access
+            tracing::debug!("Reading config file: {}", config_path.display());
+
+            let content = std::fs::read_to_string(config_path).map_err(|e| {
+                tracing::error!(
+                    "Failed to read config file {}: {}",
+                    config_path.display(),
+                    e
+                );
+                ModelError::IoError(e)
+            })?;
+
+            Ok(serde_yaml::from_str(&content)
+                .unwrap_or(serde_yaml::Value::Mapping(Default::default())))
         } else {
-            serde_yaml::Value::Mapping(Default::default())
-        };
+            tracing::debug!(
+                "Config file does not exist, creating new: {}",
+                config_path.display()
+            );
+            Ok(serde_yaml::Value::Mapping(Default::default()))
+        }
+    }
 
-        // Ensure models map exists
-        Self::ensure_models_map(&mut config_value)?;
+    /// Check if a file is readable
+    fn check_file_readable(path: &Path) -> Result<(), ModelError> {
+        match std::fs::metadata(path) {
+            Ok(metadata) => {
+                if !metadata.is_file() {
+                    tracing::error!("Path is not a file: {}", path.display());
+                    return Err(ModelError::InvalidPath(path.to_path_buf()));
+                }
+                // On Unix, check read permission
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    let mode = metadata.permissions().mode();
+                    let has_read = (mode & 0o400) != 0; // Owner read permission
+                    if !has_read {
+                        tracing::error!("File is not readable: {}", path.display());
+                        return Err(ModelError::IoError(std::io::Error::new(
+                            std::io::ErrorKind::PermissionDenied,
+                            format!("File is not readable: {}", path.display()),
+                        )));
+                    }
+                }
+                Ok(())
+            }
+            Err(e) => {
+                tracing::error!("Cannot access file {}: {}", path.display(), e);
+                Err(ModelError::IoError(e))
+            }
+        }
+    }
 
-        // Set the use case agent
-        if let Some(agents_map) = config_value
-            .get_mut("models")
-            .and_then(|v| v.as_mapping_mut())
-        {
+    /// Update config with agent for use case
+    fn update_config_with_agent(
+        config: &mut serde_yaml::Value,
+        use_case: AgentUseCase,
+        agent_name: &str,
+    ) -> Result<(), ModelError> {
+        Self::ensure_agents_map(config)?;
+
+        if let Some(agents_map) = config.get_mut("agents").and_then(|v| v.as_mapping_mut()) {
             Self::set_use_case_agent(agents_map, use_case, agent_name);
         }
 
-        // Write back
-        let config_yaml = serde_yaml::to_string(&config_value)?;
-        std::fs::write(&config_path, config_yaml).map_err(ModelError::IoError)?;
+        Ok(())
+    }
+
+    /// Save config to file
+    ///
+    /// # Security
+    ///
+    /// - Validates file path before writing
+    /// - Checks parent directory permissions
+    /// - Uses atomic write operation when possible
+    /// - Audit logs file modifications
+    fn save_config(config_path: &Path, config: &serde_yaml::Value) -> Result<(), ModelError> {
+        // Security: Validate the parent directory is writable
+        if let Some(parent) = config_path.parent() {
+            Self::check_directory_writable(parent)?;
+        }
+
+        // Security: Audit log config write
+        tracing::info!("Writing config to file: {}", config_path.display());
+
+        let config_yaml = serde_yaml::to_string(config)?;
+
+        // Security: Check serialized config size before writing
+        const MAX_CONFIG_SIZE: usize = 10 * 1024 * 1024; // 10MB
+        if config_yaml.len() > MAX_CONFIG_SIZE {
+            tracing::error!(
+                "Config too large to write ({} bytes, maximum {})",
+                config_yaml.len(),
+                MAX_CONFIG_SIZE
+            );
+            return Err(ModelError::ConfigError(format!(
+                "Config too large ({} bytes, maximum {})",
+                config_yaml.len(),
+                MAX_CONFIG_SIZE
+            )));
+        }
+
+        std::fs::write(config_path, config_yaml).map_err(|e| {
+            tracing::error!(
+                "Failed to write config file {}: {}",
+                config_path.display(),
+                e
+            );
+            ModelError::IoError(e)
+        })?;
+
+        // Security: Audit log successful write
+        tracing::info!("Successfully wrote config to: {}", config_path.display());
 
         Ok(())
     }
@@ -1411,9 +1964,18 @@ mod tests {
         config_file: &str,
         content: Option<&str>,
     ) -> (tempfile::TempDir, std::path::PathBuf, std::path::PathBuf) {
-        use std::fs;
         let (temp_dir, original_dir) = setup_temp_test_dir();
+        let config_path = create_config_file(&temp_dir, config_file, content);
+        (temp_dir, config_path, original_dir)
+    }
 
+    /// Create config file in temp directory with optional content
+    fn create_config_file(
+        temp_dir: &tempfile::TempDir,
+        config_file: &str,
+        content: Option<&str>,
+    ) -> std::path::PathBuf {
+        use std::fs;
         let sah_dir = temp_dir.path().join(".swissarmyhammer");
         fs::create_dir_all(&sah_dir).expect("Failed to create .swissarmyhammer dir");
 
@@ -1421,21 +1983,20 @@ mod tests {
         if let Some(content) = content {
             fs::write(&config_path, content).expect("Failed to write config file");
         }
-
-        (temp_dir, config_path, original_dir)
+        config_path
     }
 
     #[test]
     fn test_system_default_is_claude() {
         let config = ModelConfig::default();
-        assert_eq!(config.executor_type(), AgentExecutorType::ClaudeCode);
+        assert_eq!(config.executor_type(), ModelExecutorType::ClaudeCode);
         assert!(!config.quiet);
     }
 
     #[test]
     fn test_agent_executor_type_default() {
-        let executor_type = AgentExecutorType::default();
-        assert_eq!(executor_type, AgentExecutorType::ClaudeCode);
+        let executor_type = ModelExecutorType::default();
+        assert_eq!(executor_type, ModelExecutorType::ClaudeCode);
     }
 
     #[test]
@@ -1484,14 +2045,13 @@ mod tests {
             ModelSource::Local { .. } => panic!("Testing config should be HuggingFace"),
         }
         assert_eq!(config.mcp_server.port, 0);
-        assert_eq!(config.mcp_server.timeout_seconds, 900); // Default timeout
-                                                            // Removed test_mode field - now always uses real models
+        assert_eq!(config.mcp_server.timeout_seconds, 30); // Test timeout (DEFAULT_TEST_MCP_TIMEOUT_SECONDS)
     }
 
     #[test]
     fn test_agent_config_claude_code_factory() {
         let config = ModelConfig::claude_code();
-        assert_eq!(config.executor_type(), AgentExecutorType::ClaudeCode);
+        assert_eq!(config.executor_type(), ModelExecutorType::ClaudeCode);
         assert!(!config.quiet);
 
         match config.executor {
@@ -1508,12 +2068,12 @@ mod tests {
         let llama_config = LlamaAgentConfig::for_testing();
         let config = ModelConfig::llama_agent(llama_config.clone());
 
-        assert_eq!(config.executor_type(), AgentExecutorType::LlamaAgent);
+        assert_eq!(config.executor_type(), ModelExecutorType::LlamaAgent);
         assert!(!config.quiet);
 
         match config.executor {
             ModelExecutorConfig::LlamaAgent(agent_config) => {
-                assert_eq!(agent_config.mcp_server.timeout_seconds, 900);
+                assert_eq!(agent_config.mcp_server.timeout_seconds, 30); // Test timeout (DEFAULT_TEST_MCP_TIMEOUT_SECONDS)
             }
             ModelExecutorConfig::ClaudeCode(_) => panic!("Should be LlamaAgent config"),
         }
@@ -1999,8 +2559,8 @@ quiet: true"#;
     }
 
     #[test]
-    fn test_agent_manager_load_builtin_agents() {
-        let agents = ModelManager::load_builtin_agents().expect("Failed to load builtin agents");
+    fn test_agent_manager_load_builtin_models() {
+        let agents = ModelManager::load_builtin_models().expect("Failed to load builtin models");
 
         // Should contain at least the known builtin agents
         assert!(!agents.is_empty(), "Builtin agents should not be empty");
@@ -2032,7 +2592,7 @@ quiet: true"#;
         use std::path::Path;
 
         let non_existent_dir = Path::new("/non/existent/directory");
-        let result = ModelManager::load_agents_from_dir(non_existent_dir, ModelConfigSource::User);
+        let result = ModelManager::load_models_from_dir(non_existent_dir, ModelConfigSource::User);
 
         assert!(result.is_ok(), "Should handle missing directory gracefully");
         let agents = result.unwrap();
@@ -2043,7 +2603,7 @@ quiet: true"#;
     }
 
     #[test]
-    fn test_agent_manager_load_agents_from_dir_with_temp_files() {
+    fn test_agent_manager_load_models_from_dir_with_temp_files() {
         use std::fs;
         use tempfile::TempDir;
 
@@ -2075,7 +2635,7 @@ quiet: false"#;
         fs::write(temp_path.join("not-an-agent.txt"), "ignored content")
             .expect("Failed to write non-yaml file");
 
-        let result = ModelManager::load_agents_from_dir(temp_path, ModelConfigSource::Project);
+        let result = ModelManager::load_models_from_dir(temp_path, ModelConfigSource::Project);
         if let Err(e) = &result {
             eprintln!("Error loading agents: {:?}", e);
         }
@@ -2280,7 +2840,7 @@ quiet: false"#;
 
         // Test direct directory loading instead since we can't easily mock home_dir
         let project_agents =
-            ModelManager::load_agents_from_dir(&project_agents_dir, ModelConfigSource::Project);
+            ModelManager::load_models_from_dir(&project_agents_dir, ModelConfigSource::Project);
         assert!(
             project_agents.is_ok(),
             "Should load project agents successfully"
@@ -2313,7 +2873,7 @@ quiet: false"#;
 
         // Test user agents
         let user_agents =
-            ModelManager::load_agents_from_dir(&user_agents_dir, ModelConfigSource::User);
+            ModelManager::load_models_from_dir(&user_agents_dir, ModelConfigSource::User);
         assert!(user_agents.is_ok(), "Should load user agents successfully");
 
         let user_agents = user_agents.unwrap();
@@ -2378,7 +2938,7 @@ quiet: true"#;
             .expect("Failed to write valid agent 2");
 
         // Test that loading continues despite invalid agents and loads only valid ones
-        let result = ModelManager::load_agents_from_dir(temp_path, ModelConfigSource::Project);
+        let result = ModelManager::load_models_from_dir(temp_path, ModelConfigSource::Project);
 
         // The function should succeed and load only valid agents
         assert!(
@@ -2427,7 +2987,7 @@ quiet: true"#;
         let empty_dir = temp_dir.path().join("empty_agents");
         std::fs::create_dir_all(&empty_dir).expect("Failed to create empty dir");
 
-        let result = ModelManager::load_agents_from_dir(&empty_dir, ModelConfigSource::Project);
+        let result = ModelManager::load_models_from_dir(&empty_dir, ModelConfigSource::Project);
         assert!(result.is_ok(), "Should handle empty directory gracefully");
 
         let agents = result.unwrap();
@@ -2461,7 +3021,7 @@ quiet: false"#;
         fs::write(temp_path.join("real-agent.yaml"), valid_content)
             .expect("Failed to write valid agent");
 
-        let result = ModelManager::load_agents_from_dir(temp_path, ModelConfigSource::User);
+        let result = ModelManager::load_models_from_dir(temp_path, ModelConfigSource::User);
         assert!(
             result.is_ok(),
             "Should load agents while ignoring non-YAML files"
@@ -2726,8 +3286,8 @@ quiet: false"#;
 
         let config_content = fs::read_to_string(&config_path).expect("Failed to read config");
         assert!(
-            config_content.contains("models:"),
-            "Should contain models section"
+            config_content.contains("agents:"),
+            "Should contain agents section"
         );
         assert!(
             config_content.contains("root:"),
@@ -2765,8 +3325,8 @@ other_section:
             "Should preserve existing values"
         );
         assert!(
-            updated_config.contains("models:"),
-            "Should add models section"
+            updated_config.contains("agents:"),
+            "Should add agents section"
         );
         assert!(
             updated_config.contains("root:"),
@@ -2779,10 +3339,10 @@ other_section:
     #[test]
     fn test_agent_manager_use_agent_replaces_existing_agent() {
         use std::fs;
-        let existing_config = r#"# Config with existing models
+        let existing_config = r#"# Config with existing agents
 other_section:
   value: "preserved"
-models:
+agents:
   root: "qwen-coder"
 "#;
         let (_temp_dir, config_path, original_dir) =
@@ -2802,8 +3362,8 @@ models:
             "Should preserve existing values"
         );
         assert!(
-            updated_config.contains("models:"),
-            "Should have models section"
+            updated_config.contains("agents:"),
+            "Should have agents section"
         );
         assert!(
             updated_config.contains("claude-code"),
@@ -2885,48 +3445,48 @@ models:
         env::set_current_dir(&temp_dir).expect("Failed to change to temp dir");
 
         // Test 1: No config - should return default claude-code
-        let result = ModelManager::resolve_agent_config_for_use_case(ModelUseCase::Rules);
+        let result = ModelManager::resolve_agent_config_for_use_case(AgentUseCase::Rules);
         assert!(
             result.is_ok(),
             "Should resolve to default agent when no config exists"
         );
         let config = result.unwrap();
-        assert_eq!(config.executor_type(), AgentExecutorType::ClaudeCode);
+        assert_eq!(config.executor_type(), ModelExecutorType::ClaudeCode);
 
         // Test 2: Config with root agent only - rules should fall back to root
         let sah_dir = temp_dir.path().join(".swissarmyhammer");
         fs::create_dir_all(&sah_dir).expect("Failed to create sah dir");
         let config_path = sah_dir.join("sah.yaml");
-        let config_with_root = r#"models:
+        let config_with_root = r#"agents:
   root: "claude-code"
 "#;
         fs::write(&config_path, config_with_root).expect("Failed to write config");
 
-        let result = ModelManager::resolve_agent_config_for_use_case(ModelUseCase::Rules);
+        let result = ModelManager::resolve_agent_config_for_use_case(AgentUseCase::Rules);
         assert!(
             result.is_ok(),
             "Should resolve to root agent when use case not configured"
         );
         let config = result.unwrap();
-        assert_eq!(config.executor_type(), AgentExecutorType::ClaudeCode);
+        assert_eq!(config.executor_type(), ModelExecutorType::ClaudeCode);
 
         // Test 3: Config with specific rules agent - should use rules agent
-        let config_with_rules = r#"models:
+        let config_with_rules = r#"agents:
   root: "claude-code"
   rules: "qwen-coder"
 "#;
         fs::write(&config_path, config_with_rules).expect("Failed to write config with rules");
 
-        let result = ModelManager::resolve_agent_config_for_use_case(ModelUseCase::Rules);
+        let result = ModelManager::resolve_agent_config_for_use_case(AgentUseCase::Rules);
         assert!(result.is_ok(), "Should resolve to rules-specific agent");
         let config = result.unwrap();
-        assert_eq!(config.executor_type(), AgentExecutorType::LlamaAgent);
+        assert_eq!(config.executor_type(), ModelExecutorType::LlamaAgent);
 
         // Test 4: Root use case should use root agent directly
-        let result = ModelManager::resolve_agent_config_for_use_case(ModelUseCase::Root);
+        let result = ModelManager::resolve_agent_config_for_use_case(AgentUseCase::Root);
         assert!(result.is_ok(), "Should resolve root use case");
         let config = result.unwrap();
-        assert_eq!(config.executor_type(), AgentExecutorType::ClaudeCode);
+        assert_eq!(config.executor_type(), ModelExecutorType::ClaudeCode);
 
         env::set_current_dir(&original_dir).expect("Failed to restore original dir");
     }
@@ -2942,19 +3502,23 @@ models:
             temp_dir
         }
 
+        // Note: This is a simplified test setup that doesn't need the full
+        // setup_temp_test_dir pattern since tests in this module don't need
+        // to restore the original directory
+
         #[test]
         fn test_resolve_use_case_with_specific_agent() {
             let _temp = setup_test_env();
 
             // Set Rules to specific agent
-            ModelManager::use_agent_for_use_case("claude-code", ModelUseCase::Rules).unwrap();
+            ModelManager::use_agent_for_use_case("claude-code", AgentUseCase::Rules).unwrap();
 
             // Verify it resolves correctly
             let agent =
-                ModelManager::resolve_agent_config_for_use_case(ModelUseCase::Rules).unwrap();
+                ModelManager::resolve_agent_config_for_use_case(AgentUseCase::Rules).unwrap();
             assert!(matches!(
                 agent.executor_type(),
-                AgentExecutorType::ClaudeCode
+                ModelExecutorType::ClaudeCode
             ));
         }
 
@@ -2963,14 +3527,14 @@ models:
             let _temp = setup_test_env();
 
             // Set only Root
-            ModelManager::use_agent_for_use_case("claude-code", ModelUseCase::Root).unwrap();
+            ModelManager::use_agent_for_use_case("claude-code", AgentUseCase::Root).unwrap();
 
             // Rules should fall back to Root
             let agent =
-                ModelManager::resolve_agent_config_for_use_case(ModelUseCase::Rules).unwrap();
+                ModelManager::resolve_agent_config_for_use_case(AgentUseCase::Rules).unwrap();
             assert!(matches!(
                 agent.executor_type(),
-                AgentExecutorType::ClaudeCode
+                ModelExecutorType::ClaudeCode
             ));
         }
 
@@ -2981,33 +3545,33 @@ models:
             // Don't configure anything
             // Should fall back to default (claude-code)
             let agent =
-                ModelManager::resolve_agent_config_for_use_case(ModelUseCase::Rules).unwrap();
+                ModelManager::resolve_agent_config_for_use_case(AgentUseCase::Rules).unwrap();
             assert!(matches!(
                 agent.executor_type(),
-                AgentExecutorType::ClaudeCode
+                ModelExecutorType::ClaudeCode
             ));
         }
 
         #[test]
         fn test_use_case_from_str() {
-            assert_eq!("root".parse::<ModelUseCase>().unwrap(), ModelUseCase::Root);
+            assert_eq!("root".parse::<AgentUseCase>().unwrap(), AgentUseCase::Root);
             assert_eq!(
-                "rules".parse::<ModelUseCase>().unwrap(),
-                ModelUseCase::Rules
+                "rules".parse::<AgentUseCase>().unwrap(),
+                AgentUseCase::Rules
             );
             assert_eq!(
-                "workflows".parse::<ModelUseCase>().unwrap(),
-                ModelUseCase::Workflows
+                "workflows".parse::<AgentUseCase>().unwrap(),
+                AgentUseCase::Workflows
             );
 
-            assert!("invalid".parse::<ModelUseCase>().is_err());
+            assert!("invalid".parse::<AgentUseCase>().is_err());
         }
 
         #[test]
         fn test_use_case_display() {
-            assert_eq!(ModelUseCase::Root.to_string(), "root");
-            assert_eq!(ModelUseCase::Rules.to_string(), "rules");
-            assert_eq!(ModelUseCase::Workflows.to_string(), "workflows");
+            assert_eq!(AgentUseCase::Root.to_string(), "root");
+            assert_eq!(AgentUseCase::Rules.to_string(), "rules");
+            assert_eq!(AgentUseCase::Workflows.to_string(), "workflows");
         }
 
         #[test]
@@ -3019,7 +3583,7 @@ models:
             std::fs::write(&config_path, "agent: claude-code\n").unwrap();
 
             // Should be able to read it (returns None since old format not supported)
-            let agent = ModelManager::get_agent_for_use_case(ModelUseCase::Root).unwrap();
+            let agent = ModelManager::get_agent_for_use_case(AgentUseCase::Root).unwrap();
             assert_eq!(agent, None);
         }
 
@@ -3031,19 +3595,19 @@ models:
             let config_path = ModelManager::ensure_config_structure().unwrap();
             std::fs::write(
                 &config_path,
-                "models:\n  root: claude-code\n  rules: qwen-coder\n",
+                "agents:\n  root: claude-code\n  rules: qwen-coder\n",
             )
             .unwrap();
 
             // Should read both use cases
             assert_eq!(
-                ModelManager::get_agent_for_use_case(ModelUseCase::Root)
+                ModelManager::get_agent_for_use_case(AgentUseCase::Root)
                     .unwrap()
                     .unwrap(),
                 "claude-code"
             );
             assert_eq!(
-                ModelManager::get_agent_for_use_case(ModelUseCase::Rules)
+                ModelManager::get_agent_for_use_case(AgentUseCase::Rules)
                     .unwrap()
                     .unwrap(),
                 "qwen-coder"

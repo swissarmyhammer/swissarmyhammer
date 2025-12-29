@@ -1,0 +1,582 @@
+{
+  "id": "01KDJGA4YDKT9KKBM6JY0XX51J",
+  "created_at": {
+    "secs_since_epoch": 1766926390,
+    "nanos_since_epoch": 221675000
+  },
+  "last_accessed": {
+    "secs_since_epoch": 1766926403,
+    "nanos_since_epoch": 590261000
+  },
+  "context": [
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926397,
+        "nanos_since_epoch": 267854000
+      },
+      "update": {
+        "sessionUpdate": "available_commands_update",
+        "availableCommands": [
+          {
+            "name": "create_plan",
+            "description": "Create an execution plan for complex tasks",
+            "input": null,
+            "_meta": {
+              "category": "planning",
+              "source": "core"
+            }
+          },
+          {
+            "name": "research_codebase",
+            "description": "Research and analyze the codebase structure",
+            "input": null,
+            "_meta": {
+              "category": "analysis",
+              "source": "core"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926397,
+        "nanos_since_epoch": 268111000
+      },
+      "update": {
+        "sessionUpdate": "user_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "\n[Audio content: audio/wav (embedded data)]"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926400,
+        "nanos_since_epoch": 867325000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "I can"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926400,
+        "nanos_since_epoch": 924812000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " see"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926401,
+        "nanos_since_epoch": 113741000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " you've shared an"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926401,
+        "nanos_since_epoch": 173329000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " audio file. I'm"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926401,
+        "nanos_since_epoch": 174824000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " able"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926401,
+        "nanos_since_epoch": 261653000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " to process audio content,"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926401,
+        "nanos_since_epoch": 273906000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " but I didn"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926401,
+        "nanos_since_epoch": 285246000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "'t hear"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926401,
+        "nanos_since_epoch": 305232000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " any"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926401,
+        "nanos_since_epoch": 627878000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " speech"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926401,
+        "nanos_since_epoch": 642840000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " or ident"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926401,
+        "nanos_since_epoch": 661265000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "ifiable content in this"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926401,
+        "nanos_since_epoch": 732692000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " particular"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926401,
+        "nanos_since_epoch": 749662000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " clip"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926401,
+        "nanos_since_epoch": 763769000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " -"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926401,
+        "nanos_since_epoch": 772830000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " it appears to be either"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926401,
+        "nanos_since_epoch": 774219000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " silent"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926401,
+        "nanos_since_epoch": 841623000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": ","
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926401,
+        "nanos_since_epoch": 862960000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " very"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926401,
+        "nanos_since_epoch": 903312000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " short"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926402,
+        "nanos_since_epoch": 11633000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": ", or contains audio"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926402,
+        "nanos_since_epoch": 38670000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " that wasn"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926402,
+        "nanos_since_epoch": 140947000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "'t clearly capture"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926402,
+        "nanos_since_epoch": 147529000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "d."
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926402,
+        "nanos_since_epoch": 190085000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "\n\nCoul"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926402,
+        "nanos_since_epoch": 229712000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "d you let"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926402,
+        "nanos_since_epoch": 456289000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " me know what"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926402,
+        "nanos_since_epoch": 582563000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " you'd like help"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926402,
+        "nanos_since_epoch": 603552000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " with? Feel"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926402,
+        "nanos_since_epoch": 660288000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " free to type"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926402,
+        "nanos_since_epoch": 722116000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " your"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926402,
+        "nanos_since_epoch": 739504000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " question or"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926402,
+        "nanos_since_epoch": 752283000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " share"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926402,
+        "nanos_since_epoch": 772301000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " another"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926402,
+        "nanos_since_epoch": 779276000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " audio file if"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926403,
+        "nanos_since_epoch": 51023000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " neede"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926403,
+        "nanos_since_epoch": 82923000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "d."
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926403,
+        "nanos_since_epoch": 590226000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "I can see you've shared an audio file. I'm able to process audio content, but I didn't hear any speech or identifiable content in this particular clip - it appears to be either silent, very short, or contains audio that wasn't clearly captured.\n\nCould you let me know what you'd like help with? Feel free to type your question or share another audio file if needed."
+        }
+      }
+    }
+  ],
+  "client_capabilities": {
+    "fs": {
+      "readTextFile": false,
+      "writeTextFile": false
+    },
+    "terminal": false
+  },
+  "mcp_servers": [],
+  "cwd": "/Users/wballard/github/swissarmyhammer/acp-conformance",
+  "available_commands": [
+    {
+      "name": "create_plan",
+      "description": "Create an execution plan for complex tasks",
+      "input": null,
+      "_meta": {
+        "category": "planning",
+        "source": "core"
+      }
+    },
+    {
+      "name": "research_codebase",
+      "description": "Research and analyze the codebase structure",
+      "input": null,
+      "_meta": {
+        "category": "analysis",
+        "source": "core"
+      }
+    }
+  ],
+  "turn_request_count": 1,
+  "turn_token_count": 10,
+  "current_mode": null,
+  "todos": []
+}

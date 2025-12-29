@@ -108,6 +108,21 @@ impl PermissionStorage {
         let prefs = self.preferences.read().await;
         prefs.len()
     }
+
+    /// List all stored permission decisions
+    ///
+    /// Returns a vector of tuples containing the tool name and its stored permission kind.
+    /// This is useful for debugging, monitoring, or displaying the current permission state.
+    ///
+    /// # Returns
+    /// A vector of (tool_name, permission_kind) tuples for all stored preferences
+    pub async fn list_all(&self) -> Vec<(String, PermissionOptionKind)> {
+        let prefs = self.preferences.read().await;
+        prefs
+            .iter()
+            .map(|(name, kind)| (name.clone(), kind.clone()))
+            .collect()
+    }
 }
 
 impl Default for PermissionStorage {
@@ -232,5 +247,46 @@ mod tests {
 
         // Should still have only one entry
         assert_eq!(storage.count().await, 1);
+    }
+
+    #[tokio::test]
+    async fn test_list_all() {
+        let storage = PermissionStorage::new();
+
+        // Initially, list should be empty
+        let list = storage.list_all().await;
+        assert_eq!(list.len(), 0);
+
+        // Store multiple preferences
+        storage
+            .store_preference("tool1", PermissionOptionKind::AllowAlways)
+            .await;
+        storage
+            .store_preference("tool2", PermissionOptionKind::RejectAlways)
+            .await;
+        storage
+            .store_preference("tool3", PermissionOptionKind::AllowAlways)
+            .await;
+
+        // List should now have 3 items
+        let list = storage.list_all().await;
+        assert_eq!(list.len(), 3);
+
+        // Verify all tools are in the list
+        let tool_names: Vec<&str> = list.iter().map(|(name, _)| name.as_str()).collect();
+        assert!(tool_names.contains(&"tool1"));
+        assert!(tool_names.contains(&"tool2"));
+        assert!(tool_names.contains(&"tool3"));
+
+        // Verify correct kinds
+        for (name, kind) in list {
+            match name.as_str() {
+                "tool1" | "tool3" => {
+                    assert!(matches!(kind, PermissionOptionKind::AllowAlways))
+                }
+                "tool2" => assert!(matches!(kind, PermissionOptionKind::RejectAlways)),
+                _ => panic!("Unexpected tool name: {}", name),
+            }
+        }
     }
 }

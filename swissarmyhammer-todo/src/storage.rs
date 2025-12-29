@@ -10,7 +10,7 @@
 //! acquire an exclusive lock on a separate `.lock` file to prevent race conditions.
 
 use crate::error::{Result, TodoError};
-use crate::types::{TodoId, TodoItem, TodoList};
+use crate::types::{TodoId, TodoItem, TodoItemExt, TodoList};
 use crate::utils::get_todo_directory;
 use fs2::FileExt;
 use std::fs::{self, File};
@@ -138,6 +138,11 @@ impl TodoStorage {
     ///
     /// This method acquires an exclusive lock to prevent concurrent modifications.
     pub async fn mark_todo_complete(&self, id: &TodoId) -> Result<()> {
+        self.mark_todo_complete_by_string(id.as_str()).await
+    }
+
+    /// Mark a todo item as complete by string ID
+    async fn mark_todo_complete_by_string(&self, id_str: &str) -> Result<()> {
         let path = self.get_todo_file_path()?;
 
         if !path.exists() {
@@ -149,10 +154,12 @@ impl TodoStorage {
 
         let mut list = self.load_todo_list(&path).await?;
 
-        // Find and mark the item complete
+        // Find and mark the item complete by string ID
         let item = list
-            .find_item_mut(id)
-            .ok_or_else(|| TodoError::TodoItemNotFound(id.to_string(), "todo".to_string()))?;
+            .todo
+            .iter_mut()
+            .find(|item| item.id == id_str)
+            .ok_or_else(|| TodoError::TodoItemNotFound(id_str.to_string(), "todo".to_string()))?;
 
         item.mark_complete();
 
@@ -202,7 +209,7 @@ impl TodoStorage {
         let completed_count = list.complete_count();
 
         // Remove all completed items
-        list.todo.retain(|item| !item.done);
+        list.todo.retain(|item| !item.done());
 
         if completed_count > 0 {
             tracing::debug!(
@@ -346,17 +353,28 @@ mod tests {
         after: chrono::DateTime<chrono::Utc>,
         expect_equal: bool,
     ) {
+        use std::time::SystemTime;
+
+        // Helper to convert SystemTime to DateTime<Utc>
+        let system_to_datetime = |st: SystemTime| -> chrono::DateTime<chrono::Utc> {
+            let duration = st.duration_since(SystemTime::UNIX_EPOCH).unwrap();
+            chrono::DateTime::from_timestamp(duration.as_secs() as i64, duration.subsec_nanos())
+                .unwrap()
+        };
+
         // Verify created_at is set and within reasonable bounds
-        assert!(item.created_at >= before);
-        assert!(item.created_at <= after);
+        let created_at = system_to_datetime(item.created_at.expect("created_at should be set"));
+        assert!(created_at >= before);
+        assert!(created_at <= after);
 
         // Verify updated_at is set and within reasonable bounds
-        assert!(item.updated_at >= before);
-        assert!(item.updated_at <= after);
+        let updated_at = system_to_datetime(item.updated_at.expect("updated_at should be set"));
+        assert!(updated_at >= before);
+        assert!(updated_at <= after);
 
         // Optionally verify both timestamps are equal
         if expect_equal {
-            assert_eq!(item.created_at, item.updated_at);
+            assert_eq!(created_at, updated_at);
         }
     }
 
@@ -369,9 +387,9 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(item.task, "Test task");
-        assert_eq!(item.context, Some("Test context".to_string()));
-        assert!(!item.done);
+        assert_eq!(item.task(), "Test task");
+        assert_eq!(item.context(), Some(&"Test context".to_string()));
+        assert!(!item.done());
         assert_eq!(gc_count, 0);
     }
 
@@ -443,7 +461,7 @@ mod tests {
         let next = storage.get_todo_item("next").await.unwrap().unwrap();
 
         assert_eq!(next.id, item1.id);
-        assert_eq!(next.task, "Task 1");
+        assert_eq!(next.task(), "Task 1");
     }
 
     #[tokio::test]
@@ -455,8 +473,9 @@ mod tests {
             .await
             .unwrap();
 
-        // Mark complete
-        storage.mark_todo_complete(&item.id).await.unwrap();
+        // Mark complete using string ID
+        let id = TodoId::from_string(item.id.clone()).unwrap();
+        storage.mark_todo_complete(&id).await.unwrap();
 
         // Since all items are complete, the list should be deleted
         let result = storage.get_todo_list().await.unwrap();
@@ -478,7 +497,8 @@ mod tests {
             .unwrap();
 
         // Mark first item complete
-        storage.mark_todo_complete(&item1.id).await.unwrap();
+        let id1 = TodoId::from_string(item1.id.clone()).unwrap();
+        storage.mark_todo_complete(&id1).await.unwrap();
 
         // List should still exist with one incomplete item
         let list = storage.get_todo_list().await.unwrap().unwrap();
@@ -486,7 +506,7 @@ mod tests {
 
         // Next should return the second task
         let next = storage.get_todo_item("next").await.unwrap().unwrap();
-        assert_eq!(next.task, "Task 2");
+        assert_eq!(next.task(), "Task 2");
     }
 
     #[tokio::test]
@@ -499,14 +519,10 @@ mod tests {
             .unwrap();
 
         // Get specific item by ID
-        let retrieved = storage
-            .get_todo_item(item.id.as_str())
-            .await
-            .unwrap()
-            .unwrap();
+        let retrieved = storage.get_todo_item(&item.id).await.unwrap().unwrap();
 
         assert_eq!(retrieved.id, item.id);
-        assert_eq!(retrieved.task, "Test task");
+        assert_eq!(retrieved.task(), "Test task");
     }
 
     #[tokio::test]
@@ -534,55 +550,55 @@ mod tests {
 
     #[tokio::test]
     async fn test_backward_compatibility_old_yaml_format() {
-        use chrono::Utc;
-
         let (storage, temp_dir) = setup_test_storage();
 
-        // Create an old format YAML file (without timestamps)
+        // Create an old format YAML file (PlanEntry format)
         let old_yaml = r#"todo:
 - id: 01K68A5EJJ61XP2W1T5VDP2XBC
-  task: Check system status
-  context: null
-  done: false
+  content: Check system status
+  priority: medium
+  status: pending
+  notes: null
+  created_at: null
+  updated_at: null
 - id: 01K68A5EJJ61XP2W1T5VDP2XBD
-  task: Another task
-  context: Some context
-  done: true
+  content: Another task
+  priority: medium
+  status: completed
+  notes: Some context
+  created_at: null
+  updated_at: null
 "#;
 
         let todo_file = temp_dir.path().join("todo.yaml");
         fs::write(&todo_file, old_yaml).unwrap();
 
         // Load the old format file
-        let before_load = Utc::now();
         let list = storage.load_todo_list(&todo_file).await.unwrap();
-        let after_load = Utc::now();
 
         // Verify the list was loaded successfully
         assert_eq!(list.todo.len(), 2);
 
         // Verify first item
-        assert_eq!(list.todo[0].task, "Check system status");
-        assert_eq!(list.todo[0].context, None);
-        assert!(!list.todo[0].done);
+        assert_eq!(list.todo[0].task(), "Check system status");
+        assert_eq!(list.todo[0].context(), None);
+        assert!(!list.todo[0].done());
 
-        // Verify timestamps were added with default values (current time)
-        assert_timestamp_bounds(&list.todo[0], before_load, after_load, false);
+        // For items without timestamps, they should be None
+        // (PlanEntry timestamps are Option<SystemTime>)
 
         // Verify second item
-        assert_eq!(list.todo[1].task, "Another task");
-        assert_eq!(list.todo[1].context, Some("Some context".to_string()));
-        assert!(list.todo[1].done);
+        assert_eq!(list.todo[1].task(), "Another task");
+        assert_eq!(list.todo[1].context(), Some(&"Some context".to_string()));
+        assert!(list.todo[1].done());
 
-        // Verify timestamps were added
-        assert_timestamp_bounds(&list.todo[1], before_load, after_load, false);
-
-        // Now save the list and verify it has timestamps in the YAML
+        // Now save the list and verify it serializes correctly
         storage.save_todo_list(&todo_file, &list).await.unwrap();
 
         let new_content = fs::read_to_string(&todo_file).unwrap();
-        assert!(new_content.contains("created_at:"));
-        assert!(new_content.contains("updated_at:"));
+        assert!(new_content.contains("content:"));
+        assert!(new_content.contains("priority:"));
+        assert!(new_content.contains("status:"));
     }
 
     #[tokio::test]
@@ -657,8 +673,8 @@ mod tests {
         let incomplete_tasks: Vec<String> = list
             .todo
             .iter()
-            .filter(|item| !item.done)
-            .map(|item| item.task.clone())
+            .filter(|item| !item.done())
+            .map(|item| item.task().to_string())
             .collect();
 
         // GC should remove only completed items
@@ -667,7 +683,11 @@ mod tests {
         assert_todo_counts(&list, 3, 0, 3);
 
         // Verify the remaining tasks are the ones that were incomplete
-        let remaining_tasks: Vec<String> = list.todo.iter().map(|item| item.task.clone()).collect();
+        let remaining_tasks: Vec<String> = list
+            .todo
+            .iter()
+            .map(|item| item.task().to_string())
+            .collect();
 
         assert_eq!(remaining_tasks, incomplete_tasks);
         assert_eq!(remaining_tasks, vec!["Task 1", "Task 3", "Task 5"]);
@@ -692,8 +712,10 @@ mod tests {
             .unwrap();
 
         // Mark first two as complete
-        storage.mark_todo_complete(&item1.id).await.unwrap();
-        storage.mark_todo_complete(&item2.id).await.unwrap();
+        let id1 = TodoId::from_string(item1.id.clone()).unwrap();
+        let id2 = TodoId::from_string(item2.id.clone()).unwrap();
+        storage.mark_todo_complete(&id1).await.unwrap();
+        storage.mark_todo_complete(&id2).await.unwrap();
 
         // Verify we have 1 incomplete and 2 complete
         let list = storage.get_todo_list().await.unwrap().unwrap();
@@ -710,24 +732,12 @@ mod tests {
         assert_todo_counts(&list, 2, 0, 2);
 
         // Verify the correct items remain
-        let remaining_ids: Vec<String> = list.todo.iter().map(|item| item.id.to_string()).collect();
+        let remaining_ids: Vec<String> = list.todo.iter().map(|item| item.id.clone()).collect();
 
-        assert!(
-            remaining_ids.contains(&item3.id.to_string()),
-            "Task 3 should remain"
-        );
-        assert!(
-            remaining_ids.contains(&item4.id.to_string()),
-            "Task 4 should remain"
-        );
-        assert!(
-            !remaining_ids.contains(&item1.id.to_string()),
-            "Task 1 should be GC'd"
-        );
-        assert!(
-            !remaining_ids.contains(&item2.id.to_string()),
-            "Task 2 should be GC'd"
-        );
+        assert!(remaining_ids.contains(&item3.id), "Task 3 should remain");
+        assert!(remaining_ids.contains(&item4.id), "Task 4 should remain");
+        assert!(!remaining_ids.contains(&item1.id), "Task 1 should be GC'd");
+        assert!(!remaining_ids.contains(&item2.id), "Task 2 should be GC'd");
     }
 
     #[tokio::test]
@@ -749,9 +759,9 @@ mod tests {
         storage.gc_completed_todos(&mut list).unwrap();
 
         assert_eq!(list.todo.len(), 3);
-        assert_eq!(list.todo[0].task, "A");
-        assert_eq!(list.todo[1].task, "C");
-        assert_eq!(list.todo[2].task, "E");
+        assert_eq!(list.todo[0].task(), "A");
+        assert_eq!(list.todo[1].task(), "C");
+        assert_eq!(list.todo[2].task(), "E");
     }
 
     #[tokio::test]

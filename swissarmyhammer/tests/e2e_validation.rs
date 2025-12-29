@@ -164,7 +164,7 @@ async fn test_variable_templating_patterns() {
         // Test that complex variables don't break context creation
         assert_eq!(
             execution_context.executor_type(),
-            swissarmyhammer_config::model::AgentExecutorType::ClaudeCode
+            swissarmyhammer_config::model::ModelExecutorType::ClaudeCode
         );
         println!("  ✓ Template pattern {} handled successfully", test_name);
     }
@@ -279,7 +279,7 @@ fn process_state_transition(
     // Verify execution context for state persistence
     assert_eq!(
         execution_context.executor_type(),
-        swissarmyhammer_config::model::AgentExecutorType::ClaudeCode
+        swissarmyhammer_config::model::ModelExecutorType::ClaudeCode
     );
     println!("  ✓ State {} processed successfully", new_status);
 
@@ -346,7 +346,7 @@ fn test_error_case(test_case: &str, vars: HashMap<String, serde_json::Value>) {
             // Verify execution context creation with special cases
             assert_eq!(
                 execution_context.executor_type(),
-                swissarmyhammer_config::model::AgentExecutorType::ClaudeCode
+                swissarmyhammer_config::model::ModelExecutorType::ClaudeCode
             );
             println!("  ✓ Error case {} handled gracefully", test_case);
         }

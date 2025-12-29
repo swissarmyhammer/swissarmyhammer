@@ -1,0 +1,1921 @@
+{
+  "id": "01KDJGMHFJQM97FQBG8NGDFSB5",
+  "created_at": {
+    "secs_since_epoch": 1766926730,
+    "nanos_since_epoch": 738131000
+  },
+  "last_accessed": {
+    "secs_since_epoch": 1766926744,
+    "nanos_since_epoch": 157551000
+  },
+  "context": [
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926734,
+        "nanos_since_epoch": 593454000
+      },
+      "update": {
+        "sessionUpdate": "available_commands_update",
+        "availableCommands": [
+          {
+            "name": "create_plan",
+            "description": "Create an execution plan for complex tasks",
+            "input": null,
+            "_meta": {
+              "category": "planning",
+              "source": "core"
+            }
+          },
+          {
+            "name": "research_codebase",
+            "description": "Research and analyze the codebase structure",
+            "input": null,
+            "_meta": {
+              "category": "analysis",
+              "source": "core"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926734,
+        "nanos_since_epoch": 593674000
+      },
+      "update": {
+        "sessionUpdate": "user_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "\n[Image content: image/png (embedded data)]"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926736,
+        "nanos_since_epoch": 621936000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "This"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926736,
+        "nanos_since_epoch": 735215000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " looks"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926736,
+        "nanos_since_epoch": 883278000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " like a"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926736,
+        "nanos_since_epoch": 903445000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " great"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926736,
+        "nanos_since_epoch": 926607000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " VS"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926736,
+        "nanos_since_epoch": 962332000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " Code extension"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926736,
+        "nanos_since_epoch": 962716000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " UI"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926737,
+        "nanos_since_epoch": 21301000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " for"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926737,
+        "nanos_since_epoch": 64154000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " viewing"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926737,
+        "nanos_since_epoch": 131939000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " A"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926737,
+        "nanos_since_epoch": 169021000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "CP"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926737,
+        "nanos_since_epoch": 272819000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " (Agent"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926737,
+        "nanos_since_epoch": 273424000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " Client"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926737,
+        "nanos_since_epoch": 420597000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " Protocol) conform"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926737,
+        "nanos_since_epoch": 463087000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "ance test recordings"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926737,
+        "nanos_since_epoch": 547602000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "! \n\nThe"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926737,
+        "nanos_since_epoch": 548371000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " interface"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926737,
+        "nanos_since_epoch": 628561000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " shows:"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926737,
+        "nanos_since_epoch": 631020000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "\n\n1"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926737,
+        "nanos_since_epoch": 767601000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": ". **Recording"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926737,
+        "nanos_since_epoch": 774002000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " Files"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926737,
+        "nanos_since_epoch": 798892000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " Panel"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926737,
+        "nanos_since_epoch": 856106000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "** ("
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926737,
+        "nanos_since_epoch": 869093000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "left"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926737,
+        "nanos_since_epoch": 905781000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": ")"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926738,
+        "nanos_since_epoch": 116170000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " - Lists"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926738,
+        "nanos_since_epoch": 130674000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " test"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926738,
+        "nanos_since_epoch": 158481000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " recordings organize"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926738,
+        "nanos_since_epoch": 171442000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "d in"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926738,
+        "nanos_since_epoch": 196601000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " a"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926738,
+        "nanos_since_epoch": 294399000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " tree view:"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926738,
+        "nanos_since_epoch": 381481000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "\n   - `"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926738,
+        "nanos_since_epoch": 414365000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "test_tool"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926738,
+        "nanos_since_epoch": 589710000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "_call_notifications"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926738,
+        "nanos_since_epoch": 727715000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": ".json` ("
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926738,
+        "nanos_since_epoch": 738004000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "claude"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926738,
+        "nanos_since_epoch": 747503000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": ")"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926738,
+        "nanos_since_epoch": 773631000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "\n   - `test"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926738,
+        "nanos_since_epoch": 786770000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "_tool_call_"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926738,
+        "nanos_since_epoch": 789960000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "notifications."
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926738,
+        "nanos_since_epoch": 850460000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "json` (ll"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926738,
+        "nanos_since_epoch": 886346000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "ama)"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926738,
+        "nanos_since_epoch": 956825000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "\n\n2. **Recording"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926739,
+        "nanos_since_epoch": 2867000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " Viewer"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926739,
+        "nanos_since_epoch": 145331000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "** (main"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926739,
+        "nanos_since_epoch": 157516000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " panel"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926739,
+        "nanos_since_epoch": 231191000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": ") - Displays the"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926739,
+        "nanos_since_epoch": 234758000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " contents"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926739,
+        "nanos_since_epoch": 326623000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " of the selected recording with"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926739,
+        "nanos_since_epoch": 375797000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": ":\n   - **"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926739,
+        "nanos_since_epoch": 376221000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "Summary"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926739,
+        "nanos_since_epoch": 380617000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " Stats"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926739,
+        "nanos_since_epoch": 432691000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "**:"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926739,
+        "nanos_since_epoch": 485866000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " "
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926739,
+        "nanos_since_epoch": 538483000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "13"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926739,
+        "nanos_since_epoch": 616271000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " messages"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926739,
+        "nanos_since_epoch": 695734000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": ", 11"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926739,
+        "nanos_since_epoch": 721666000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " notifications"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926739,
+        "nanos_since_epoch": 852583000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": ", 2 requests"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926739,
+        "nanos_since_epoch": 853078000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": ","
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926739,
+        "nanos_since_epoch": 884400000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " 0"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926739,
+        "nanos_since_epoch": 930952000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " responses"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926740,
+        "nanos_since_epoch": 60326000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "\n   - **"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926740,
+        "nanos_since_epoch": 60833000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "Coll"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926740,
+        "nanos_since_epoch": 113759000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "apsible message"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926740,
+        "nanos_since_epoch": 117737000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " entries"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926740,
+        "nanos_since_epoch": 169575000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "**"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926740,
+        "nanos_since_epoch": 222089000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " showing"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926740,
+        "nanos_since_epoch": 290777000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": ":"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926740,
+        "nanos_since_epoch": 407265000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "\n     - Direction"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926740,
+        "nanos_since_epoch": 407770000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " indicators"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926740,
+        "nanos_since_epoch": 523254000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " (↑"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926740,
+        "nanos_since_epoch": 523824000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " out"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926740,
+        "nanos_since_epoch": 544930000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "going"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926740,
+        "nanos_since_epoch": 692299000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": ", ↓"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926740,
+        "nanos_since_epoch": 742677000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " incoming)\n     -"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926740,
+        "nanos_since_epoch": 743253000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " Message types"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926740,
+        "nanos_since_epoch": 774881000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " (notifications"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926740,
+        "nanos_since_epoch": 872520000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": ", requests)"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926740,
+        "nanos_since_epoch": 937024000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "\n     - Metho"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926740,
+        "nanos_since_epoch": 940296000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "d names"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926740,
+        "nanos_since_epoch": 959089000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " like"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926741,
+        "nanos_since_epoch": 20234000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " `"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926741,
+        "nanos_since_epoch": 148934000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "notifications"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926741,
+        "nanos_since_epoch": 165993000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "/"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926741,
+        "nanos_since_epoch": 213765000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "message"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926741,
+        "nanos_since_epoch": 254746000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "`,"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926741,
+        "nanos_since_epoch": 302034000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " `agent"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926741,
+        "nanos_since_epoch": 355333000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "/prompt"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926741,
+        "nanos_since_epoch": 505195000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "`, `tools"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926741,
+        "nanos_since_epoch": 555584000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "/call"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926741,
+        "nanos_since_epoch": 675190000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "`\n     -"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926741,
+        "nanos_since_epoch": 680924000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " Timestamps with"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926741,
+        "nanos_since_epoch": 686512000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " relative"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926741,
+        "nanos_since_epoch": 692029000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " timing"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926741,
+        "nanos_since_epoch": 735554000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " (+"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926741,
+        "nanos_since_epoch": 783584000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "0"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926741,
+        "nanos_since_epoch": 845141000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": ".000"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926741,
+        "nanos_since_epoch": 945964000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "ms"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926742,
+        "nanos_since_epoch": 15741000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": ", +0.001"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926742,
+        "nanos_since_epoch": 21009000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "ms, etc"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926742,
+        "nanos_since_epoch": 36497000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": ".)"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926742,
+        "nanos_since_epoch": 158625000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "\n\n3. **Detail"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926742,
+        "nanos_since_epoch": 216359000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " View** (bottom)"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926742,
+        "nanos_since_epoch": 228370000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " - Shows the"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926742,
+        "nanos_since_epoch": 264630000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " full JSON"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926742,
+        "nanos_since_epoch": 278635000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " payloa"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926742,
+        "nanos_since_epoch": 403203000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "d when"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926742,
+        "nanos_since_epoch": 439313000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " a"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926742,
+        "nanos_since_epoch": 450769000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " message"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926742,
+        "nanos_since_epoch": 535811000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " is selected,"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926742,
+        "nanos_since_epoch": 537536000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " displaying"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926742,
+        "nanos_since_epoch": 590342000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " the"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926742,
+        "nanos_since_epoch": 700811000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " complete structure"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926742,
+        "nanos_since_epoch": 725627000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " of"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926742,
+        "nanos_since_epoch": 773747000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " the `"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926742,
+        "nanos_since_epoch": 801332000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "agent"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926742,
+        "nanos_since_epoch": 930435000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "/prompt` request"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926742,
+        "nanos_since_epoch": 931111000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " with"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926742,
+        "nanos_since_epoch": 958785000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " its"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926743,
+        "nanos_since_epoch": 114083000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " parameters.\n\nThis is"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926743,
+        "nanos_since_epoch": 114983000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " a"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926743,
+        "nanos_since_epoch": 115945000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " useful"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926743,
+        "nanos_since_epoch": 171057000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " debugging"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926743,
+        "nanos_since_epoch": 258890000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "/analysis"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926743,
+        "nanos_since_epoch": 352152000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " tool for understanding the"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926743,
+        "nanos_since_epoch": 352802000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " message"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926743,
+        "nanos_since_epoch": 407731000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " flow in"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926743,
+        "nanos_since_epoch": 436520000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " A"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926743,
+        "nanos_since_epoch": 519291000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "CP test"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926743,
+        "nanos_since_epoch": 537066000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " scenarios"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926743,
+        "nanos_since_epoch": 617502000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": ". Is"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926743,
+        "nanos_since_epoch": 643655000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " this"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926743,
+        "nanos_since_epoch": 696005000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " something"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926743,
+        "nanos_since_epoch": 800402000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " you're building"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926743,
+        "nanos_since_epoch": 831846000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " or working"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926743,
+        "nanos_since_epoch": 956507000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " on? I'd be"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926743,
+        "nanos_since_epoch": 988819000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " happy to help with"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926743,
+        "nanos_since_epoch": 989512000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " it"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926744,
+        "nanos_since_epoch": 16767000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "!"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926744,
+        "nanos_since_epoch": 157519000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "This looks like a great VS Code extension UI for viewing ACP (Agent Client Protocol) conformance test recordings! \n\nThe interface shows:\n\n1. **Recording Files Panel** (left) - Lists test recordings organized in a tree view:\n   - `test_tool_call_notifications.json` (claude)\n   - `test_tool_call_notifications.json` (llama)\n\n2. **Recording Viewer** (main panel) - Displays the contents of the selected recording with:\n   - **Summary Stats**: 13 messages, 11 notifications, 2 requests, 0 responses\n   - **Collapsible message entries** showing:\n     - Direction indicators (↑ outgoing, ↓ incoming)\n     - Message types (notifications, requests)\n     - Method names like `notifications/message`, `agent/prompt`, `tools/call`\n     - Timestamps with relative timing (+0.000ms, +0.001ms, etc.)\n\n3. **Detail View** (bottom) - Shows the full JSON payload when a message is selected, displaying the complete structure of the `agent/prompt` request with its parameters.\n\nThis is a useful debugging/analysis tool for understanding the message flow in ACP test scenarios. Is this something you're building or working on? I'd be happy to help with it!"
+        }
+      }
+    }
+  ],
+  "client_capabilities": {
+    "fs": {
+      "readTextFile": false,
+      "writeTextFile": false
+    },
+    "terminal": false
+  },
+  "mcp_servers": [],
+  "cwd": "/Users/wballard/github/swissarmyhammer/acp-conformance",
+  "available_commands": [
+    {
+      "name": "create_plan",
+      "description": "Create an execution plan for complex tasks",
+      "input": null,
+      "_meta": {
+        "category": "planning",
+        "source": "core"
+      }
+    },
+    {
+      "name": "research_codebase",
+      "description": "Research and analyze the codebase structure",
+      "input": null,
+      "_meta": {
+        "category": "analysis",
+        "source": "core"
+      }
+    }
+  ],
+  "turn_request_count": 1,
+  "turn_token_count": 10,
+  "current_mode": null,
+  "todos": []
+}

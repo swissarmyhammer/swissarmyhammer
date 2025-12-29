@@ -1,4 +1,5 @@
 //! MCP server implementation for serving prompts and workflows
+// sah rule ignore acp/capability-enforcement
 
 use crate::mcp::file_watcher::{FileWatcher, McpFileWatcherCallback};
 use rmcp::model::*;
@@ -11,7 +12,7 @@ use std::sync::Arc;
 
 use swissarmyhammer_common::{Result, SwissArmyHammerError};
 use swissarmyhammer_config::model::{parse_model_config, ModelManager};
-use swissarmyhammer_config::{ModelUseCase, TemplateContext};
+use swissarmyhammer_config::{AgentUseCase, TemplateContext};
 use swissarmyhammer_git::GitOperations;
 use swissarmyhammer_prompts::{PromptLibrary, PromptResolver};
 
@@ -210,7 +211,8 @@ impl McpServer {
             agent_config,
             use_case_agents,
             Some(work_dir),
-        );
+        )
+        .await;
 
         let server = Self {
             library: Arc::new(RwLock::new(library)),
@@ -265,10 +267,10 @@ impl McpServer {
     ///
     /// # Returns
     ///
-    /// * `Result<HashMap<ModelUseCase, Arc<swissarmyhammer_config::model::ModelConfig>>>` - Use case agent map
+    /// * `Result<HashMap<AgentUseCase, Arc<swissarmyhammer_config::model::ModelConfig>>>` - Use case agent map
     fn initialize_use_case_agents(
         model_override: Option<String>,
-    ) -> Result<HashMap<ModelUseCase, Arc<swissarmyhammer_config::model::ModelConfig>>> {
+    ) -> Result<HashMap<AgentUseCase, Arc<swissarmyhammer_config::model::ModelConfig>>> {
         let mut use_case_agents = HashMap::new();
 
         if let Some(override_model_name) = model_override {
@@ -292,7 +294,7 @@ impl McpServer {
     /// * `Result<()>` - Ok if override is successfully applied
     fn apply_model_override(
         use_case_agents: &mut HashMap<
-            ModelUseCase,
+            AgentUseCase,
             Arc<swissarmyhammer_config::model::ModelConfig>,
         >,
         override_model_name: String,
@@ -319,9 +321,9 @@ impl McpServer {
         };
 
         for use_case in [
-            ModelUseCase::Root,
-            ModelUseCase::Rules,
-            ModelUseCase::Workflows,
+            AgentUseCase::Root,
+            AgentUseCase::Rules,
+            AgentUseCase::Workflows,
         ] {
             use_case_agents.insert(use_case, Arc::new(override_agent.clone()));
         }
@@ -336,14 +338,14 @@ impl McpServer {
     /// * `use_case_agents` - Map to populate with agent configurations
     fn resolve_use_case_agents(
         use_case_agents: &mut HashMap<
-            ModelUseCase,
+            AgentUseCase,
             Arc<swissarmyhammer_config::model::ModelConfig>,
         >,
     ) {
         for use_case in [
-            ModelUseCase::Root,
-            ModelUseCase::Rules,
-            ModelUseCase::Workflows,
+            AgentUseCase::Root,
+            AgentUseCase::Rules,
+            AgentUseCase::Workflows,
         ] {
             match ModelManager::resolve_agent_config_for_use_case(use_case) {
                 Ok(config) => {
@@ -378,15 +380,15 @@ impl McpServer {
     /// # Returns
     ///
     /// * `(Arc<RwLock<ToolRegistry>>, Arc<ToolContext>)` - Registry and context
-    fn create_tool_context_and_registry(
+    async fn create_tool_context_and_registry(
         tool_handlers: ToolHandlers,
         git_ops_arc: Arc<Mutex<Option<GitOperations>>>,
         agent_config: Arc<swissarmyhammer_config::model::ModelConfig>,
-        use_case_agents: HashMap<ModelUseCase, Arc<swissarmyhammer_config::model::ModelConfig>>,
+        use_case_agents: HashMap<AgentUseCase, Arc<swissarmyhammer_config::model::ModelConfig>>,
         working_dir: Option<PathBuf>,
     ) -> (Arc<RwLock<ToolRegistry>>, Arc<ToolContext>) {
         let mut tool_registry = ToolRegistry::new();
-        Self::register_all_tools(&mut tool_registry);
+        Self::register_all_tools(&mut tool_registry).await;
 
         let mut tool_context = ToolContext::new(Arc::new(tool_handlers), git_ops_arc, agent_config);
         tool_context.use_case_agents = Arc::new(use_case_agents);
@@ -403,9 +405,9 @@ impl McpServer {
     /// # Arguments
     ///
     /// * `tool_registry` - Registry to register tools into
-    fn register_all_tools(tool_registry: &mut ToolRegistry) {
+    async fn register_all_tools(tool_registry: &mut ToolRegistry) {
         register_abort_tools(tool_registry);
-        register_file_tools(tool_registry);
+        register_file_tools(tool_registry).await;
         register_flow_tools(tool_registry);
         register_git_tools(tool_registry);
         register_questions_tools(tool_registry);
@@ -910,6 +912,7 @@ impl ServerHandler for McpServer {
                             arguments,
                             icons: None,
                             title: Some(p.name.clone()),
+                            meta: None,
                         }
                     })
                     .collect();
@@ -917,6 +920,7 @@ impl ServerHandler for McpServer {
                 Ok(ListPromptsResult {
                     prompts: prompt_list,
                     next_cursor: None,
+                    meta: None,
                 })
             }
             Err(e) => Err(McpError::internal_error(e.to_string(), None)),
@@ -965,6 +969,7 @@ impl ServerHandler for McpServer {
         Ok(ListToolsResult {
             tools: self.tool_registry.read().await.list_tools(),
             next_cursor: None,
+            meta: None,
         })
     }
 

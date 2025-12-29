@@ -4,7 +4,7 @@ use std::env;
 use std::fs;
 use std::path::PathBuf;
 use swissarmyhammer_common::test_utils::IsolatedTestEnvironment;
-use swissarmyhammer_config::{AgentExecutorType, TemplateContext};
+use swissarmyhammer_config::{ModelExecutorType, TemplateContext};
 
 /// RAII guard for temporary test directory that automatically restores the original directory
 struct TempTestDir {
@@ -45,7 +45,7 @@ fn assert_default_toml_config(context: &TemplateContext) {
     let repo_default_config = context.get_agent_config(None);
     assert_eq!(
         repo_default_config.executor_type(),
-        AgentExecutorType::ClaudeCode
+        ModelExecutorType::ClaudeCode
     );
     assert!(!repo_default_config.quiet);
 }
@@ -54,7 +54,7 @@ fn assert_testing_toml_config(context: &TemplateContext) {
     let testing_config = context.get_agent_config(Some("testing"));
     assert_eq!(
         testing_config.executor_type(),
-        AgentExecutorType::LlamaAgent
+        ModelExecutorType::LlamaAgent
     );
     assert!(testing_config.quiet);
 }
@@ -63,7 +63,7 @@ fn assert_production_toml_config(context: &TemplateContext) {
     let production_config = context.get_agent_config(Some("production"));
     assert_eq!(
         production_config.executor_type(),
-        AgentExecutorType::ClaudeCode
+        ModelExecutorType::ClaudeCode
     );
     assert!(!production_config.quiet);
 }
@@ -111,20 +111,20 @@ fn assert_default_yaml_config(context: &TemplateContext) {
     let default_config = context.get_agent_config(None);
     assert_eq!(
         default_config.executor_type(),
-        AgentExecutorType::LlamaAgent
+        ModelExecutorType::LlamaAgent
     );
     assert!(!default_config.quiet);
 }
 
 fn assert_quick_test_yaml_config(context: &TemplateContext) {
     let quick_config = context.get_agent_config(Some("quick-test"));
-    assert_eq!(quick_config.executor_type(), AgentExecutorType::LlamaAgent);
+    assert_eq!(quick_config.executor_type(), ModelExecutorType::LlamaAgent);
     assert!(quick_config.quiet);
 }
 
 fn assert_deploy_yaml_config(context: &TemplateContext) {
     let deploy_config = context.get_agent_config(Some("deploy"));
-    assert_eq!(deploy_config.executor_type(), AgentExecutorType::ClaudeCode);
+    assert_eq!(deploy_config.executor_type(), ModelExecutorType::ClaudeCode);
     assert!(!deploy_config.quiet);
 }
 
@@ -132,7 +132,7 @@ fn assert_fallback_yaml_config(context: &TemplateContext) {
     let fallback_config = context.get_agent_config(Some("nonexistent"));
     assert_eq!(
         fallback_config.executor_type(),
-        AgentExecutorType::LlamaAgent
+        ModelExecutorType::LlamaAgent
     );
 }
 
@@ -218,7 +218,7 @@ quiet = "${AGENT_QUIET:-false}"
     let context = TemplateContext::load_for_cli().unwrap();
     let config = context.get_agent_config(None);
 
-    assert_eq!(config.executor_type(), AgentExecutorType::ClaudeCode);
+    assert_eq!(config.executor_type(), ModelExecutorType::ClaudeCode);
 
     env::remove_var("CLAUDE_PATH");
     env::remove_var("CLAUDE_ARGS");

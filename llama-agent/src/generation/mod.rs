@@ -395,6 +395,7 @@ impl GenerationHelper {
                 text: token_str.clone(),
                 is_complete: false,
                 token_count: tokens_generated,
+                finish_reason: None,
             };
 
             if stream_sender.try_send(Ok(chunk)).is_err() {
@@ -459,6 +460,7 @@ impl GenerationHelper {
             text: String::new(),
             is_complete: true,
             token_count: tokens_generated,
+            finish_reason: Some(crate::types::FinishReason::Stopped(reason.to_string())),
         };
         let _ = stream_sender.try_send(Ok(final_chunk));
 
@@ -829,6 +831,9 @@ impl GenerationHelper {
                 text: String::new(),
                 is_complete: true,
                 token_count: 0,
+                finish_reason: Some(crate::types::FinishReason::Stopped(
+                    "No new tokens to process".to_string(),
+                )),
             };
             let _ = stream_sender.try_send(Ok(final_chunk));
             return Ok(());
@@ -936,6 +941,7 @@ impl GenerationHelper {
                 text: token_str.clone(),
                 is_complete: false,
                 token_count: tokens_generated,
+                finish_reason: None,
             };
 
             if stream_sender.try_send(Ok(chunk)).is_err() {

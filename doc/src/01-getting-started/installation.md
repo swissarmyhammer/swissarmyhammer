@@ -130,3 +130,4 @@ claude mcp restart sah
 ## Next Steps
 
 - [Quick Start](quick-start.md) - Start with full auto coding
+- [Zed Editor Integration](../02-editor-integration/zed.md) - Use SwissArmyHammer directly in Zed

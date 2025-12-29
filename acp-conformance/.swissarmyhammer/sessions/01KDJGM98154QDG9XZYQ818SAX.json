@@ -1,0 +1,1076 @@
+{
+  "id": "01KDJGM98154QDG9XZYQ818SAX",
+  "created_at": {
+    "secs_since_epoch": 1766926722,
+    "nanos_since_epoch": 305530000
+  },
+  "last_accessed": {
+    "secs_since_epoch": 1766926735,
+    "nanos_since_epoch": 455901000
+  },
+  "context": [
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926728,
+        "nanos_since_epoch": 447733000
+      },
+      "update": {
+        "sessionUpdate": "available_commands_update",
+        "availableCommands": [
+          {
+            "name": "create_plan",
+            "description": "Create an execution plan for complex tasks",
+            "input": null,
+            "_meta": {
+              "category": "planning",
+              "source": "core"
+            }
+          },
+          {
+            "name": "research_codebase",
+            "description": "Research and analyze the codebase structure",
+            "input": null,
+            "_meta": {
+              "category": "analysis",
+              "source": "core"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926728,
+        "nanos_since_epoch": 448071000
+      },
+      "update": {
+        "sessionUpdate": "user_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "\n[Embedded Resource]"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926730,
+        "nanos_since_epoch": 652715000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "I see"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926730,
+        "nanos_since_epoch": 795503000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " you've share"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926730,
+        "nanos_since_epoch": 795958000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "d a"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926730,
+        "nanos_since_epoch": 922737000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " file listing"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926730,
+        "nanos_since_epoch": 927199000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " from"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926730,
+        "nanos_since_epoch": 931117000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " `/"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926730,
+        "nanos_since_epoch": 969816000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "Users"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926731,
+        "nanos_since_epoch": 58710000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "/w"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926731,
+        "nanos_since_epoch": 110481000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "ball"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926731,
+        "nanos_since_epoch": 202048000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "ard/github"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926731,
+        "nanos_since_epoch": 215851000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "/sw"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926731,
+        "nanos_since_epoch": 235900000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "iss"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926731,
+        "nanos_since_epoch": 304485000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "arm"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926731,
+        "nanos_since_epoch": 338412000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "yh"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926731,
+        "nanos_since_epoch": 390603000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "ammer"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926731,
+        "nanos_since_epoch": 479219000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "/a"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926731,
+        "nanos_since_epoch": 557534000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "cp"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926731,
+        "nanos_since_epoch": 562050000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "-"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926731,
+        "nanos_since_epoch": 600531000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "conform"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926731,
+        "nanos_since_epoch": 692178000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "ance/"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926731,
+        "nanos_since_epoch": 705406000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "src"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926731,
+        "nanos_since_epoch": 915870000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "`."
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926731,
+        "nanos_since_epoch": 919866000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " This"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926732,
+        "nanos_since_epoch": 17085000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " appears to be a"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926732,
+        "nanos_since_epoch": 17410000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " Rust"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926732,
+        "nanos_since_epoch": 169968000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " project with"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926732,
+        "nanos_since_epoch": 174347000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " several"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926732,
+        "nanos_since_epoch": 188702000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " modules:"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926732,
+        "nanos_since_epoch": 189590000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "\n\n-"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926732,
+        "nanos_since_epoch": 461232000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " `agent"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926732,
+        "nanos_since_epoch": 466957000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "_"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926732,
+        "nanos_since_epoch": 471551000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "plan"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926732,
+        "nanos_since_epoch": 475034000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "."
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926732,
+        "nanos_since_epoch": 475701000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "rs`"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926732,
+        "nanos_since_epoch": 548732000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "\n- `content"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926732,
+        "nanos_since_epoch": 631431000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": ".rs`\n-"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926732,
+        "nanos_since_epoch": 713184000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " `file"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926732,
+        "nanos_since_epoch": 717623000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "_system"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926732,
+        "nanos_since_epoch": 783245000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": ".rs`\n-"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926732,
+        "nanos_since_epoch": 821410000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " `initialization"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926732,
+        "nanos_since_epoch": 884548000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": ".rs`\n-"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926732,
+        "nanos_since_epoch": 935833000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " `lib"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926732,
+        "nanos_since_epoch": 985915000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": ".rs`\n-"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926733,
+        "nanos_since_epoch": 127831000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " `prompt"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926733,
+        "nanos_since_epoch": 130705000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "_turn"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926733,
+        "nanos_since_epoch": 139202000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": ".rs`\n-"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926733,
+        "nanos_since_epoch": 440535000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " `responses"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926733,
+        "nanos_since_epoch": 443985000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": ".rs`\n-"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926733,
+        "nanos_since_epoch": 582340000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " `sessions"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926733,
+        "nanos_since_epoch": 583006000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": ".rs`\n-"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926733,
+        "nanos_since_epoch": 659998000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " `terminals"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926733,
+        "nanos_since_epoch": 660768000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": ".rs`\n-"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926733,
+        "nanos_since_epoch": 743368000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " `tool_calls."
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926733,
+        "nanos_since_epoch": 744449000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "rs`\n- `"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926733,
+        "nanos_since_epoch": 909130000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "validation"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926733,
+        "nanos_since_epoch": 913100000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": ".rs`\n\nWhat"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926733,
+        "nanos_since_epoch": 913744000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " woul"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926734,
+        "nanos_since_epoch": 47904000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "d you like to do with"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926734,
+        "nanos_since_epoch": 49164000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " this c"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926734,
+        "nanos_since_epoch": 214735000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "odebase? I can"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926734,
+        "nanos_since_epoch": 215312000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " help you:"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926734,
+        "nanos_since_epoch": 383204000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "\n- Explore"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926734,
+        "nanos_since_epoch": 386571000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " an"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926734,
+        "nanos_since_epoch": 387263000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "d understand the code structure"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926734,
+        "nanos_since_epoch": 580876000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "\n- Fix"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926734,
+        "nanos_since_epoch": 584831000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " bugs"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926734,
+        "nanos_since_epoch": 586071000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " or issues"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926734,
+        "nanos_since_epoch": 695586000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "\n- Ad"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926734,
+        "nanos_since_epoch": 701289000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "d new"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926734,
+        "nanos_since_epoch": 701825000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " features\n- Run tests"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926734,
+        "nanos_since_epoch": 913346000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "\n- Or"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926734,
+        "nanos_since_epoch": 917183000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " anything"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926734,
+        "nanos_since_epoch": 922265000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " else you"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926734,
+        "nanos_since_epoch": 923912000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " nee"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926734,
+        "nanos_since_epoch": 925028000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "d"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926735,
+        "nanos_since_epoch": 455879000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "I see you've shared a file listing from `/Users/wballard/github/swissarmyhammer/acp-conformance/src`. This appears to be a Rust project with several modules:\n\n- `agent_plan.rs`\n- `content.rs`\n- `file_system.rs`\n- `initialization.rs`\n- `lib.rs`\n- `prompt_turn.rs`\n- `responses.rs`\n- `sessions.rs`\n- `terminals.rs`\n- `tool_calls.rs`\n- `validation.rs`\n\nWhat would you like to do with this codebase? I can help you:\n- Explore and understand the code structure\n- Fix bugs or issues\n- Add new features\n- Run tests\n- Or anything else you need"
+        }
+      }
+    }
+  ],
+  "client_capabilities": {
+    "fs": {
+      "readTextFile": false,
+      "writeTextFile": false
+    },
+    "terminal": false
+  },
+  "mcp_servers": [],
+  "cwd": "/Users/wballard/github/swissarmyhammer/acp-conformance",
+  "available_commands": [
+    {
+      "name": "create_plan",
+      "description": "Create an execution plan for complex tasks",
+      "input": null,
+      "_meta": {
+        "category": "planning",
+        "source": "core"
+      }
+    },
+    {
+      "name": "research_codebase",
+      "description": "Research and analyze the codebase structure",
+      "input": null,
+      "_meta": {
+        "category": "analysis",
+        "source": "core"
+      }
+    }
+  ],
+  "turn_request_count": 1,
+  "turn_token_count": 5,
+  "current_mode": null,
+  "todos": []
+}

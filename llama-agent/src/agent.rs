@@ -12,6 +12,7 @@ use crate::types::{
 };
 use async_trait::async_trait;
 use futures::{Stream, StreamExt};
+use llama_common::retry::{RetryConfig as CommonRetryConfig, RetryManager, RetryableError};
 
 use std::path::PathBuf;
 use std::pin::Pin;
@@ -25,6 +26,35 @@ use tracing::{debug, error, info, trace, warn};
 /// when we cannot query the model for its actual context size, ensuring safe operation
 /// even in degraded states.
 const DEFAULT_CONTEXT_SIZE: usize = 4096;
+
+/// Capability types for ACP operations
+#[cfg(feature = "acp")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CapabilityType {
+    FsRead,
+    FsWrite,
+    Terminal,
+}
+
+/// Mapping of tool name patterns to required ACP capabilities
+/// This provides a robust, maintainable way to enforce capability checks
+/// without relying on fragile string matching in the hot path.
+#[cfg(feature = "acp")]
+const TOOL_CAPABILITY_MAP: &[(&str, CapabilityType)] = &[
+    // Filesystem read operations
+    ("fs/read", CapabilityType::FsRead),
+    ("read_file", CapabilityType::FsRead),
+    ("read_text_file", CapabilityType::FsRead),
+    ("fs_read", CapabilityType::FsRead),
+    // Filesystem write operations
+    ("fs/write", CapabilityType::FsWrite),
+    ("write_file", CapabilityType::FsWrite),
+    ("write_text_file", CapabilityType::FsWrite),
+    ("fs_write", CapabilityType::FsWrite),
+    // Terminal operations
+    ("terminal", CapabilityType::Terminal),
+    ("shell", CapabilityType::Terminal),
+];
 
 /// Type alias for the summary generator function used in session compaction.
 /// This function takes a vector of messages and returns a future that produces
@@ -50,6 +80,10 @@ pub struct AgentServer {
     config: AgentConfig,
     start_time: Instant,
     shutdown_token: tokio_util::sync::CancellationToken,
+    /// Client capabilities from ACP initialize request (if running as ACP server)
+    /// This enables capability enforcement for filesystem, terminal, and other operations
+    #[cfg(feature = "acp")]
+    client_capabilities: tokio::sync::RwLock<Option<agent_client_protocol::ClientCapabilities>>,
 }
 
 impl std::fmt::Debug for AgentServer {
@@ -81,11 +115,283 @@ impl AgentServer {
             config,
             start_time: Instant::now(),
             shutdown_token: tokio_util::sync::CancellationToken::new(),
+            #[cfg(feature = "acp")]
+            client_capabilities: tokio::sync::RwLock::new(None),
         }
+    }
+
+    /// Set client capabilities from ACP initialize request
+    ///
+    /// This method should be called by ACP server implementations after receiving
+    /// the initialize request from the client. The stored capabilities are used
+    /// to enforce permission checks for filesystem, terminal, and other operations.
+    ///
+    /// # Arguments
+    ///
+    /// * `capabilities` - Client capabilities from the ACP initialize request
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// // In ACP server implementation:
+    /// let client_caps = initialize_request.client_capabilities;
+    /// agent_server.set_client_capabilities(client_caps).await;
+    /// ```
+    #[cfg(feature = "acp")]
+    pub async fn set_client_capabilities(
+        &self,
+        capabilities: agent_client_protocol::ClientCapabilities,
+    ) {
+        let mut caps = self.client_capabilities.write().await;
+        *caps = Some(capabilities);
+    }
+
+    /// Get current client capabilities
+    ///
+    /// Returns the client capabilities if they have been set via an ACP initialize
+    /// request, or None if running in non-ACP mode or before initialization.
+    #[cfg(feature = "acp")]
+    pub async fn get_client_capabilities(
+        &self,
+    ) -> Option<agent_client_protocol::ClientCapabilities> {
+        self.client_capabilities.read().await.clone()
+    }
+
+    /// Check if a tool operation is allowed based on client capabilities
+    ///
+    /// This method enforces capability checks for ACP operations. It uses a robust
+    /// mapping structure (TOOL_CAPABILITY_MAP) to determine which capability is required
+    /// for each tool and verifies the client has advertised support.
+    ///
+    /// # Capability Mapping
+    ///
+    /// The mapping is defined in TOOL_CAPABILITY_MAP and includes:
+    /// - Filesystem read operations → `fs.read_text_file`
+    /// - Filesystem write operations → `fs.write_text_file`
+    /// - Terminal operations → `terminal`
+    ///
+    /// If no client capabilities have been set (non-ACP mode), all operations are allowed.
+    ///
+    /// # Arguments
+    ///
+    /// * `tool_name` - Name of the tool to check
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(())` - If the operation is allowed
+    /// * `Err(AgentError)` - If the client lacks the required capability
+    #[cfg(feature = "acp")]
+    async fn check_tool_capability(&self, tool_name: &str) -> Result<(), AgentError> {
+        // Get client capabilities
+        let caps = self.client_capabilities.read().await;
+
+        // If no capabilities are set, allow all operations (non-ACP mode)
+        let Some(ref capabilities) = *caps else {
+            return Ok(());
+        };
+
+        // Map tool name to required capability using the robust mapping structure
+        let tool_lower = tool_name.to_lowercase();
+
+        // Find the required capability by checking if any pattern matches the tool name
+        let required_capability = TOOL_CAPABILITY_MAP
+            .iter()
+            .find(|(pattern, _)| tool_lower.contains(pattern))
+            .map(|(_, cap_type)| cap_type);
+
+        // If a capability requirement is found, verify the client has it
+        if let Some(&capability_type) = required_capability {
+            let (has_capability, capability_name) = match capability_type {
+                CapabilityType::FsRead => (capabilities.fs.read_text_file, "filesystem read"),
+                CapabilityType::FsWrite => (capabilities.fs.write_text_file, "filesystem write"),
+                CapabilityType::Terminal => (capabilities.terminal, "terminal"),
+            };
+
+            if !has_capability {
+                return Err(AgentError::Session(
+                    crate::types::SessionError::InvalidState(format!(
+                        "Client does not support {} operations (tool: {})",
+                        capability_name, tool_name
+                    )),
+                ));
+            }
+        }
+
+        Ok(())
     }
 
     pub fn mcp_client(&self) -> &dyn MCPClient {
         self.mcp_client.as_ref()
+    }
+
+    pub fn session_manager(&self) -> &SessionManager {
+        &self.session_manager
+    }
+
+    pub fn chat_template(&self) -> &ChatTemplateEngine {
+        &self.chat_template
+    }
+
+    pub fn request_queue(&self) -> &RequestQueue {
+        &self.request_queue
+    }
+
+    /// Execute an MCP tool directly via the MCP client
+    ///
+    /// This method provides direct access to MCP tool execution without requiring
+    /// a full session context. It's useful for:
+    /// - ACP server implementations that need to execute tools
+    /// - Administrative or system-level tool calls
+    /// - Tools that don't require session history
+    ///
+    /// # Capability Enforcement
+    ///
+    /// When running as an ACP server (with the `acp` feature enabled), this method
+    /// enforces client capability checks before executing operations. Tools will
+    /// fail with an error if the client hasn't advertised the required capability.
+    ///
+    /// # Arguments
+    ///
+    /// * `tool_name` - Name of the MCP tool to execute
+    /// * `arguments` - JSON arguments for the tool
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(String)` - Tool execution result as a string
+    /// * `Err(AgentError)` - If tool execution fails or capabilities are missing
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use serde_json::json;
+    ///
+    /// let result = agent_server
+    ///     .execute_mcp_tool("fs_read", json!({"path": "/tmp/test.txt"}))
+    ///     .await?;
+    /// ```
+    pub async fn execute_mcp_tool(
+        &self,
+        tool_name: &str,
+        arguments: serde_json::Value,
+    ) -> Result<String, AgentError> {
+        debug!(
+            "Executing MCP tool: {} with arguments: {}",
+            tool_name, arguments
+        );
+
+        // Check capabilities if running in ACP mode
+        #[cfg(feature = "acp")]
+        self.check_tool_capability(tool_name).await?;
+
+        self.mcp_client
+            .call_tool(tool_name, arguments)
+            .await
+            .map_err(AgentError::MCP)
+    }
+
+    /// Handle ACP extension methods
+    ///
+    /// This method provides a hook for ACP servers to implement custom extension
+    /// methods beyond the standard ACP protocol. Extension methods allow clients
+    /// to request custom functionality like file system operations, terminal output,
+    /// or other domain-specific features.
+    ///
+    /// # Capability Enforcement
+    ///
+    /// **IMPORTANT**: This method enforces client capability checks before executing
+    /// extension methods. The implementation verifies that clients have advertised
+    /// the required capabilities (fs.read_text_file, fs.write_text_file, terminal)
+    /// before proceeding with the operation.
+    ///
+    /// Capability checks are performed for:
+    /// - `fs/read_text_file`: Requires `client_capabilities.fs.read_text_file`
+    /// - `fs/write_text_file`: Requires `client_capabilities.fs.write_text_file`
+    /// - Terminal operations: Requires `client_capabilities.terminal`
+    ///
+    /// Failing capability checks will return an error, preventing clients from
+    /// executing operations they haven't declared support for.
+    ///
+    /// # Arguments
+    ///
+    /// * `method` - The extension method name (e.g., "fs/read_text_file")
+    /// * `params` - JSON parameters for the extension method
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(serde_json::Value)` - Extension method result
+    /// * `Err(AgentError)` - If the extension method is not supported or fails
+    ///
+    /// # Default Implementation
+    ///
+    /// By default, this method returns an error indicating the extension method
+    /// is not supported. ACP server implementations should override this to provide
+    /// custom extension method handling with proper capability checks.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// // In an ACP server implementation with capability checking:
+    /// pub async fn ext_method(
+    ///     &self,
+    ///     method: &str,
+    ///     params: serde_json::Value,
+    ///     client_capabilities: &ClientCapabilities,
+    /// ) -> Result<serde_json::Value, AgentError> {
+    ///     match method {
+    ///         "fs/read_text_file" => {
+    ///             // Check capability before execution
+    ///             if !client_capabilities.fs.read_text_file {
+    ///                 return Err(AgentError::Session(
+    ///                     SessionError::InvalidState(
+    ///                         "Client does not support fs/read_text_file".to_string()
+    ///                     )
+    ///                 ));
+    ///             }
+    ///             // Execute operation...
+    ///         }
+    ///         _ => Err(AgentError::Session(
+    ///             SessionError::InvalidState(
+    ///                 format!("Extension method '{}' not supported", method)
+    ///             )
+    ///         ))
+    ///     }
+    /// }
+    /// ```
+    pub async fn ext_method(
+        &self,
+        method: &str,
+        params: serde_json::Value,
+    ) -> Result<serde_json::Value, AgentError> {
+        // Check capabilities even for unsupported methods to enforce security
+        #[cfg(feature = "acp")]
+        {
+            // Map extension method names to required capabilities
+            match method {
+                m if m.starts_with("fs/read") || m.contains("read_text_file") => {
+                    self.check_tool_capability("fs/read_text_file").await?;
+                }
+                m if m.starts_with("fs/write") || m.contains("write_text_file") => {
+                    self.check_tool_capability("fs/write_text_file").await?;
+                }
+                m if m.contains("terminal") => {
+                    self.check_tool_capability("terminal").await?;
+                }
+                _ => {
+                    // Unknown extension methods don't require specific capabilities
+                }
+            }
+        }
+
+        warn!(
+            "Extension method '{}' not implemented, params: {}",
+            method, params
+        );
+        Err(AgentError::Session(
+            crate::types::SessionError::InvalidState(format!(
+                "Extension method '{}' is not supported",
+                method
+            )),
+        ))
     }
 
     pub async fn shutdown(self) -> Result<(), AgentError> {
@@ -103,18 +409,28 @@ impl AgentServer {
             Err(e) => warn!("MCP client shutdown encountered error: {}", e),
         }
 
-        // Wait for queue to drain naturally
-        info!("Waiting for request queue to drain...");
-        let queue_stats = self.request_queue.get_stats();
-        if queue_stats.current_queue_size > 0 {
-            info!(
-                "Draining queue with {} pending requests - allowing natural completion",
-                queue_stats.current_queue_size
-            );
-            // Note: Queue will drain naturally as part of its own shutdown process
-            // No artificial timeout imposed - operations complete when ready
-        } else {
-            info!("Request queue is already empty - no draining required");
+        // Shutdown request queue gracefully
+        info!("Shutting down request queue...");
+        match Arc::try_unwrap(self.request_queue) {
+            Ok(queue) => {
+                // We have exclusive ownership - perform graceful shutdown
+                queue.shutdown().await;
+                info!("Request queue shutdown completed successfully");
+            }
+            Err(arc_queue) => {
+                // There are still references to the queue - log stats and let it drop naturally
+                let queue_stats = arc_queue.get_stats();
+                warn!(
+                    "Request queue has {} remaining references - shutdown will occur on drop",
+                    Arc::strong_count(&arc_queue)
+                );
+                warn!(
+                    "Queue stats at shutdown: {} pending, {} completed, {} failed",
+                    queue_stats.current_queue_size,
+                    queue_stats.completed_requests,
+                    queue_stats.failed_requests
+                );
+            }
         }
 
         // Complete shutdown process
@@ -124,12 +440,6 @@ impl AgentServer {
         info!(
             "AgentServer shutdown completed gracefully in {:?}",
             shutdown_duration
-        );
-        info!(
-            "Final statistics: {} requests completed, {} failed, {} total processed",
-            queue_stats.completed_requests,
-            queue_stats.failed_requests,
-            queue_stats.completed_requests + queue_stats.failed_requests
         );
 
         Ok(())
@@ -987,6 +1297,23 @@ impl AgentAPI for AgentServer {
         );
         debug!("Tool call arguments: {}", tool_call.arguments);
 
+        // Check client capabilities if running in ACP mode. In non-ACP mode, all tools are allowed.
+        // When the acp feature is enabled, this enforces that clients have advertised the required
+        // capabilities (filesystem operations, terminal access) before tools are executed.
+        #[cfg(feature = "acp")]
+        if let Err(e) = self.check_tool_capability(&tool_call.name).await {
+            let error_msg = format!("Capability check failed: {}", e);
+            error!(
+                "Tool call '{}' blocked by capability check: {}",
+                tool_call.name, error_msg
+            );
+            return Ok(ToolResult {
+                call_id: tool_call.id,
+                result: serde_json::Value::Null,
+                error: Some(error_msg),
+            });
+        }
+
         // Validate tool call name is not empty
         if tool_call.name.trim().is_empty() {
             let error_msg = "Tool name cannot be empty";
@@ -1039,39 +1366,29 @@ impl AgentAPI for AgentServer {
             // Continue execution despite validation failure but log the issue
         }
 
-        // Execute the tool call through MCP client with error handling
-        debug!(
-            "Calling MCP server '{}' for tool '{}'",
-            tool_def.server_name, tool_call.name
-        );
-        match self
-            .mcp_client
-            .call_tool(&tool_call.name, tool_call.arguments.clone())
-            .await
-        {
-            Ok(result_value) => {
-                debug!("Tool call '{}' completed successfully", tool_call.name);
-                debug!("Tool call result: {}", result_value);
-                Ok(ToolResult {
-                    call_id: tool_call.id,
-                    result: serde_json::Value::String(result_value),
-                    error: None,
-                })
-            }
-            Err(mcp_error) => {
-                let error_msg = format!("Tool execution failed: {}", mcp_error);
-                error!("Tool call '{}' failed: {}", tool_call.name, error_msg);
-                debug!("Failed tool call arguments were: {}", tool_call.arguments);
+        // Execute the tool call with retry logic for transient failures
+        let tool_result = self.execute_tool_with_retry(&tool_call).await;
 
-                // Return ToolResult with error instead of propagating the error
-                // This allows the workflow to continue with partial failures
-                Ok(ToolResult {
-                    call_id: tool_call.id,
-                    result: serde_json::Value::Null,
-                    error: Some(error_msg),
-                })
+        // Sync session todos if this was a todo-related tool call and it succeeded
+        #[cfg(feature = "acp")]
+        if tool_result.error.is_none()
+            && (tool_call.name == "mcp__swissarmyhammer__todo_create"
+                || tool_call.name == "mcp__swissarmyhammer__todo_mark_complete")
+        {
+            debug!(
+                "Tool '{}' affects todos, syncing session todos",
+                tool_call.name
+            );
+            if let Err(e) = self.sync_session_todos(&session.id).await {
+                warn!(
+                    "Failed to sync session todos after '{}': {}",
+                    tool_call.name, e
+                );
+                // Don't fail the tool call if sync fails - the tool itself succeeded
             }
         }
+
+        Ok(tool_result)
     }
 
     async fn health(&self) -> Result<HealthStatus, AgentError> {
@@ -1245,9 +1562,164 @@ impl AgentAPI for AgentServer {
             .await
             .map_err(AgentError::Session)
     }
+
+    /// Load an existing session by ID
+    ///
+    /// Retrieves a session from persistent storage and restores its state,
+    /// allowing continuation of a previous conversation.
+    ///
+    /// # Arguments
+    ///
+    /// * `session_id` - The ID of the session to load
+    ///
+    /// # Returns
+    ///
+    /// The loaded session with full conversation history
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the session doesn't exist or cannot be loaded
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use llama_agent::{AgentServer, AgentConfig, AgentAPI, SessionId};
+    ///
+    /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+    /// let config = AgentConfig::default();
+    /// let agent = AgentServer::initialize(config).await?;
+    ///
+    /// // Load an existing session
+    /// let session_id = SessionId::parse("01ARZ3NDEKTSV4RRFFQ69G5FAV")?;
+    /// let session = agent.load_session(&session_id).await?;
+    ///
+    /// println!("Loaded session with {} messages", session.messages.len());
+    /// # Ok(())
+    /// # }
+    /// ```
+    async fn load_session(&self, session_id: &SessionId) -> Result<Session, AgentError> {
+        debug!("Loading session: {}", session_id);
+
+        let session = self
+            .session_manager
+            .get_session(session_id)
+            .await?
+            .ok_or_else(|| {
+                AgentError::Session(crate::types::SessionError::NotFound(session_id.to_string()))
+            })?;
+
+        info!(
+            "Loaded session {} with {} messages",
+            session_id,
+            session.messages.len()
+        );
+
+        Ok(session)
+    }
 }
 
 impl AgentServer {
+    /// Create a new session and return its ID.
+    ///
+    /// This is a convenience method that wraps `create_session` and returns
+    /// just the session ID, matching the ergonomic API shown in documentation examples.
+    ///
+    /// # Returns
+    ///
+    /// The ID of the newly created session
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use llama_agent::{AgentServer, AgentConfig, AgentAPI};
+    ///
+    /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+    /// let config = AgentConfig::default();
+    /// let agent = AgentServer::initialize(config).await?;
+    /// let session_id = agent.new_session().await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn new_session(&self) -> Result<SessionId, AgentError> {
+        let session = self.create_session().await?;
+        Ok(session.id)
+    }
+
+    /// Send a text prompt to the agent and get a response.
+    ///
+    /// This is a high-level convenience method that simplifies the common workflow of:
+    /// 1. Adding a user message to the session
+    /// 2. Generating a response
+    /// 3. Extracting the generated text
+    ///
+    /// The method automatically handles tool calls and continues generation until
+    /// the conversation naturally completes. For more control over the generation
+    /// process, use `add_message` and `generate` directly.
+    ///
+    /// # Arguments
+    ///
+    /// * `session_id` - The session to send the prompt to
+    /// * `prompt` - The text prompt from the user
+    ///
+    /// # Returns
+    ///
+    /// The generated response text
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use llama_agent::{AgentServer, AgentConfig, AgentAPI};
+    ///
+    /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+    /// let config = AgentConfig::default();
+    /// let agent = AgentServer::initialize(config).await?;
+    /// let session_id = agent.new_session().await?;
+    ///
+    /// let response = agent.prompt(&session_id, "Hello, how are you?").await?;
+    /// println!("Agent: {}", response);
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn prompt(&self, session_id: &SessionId, prompt: &str) -> Result<String, AgentError> {
+        debug!("Processing prompt for session: {}", session_id);
+
+        if prompt.trim().is_empty() {
+            return Err(AgentError::Session(
+                crate::types::SessionError::InvalidState("Prompt cannot be empty".to_string()),
+            ));
+        }
+
+        // Add user message to session
+        let user_message = Message {
+            role: crate::types::MessageRole::User,
+            content: prompt.to_string(),
+            tool_call_id: None,
+            tool_name: None,
+            timestamp: SystemTime::now(),
+        };
+
+        self.add_message(session_id, user_message).await?;
+
+        // Generate response
+        let generation_request = GenerationRequest {
+            session_id: *session_id,
+            max_tokens: None,
+            temperature: None,
+            top_p: None,
+            stop_tokens: Vec::new(),
+            stopping_config: None,
+        };
+
+        let generation_response = self.generate(generation_request).await?;
+
+        debug!(
+            "Prompt completed: {} tokens generated",
+            generation_response.tokens_generated
+        );
+
+        Ok(generation_response.generated_text)
+    }
+
     /// Submit a streaming generation request directly to the request queue
     ///
     /// This is a lower-level API that bypasses tool calling and session management.
@@ -1351,6 +1823,13 @@ impl AgentServer {
                     transcript_path: None,
                     context_state: None,
                     template_token_count: None,
+                    #[cfg(feature = "acp")]
+                    todos: Vec::new(),
+                    #[cfg(feature = "acp")]
+                    available_commands: Vec::new(),
+                    current_mode: None,
+                    #[cfg(feature = "acp")]
+                    client_capabilities: None,
                 };
 
                 model_manager
@@ -1419,6 +1898,264 @@ impl AgentServer {
                     })?
             })
         })
+    }
+
+    /// Synchronize session todos with TodoStorage
+    ///
+    /// Loads all todos from the TodoStorage and updates the session's todos vector.
+    /// This ensures the session has the latest todo state from the filesystem.
+    ///
+    /// # Arguments
+    ///
+    /// * `session_id` - The session ID to sync todos for
+    ///
+    /// # Returns
+    ///
+    /// `Ok(())` if sync succeeds, `Err` if the session doesn't exist or sync fails
+    #[cfg(feature = "acp")]
+    async fn sync_session_todos(&self, session_id: &SessionId) -> Result<(), AgentError> {
+        use swissarmyhammer_todo::TodoStorage;
+
+        debug!("Syncing todos for session: {}", session_id);
+
+        // Create TodoStorage instance
+        let storage = TodoStorage::new_default().map_err(|e| {
+            AgentError::Session(crate::types::SessionError::InvalidState(format!(
+                "Failed to create todo storage: {}",
+                e
+            )))
+        })?;
+
+        // Load all todos from storage
+        let todo_list = storage.get_todo_list().await.map_err(|e| {
+            AgentError::Session(crate::types::SessionError::InvalidState(format!(
+                "Failed to load todo list: {}",
+                e
+            )))
+        })?;
+
+        // Get the session, update its todos, and save it back
+        let mut session = self
+            .session_manager
+            .get_session(session_id)
+            .await?
+            .ok_or_else(|| {
+                AgentError::Session(crate::types::SessionError::NotFound(session_id.to_string()))
+            })?;
+
+        // Update session todos
+        if let Some(list) = todo_list {
+            session.todos = list.todo;
+            debug!(
+                "Updated session {} with {} todos",
+                session_id,
+                session.todos.len()
+            );
+        } else {
+            session.todos.clear();
+            debug!(
+                "Cleared todos for session {} (no todo list found)",
+                session_id
+            );
+        }
+
+        // Save the updated session back
+        self.session_manager
+            .update_session(session)
+            .await
+            .map_err(AgentError::Session)?;
+
+        Ok(())
+    }
+
+    /// Execute a tool call with retry logic for transient failures
+    ///
+    /// This method implements error recovery strategies including:
+    /// - Retry with exponential backoff for network errors
+    /// - Retry for server errors (5xx)
+    /// - Immediate failure for client errors (4xx)
+    /// - Graceful degradation by returning errors in ToolResult
+    ///
+    /// # Capability Enforcement
+    ///
+    /// When running in ACP mode, this method checks client capabilities before
+    /// executing tools. Tools requiring capabilities the client hasn't advertised
+    /// will fail immediately without retrying.
+    async fn execute_tool_with_retry(&self, tool_call: &ToolCall) -> ToolResult {
+        // Check capabilities before attempting execution (ACP mode)
+        #[cfg(feature = "acp")]
+        if let Err(e) = self.check_tool_capability(&tool_call.name).await {
+            let error_msg = format!("Capability check failed: {}", e);
+            error!(
+                "Tool call '{}' blocked by capability check: {}",
+                tool_call.name, error_msg
+            );
+            return ToolResult {
+                call_id: tool_call.id,
+                result: serde_json::Value::Null,
+                error: Some(error_msg),
+            };
+        }
+        // Create a retry-enabled error type
+        #[derive(Debug)]
+        struct ToolExecutionError {
+            message: String,
+            is_retriable: bool,
+        }
+
+        impl std::fmt::Display for ToolExecutionError {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                write!(f, "{}", self.message)
+            }
+        }
+
+        impl std::error::Error for ToolExecutionError {}
+
+        impl RetryableError for ToolExecutionError {
+            fn is_retriable(&self) -> bool {
+                self.is_retriable
+            }
+        }
+
+        // Configure retry behavior for tool execution
+        let retry_config = CommonRetryConfig {
+            max_retries: 3,
+            initial_delay: std::time::Duration::from_millis(500),
+            backoff_multiplier: 2.0,
+            max_delay: std::time::Duration::from_secs(10),
+            use_jitter: true,
+        };
+
+        let retry_manager = RetryManager::with_config(retry_config);
+
+        // Clone data needed for the retry closure
+        let tool_name = tool_call.name.clone();
+        let tool_args = tool_call.arguments.clone();
+        let call_id = tool_call.id;
+        let mcp_client = Arc::clone(&self.mcp_client);
+
+        // Execute with retry logic
+        let result = retry_manager
+            .retry(&format!("tool_{}", tool_name), || async {
+                debug!("Calling MCP server for tool '{}' (attempt)", tool_name);
+
+                mcp_client
+                    .call_tool(&tool_name, tool_args.clone())
+                    .await
+                    .map_err(|mcp_error| {
+                        let error_msg = mcp_error.to_string();
+                        let is_retriable = AgentServer::is_tool_error_retriable(&error_msg);
+
+                        if is_retriable {
+                            debug!(
+                                "Tool '{}' failed with retriable error: {}",
+                                tool_name, error_msg
+                            );
+                        } else {
+                            debug!(
+                                "Tool '{}' failed with non-retriable error: {}",
+                                tool_name, error_msg
+                            );
+                        }
+
+                        ToolExecutionError {
+                            message: error_msg,
+                            is_retriable,
+                        }
+                    })
+            })
+            .await;
+
+        // Convert result to ToolResult
+        match result {
+            Ok(result_value) => {
+                debug!("Tool call '{}' completed successfully", tool_name);
+                debug!("Tool call result: {}", result_value);
+                ToolResult {
+                    call_id,
+                    result: serde_json::Value::String(result_value),
+                    error: None,
+                }
+            }
+            Err(execution_error) => {
+                let error_msg = format!("Tool execution failed: {}", execution_error);
+                error!("Tool call '{}' failed: {}", tool_name, error_msg);
+                debug!("Failed tool call arguments were: {}", tool_args);
+
+                // Return ToolResult with error instead of propagating the error
+                // This allows the workflow to continue with partial failures
+                ToolResult {
+                    call_id,
+                    result: serde_json::Value::Null,
+                    error: Some(error_msg),
+                }
+            }
+        }
+    }
+
+    /// Determine if a tool execution error should be retried
+    ///
+    /// Recovery strategies:
+    /// - Network errors (connection, timeout, DNS): Retry with backoff
+    /// - Server errors (5xx): Retry with backoff
+    /// - Rate limiting (429): Do not retry (requires different strategy)
+    /// - Client errors (4xx): Do not retry (user/configuration error)
+    /// - Unknown errors: Retry conservatively
+    fn is_tool_error_retriable(error_msg: &str) -> bool {
+        let error_lower = error_msg.to_lowercase();
+
+        // Server errors (5xx) are retriable
+        if error_lower.contains("500")
+            || error_lower.contains("internal server error")
+            || error_lower.contains("502")
+            || error_lower.contains("bad gateway")
+            || error_lower.contains("503")
+            || error_lower.contains("service unavailable")
+            || error_lower.contains("504")
+            || error_lower.contains("gateway timeout")
+        {
+            return true;
+        }
+
+        // Network-level errors are retriable
+        if error_lower.contains("connection")
+            || error_lower.contains("timeout")
+            || error_lower.contains("network")
+            || error_lower.contains("dns")
+            || error_lower.contains("reset")
+            || error_lower.contains("refused")
+        {
+            return true;
+        }
+
+        // Rate limiting should not be retried immediately
+        if error_lower.contains("429") || error_lower.contains("too many requests") {
+            return false;
+        }
+
+        // Client errors (4xx) are not retriable
+        if error_lower.contains("400")
+            || error_lower.contains("bad request")
+            || error_lower.contains("401")
+            || error_lower.contains("unauthorized")
+            || error_lower.contains("403")
+            || error_lower.contains("forbidden")
+            || error_lower.contains("404")
+            || error_lower.contains("not found")
+        {
+            return false;
+        }
+
+        // Validation errors are not retriable
+        if error_lower.contains("invalid")
+            || error_lower.contains("validation")
+            || error_lower.contains("malformed")
+        {
+            return false;
+        }
+
+        // Default to non-retriable for safety - tool errors are often deterministic
+        false
     }
 }
 

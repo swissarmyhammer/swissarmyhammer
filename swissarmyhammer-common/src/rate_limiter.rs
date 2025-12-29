@@ -32,11 +32,11 @@ pub trait RateLimitChecker: Send + Sync {
 }
 
 /// Default rate limits for different operation types
-pub const DEFAULT_GLOBAL_RATE_LIMIT: u32 = 100; // requests per minute
+pub const DEFAULT_GLOBAL_RATE_LIMIT: u32 = 10000; // requests per minute
 /// Default rate limit per client (requests per minute)
-pub const DEFAULT_PER_CLIENT_RATE_LIMIT: u32 = 10; // requests per minute
+pub const DEFAULT_PER_CLIENT_RATE_LIMIT: u32 = 1000; // requests per minute
 /// Default rate limit for expensive operations (requests per minute)
-pub const DEFAULT_EXPENSIVE_OPERATION_LIMIT: u32 = 5; // requests per minute
+pub const DEFAULT_EXPENSIVE_OPERATION_LIMIT: u32 = 500; // requests per minute
 
 /// Rate limiter using governor crate's token bucket algorithm
 #[derive(Debug)]
@@ -180,7 +180,9 @@ impl RateLimiter {
     fn operation_limit(&self, operation: &str) -> u32 {
         match operation {
             // Expensive operations that require more resources
-            "search" | "workflow_run" | "complex_query" => self.config.expensive_operation_limit,
+            "search" | "workflow_run" | "complex_query" | "file_glob" | "file_grep" => {
+                self.config.expensive_operation_limit
+            }
             // Standard operations
             _ => self.config.global_limit,
         }

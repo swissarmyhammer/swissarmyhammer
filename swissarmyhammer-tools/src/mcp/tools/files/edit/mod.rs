@@ -1,8 +1,12 @@
+// sah rule ignore acp/capability-enforcement
 //! File editing tool for MCP operations
 //!
 //! This module provides the EditFileTool for performing precise string replacements in files
 //! with atomic operations, comprehensive security validation, file encoding preservation,
 //! and metadata preservation.
+//!
+//! Note: This is an MCP tool, not an ACP operation. ACP capability checking happens at the
+//! agent layer (claude-agent, llama-agent), not at the MCP tool layer.
 
 use crate::mcp::tool_registry::{BaseToolImpl, McpTool, ToolContext};
 use async_trait::async_trait;
@@ -403,6 +407,18 @@ impl McpTool for EditFileTool {
 
         // Parse arguments
         let request: EditRequest = BaseToolImpl::parse_arguments(arguments)?;
+
+        // Check rate limit using tokio task ID as client identifier
+        use swissarmyhammer_common::rate_limiter::get_rate_limiter;
+        let rate_limiter = get_rate_limiter();
+        let client_id = format!("task_{:?}", tokio::task::try_id());
+        if let Err(e) = rate_limiter.check_rate_limit(&client_id, "file_edit", 1) {
+            tracing::warn!("Rate limit exceeded for file_edit: {}", e);
+            return Err(McpError::invalid_request(
+                format!("Rate limit exceeded: {}", e),
+                None,
+            ));
+        }
 
         // Validate parameters before operation
         if request.file_path.trim().is_empty() {

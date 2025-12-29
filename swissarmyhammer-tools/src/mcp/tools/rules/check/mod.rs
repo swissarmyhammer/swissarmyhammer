@@ -15,7 +15,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Instant;
 use swissarmyhammer_agent_executor::AgentExecutor;
-use swissarmyhammer_config::{ModelConfig, ModelUseCase};
+use swissarmyhammer_config::{AgentUseCase, ModelConfig};
 use swissarmyhammer_mcp_proxy::{start_proxy_server, FilteringMcpProxy, ToolFilter};
 use swissarmyhammer_rules::{
     AgentFactory, RuleCheckRequest as DomainRuleCheckRequest, RuleChecker, RuleViolation, Severity,
@@ -770,13 +770,13 @@ impl RuleCheckTool {
 
         // Create agent factory that provides per-rule agents
         let default_agent = create_agent_from_config(
-            &context.get_agent_for_use_case(ModelUseCase::Rules),
+            &context.get_agent_for_use_case(AgentUseCase::Rules),
             context,
         )
         .await?;
 
         let upstream_url = Self::get_upstream_url(context).await?;
-        let agent_config = context.get_agent_for_use_case(ModelUseCase::Rules);
+        let agent_config = context.get_agent_for_use_case(AgentUseCase::Rules);
 
         let factory = Arc::new(RuleCheckAgentFactory::new(
             default_agent,

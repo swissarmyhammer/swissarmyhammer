@@ -618,8 +618,8 @@ async fn test_model_use_creates_config_file() -> Result<()> {
 
         let config_content = fs::read_to_string(&config_path)?;
         assert!(
-            config_content.contains("models:"),
-            "Config should contain models section. Actual: {}",
+            config_content.contains("agents:"),
+            "Config should contain agents section. Actual: {}",
             config_content
         );
         assert!(
@@ -667,10 +667,10 @@ existing_agent:
             "Should preserve existing values"
         );
 
-        // Should add/update models section
+        // Should add/update agents section
         assert!(
-            updated_config.contains("models:"),
-            "Should have models section. Actual: {}",
+            updated_config.contains("agents:"),
+            "Should have agents section. Actual: {}",
             updated_config
         );
         assert!(

@@ -2,7 +2,7 @@
 
 use crate::{ActionResult, AgentExecutionContext, AgentResponse};
 use async_trait::async_trait;
-use swissarmyhammer_config::model::AgentExecutorType;
+use swissarmyhammer_config::model::ModelExecutorType;
 
 /// Agent executor trait for abstracting prompt execution across different AI backends
 #[async_trait]
@@ -16,7 +16,7 @@ pub trait AgentExecutor: Send + Sync {
     ) -> ActionResult<AgentResponse>;
 
     /// Get the executor type enum
-    fn executor_type(&self) -> AgentExecutorType;
+    fn executor_type(&self) -> ModelExecutorType;
 
     /// Initialize the executor with configuration
     async fn initialize(&mut self) -> ActionResult<()>;
@@ -74,13 +74,13 @@ impl AgentExecutorFactory {
         mcp_server: agent_client_protocol::McpServer,
     ) -> ActionResult<Box<dyn AgentExecutor>> {
         match agent_config.executor_type() {
-            AgentExecutorType::ClaudeCode => {
+            ModelExecutorType::ClaudeCode => {
                 tracing::info!("Creating ClaudeCode executor with MCP server");
                 let mut executor = crate::claude::ClaudeCodeExecutor::new(mcp_server);
                 executor.initialize().await?;
                 Ok(Box::new(executor))
             }
-            AgentExecutorType::LlamaAgent => {
+            ModelExecutorType::LlamaAgent => {
                 tracing::info!("Creating LlamaAgent executor with MCP server");
 
                 // Extract LlamaAgent configuration from agent config

@@ -219,6 +219,8 @@ enum ArgSpecAction {
 enum ArgSpecValueParser {
     Strings(Vec<&'static str>),
     U16,
+    U64,
+    Usize,
 }
 
 impl ArgSpec {
@@ -321,6 +323,8 @@ impl ArgSpec {
                     arg.value_parser(clap::builder::PossibleValuesParser::new(values))
                 }
                 ArgSpecValueParser::U16 => arg.value_parser(clap::value_parser!(u16)),
+                ArgSpecValueParser::U64 => arg.value_parser(clap::value_parser!(u64)),
+                ArgSpecValueParser::Usize => arg.value_parser(clap::value_parser!(usize)),
             };
         }
 
@@ -1929,10 +1933,11 @@ impl CliBuilder {
             .subcommand(Self::build_validate_command())
     }
 
-    /// Add content management commands (prompt, model)
+    /// Add content management commands (prompt, model, agent)
     fn add_content_commands(cli: Command) -> Command {
         cli.subcommand(Self::build_prompt_command())
             .subcommand(Self::build_model_command())
+            .subcommand(Self::build_agent_command())
     }
 
     /// Add workflow-related commands (flow)
@@ -2085,6 +2090,118 @@ impl CliBuilder {
                 name: "model",
                 about: "Manage and interact with models",
                 long_about: MODEL_COMMAND_LONG_ABOUT,
+            },
+            Self::build_subcommands_from_specs(&subcommand_specs),
+        )
+    }
+
+    /// Build the agent command with ACP subcommand
+    ///
+    /// Creates the agent command for managing Agent Client Protocol (ACP) server integration.
+    ///
+    /// # Returns
+    ///
+    /// A configured `Command` for agent management
+    pub fn build_agent_command() -> Command {
+        let config_arg = ArgSpec::new("config", "Path to ACP configuration file")
+            .long("config")
+            .short('c')
+            .value_name("FILE");
+
+        let permission_policy_arg = ArgSpec::new(
+            "permission_policy",
+            "Permission policy: always-ask, auto-approve-reads",
+        )
+        .long("permission-policy")
+        .value_name("POLICY");
+
+        let allow_path_arg = ArgSpec::new(
+            "allow_path",
+            "Allowed filesystem paths (can be specified multiple times)",
+        )
+        .long("allow-path")
+        .value_name("PATH")
+        .action(ArgSpecAction::Append);
+
+        let block_path_arg = ArgSpec::new(
+            "block_path",
+            "Blocked filesystem paths (can be specified multiple times)",
+        )
+        .long("block-path")
+        .value_name("PATH")
+        .action(ArgSpecAction::Append);
+
+        let max_file_size_arg = ArgSpec::new(
+            "max_file_size",
+            "Maximum file size for read operations in bytes",
+        )
+        .long("max-file-size")
+        .value_name("BYTES")
+        .value_parser(ArgSpecValueParser::U64);
+
+        let terminal_buffer_size_arg = ArgSpec::new(
+            "terminal_buffer_size",
+            "Terminal output buffer size in bytes",
+        )
+        .long("terminal-buffer-size")
+        .value_name("BYTES")
+        .value_parser(ArgSpecValueParser::Usize);
+
+        let graceful_shutdown_timeout_arg = ArgSpec::new(
+            "graceful_shutdown_timeout",
+            "Graceful shutdown timeout in seconds",
+        )
+        .long("graceful-shutdown-timeout")
+        .value_name("SECONDS")
+        .value_parser(ArgSpecValueParser::U64);
+
+        let subcommand_specs =
+            vec![
+                SubcommandSpec::new("acp", "Start ACP server over stdio for editor integration")
+                    .long_about(
+                        "Start Agent Client Protocol (ACP) server for code editor integration.\n\n\
+             The ACP server enables SwissArmyHammer to work with ACP-compatible code editors\n\
+             like Zed and JetBrains IDEs. The server communicates over stdin/stdout using\n\
+             JSON-RPC 2.0 protocol.\n\n\
+             Features:\n\
+             • Local LLaMA model execution for coding assistance\n\
+             • Session management with conversation history\n\
+             • File system operations (read/write)\n\
+             • Terminal execution\n\
+             • Tool integration via MCP servers\n\
+             • Permission-based security model\n\n\
+             Examples:\n\
+               sah agent acp                        # Start with default config\n\
+               sah agent acp --config acp.yaml      # Start with custom config\n\
+               sah agent acp --permission-policy auto-approve-reads\n\
+               sah agent acp --allow-path /home/user/projects --block-path /home/user/.ssh\n\
+               sah agent acp --max-file-size 5242880 --terminal-buffer-size 2097152\n\n\
+             Configuration:\n\
+             Options can be specified via:\n\
+             1. Command-line flags (highest priority)\n\
+             2. Configuration file (--config)\n\
+             3. Default values (lowest priority)\n\n\
+             Command-line flags override configuration file settings.\n\n\
+             For editor configuration:\n\
+             • Zed: Add to agents section in settings\n\
+             • JetBrains: Install ACP plugin and configure",
+                    )
+                    .args(vec![
+                        config_arg,
+                        permission_policy_arg,
+                        allow_path_arg,
+                        block_path_arg,
+                        max_file_size_arg,
+                        terminal_buffer_size_arg,
+                        graceful_shutdown_timeout_arg,
+                    ]),
+            ];
+
+        Self::build_command_with_subcommands(
+            CommandConfig {
+                name: "agent",
+                about: "Manage and interact with Agent Client Protocol server",
+                long_about: crate::commands::agent::DESCRIPTION,
             },
             Self::build_subcommands_from_specs(&subcommand_specs),
         )

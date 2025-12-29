@@ -51,7 +51,7 @@ pub fn tool_permissions_with(
 
 /// Create test session ID with ACP-compliant format
 pub fn session_id(id: &str) -> agent_client_protocol::SessionId {
-    agent_client_protocol::SessionId(id.into())
+    agent_client_protocol::SessionId::new(id)
 }
 
 #[cfg(test)]

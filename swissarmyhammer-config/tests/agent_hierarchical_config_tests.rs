@@ -1,5 +1,5 @@
 use serde_json::json;
-use swissarmyhammer_config::{AgentExecutorType, LlamaAgentConfig, ModelConfig, TemplateContext};
+use swissarmyhammer_config::{LlamaAgentConfig, ModelConfig, ModelExecutorType, TemplateContext};
 
 #[test]
 fn test_hierarchical_configuration_system_default() {
@@ -9,7 +9,7 @@ fn test_hierarchical_configuration_system_default() {
     let system_default = context.get_agent_config(None);
     assert_eq!(
         system_default.executor_type(),
-        AgentExecutorType::ClaudeCode
+        ModelExecutorType::ClaudeCode
     );
     assert!(!system_default.quiet);
 }
@@ -27,12 +27,12 @@ fn test_hierarchical_configuration_repo_default() {
 
     // Should use repo default instead of system default
     let repo_default = context.get_agent_config(None);
-    assert_eq!(repo_default.executor_type(), AgentExecutorType::LlamaAgent);
+    assert_eq!(repo_default.executor_type(), ModelExecutorType::LlamaAgent);
     assert!(!repo_default.quiet);
 
     // Non-existent workflow should also use repo default
     let fallback = context.get_agent_config(Some("nonexistent-workflow"));
-    assert_eq!(fallback.executor_type(), AgentExecutorType::LlamaAgent);
+    assert_eq!(fallback.executor_type(), ModelExecutorType::LlamaAgent);
 }
 
 #[test]
@@ -57,18 +57,18 @@ fn test_hierarchical_configuration_workflow_specific() {
     let workflow_config = context.get_agent_config(Some("test-workflow"));
     assert_eq!(
         workflow_config.executor_type(),
-        AgentExecutorType::ClaudeCode
+        ModelExecutorType::ClaudeCode
     );
 
     // But repo default should still be used for other workflows
     let repo_config = context.get_agent_config(None);
-    assert_eq!(repo_config.executor_type(), AgentExecutorType::LlamaAgent);
+    assert_eq!(repo_config.executor_type(), ModelExecutorType::LlamaAgent);
 
     // Non-existent workflow should use repo default
     let fallback_config = context.get_agent_config(Some("other-workflow"));
     assert_eq!(
         fallback_config.executor_type(),
-        AgentExecutorType::LlamaAgent
+        ModelExecutorType::LlamaAgent
     );
 }
 
@@ -97,7 +97,7 @@ fn test_get_all_model_configs_with_default() {
     let default_config = configs.get("default").unwrap();
     assert_eq!(
         default_config.executor_type(),
-        AgentExecutorType::LlamaAgent
+        ModelExecutorType::LlamaAgent
     );
 }
 
@@ -134,15 +134,15 @@ fn test_get_all_model_configs_with_workflows() {
 
     assert_eq!(
         configs.get("default").unwrap().executor_type(),
-        AgentExecutorType::LlamaAgent
+        ModelExecutorType::LlamaAgent
     );
     assert_eq!(
         configs.get("production").unwrap().executor_type(),
-        AgentExecutorType::ClaudeCode
+        ModelExecutorType::ClaudeCode
     );
     assert_eq!(
         configs.get("testing").unwrap().executor_type(),
-        AgentExecutorType::LlamaAgent
+        ModelExecutorType::LlamaAgent
     );
 }
 
@@ -155,14 +155,14 @@ fn test_malformed_model_config_falls_back() {
 
     // Should fall back to system default
     let config = context.get_agent_config(None);
-    assert_eq!(config.executor_type(), AgentExecutorType::ClaudeCode);
+    assert_eq!(config.executor_type(), ModelExecutorType::ClaudeCode);
 
     // Should also fall back for workflow-specific malformed config
     context.set("agent.configs.broken".to_string(), json!(42));
     let workflow_config = context.get_agent_config(Some("broken"));
     assert_eq!(
         workflow_config.executor_type(),
-        AgentExecutorType::ClaudeCode
+        ModelExecutorType::ClaudeCode
     );
 }
 
@@ -181,5 +181,5 @@ fn test_quiet_mode_configuration() {
 
     let config = context.get_agent_config(None);
     assert!(config.quiet);
-    assert_eq!(config.executor_type(), AgentExecutorType::ClaudeCode);
+    assert_eq!(config.executor_type(), ModelExecutorType::ClaudeCode);
 }

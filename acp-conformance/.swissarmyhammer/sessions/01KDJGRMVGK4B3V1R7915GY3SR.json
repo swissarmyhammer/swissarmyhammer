@@ -1,0 +1,114 @@
+{
+  "id": "01KDJGRMVGK4B3V1R7915GY3SR",
+  "created_at": {
+    "secs_since_epoch": 1766926865,
+    "nanos_since_epoch": 264740000
+  },
+  "last_accessed": {
+    "secs_since_epoch": 1766926871,
+    "nanos_since_epoch": 847773000
+  },
+  "context": [
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926869,
+        "nanos_since_epoch": 660179000
+      },
+      "update": {
+        "sessionUpdate": "available_commands_update",
+        "availableCommands": [
+          {
+            "name": "create_plan",
+            "description": "Create an execution plan for complex tasks",
+            "input": null,
+            "_meta": {
+              "category": "planning",
+              "source": "core"
+            }
+          },
+          {
+            "name": "research_codebase",
+            "description": "Research and analyze the codebase structure",
+            "input": null,
+            "_meta": {
+              "category": "analysis",
+              "source": "core"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926869,
+        "nanos_since_epoch": 660459000
+      },
+      "update": {
+        "sessionUpdate": "user_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "What is 2+2?"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926871,
+        "nanos_since_epoch": 594367000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "4"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926871,
+        "nanos_since_epoch": 847760000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "4"
+        }
+      }
+    }
+  ],
+  "client_capabilities": {
+    "fs": {
+      "readTextFile": false,
+      "writeTextFile": false
+    },
+    "terminal": false
+  },
+  "mcp_servers": [],
+  "cwd": "/Users/wballard/github/swissarmyhammer/acp-conformance",
+  "available_commands": [
+    {
+      "name": "create_plan",
+      "description": "Create an execution plan for complex tasks",
+      "input": null,
+      "_meta": {
+        "category": "planning",
+        "source": "core"
+      }
+    },
+    {
+      "name": "research_codebase",
+      "description": "Research and analyze the codebase structure",
+      "input": null,
+      "_meta": {
+        "category": "analysis",
+        "source": "core"
+      }
+    }
+  ],
+  "turn_request_count": 1,
+  "turn_token_count": 3,
+  "current_mode": null,
+  "todos": []
+}

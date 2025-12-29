@@ -883,6 +883,10 @@ impl ToolCallHandler {
 
         match self.execute_tool_request(session_id, &request).await {
             Ok(response) => {
+                // Update session todos for todo-related MCP tool calls
+                self.update_session_todos_if_needed(session_id, &request, &response)
+                    .await;
+
                 // Complete the tool call with success
                 let completed_report = self
                     .complete_tool_call_report(
@@ -1025,6 +1029,117 @@ impl ToolCallHandler {
         } else {
             None
         }
+    }
+
+    /// Update session todos when MCP todo tools are called
+    ///
+    /// This method intercepts successful todo_create and todo_mark_complete tool calls
+    /// to keep the session's todos field synchronized with the todo storage by syncing
+    /// the entire todo list from storage.
+    async fn update_session_todos_if_needed(
+        &self,
+        session_id: &agent_client_protocol::SessionId,
+        request: &InternalToolRequest,
+        _response: &str,
+    ) {
+        // Check if this is a todo-related MCP tool
+        let tool_base_name = if let Some(server_name) = self.extract_mcp_server_name(&request.name)
+        {
+            // Extract tool name after server prefix (e.g., "swissarmyhammer:todo_create" -> "todo_create")
+            request
+                .name
+                .strip_prefix(&format!("{}:", server_name))
+                .unwrap_or(&request.name)
+        } else {
+            &request.name
+        };
+
+        match tool_base_name {
+            "todo_create" | "todo_mark_complete" => {
+                // Sync the entire todo list from storage for todo-related operations
+                if let Err(e) = self.sync_session_todos(&session_id.0).await {
+                    tracing::warn!(
+                        "Failed to sync todos for session {} after {}: {}",
+                        session_id.0,
+                        tool_base_name,
+                        e
+                    );
+                } else {
+                    tracing::debug!(
+                        "Synced todos for session {} after {}",
+                        session_id.0,
+                        tool_base_name
+                    );
+                }
+            }
+            _ => {
+                // Not a todo tool, no action needed
+            }
+        }
+    }
+
+    /// Sync session todos from storage
+    ///
+    /// This method reads the complete todo list from storage and updates the session's
+    /// todos field to match. This ensures the session state stays in sync with the
+    /// underlying todo storage.
+    ///
+    /// # Arguments
+    ///
+    /// * `session_id` - The session identifier (as a string)
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - The session does not exist
+    /// - The todo storage cannot be accessed
+    /// - The session cannot be updated
+    async fn sync_session_todos(&self, session_id: &str) -> crate::Result<()> {
+        use swissarmyhammer_todo::TodoItemExt;
+
+        // Get the session to access its working directory
+        let session_id_parsed = crate::session::SessionId::parse(session_id)
+            .map_err(|e| crate::error::AgentError::Session(format!("Invalid session ID: {}", e)))?;
+
+        let session = self
+            .session_manager
+            .get_session(&session_id_parsed)
+            .map_err(|e| {
+                crate::error::AgentError::Session(format!("Failed to get session: {}", e))
+            })?
+            .ok_or_else(|| {
+                crate::error::AgentError::Session(format!("Session not found: {}", session_id))
+            })?;
+
+        // Create TodoStorage using the session's working directory
+        let storage = swissarmyhammer_todo::TodoStorage::new_with_working_dir(session.cwd)
+            .map_err(|e| {
+                crate::error::AgentError::Internal(format!("Failed to create todo storage: {}", e))
+            })?;
+
+        // Get the todo list from storage
+        let todo_list = storage.get_todo_list().await.map_err(|e| {
+            crate::error::AgentError::Internal(format!("Failed to get todo list: {}", e))
+        })?;
+
+        // Extract incomplete todo IDs
+        let todo_ids: Vec<String> = if let Some(list) = todo_list {
+            list.todo
+                .iter()
+                .filter(|item| !item.done())
+                .map(|item| item.id.clone())
+                .collect()
+        } else {
+            Vec::new()
+        };
+
+        // Update the session's todos vector
+        self.session_manager
+            .update_session(&session_id_parsed, |session| {
+                session.todos = todo_ids;
+            })?;
+
+        Ok(())
     }
 
     /// List all available tools including MCP tools
@@ -1288,6 +1403,9 @@ impl ToolCallHandler {
         session_id: &agent_client_protocol::SessionId,
         request: &InternalToolRequest,
     ) -> crate::Result<String> {
+        // ACP requires that we only use features the client declared support for.
+        self.validate_fs_read_capability()?;
+
         let args = self.parse_tool_args(&request.arguments)?;
         let path_str = args.get("path").and_then(|v| v.as_str()).unwrap_or(".");
 
@@ -1525,9 +1643,19 @@ impl ToolCallHandler {
                         "Path outside allowed boundaries: {}", path
                     ))
                 }
+                PathValidationError::Blocked(path) => {
+                    crate::AgentError::ToolExecution(format!(
+                        "Path is blocked: {}", path
+                    ))
+                }
                 PathValidationError::InvalidFormat(msg) => {
                     crate::AgentError::ToolExecution(format!(
                         "Invalid path format: {}", msg
+                    ))
+                }
+                PathValidationError::InsufficientPermissions { path, required } => {
+                    crate::AgentError::ToolExecution(format!(
+                        "Insufficient permissions for path '{}': missing {} permission", path, required
                     ))
                 }
             }
@@ -1870,7 +1998,7 @@ mod tests {
     }
 
     fn session_id(id: &str) -> SessionId {
-        SessionId(id.into())
+        SessionId::new(id)
     }
 
     fn create_test_handler() -> ToolCallHandler {
@@ -1926,7 +2054,7 @@ mod tests {
             .unwrap();
 
         // Create ACP-compliant session ID
-        let acp_session_id = SessionId(internal_session_id.to_string().into());
+        let acp_session_id = SessionId::new(internal_session_id.to_string());
 
         // Create handler with session manager
         let permission_engine = create_permission_engine();
@@ -3756,7 +3884,7 @@ mod tests {
     #[tokio::test]
     async fn test_tool_call_report_lifecycle() {
         let handler = create_test_handler();
-        let session_id = agent_client_protocol::SessionId("test_session".into());
+        let session_id = agent_client_protocol::SessionId::new("test_session");
 
         // Create a tool call report
         let report = handler
@@ -3986,7 +4114,7 @@ mod tests {
         };
 
         // Convert SessionId to agent_client_protocol::SessionId
-        let acp_session_id = agent_client_protocol::SessionId(session_id.to_string().into());
+        let acp_session_id = agent_client_protocol::SessionId::new(session_id.to_string());
 
         // This should work with valid session
         let result = handler
@@ -3997,7 +4125,7 @@ mod tests {
 
         // Try with invalid session ID
         let invalid_session_id =
-            agent_client_protocol::SessionId("01ARZ3NDEKTSV4RRFFQ69G5FAV".into());
+            agent_client_protocol::SessionId::new("01ARZ3NDEKTSV4RRFFQ69G5FAV");
 
         // This should fail because session doesn't exist
         let result = handler
@@ -4133,8 +4261,8 @@ mod tests {
             .create_session(temp_dir.path().to_path_buf(), None)
             .unwrap();
 
-        let acp_session_id1 = agent_client_protocol::SessionId(session_id1.to_string().into());
-        let acp_session_id2 = agent_client_protocol::SessionId(session_id2.to_string().into());
+        let acp_session_id1 = agent_client_protocol::SessionId::new(session_id1.to_string());
+        let acp_session_id2 = agent_client_protocol::SessionId::new(session_id2.to_string());
 
         // Perform file operations in session 1
         let write_request1 = InternalToolRequest {

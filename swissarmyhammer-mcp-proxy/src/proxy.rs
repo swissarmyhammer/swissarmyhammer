@@ -216,6 +216,7 @@ impl ServerHandler for FilteringMcpProxy {
         Ok(ListToolsResult {
             tools: filtered_tools,
             next_cursor: result.next_cursor,
+            meta: result.meta,
         })
     }
 

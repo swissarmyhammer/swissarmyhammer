@@ -1,6 +1,6 @@
 //! Agent execution context
 
-use swissarmyhammer_config::model::{AgentExecutorType, ModelConfig};
+use swissarmyhammer_config::model::{ModelConfig, ModelExecutorType};
 
 /// Agent execution context for prompt execution
 ///
@@ -41,7 +41,7 @@ impl<'a> AgentExecutionContext<'a> {
     }
 
     /// Get executor type
-    pub fn executor_type(&self) -> AgentExecutorType {
+    pub fn executor_type(&self) -> ModelExecutorType {
         self.agent_config.executor_type()
     }
 

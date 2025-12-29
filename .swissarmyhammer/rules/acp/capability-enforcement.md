@@ -3,11 +3,15 @@ severity: error
 tags:
 - acp
 - security
+applies_to: llama-agent/src/acp/**
 ---
 
 # ACP Client Capability Enforcement
 
 All ACP operations must check client capabilities before execution.
+
+**Note**: This rule applies only to ACP protocol implementation files in `llama-agent/src/acp/`. 
+MCP tools in `swissarmyhammer-tools` use a different protocol and capability model.
 
 ## Requirements
 

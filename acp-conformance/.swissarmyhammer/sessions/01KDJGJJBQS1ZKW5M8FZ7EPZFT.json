@@ -1,0 +1,102 @@
+{
+  "id": "01KDJGJJBQS1ZKW5M8FZ7EPZFT",
+  "created_at": {
+    "secs_since_epoch": 1766926666,
+    "nanos_since_epoch": 103361000
+  },
+  "last_accessed": {
+    "secs_since_epoch": 1766926675,
+    "nanos_since_epoch": 510103000
+  },
+  "context": [
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926670,
+        "nanos_since_epoch": 366055000
+      },
+      "update": {
+        "sessionUpdate": "available_commands_update",
+        "availableCommands": [
+          {
+            "name": "create_plan",
+            "description": "Create an execution plan for complex tasks",
+            "input": null,
+            "_meta": {
+              "category": "planning",
+              "source": "core"
+            }
+          },
+          {
+            "name": "research_codebase",
+            "description": "Research and analyze the codebase structure",
+            "input": null,
+            "_meta": {
+              "category": "analysis",
+              "source": "core"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926670,
+        "nanos_since_epoch": 366316000
+      },
+      "update": {
+        "sessionUpdate": "user_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "Create a todo item using the mcp__test-mcp-server__create-plan tool with goal 'Implement user authentication'. This is a multi-step task that requires planning."
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926675,
+        "nanos_since_epoch": 510092000
+      },
+      "update": {
+        "sessionUpdate": "tool_call",
+        "toolCallId": "tool_1",
+        "title": "mcp__test-mcp-server__create-plan",
+        "rawInput": {
+          "goal": "Implement user authentication"
+        }
+      }
+    }
+  ],
+  "client_capabilities": {
+    "fs": {
+      "readTextFile": false,
+      "writeTextFile": false
+    },
+    "terminal": false
+  },
+  "mcp_servers": [],
+  "cwd": "/Users/wballard/github/swissarmyhammer/acp-conformance",
+  "available_commands": [
+    {
+      "name": "create_plan",
+      "description": "Create an execution plan for complex tasks",
+      "input": null,
+      "_meta": {
+        "category": "planning",
+        "source": "core"
+      }
+    },
+    {
+      "name": "research_codebase",
+      "description": "Research and analyze the codebase structure",
+      "input": null,
+      "_meta": {
+        "category": "analysis",
+        "source": "core"
+      }
+    }
+  ],
+  "turn_request_count": 1,
+  "turn_token_count": 40,
+  "current_mode": null,
+  "todos": []
+}

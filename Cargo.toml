@@ -25,6 +25,9 @@ members = [
     "llama-loader",
     "mermaid-parser",
 ]
+exclude = [
+    "claude-agent",  # Reference implementation for ACP integration, not part of build
+]
 resolver = "2"
 
 [workspace.metadata.release]
@@ -45,6 +48,7 @@ homepage = "https://github.com/swissarmyhammer/swissarmyhammer/blob/main/README.
 tokio = { version = "1.46", features = ["full"] }
 tokio-util = "0.7"
 tokio-stream = "0.1"
+tokio-tungstenite = "0.28"
 serde = { version = "1.0.219", features = ["derive"] }
 serde_yaml = "0.9"
 serde_json = "1"
@@ -54,6 +58,7 @@ tracing = "0.1"
 test-log = {version = "0.2.18" , features = ["trace"]}
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 async-trait = "0.1"
+base64 = "0.22"
 
 # Library core dependencies
 liquid = "0.26.11"
@@ -69,6 +74,7 @@ async-watcher = "0.3"
 glob = "0.3"
 ignore = "0.4"
 ulid = { version = "1.2.1", features = ["serde"] }
+uuid = { version = "1.10", features = ["v4", "serde"] }
 toml = "0.9.5"
 schemars = "0.8"
 governor = "0.7"
@@ -92,13 +98,10 @@ owo-colors = "4"
 is-terminal = "0.4"
 which = "7.0"
 
-rmcp = { version = "0.10.0", features = [
+rmcp = { version = "0.11.0", features = [
     "server",
     "client",
     "macros",
-    "transport-sse-server",
-    "transport-sse-client",
-    "transport-sse-client-reqwest",
     "transport-io",
     "transport-streamable-http-server",
     "transport-streamable-http-client-reqwest",

@@ -1,0 +1,439 @@
+{
+  "id": "01KDJK48ECK4ZRPRJYEFHQ53ZY",
+  "created_at": {
+    "secs_since_epoch": 1766929342,
+    "nanos_since_epoch": 924617000
+  },
+  "last_accessed": {
+    "secs_since_epoch": 1766929355,
+    "nanos_since_epoch": 704250000
+  },
+  "context": [
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766929350,
+        "nanos_since_epoch": 318613000
+      },
+      "update": {
+        "sessionUpdate": "available_commands_update",
+        "availableCommands": [
+          {
+            "name": "create_plan",
+            "description": "Create an execution plan for complex tasks",
+            "input": null,
+            "_meta": {
+              "category": "planning",
+              "source": "core"
+            }
+          },
+          {
+            "name": "research_codebase",
+            "description": "Research and analyze the codebase structure",
+            "input": null,
+            "_meta": {
+              "category": "analysis",
+              "source": "core"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766929350,
+        "nanos_since_epoch": 318850000
+      },
+      "update": {
+        "sessionUpdate": "user_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "First messageSecond message"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766929354,
+        "nanos_since_epoch": 89421000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "Hi"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766929354,
+        "nanos_since_epoch": 184936000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "!"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766929354,
+        "nanos_since_epoch": 319008000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " I see"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766929354,
+        "nanos_since_epoch": 335049000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " you sent"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766929354,
+        "nanos_since_epoch": 467324000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " two messages. How"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766929354,
+        "nanos_since_epoch": 515911000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " can I help you with"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766929354,
+        "nanos_since_epoch": 517039000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " your project"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766929354,
+        "nanos_since_epoch": 517263000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "?"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766929354,
+        "nanos_since_epoch": 546760000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " I"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766929354,
+        "nanos_since_epoch": 635762000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " can see"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766929354,
+        "nanos_since_epoch": 678298000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " you're"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766929354,
+        "nanos_since_epoch": 704511000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " working"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766929354,
+        "nanos_since_epoch": 784257000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " on an"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766929354,
+        "nanos_since_epoch": 821650000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " `"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766929354,
+        "nanos_since_epoch": 870706000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "a"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766929354,
+        "nanos_since_epoch": 915003000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "cp"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766929354,
+        "nanos_since_epoch": 999472000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "-conform"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766929355,
+        "nanos_since_epoch": 51117000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "ance`"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766929355,
+        "nanos_since_epoch": 157704000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " repository"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766929355,
+        "nanos_since_epoch": 161081000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " with"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766929355,
+        "nanos_since_epoch": 178291000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " quite"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766929355,
+        "nanos_since_epoch": 295000000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " a few changes"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766929355,
+        "nanos_since_epoch": 295404000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " in"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766929355,
+        "nanos_since_epoch": 398128000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " progress. Let"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766929355,
+        "nanos_since_epoch": 518713000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " me know what you'"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766929355,
+        "nanos_since_epoch": 555832000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "d like to work on."
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766929355,
+        "nanos_since_epoch": 704231000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "Hi! I see you sent two messages. How can I help you with your project? I can see you're working on an `acp-conformance` repository with quite a few changes in progress. Let me know what you'd like to work on."
+        }
+      }
+    }
+  ],
+  "client_capabilities": {
+    "fs": {
+      "readTextFile": false,
+      "writeTextFile": false
+    },
+    "terminal": false
+  },
+  "mcp_servers": [],
+  "cwd": "/Users/wballard/github/swissarmyhammer/acp-conformance",
+  "available_commands": [
+    {
+      "name": "create_plan",
+      "description": "Create an execution plan for complex tasks",
+      "input": null,
+      "_meta": {
+        "category": "planning",
+        "source": "core"
+      }
+    },
+    {
+      "name": "research_codebase",
+      "description": "Research and analyze the codebase structure",
+      "input": null,
+      "_meta": {
+        "category": "analysis",
+        "source": "core"
+      }
+    }
+  ],
+  "turn_request_count": 1,
+  "turn_token_count": 6,
+  "current_mode": null,
+  "todos": []
+}

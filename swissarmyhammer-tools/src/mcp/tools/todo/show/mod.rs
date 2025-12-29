@@ -71,19 +71,21 @@ impl McpTool for ShowTodoTool {
                     json!({
                         "todo_item": {
                             "id": item.id.as_str(),
-                            "task": item.task,
-                            "context": item.context,
-                            "done": item.done
+                            "content": &item.content,
+                            "notes": &item.notes,
+                            "status": format!("{:?}", item.status).to_lowercase(),
+                            "priority": format!("{:?}", item.priority).to_lowercase()
                         },
                         "yaml": format!(
-                            "id: {}\ntask: \"{}\"\ncontext: {}\ndone: {}",
+                            "id: {}\ncontent: \"{}\"\nnotes: {}\nstatus: {}\npriority: {}",
                             item.id.as_str(),
-                            item.task,
-                            match &item.context {
+                            item.content,
+                            match &item.notes {
                                 Some(ctx) => format!("\"{ctx}\""),
                                 None => "null".to_string(),
                             },
-                            item.done
+                            format!("{:?}", item.status).to_lowercase(),
+                            format!("{:?}", item.priority).to_lowercase()
                         )
                     })
                     .to_string(),
@@ -99,9 +101,12 @@ impl McpTool for ShowTodoTool {
                         .to_string(),
                     ))
                 } else {
-                    Err(McpError::invalid_request(
-                        format!("Todo item '{}' not found", request.item),
-                        None,
+                    Ok(BaseToolImpl::create_success_response(
+                        json!({
+                            "message": format!("Todo item '{}' not found", request.item),
+                            "todo_item": null
+                        })
+                        .to_string(),
                     ))
                 }
             }

@@ -60,7 +60,7 @@ use syntect::parsing::SyntaxSet;
 use syntect::util::as_24_bit_terminal_escaped;
 use thiserror::Error;
 
-use swissarmyhammer_config::model::{AgentExecutorType, ModelConfig, ModelExecutorConfig};
+use swissarmyhammer_config::model::{ModelConfig, ModelExecutorConfig, ModelExecutorType};
 use swissarmyhammer_prompts::{PromptLibrary, PromptResolver};
 
 // Re-export types from agent-executor crate
@@ -179,7 +179,7 @@ impl<'a> AgentExecutionContext<'a> {
     }
 
     /// Get executor type
-    pub fn executor_type(&self) -> AgentExecutorType {
+    pub fn executor_type(&self) -> ModelExecutorType {
         self.agent_config().executor_type()
     }
 
@@ -279,13 +279,13 @@ fn convert_agent_executor_error(err: swissarmyhammer_agent_executor::ActionError
 
 impl ActionError {
     /// Create an executor-specific error
-    pub fn executor_error(executor_type: AgentExecutorType, message: String) -> Self {
+    pub fn executor_error(executor_type: ModelExecutorType, message: String) -> Self {
         ActionError::ExecutionError(format!("{:?} executor error: {}", executor_type, message))
     }
 
     /// Create an initialization error
     pub fn initialization_error(
-        executor_type: AgentExecutorType,
+        executor_type: ModelExecutorType,
         source: Box<dyn std::error::Error>,
     ) -> Self {
         ActionError::ExecutionError(format!(
@@ -696,8 +696,8 @@ impl PromptAction {
         tracing::debug!("Creating executor on-demand for prompt execution");
 
         match context.executor_type() {
-            AgentExecutorType::ClaudeCode => self.create_claude_executor(context).await,
-            AgentExecutorType::LlamaAgent => self.create_llama_executor(context).await,
+            ModelExecutorType::ClaudeCode => self.create_claude_executor(context).await,
+            ModelExecutorType::LlamaAgent => self.create_llama_executor(context).await,
         }
     }
 
@@ -2327,7 +2327,7 @@ mod tests {
         let execution_context = AgentExecutionContext::new(&context);
         assert_eq!(
             execution_context.executor_type(),
-            AgentExecutorType::ClaudeCode
+            ModelExecutorType::ClaudeCode
         );
         assert!(!execution_context.quiet());
     }
@@ -2340,7 +2340,7 @@ mod tests {
         let mut executor = ClaudeCodeExecutor::new(mcp_server);
 
         // Test initial state
-        assert_eq!(executor.executor_type(), AgentExecutorType::ClaudeCode);
+        assert_eq!(executor.executor_type(), ModelExecutorType::ClaudeCode);
 
         // Test initialization - may fail if Claude CLI is not available
         match executor.initialize().await {
@@ -2369,7 +2369,7 @@ mod tests {
         let mut executor = LlamaAgentExecutor::new(config);
 
         // Test initial state
-        assert_eq!(executor.executor_type(), AgentExecutorType::LlamaAgent);
+        assert_eq!(executor.executor_type(), ModelExecutorType::LlamaAgent);
 
         // Test initialization (should always succeed for now)
         assert!(executor.initialize().await.is_ok());
@@ -2390,7 +2390,7 @@ mod tests {
         // This test may fail if claude CLI is not available - that's expected
         match action.get_executor(&execution_context).await {
             Ok(executor) => {
-                assert_eq!(executor.executor_type(), AgentExecutorType::ClaudeCode);
+                assert_eq!(executor.executor_type(), ModelExecutorType::ClaudeCode);
             }
             Err(ActionError::ExecutionError(msg)) if msg.contains("Claude CLI not found") => {
                 // This is expected in environments without Claude CLI
@@ -2436,7 +2436,7 @@ mod tests {
     #[test]
     fn test_executor_error_helpers() {
         let error = ActionError::executor_error(
-            AgentExecutorType::ClaudeCode,
+            ModelExecutorType::ClaudeCode,
             "Test error message".to_string(),
         );
 
@@ -2453,7 +2453,7 @@ mod tests {
             "File not found",
         ));
         let init_error =
-            ActionError::initialization_error(AgentExecutorType::LlamaAgent, source_error);
+            ActionError::initialization_error(ModelExecutorType::LlamaAgent, source_error);
 
         match init_error {
             ActionError::ExecutionError(msg) => {
@@ -3461,7 +3461,7 @@ mod tests {
 
         match action.get_executor(&execution_context).await {
             Ok(executor) => {
-                assert_eq!(executor.executor_type(), AgentExecutorType::ClaudeCode);
+                assert_eq!(executor.executor_type(), ModelExecutorType::ClaudeCode);
             }
             Err(ActionError::ExecutionError(msg)) if msg.contains("Claude CLI not found") => {
                 // Expected in environments without Claude CLI

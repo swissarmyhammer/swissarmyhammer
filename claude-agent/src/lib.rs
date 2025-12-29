@@ -52,6 +52,8 @@ pub mod url_validation;
 pub use agent::{ClaudeAgent, RawMessageManager};
 pub use config::AgentConfig;
 pub use error::{AgentError, Result};
-pub use plan::{todowrite_to_acp_plan, AgentPlan, PlanEntry, PlanEntryStatus, Priority};
+pub use plan::{
+    todowrite_to_acp_plan, todowrite_to_agent_plan, AgentPlan, PlanEntry, PlanEntryStatus, Priority,
+};
 pub use server::ClaudeAgentServer;
 pub use tools::{ToolCallHandler, ToolCallResult, ToolPermissions};

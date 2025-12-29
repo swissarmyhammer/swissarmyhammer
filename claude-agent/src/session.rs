@@ -187,6 +187,8 @@ pub struct Session {
     pub turn_token_count: u64,
     /// Current session mode identifier for ACP current mode updates
     pub current_mode: Option<String>,
+    /// Todo items associated with this session
+    pub todos: Vec<String>,
 }
 
 impl Session {
@@ -221,6 +223,7 @@ impl Session {
             turn_request_count: 0,
             turn_token_count: 0,
             current_mode: None,
+            todos: Vec::new(),
         }
     }
 
@@ -253,9 +256,13 @@ impl Session {
             return true;
         }
 
-        // Compare each command by name and description
+        // Compare each command by all fields
         for (existing, new) in self.available_commands.iter().zip(new_commands.iter()) {
-            if existing.name != new.name || existing.description != new.description {
+            if existing.name != new.name
+                || existing.description != new.description
+                || existing.input != new.input
+                || existing.meta != new.meta
+            {
                 return true;
             }
         }
@@ -292,6 +299,23 @@ impl Session {
     /// Get the current turn token count
     pub fn get_turn_token_count(&self) -> u64 {
         self.turn_token_count
+    }
+
+    /// Add a todo item ID to the session
+    pub fn add_todo(&mut self, todo_id: String) {
+        self.todos.push(todo_id);
+        self.last_accessed = SystemTime::now();
+    }
+
+    /// Remove a todo item ID from the session (when completed)
+    pub fn remove_todo(&mut self, todo_id: &str) {
+        self.todos.retain(|id| id != todo_id);
+        self.last_accessed = SystemTime::now();
+    }
+
+    /// Get all todo item IDs for this session
+    pub fn get_todos(&self) -> &[String] {
+        &self.todos
     }
 }
 
@@ -368,6 +392,7 @@ pub struct SessionManager {
     sessions: Arc<RwLock<HashMap<SessionId, Session>>>,
     cleanup_interval: Duration,
     max_session_age: Duration,
+    storage_path: Option<PathBuf>,
 }
 
 impl SessionManager {
@@ -377,6 +402,7 @@ impl SessionManager {
             sessions: Arc::new(RwLock::new(HashMap::new())),
             cleanup_interval: Duration::from_secs(300), // 5 minutes
             max_session_age: Duration::from_secs(3600), // 1 hour
+            storage_path: Self::default_storage_path(),
         }
     }
 
@@ -386,7 +412,94 @@ impl SessionManager {
             sessions: Arc::new(RwLock::new(HashMap::new())),
             cleanup_interval,
             max_session_age,
+            storage_path: Self::default_storage_path(),
         }
+    }
+
+    /// Set the storage path for sessions
+    ///
+    /// This allows tests and custom configurations to specify where session files are stored.
+    /// If set to None, sessions will only be kept in memory.
+    pub fn with_storage_path(mut self, path: Option<PathBuf>) -> Self {
+        self.storage_path = path;
+        self
+    }
+
+    /// Get the default storage path for sessions
+    fn default_storage_path() -> Option<PathBuf> {
+        std::env::current_dir()
+            .ok()
+            .map(|cwd| cwd.join(".swissarmyhammer").join("sessions"))
+    }
+
+    /// Ensure the storage directory exists
+    fn ensure_storage_directory(&self) -> crate::Result<PathBuf> {
+        if let Some(storage_path) = &self.storage_path {
+            std::fs::create_dir_all(storage_path).map_err(|e| {
+                crate::AgentError::Session(format!(
+                    "Failed to create session storage directory: {}",
+                    e
+                ))
+            })?;
+            Ok(storage_path.clone())
+        } else {
+            Err(crate::AgentError::Session(
+                "No storage path configured".to_string(),
+            ))
+        }
+    }
+
+    /// Get the file path for a session
+    fn session_file_path(&self, session_id: &SessionId) -> crate::Result<PathBuf> {
+        let storage_path = self.ensure_storage_directory()?;
+        Ok(storage_path.join(format!("{}.json", session_id)))
+    }
+
+    /// Save a session to disk
+    fn save_session_to_disk(&self, session: &Session) -> crate::Result<()> {
+        let file_path = self.session_file_path(&session.id)?;
+        let json = serde_json::to_string_pretty(session).map_err(|e| {
+            crate::AgentError::Session(format!("Failed to serialize session: {}", e))
+        })?;
+        std::fs::write(&file_path, json).map_err(|e| {
+            crate::AgentError::Session(format!("Failed to write session to disk: {}", e))
+        })?;
+        tracing::debug!("Saved session {} to disk", session.id);
+        Ok(())
+    }
+
+    /// Load a session from disk
+    fn load_session_from_disk(&self, session_id: &SessionId) -> crate::Result<Option<Session>> {
+        let file_path = self.session_file_path(session_id)?;
+
+        if !file_path.exists() {
+            return Ok(None);
+        }
+
+        let json = std::fs::read_to_string(&file_path).map_err(|e| {
+            crate::AgentError::Session(format!("Failed to read session from disk: {}", e))
+        })?;
+
+        let session: Session = serde_json::from_str(&json).map_err(|e| {
+            crate::AgentError::Session(format!("Failed to deserialize session: {}", e))
+        })?;
+
+        tracing::debug!("Loaded session {} from disk", session_id);
+        Ok(Some(session))
+    }
+
+    /// Delete a session file from disk
+    fn delete_session_from_disk(&self, session_id: &SessionId) -> crate::Result<()> {
+        let file_path = self.session_file_path(session_id)?;
+
+        if file_path.exists() {
+            std::fs::remove_file(&file_path).map_err(|e| {
+                crate::AgentError::Session(format!("Failed to delete session from disk: {}", e))
+            })?;
+            tracing::debug!("Deleted session {} from disk", session_id);
+        }
+
+        Ok(())
     }
 
     /// Create a new session with specified working directory and return its ID
@@ -412,6 +525,9 @@ impl SessionManager {
         let mut session = Session::new(session_id, cwd);
         session.client_capabilities = client_capabilities;
 
+        // Save to disk first
+        self.save_session_to_disk(&session)?;
+
         let mut sessions = self
             .sessions
             .write()
@@ -424,12 +540,35 @@ impl SessionManager {
 
     /// Get a session by ID
     pub fn get_session(&self, session_id: &SessionId) -> crate::Result<Option<Session>> {
-        let sessions = self
-            .sessions
-            .read()
-            .map_err(|_| crate::AgentError::Session("Failed to acquire read lock".to_string()))?;
+        // Fast path: check in-memory cache with read lock
+        {
+            let sessions = self.sessions.read().map_err(|_| {
+                crate::AgentError::Session("Failed to acquire read lock".to_string())
+            })?;
 
-        Ok(sessions.get(session_id).cloned())
+            if let Some(session) = sessions.get(session_id) {
+                return Ok(Some(session.clone()));
+            }
+        } // Release read lock immediately
+
+        // Slow path: load from disk if storage is configured
+        if let Some(session) = self.load_session_from_disk(session_id)? {
+            // Cache the loaded session in memory
+            let mut sessions = self.sessions.write().map_err(|_| {
+                crate::AgentError::Session("Failed to acquire write lock".to_string())
+            })?;
+
+            // Double-check in case another thread loaded it while we were acquiring write lock
+            if let Some(existing) = sessions.get(session_id) {
+                return Ok(Some(existing.clone()));
+            }
+
+            sessions.insert(*session_id, session.clone());
+            tracing::debug!("Loaded session {} from disk into memory", session_id);
+            Ok(Some(session))
+        } else {
+            Ok(None)
+        }
     }
 
     /// Update a session using a closure
@@ -437,6 +576,9 @@ impl SessionManager {
     where
         F: FnOnce(&mut Session),
     {
+        // First ensure the session is loaded into memory
+        self.get_session(session_id)?;
+
         let mut sessions = self
             .sessions
             .write()
@@ -445,6 +587,12 @@ impl SessionManager {
         if let Some(session) = sessions.get_mut(session_id) {
             updater(session);
             session.update_access_time();
+
+            // Save updated session to disk
+            let session_clone = session.clone();
+            drop(sessions); // Release lock before disk I/O
+            self.save_session_to_disk(&session_clone)?;
+
             tracing::trace!("Updated session: {}", session_id);
         } else {
             tracing::warn!("Attempted to update non-existent session: {}", session_id);
@@ -454,6 +602,10 @@ impl SessionManager {
     }
 
     /// Remove a session and return it if it existed
+    ///
+    /// Note: This method only removes the session data. To properly clean up all
+    /// associated resources (including terminal processes), use `remove_session_with_cleanup`
+    /// which accepts a `TerminalManager`.
     pub fn remove_session(&self, session_id: &SessionId) -> crate::Result<Option<Session>> {
         let mut sessions = self
             .sessions
@@ -461,20 +613,102 @@ impl SessionManager {
             .map_err(|_| crate::AgentError::Session("Failed to acquire write lock".to_string()))?;
 
         let removed = sessions.remove(session_id);
+
+        // Also remove from disk
+        drop(sessions); // Release lock before disk I/O
+        let _ = self.delete_session_from_disk(session_id); // Best effort deletion
+
         if removed.is_some() {
             tracing::debug!("Removed session: {}", session_id);
         }
         Ok(removed)
     }
 
-    /// List all session IDs
+    /// Remove a session and clean up all associated resources including terminals
+    ///
+    /// This is the preferred method for removing sessions as it ensures proper cleanup
+    /// of terminal processes associated with the session. It:
+    /// 1. Cleans up all terminal processes for the session
+    /// 2. Removes the session from memory and disk
+    ///
+    /// # Arguments
+    ///
+    /// * `session_id` - The session ID to remove
+    /// * `terminal_manager` - Terminal manager for cleaning up associated terminals
+    ///
+    /// # Returns
+    ///
+    /// Returns the removed session if it existed, or None if not found
+    pub async fn remove_session_with_cleanup(
+        &self,
+        session_id: &SessionId,
+        terminal_manager: &crate::terminal_manager::TerminalManager,
+    ) -> crate::Result<Option<Session>> {
+        // First clean up all terminals associated with this session
+        let session_id_str = session_id.to_string();
+        match terminal_manager
+            .cleanup_session_terminals(&session_id_str)
+            .await
+        {
+            Ok(count) => {
+                if count > 0 {
+                    tracing::info!(
+                        "Cleaned up {} terminal(s) before removing session {}",
+                        count,
+                        session_id
+                    );
+                }
+            }
+            Err(e) => {
+                tracing::warn!(
+                    "Failed to clean up terminals for session {}: {}",
+                    session_id,
+                    e
+                );
+                // Continue with session removal even if terminal cleanup fails
+            }
+        }
+
+        // Now remove the session
+        self.remove_session(session_id)
+    }
+
+    /// List all session IDs (from both memory and disk)
     pub fn list_sessions(&self) -> crate::Result<Vec<SessionId>> {
+        let mut session_ids = std::collections::HashSet::new();
+
+        // Get in-memory sessions
         let sessions = self
             .sessions
             .read()
             .map_err(|_| crate::AgentError::Session("Failed to acquire read lock".to_string()))?;
 
-        Ok(sessions.keys().cloned().collect())
+        for id in sessions.keys() {
+            session_ids.insert(*id);
+        }
+
+        drop(sessions); // Release lock before disk I/O
+
+        // Get sessions from disk
+        if let Some(storage_path) = &self.storage_path {
+            if storage_path.exists() {
+                if let Ok(entries) = std::fs::read_dir(storage_path) {
+                    for entry in entries.flatten() {
+                        if let Some(file_name) = entry.file_name().to_str() {
+                            if file_name.ends_with(".json") {
+                                if let Some(id_str) = file_name.strip_suffix(".json") {
+                                    if let Ok(session_id) = SessionId::parse(id_str) {
+                                        session_ids.insert(session_id);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(session_ids.into_iter().collect())
     }
 
     /// Get the number of active sessions
@@ -494,6 +728,9 @@ impl SessionManager {
         session_id: &SessionId,
         commands: Vec<agent_client_protocol::AvailableCommand>,
     ) -> crate::Result<bool> {
+        // First ensure the session is loaded into memory
+        self.get_session(session_id)?;
+
         let mut sessions = self
             .sessions
             .write()
@@ -503,6 +740,12 @@ impl SessionManager {
             let commands_changed = session.has_available_commands_changed(&commands);
             if commands_changed {
                 session.update_available_commands(commands);
+
+                // Save updated session to disk
+                let session_clone = session.clone();
+                drop(sessions); // Release lock before disk I/O
+                self.save_session_to_disk(&session_clone)?;
+
                 tracing::debug!("Updated available commands for session: {}", session_id);
                 Ok(true)
             } else {
@@ -516,6 +759,28 @@ impl SessionManager {
             );
             Ok(false)
         }
+    }
+
+    /// Add a todo item ID to a session
+    pub fn add_todo_to_session(
+        &self,
+        session_id: &SessionId,
+        todo_id: String,
+    ) -> crate::Result<()> {
+        self.update_session(session_id, |session| {
+            session.add_todo(todo_id);
+        })
+    }
+
+    /// Remove a todo item ID from a session
+    pub fn remove_todo_from_session(
+        &self,
+        session_id: &SessionId,
+        todo_id: &str,
+    ) -> crate::Result<()> {
+        self.update_session(session_id, |session| {
+            session.remove_todo(todo_id);
+        })
     }
 
     /// Start the cleanup task that removes expired sessions
@@ -822,6 +1087,129 @@ mod tests {
 
         // Remove session
         let removed = manager.remove_session(&session_id).unwrap();
+        assert!(removed.is_some());
+        assert_eq!(removed.unwrap().id, session_id);
+
+        // Verify session no longer exists
+        assert!(manager.get_session(&session_id).unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn test_remove_session_with_cleanup() {
+        use crate::terminal_manager::{TerminalCreateParams, TerminalManager};
+
+        let manager = SessionManager::new();
+        let terminal_manager = TerminalManager::new();
+        let cwd = std::env::current_dir().unwrap();
+        let session_id = manager.create_session(cwd, None).unwrap();
+        let session_id_str = session_id.to_string();
+
+        // Create a terminal associated with this session
+        let params = TerminalCreateParams {
+            session_id: session_id_str.clone(),
+            command: "echo".to_string(),
+            args: Some(vec!["test".to_string()]),
+            env: None,
+            cwd: None,
+            output_byte_limit: None,
+        };
+
+        let terminal_id = terminal_manager
+            .create_terminal_with_command(&manager, params)
+            .await
+            .unwrap();
+
+        // Verify terminal exists
+        {
+            let terminals = terminal_manager.terminals.read().await;
+            assert!(terminals.contains_key(&terminal_id));
+        }
+
+        // Remove session with cleanup
+        let removed = manager
+            .remove_session_with_cleanup(&session_id, &terminal_manager)
+            .await
+            .unwrap();
+        assert!(removed.is_some());
+        assert_eq!(removed.unwrap().id, session_id);
+
+        // Verify session no longer exists
+        assert!(manager.get_session(&session_id).unwrap().is_none());
+
+        // Verify terminal was cleaned up
+        {
+            let terminals = terminal_manager.terminals.read().await;
+            assert!(!terminals.contains_key(&terminal_id));
+        }
+    }
+
+    #[tokio::test]
+    async fn test_remove_session_with_cleanup_multiple_terminals() {
+        use crate::terminal_manager::{TerminalCreateParams, TerminalManager};
+
+        let manager = SessionManager::new();
+        let terminal_manager = TerminalManager::new();
+        let cwd = std::env::current_dir().unwrap();
+        let session_id = manager.create_session(cwd, None).unwrap();
+        let session_id_str = session_id.to_string();
+
+        // Create multiple terminals associated with this session
+        let mut terminal_ids = Vec::new();
+        for i in 0..3 {
+            let params = TerminalCreateParams {
+                session_id: session_id_str.clone(),
+                command: "echo".to_string(),
+                args: Some(vec![format!("test{}", i)]),
+                env: None,
+                cwd: None,
+                output_byte_limit: None,
+            };
+
+            let terminal_id = terminal_manager
+                .create_terminal_with_command(&manager, params)
+                .await
+                .unwrap();
+            terminal_ids.push(terminal_id);
+        }
+
+        // Verify all terminals exist
+        {
+            let terminals = terminal_manager.terminals.read().await;
+            for terminal_id in &terminal_ids {
+                assert!(terminals.contains_key(terminal_id));
+            }
+        }
+
+        // Remove session with cleanup
+        let removed = manager
+            .remove_session_with_cleanup(&session_id, &terminal_manager)
+            .await
+            .unwrap();
+        assert!(removed.is_some());
+
+        // Verify all terminals were cleaned up
+        {
+            let terminals = terminal_manager.terminals.read().await;
+            for terminal_id in &terminal_ids {
+                assert!(!terminals.contains_key(terminal_id));
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_remove_session_with_cleanup_no_terminals() {
+        use crate::terminal_manager::TerminalManager;
+
+        let manager = SessionManager::new();
+        let terminal_manager = TerminalManager::new();
+        let cwd = std::env::current_dir().unwrap();
+        let session_id = manager.create_session(cwd, None).unwrap();
+
+        // Remove session with cleanup (no terminals to clean up)
+        let removed = manager
+            .remove_session_with_cleanup(&session_id, &terminal_manager)
+            .await
+            .unwrap();
         assert!(removed.is_some());
         assert_eq!(removed.unwrap().id, session_id);
 
@@ -1151,5 +1539,204 @@ mod tests {
             .update_available_commands(&session_id, commands)
             .unwrap();
         assert!(!update_sent);
+    }
+
+    #[test]
+    fn test_session_detect_meta_field_changes() {
+        let session_id = SessionId::new();
+        let cwd = std::env::current_dir().unwrap();
+        let mut session = Session::new(session_id, cwd);
+
+        let initial_commands = vec![agent_client_protocol::AvailableCommand {
+            name: "create_plan".to_string(),
+            description: "Create an execution plan".to_string(),
+            input: None,
+            meta: Some(serde_json::json!({"version": "1.0"})),
+        }];
+
+        session.update_available_commands(initial_commands.clone());
+        assert!(!session.has_available_commands_changed(&initial_commands));
+
+        // Change meta field - should detect difference
+        let updated_commands = vec![agent_client_protocol::AvailableCommand {
+            name: "create_plan".to_string(),
+            description: "Create an execution plan".to_string(),
+            input: None,
+            meta: Some(serde_json::json!({"version": "2.0"})),
+        }];
+
+        assert!(session.has_available_commands_changed(&updated_commands));
+    }
+
+    #[test]
+    fn test_session_detect_input_field_changes() {
+        let session_id = SessionId::new();
+        let cwd = std::env::current_dir().unwrap();
+        let mut session = Session::new(session_id, cwd);
+
+        let input_schema = agent_client_protocol::CommandInput {
+            r#type: "object".to_string(),
+            properties: Some(serde_json::json!({
+                "task": {"type": "string"}
+            })),
+            required: Some(vec!["task".to_string()]),
+            additional_properties: None,
+        };
+
+        let initial_commands = vec![agent_client_protocol::AvailableCommand {
+            name: "create_plan".to_string(),
+            description: "Create an execution plan".to_string(),
+            input: Some(input_schema.clone()),
+            meta: None,
+        }];
+
+        session.update_available_commands(initial_commands.clone());
+        assert!(!session.has_available_commands_changed(&initial_commands));
+
+        // Change input field - should detect difference
+        let updated_input_schema = agent_client_protocol::CommandInput {
+            r#type: "object".to_string(),
+            properties: Some(serde_json::json!({
+                "task": {"type": "string"},
+                "priority": {"type": "number"}
+            })),
+            required: Some(vec!["task".to_string()]),
+            additional_properties: None,
+        };
+
+        let updated_commands = vec![agent_client_protocol::AvailableCommand {
+            name: "create_plan".to_string(),
+            description: "Create an execution plan".to_string(),
+            input: Some(updated_input_schema),
+            meta: None,
+        }];
+
+        assert!(session.has_available_commands_changed(&updated_commands));
+    }
+
+    #[test]
+    fn test_session_detect_meta_none_to_some_change() {
+        let session_id = SessionId::new();
+        let cwd = std::env::current_dir().unwrap();
+        let mut session = Session::new(session_id, cwd);
+
+        let initial_commands = vec![agent_client_protocol::AvailableCommand {
+            name: "create_plan".to_string(),
+            description: "Create an execution plan".to_string(),
+            input: None,
+            meta: None,
+        }];
+
+        session.update_available_commands(initial_commands.clone());
+        assert!(!session.has_available_commands_changed(&initial_commands));
+
+        // Add meta field - should detect difference
+        let updated_commands = vec![agent_client_protocol::AvailableCommand {
+            name: "create_plan".to_string(),
+            description: "Create an execution plan".to_string(),
+            input: None,
+            meta: Some(serde_json::json!({"new": "field"})),
+        }];
+
+        assert!(session.has_available_commands_changed(&updated_commands));
+    }
+
+    #[test]
+    fn test_session_add_todo() {
+        let session_id = SessionId::new();
+        let cwd = std::env::current_dir().unwrap();
+        let mut session = Session::new(session_id, cwd);
+
+        assert_eq!(session.get_todos().len(), 0);
+
+        session.add_todo("01ARZ3NDEKTSV4RRFFQ69G5FAV".to_string());
+        assert_eq!(session.get_todos().len(), 1);
+        assert_eq!(session.get_todos()[0], "01ARZ3NDEKTSV4RRFFQ69G5FAV");
+
+        session.add_todo("01BRZ3NDEKTSV4RRFFQ69G5FAV".to_string());
+        assert_eq!(session.get_todos().len(), 2);
+    }
+
+    #[test]
+    fn test_session_remove_todo() {
+        let session_id = SessionId::new();
+        let cwd = std::env::current_dir().unwrap();
+        let mut session = Session::new(session_id, cwd);
+
+        session.add_todo("01ARZ3NDEKTSV4RRFFQ69G5FAV".to_string());
+        session.add_todo("01BRZ3NDEKTSV4RRFFQ69G5FAV".to_string());
+        assert_eq!(session.get_todos().len(), 2);
+
+        session.remove_todo("01ARZ3NDEKTSV4RRFFQ69G5FAV");
+        assert_eq!(session.get_todos().len(), 1);
+        assert_eq!(session.get_todos()[0], "01BRZ3NDEKTSV4RRFFQ69G5FAV");
+
+        session.remove_todo("01BRZ3NDEKTSV4RRFFQ69G5FAV");
+        assert_eq!(session.get_todos().len(), 0);
+    }
+
+    #[test]
+    fn test_session_manager_add_todo() {
+        let manager = SessionManager::new();
+        let cwd = std::env::current_dir().unwrap();
+        let session_id = manager.create_session(cwd, None).unwrap();
+
+        manager
+            .add_todo_to_session(&session_id, "01ARZ3NDEKTSV4RRFFQ69G5FAV".to_string())
+            .unwrap();
+
+        let session = manager.get_session(&session_id).unwrap().unwrap();
+        assert_eq!(session.get_todos().len(), 1);
+        assert_eq!(session.get_todos()[0], "01ARZ3NDEKTSV4RRFFQ69G5FAV");
+    }
+
+    #[test]
+    fn test_session_manager_remove_todo() {
+        let manager = SessionManager::new();
+        let cwd = std::env::current_dir().unwrap();
+        let session_id = manager.create_session(cwd, None).unwrap();
+
+        manager
+            .add_todo_to_session(&session_id, "01ARZ3NDEKTSV4RRFFQ69G5FAV".to_string())
+            .unwrap();
+        manager
+            .add_todo_to_session(&session_id, "01BRZ3NDEKTSV4RRFFQ69G5FAV".to_string())
+            .unwrap();
+
+        let session = manager.get_session(&session_id).unwrap().unwrap();
+        assert_eq!(session.get_todos().len(), 2);
+
+        manager
+            .remove_todo_from_session(&session_id, "01ARZ3NDEKTSV4RRFFQ69G5FAV")
+            .unwrap();
+
+        let session = manager.get_session(&session_id).unwrap().unwrap();
+        assert_eq!(session.get_todos().len(), 1);
+        assert_eq!(session.get_todos()[0], "01BRZ3NDEKTSV4RRFFQ69G5FAV");
+    }
+
+    #[test]
+    fn test_session_todos_persist_to_disk() {
+        use std::fs;
+        use tempfile::tempdir;
+
+        let temp_dir = tempdir().unwrap();
+        let storage_path = temp_dir.path().join("sessions");
+
+        let manager = SessionManager::new().with_storage_path(Some(storage_path.clone()));
+        let cwd = std::env::current_dir().unwrap();
+        let session_id = manager.create_session(cwd, None).unwrap();
+
+        manager
+            .add_todo_to_session(&session_id, "01ARZ3NDEKTSV4RRFFQ69G5FAV".to_string())
+            .unwrap();
+
+        // Create a new manager with the same storage path
+        let manager2 = SessionManager::new().with_storage_path(Some(storage_path));
+
+        // Load the session from disk
+        let session = manager2.get_session(&session_id).unwrap().unwrap();
+        assert_eq!(session.get_todos().len(), 1);
+        assert_eq!(session.get_todos()[0], "01ARZ3NDEKTSV4RRFFQ69G5FAV");
     }
 }

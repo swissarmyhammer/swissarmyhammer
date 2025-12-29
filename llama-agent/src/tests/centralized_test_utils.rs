@@ -41,6 +41,13 @@ pub fn create_empty_session() -> Session {
         transcript_path: None,
         context_state: None,
         template_token_count: None,
+        #[cfg(feature = "acp")]
+        todos: Vec::new(),
+        #[cfg(feature = "acp")]
+        available_commands: Vec::new(),
+        current_mode: None,
+        #[cfg(feature = "acp")]
+        client_capabilities: None,
     }
 }
 
@@ -118,6 +125,13 @@ pub fn create_session_with_message(content: &str) -> Session {
         transcript_path: None,
         context_state: None,
         template_token_count: None,
+        #[cfg(feature = "acp")]
+        todos: Vec::new(),
+        #[cfg(feature = "acp")]
+        available_commands: Vec::new(),
+        current_mode: None,
+        #[cfg(feature = "acp")]
+        client_capabilities: None,
     }
 }
 
@@ -159,6 +173,13 @@ pub fn create_session_with_messages(messages: Vec<Message>) -> Session {
         transcript_path: None,
         context_state: None,
         template_token_count: None,
+        #[cfg(feature = "acp")]
+        todos: Vec::new(),
+        #[cfg(feature = "acp")]
+        available_commands: Vec::new(),
+        current_mode: None,
+        #[cfg(feature = "acp")]
+        client_capabilities: None,
     }
 }
 
@@ -201,6 +222,13 @@ pub fn create_session_with_tools(tools: Vec<ToolDefinition>) -> Session {
         transcript_path: None,
         context_state: None,
         template_token_count: None,
+        #[cfg(feature = "acp")]
+        todos: Vec::new(),
+        #[cfg(feature = "acp")]
+        available_commands: Vec::new(),
+        current_mode: None,
+        #[cfg(feature = "acp")]
+        client_capabilities: None,
     }
 }
 

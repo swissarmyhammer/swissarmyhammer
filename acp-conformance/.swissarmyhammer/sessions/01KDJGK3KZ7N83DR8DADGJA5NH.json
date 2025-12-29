@@ -1,0 +1,362 @@
+{
+  "id": "01KDJGK3KZ7N83DR8DADGJA5NH",
+  "created_at": {
+    "secs_since_epoch": 1766926683,
+    "nanos_since_epoch": 775889000
+  },
+  "last_accessed": {
+    "secs_since_epoch": 1766926696,
+    "nanos_since_epoch": 190520000
+  },
+  "context": [
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926687,
+        "nanos_since_epoch": 903179000
+      },
+      "update": {
+        "sessionUpdate": "available_commands_update",
+        "availableCommands": [
+          {
+            "name": "create_plan",
+            "description": "Create an execution plan for complex tasks",
+            "input": null,
+            "_meta": {
+              "category": "planning",
+              "source": "core"
+            }
+          },
+          {
+            "name": "research_codebase",
+            "description": "Research and analyze the codebase structure",
+            "input": null,
+            "_meta": {
+              "category": "analysis",
+              "source": "core"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926687,
+        "nanos_since_epoch": 905012000
+      },
+      "update": {
+        "sessionUpdate": "user_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "Create a todo item using the mcp__test-mcp-server__create-plan tool with goal 'Implement user authentication'. This is a multi-step task that requires planning."
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926691,
+        "nanos_since_epoch": 229954000
+      },
+      "update": {
+        "sessionUpdate": "tool_call",
+        "toolCallId": "tool_1",
+        "title": "mcp__test-mcp-server__create-plan",
+        "rawInput": {
+          "goal": "Implement user authentication"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926695,
+        "nanos_since_epoch": 161963000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "Done"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926695,
+        "nanos_since_epoch": 505100000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "! I've created an"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926695,
+        "nanos_since_epoch": 552348000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " execution"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926695,
+        "nanos_since_epoch": 573233000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " plan for \""
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926695,
+        "nanos_since_epoch": 585398000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "Implement user authentication\""
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926695,
+        "nanos_since_epoch": 599789000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " with the following steps:"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926695,
+        "nanos_since_epoch": 649744000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "\n\n1. **"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926695,
+        "nanos_since_epoch": 687391000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "Analyze requirements** - pending"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926695,
+        "nanos_since_epoch": 715119000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "\n2. **Design"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926695,
+        "nanos_since_epoch": 747267000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " solution** - pending"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926695,
+        "nanos_since_epoch": 771660000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "\n3. **Implement"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926695,
+        "nanos_since_epoch": 791664000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " solution** - pending"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926695,
+        "nanos_since_epoch": 818283000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "\n4. **Test an"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926695,
+        "nanos_since_epoch": 842136000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "d validate** - pending"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926695,
+        "nanos_since_epoch": 860073000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "\n\nWoul"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926695,
+        "nanos_since_epoch": 871498000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "d you like me to help"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926695,
+        "nanos_since_epoch": 893046000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " you work"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926695,
+        "nanos_since_epoch": 952693000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " through any of these steps"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926696,
+        "nanos_since_epoch": 79239000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "?"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926696,
+        "nanos_since_epoch": 190464000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "Done! I've created an execution plan for \"Implement user authentication\" with the following steps:\n\n1. **Analyze requirements** - pending\n2. **Design solution** - pending\n3. **Implement solution** - pending\n4. **Test and validate** - pending\n\nWould you like me to help you work through any of these steps?"
+        }
+      }
+    }
+  ],
+  "client_capabilities": {
+    "fs": {
+      "readTextFile": false,
+      "writeTextFile": false
+    },
+    "terminal": false
+  },
+  "mcp_servers": [],
+  "cwd": "/Users/wballard/github/swissarmyhammer/acp-conformance",
+  "available_commands": [
+    {
+      "name": "create_plan",
+      "description": "Create an execution plan for complex tasks",
+      "input": null,
+      "_meta": {
+        "category": "planning",
+        "source": "core"
+      }
+    },
+    {
+      "name": "research_codebase",
+      "description": "Research and analyze the codebase structure",
+      "input": null,
+      "_meta": {
+        "category": "analysis",
+        "source": "core"
+      }
+    }
+  ],
+  "turn_request_count": 1,
+  "turn_token_count": 40,
+  "current_mode": null,
+  "todos": []
+}

@@ -8,18 +8,21 @@ use crate::{
     constants::sizes,
     content_block_processor::ContentBlockProcessor,
     content_capability_validator::ContentCapabilityValidator,
+    path_validator::PathValidator,
     permissions::{FilePermissionStorage, PermissionPolicyEngine, PolicyEvaluation},
+    protocol_translator::ProtocolTranslator,
     session::SessionManager,
+    size_validator::{SizeLimits, SizeValidator},
     tools::ToolCallHandler,
 };
 #[cfg(test)]
 use agent_client_protocol::SessionModeId;
 use agent_client_protocol::{
     Agent, AgentCapabilities, AuthenticateRequest, AuthenticateResponse, CancelNotification,
-    ContentBlock, ExtNotification, ExtRequest, InitializeRequest, InitializeResponse,
+    ContentBlock, ExtNotification, ExtRequest, ExtResponse, InitializeRequest, InitializeResponse,
     LoadSessionRequest, LoadSessionResponse, NewSessionRequest, NewSessionResponse, PromptRequest,
     PromptResponse, RawValue, SessionId, SessionNotification, SessionUpdate, SetSessionModeRequest,
-    SetSessionModeResponse, StopReason, TextContent,
+    SetSessionModeResponse, StopReason, TextContent, WriteTextFileResponse,
 };
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -502,6 +505,20 @@ pub struct ClaudeAgent {
     /// to avoid re-prompting the user for the same tool. Preferences are stored
     /// in-memory and do not persist across agent restarts.
     permission_storage: Arc<permission_storage::PermissionStorage>,
+    /// Manager for tracking plan state across sessions
+    ///
+    /// Tracks plan entries and their status changes as work progresses,
+    /// enabling ACP-compliant progress reporting to clients.
+    plan_manager: Arc<RwLock<crate::plan::PlanManager>>,
+    /// Path validator for secure file operations
+    ///
+    /// Validates file paths to prevent path traversal attacks, enforce allowed/blocked
+    /// path lists, and ensure paths meet security requirements per ACP file-security rule.
+    path_validator: Arc<PathValidator>,
+    /// Size validator for file operations
+    ///
+    /// Validates file sizes before read/write operations to prevent resource exhaustion.
+    size_validator: Arc<SizeValidator>,
 }
 
 impl ClaudeAgent {
@@ -557,7 +574,18 @@ impl ClaudeAgent {
         let (notification_sender, notification_receiver) =
             NotificationSender::new(config.notification_buffer_size);
 
-        let mut claude_client = ClaudeClient::new_with_config(&config.claude)?;
+        // Create permission policy engine with file-based storage (needed for ProtocolTranslator)
+        let storage_path = std::env::current_dir()
+            .unwrap_or_else(|_| std::path::PathBuf::from("."))
+            .join(".claude-agent")
+            .join("permissions");
+        let storage = FilePermissionStorage::new(storage_path);
+        let permission_engine = Arc::new(PermissionPolicyEngine::new(Box::new(storage)));
+
+        // Create protocol translator with permission engine
+        let protocol_translator = Arc::new(ProtocolTranslator::new(permission_engine.clone()));
+
+        let mut claude_client = ClaudeClient::new_with_config(&config.claude, protocol_translator)?;
         claude_client.set_notification_sender(Arc::new(notification_sender.clone()));
 
         // Use provided RawMessageManager or create a new one
@@ -594,14 +622,6 @@ impl ClaudeAgent {
 
         let claude_client = Arc::new(claude_client);
 
-        // Create permission policy engine with file-based storage
-        let storage_path = std::env::current_dir()
-            .unwrap_or_else(|_| std::path::PathBuf::from("."))
-            .join(".claude-agent")
-            .join("permissions");
-        let storage = FilePermissionStorage::new(storage_path);
-        let permission_engine = Arc::new(PermissionPolicyEngine::new(Box::new(storage)));
-
         // Create and initialize MCP manager
         let mut mcp_manager = crate::mcp::McpServerManager::new();
         mcp_manager
@@ -629,26 +649,30 @@ impl ClaudeAgent {
             handler.list_all_available_tools().await
         };
 
-        let capabilities = AgentCapabilities {
-            load_session: true,
-            prompt_capabilities: agent_client_protocol::PromptCapabilities {
-                audio: true,
-                embedded_context: true,
-                image: true,
-                meta: Some(serde_json::json!({"streaming": true})),
-            },
-            // We only support HTTP MCP connections, not SSE (which is deprecated in MCP spec).
-            // This is an architectural decision for simplicity and modern standards.
-            mcp_capabilities: agent_client_protocol::McpCapabilities {
-                http: true,
-                sse: false,
-                meta: None,
-            },
-            meta: Some(serde_json::json!({
-                "tools": available_tools,
-                "streaming": true
-            })),
-        };
+        let mut meta_map = serde_json::Map::new();
+        meta_map.insert("streaming".to_string(), serde_json::json!(true));
+
+        let prompt_capabilities = agent_client_protocol::PromptCapabilities::new()
+            .audio(true)
+            .embedded_context(true)
+            .image(true)
+            .meta(meta_map);
+
+        // We only support HTTP MCP connections, not SSE (which is deprecated in MCP spec).
+        // This is an architectural decision for simplicity and modern standards.
+        let mcp_capabilities = agent_client_protocol::McpCapabilities::new()
+            .http(true)
+            .sse(false);
+
+        let mut agent_meta_map = serde_json::Map::new();
+        agent_meta_map.insert("tools".to_string(), serde_json::json!(available_tools));
+        agent_meta_map.insert("streaming".to_string(), serde_json::json!(true));
+
+        let capabilities = AgentCapabilities::new()
+            .load_session(true)
+            .prompt_capabilities(prompt_capabilities)
+            .mcp_capabilities(mcp_capabilities)
+            .meta(agent_meta_map);
 
         // Create cancellation manager for session cancellation support
         let (cancellation_manager, _cancellation_receiver) =
@@ -668,6 +692,40 @@ impl ClaudeAgent {
         // Initialize editor state manager for ACP editor integration
         let editor_state_manager = Arc::new(crate::editor_state::EditorStateManager::new());
 
+        // Initialize path validator with configuration-based blocked paths
+        let path_validator = {
+            // Validate that all blocked paths are absolute during initialization
+            let blocked_paths: Vec<std::path::PathBuf> = config
+                .security
+                .forbidden_paths
+                .iter()
+                .map(|p| {
+                    let path = std::path::PathBuf::from(p);
+                    if !path.is_absolute() {
+                        tracing::error!(
+                            security_event = "invalid_forbidden_path",
+                            path = %p,
+                            "Forbidden path must be absolute"
+                        );
+                        panic!(
+                            "Configuration error: Forbidden path must be absolute: {}",
+                            p
+                        );
+                    }
+                    path
+                })
+                .collect();
+
+            if blocked_paths.is_empty() {
+                Arc::new(PathValidator::new())
+            } else {
+                Arc::new(PathValidator::with_blocked_paths(blocked_paths))
+            }
+        };
+
+        // Initialize size validator with moderate limits for file operations
+        let size_validator = Arc::new(SizeValidator::new(SizeLimits::default()));
+
         let agent = Self {
             session_manager,
             claude_client,
@@ -685,6 +743,9 @@ impl ClaudeAgent {
             raw_message_manager,
             client: None, // Client connection set later via set_client()
             permission_storage: Arc::new(permission_storage::PermissionStorage::new()),
+            plan_manager: Arc::new(RwLock::new(crate::plan::PlanManager::new())),
+            path_validator,
+            size_validator,
         };
 
         Ok((agent, notification_receiver))
@@ -696,6 +757,37 @@ impl ClaudeAgent {
     /// Required for the agent to send client/request_permission and other client requests.
     pub fn set_client(&mut self, client: Arc<dyn agent_client_protocol::Client + Send + Sync>) {
         self.client = Some(client);
+    }
+
+    /// Start monitoring MCP server notifications for capability changes
+    ///
+    /// This should be called after the agent is created and wrapped in Arc.
+    /// Spawns background tasks to monitor MCP servers for tools/list_changed
+    /// and prompts/list_changed notifications, automatically refreshing
+    /// available commands for all sessions when changes occur.
+    ///
+    /// # Arguments
+    ///
+    /// * `agent` - Arc reference to the agent for use in notification callbacks
+    ///
+    /// # Returns
+    ///
+    /// Returns a vector of join handles for the spawned monitoring tasks
+    pub fn start_mcp_monitoring(agent: Arc<Self>) -> Vec<tokio::task::JoinHandle<()>> {
+        if let Some(ref mcp_manager) = agent.mcp_manager {
+            let agent_weak = Arc::downgrade(&agent);
+
+            mcp_manager.clone().start_monitoring_notifications(move || {
+                let agent_weak = agent_weak.clone();
+                Box::pin(async move {
+                    if let Some(agent) = agent_weak.upgrade() {
+                        agent.refresh_commands_for_all_sessions().await;
+                    }
+                })
+            })
+        } else {
+            Vec::new()
+        }
     }
 
     /// Shutdown the agent and clean up resources
@@ -734,8 +826,10 @@ impl ClaudeAgent {
     }
 
     /// Supported protocol versions by this agent
-    const SUPPORTED_PROTOCOL_VERSIONS: &'static [agent_client_protocol::ProtocolVersion] =
-        &[agent_client_protocol::V0, agent_client_protocol::V1];
+    const SUPPORTED_PROTOCOL_VERSIONS: &'static [agent_client_protocol::ProtocolVersion] = &[
+        agent_client_protocol::ProtocolVersion::V0,
+        agent_client_protocol::ProtocolVersion::V1,
+    ];
 
     /// Validate protocol version compatibility with comprehensive error responses
     fn validate_protocol_version(
@@ -747,7 +841,7 @@ impl ClaudeAgent {
             let latest_supported = Self::SUPPORTED_PROTOCOL_VERSIONS
                 .iter()
                 .max()
-                .unwrap_or(&agent_client_protocol::V1);
+                .unwrap_or(&agent_client_protocol::ProtocolVersion::V1);
 
             let version_str = format!("{:?}", protocol_version);
             let latest_str = format!("{:?}", latest_supported);
@@ -801,7 +895,7 @@ impl ClaudeAgent {
             Self::SUPPORTED_PROTOCOL_VERSIONS
                 .iter()
                 .max()
-                .unwrap_or(&agent_client_protocol::V1)
+                .unwrap_or(&agent_client_protocol::ProtocolVersion::V1)
                 .clone()
         }
     }
@@ -1157,11 +1251,13 @@ impl ClaudeAgent {
                 );
 
                 // Add connection guidance based on error type
-                let connection_guidance = match error.code {
-                    -32600 => {
+                let connection_guidance = match &error.code {
+                    agent_client_protocol::ErrorCode::InvalidRequest => {
                         "Client should close connection and retry with corrected request format"
                     }
-                    -32602 => "Client should adjust capabilities and retry initialization",
+                    agent_client_protocol::ErrorCode::InvalidParams => {
+                        "Client should adjust capabilities and retry initialization"
+                    }
                     _ => "Client should close connection and check agent compatibility",
                 };
                 data_obj.insert(
@@ -1229,6 +1325,39 @@ impl ClaudeAgent {
             .map_err(|_| agent_client_protocol::Error::invalid_params())
     }
 
+    /// Apply mode-specific configuration to a session
+    ///
+    /// This method applies any configuration changes that are specific to the session mode.
+    /// Currently, this is a no-op as mode-specific configuration is not yet implemented,
+    /// but it provides an extension point for future mode-specific behavior.
+    ///
+    /// # Arguments
+    ///
+    /// * `session_id` - The session ID to apply configuration to
+    /// * `mode_id` - The mode identifier to apply configuration for
+    ///
+    /// # Returns
+    ///
+    /// Returns Ok(()) if configuration was applied successfully
+    ///
+    /// # Future Extensions
+    ///
+    /// This method can be extended to:
+    /// - Adjust token limits based on mode
+    /// - Enable/disable specific tools based on mode
+    /// - Configure different prompting strategies per mode
+    /// - Apply mode-specific system prompts
+    async fn apply_mode_configuration(
+        &self,
+        _session_id: &crate::session::SessionId,
+        _mode_id: &str,
+    ) -> Result<(), agent_client_protocol::Error> {
+        // Currently no mode-specific configuration to apply
+        // This is a placeholder for future mode-specific behavior
+        tracing::debug!("Applying mode-specific configuration (currently no-op)");
+        Ok(())
+    }
+
     /// Validate a prompt request for common issues
     async fn validate_prompt_request(
         &self,
@@ -1270,6 +1399,10 @@ impl ClaudeAgent {
                 agent_client_protocol::ContentBlock::ResourceLink(_resource_link) => {
                     // Resource link content blocks are valid content
                     has_content = true;
+                }
+                _ => {
+                    // Unknown content block types are not supported
+                    return Err(agent_client_protocol::Error::invalid_params());
                 }
             }
         }
@@ -1320,14 +1453,14 @@ impl ClaudeAgent {
 
             // Convert to ACP-compliant error response
             let acp_error_data = capability_error.to_acp_error();
-            return Err(agent_client_protocol::Error {
-                code: acp_error_data["code"].as_i64().unwrap_or(-32602) as i32,
-                message: acp_error_data["message"]
+            return Err(agent_client_protocol::Error::new(
+                acp_error_data["code"].as_i64().unwrap_or(-32602) as i32,
+                acp_error_data["message"]
                     .as_str()
                     .unwrap_or("Content capability validation failed")
                     .to_string(),
-                data: Some(acp_error_data["data"].clone()),
-            });
+            )
+            .data(acp_error_data["data"].clone()));
         }
 
         // Process all content blocks using the comprehensive processor
@@ -1362,15 +1495,22 @@ impl ClaudeAgent {
                 self.config.max_turn_requests,
                 session_id
             );
-            return Ok(PromptResponse {
-                stop_reason: StopReason::MaxTurnRequests,
-                meta: Some(serde_json::json!({
-                    "turn_requests": current_requests,
-                    "max_turn_requests": self.config.max_turn_requests,
-                    "session_id": session_id.to_string(),
-                    "streaming": true
-                })),
-            });
+            let mut meta_map = serde_json::Map::new();
+            meta_map.insert(
+                "turn_requests".to_string(),
+                serde_json::json!(current_requests),
+            );
+            meta_map.insert(
+                "max_turn_requests".to_string(),
+                serde_json::json!(self.config.max_turn_requests),
+            );
+            meta_map.insert(
+                "session_id".to_string(),
+                serde_json::json!(session_id.to_string()),
+            );
+            meta_map.insert("streaming".to_string(), serde_json::json!(true));
+
+            return Ok(PromptResponse::new(StopReason::MaxTurnRequests).meta(meta_map));
         }
 
         // Update session with incremented turn request counter
@@ -1407,10 +1547,12 @@ impl ClaudeAgent {
                     .reset_for_new_turn(&session_id_str)
                     .await;
 
-                return Ok(PromptResponse {
-                    stop_reason: StopReason::Cancelled,
-                    meta: Some(serde_json::json!({"cancelled_during_streaming": true})),
-                });
+                let mut meta_map = serde_json::Map::new();
+                meta_map.insert(
+                    "cancelled_during_streaming".to_string(),
+                    serde_json::json!(true),
+                );
+                return Ok(PromptResponse::new(StopReason::Cancelled).meta(meta_map));
             }
 
             // Capture stop_reason
@@ -1442,21 +1584,26 @@ impl ClaudeAgent {
                     ToolKind::Other
                 };
 
-                let notification = SessionNotification {
-                    session_id: SessionId(session_id_str.clone().into()),
-                    update: SessionUpdate::ToolCall(ToolCall {
-                        id: ToolCallId(Arc::from(tool_call_info.id.clone())),
-                        title: tool_call_info.name.clone(),
-                        kind,
-                        status: ToolCallStatus::Pending,
-                        content: vec![],
-                        locations: vec![],
-                        raw_input: Some(tool_call_info.parameters.clone()),
-                        raw_output: None,
-                        meta: None,
-                    }),
-                    meta: None,
-                };
+                let update = SessionUpdate::ToolCall(
+                    ToolCall::new(
+                        ToolCallId::new(Arc::from(tool_call_info.id.clone())),
+                        tool_call_info.name.clone(),
+                    )
+                    .kind(kind)
+                    .status(ToolCallStatus::Pending)
+                    .raw_input(tool_call_info.parameters.clone()),
+                );
+
+                // Store in session context for history replay
+                let tool_call_message = crate::session::Message::from_update(update.clone());
+                self.session_manager
+                    .update_session(session_id, |session| {
+                        session.add_message(tool_call_message);
+                    })
+                    .map_err(|_| agent_client_protocol::Error::internal_error())?;
+
+                let notification =
+                    SessionNotification::new(SessionId::new(session_id_str.clone()), update);
 
                 if let Err(e) = self.send_session_update(notification).await {
                     tracing::error!(
@@ -1466,15 +1613,182 @@ impl ClaudeAgent {
                     );
                 }
 
+                // Handle tool call with permission checks
+                let tool_call_id = tool_call_info.id.clone();
+                let tool_name = tool_call_info.name.clone();
+                let tool_params = tool_call_info.parameters.clone();
+
+                // Check permissions
+                let policy_eval = self
+                    .permission_engine
+                    .evaluate_tool_call(&tool_name, &tool_params)
+                    .await
+                    .map_err(|e| {
+                        tracing::error!("Permission evaluation failed: {}", e);
+                        agent_client_protocol::Error::internal_error()
+                    })?;
+
+                use crate::permissions::PolicyEvaluation;
+                match policy_eval {
+                    PolicyEvaluation::Allowed => {
+                        tracing::debug!("Tool call '{}' allowed by policy, executing", tool_name);
+                        // Execute tool immediately
+                        // TODO: Call tool handler to execute the tool
+                    }
+                    PolicyEvaluation::Denied { reason } => {
+                        tracing::warn!("Tool call '{}' denied by policy: {}", tool_name, reason);
+                        // TODO: Send tool completion with error status
+                    }
+                    PolicyEvaluation::RequireUserConsent { options } => {
+                        tracing::info!("Tool call '{}' requires user consent", tool_name);
+
+                        // Check if there's a stored preference for this tool
+                        if let Some(stored_kind) =
+                            self.permission_storage.get_preference(&tool_name).await
+                        {
+                            let should_allow = match stored_kind {
+                                crate::tools::PermissionOptionKind::AllowAlways => true,
+                                crate::tools::PermissionOptionKind::RejectAlways => false,
+                                _ => {
+                                    tracing::warn!(
+                                        "Unexpected stored permission kind: {:?}",
+                                        stored_kind
+                                    );
+                                    false
+                                }
+                            };
+
+                            if should_allow {
+                                tracing::info!(
+                                    "Using stored 'allow' preference for '{}'",
+                                    tool_name
+                                );
+                                // TODO: Call tool handler to execute the tool
+                            } else {
+                                tracing::info!(
+                                    "Using stored 'reject' preference for '{}'",
+                                    tool_name
+                                );
+                                // TODO: Send tool completion with error status
+                            }
+                        } else if let Some(ref client) = self.client {
+                            // Convert our internal types to ACP protocol types
+                            let acp_options: Vec<agent_client_protocol::PermissionOption> =
+                                options
+                                    .iter()
+                                    .map(|opt| {
+                                        let kind = match opt.kind {
+                                            crate::tools::PermissionOptionKind::AllowOnce => {
+                                                agent_client_protocol::PermissionOptionKind::AllowOnce
+                                            }
+                                            crate::tools::PermissionOptionKind::AllowAlways => {
+                                                agent_client_protocol::PermissionOptionKind::AllowAlways
+                                            }
+                                            crate::tools::PermissionOptionKind::RejectOnce => {
+                                                agent_client_protocol::PermissionOptionKind::RejectOnce
+                                            }
+                                            crate::tools::PermissionOptionKind::RejectAlways => {
+                                                agent_client_protocol::PermissionOptionKind::RejectAlways
+                                            }
+                                        };
+                                        agent_client_protocol::PermissionOption::new(
+                                            agent_client_protocol::PermissionOptionId::new(opt.option_id.as_str()),
+                                            opt.name.clone(),
+                                            kind
+                                        )
+                                    })
+                                    .collect();
+
+                            let tool_call_update = agent_client_protocol::ToolCallUpdate::new(
+                                agent_client_protocol::ToolCallId::new(tool_call_id.as_str()),
+                                agent_client_protocol::ToolCallUpdateFields::new(),
+                            );
+
+                            let acp_request = agent_client_protocol::RequestPermissionRequest::new(
+                                SessionId::new(session_id_str.clone()),
+                                tool_call_update,
+                                acp_options,
+                            );
+
+                            match client.request_permission(acp_request).await {
+                                Ok(response) => {
+                                    // Convert ACP response back to our internal type
+                                    match response.outcome {
+                                        agent_client_protocol::RequestPermissionOutcome::Cancelled => {
+                                            tracing::info!("Permission request cancelled for '{}'", tool_name);
+                                            // TODO: Send tool completion with cancelled status
+                                        }
+                                        agent_client_protocol::RequestPermissionOutcome::Selected(selected) => {
+                                            let option_id_str = selected.option_id.0.to_string();
+
+                                            // Store preference if it's an "always" decision
+                                            if let Some(option) = options
+                                                .iter()
+                                                .find(|opt| opt.option_id == option_id_str)
+                                            {
+                                                self.permission_storage
+                                                    .store_preference(&tool_name, option.kind.clone())
+                                                    .await;
+                                            }
+
+                                            // Check if the selected option allows execution
+                                            let should_allow = option_id_str.starts_with("allow");
+
+                                            if should_allow {
+                                                tracing::info!("Permission granted for '{}'", tool_name);
+                                                // TODO: Call tool handler to execute the tool
+                                            } else {
+                                                tracing::info!("Permission denied for '{}'", tool_name);
+                                                // TODO: Send tool completion with error status
+                                            }
+                                        }
+                                    }
+                                }
+                                Err(e) => {
+                                    tracing::error!(
+                                        "Failed to request permission from client: {}",
+                                        e
+                                    );
+                                    // TODO: Send tool completion with error status
+                                }
+                            }
+                        } else {
+                            tracing::warn!(
+                                "Permission required for tool '{}' but no client connection available",
+                                tool_name
+                            );
+                            // TODO: Send tool completion with error status
+                        }
+                    }
+                }
+
                 // Check if this is a TodoWrite tool call and send Plan notification
                 if tool_call_info.name == "TodoWrite" {
-                    match crate::plan::todowrite_to_acp_plan(&tool_call_info.parameters) {
-                        Ok(acp_plan) => {
-                            let plan_notification = SessionNotification {
-                                session_id: SessionId(session_id_str.clone().into()),
-                                update: SessionUpdate::Plan(acp_plan),
-                                meta: None,
-                            };
+                    match crate::plan::todowrite_to_agent_plan(&tool_call_info.parameters) {
+                        Ok(agent_plan) => {
+                            let acp_plan = agent_plan.to_acp_plan();
+                            let plan_update = SessionUpdate::Plan(acp_plan);
+
+                            // Store/update plan in PlanManager for status tracking
+                            // This preserves entry IDs when updating existing plans
+                            {
+                                let mut plan_manager = self.plan_manager.write().await;
+                                plan_manager.update_plan(&session_id.to_string(), agent_plan);
+                            }
+
+                            // Store in session context for history replay
+                            let plan_message =
+                                crate::session::Message::from_update(plan_update.clone());
+                            self.session_manager
+                                .update_session(session_id, |session| {
+                                    session.add_message(plan_message);
+                                })
+                                .map_err(|_| agent_client_protocol::Error::internal_error())?;
+
+                            let plan_notification = SessionNotification::new(
+                                SessionId::new(session_id_str.clone()),
+                                plan_update,
+                            );
 
                             if let Err(e) = self.send_session_update(plan_notification).await {
                                 tracing::error!(
@@ -1501,14 +1815,9 @@ impl ClaudeAgent {
             } else if !chunk.content.is_empty() {
                 // Create SessionUpdate for this chunk
                 let update =
-                    SessionUpdate::AgentMessageChunk(agent_client_protocol::ContentChunk {
-                        content: ContentBlock::Text(TextContent {
-                            text: chunk.content.clone(),
-                            annotations: None,
-                            meta: None,
-                        }),
-                        meta: None,
-                    });
+                    SessionUpdate::AgentMessageChunk(agent_client_protocol::ContentChunk::new(
+                        ContentBlock::Text(TextContent::new(chunk.content.clone())),
+                    ));
 
                 // Store in session
                 let chunk_message = crate::session::Message::from_update(update.clone());
@@ -1520,11 +1829,8 @@ impl ClaudeAgent {
                     .map_err(|_| agent_client_protocol::Error::internal_error())?;
 
                 // Send chunk notification
-                let notification = SessionNotification {
-                    session_id: SessionId(session_id_str.clone().into()),
-                    update,
-                    meta: None,
-                };
+                let notification =
+                    SessionNotification::new(SessionId::new(session_id_str.clone()), update);
 
                 if let Err(e) = self.send_session_update(notification).await {
                     tracing::error!(
@@ -1543,10 +1849,12 @@ impl ClaudeAgent {
             .await
         {
             tracing::info!("Session {} cancelled after streaming", session_id);
-            return Ok(PromptResponse {
-                stop_reason: StopReason::Cancelled,
-                meta: Some(serde_json::json!({"cancelled_after_streaming": true})),
-            });
+            let mut meta_map = serde_json::Map::new();
+            meta_map.insert(
+                "cancelled_after_streaming".to_string(),
+                serde_json::json!(true),
+            );
+            return Ok(PromptResponse::new(StopReason::Cancelled).meta(meta_map));
         }
 
         // Tool completions are emitted by protocol_translator when it detects
@@ -1562,12 +1870,9 @@ impl ClaudeAgent {
             }
         };
 
-        Ok(PromptResponse {
-            stop_reason,
-            meta: Some(serde_json::json!({
-                "streaming": true
-            })),
-        })
+        let mut meta_map = serde_json::Map::new();
+        meta_map.insert("streaming".to_string(), serde_json::json!(true));
+        Ok(PromptResponse::new(stop_reason).meta(meta_map))
     }
 
     /// Handle non-streaming prompt request
@@ -1591,14 +1896,14 @@ impl ClaudeAgent {
 
             // Convert to ACP-compliant error response
             let acp_error_data = capability_error.to_acp_error();
-            return Err(agent_client_protocol::Error {
-                code: acp_error_data["code"].as_i64().unwrap_or(-32602) as i32,
-                message: acp_error_data["message"]
+            return Err(agent_client_protocol::Error::new(
+                acp_error_data["code"].as_i64().unwrap_or(-32602) as i32,
+                acp_error_data["message"]
                     .as_str()
                     .unwrap_or("Content capability validation failed")
                     .to_string(),
-                data: Some(acp_error_data["data"].clone()),
-            });
+            )
+            .data(acp_error_data["data"].clone()));
         }
 
         // Extract and process all content from the prompt
@@ -1726,7 +2031,7 @@ impl ClaudeAgent {
             response_content.push_str(&chunk.content);
 
             // Handle tool calls and send notifications
-            let notification = if let Some(tool_call_info) = &chunk.tool_call {
+            let update = if let Some(tool_call_info) = &chunk.tool_call {
                 use agent_client_protocol::{ToolCall, ToolCallId, ToolCallStatus, ToolKind};
 
                 // Infer tool kind from name
@@ -1744,37 +2049,43 @@ impl ClaudeAgent {
                     ToolKind::Other
                 };
 
-                SessionNotification {
-                    session_id: SessionId(session_id_str.clone().into()),
-                    update: SessionUpdate::ToolCall(ToolCall {
-                        id: ToolCallId(Arc::from(format!("tool_{}", chunk_count))),
-                        title: tool_call_info.name.clone(),
-                        kind,
-                        status: ToolCallStatus::Pending,
-                        content: vec![],
-                        locations: vec![],
-                        raw_input: Some(tool_call_info.parameters.clone()),
-                        raw_output: None,
-                        meta: None,
-                    }),
+                SessionUpdate::ToolCall(ToolCall {
+                    id: ToolCallId::new(format!("tool_{}", chunk_count)),
+                    title: tool_call_info.name.clone(),
+                    kind,
+                    status: ToolCallStatus::Pending,
+                    content: vec![],
+                    locations: vec![],
+                    raw_input: Some(tool_call_info.parameters.clone()),
+                    raw_output: None,
                     meta: None,
-                }
+                })
             } else if !chunk.content.is_empty() {
                 // Send text chunk notification
-                SessionNotification {
-                    session_id: SessionId(session_id_str.clone().into()),
-                    update: SessionUpdate::AgentMessageChunk(agent_client_protocol::ContentChunk {
-                        content: ContentBlock::Text(TextContent {
-                            text: chunk.content.clone(),
-                            annotations: None,
-                            meta: None,
-                        }),
+                SessionUpdate::AgentMessageChunk(agent_client_protocol::ContentChunk {
+                    content: ContentBlock::Text(TextContent {
+                        text: chunk.content.clone(),
+                        annotations: None,
                         meta: None,
                     }),
                     meta: None,
-                }
+                })
             } else {
                 continue; // Skip empty chunks
+            };
+
+            // Store in session context for history replay
+            let message = crate::session::Message::from_update(update.clone());
+            self.session_manager
+                .update_session(session_id, |session| {
+                    session.add_message(message);
+                })
+                .map_err(|_| agent_client_protocol::Error::internal_error())?;
+
+            let notification = SessionNotification {
+                session_id: SessionId::new(session_id_str.clone()),
+                update,
+                meta: None,
             };
 
             // Send notification
@@ -1789,11 +2100,30 @@ impl ClaudeAgent {
             // Check if this is a TodoWrite tool call and send Plan notification
             if let Some(tool_call_info) = &chunk.tool_call {
                 if tool_call_info.name == "TodoWrite" {
-                    match crate::plan::todowrite_to_acp_plan(&tool_call_info.parameters) {
-                        Ok(acp_plan) => {
+                    match crate::plan::todowrite_to_agent_plan(&tool_call_info.parameters) {
+                        Ok(agent_plan) => {
+                            let acp_plan = agent_plan.to_acp_plan();
+                            let plan_update = SessionUpdate::Plan(acp_plan);
+
+                            // Store/update plan in PlanManager for status tracking
+                            // This preserves entry IDs when updating existing plans
+                            {
+                                let mut plan_manager = self.plan_manager.write().await;
+                                plan_manager.update_plan(&session_id.to_string(), agent_plan);
+                            }
+
+                            // Store in session context for history replay
+                            let plan_message =
+                                crate::session::Message::from_update(plan_update.clone());
+                            self.session_manager
+                                .update_session(session_id, |session| {
+                                    session.add_message(plan_message);
+                                })
+                                .map_err(|_| agent_client_protocol::Error::internal_error())?;
+
                             let plan_notification = SessionNotification {
-                                session_id: SessionId(session_id_str.clone().into()),
-                                update: SessionUpdate::Plan(acp_plan),
+                                session_id: SessionId::new(session_id_str.clone()),
+                                update: plan_update,
                                 meta: None,
                             };
 
@@ -1887,6 +2217,61 @@ impl ClaudeAgent {
         self.notification_sender.send_update(notification).await
     }
 
+    /// Send plan update notification for the current session plan
+    ///
+    /// Retrieves the current plan from PlanManager and sends it as a Plan notification
+    /// to all subscribers. This enables programmatic plan status updates to be
+    /// communicated to clients in real-time.
+    ///
+    /// # Arguments
+    ///
+    /// * `session_id` - The session ID whose plan should be sent
+    ///
+    /// # Returns
+    ///
+    /// Returns `Ok(())` if the notification was sent successfully, or an error if:
+    /// - No plan exists for the session
+    /// - The notification could not be sent
+    ///
+    /// # Example Use Cases
+    ///
+    /// - Update plan entry status when tools start/complete execution
+    /// - Notify clients of plan progress outside of TodoWrite calls
+    /// - Enable automatic plan tracking based on agent actions
+    pub async fn send_plan_update(&self, session_id: &SessionId) -> crate::Result<()> {
+        // Get the current plan from PlanManager
+        let plan_manager = self.plan_manager.read().await;
+        let agent_plan = plan_manager
+            .get_plan(&session_id.to_string())
+            .ok_or_else(|| {
+                crate::AgentError::Protocol(format!("No plan found for session {}", session_id))
+            })?;
+
+        // Convert to ACP format
+        let acp_plan = agent_plan.to_acp_plan();
+        let plan_update = SessionUpdate::Plan(acp_plan);
+
+        // Store in session context for history replay
+        let plan_message = crate::session::Message::from_update(plan_update.clone());
+        self.session_manager
+            .update_session(session_id, |session| {
+                session.add_message(plan_message);
+            })
+            .map_err(|_| agent_client_protocol::Error::internal_error())?;
+
+        // Send the notification
+        let plan_notification = SessionNotification {
+            session_id: session_id.clone(),
+            update: plan_update,
+            meta: None,
+        };
+
+        self.send_session_update(plan_notification).await?;
+
+        tracing::debug!("Sent plan update notification for session {}", session_id);
+        Ok(())
+    }
+
     /// Send agent thought chunk update for reasoning transparency
     ///
     /// ACP agent thought chunks provide reasoning transparency:
@@ -1903,21 +2288,31 @@ impl ClaudeAgent {
         session_id: &SessionId,
         thought: &AgentThought,
     ) -> crate::Result<()> {
+        let update = SessionUpdate::AgentThoughtChunk(agent_client_protocol::ContentChunk {
+            content: ContentBlock::Text(TextContent {
+                text: thought.content.clone(),
+                annotations: None,
+                meta: Some(serde_json::json!({
+                    "reasoning_phase": thought.phase,
+                    "timestamp": thought.timestamp.duration_since(SystemTime::UNIX_EPOCH)
+                        .unwrap_or_default().as_secs(),
+                    "context": thought.context
+                })),
+            }),
+            meta: None,
+        });
+
+        // Store in session context for history replay
+        let thought_message = crate::session::Message::from_update(update.clone());
+        self.session_manager
+            .update_session(session_id, |session| {
+                session.add_message(thought_message);
+            })
+            .map_err(|_| agent_client_protocol::Error::internal_error())?;
+
         let notification = SessionNotification {
             session_id: session_id.clone(),
-            update: SessionUpdate::AgentThoughtChunk(agent_client_protocol::ContentChunk {
-                content: ContentBlock::Text(TextContent {
-                    text: thought.content.clone(),
-                    annotations: None,
-                    meta: Some(serde_json::json!({
-                        "reasoning_phase": thought.phase,
-                        "timestamp": thought.timestamp.duration_since(SystemTime::UNIX_EPOCH)
-                            .unwrap_or_default().as_secs(),
-                        "context": thought.context
-                    })),
-                }),
-                meta: None,
-            }),
+            update,
             meta: None,
         };
 
@@ -2030,14 +2425,24 @@ impl ClaudeAgent {
         session_id: &SessionId,
         commands: Vec<agent_client_protocol::AvailableCommand>,
     ) -> crate::Result<()> {
+        let update = SessionUpdate::AvailableCommandsUpdate(
+            agent_client_protocol::AvailableCommandsUpdate {
+                available_commands: commands,
+                meta: None,
+            },
+        );
+
+        // Store in session context for history replay
+        let commands_message = crate::session::Message::from_update(update.clone());
+        self.session_manager
+            .update_session(session_id, |session| {
+                session.add_message(commands_message);
+            })
+            .map_err(|_| agent_client_protocol::Error::internal_error())?;
+
         let notification = SessionNotification {
             session_id: session_id.clone(),
-            update: SessionUpdate::AvailableCommandsUpdate(
-                agent_client_protocol::AvailableCommandsUpdate {
-                    available_commands: commands,
-                    meta: None,
-                },
-            ),
+            update,
             meta: Some(serde_json::json!({
                 "update_type": "available_commands",
                 "session_id": session_id,
@@ -2088,10 +2493,76 @@ impl ClaudeAgent {
         Ok(commands_changed)
     }
 
+    /// Refresh available commands for all active sessions
+    ///
+    /// This method is called when MCP servers send notifications about capability changes
+    /// (tools/list_changed or prompts/list_changed). It updates commands for all active
+    /// sessions and sends AvailableCommandsUpdate notifications if commands have changed.
+    pub async fn refresh_commands_for_all_sessions(&self) {
+        tracing::debug!("Refreshing available commands for all active sessions");
+
+        // Get list of all active sessions
+        let session_ids = match self.session_manager.list_sessions() {
+            Ok(ids) => ids,
+            Err(e) => {
+                tracing::error!("Failed to list sessions for command refresh: {}", e);
+                return;
+            }
+        };
+
+        // Refresh commands for each session
+        for session_id in session_ids {
+            let protocol_session_id = SessionId::new(session_id.to_string());
+
+            // Get updated commands for this session
+            let updated_commands = self
+                .get_available_commands_for_session(&protocol_session_id)
+                .await;
+
+            // Update and notify if changed
+            if let Err(e) = self
+                .update_session_available_commands(&protocol_session_id, updated_commands)
+                .await
+            {
+                tracing::warn!(
+                    "Failed to update commands for session {}: {}",
+                    session_id,
+                    e
+                );
+            }
+        }
+
+        tracing::debug!("Completed command refresh for all active sessions");
+    }
+
     /// Get available commands for a session
     ///
     /// This method determines what commands are available for the given session
     /// based on capabilities, MCP servers, and current session state.
+    /// Get available commands for a session, filtered by client capabilities
+    ///
+    /// This method returns the list of commands (slash commands) available to the client
+    /// for the given session. The returned commands are automatically filtered based on
+    /// the client's declared capabilities during initialization.
+    ///
+    /// # Capability Filtering
+    ///
+    /// Commands are only included if the client has declared the necessary capabilities:
+    /// - Core planning and analysis commands are always available
+    /// - MCP-provided commands are included based on connected MCP servers
+    /// - Tool-based commands respect the client's declared tool capabilities
+    ///
+    /// This ensures that operations requiring specific capabilities (like file system
+    /// or terminal access) are only offered to clients that support them, maintaining
+    /// the ACP contract that all operations must check capabilities before execution.
+    ///
+    /// # Arguments
+    ///
+    /// * `session_id` - The session identifier to get commands for
+    ///
+    /// # Returns
+    ///
+    /// A vector of AvailableCommand structs representing commands the client can invoke
     async fn get_available_commands_for_session(
         &self,
         session_id: &SessionId,
@@ -2152,7 +2623,7 @@ impl ClaudeAgent {
                     )
                 };
 
-                let description_with_hint = if let Some(hint) = input_hint {
+                let description_with_hint = if let Some(hint) = input_hint.as_ref() {
                     format!(
                         "{} {}",
                         prompt
@@ -2168,18 +2639,42 @@ impl ClaudeAgent {
                         .unwrap_or_else(|| format!("MCP prompt: {}", prompt.name))
                 };
 
-                commands.push(agent_client_protocol::AvailableCommand {
-                    name: prompt.name.clone(),
-                    description: description_with_hint,
-                    input: None,
-                    meta: Some(serde_json::json!({
-                        "category": "mcp_prompt",
-                        "source": "mcp_server",
-                        "arguments": prompt.arguments.iter().map(|arg| serde_json::json!({
+                // Build parameter schema for meta field
+                let parameters_schema: Vec<serde_json::Value> = prompt
+                    .arguments
+                    .iter()
+                    .map(|arg| {
+                        serde_json::json!({
                             "name": arg.name,
                             "description": arg.description,
                             "required": arg.required,
-                        })).collect::<Vec<_>>(),
+                        })
+                    })
+                    .collect();
+
+                // Create input specification if there are arguments
+                let command_input = if let Some(hint) = input_hint {
+                    let mut input_meta = serde_json::Map::new();
+                    input_meta.insert(
+                        "parameters".to_string(),
+                        serde_json::Value::Array(parameters_schema.clone()),
+                    );
+
+                    Some(agent_client_protocol::AvailableCommandInput::Unstructured(
+                        agent_client_protocol::UnstructuredCommandInput::new(hint).meta(input_meta),
+                    ))
+                } else {
+                    None
+                };
+
+                commands.push(agent_client_protocol::AvailableCommand {
+                    name: prompt.name.clone(),
+                    description: description_with_hint,
+                    input: command_input,
+                    meta: Some(serde_json::json!({
+                        "category": "mcp_prompt",
+                        "source": "mcp_server",
+                        "arguments": parameters_schema,
                     })),
                 });
             }
@@ -2342,7 +2837,7 @@ impl ClaudeAgent {
         // Send a final text message to notify about cancellation
         // Using AgentMessageChunk since it's a known working variant
         let cancellation_notification = SessionNotification {
-            session_id: SessionId(session_id.into()),
+            session_id: SessionId::new(session_id),
             update: SessionUpdate::AgentMessageChunk(agent_client_protocol::ContentChunk {
                 content: ContentBlock::Text(TextContent {
                     text: "[Session cancelled by client request]".to_string(),
@@ -2375,6 +2870,79 @@ impl ClaudeAgent {
             "Final cancellation updates sent for session: {}",
             session_id
         );
+        Ok(())
+    }
+
+    /// Update plan entry status and send notification
+    ///
+    /// Updates the status of a specific plan entry and automatically sends
+    /// a Plan notification to all subscribers. This enables programmatic plan
+    /// status updates to be communicated to clients in real-time.
+    ///
+    /// # Arguments
+    ///
+    /// * `session_id` - The session ID whose plan should be updated
+    /// * `entry_id` - The ID of the plan entry to update
+    /// * `new_status` - The new status for the plan entry
+    ///
+    /// # Returns
+    ///
+    /// Returns `Ok(())` if the update and notification were successful, or an error if:
+    /// - No plan exists for the session
+    /// - The entry ID is not found in the plan
+    /// - The notification could not be sent
+    ///
+    /// # Example Use Cases
+    ///
+    /// ```rust,ignore
+    /// // Mark a plan entry as in-progress when tool execution starts
+    /// agent.update_plan_entry_status(
+    ///     &session_id,
+    ///     &entry_id,
+    ///     PlanEntryStatus::InProgress
+    /// ).await?;
+    ///
+    /// // Mark a plan entry as completed when tool execution finishes
+    /// agent.update_plan_entry_status(
+    ///     &session_id,
+    ///     &entry_id,
+    ///     PlanEntryStatus::Completed
+    /// ).await?;
+    /// ```
+    pub async fn update_plan_entry_status(
+        &self,
+        session_id: &SessionId,
+        entry_id: &str,
+        new_status: crate::plan::PlanEntryStatus,
+    ) -> crate::Result<()> {
+        // Update the plan entry status in PlanManager
+        let mut plan_manager = self.plan_manager.write().await;
+        let was_updated = plan_manager.update_plan_entry_status(
+            &session_id.to_string(),
+            entry_id,
+            new_status.clone(),
+        );
+
+        if !was_updated {
+            return Err(crate::AgentError::Protocol(format!(
+                "Failed to update plan entry {} for session {}",
+                entry_id, session_id
+            )));
+        }
+
+        // Release the write lock before sending notification
+        drop(plan_manager);
+
+        // Send the updated plan notification
+        self.send_plan_update(session_id).await?;
+
+        tracing::debug!(
+            "Updated plan entry {} to status {:?} for session {}",
+            entry_id,
+            new_status,
+            session_id
+        );
+
         Ok(())
     }
 
@@ -2582,7 +3150,7 @@ impl Agent for ClaudeAgent {
 
         tracing::info!("Created session: {}", session_id);
 
-        let protocol_session_id = SessionId(session_id.to_string().into());
+        let protocol_session_id = SessionId::new(session_id.to_string());
 
         // Spawn Claude process immediately and read init message with slash_commands
         tracing::info!("Spawning Claude process for session: {}", session_id);
@@ -2609,13 +3177,7 @@ impl Agent for ClaudeAgent {
             );
         }
 
-        let response = NewSessionResponse {
-            session_id: SessionId(session_id.to_string().into()),
-            modes: None, // No specific modes for now
-            meta: Some(serde_json::json!({
-                "created_at": chrono::Utc::now().to_rfc3339()
-            })),
-        };
+        let response = NewSessionResponse::new(SessionId::new(session_id.to_string()));
 
         self.log_response("new_session", &response);
         Ok(response)
@@ -2679,7 +3241,7 @@ impl Agent for ClaudeAgent {
                     for message in &session.context {
                         // Use the SessionUpdate stored in the message directly
                         let notification = SessionNotification {
-                            session_id: SessionId(session.id.to_string().into()),
+                            session_id: SessionId::new(session.id.to_string()),
                             update: message.update.clone(),
                             meta: Some(serde_json::json!({
                                 "timestamp": message.timestamp.duration_since(std::time::UNIX_EPOCH)
@@ -2689,6 +3251,8 @@ impl Agent for ClaudeAgent {
                         };
 
                         // Stream historical message via session/update notification
+                        // Note: send_update() queues the notification in the broadcast channel
+                        // The notification_handler task processes these concurrently
                         if let Err(e) = self.notification_sender.send_update(notification).await {
                             tracing::error!(
                                 "Failed to send historical message notification: {}",
@@ -2698,10 +3262,20 @@ impl Agent for ClaudeAgent {
                         }
                     }
 
-                    tracing::info!("Completed history replay for session {}", session_id);
+                    tracing::info!(
+                        "Completed queueing {} history notifications for session {}",
+                        session.context.len(),
+                        session_id
+                    );
                 }
 
-                // Step 4: Send session/load response ONLY after all history is streamed
+                // Step 4: Return LoadSessionResponse after all history notifications are queued
+                // The notifications are processed by the notification_handler task concurrently.
+                // The broadcast channel and shared writer Mutex ensure notifications are delivered
+                // to the client before this response due to:
+                // 1. FIFO ordering in the broadcast channel
+                // 2. Notification handler actively polling the channel
+                // 3. Serialized writes through the shared Mutex-protected writer
                 let response = LoadSessionResponse {
                     modes: None, // No specific session modes for now
                     meta: Some(serde_json::json!({
@@ -2762,17 +3336,30 @@ impl Agent for ClaudeAgent {
             })
             .map_err(|_| agent_client_protocol::Error::internal_error())?;
 
+        // Apply mode-specific configuration
+        self.apply_mode_configuration(&parsed_session_id, &mode_id_string)
+            .await?;
+
         // Send current mode update notification if mode actually changed
         if mode_changed {
+            let update =
+                SessionUpdate::CurrentModeUpdate(agent_client_protocol::CurrentModeUpdate {
+                    current_mode_id: request.mode_id.clone(),
+                    meta: None,
+                });
+
+            // Store in session context for history replay
+            let mode_message = crate::session::Message::from_update(update.clone());
+            self.session_manager
+                .update_session(&parsed_session_id, |session| {
+                    session.add_message(mode_message);
+                })
+                .map_err(|_| agent_client_protocol::Error::internal_error())?;
+
             if let Err(e) = self
                 .send_session_update(SessionNotification {
                     session_id: request.session_id.clone(),
-                    update: SessionUpdate::CurrentModeUpdate(
-                        agent_client_protocol::CurrentModeUpdate {
-                            current_mode_id: request.mode_id.clone(),
-                            meta: None,
-                        },
-                    ),
+                    update,
                     meta: None,
                 })
                 .await
@@ -3125,7 +3712,7 @@ impl Agent for ClaudeAgent {
     async fn ext_method(
         &self,
         request: ExtRequest,
-    ) -> Result<Arc<RawValue>, agent_client_protocol::Error> {
+    ) -> Result<ExtResponse, agent_client_protocol::Error> {
         self.log_request("ext_method", &request);
         tracing::info!("Extension method called: {}", request.method);
 
@@ -3173,7 +3760,7 @@ impl Agent for ClaudeAgent {
             let raw_value = RawValue::from_string(response_json.to_string())
                 .map_err(|_e| agent_client_protocol::Error::internal_error())?;
 
-            return Ok(Arc::from(raw_value));
+            return Ok(ExtResponse(Arc::from(raw_value)));
         }
 
         // Handle fs/write_text_file extension method
@@ -3221,7 +3808,7 @@ impl Agent for ClaudeAgent {
             let raw_value = RawValue::from_string(response_json.to_string())
                 .map_err(|_e| agent_client_protocol::Error::internal_error())?;
 
-            return Ok(Arc::from(raw_value));
+            return Ok(ExtResponse(Arc::from(raw_value)));
         }
 
         // Handle terminal/output extension method
@@ -3269,7 +3856,7 @@ impl Agent for ClaudeAgent {
             let raw_value = RawValue::from_string(response_json.to_string())
                 .map_err(|_e| agent_client_protocol::Error::internal_error())?;
 
-            return Ok(Arc::from(raw_value));
+            return Ok(ExtResponse(Arc::from(raw_value)));
         }
 
         // Handle terminal/release extension method
@@ -3317,7 +3904,7 @@ impl Agent for ClaudeAgent {
             let raw_value = RawValue::from_string(response_json.to_string())
                 .map_err(|_e| agent_client_protocol::Error::internal_error())?;
 
-            return Ok(Arc::from(raw_value));
+            return Ok(ExtResponse(Arc::from(raw_value)));
         }
 
         // Handle terminal/wait_for_exit extension method
@@ -3368,7 +3955,7 @@ impl Agent for ClaudeAgent {
             let raw_value = RawValue::from_string(response_json.to_string())
                 .map_err(|_e| agent_client_protocol::Error::internal_error())?;
 
-            return Ok(Arc::from(raw_value));
+            return Ok(ExtResponse(Arc::from(raw_value)));
         }
 
         // Handle terminal/kill extension method
@@ -3414,7 +4001,55 @@ impl Agent for ClaudeAgent {
             let raw_value = RawValue::from_string(response_json.to_string())
                 .map_err(|_e| agent_client_protocol::Error::internal_error())?;
 
-            return Ok(Arc::from(raw_value));
+            return Ok(ExtResponse(Arc::from(raw_value)));
+        }
+
+        // Handle terminal/create extension method
+        if request.method == "terminal/create".into() {
+            // Validate terminal capability
+            {
+                let client_caps = self.client_capabilities.read().await;
+                match &*client_caps {
+                    Some(caps) if caps.terminal => {
+                        tracing::debug!("Terminal capability validated for create");
+                    }
+                    Some(_) => {
+                        tracing::error!("terminal/create capability not declared by client");
+                        return Err(agent_client_protocol::Error::invalid_params());
+                    }
+                    None => {
+                        tracing::error!(
+                            "No client capabilities available for terminal/create validation"
+                        );
+                        return Err(agent_client_protocol::Error::invalid_params());
+                    }
+                }
+            }
+
+            // Parse and validate parameters
+            let params_value: serde_json::Value = serde_json::from_str(request.params.get())
+                .map_err(|e| {
+                    tracing::error!("Failed to parse terminal/create parameters: {}", e);
+                    agent_client_protocol::Error::invalid_params()
+                })?;
+
+            let params: crate::terminal_manager::TerminalCreateParams =
+                serde_json::from_value(params_value).map_err(|e| {
+                    tracing::error!("Failed to deserialize terminal/create parameters: {}", e);
+                    agent_client_protocol::Error::invalid_params()
+                })?;
+
+            // Handle the terminal create request
+            let response = self.handle_terminal_create(params).await?;
+
+            // Convert response to RawValue
+            let response_json = serde_json::to_value(response)
+                .map_err(|_e| agent_client_protocol::Error::internal_error())?;
+
+            let raw_value = RawValue::from_string(response_json.to_string())
+                .map_err(|_e| agent_client_protocol::Error::internal_error())?;
+
+            return Ok(ExtResponse(Arc::from(raw_value)));
         }
 
         // Handle editor/update_buffers extension method
@@ -3458,19 +4093,30 @@ impl Agent for ClaudeAgent {
         // });
         // ```
         if request.method == "editor/update_buffers".into() {
-            // Note: editorState capability is optional for this method
-            // Clients can push editor state updates without advertising the capability.
-            // This allows for flexible integration where clients proactively send updates.
+            // Validate client capabilities for editor state operations
             {
                 let client_caps = self.client_capabilities.read().await;
                 match &*client_caps {
                     Some(caps) if crate::editor_state::supports_editor_state(caps) => {
                         tracing::debug!("Editor state capability declared and validated");
                     }
-                    Some(_) | None => {
-                        tracing::debug!(
-                            "Processing editor/update_buffers without declared editorState capability"
+                    Some(_) => {
+                        tracing::error!("editor/update_buffers capability not declared by client");
+                        return Err(agent_client_protocol::Error {
+                            code: -32602,
+                            message: "Editor state capability not declared by client. This feature requires client to support editor buffer synchronization.".to_string(),
+                            data: None,
+                        });
+                    }
+                    None => {
+                        tracing::error!(
+                            "No client capabilities available for editor/update_buffers validation"
                         );
+                        return Err(agent_client_protocol::Error {
+                            code: -32602,
+                            message: "Client capabilities not initialized. Cannot perform editor operations without capability declaration.".to_string(),
+                            data: None,
+                        });
                     }
                 }
             }
@@ -3505,7 +4151,7 @@ impl Agent for ClaudeAgent {
             let raw_value = RawValue::from_string(response_json.to_string())
                 .map_err(|_e| agent_client_protocol::Error::internal_error())?;
 
-            return Ok(Arc::from(raw_value));
+            return Ok(ExtResponse(Arc::from(raw_value)));
         }
 
         // Return a structured response indicating no other extensions are implemented
@@ -3518,7 +4164,7 @@ impl Agent for ClaudeAgent {
         let raw_value = RawValue::from_string(response.to_string())
             .map_err(|_e| agent_client_protocol::Error::internal_error())?;
 
-        Ok(Arc::from(raw_value))
+        Ok(ExtResponse(Arc::from(raw_value)))
     }
 
     async fn ext_notification(
@@ -3668,8 +4314,8 @@ impl ClaudeAgent {
                         permission_options
                             .iter()
                             .map(|opt| agent_client_protocol::PermissionOption {
-                                id: agent_client_protocol::PermissionOptionId(
-                                    opt.option_id.as_str().into(),
+                                id: agent_client_protocol::PermissionOptionId::new(
+                                    opt.option_id.as_str(),
                                 ),
                                 name: opt.name.clone(),
                                 kind: match opt.kind {
@@ -3693,8 +4339,8 @@ impl ClaudeAgent {
                     let acp_request = agent_client_protocol::RequestPermissionRequest {
                         session_id: request.session_id.clone(),
                         tool_call: agent_client_protocol::ToolCallUpdate {
-                            id: agent_client_protocol::ToolCallId(
-                                request.tool_call.tool_call_id.as_str().into(),
+                            id: agent_client_protocol::ToolCallId::new(
+                                request.tool_call.tool_call_id.as_str(),
                             ),
                             fields: agent_client_protocol::ToolCallUpdateFields {
                                 kind: None,
@@ -3720,9 +4366,23 @@ impl ClaudeAgent {
                                 }
                                 agent_client_protocol::RequestPermissionOutcome::Selected {
                                     option_id,
-                                } => crate::tools::PermissionOutcome::Selected {
-                                    option_id: option_id.0.to_string(),
-                                },
+                                } => {
+                                    let option_id_str = option_id.0.to_string();
+
+                                    // Store preference if it's an "always" decision
+                                    if let Some(option) = permission_options
+                                        .iter()
+                                        .find(|opt| opt.option_id == option_id_str)
+                                    {
+                                        self.permission_storage
+                                            .store_preference(&tool_name, option.kind.clone())
+                                            .await;
+                                    }
+
+                                    crate::tools::PermissionOutcome::Selected {
+                                        option_id: option_id_str,
+                                    }
+                                }
                             }
                         }
                         Err(e) => {
@@ -3769,14 +4429,65 @@ impl ClaudeAgent {
     ) -> Result<ReadTextFileResponse, agent_client_protocol::Error> {
         tracing::debug!("Processing fs/read_text_file request: {:?}", params);
 
+        // Audit logging for file access attempt
+        tracing::info!(
+            security_event = "file_read_attempt",
+            session_id = %params.session_id,
+            path = %params.path,
+            "File read operation requested"
+        );
+
+        // Validate client capabilities for file system read operations
+        {
+            let client_caps = self.client_capabilities.read().await;
+            match &*client_caps {
+                Some(caps) if caps.fs.read_text_file => {
+                    tracing::debug!("File system read capability validated");
+                }
+                Some(_) => {
+                    tracing::error!("fs/read_text_file capability not declared by client");
+                    return Err(agent_client_protocol::Error {
+                        code: -32602,
+                        message: "File system read capability not declared by client. Set client_capabilities.fs.read_text_file = true during initialization.".to_string(),
+                        data: None,
+                    });
+                }
+                None => {
+                    tracing::error!(
+                        "No client capabilities available for fs/read_text_file validation"
+                    );
+                    return Err(agent_client_protocol::Error {
+                        code: -32602,
+                        message: "Client capabilities not initialized. Cannot perform file system operations without capability declaration.".to_string(),
+                        data: None,
+                    });
+                }
+            }
+        }
+
         // Validate session ID
-        self.parse_session_id(&SessionId(params.session_id.clone().into()))
+        self.parse_session_id(&SessionId::new(params.session_id.clone()))
             .map_err(|_| agent_client_protocol::Error::invalid_params())?;
 
-        // Validate absolute path
-        if !params.path.starts_with('/') {
-            return Err(agent_client_protocol::Error::invalid_params());
-        }
+        // Validate path security using PathValidator
+        // This checks: absolute path, no traversal, no symlinks, blocked paths
+        let validated_path = self
+            .path_validator
+            .validate_absolute_path(&params.path)
+            .map_err(|e| {
+                tracing::warn!(
+                    security_event = "path_validation_failed",
+                    session_id = %params.session_id,
+                    path = %params.path,
+                    error = %e,
+                    "Path validation failed for read operation"
+                );
+                // Use generic error message to avoid leaking security policy details
+                agent_client_protocol::Error::new(
+                    -32602,
+                    "Invalid file path".to_string()
+                )
+            })?;
 
         // Validate line and limit parameters
         if let Some(line) = params.line {
@@ -3785,7 +4496,7 @@ impl ClaudeAgent {
             }
         }
 
-        let path = std::path::Path::new(&params.path);
+        let path = validated_path.as_path();
 
         // ACP requires integration with client editor state for unsaved changes
         // Try to get content from editor buffer first
@@ -3833,24 +4544,113 @@ impl ClaudeAgent {
     pub async fn handle_write_text_file(
         &self,
         params: WriteTextFileParams,
-    ) -> Result<serde_json::Value, agent_client_protocol::Error> {
+    ) -> Result<WriteTextFileResponse, agent_client_protocol::Error> {
         tracing::debug!("Processing fs/write_text_file request: {:?}", params);
 
-        // Validate session ID
-        self.parse_session_id(&SessionId(params.session_id.clone().into()))
-            .map_err(|_| agent_client_protocol::Error::invalid_params())?;
+        // Audit logging for file write attempt
+        tracing::info!(
+            security_event = "file_write_attempt",
+            session_id = %params.session_id,
+            path = %params.path,
+            content_size = params.content.len(),
+            "File write operation requested"
+        );
 
-        // Validate absolute path
-        if !params.path.starts_with('/') {
-            return Err(agent_client_protocol::Error::invalid_params());
+        // Validate client capabilities for file system write operations
+        {
+            let client_caps = self.client_capabilities.read().await;
+            match &*client_caps {
+                Some(caps) if caps.fs.write_text_file => {
+                    tracing::debug!("File system write capability validated");
+                }
+                Some(_) => {
+                    tracing::error!("fs/write_text_file capability not declared by client");
+                    return Err(agent_client_protocol::Error {
+                        code: -32602,
+                        message: "File system write capability not declared by client. Set client_capabilities.fs.write_text_file = true during initialization.".to_string(),
+                        data: None,
+                    });
+                }
+                None => {
+                    tracing::error!(
+                        "No client capabilities available for fs/write_text_file validation"
+                    );
+                    return Err(agent_client_protocol::Error {
+                        code: -32602,
+                        message: "Client capabilities not initialized. Cannot perform file system operations without capability declaration.".to_string(),
+                        data: None,
+                    });
+                }
+            }
         }
 
-        // Perform atomic write operation
-        self.write_file_atomically(&params.path, &params.content)
+        // Validate session ID
+        self.parse_session_id(&SessionId::new(params.session_id.clone()))
+            .map_err(|_| agent_client_protocol::Error::invalid_params())?;
+
+        // Validate path security using PathValidator
+        // This checks: absolute path, no traversal, no symlinks, blocked paths
+        let validated_path = self
+            .path_validator
+            .validate_absolute_path(&params.path)
+            .map_err(|e| {
+                tracing::warn!(
+                    security_event = "path_validation_failed",
+                    session_id = %params.session_id,
+                    path = %params.path,
+                    error = %e,
+                    "Path validation failed for write operation"
+                );
+                // Use generic error message to avoid leaking security policy details
+                agent_client_protocol::Error::new(
+                    -32602,
+                    "Invalid file path".to_string()
+                )
+            })?;
+
+        // Validate content size before write to prevent disk exhaustion
+        // Using > to reject content strictly larger than the limit (50MB limit is exclusive)
+        let content_size = params.content.len();
+        if content_size > sizes::content::MAX_RESOURCE_MODERATE {
+            tracing::warn!(
+                security_event = "content_size_exceeded",
+                session_id = %params.session_id,
+                path = %params.path,
+                size = content_size,
+                limit = sizes::content::MAX_RESOURCE_MODERATE,
+                "Content size exceeds maximum allowed for write operation"
+            );
+            // Return error with size information for client debugging
+            return Err(agent_client_protocol::Error {
+                code: -32602,
+                message: format!(
+                    "Content size {} bytes exceeds maximum {} bytes (limit is exclusive)",
+                    content_size,
+                    sizes::content::MAX_RESOURCE_MODERATE
+                ),
+                data: Some(serde_json::json!({
+                    "error": "content_too_large",
+                    "size": content_size,
+                    "max_size": sizes::content::MAX_RESOURCE_MODERATE
+                })),
+            });
+        }
+
+        // Perform atomic write operation with validated path
+        self.write_file_atomically(validated_path.to_str().unwrap(), &params.content)
             .await?;
 
-        // Return null result as per ACP specification
-        Ok(serde_json::Value::Null)
+        // Audit logging for successful write
+        tracing::info!(
+            security_event = "file_write_success",
+            session_id = %params.session_id,
+            path = %params.path,
+            bytes = content_size,
+            "File write completed successfully"
+        );
+
+        // Return WriteTextFileResponse as per ACP specification
+        Ok(WriteTextFileResponse { meta: None })
     }
 
     /// Handle terminal/output ACP extension method
@@ -3859,6 +4659,34 @@ impl ClaudeAgent {
         params: crate::terminal_manager::TerminalOutputParams,
     ) -> Result<crate::terminal_manager::TerminalOutputResponse, agent_client_protocol::Error> {
         tracing::debug!("Processing terminal/output request: {:?}", params);
+
+        // Check client terminal capability before allowing operation
+        {
+            let client_caps = self.client_capabilities.read().await;
+            match &*client_caps {
+                Some(caps) if caps.terminal => {
+                    tracing::debug!("Terminal capability validated for handle_terminal_output");
+                }
+                Some(_) => {
+                    tracing::error!("terminal capability not declared by client");
+                    return Err(agent_client_protocol::Error {
+                        code: -32602,
+                        message: "Terminal capability not declared by client. Set client_capabilities.terminal = true during initialization.".to_string(),
+                        data: None,
+                    });
+                }
+                None => {
+                    tracing::error!(
+                        "No client capabilities available for terminal operation validation"
+                    );
+                    return Err(agent_client_protocol::Error {
+                        code: -32602,
+                        message: "Client capabilities not initialized. Cannot perform terminal operations without capability declaration.".to_string(),
+                        data: None,
+                    });
+                }
+            }
+        }
 
         // Get terminal manager from tool handler
         let tool_handler = self.tool_handler.read().await;
@@ -3870,7 +4698,7 @@ impl ClaudeAgent {
             .await
             .map_err(|e| {
                 tracing::error!("Failed to get terminal output: {}", e);
-                agent_client_protocol::Error::invalid_params()
+                e.into()
             })
     }
 
@@ -3880,6 +4708,34 @@ impl ClaudeAgent {
         params: crate::terminal_manager::TerminalReleaseParams,
     ) -> Result<serde_json::Value, agent_client_protocol::Error> {
         tracing::debug!("Processing terminal/release request: {:?}", params);
+
+        // Check client terminal capability before allowing operation
+        {
+            let client_caps = self.client_capabilities.read().await;
+            match &*client_caps {
+                Some(caps) if caps.terminal => {
+                    tracing::debug!("Terminal capability validated for handle_terminal_release");
+                }
+                Some(_) => {
+                    tracing::error!("terminal capability not declared by client");
+                    return Err(agent_client_protocol::Error {
+                        code: -32602,
+                        message: "Terminal capability not declared by client. Set client_capabilities.terminal = true during initialization.".to_string(),
+                        data: None,
+                    });
+                }
+                None => {
+                    tracing::error!(
+                        "No client capabilities available for terminal operation validation"
+                    );
+                    return Err(agent_client_protocol::Error {
+                        code: -32602,
+                        message: "Client capabilities not initialized. Cannot perform terminal operations without capability declaration.".to_string(),
+                        data: None,
+                    });
+                }
+            }
+        }
 
         // Get terminal manager from tool handler
         let tool_handler = self.tool_handler.read().await;
@@ -3891,7 +4747,7 @@ impl ClaudeAgent {
             .await
             .map_err(|e| {
                 tracing::error!("Failed to release terminal: {}", e);
-                agent_client_protocol::Error::invalid_params()
+                e.into()
             })
     }
 
@@ -3901,6 +4757,36 @@ impl ClaudeAgent {
         params: crate::terminal_manager::TerminalOutputParams,
     ) -> Result<crate::terminal_manager::ExitStatus, agent_client_protocol::Error> {
         tracing::debug!("Processing terminal/wait_for_exit request: {:?}", params);
+
+        // Check client terminal capability before allowing operation
+        {
+            let client_caps = self.client_capabilities.read().await;
+            match &*client_caps {
+                Some(caps) if caps.terminal => {
+                    tracing::debug!(
+                        "Terminal capability validated for handle_terminal_wait_for_exit"
+                    );
+                }
+                Some(_) => {
+                    tracing::error!("terminal capability not declared by client");
+                    return Err(agent_client_protocol::Error {
+                        code: -32602,
+                        message: "Terminal capability not declared by client. Set client_capabilities.terminal = true during initialization.".to_string(),
+                        data: None,
+                    });
+                }
+                None => {
+                    tracing::error!(
+                        "No client capabilities available for terminal operation validation"
+                    );
+                    return Err(agent_client_protocol::Error {
+                        code: -32602,
+                        message: "Client capabilities not initialized. Cannot perform terminal operations without capability declaration.".to_string(),
+                        data: None,
+                    });
+                }
+            }
+        }
 
         // Get terminal manager from tool handler
         let tool_handler = self.tool_handler.read().await;
@@ -3912,7 +4798,7 @@ impl ClaudeAgent {
             .await
             .map_err(|e| {
                 tracing::error!("Failed to wait for terminal exit: {}", e);
-                agent_client_protocol::Error::invalid_params()
+                e.into()
             })
     }
 
@@ -3922,6 +4808,34 @@ impl ClaudeAgent {
         params: crate::terminal_manager::TerminalOutputParams,
     ) -> Result<(), agent_client_protocol::Error> {
         tracing::debug!("Processing terminal/kill request: {:?}", params);
+
+        // Check client terminal capability before allowing operation
+        {
+            let client_caps = self.client_capabilities.read().await;
+            match &*client_caps {
+                Some(caps) if caps.terminal => {
+                    tracing::debug!("Terminal capability validated for handle_terminal_kill");
+                }
+                Some(_) => {
+                    tracing::error!("terminal capability not declared by client");
+                    return Err(agent_client_protocol::Error {
+                        code: -32602,
+                        message: "Terminal capability not declared by client. Set client_capabilities.terminal = true during initialization.".to_string(),
+                        data: None,
+                    });
+                }
+                None => {
+                    tracing::error!(
+                        "No client capabilities available for terminal operation validation"
+                    );
+                    return Err(agent_client_protocol::Error {
+                        code: -32602,
+                        message: "Client capabilities not initialized. Cannot perform terminal operations without capability declaration.".to_string(),
+                        data: None,
+                    });
+                }
+            }
+        }
 
         // Get terminal manager from tool handler
         let tool_handler = self.tool_handler.read().await;
@@ -3933,20 +4847,80 @@ impl ClaudeAgent {
             .await
             .map_err(|e| {
                 tracing::error!("Failed to kill terminal: {}", e);
-                agent_client_protocol::Error::invalid_params()
+                e.into()
             })
     }
 
+    /// Handle terminal/create ACP extension method
+    pub async fn handle_terminal_create(
+        &self,
+        params: crate::terminal_manager::TerminalCreateParams,
+    ) -> Result<crate::terminal_manager::TerminalCreateResponse, agent_client_protocol::Error> {
+        tracing::debug!("Processing terminal/create request: {:?}", params);
+
+        // Check client terminal capability before allowing operation
+        {
+            let client_caps = self.client_capabilities.read().await;
+            match &*client_caps {
+                Some(caps) if caps.terminal => {
+                    tracing::debug!("Terminal capability validated for handle_terminal_create");
+                }
+                Some(_) => {
+                    tracing::error!("terminal capability not declared by client");
+                    return Err(agent_client_protocol::Error {
+                        code: -32602,
+                        message: "Terminal capability not declared by client. Set client_capabilities.terminal = true during initialization.".to_string(),
+                        data: None,
+                    });
+                }
+                None => {
+                    tracing::error!(
+                        "No client capabilities available for terminal operation validation"
+                    );
+                    return Err(agent_client_protocol::Error {
+                        code: -32602,
+                        message: "Client capabilities not initialized. Cannot perform terminal operations without capability declaration.".to_string(),
+                        data: None,
+                    });
+                }
+            }
+        }
+
+        // Get terminal manager from tool handler
+        let tool_handler = self.tool_handler.read().await;
+        let terminal_manager = tool_handler.get_terminal_manager();
+
+        // Create terminal and return the terminal ID
+        let terminal_id = terminal_manager
+            .create_terminal_with_command(&self.session_manager, params)
+            .await
+            .map_err(|e| {
+                tracing::error!("Failed to create terminal: {}", e);
+                e.into()
+            })?;
+
+        Ok(crate::terminal_manager::TerminalCreateResponse { terminal_id })
+    }
+
     /// Read file content with optional line offset and limit
+    ///
+    /// # Security
+    /// This function assumes the caller has already validated the path using PathValidator.
+    /// Path validation must include: absolute path check, traversal prevention, and blocked path check.
     async fn read_file_with_options(
         &self,
         path: &str,
         start_line: Option<u32>,
         limit: Option<u32>,
     ) -> Result<String, agent_client_protocol::Error> {
-        // Read the entire file
-        let file_content = tokio::fs::read_to_string(path).await.map_err(|e| {
-            tracing::error!("Failed to read file {}: {}", path, e);
+        // Check file size before reading to prevent memory exhaustion
+        let metadata = tokio::fs::metadata(path).await.map_err(|e| {
+            tracing::error!(
+                security_event = "file_metadata_failed",
+                path = %path,
+                error = %e,
+                "Failed to get file metadata"
+            );
             match e.kind() {
                 std::io::ErrorKind::NotFound => agent_client_protocol::Error::invalid_params(),
                 std::io::ErrorKind::PermissionDenied => {
@@ -3955,6 +4929,46 @@ impl ClaudeAgent {
                 _ => agent_client_protocol::Error::internal_error(),
             }
         })?;
+
+        let file_size = metadata.len() as usize;
+
+        // Validate file size against configured limits
+        // Using > to reject files strictly larger than the limit (50MB limit is exclusive)
+        if file_size > sizes::content::MAX_RESOURCE_MODERATE {
+            tracing::warn!(
+                security_event = "file_size_exceeded",
+                path = %path,
+                size = file_size,
+                limit = sizes::content::MAX_RESOURCE_MODERATE,
+                "File size exceeds maximum allowed for read operation"
+            );
+            return Err(agent_client_protocol::Error::invalid_params());
+        }
+
+        // Read the entire file
+        let file_content = tokio::fs::read_to_string(path).await.map_err(|e| {
+            tracing::error!(
+                security_event = "file_read_failed",
+                path = %path,
+                error = %e,
+                "Failed to read file content"
+            );
+            match e.kind() {
+                std::io::ErrorKind::NotFound => agent_client_protocol::Error::invalid_params(),
+                std::io::ErrorKind::PermissionDenied => {
+                    agent_client_protocol::Error::invalid_params()
+                }
+                _ => agent_client_protocol::Error::internal_error(),
+            }
+        })?;
+
+        // Audit logging for successful read
+        tracing::info!(
+            security_event = "file_read_success",
+            path = %path,
+            bytes = file_content.len(),
+            "File read completed successfully"
+        );
 
         // Apply line filtering if specified
         self.apply_line_filtering(&file_content, start_line, limit)
@@ -3981,6 +4995,12 @@ impl ClaudeAgent {
 
         // If start index is beyond the end of the file, return empty string
         if start_index >= lines.len() {
+            tracing::debug!(
+                security_event = "line_out_of_bounds",
+                start_line = start_index,
+                total_lines = lines.len(),
+                "Line offset beyond file end"
+            );
             return Ok(String::new());
         }
 
@@ -3989,7 +5009,11 @@ impl ClaudeAgent {
                 if limit_count == 0 {
                     return Ok(String::new());
                 }
-                std::cmp::min(start_index + limit_count as usize, lines.len())
+                // Use checked_add to prevent integer overflow
+                start_index
+                    .checked_add(limit_count as usize)
+                    .ok_or_else(|| agent_client_protocol::Error::invalid_params())?
+                    .min(lines.len())
             }
             None => lines.len(),
         };
@@ -4014,37 +5038,155 @@ impl ClaudeAgent {
             if !parent_dir.exists() {
                 tokio::fs::create_dir_all(parent_dir).await.map_err(|e| {
                     tracing::error!(
-                        "Failed to create parent directory {}: {}",
-                        parent_dir.display(),
-                        e
+                        security_event = "directory_creation_failed",
+                        path = %parent_dir.display(),
+                        error = %e,
+                        "Failed to create parent directory"
                     );
                     agent_client_protocol::Error::internal_error()
                 })?;
             }
         }
 
-        // Create temporary file for atomic write
-        let temp_path = format!("{}.tmp.{}", path, Ulid::new());
+        // Create temporary file in same directory for atomic write
+        // Using ULID ensures uniqueness and prevents predictable temp file names
+        let temp_path = if let Some(parent) = path_buf.parent() {
+            let file_name = path_buf
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("file");
+            parent.join(format!(".tmp.{}.{}", file_name, Ulid::new()))
+        } else {
+            std::path::PathBuf::from(format!("{}.tmp.{}", path, Ulid::new()))
+        };
+
+        // Ensure temp path is absolute before proceeding
+        if !temp_path.is_absolute() {
+            tracing::error!(
+                security_event = "temp_path_not_absolute",
+                path = %temp_path.display(),
+                "Temporary file path must be absolute"
+            );
+            return Err(agent_client_protocol::Error::internal_error());
+        }
+
+        // Validate temp file path to prevent symlink manipulation in parent directories
+        // This ensures the temp file doesn't escape security boundaries
+        let temp_path = if let Some(parent) = temp_path.parent() {
+            // Canonicalize the parent directory to resolve symlinks
+            match parent.canonicalize() {
+                Ok(canonical_parent) => {
+                    let resolved = canonical_parent.join(temp_path.file_name().unwrap());
+                    // Verify the resolved path is still absolute
+                    if !resolved.is_absolute() {
+                        tracing::error!(
+                            security_event = "temp_path_resolution_failed",
+                            resolved_path = %resolved.display(),
+                            "Resolved temp path is not absolute"
+                        );
+                        return Err(agent_client_protocol::Error::internal_error());
+                    }
+                    
+                    // Additional validation: ensure the resolved temp path is within allowed boundaries
+                    // Validate the resolved path to ensure it hasn't escaped security boundaries via symlinks
+                    if let Err(e) = self.path_validator.validate_absolute_path(
+                        resolved.to_str().ok_or_else(|| {
+                            tracing::error!(
+                                security_event = "temp_path_utf8_invalid",
+                                resolved_path = %resolved.display(),
+                                "Resolved temp path contains invalid UTF-8"
+                            );
+                            agent_client_protocol::Error::internal_error()
+                        })?
+                    ) {
+                        tracing::error!(
+                            security_event = "temp_path_security_validation_failed",
+                            resolved_path = %resolved.display(),
+                            error = %e,
+                            "Resolved temp path failed security validation - possible symlink attack"
+                        );
+                        return Err(agent_client_protocol::Error::internal_error());
+                    }
+                    
+                    resolved
+                }
+                Err(e) => {
+                    tracing::error!(
+                        security_event = "parent_canonicalization_failed",
+                        parent = %parent.display(),
+                        error = %e,
+                        "Failed to canonicalize parent directory for temp file"
+                    );
+                    return Err(agent_client_protocol::Error::internal_error());
+                }
+            }
+        } else {
+            temp_path
+        };
+
+        let temp_path_str = temp_path.to_string_lossy();
 
         // Write content to temporary file
         match tokio::fs::write(&temp_path, content).await {
             Ok(_) => {
+                // Set restrictive permissions on Unix systems (owner read/write only)
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    if let Err(e) = tokio::fs::set_permissions(
+                        &temp_path,
+                        std::fs::Permissions::from_mode(0o600),
+                    )
+                    .await
+                    {
+                        tracing::warn!(
+                            security_event = "permission_set_failed",
+                            path = %temp_path_str,
+                            error = %e,
+                            "Failed to set restrictive permissions on temp file"
+                        );
+                        // Continue despite permission setting failure
+                    }
+                }
+
                 // Atomically rename temporary file to final path
                 match tokio::fs::rename(&temp_path, path).await {
                     Ok(_) => {
-                        tracing::debug!("Successfully wrote file: {}", path);
+                        tracing::debug!(
+                            security_event = "atomic_write_success",
+                            path = %path,
+                            "Successfully completed atomic write"
+                        );
                         Ok(())
                     }
                     Err(e) => {
-                        // Clean up temp file on failure
-                        let _ = tokio::fs::remove_file(&temp_path).await;
-                        tracing::error!("Failed to rename temp file to {}: {}", path, e);
+                        // Clean up temp file on failure with explicit error handling
+                        if let Err(cleanup_err) = tokio::fs::remove_file(&temp_path).await {
+                            tracing::error!(
+                                security_event = "temp_file_cleanup_failed",
+                                temp_path = %temp_path_str,
+                                cleanup_error = %cleanup_err,
+                                "Failed to clean up temporary file after write failure - manual cleanup may be required"
+                            );
+                        }
+                        tracing::error!(
+                            security_event = "atomic_rename_failed",
+                            path = %path,
+                            temp_path = %temp_path_str,
+                            error = %e,
+                            "Failed to rename temp file"
+                        );
                         Err(agent_client_protocol::Error::internal_error())
                     }
                 }
             }
             Err(e) => {
-                tracing::error!("Failed to write temp file {}: {}", temp_path, e);
+                tracing::error!(
+                    security_event = "temp_write_failed",
+                    path = %temp_path_str,
+                    error = %e,
+                    "Failed to write temp file"
+                );
                 match e.kind() {
                     std::io::ErrorKind::PermissionDenied => {
                         Err(agent_client_protocol::Error::invalid_params())
@@ -4170,6 +5312,188 @@ impl ClaudeAgent {
             }
         }
     }
+
+    /// Get TodoStorage for a session
+    ///
+    /// Creates a TodoStorage instance configured for the session's working directory.
+    /// This ensures todos are stored in the correct location relative to the session's cwd.
+    ///
+    /// # Arguments
+    ///
+    /// * `session_id` - The session identifier
+    ///
+    /// # Returns
+    ///
+    /// Returns a TodoStorage instance configured for the session's working directory
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - The session does not exist
+    /// - The todo storage cannot be created
+    pub async fn get_todo_storage(
+        &self,
+        session_id: &str,
+    ) -> crate::Result<swissarmyhammer_todo::TodoStorage> {
+        // Get the session to access its working directory
+        let session = self
+            .session_manager
+            .get_session(&crate::session::SessionId::from_string(
+                session_id.to_string(),
+            )?)
+            .map_err(|e| crate::error::AgentError::SessionNotFound(session_id.to_string()))?
+            .ok_or_else(|| crate::error::AgentError::SessionNotFound(session_id.to_string()))?;
+
+        // Create TodoStorage using the session's working directory
+        let todo_storage = swissarmyhammer_todo::TodoStorage::new_with_working_dir(session.cwd)
+            .map_err(|e| {
+                crate::error::AgentError::Internal(format!("Failed to create todo storage: {}", e))
+            })?;
+
+        Ok(todo_storage)
+    }
+
+    /// Create a new todo item for a session
+    ///
+    /// # Arguments
+    ///
+    /// * `session_id` - The session identifier
+    /// * `task` - The task description
+    /// * `context` - Optional context or implementation notes
+    ///
+    /// # Returns
+    ///
+    /// Returns a tuple containing:
+    /// - The created TodoItem
+    /// - The number of completed items that were garbage collected
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the todo item cannot be created
+    pub async fn create_todo(
+        &self,
+        session_id: &str,
+        task: String,
+        context: Option<String>,
+    ) -> crate::Result<(swissarmyhammer_todo::TodoItem, usize)> {
+        let storage = self.get_todo_storage(session_id).await?;
+        storage.create_todo_item(task, context).await.map_err(|e| {
+            crate::error::AgentError::Internal(format!("Failed to create todo item: {}", e))
+        })
+    }
+
+    /// Get a specific todo item by ID or the next incomplete item
+    ///
+    /// # Arguments
+    ///
+    /// * `session_id` - The session identifier
+    /// * `item_identifier` - Either a ULID string or "next" for the next incomplete item
+    ///
+    /// # Returns
+    ///
+    /// Returns the todo item if found, or None if not found or no incomplete items exist
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the todo item cannot be retrieved
+    pub async fn get_todo_item(
+        &self,
+        session_id: &str,
+        item_identifier: &str,
+    ) -> crate::Result<Option<swissarmyhammer_todo::TodoItem>> {
+        let storage = self.get_todo_storage(session_id).await?;
+        storage.get_todo_item(item_identifier).await.map_err(|e| {
+            crate::error::AgentError::Internal(format!("Failed to get todo item: {}", e))
+        })
+    }
+
+    /// Mark a todo item as complete
+    ///
+    /// # Arguments
+    ///
+    /// * `session_id` - The session identifier
+    /// * `id` - The todo item ID
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the todo item cannot be marked as complete
+    pub async fn mark_todo_complete(
+        &self,
+        session_id: &str,
+        id: &swissarmyhammer_todo::TodoId,
+    ) -> crate::Result<()> {
+        let storage = self.get_todo_storage(session_id).await?;
+        storage.mark_todo_complete(id).await.map_err(|e| {
+            crate::error::AgentError::Internal(format!("Failed to mark todo complete: {}", e))
+        })
+    }
+
+    /// Get all todo items for a session
+    ///
+    /// # Arguments
+    ///
+    /// * `session_id` - The session identifier
+    ///
+    /// # Returns
+    ///
+    /// Returns the complete todo list if it exists, or None if no todos exist
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the todo list cannot be retrieved
+    pub async fn get_todo_list(
+        &self,
+        session_id: &str,
+    ) -> crate::Result<Option<swissarmyhammer_todo::TodoList>> {
+        let storage = self.get_todo_storage(session_id).await?;
+        storage.get_todo_list().await.map_err(|e| {
+            crate::error::AgentError::Internal(format!("Failed to get todo list: {}", e))
+        })
+    }
+
+    /// Sync session todos with TodoStorage
+    ///
+    /// Loads todos from TodoStorage and updates the session's todos vector with the IDs
+    /// of all incomplete todo items. This ensures the session's todo list is in sync
+    /// with the persistent storage.
+    ///
+    /// # Arguments
+    ///
+    /// * `session_id` - The session identifier
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - The session does not exist
+    /// - The todo storage cannot be accessed
+    /// - The session cannot be updated
+    pub async fn sync_session_todos(&self, session_id: &str) -> crate::Result<()> {
+        // Get the todo list from storage
+        let storage = self.get_todo_storage(session_id).await?;
+        let todo_list = storage.get_todo_list().await.map_err(|e| {
+            crate::error::AgentError::Internal(format!("Failed to get todo list: {}", e))
+        })?;
+
+        // Extract incomplete todo IDs
+        let todo_ids: Vec<String> = if let Some(list) = todo_list {
+            list.todo
+                .iter()
+                .filter(|item| !item.done())
+                .map(|item| item.id.clone())
+                .collect()
+        } else {
+            Vec::new()
+        };
+
+        // Update the session's todos vector
+        let session_id_parsed = crate::session::SessionId::from_string(session_id.to_string())?;
+        self.session_manager
+            .update_session(&session_id_parsed, |session| {
+                session.todos = todo_ids;
+            })?;
+
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -4193,7 +5517,7 @@ mod tests {
             // Auto-approve all permission requests in tests
             Ok(RequestPermissionResponse {
                 outcome: agent_client_protocol::RequestPermissionOutcome::Selected {
-                    option_id: agent_client_protocol::PermissionOptionId("allow-once".into()),
+                    option_id: agent_client_protocol::PermissionOptionId::new("allow-once"),
                 },
                 meta: None,
             })
@@ -4606,7 +5930,7 @@ mod tests {
         let agent = create_test_agent().await;
         // Use a valid ULID format that doesn't exist in session manager
         let nonexistent_session_id = "01ARZ3NDEKTSV4RRFFQ69G5FAV"; // Valid ULID format
-        let session_id_wrapper = SessionId(nonexistent_session_id.to_string().into());
+        let session_id_wrapper = SessionId::new(nonexistent_session_id.to_string());
 
         let request = LoadSessionRequest {
             session_id: session_id_wrapper.clone(),
@@ -4639,7 +5963,7 @@ mod tests {
 
         // Test with an invalid ULID format - should fail at parsing stage
         let request = LoadSessionRequest {
-            session_id: SessionId("invalid_session_format".to_string().into()),
+            session_id: SessionId::new("invalid_session_format".to_string()),
             cwd: std::path::PathBuf::from("/tmp"),
             mcp_servers: vec![],
             meta: None,
@@ -4725,7 +6049,7 @@ mod tests {
         let agent = create_test_agent().await;
 
         let notification = CancelNotification {
-            session_id: SessionId("test_session".to_string().into()),
+            session_id: SessionId::new("test_session".to_string()),
             meta: Some(serde_json::json!({"reason": "user_request"})),
         };
 
@@ -4846,7 +6170,7 @@ mod tests {
 
         // Test invalid session ID
         let prompt_request = PromptRequest {
-            session_id: SessionId("invalid-uuid".to_string().into()),
+            session_id: SessionId::new("invalid-uuid".to_string()),
             prompt: vec![agent_client_protocol::ContentBlock::Text(
                 agent_client_protocol::TextContent {
                     text: "Hello".to_string(),
@@ -5005,7 +6329,7 @@ mod tests {
         // Use a valid ULID but for a session that doesn't exist
         let nonexistent_session_id = ulid::Ulid::new();
         let prompt_request = PromptRequest {
-            session_id: SessionId(nonexistent_session_id.to_string().into()),
+            session_id: SessionId::new(nonexistent_session_id.to_string()),
             prompt: vec![agent_client_protocol::ContentBlock::Text(
                 agent_client_protocol::TextContent {
                     text: "Hello".to_string(),
@@ -6071,10 +7395,12 @@ mod tests {
 
         // Verify plan has expected entries
         assert_eq!(acp_plan.entries.len(), 3);
+        // Pending and completed items use base content
         assert_eq!(acp_plan.entries[0].content, "Check for syntax errors");
+        // In-progress items use activeForm as content
         assert_eq!(
             acp_plan.entries[1].content,
-            "Identify potential type issues"
+            "Identifying potential type issues"
         );
         assert_eq!(acp_plan.entries[2].content, "Fix all errors");
 
@@ -6094,7 +7420,9 @@ mod tests {
         let priority_2_json = serde_json::to_value(&acp_plan.entries[2].priority).unwrap();
         assert_eq!(priority_2_json, "low"); // completed -> low
 
-        // Verify activeForm is stored in meta.notes
+        // Verify notes handling:
+        // - Pending/completed items: activeForm is in notes
+        // - In-progress items: original content is in notes (since activeForm becomes content)
         assert!(acp_plan.entries[0].meta.as_ref().unwrap()["notes"]
             .as_str()
             .unwrap()
@@ -6102,11 +7430,132 @@ mod tests {
         assert!(acp_plan.entries[1].meta.as_ref().unwrap()["notes"]
             .as_str()
             .unwrap()
-            .contains("Identifying potential type issues"));
+            .contains("Identify potential type issues")); // Original content
         assert!(acp_plan.entries[2].meta.as_ref().unwrap()["notes"]
             .as_str()
             .unwrap()
             .contains("Fixing all errors"));
+    }
+
+    #[tokio::test]
+    async fn test_plan_update_notification_sender() {
+        // Test that plan updates can be sent after programmatic status changes
+        let agent = create_test_agent().await;
+
+        // Create a session
+        let new_session_request = NewSessionRequest {
+            cwd: std::path::PathBuf::from("/tmp"),
+            meta: None,
+            mcp_servers: vec![],
+        };
+        let session_response = agent.new_session(new_session_request).await.unwrap();
+        let session_id = session_response.session_id;
+
+        // Create an initial plan with TodoWrite
+        let todowrite_params = serde_json::json!({
+            "todos": [
+                {
+                    "content": "Task 1",
+                    "status": "pending",
+                    "activeForm": "Doing Task 1"
+                },
+                {
+                    "content": "Task 2",
+                    "status": "pending",
+                    "activeForm": "Doing Task 2"
+                }
+            ]
+        });
+
+        // Convert to agent plan and store it
+        let agent_plan = crate::plan::todowrite_to_agent_plan(&todowrite_params).unwrap();
+        let entry_id = agent_plan.entries[0].id.clone();
+
+        {
+            let mut plan_manager = agent.plan_manager.write().await;
+            plan_manager.set_plan(session_id.to_string(), agent_plan);
+        }
+
+        // Subscribe to notifications before updating
+        let mut notification_receiver = agent.notification_sender.sender.subscribe();
+
+        // Update the first entry status to in_progress
+        let result = agent
+            .update_plan_entry_status(
+                &session_id,
+                &entry_id,
+                crate::plan::PlanEntryStatus::InProgress,
+            )
+            .await;
+
+        assert!(result.is_ok(), "Plan entry status update should succeed");
+
+        // Verify notification was sent
+        let notification = tokio::time::timeout(
+            std::time::Duration::from_secs(1),
+            notification_receiver.recv(),
+        )
+        .await;
+
+        assert!(
+            notification.is_ok(),
+            "Should receive notification within timeout"
+        );
+        let notification = notification.unwrap();
+        assert!(notification.is_ok(), "Notification should not be an error");
+        let notification = notification.unwrap();
+
+        // Verify notification is a Plan update
+        match notification.update {
+            agent_client_protocol::SessionUpdate::Plan(plan) => {
+                assert_eq!(plan.entries.len(), 2);
+                // Find the updated entry
+                let updated_entry = plan
+                    .entries
+                    .iter()
+                    .find(|e| e.meta.as_ref().unwrap()["id"] == entry_id)
+                    .expect("Updated entry should be in plan");
+                let status_json = serde_json::to_value(&updated_entry.status).unwrap();
+                assert_eq!(status_json, "in_progress");
+            }
+            _ => panic!("Expected Plan update notification"),
+        }
+
+        // Verify the status was updated in PlanManager
+        {
+            let plan_manager = agent.plan_manager.read().await;
+            let stored_plan = plan_manager.get_plan(&session_id.to_string()).unwrap();
+            let updated_entry = stored_plan.get_entry(&entry_id).unwrap();
+            assert_eq!(
+                updated_entry.status,
+                crate::plan::PlanEntryStatus::InProgress
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn test_send_plan_update_no_plan_error() {
+        // Test that send_plan_update returns error when no plan exists
+        let agent = create_test_agent().await;
+
+        // Create a session without a plan
+        let new_session_request = NewSessionRequest {
+            cwd: std::path::PathBuf::from("/tmp"),
+            meta: None,
+            mcp_servers: vec![],
+        };
+        let session_response = agent.new_session(new_session_request).await.unwrap();
+        let session_id = session_response.session_id;
+
+        // Try to send plan update without a plan
+        let result = agent.send_plan_update(&session_id).await;
+
+        assert!(result.is_err(), "Should return error when no plan exists");
+        let error_msg = result.unwrap_err().to_string();
+        assert!(
+            error_msg.contains("No plan found"),
+            "Error should mention no plan found"
+        );
     }
 
     #[tokio::test]
@@ -6161,7 +7610,7 @@ mod tests {
     #[tokio::test]
     async fn test_send_agent_thought() {
         let (agent, mut receiver) = create_test_agent_with_notifications().await;
-        let session_id = SessionId("test_thought_session".to_string().into());
+        let session_id = SessionId::new("test_thought_session".to_string());
 
         let thought = AgentThought::new(
             ReasoningPhase::PromptAnalysis,
@@ -6210,7 +7659,7 @@ mod tests {
         let (agent, _receiver) = create_test_agent_with_notifications().await;
 
         // Test with invalid session ID format (should not panic)
-        let invalid_session_id = SessionId("".to_string().into());
+        let invalid_session_id = SessionId::new("".to_string());
         let thought = AgentThought::new(ReasoningPhase::Execution, "Testing error handling");
 
         // This should not fail even with invalid session ID
@@ -6961,6 +8410,61 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_fs_read_text_file_capability_check() {
+        use std::io::Write;
+        use tempfile::NamedTempFile;
+
+        let agent = create_test_agent().await;
+
+        // Initialize with read_text_file capability disabled
+        let init_request = InitializeRequest {
+            protocol_version: agent_client_protocol::V1,
+            client_capabilities: agent_client_protocol::ClientCapabilities {
+                fs: agent_client_protocol::FileSystemCapability {
+                    read_text_file: false,
+                    write_text_file: true,
+                    meta: None,
+                },
+                terminal: true,
+                meta: None,
+            },
+            client_info: None,
+            meta: None,
+        };
+
+        agent.initialize(init_request).await.unwrap();
+
+        // Create session
+        let new_request = NewSessionRequest {
+            cwd: std::path::PathBuf::from("/tmp"),
+            mcp_servers: vec![],
+            meta: None,
+        };
+
+        let new_response = agent.new_session(new_request).await.unwrap();
+        let session_id = new_response.session_id.0.as_ref().to_string();
+
+        // Create a test file
+        let mut temp_file = NamedTempFile::new().unwrap();
+        temp_file.write_all(b"Test content").unwrap();
+        temp_file.flush().unwrap();
+
+        // Try to read file with capability disabled
+        let params = ReadTextFileParams {
+            session_id,
+            path: temp_file.path().to_string_lossy().to_string(),
+            line: None,
+            limit: None,
+        };
+
+        let result = agent.handle_read_text_file(params).await;
+        assert!(
+            result.is_err(),
+            "Should fail when read_text_file capability is disabled"
+        );
+    }
+
+    #[tokio::test]
     async fn test_fs_read_text_file_different_line_endings() {
         use std::io::Write;
         use tempfile::NamedTempFile;
@@ -7083,7 +8587,7 @@ mod tests {
         };
 
         let result = agent.handle_write_text_file(params).await.unwrap();
-        assert_eq!(result, serde_json::Value::Null);
+        assert_eq!(result, WriteTextFileResponse { meta: None });
 
         // Verify the file content was overwritten
         let written_content = tokio::fs::read_to_string(temp_file.path()).await.unwrap();
@@ -7108,7 +8612,7 @@ mod tests {
         };
 
         let result = agent.handle_write_text_file(params).await.unwrap();
-        assert_eq!(result, serde_json::Value::Null);
+        assert_eq!(result, WriteTextFileResponse { meta: None });
 
         // Verify the parent directories were created
         assert!(nested_path.parent().unwrap().exists());
@@ -7149,7 +8653,7 @@ mod tests {
         };
 
         let result = agent.handle_write_text_file(params).await.unwrap();
-        assert_eq!(result, serde_json::Value::Null);
+        assert_eq!(result, WriteTextFileResponse { meta: None });
 
         // Verify empty file was created
         let written_content = tokio::fs::read_to_string(&file_path).await.unwrap();
@@ -7176,7 +8680,7 @@ mod tests {
         };
 
         let result = agent.handle_write_text_file(params).await.unwrap();
-        assert_eq!(result, serde_json::Value::Null);
+        assert_eq!(result, WriteTextFileResponse { meta: None });
 
         // Verify large content was written correctly
         let written_content = tokio::fs::read_to_string(&file_path).await.unwrap();
@@ -7202,7 +8706,7 @@ mod tests {
         };
 
         let result = agent.handle_write_text_file(params).await.unwrap();
-        assert_eq!(result, serde_json::Value::Null);
+        assert_eq!(result, WriteTextFileResponse { meta: None });
 
         // Verify unicode content was written correctly
         let written_content = tokio::fs::read_to_string(&file_path).await.unwrap();
@@ -7271,7 +8775,7 @@ mod tests {
         let agent = create_test_agent().await;
 
         let request = LoadSessionRequest {
-            session_id: SessionId("01ARZ3NDEKTSV4RRFFQ69G5FAV".to_string().into()),
+            session_id: SessionId::new("01ARZ3NDEKTSV4RRFFQ69G5FAV".to_string()),
             cwd: std::path::PathBuf::from("/tmp"),
             mcp_servers: vec![], // Empty for now
             meta: None,
@@ -7652,14 +9156,14 @@ mod tests {
 
         let tool_handler = agent.tool_handler.read().await;
         let report = tool_handler
-            .create_tool_call_report(&SessionId(session_id.clone().into()), tool_name, &tool_args)
+            .create_tool_call_report(&SessionId::new(session_id.clone()), tool_name, &tool_args)
             .await;
         let tool_call_id = report.tool_call_id.clone();
         drop(tool_handler);
 
         // Create a permission request for this tool call
         let request = PermissionRequest {
-            session_id: SessionId(session_id.into()),
+            session_id: SessionId::new(session_id),
             tool_call: ToolCallUpdate {
                 tool_call_id: tool_call_id.clone(),
             },
@@ -7687,7 +9191,7 @@ mod tests {
         // Create a permission request with a non-existent tool_call_id
         let fake_tool_call_id = "nonexistent_tool_call_id_12345";
         let request = PermissionRequest {
-            session_id: SessionId(session_id.into()),
+            session_id: SessionId::new(session_id),
             tool_call: ToolCallUpdate {
                 tool_call_id: fake_tool_call_id.to_string(),
             },
@@ -7729,7 +9233,7 @@ mod tests {
 
         // Create a permission request
         let request = PermissionRequest {
-            session_id: SessionId(session_id.into()),
+            session_id: SessionId::new(session_id),
             tool_call: ToolCallUpdate {
                 tool_call_id: tool_call_id.clone(),
             },
@@ -7760,7 +9264,7 @@ mod tests {
         // Manually update the report to have None for raw_input
         tool_handler
             .update_tool_call_report(
-                &SessionId(session_id.clone().into()),
+                &SessionId::new(session_id.clone()),
                 &tool_call_id,
                 |report| {
                     report.raw_input = None;
@@ -7771,7 +9275,7 @@ mod tests {
 
         // Create a permission request
         let request = PermissionRequest {
-            session_id: SessionId(session_id.into()),
+            session_id: SessionId::new(session_id),
             tool_call: ToolCallUpdate {
                 tool_call_id: tool_call_id.clone(),
             },
@@ -7788,7 +9292,7 @@ mod tests {
     #[tokio::test]
     async fn test_command_discovery_includes_core_commands() {
         let agent = create_test_agent().await;
-        let session_id = SessionId("test_session_123".to_string().into());
+        let session_id = SessionId::new("test_session_123".to_string());
 
         let commands = agent.get_available_commands_for_session(&session_id).await;
 
@@ -7835,7 +9339,7 @@ mod tests {
         tool_handler.set_client_capabilities(caps);
         drop(tool_handler);
 
-        let session_id = SessionId("test_session_456".to_string().into());
+        let session_id = SessionId::new("test_session_456".to_string());
         let commands = agent.get_available_commands_for_session(&session_id).await;
 
         // Verify filesystem commands are present when capability is enabled
@@ -7878,7 +9382,7 @@ mod tests {
         tool_handler.set_client_capabilities(caps);
         drop(tool_handler);
 
-        let session_id = SessionId("test_session_789".to_string().into());
+        let session_id = SessionId::new("test_session_789".to_string());
         let commands = agent.get_available_commands_for_session(&session_id).await;
 
         // Should include read commands
@@ -7924,7 +9428,7 @@ mod tests {
         tool_handler.set_client_capabilities(caps);
         drop(tool_handler);
 
-        let session_id = SessionId("test_session_terminal".to_string().into());
+        let session_id = SessionId::new("test_session_terminal".to_string());
         let commands = agent.get_available_commands_for_session(&session_id).await;
 
         // Terminal commands are already filtered by tool handler based on its capabilities
@@ -7962,7 +9466,7 @@ mod tests {
         let agent = create_test_agent().await;
 
         // No capabilities set (None)
-        let session_id = SessionId("test_session_no_caps".to_string().into());
+        let session_id = SessionId::new("test_session_no_caps".to_string());
         let commands = agent.get_available_commands_for_session(&session_id).await;
 
         // Should still include core commands
@@ -8006,7 +9510,7 @@ mod tests {
         tool_handler.set_client_capabilities(caps);
         drop(tool_handler);
 
-        let session_id = SessionId("test_session_logging".to_string().into());
+        let session_id = SessionId::new("test_session_logging".to_string());
         let commands = agent.get_available_commands_for_session(&session_id).await;
 
         // Verify we have commands from multiple sources

@@ -1,0 +1,111 @@
+{
+  "id": "01KDJGA4YJ6YE3TD8ZJZXJ721X",
+  "created_at": {
+    "secs_since_epoch": 1766926390,
+    "nanos_since_epoch": 226733000
+  },
+  "last_accessed": {
+    "secs_since_epoch": 1766926396,
+    "nanos_since_epoch": 757845000
+  },
+  "context": [
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926396,
+        "nanos_since_epoch": 757827000
+      },
+      "update": {
+        "sessionUpdate": "available_commands_update",
+        "availableCommands": [
+          {
+            "name": "create_plan",
+            "description": "Create an execution plan for complex tasks",
+            "input": null,
+            "_meta": {
+              "category": "planning",
+              "source": "core"
+            }
+          },
+          {
+            "name": "research_codebase",
+            "description": "Research and analyze the codebase structure",
+            "input": null,
+            "_meta": {
+              "category": "analysis",
+              "source": "core"
+            }
+          },
+          {
+            "name": "fs_read",
+            "description": "Read file contents",
+            "input": null,
+            "_meta": {
+              "category": "filesystem",
+              "source": "tool_handler"
+            }
+          },
+          {
+            "name": "fs_list",
+            "description": "List directory contents",
+            "input": null,
+            "_meta": {
+              "category": "filesystem",
+              "source": "tool_handler"
+            }
+          }
+        ]
+      }
+    }
+  ],
+  "client_capabilities": {
+    "fs": {
+      "readTextFile": true,
+      "writeTextFile": false
+    },
+    "terminal": false
+  },
+  "mcp_servers": [],
+  "cwd": "/Users/wballard/github/swissarmyhammer/acp-conformance",
+  "available_commands": [
+    {
+      "name": "create_plan",
+      "description": "Create an execution plan for complex tasks",
+      "input": null,
+      "_meta": {
+        "category": "planning",
+        "source": "core"
+      }
+    },
+    {
+      "name": "research_codebase",
+      "description": "Research and analyze the codebase structure",
+      "input": null,
+      "_meta": {
+        "category": "analysis",
+        "source": "core"
+      }
+    },
+    {
+      "name": "fs_read",
+      "description": "Read file contents",
+      "input": null,
+      "_meta": {
+        "category": "filesystem",
+        "source": "tool_handler"
+      }
+    },
+    {
+      "name": "fs_list",
+      "description": "List directory contents",
+      "input": null,
+      "_meta": {
+        "category": "filesystem",
+        "source": "tool_handler"
+      }
+    }
+  ],
+  "turn_request_count": 0,
+  "turn_token_count": 0,
+  "current_mode": null,
+  "todos": []
+}

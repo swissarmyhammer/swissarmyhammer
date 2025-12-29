@@ -1,0 +1,478 @@
+{
+  "id": "01KDJGA4YG98K2ZQ9HGYKT1ZTD",
+  "created_at": {
+    "secs_since_epoch": 1766926390,
+    "nanos_since_epoch": 224222000
+  },
+  "last_accessed": {
+    "secs_since_epoch": 1766926400,
+    "nanos_since_epoch": 126786000
+  },
+  "context": [
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926396,
+        "nanos_since_epoch": 497065000
+      },
+      "update": {
+        "sessionUpdate": "available_commands_update",
+        "availableCommands": [
+          {
+            "name": "create_plan",
+            "description": "Create an execution plan for complex tasks",
+            "input": null,
+            "_meta": {
+              "category": "planning",
+              "source": "core"
+            }
+          },
+          {
+            "name": "research_codebase",
+            "description": "Research and analyze the codebase structure",
+            "input": null,
+            "_meta": {
+              "category": "analysis",
+              "source": "core"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926396,
+        "nanos_since_epoch": 497446000
+      },
+      "update": {
+        "sessionUpdate": "user_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "\n[Resource Link: document.pdf]"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926398,
+        "nanos_since_epoch": 433031000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "I see"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926398,
+        "nanos_since_epoch": 685522000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " you've shared a resource"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926398,
+        "nanos_since_epoch": 685801000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " link to"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926398,
+        "nanos_since_epoch": 685971000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " `"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926398,
+        "nanos_since_epoch": 762837000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "document.pdf`. However"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926398,
+        "nanos_since_epoch": 763274000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": ", I don"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926398,
+        "nanos_since_epoch": 809137000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "'t have direct"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926398,
+        "nanos_since_epoch": 882732000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " access to view resource"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926398,
+        "nanos_since_epoch": 883287000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " links"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926398,
+        "nanos_since_epoch": 927071000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " in"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926399,
+        "nanos_since_epoch": 88076000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " this"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926399,
+        "nanos_since_epoch": 99601000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " format"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926399,
+        "nanos_since_epoch": 103955000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "."
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926399,
+        "nanos_since_epoch": 161551000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "\n\nCoul"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926399,
+        "nanos_since_epoch": 210613000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "d you:"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926399,
+        "nanos_since_epoch": 337006000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "\n1. Provide"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926399,
+        "nanos_since_epoch": 337376000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " the full"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926399,
+        "nanos_since_epoch": 345531000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " file"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926399,
+        "nanos_since_epoch": 468751000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " path to the PDF"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926399,
+        "nanos_since_epoch": 469177000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " so"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926399,
+        "nanos_since_epoch": 551308000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " I can rea"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926399,
+        "nanos_since_epoch": 557083000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "d it"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926399,
+        "nanos_since_epoch": 733356000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "\n2. Or share"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926399,
+        "nanos_since_epoch": 733716000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " what"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926399,
+        "nanos_since_epoch": 861665000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " you'd like me to"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926399,
+        "nanos_since_epoch": 892294000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " help"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926399,
+        "nanos_since_epoch": 899464000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " with regarding"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926399,
+        "nanos_since_epoch": 932521000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " this"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926400,
+        "nanos_since_epoch": 61000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " document?"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926400,
+        "nanos_since_epoch": 126765000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "I see you've shared a resource link to `document.pdf`. However, I don't have direct access to view resource links in this format.\n\nCould you:\n1. Provide the full file path to the PDF so I can read it\n2. Or share what you'd like me to help with regarding this document?"
+        }
+      }
+    }
+  ],
+  "client_capabilities": {
+    "fs": {
+      "readTextFile": false,
+      "writeTextFile": false
+    },
+    "terminal": false
+  },
+  "mcp_servers": [],
+  "cwd": "/Users/wballard/github/swissarmyhammer/acp-conformance",
+  "available_commands": [
+    {
+      "name": "create_plan",
+      "description": "Create an execution plan for complex tasks",
+      "input": null,
+      "_meta": {
+        "category": "planning",
+        "source": "core"
+      }
+    },
+    {
+      "name": "research_codebase",
+      "description": "Research and analyze the codebase structure",
+      "input": null,
+      "_meta": {
+        "category": "analysis",
+        "source": "core"
+      }
+    }
+  ],
+  "turn_request_count": 1,
+  "turn_token_count": 7,
+  "current_mode": null,
+  "todos": []
+}

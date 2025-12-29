@@ -527,25 +527,49 @@ impl RuleChecker {
 
         let result_text = response.content.trim();
         let normalized_text = result_text.trim_start_matches('*').trim_start();
-        let trimmed_end = result_text.trim_end_matches('*').trim_end();
-        let ends_with_pass = trimmed_end.ends_with("PASS")
+
+        // Check if response indicates a pass
+        // The LLM may provide analysis before the verdict, so we need to check:
+        // - Starts with PASS (original behavior)
+        // - Contains PASS on its own line (handles analysis before verdict)
+        // - Contains emphasized PASS (**PASS** or *PASS*)
+        let is_pass = normalized_text.starts_with("PASS")
             || result_text.contains("**PASS**")
-            || result_text.contains("*PASS*");
+            || result_text.contains("*PASS*")
+            || result_text.lines().any(|line| {
+                let trimmed = line.trim();
+                trimmed == "PASS" || trimmed.starts_with("PASS")
+            });
 
         tracing::debug!(
-            "Response parsing - result_text length: {}",
-            result_text.len()
+            "Response parsing - result_text length: {}, first 100 chars: {:?}",
+            result_text.len(),
+            result_text.chars().take(100).collect::<String>()
         );
         tracing::debug!(
             "Response parsing - starts with PASS: {}",
             normalized_text.starts_with("PASS")
         );
-        tracing::debug!("Response parsing - ends_with_pass: {}", ends_with_pass);
+        tracing::debug!(
+            "Response parsing - contains **PASS**: {}",
+            result_text.contains("**PASS**")
+        );
+        tracing::debug!(
+            "Response parsing - contains *PASS*: {}",
+            result_text.contains("*PASS*")
+        );
 
-        if normalized_text.starts_with("PASS") || ends_with_pass {
+        let pass_line_found = result_text.lines().any(|line| {
+            let trimmed = line.trim();
+            trimmed == "PASS" || trimmed.starts_with("PASS")
+        });
+        tracing::debug!("Response parsing - PASS line found: {}", pass_line_found);
+        tracing::debug!("Response parsing - is_pass: {}", is_pass);
+
+        if is_pass {
             let duration = check_start.elapsed();
             tracing::info!(
-                "Check passed for {} against rule {} in {:.2}s",
+                "✓ PASS DETECTED ✓ Check passed for {} against rule {} in {:.2}s",
                 target_path.display(),
                 rule.name,
                 duration.as_secs_f64()
@@ -1119,6 +1143,27 @@ mod tests {
         assert!(
             trimmed.starts_with("PASS"),
             "Multi-line PASS response should start with 'PASS'"
+        );
+    }
+
+    #[test]
+    fn test_pass_response_with_analysis_before() {
+        // Test the case where LLM provides analysis before the verdict
+        let response_text = "I'll analyze this test file against the rule.\n\nLet me examine the code.\n\nPASS\n\nThe file follows the rule correctly.";
+
+        // Check if our logic correctly identifies this as a PASS
+        let is_pass = response_text
+            .trim()
+            .trim_start_matches('*')
+            .trim_start()
+            .starts_with("PASS")
+            || response_text.contains("**PASS**")
+            || response_text.contains("*PASS*")
+            || response_text.lines().any(|line| line.trim() == "PASS");
+
+        assert!(
+            is_pass,
+            "Response with PASS on its own line should be detected as a pass"
         );
     }
 

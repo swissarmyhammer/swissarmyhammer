@@ -81,7 +81,7 @@ impl EnhancedSessionLoader {
                     session_id, e
                 );
                 return Err(SessionSetupError::SessionStorageFailure {
-                    session_id: Some(agent_client_protocol::SessionId(
+                    session_id: Some(agent_client_protocol::SessionId::new(
                         session_id.to_string().into(),
                     )),
                     storage_error: e.to_string(),
@@ -100,7 +100,7 @@ impl EnhancedSessionLoader {
                 let available_sessions = self.get_available_session_list()?;
 
                 return Err(SessionSetupError::SessionNotFound {
-                    session_id: agent_client_protocol::SessionId(session_id.to_string().into()),
+                    session_id: agent_client_protocol::SessionId::new(session_id.to_string()),
                     available_sessions,
                 });
             }
@@ -119,7 +119,7 @@ impl EnhancedSessionLoader {
                     .as_secs();
 
                 return Err(SessionSetupError::SessionExpired {
-                    session_id: agent_client_protocol::SessionId(session_id.to_string().into()),
+                    session_id: agent_client_protocol::SessionId::new(session_id.to_string()),
                     expired_at: chrono::DateTime::from_timestamp(expired_at as i64, 0)
                         .unwrap_or_default()
                         .to_rfc3339(),
@@ -154,21 +154,21 @@ impl EnhancedSessionLoader {
         // Validate timestamps
         if session.created_at > SystemTime::now() {
             return Err(SessionSetupError::SessionCorrupted {
-                session_id: agent_client_protocol::SessionId(session.id.to_string().into()),
+                session_id: agent_client_protocol::SessionId::new(session.id.to_string()),
                 corruption_details: "Session created_at timestamp is in the future".to_string(),
             });
         }
 
         if session.last_accessed > SystemTime::now() {
             return Err(SessionSetupError::SessionCorrupted {
-                session_id: agent_client_protocol::SessionId(session.id.to_string().into()),
+                session_id: agent_client_protocol::SessionId::new(session.id.to_string()),
                 corruption_details: "Session last_accessed timestamp is in the future".to_string(),
             });
         }
 
         if session.created_at > session.last_accessed {
             return Err(SessionSetupError::SessionCorrupted {
-                session_id: agent_client_protocol::SessionId(session.id.to_string().into()),
+                session_id: agent_client_protocol::SessionId::new(session.id.to_string()),
                 corruption_details: "Session created_at is after last_accessed".to_string(),
             });
         }
@@ -177,7 +177,7 @@ impl EnhancedSessionLoader {
         for (i, message) in session.context.iter().enumerate() {
             if message.timestamp > SystemTime::now() {
                 return Err(SessionSetupError::SessionCorrupted {
-                    session_id: agent_client_protocol::SessionId(session.id.to_string().into()),
+                    session_id: agent_client_protocol::SessionId::new(session.id.to_string()),
                     corruption_details: format!("Message {} timestamp is in the future", i),
                 });
             }
@@ -186,7 +186,7 @@ impl EnhancedSessionLoader {
         // Check for excessive message count
         if session.context.len() > self.max_history_messages {
             return Err(SessionSetupError::SessionCorrupted {
-                session_id: agent_client_protocol::SessionId(session.id.to_string().into()),
+                session_id: agent_client_protocol::SessionId::new(session.id.to_string()),
                 corruption_details: format!(
                     "Session contains {} messages, exceeding maximum of {}",
                     session.context.len(),
@@ -218,7 +218,7 @@ impl EnhancedSessionLoader {
         for (i, message) in session.context.iter().enumerate() {
             // Use SessionUpdate stored directly in the message
             let notification = SessionNotification {
-                session_id: agent_client_protocol::SessionId(session.id.to_string().into()),
+                session_id: agent_client_protocol::SessionId::new(session.id.to_string()),
                 update: message.update.clone(),
                 meta: Some(serde_json::json!({
                     "timestamp": message.timestamp
@@ -433,7 +433,7 @@ impl SessionHistoryReplayer {
         for (i, message) in session.context.iter().enumerate() {
             // Use SessionUpdate stored directly in message
             let notification = SessionNotification {
-                session_id: agent_client_protocol::SessionId(session.id.to_string().into()),
+                session_id: agent_client_protocol::SessionId::new(session.id.to_string()),
                 update: message.update.clone(),
                 meta: Some(serde_json::json!({
                     "timestamp": message.timestamp
@@ -472,7 +472,7 @@ impl SessionHistoryReplayer {
                             failure_count
                         );
                         return Err(SessionSetupError::SessionHistoryReplayFailed {
-                            session_id: agent_client_protocol::SessionId(
+                            session_id: agent_client_protocol::SessionId::new(
                                 session.id.to_string().into(),
                             ),
                             failed_at_message: i,
@@ -630,7 +630,7 @@ mod tests {
         let loader = EnhancedSessionLoader::new(session_manager);
 
         let request = LoadSessionRequest {
-            session_id: SessionId("01ARZ3NDEKTSV4RRFFQ69G5FAV".to_string().into()),
+            session_id: SessionId::new("01ARZ3NDEKTSV4RRFFQ69G5FAV"),
             cwd: std::env::current_dir().unwrap(),
             mcp_servers: vec![McpServer::Stdio {
                 name: "test-server".to_string(),
@@ -653,7 +653,7 @@ mod tests {
         let loader = EnhancedSessionLoader::new(session_manager);
 
         let request = LoadSessionRequest {
-            session_id: SessionId("01ARZ3NDEKTSV4RRFFQ69G5FAV".to_string().into()),
+            session_id: SessionId::new("01ARZ3NDEKTSV4RRFFQ69G5FAV"),
             cwd: std::env::current_dir().unwrap(),
             mcp_servers: vec![McpServer::Http {
                 name: "test-http-server".to_string(),
@@ -675,7 +675,7 @@ mod tests {
         let loader = EnhancedSessionLoader::new(session_manager);
 
         let request = LoadSessionRequest {
-            session_id: SessionId("01ARZ3NDEKTSV4RRFFQ69G5FAV".to_string().into()),
+            session_id: SessionId::new("01ARZ3NDEKTSV4RRFFQ69G5FAV"),
             cwd: std::env::current_dir().unwrap(),
             mcp_servers: vec![McpServer::Sse {
                 name: "test-sse-server".to_string(),
@@ -697,7 +697,7 @@ mod tests {
         let loader = EnhancedSessionLoader::new(session_manager);
 
         let request = LoadSessionRequest {
-            session_id: SessionId("01ARZ3NDEKTSV4RRFFQ69G5FAV".to_string().into()),
+            session_id: SessionId::new("01ARZ3NDEKTSV4RRFFQ69G5FAV"),
             cwd: std::env::current_dir().unwrap(),
             mcp_servers: vec![McpServer::Http {
                 name: "test-http-server".to_string(),
@@ -725,7 +725,7 @@ mod tests {
         let loader = EnhancedSessionLoader::new(session_manager);
 
         let request = LoadSessionRequest {
-            session_id: SessionId("01ARZ3NDEKTSV4RRFFQ69G5FAV".to_string().into()),
+            session_id: SessionId::new("01ARZ3NDEKTSV4RRFFQ69G5FAV"),
             cwd: std::env::current_dir().unwrap(),
             mcp_servers: vec![McpServer::Sse {
                 name: "test-sse-server".to_string(),
@@ -754,7 +754,7 @@ mod tests {
         let loader = EnhancedSessionLoader::new(session_manager);
 
         let request = LoadSessionRequest {
-            session_id: SessionId("01ARZ3NDEKTSV4RRFFQ69G5FAV".to_string().into()),
+            session_id: SessionId::new("01ARZ3NDEKTSV4RRFFQ69G5FAV"),
             cwd: std::env::current_dir().unwrap(),
             mcp_servers: vec![
                 McpServer::Stdio {
@@ -790,7 +790,7 @@ mod tests {
         let loader = EnhancedSessionLoader::new(session_manager);
 
         let request = LoadSessionRequest {
-            session_id: SessionId("01ARZ3NDEKTSV4RRFFQ69G5FAV".to_string().into()),
+            session_id: SessionId::new("01ARZ3NDEKTSV4RRFFQ69G5FAV"),
             cwd: std::env::current_dir().unwrap(),
             mcp_servers: vec![McpServer::Stdio {
                 name: "nonexistent-server".to_string(),

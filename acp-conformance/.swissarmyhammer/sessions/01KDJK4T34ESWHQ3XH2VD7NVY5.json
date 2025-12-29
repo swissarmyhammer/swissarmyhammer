@@ -1,0 +1,75 @@
+{
+  "id": "01KDJK4T34ESWHQ3XH2VD7NVY5",
+  "created_at": {
+    "secs_since_epoch": 1766929360,
+    "nanos_since_epoch": 996798000
+  },
+  "last_accessed": {
+    "secs_since_epoch": 1766929367,
+    "nanos_since_epoch": 421221000
+  },
+  "context": [
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766929367,
+        "nanos_since_epoch": 421215000
+      },
+      "update": {
+        "sessionUpdate": "available_commands_update",
+        "availableCommands": [
+          {
+            "name": "create_plan",
+            "description": "Create an execution plan for complex tasks",
+            "input": null,
+            "_meta": {
+              "category": "planning",
+              "source": "core"
+            }
+          },
+          {
+            "name": "research_codebase",
+            "description": "Research and analyze the codebase structure",
+            "input": null,
+            "_meta": {
+              "category": "analysis",
+              "source": "core"
+            }
+          }
+        ]
+      }
+    }
+  ],
+  "client_capabilities": {
+    "fs": {
+      "readTextFile": false,
+      "writeTextFile": false
+    },
+    "terminal": false
+  },
+  "mcp_servers": [],
+  "cwd": "/Users/wballard/github/swissarmyhammer/acp-conformance",
+  "available_commands": [
+    {
+      "name": "create_plan",
+      "description": "Create an execution plan for complex tasks",
+      "input": null,
+      "_meta": {
+        "category": "planning",
+        "source": "core"
+      }
+    },
+    {
+      "name": "research_codebase",
+      "description": "Research and analyze the codebase structure",
+      "input": null,
+      "_meta": {
+        "category": "analysis",
+        "source": "core"
+      }
+    }
+  ],
+  "turn_request_count": 0,
+  "turn_token_count": 0,
+  "current_mode": null,
+  "todos": []
+}

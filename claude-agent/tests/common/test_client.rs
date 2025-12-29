@@ -183,7 +183,7 @@ impl Client for TestClient {
         use agent_client_protocol::{PermissionOptionId, RequestPermissionOutcome};
         Ok(RequestPermissionResponse {
             outcome: RequestPermissionOutcome::Selected {
-                option_id: PermissionOptionId(Arc::from("allow")),
+                option_id: PermissionOptionId::new("allow"),
             },
             meta: None,
         })
@@ -323,7 +323,7 @@ mod tests {
         let request = RequestPermissionRequest {
             session_id: test_session_id(),
             tool_call: agent_client_protocol::ToolCallUpdate {
-                id: agent_client_protocol::ToolCallId(Arc::from("tool-1")),
+                id: agent_client_protocol::ToolCallId::new("tool-1"),
                 fields: agent_client_protocol::ToolCallUpdateFields {
                     title: Some("test-tool".to_string()),
                     ..Default::default()

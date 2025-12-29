@@ -4,7 +4,7 @@
 use crate::{ActionError, ActionResult, AgentExecutionContext, AgentExecutor, AgentResponse};
 use agent_client_protocol::McpServer;
 use async_trait::async_trait;
-use swissarmyhammer_config::model::AgentExecutorType;
+use swissarmyhammer_config::model::ModelExecutorType;
 
 /// Executor that shells out to Claude Code CLI
 #[derive(Debug, Clone)]
@@ -217,8 +217,8 @@ impl AgentExecutor for ClaudeCodeExecutor {
         .await
     }
 
-    fn executor_type(&self) -> AgentExecutorType {
-        AgentExecutorType::ClaudeCode
+    fn executor_type(&self) -> ModelExecutorType {
+        ModelExecutorType::ClaudeCode
     }
 
     async fn initialize(&mut self) -> ActionResult<()> {

@@ -1,0 +1,283 @@
+{
+  "id": "01KDJG184BAJWQCRXWZGGN84M6",
+  "created_at": {
+    "secs_since_epoch": 1766926098,
+    "nanos_since_epoch": 571055000
+  },
+  "last_accessed": {
+    "secs_since_epoch": 1766926112,
+    "nanos_since_epoch": 113109000
+  },
+  "context": [
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926107,
+        "nanos_since_epoch": 548173000
+      },
+      "update": {
+        "sessionUpdate": "available_commands_update",
+        "availableCommands": [
+          {
+            "name": "create_plan",
+            "description": "Create an execution plan for complex tasks",
+            "input": null,
+            "_meta": {
+              "category": "planning",
+              "source": "core"
+            }
+          },
+          {
+            "name": "research_codebase",
+            "description": "Research and analyze the codebase structure",
+            "input": null,
+            "_meta": {
+              "category": "analysis",
+              "source": "core"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926107,
+        "nanos_since_epoch": 548406000
+      },
+      "update": {
+        "sessionUpdate": "user_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "First messageSecond message"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926111,
+        "nanos_since_epoch": 201577000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "It"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926111,
+        "nanos_since_epoch": 609126000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " looks like you sent"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926111,
+        "nanos_since_epoch": 610696000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " two"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926111,
+        "nanos_since_epoch": 611200000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " messages that"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926111,
+        "nanos_since_epoch": 612328000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " got concaten"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926111,
+        "nanos_since_epoch": 612526000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "ated together. How"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926111,
+        "nanos_since_epoch": 664637000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " can I help you?"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926111,
+        "nanos_since_epoch": 665092000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " Feel"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926111,
+        "nanos_since_epoch": 713061000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " free to share"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926111,
+        "nanos_since_epoch": 726357000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " what"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926111,
+        "nanos_since_epoch": 792995000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " you're"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926111,
+        "nanos_since_epoch": 819330000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " working"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926111,
+        "nanos_since_epoch": 973283000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " on or what questions you"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926111,
+        "nanos_since_epoch": 973810000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " have."
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926112,
+        "nanos_since_epoch": 113087000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "It looks like you sent two messages that got concatenated together. How can I help you? Feel free to share what you're working on or what questions you have."
+        }
+      }
+    }
+  ],
+  "client_capabilities": {
+    "fs": {
+      "readTextFile": false,
+      "writeTextFile": false
+    },
+    "terminal": false
+  },
+  "mcp_servers": [],
+  "cwd": "/Users/wballard/github/swissarmyhammer/acp-conformance",
+  "available_commands": [
+    {
+      "name": "create_plan",
+      "description": "Create an execution plan for complex tasks",
+      "input": null,
+      "_meta": {
+        "category": "planning",
+        "source": "core"
+      }
+    },
+    {
+      "name": "research_codebase",
+      "description": "Research and analyze the codebase structure",
+      "input": null,
+      "_meta": {
+        "category": "analysis",
+        "source": "core"
+      }
+    }
+  ],
+  "turn_request_count": 1,
+  "turn_token_count": 6,
+  "current_mode": null,
+  "todos": []
+}

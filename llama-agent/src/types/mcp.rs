@@ -290,6 +290,7 @@ impl HttpServerConfig {
         StreamableHttpServerConfig {
             sse_keep_alive: self.sse_keep_alive_secs.map(Duration::from_secs),
             stateful_mode: self.stateful_mode,
+            cancellation_token: Default::default(),
         }
     }
 

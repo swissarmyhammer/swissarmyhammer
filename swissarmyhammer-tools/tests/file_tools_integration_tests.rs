@@ -138,9 +138,9 @@ async fn create_test_context() -> ToolContext {
 }
 
 /// Create a test tool registry with file tools registered
-fn create_test_registry() -> ToolRegistry {
+async fn create_test_registry() -> ToolRegistry {
     let mut registry = ToolRegistry::new();
-    files::register_file_tools(&mut registry);
+    files::register_file_tools(&mut registry).await;
     registry
 }
 
@@ -260,11 +260,15 @@ where
 
     let mut success_count = 0;
     let mut error_count = 0;
+    let mut errors = Vec::new();
 
     while let Some(result) = join_set.join_next().await {
         match result.unwrap() {
             Ok(_) => success_count += 1,
-            Err(_) => error_count += 1,
+            Err(e) => {
+                error_count += 1;
+                errors.push(format!("{:?}", e));
+            }
         }
     }
 
@@ -660,7 +664,7 @@ async fn test_read_with_offset_limit(
     limit: Option<usize>,
     expected_content: &str,
 ) {
-    let registry = create_test_registry();
+    let registry = create_test_registry().await;
     let context = create_test_context().await;
     let tool = registry.get_tool("files_read").unwrap();
 
@@ -779,7 +783,7 @@ fn verify_tool_registration(
 
 #[tokio::test]
 async fn test_read_tool_discovery_and_registration() {
-    let registry = create_test_registry();
+    let registry = create_test_registry().await;
     verify_tool_registration(
         &registry,
         "files_read",
@@ -791,7 +795,7 @@ async fn test_read_tool_discovery_and_registration() {
 
 #[tokio::test]
 async fn test_read_tool_execution_success_cases() {
-    let registry = create_test_registry();
+    let registry = create_test_registry().await;
     let context = create_test_context().await;
     let tool = registry.get_tool("files_read").unwrap();
 
@@ -836,7 +840,7 @@ async fn test_read_tool_limit_only() {
 
 #[tokio::test]
 async fn test_read_tool_missing_file_error() {
-    let registry = create_test_registry();
+    let registry = create_test_registry().await;
     let context = create_test_context().await;
     let tool = registry.get_tool("files_read").unwrap();
 
@@ -858,7 +862,7 @@ async fn test_read_tool_missing_file_error() {
 
 #[tokio::test]
 async fn test_read_tool_relative_path_support() {
-    let registry = create_test_registry();
+    let registry = create_test_registry().await;
     let context = create_test_context().await;
     let tool = registry.get_tool("files_read").unwrap();
 
@@ -880,7 +884,7 @@ async fn test_read_tool_relative_path_support() {
 
 #[tokio::test]
 async fn test_read_tool_empty_path_error() {
-    let registry = create_test_registry();
+    let registry = create_test_registry().await;
     let context = create_test_context().await;
     let tool = registry.get_tool("files_read").unwrap();
 
@@ -901,7 +905,7 @@ async fn test_read_tool_empty_path_error() {
 
 #[tokio::test]
 async fn test_read_tool_missing_required_parameter() {
-    let registry = create_test_registry();
+    let registry = create_test_registry().await;
     let context = create_test_context().await;
     let tool = registry.get_tool("files_read").unwrap();
 
@@ -918,7 +922,7 @@ async fn test_read_tool_missing_required_parameter() {
 
 #[tokio::test]
 async fn test_read_tool_path_traversal_protection() {
-    let registry = create_test_registry();
+    let registry = create_test_registry().await;
     let context = create_test_context().await;
     let tool = registry.get_tool("files_read").unwrap();
 
@@ -953,7 +957,7 @@ async fn test_read_tool_path_traversal_protection() {
 
 #[tokio::test]
 async fn test_read_tool_handles_large_files_safely() {
-    let registry = create_test_registry();
+    let registry = create_test_registry().await;
     let context = create_test_context().await;
     let tool = registry.get_tool("files_read").unwrap();
 
@@ -995,7 +999,7 @@ async fn test_read_tool_handles_large_files_safely() {
 
 #[tokio::test]
 async fn test_read_tool_empty_file() {
-    let registry = create_test_registry();
+    let registry = create_test_registry().await;
     let context = create_test_context().await;
     let tool = registry.get_tool("files_read").unwrap();
 
@@ -1015,7 +1019,7 @@ async fn test_read_tool_empty_file() {
 
 #[tokio::test]
 async fn test_read_tool_single_line_file() {
-    let registry = create_test_registry();
+    let registry = create_test_registry().await;
     let context = create_test_context().await;
     let tool = registry.get_tool("files_read").unwrap();
 
@@ -1035,7 +1039,7 @@ async fn test_read_tool_single_line_file() {
 
 #[tokio::test]
 async fn test_read_tool_with_unicode_content() {
-    let registry = create_test_registry();
+    let registry = create_test_registry().await;
     let context = create_test_context().await;
     let tool = registry.get_tool("files_read").unwrap();
 
@@ -1055,7 +1059,7 @@ async fn test_read_tool_with_unicode_content() {
 
 #[tokio::test]
 async fn test_read_tool_excessive_offset_error() {
-    let registry = create_test_registry();
+    let registry = create_test_registry().await;
     let context = create_test_context().await;
     let tool = registry.get_tool("files_read").unwrap();
 
@@ -1072,7 +1076,7 @@ async fn test_read_tool_excessive_offset_error() {
 
 #[tokio::test]
 async fn test_read_tool_zero_limit_error() {
-    let registry = create_test_registry();
+    let registry = create_test_registry().await;
     let context = create_test_context().await;
     let tool = registry.get_tool("files_read").unwrap();
 
@@ -1089,7 +1093,7 @@ async fn test_read_tool_zero_limit_error() {
 
 #[tokio::test]
 async fn test_read_tool_excessive_limit_error() {
-    let registry = create_test_registry();
+    let registry = create_test_registry().await;
     let context = create_test_context().await;
     let tool = registry.get_tool("files_read").unwrap();
 
@@ -1106,7 +1110,7 @@ async fn test_read_tool_excessive_limit_error() {
 
 #[tokio::test]
 async fn test_read_tool_file_not_found_error() {
-    let registry = create_test_registry();
+    let registry = create_test_registry().await;
     let context = create_test_context().await;
     let tool = registry.get_tool("files_read").unwrap();
 
@@ -1119,7 +1123,7 @@ async fn test_read_tool_file_not_found_error() {
 
 #[tokio::test]
 async fn test_read_tool_permission_denied_scenarios() {
-    let registry = create_test_registry();
+    let registry = create_test_registry().await;
     let context = create_test_context().await;
     let tool = registry.get_tool("files_read").unwrap();
 
@@ -1147,7 +1151,7 @@ async fn test_read_tool_permission_denied_scenarios() {
 
 #[tokio::test]
 async fn test_read_tool_large_file_handling() {
-    let registry = create_test_registry();
+    let registry = create_test_registry().await;
     let context = create_test_context().await;
     let tool = registry.get_tool("files_read").unwrap();
 
@@ -1190,7 +1194,7 @@ async fn test_read_tool_large_file_handling() {
 
 #[tokio::test]
 async fn test_read_tool_edge_cases() {
-    let registry = create_test_registry();
+    let registry = create_test_registry().await;
     let context = create_test_context().await;
     let tool = registry.get_tool("files_read").unwrap();
 
@@ -1233,7 +1237,7 @@ async fn test_read_tool_edge_cases() {
 
 #[tokio::test]
 async fn test_glob_tool_discovery_and_registration() {
-    let registry = create_test_registry();
+    let registry = create_test_registry().await;
     verify_tool_registration(
         &registry,
         "files_glob",
@@ -1245,7 +1249,7 @@ async fn test_glob_tool_discovery_and_registration() {
 
 #[tokio::test]
 async fn test_glob_tool_basic_pattern_matching() {
-    let registry = create_test_registry();
+    let registry = create_test_registry().await;
     let context = create_test_context().await;
     let tool = registry.get_tool("files_glob").unwrap();
 
@@ -1289,7 +1293,7 @@ async fn test_glob_tool_basic_pattern_matching() {
 #[tokio::test]
 async fn test_glob_tool_advanced_gitignore_integration() {
     // This test will fail initially - it tests the enhanced functionality we need to implement
-    let registry = create_test_registry();
+    let registry = create_test_registry().await;
     let context = create_test_context().await;
     let tool = registry.get_tool("files_glob").unwrap();
 
@@ -1341,7 +1345,7 @@ async fn test_glob_tool_advanced_gitignore_integration() {
 
 #[tokio::test]
 async fn test_glob_tool_pattern_validation() {
-    let registry = create_test_registry();
+    let registry = create_test_registry().await;
     let context = create_test_context().await;
     let tool = registry.get_tool("files_glob").unwrap();
 
@@ -1367,7 +1371,7 @@ async fn test_glob_tool_pattern_validation() {
 
 #[tokio::test]
 async fn test_glob_tool_case_sensitivity() {
-    let registry = create_test_registry();
+    let registry = create_test_registry().await;
     let context = create_test_context().await;
     let tool = registry.get_tool("files_glob").unwrap();
 
@@ -1416,7 +1420,7 @@ async fn test_glob_tool_case_sensitivity() {
 
 #[tokio::test]
 async fn test_glob_tool_modification_time_sorting() {
-    let registry = create_test_registry();
+    let registry = create_test_registry().await;
     let context = create_test_context().await;
     let tool = registry.get_tool("files_glob").unwrap();
 
@@ -1464,7 +1468,7 @@ async fn test_glob_tool_modification_time_sorting() {
 
 #[tokio::test]
 async fn test_glob_tool_no_matches() {
-    let registry = create_test_registry();
+    let registry = create_test_registry().await;
     let context = create_test_context().await;
     let tool = registry.get_tool("files_glob").unwrap();
 
@@ -1488,7 +1492,7 @@ async fn test_glob_tool_no_matches() {
 
 #[tokio::test]
 async fn test_glob_tool_recursive_patterns() {
-    let registry = create_test_registry();
+    let registry = create_test_registry().await;
     let context = create_test_context().await;
     let tool = registry.get_tool("files_glob").unwrap();
 
@@ -1539,7 +1543,7 @@ async fn test_glob_tool_recursive_patterns() {
 
 #[tokio::test]
 async fn test_grep_tool_discovery_and_registration() {
-    let registry = create_test_registry();
+    let registry = create_test_registry().await;
     verify_tool_registration(
         &registry,
         "files_grep",
@@ -1558,7 +1562,7 @@ async fn test_grep_tool_discovery_and_registration() {
 
 #[tokio::test]
 async fn test_grep_tool_basic_pattern_matching() {
-    let registry = create_test_registry();
+    let registry = create_test_registry().await;
     let context = create_test_context().await;
     let tool = registry.get_tool("files_grep").unwrap();
 
@@ -1602,7 +1606,7 @@ async fn test_grep_tool_basic_pattern_matching() {
 
 #[tokio::test]
 async fn test_grep_tool_file_type_filtering() {
-    let registry = create_test_registry();
+    let registry = create_test_registry().await;
     let context = create_test_context().await;
     let tool = registry.get_tool("files_grep").unwrap();
 
@@ -1646,7 +1650,7 @@ async fn test_grep_tool_file_type_filtering() {
 
 #[tokio::test]
 async fn test_grep_tool_glob_filtering() {
-    let registry = create_test_registry();
+    let registry = create_test_registry().await;
     let context = create_test_context().await;
     let tool = registry.get_tool("files_grep").unwrap();
 
@@ -1698,7 +1702,7 @@ async fn test_grep_tool_glob_filtering() {
 
 #[tokio::test]
 async fn test_grep_tool_case_sensitivity() {
-    let registry = create_test_registry();
+    let registry = create_test_registry().await;
     let context = create_test_context().await;
     let tool = registry.get_tool("files_grep").unwrap();
 
@@ -1740,7 +1744,7 @@ async fn test_grep_tool_case_sensitivity() {
 
 #[tokio::test]
 async fn test_grep_tool_context_lines() {
-    let registry = create_test_registry();
+    let registry = create_test_registry().await;
     let context = create_test_context().await;
     let tool = registry.get_tool("files_grep").unwrap();
 
@@ -1769,7 +1773,7 @@ async fn test_grep_tool_context_lines() {
 
 #[tokio::test]
 async fn test_grep_tool_output_modes() {
-    let registry = create_test_registry();
+    let registry = create_test_registry().await;
     let context = create_test_context().await;
     let tool = registry.get_tool("files_grep").unwrap();
 
@@ -1835,7 +1839,7 @@ async fn test_grep_tool_output_modes() {
 
 #[tokio::test]
 async fn test_grep_tool_error_handling() {
-    let registry = create_test_registry();
+    let registry = create_test_registry().await;
     let context = create_test_context().await;
     let tool = registry.get_tool("files_grep").unwrap();
 
@@ -1885,7 +1889,7 @@ async fn test_grep_tool_error_handling() {
 
 #[tokio::test]
 async fn test_grep_tool_binary_file_exclusion() {
-    let registry = create_test_registry();
+    let registry = create_test_registry().await;
     let context = create_test_context().await;
     let tool = registry.get_tool("files_grep").unwrap();
 
@@ -1920,7 +1924,7 @@ async fn test_grep_tool_binary_file_exclusion() {
 
 #[tokio::test]
 async fn test_grep_tool_no_matches() {
-    let registry = create_test_registry();
+    let registry = create_test_registry().await;
     let context = create_test_context().await;
     let tool = registry.get_tool("files_grep").unwrap();
 
@@ -1946,7 +1950,7 @@ async fn test_grep_tool_no_matches() {
 
 #[tokio::test]
 async fn test_grep_tool_ripgrep_fallback_behavior() {
-    let registry = create_test_registry();
+    let registry = create_test_registry().await;
     let context = create_test_context().await;
     let tool = registry.get_tool("files_grep").unwrap();
 
@@ -1979,7 +1983,7 @@ async fn test_grep_tool_ripgrep_fallback_behavior() {
 
 #[tokio::test]
 async fn test_grep_tool_single_file_vs_directory() {
-    let registry = create_test_registry();
+    let registry = create_test_registry().await;
     let context = create_test_context().await;
     let tool = registry.get_tool("files_grep").unwrap();
 
@@ -2035,7 +2039,7 @@ async fn test_grep_tool_single_file_vs_directory() {
 
 #[tokio::test]
 async fn test_write_tool_discovery_and_registration() {
-    let registry = create_test_registry();
+    let registry = create_test_registry().await;
     verify_tool_registration(
         &registry,
         "files_write",
@@ -2047,7 +2051,7 @@ async fn test_write_tool_discovery_and_registration() {
 
 #[tokio::test]
 async fn test_write_tool_execution_success_cases() {
-    let registry = create_test_registry();
+    let registry = create_test_registry().await;
     let context = create_test_context().await;
     let tool = registry.get_tool("files_write").unwrap();
 
@@ -2077,7 +2081,7 @@ async fn test_write_tool_execution_success_cases() {
 
 #[tokio::test]
 async fn test_write_tool_overwrite_existing_file() {
-    let registry = create_test_registry();
+    let registry = create_test_registry().await;
     let context = create_test_context().await;
     let tool = registry.get_tool("files_write").unwrap();
 
@@ -2107,7 +2111,7 @@ async fn test_write_tool_overwrite_existing_file() {
 
 #[tokio::test]
 async fn test_write_tool_creates_parent_directories() {
-    let registry = create_test_registry();
+    let registry = create_test_registry().await;
     let context = create_test_context().await;
     let tool = registry.get_tool("files_write").unwrap();
 
@@ -2145,7 +2149,7 @@ async fn test_write_tool_creates_parent_directories() {
 
 #[tokio::test]
 async fn test_write_tool_unicode_content() {
-    let registry = create_test_registry();
+    let registry = create_test_registry().await;
     let context = create_test_context().await;
     let tool = registry.get_tool("files_write").unwrap();
 
@@ -2171,7 +2175,7 @@ async fn test_write_tool_unicode_content() {
 
 #[tokio::test]
 async fn test_write_tool_empty_content() {
-    let registry = create_test_registry();
+    let registry = create_test_registry().await;
     let context = create_test_context().await;
     let tool = registry.get_tool("files_write").unwrap();
 
@@ -2195,7 +2199,7 @@ async fn test_write_tool_empty_content() {
 
 #[tokio::test]
 async fn test_write_tool_error_handling() {
-    let registry = create_test_registry();
+    let registry = create_test_registry().await;
     let context = create_test_context().await;
     let tool = registry.get_tool("files_write").unwrap();
 
@@ -2238,7 +2242,7 @@ async fn test_write_tool_error_handling() {
 
 #[tokio::test]
 async fn test_edit_tool_discovery_and_registration() {
-    let registry = create_test_registry();
+    let registry = create_test_registry().await;
     verify_tool_registration(
         &registry,
         "files_edit",
@@ -2250,7 +2254,7 @@ async fn test_edit_tool_discovery_and_registration() {
 
 #[tokio::test]
 async fn test_edit_tool_single_replacement_success() {
-    let registry = create_test_registry();
+    let registry = create_test_registry().await;
     let context = create_test_context().await;
     let tool = registry.get_tool("files_edit").unwrap();
 
@@ -2288,7 +2292,7 @@ async fn test_edit_tool_single_replacement_success() {
 
 #[tokio::test]
 async fn test_edit_tool_replace_all_success() {
-    let registry = create_test_registry();
+    let registry = create_test_registry().await;
     let context = create_test_context().await;
     let tool = registry.get_tool("files_edit").unwrap();
 
@@ -2319,7 +2323,7 @@ async fn test_edit_tool_replace_all_success() {
 
 #[tokio::test]
 async fn test_edit_tool_string_not_found_error() {
-    let registry = create_test_registry();
+    let registry = create_test_registry().await;
     let context = create_test_context().await;
     let tool = registry.get_tool("files_edit").unwrap();
 
@@ -2347,7 +2351,7 @@ async fn test_edit_tool_string_not_found_error() {
 
 #[tokio::test]
 async fn test_edit_tool_multiple_occurrences_without_replace_all() {
-    let registry = create_test_registry();
+    let registry = create_test_registry().await;
     let context = create_test_context().await;
     let tool = registry.get_tool("files_edit").unwrap();
 
@@ -2378,7 +2382,7 @@ async fn test_edit_tool_multiple_occurrences_without_replace_all() {
 
 #[tokio::test]
 async fn test_edit_tool_unicode_content() {
-    let registry = create_test_registry();
+    let registry = create_test_registry().await;
     let context = create_test_context().await;
     let tool = registry.get_tool("files_edit").unwrap();
 
@@ -2408,7 +2412,7 @@ async fn test_edit_tool_unicode_content() {
 
 #[tokio::test]
 async fn test_edit_tool_preserves_line_endings() {
-    let registry = create_test_registry();
+    let registry = create_test_registry().await;
     let context = create_test_context().await;
     let tool = registry.get_tool("files_edit").unwrap();
 
@@ -2443,7 +2447,7 @@ async fn test_edit_tool_preserves_line_endings() {
 
 #[tokio::test]
 async fn test_edit_tool_file_not_exists_error() {
-    let registry = create_test_registry();
+    let registry = create_test_registry().await;
     let context = create_test_context().await;
     let tool = registry.get_tool("files_edit").unwrap();
 
@@ -2469,7 +2473,7 @@ async fn test_edit_tool_file_not_exists_error() {
 
 #[tokio::test]
 async fn test_edit_tool_empty_parameters_error() {
-    let registry = create_test_registry();
+    let registry = create_test_registry().await;
     let context = create_test_context().await;
     let tool = registry.get_tool("files_edit").unwrap();
 
@@ -2495,7 +2499,7 @@ async fn test_edit_tool_empty_parameters_error() {
 
 #[tokio::test]
 async fn test_write_then_read_workflow() {
-    let registry = create_test_registry();
+    let registry = create_test_registry().await;
     let context = create_test_context().await;
     let write_tool = registry.get_tool("files_write").unwrap();
     let read_tool = registry.get_tool("files_read").unwrap();
@@ -2533,7 +2537,7 @@ async fn test_write_then_read_workflow() {
 
 #[tokio::test]
 async fn test_write_then_edit_workflow() {
-    let registry = create_test_registry();
+    let registry = create_test_registry().await;
     let context = create_test_context().await;
     let write_tool = registry.get_tool("files_write").unwrap();
     let edit_tool = registry.get_tool("files_edit").unwrap();
@@ -2566,7 +2570,7 @@ async fn test_write_then_edit_workflow() {
 
 #[tokio::test]
 async fn test_read_then_edit_workflow() {
-    let registry = create_test_registry();
+    let registry = create_test_registry().await;
     let context = create_test_context().await;
     let read_tool = registry.get_tool("files_read").unwrap();
     let edit_tool = registry.get_tool("files_edit").unwrap();
@@ -2606,7 +2610,7 @@ async fn test_read_then_edit_workflow() {
 
 #[tokio::test]
 async fn test_glob_then_grep_workflow() {
-    let registry = create_test_registry();
+    let registry = create_test_registry().await;
     let context = create_test_context().await;
     let glob_tool = registry.get_tool("files_glob").unwrap();
     let grep_tool = registry.get_tool("files_grep").unwrap();
@@ -2667,7 +2671,7 @@ async fn test_glob_then_grep_workflow() {
 #[tokio::test]
 async fn test_complex_file_workflow() {
     // Test a complex workflow: glob -> read -> edit -> read (to verify)
-    let registry = create_test_registry();
+    let registry = create_test_registry().await;
     let context = create_test_context().await;
     let glob_tool = registry.get_tool("files_glob").unwrap();
     let read_tool = registry.get_tool("files_read").unwrap();
@@ -2749,7 +2753,7 @@ async fn test_complex_file_workflow() {
 #[tokio::test]
 async fn test_error_handling_in_workflow() {
     // Test error handling when tools fail in a workflow
-    let registry = create_test_registry();
+    let registry = create_test_registry().await;
     let context = create_test_context().await;
     let read_tool = registry.get_tool("files_read").unwrap();
     let edit_tool = registry.get_tool("files_edit").unwrap();
@@ -2800,7 +2804,7 @@ async fn test_error_handling_in_workflow() {
 
 #[tokio::test]
 async fn test_comprehensive_path_traversal_protection_all_tools() {
-    let registry = create_test_registry();
+    let registry = create_test_registry().await;
     let context = create_test_context().await;
 
     for tool_name in FILE_TOOLS {
@@ -2810,7 +2814,7 @@ async fn test_comprehensive_path_traversal_protection_all_tools() {
 
 #[tokio::test]
 async fn test_symlink_read_security() {
-    let registry = create_test_registry();
+    let registry = create_test_registry().await;
     let context = create_test_context().await;
     let read_tool = registry.get_tool("files_read").unwrap();
 
@@ -2851,7 +2855,7 @@ async fn test_symlink_read_security() {
 
 #[tokio::test]
 async fn test_symlink_write_security() {
-    let registry = create_test_registry();
+    let registry = create_test_registry().await;
     let context = create_test_context().await;
     let write_tool = registry.get_tool("files_write").unwrap();
 
@@ -2919,7 +2923,7 @@ async fn test_restricted_path_access(
 
 #[tokio::test]
 async fn test_workspace_boundary_enforcement() {
-    let registry = create_test_registry();
+    let registry = create_test_registry().await;
     let context = create_test_context().await;
 
     let read_tool = registry.get_tool("files_read").unwrap();
@@ -2943,7 +2947,7 @@ async fn test_workspace_boundary_enforcement() {
 
 #[tokio::test]
 async fn test_read_tool_malformed_input() {
-    let registry = create_test_registry();
+    let registry = create_test_registry().await;
     let context = create_test_context().await;
     let read_tool = registry.get_tool("files_read").unwrap();
 
@@ -2968,7 +2972,7 @@ async fn test_read_tool_malformed_input() {
 
 #[tokio::test]
 async fn test_write_tool_malformed_input() {
-    let registry = create_test_registry();
+    let registry = create_test_registry().await;
     let context = create_test_context().await;
     let write_tool = registry.get_tool("files_write").unwrap();
 
@@ -3001,7 +3005,7 @@ async fn test_write_tool_malformed_input() {
 
 #[tokio::test]
 async fn test_glob_tool_malformed_input() {
-    let registry = create_test_registry();
+    let registry = create_test_registry().await;
     let context = create_test_context().await;
     let glob_tool = registry.get_tool("files_glob").unwrap();
 
@@ -3026,7 +3030,7 @@ async fn test_glob_tool_malformed_input() {
 
 #[tokio::test]
 async fn test_grep_tool_malformed_input() {
-    let registry = create_test_registry();
+    let registry = create_test_registry().await;
     let context = create_test_context().await;
     let grep_tool = registry.get_tool("files_grep").unwrap();
 
@@ -3089,7 +3093,7 @@ async fn test_privileged_location_access(
 
 #[tokio::test]
 async fn test_permission_escalation_prevention() {
-    let registry = create_test_registry();
+    let registry = create_test_registry().await;
     let context = create_test_context().await;
 
     let write_tool = registry.get_tool("files_write").unwrap();
@@ -3115,7 +3119,7 @@ async fn test_permission_escalation_prevention() {
 
 #[tokio::test]
 async fn test_read_tool_excessive_parameters() {
-    let registry = create_test_registry();
+    let registry = create_test_registry().await;
     let context = create_test_context().await;
     let read_tool = registry.get_tool("files_read").unwrap();
 
@@ -3144,7 +3148,7 @@ async fn test_read_tool_excessive_parameters() {
 
 #[tokio::test]
 async fn test_write_tool_large_content_limits() {
-    let registry = create_test_registry();
+    let registry = create_test_registry().await;
     let context = create_test_context().await;
     let write_tool = registry.get_tool("files_write").unwrap();
 
@@ -3166,7 +3170,7 @@ async fn test_write_tool_large_content_limits() {
 
 #[tokio::test]
 async fn test_glob_tool_complex_patterns() {
-    let registry = create_test_registry();
+    let registry = create_test_registry().await;
     let context = create_test_context().await;
     let glob_tool = registry.get_tool("files_glob").unwrap();
 
@@ -3189,7 +3193,7 @@ async fn test_glob_tool_complex_patterns() {
 async fn test_concurrent_file_operations_safety() {
     use std::sync::Arc;
 
-    let registry = Arc::new(create_test_registry());
+    let registry = Arc::new(create_test_registry().await);
     let context = Arc::new(create_test_context().await);
 
     let _env = IsolatedTestEnvironment::new().expect("Failed to create test environment");
@@ -3264,7 +3268,7 @@ async fn test_concurrent_file_operations_safety() {
 
 #[tokio::test]
 async fn test_full_file_read_memory_usage() {
-    let registry = create_test_registry();
+    let registry = create_test_registry().await;
     let context = create_test_context().await;
     let read_tool = registry.get_tool("files_read").unwrap();
 
@@ -3331,7 +3335,7 @@ async fn test_full_file_read_memory_usage() {
 
 #[tokio::test]
 async fn test_offset_limit_read_memory_usage() {
-    let registry = create_test_registry();
+    let registry = create_test_registry().await;
     let context = create_test_context().await;
     let read_tool = registry.get_tool("files_read").unwrap();
 
@@ -3379,7 +3383,7 @@ async fn test_offset_limit_read_memory_usage() {
 
 #[tokio::test]
 async fn test_large_file_write_memory_usage() {
-    let registry = create_test_registry();
+    let registry = create_test_registry().await;
     let context = create_test_context().await;
     let write_tool = registry.get_tool("files_write").unwrap();
 
@@ -3441,7 +3445,7 @@ async fn test_large_file_write_memory_usage() {
 
 #[tokio::test]
 async fn test_large_file_edit_memory_usage() {
-    let registry = create_test_registry();
+    let registry = create_test_registry().await;
     let context = create_test_context().await;
     let write_tool = registry.get_tool("files_write").unwrap();
     let edit_tool = registry.get_tool("files_edit").unwrap();
@@ -3543,7 +3547,7 @@ async fn test_large_file_edit_memory_usage() {
 
 #[tokio::test]
 async fn test_concurrent_operations_memory_usage() {
-    let registry = Arc::new(create_test_registry());
+    let registry = Arc::new(create_test_registry().await);
     let context = Arc::new(create_test_context().await);
 
     let _env = IsolatedTestEnvironment::new().expect("Failed to create test environment");
@@ -3629,7 +3633,7 @@ async fn test_concurrent_operations_memory_usage() {
 
 #[tokio::test]
 async fn test_high_concurrency_stress_test() {
-    let registry = Arc::new(create_test_registry());
+    let registry = Arc::new(create_test_registry().await);
     let context = Arc::new(create_test_context().await);
 
     let _env = IsolatedTestEnvironment::new().expect("Failed to create test environment");
@@ -3669,7 +3673,7 @@ async fn test_high_concurrency_stress_test() {
 
 #[tokio::test]
 async fn test_mixed_operation_concurrency_stress() {
-    let registry = Arc::new(create_test_registry());
+    let registry = Arc::new(create_test_registry().await);
     let context = Arc::new(create_test_context().await);
 
     let _env = IsolatedTestEnvironment::new().expect("Failed to create test environment");
@@ -3735,7 +3739,7 @@ async fn test_mixed_operation_concurrency_stress() {
 
 #[tokio::test]
 async fn test_concurrent_file_access_patterns() {
-    let registry = Arc::new(create_test_registry());
+    let registry = Arc::new(create_test_registry().await);
     let context = Arc::new(create_test_context().await);
 
     let _env = IsolatedTestEnvironment::new().expect("Failed to create test environment");
@@ -3823,7 +3827,7 @@ fn extract_text_content(raw_content: &rmcp::model::RawContent) -> &str {
 // Property-based testing using regular tokio tests with generated data
 #[tokio::test]
 async fn test_write_read_roundtrip_properties() {
-    let registry = create_test_registry();
+    let registry = create_test_registry().await;
     let context = create_test_context().await;
     let write_tool = registry.get_tool("files_write").unwrap();
     let read_tool = registry.get_tool("files_read").unwrap();
@@ -3890,7 +3894,7 @@ async fn test_write_read_roundtrip_properties() {
 
 #[tokio::test]
 async fn test_edit_operation_consistency_properties() {
-    let registry = create_test_registry();
+    let registry = create_test_registry().await;
     let context = create_test_context().await;
     let write_tool = registry.get_tool("files_write").unwrap();
     let edit_tool = registry.get_tool("files_edit").unwrap();
@@ -3949,7 +3953,7 @@ async fn test_edit_operation_consistency_properties() {
 
 #[tokio::test]
 async fn test_glob_pattern_consistency_properties() {
-    let registry = create_test_registry();
+    let registry = create_test_registry().await;
     let context = create_test_context().await;
     let write_tool = registry.get_tool("files_write").unwrap();
     let glob_tool = registry.get_tool("files_glob").unwrap();
@@ -4013,7 +4017,7 @@ async fn test_glob_pattern_consistency_properties() {
 
 #[tokio::test]
 async fn test_read_offset_limit_consistency_properties() {
-    let registry = create_test_registry();
+    let registry = create_test_registry().await;
     let context = create_test_context().await;
     let write_tool = registry.get_tool("files_write").unwrap();
     let read_tool = registry.get_tool("files_read").unwrap();
@@ -4095,7 +4099,7 @@ async fn test_read_offset_limit_consistency_properties() {
 #[tokio::test]
 #[allow(clippy::useless_vec)]
 async fn test_grep_pattern_robustness_properties() {
-    let registry = create_test_registry();
+    let registry = create_test_registry().await;
     let context = create_test_context().await;
     let write_tool = registry.get_tool("files_write").unwrap();
     let grep_tool = registry.get_tool("files_grep").unwrap();

@@ -83,6 +83,13 @@ pub enum ActionError {
 /// Result type for action operations
 pub type ActionResult<T> = std::result::Result<T, ActionError>;
 
+/// Convert llama_agent::types::AgentError to ActionError
+impl From<llama_agent::types::AgentError> for ActionError {
+    fn from(error: llama_agent::types::AgentError) -> Self {
+        ActionError::ExecutionError(format!("LlamaAgent error: {}", error))
+    }
+}
+
 /// Implementation of Severity trait for ActionError
 ///
 /// This implementation categorizes all ActionError variants by their
@@ -171,5 +178,59 @@ mod severity_tests {
             wait_time: Duration::from_secs(60),
         };
         assert_eq!(error.severity(), ErrorSeverity::Warning);
+    }
+
+    #[test]
+    fn test_agent_error_conversion() {
+        use llama_agent::types::{AgentError, SessionError};
+
+        // Test conversion from AgentError::Session
+        let session_error = SessionError::NotFound("test-session-id".to_string());
+        let agent_error = AgentError::Session(session_error);
+        let action_error: ActionError = agent_error.into();
+
+        match action_error {
+            ActionError::ExecutionError(msg) => {
+                assert!(msg.contains("LlamaAgent error"));
+                assert!(msg.contains("Session not found"));
+            }
+            _ => panic!("Expected ExecutionError variant"),
+        }
+    }
+
+    #[test]
+    fn test_agent_timeout_error_conversion() {
+        use llama_agent::types::AgentError;
+
+        // Test conversion from AgentError::Timeout
+        let timeout_error = AgentError::Timeout {
+            timeout: Duration::from_secs(30),
+        };
+        let action_error: ActionError = timeout_error.into();
+
+        match action_error {
+            ActionError::ExecutionError(msg) => {
+                assert!(msg.contains("LlamaAgent error"));
+                assert!(msg.contains("timeout"));
+            }
+            _ => panic!("Expected ExecutionError variant"),
+        }
+    }
+
+    #[test]
+    fn test_agent_queue_full_error_conversion() {
+        use llama_agent::types::AgentError;
+
+        // Test conversion from AgentError::QueueFull
+        let queue_error = AgentError::QueueFull { capacity: 100 };
+        let action_error: ActionError = queue_error.into();
+
+        match action_error {
+            ActionError::ExecutionError(msg) => {
+                assert!(msg.contains("LlamaAgent error"));
+                assert!(msg.contains("100"));
+            }
+            _ => panic!("Expected ExecutionError variant"),
+        }
     }
 }

@@ -1,0 +1,69 @@
+{
+  "id": "01KDJG4F7D1PZK6VMSSTJ4ZR4D",
+  "created_at": {
+    "secs_since_epoch": 1766926204,
+    "nanos_since_epoch": 141257000
+  },
+  "last_accessed": {
+    "secs_since_epoch": 1766926211,
+    "nanos_since_epoch": 396252000
+  },
+  "context": [
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926211,
+        "nanos_since_epoch": 396094000
+      },
+      "update": {
+        "sessionUpdate": "available_commands_update",
+        "availableCommands": [
+          {
+            "name": "create_plan",
+            "description": "Create an execution plan for complex tasks",
+            "input": null,
+            "_meta": {
+              "category": "planning",
+              "source": "core"
+            }
+          },
+          {
+            "name": "research_codebase",
+            "description": "Research and analyze the codebase structure",
+            "input": null,
+            "_meta": {
+              "category": "analysis",
+              "source": "core"
+            }
+          }
+        ]
+      }
+    }
+  ],
+  "client_capabilities": null,
+  "mcp_servers": [],
+  "cwd": "/var/folders/3k/6b488x1j6rg1f6w8fnyfwm9w0000gn/T/",
+  "available_commands": [
+    {
+      "name": "create_plan",
+      "description": "Create an execution plan for complex tasks",
+      "input": null,
+      "_meta": {
+        "category": "planning",
+        "source": "core"
+      }
+    },
+    {
+      "name": "research_codebase",
+      "description": "Research and analyze the codebase structure",
+      "input": null,
+      "_meta": {
+        "category": "analysis",
+        "source": "core"
+      }
+    }
+  ],
+  "turn_request_count": 0,
+  "turn_token_count": 0,
+  "current_mode": null,
+  "todos": []
+}

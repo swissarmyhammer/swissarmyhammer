@@ -79,6 +79,18 @@ impl McpTool for GlobFileTool {
         // Parse arguments
         let request: GlobRequest = BaseToolImpl::parse_arguments(arguments)?;
 
+        // Check rate limit (glob is an expensive search operation) using tokio task ID as client identifier
+        use swissarmyhammer_common::rate_limiter::get_rate_limiter;
+        let rate_limiter = get_rate_limiter();
+        let client_id = format!("task_{:?}", tokio::task::try_id());
+        if let Err(e) = rate_limiter.check_rate_limit(&client_id, "file_glob", 2) {
+            tracing::warn!("Rate limit exceeded for file_glob: {}", e);
+            return Err(McpError::invalid_request(
+                format!("Rate limit exceeded: {}", e),
+                None,
+            ));
+        }
+
         // Validate pattern
         validate_glob_pattern(&request.pattern)?;
 
@@ -125,7 +137,7 @@ impl McpTool for GlobFileTool {
                 .send_progress_with_metadata(
                     &token,
                     Some(0),
-                    format!("Matching pattern: {}", request.pattern),
+                    format!("File glob: Matching pattern: {}", request.pattern),
                     json!({
                         "pattern": request.pattern,
                         "path": search_dir.display().to_string(),
@@ -137,10 +149,29 @@ impl McpTool for GlobFileTool {
         }
 
         // Use advanced gitignore integration with ignore crate
-        let matched_files = if respect_git_ignore {
-            find_files_with_gitignore(&search_dir, &request.pattern, case_sensitive)?
+        let matched_files = match if respect_git_ignore {
+            find_files_with_gitignore(&search_dir, &request.pattern, case_sensitive)
         } else {
-            find_files_with_glob(&search_dir, &request.pattern, case_sensitive)?
+            find_files_with_glob(&search_dir, &request.pattern, case_sensitive)
+        } {
+            Ok(files) => files,
+            Err(e) => {
+                // Send error notification
+                if let Some(sender) = &context.progress_sender {
+                    sender
+                        .send_progress_with_metadata(
+                            &token,
+                            None,
+                            format!("File glob: Failed - {}", e),
+                            json!({
+                                "error": e.to_string(),
+                                "pattern": request.pattern
+                            }),
+                        )
+                        .ok();
+                }
+                return Err(e);
+            }
         };
 
         // Calculate operation duration and file count for completion notification.
@@ -156,7 +187,7 @@ impl McpTool for GlobFileTool {
                 .send_progress_with_metadata(
                     &token,
                     Some(100),
-                    format!("Found {} matching files", file_count),
+                    format!("File glob: Complete - Found {} files", file_count),
                     json!({
                         "file_count": file_count,
                         "duration_ms": duration_ms
@@ -492,8 +523,8 @@ mod tests {
         // Verify completion notification
         let complete = &notifications[1];
         assert_eq!(complete.progress, Some(100));
-        assert!(complete.message.contains("Found"));
-        assert!(complete.message.contains("matching files"));
+        assert!(complete.message.contains("Complete"));
+        assert!(complete.message.contains("files"));
         assert!(complete.metadata.is_some());
         let complete_meta = complete.metadata.as_ref().unwrap();
         assert!(complete_meta["file_count"].is_number());

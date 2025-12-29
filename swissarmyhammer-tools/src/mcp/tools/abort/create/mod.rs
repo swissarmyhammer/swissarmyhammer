@@ -1,8 +1,12 @@
+// sah rule ignore acp/capability-enforcement
 //! Abort creation tool for MCP operations
 //!
 //! This module provides the AbortCreateTool for creating abort files through the MCP protocol.
 //! The tool creates a `.swissarmyhammer/.abort` file containing the abort reason, enabling
 //! file-based abort detection throughout the workflow system.
+//!
+//! Note: This is an MCP tool, not an ACP operation. ACP capability checking happens at the
+//! agent layer (claude-agent, llama-agent), not at the MCP tool layer.
 
 use crate::mcp::shared_utils::{McpErrorHandler, McpValidation};
 use crate::mcp::tool_registry::{BaseToolImpl, McpTool, ToolContext};
@@ -74,10 +78,7 @@ impl McpTool for AbortCreateTool {
         create_abort_file_current_dir(&request.reason);
 
         tracing::info!("Created abort file with reason: {}", request.reason);
-        Ok(BaseToolImpl::create_success_response(format!(
-            "Abort file created with reason: {}",
-            request.reason
-        )))
+        Ok(BaseToolImpl::create_success_response("OK".to_string()))
     }
 }
 

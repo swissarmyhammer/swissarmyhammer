@@ -1187,8 +1187,15 @@ mod qwen3coder_model_integration {
             updated_at: SystemTime::now(),
             compaction_history: Vec::new(),
             transcript_path: None,
-        context_state: None,
-        template_token_count: None,
+            context_state: None,
+            template_token_count: None,
+            #[cfg(feature = "acp")]
+            todos: Vec::new(),
+            #[cfg(feature = "acp")]
+            available_commands: Vec::new(),
+            current_mode: None,
+        #[cfg(feature = "acp")]
+        client_capabilities: None,
         }
     }
 
@@ -1772,8 +1779,15 @@ mod qwen3coder_integration_tests {
             updated_at: SystemTime::now(),
             compaction_history: Vec::new(),
             transcript_path: None,
-        context_state: None,
-        template_token_count: None,
+            context_state: None,
+            template_token_count: None,
+            #[cfg(feature = "acp")]
+            todos: Vec::new(),
+            #[cfg(feature = "acp")]
+            available_commands: Vec::new(),
+            current_mode: None,
+        #[cfg(feature = "acp")]
+        client_capabilities: None,
         }
     }
 
@@ -4200,6 +4214,13 @@ mod tests {
             transcript_path: None,
             context_state: None,
             template_token_count: None,
+            #[cfg(feature = "acp")]
+            todos: Vec::new(),
+            #[cfg(feature = "acp")]
+            available_commands: Vec::new(),
+            current_mode: None,
+            #[cfg(feature = "acp")]
+            client_capabilities: None,
         }
     }
 
@@ -6717,6 +6738,13 @@ mod template_only_tests {
             transcript_path: None,
             context_state: None,
             template_token_count: None,
+            #[cfg(feature = "acp")]
+            todos: Vec::new(),
+            #[cfg(feature = "acp")]
+            available_commands: Vec::new(),
+            current_mode: None,
+            #[cfg(feature = "acp")]
+            client_capabilities: None,
         };
 
         // Add a simple tool

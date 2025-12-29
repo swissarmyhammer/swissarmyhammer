@@ -1,0 +1,491 @@
+{
+  "id": "01KDJG2EHZFF76Z74Q8QWZ85FK",
+  "created_at": {
+    "secs_since_epoch": 1766926137,
+    "nanos_since_epoch": 919853000
+  },
+  "last_accessed": {
+    "secs_since_epoch": 1766926147,
+    "nanos_since_epoch": 883987000
+  },
+  "context": [
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926143,
+        "nanos_since_epoch": 400529000
+      },
+      "update": {
+        "sessionUpdate": "available_commands_update",
+        "availableCommands": [
+          {
+            "name": "create_plan",
+            "description": "Create an execution plan for complex tasks",
+            "input": null,
+            "_meta": {
+              "category": "planning",
+              "source": "core"
+            }
+          },
+          {
+            "name": "research_codebase",
+            "description": "Research and analyze the codebase structure",
+            "input": null,
+            "_meta": {
+              "category": "analysis",
+              "source": "core"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926143,
+        "nanos_since_epoch": 401535000
+      },
+      "update": {
+        "sessionUpdate": "user_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "Hello, how are you?"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926146,
+        "nanos_since_epoch": 165394000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "I"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926146,
+        "nanos_since_epoch": 686660000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "'m doing well, thanks"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926146,
+        "nanos_since_epoch": 686830000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " for asking! I'm"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926146,
+        "nanos_since_epoch": 687111000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " ready"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926146,
+        "nanos_since_epoch": 687204000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " to help you"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926146,
+        "nanos_since_epoch": 687306000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " with any"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926146,
+        "nanos_since_epoch": 687982000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " software"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926146,
+        "nanos_since_epoch": 688612000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " engineering"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926146,
+        "nanos_since_epoch": 689458000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " tasks"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926146,
+        "nanos_since_epoch": 700527000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " you have"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926146,
+        "nanos_since_epoch": 727318000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "."
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926146,
+        "nanos_since_epoch": 779871000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " Looking"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926146,
+        "nanos_since_epoch": 873793000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " at your"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926146,
+        "nanos_since_epoch": 890056000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " project"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926146,
+        "nanos_since_epoch": 938570000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": ","
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926146,
+        "nanos_since_epoch": 991623000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " it"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926147,
+        "nanos_since_epoch": 48307000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " appears"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926147,
+        "nanos_since_epoch": 96357000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " to"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926147,
+        "nanos_since_epoch": 212961000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " be a"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926147,
+        "nanos_since_epoch": 232712000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " Rust c"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926147,
+        "nanos_since_epoch": 316029000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "odebase relate"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926147,
+        "nanos_since_epoch": 337583000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "d to A"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926147,
+        "nanos_since_epoch": 359011000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "CP"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926147,
+        "nanos_since_epoch": 471999000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " (Agent Client"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926147,
+        "nanos_since_epoch": 523367000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " Protocol) conform"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926147,
+        "nanos_since_epoch": 631536000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "ance testing. "
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926147,
+        "nanos_since_epoch": 631852000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "\n\nIs"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926147,
+        "nanos_since_epoch": 656211000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " there something"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926147,
+        "nanos_since_epoch": 785467000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " specific you'd like to"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926147,
+        "nanos_since_epoch": 786174000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " work on?"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926147,
+        "nanos_since_epoch": 883967000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "I'm doing well, thanks for asking! I'm ready to help you with any software engineering tasks you have. Looking at your project, it appears to be a Rust codebase related to ACP (Agent Client Protocol) conformance testing. \n\nIs there something specific you'd like to work on?"
+        }
+      }
+    }
+  ],
+  "client_capabilities": {
+    "fs": {
+      "readTextFile": false,
+      "writeTextFile": false
+    },
+    "terminal": false
+  },
+  "mcp_servers": [],
+  "cwd": "/Users/wballard/github/swissarmyhammer/acp-conformance",
+  "available_commands": [
+    {
+      "name": "create_plan",
+      "description": "Create an execution plan for complex tasks",
+      "input": null,
+      "_meta": {
+        "category": "planning",
+        "source": "core"
+      }
+    },
+    {
+      "name": "research_codebase",
+      "description": "Research and analyze the codebase structure",
+      "input": null,
+      "_meta": {
+        "category": "analysis",
+        "source": "core"
+      }
+    }
+  ],
+  "turn_request_count": 1,
+  "turn_token_count": 4,
+  "current_mode": null,
+  "todos": []
+}

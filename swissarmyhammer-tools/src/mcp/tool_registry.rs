@@ -230,7 +230,7 @@ use std::sync::Arc;
 
 use swissarmyhammer_common::{ErrorSeverity, Severity};
 use swissarmyhammer_config::model::ModelConfig;
-use swissarmyhammer_config::ModelUseCase;
+use swissarmyhammer_config::AgentUseCase;
 use swissarmyhammer_git::GitOperations;
 use tokio::sync::{Mutex, RwLock};
 
@@ -278,7 +278,7 @@ pub struct ToolContext {
     /// Falls back to agent_config if use case not present. This allows different
     /// operations to use different agents (e.g., a specialized agent for rule checking).
     /// Agents are Arc-wrapped to avoid cloning the entire configuration.
-    pub use_case_agents: Arc<HashMap<ModelUseCase, Arc<ModelConfig>>>,
+    pub use_case_agents: Arc<HashMap<AgentUseCase, Arc<ModelConfig>>>,
 
     /// Optional notification sender for long-running operations (workflow state transitions)
     ///
@@ -413,7 +413,7 @@ impl ToolContext {
     /// # Returns
     ///
     /// An Arc to the appropriate ModelConfig
-    pub fn get_agent_for_use_case(&self, use_case: ModelUseCase) -> Arc<ModelConfig> {
+    pub fn get_agent_for_use_case(&self, use_case: AgentUseCase) -> Arc<ModelConfig> {
         self.use_case_agents
             .get(&use_case)
             .cloned()
@@ -1643,11 +1643,13 @@ register_tool_category!(
     abort,
     "Register all abort-related tools with the registry"
 );
-register_tool_category!(
-    register_file_tools,
-    files,
-    "Register all file-related tools with the registry"
-);
+
+/// Register all file-related tools with the registry
+pub async fn register_file_tools(registry: &mut ToolRegistry) {
+    use super::tools::files;
+    files::register_file_tools(registry).await;
+}
+
 register_tool_category!(
     register_flow_tools,
     flow,
@@ -1698,12 +1700,12 @@ register_tool_category!(
 /// # Returns
 ///
 /// * `ToolRegistry` - A registry with all tools registered
-pub fn create_fully_registered_tool_registry() -> ToolRegistry {
+pub async fn create_fully_registered_tool_registry() -> ToolRegistry {
     let mut registry = ToolRegistry::new();
 
     // Register all tools exactly like McpServer does
     register_abort_tools(&mut registry);
-    register_file_tools(&mut registry);
+    register_file_tools(&mut registry).await;
     register_flow_tools(&mut registry);
     register_git_tools(&mut registry);
     register_questions_tools(&mut registry);
@@ -2392,7 +2394,7 @@ mod tests {
 
     /// Helper function to create a test context with use case specific agents
     fn create_test_context_with_use_case_agents(
-        use_case_agents: HashMap<ModelUseCase, Arc<ModelConfig>>,
+        use_case_agents: HashMap<AgentUseCase, Arc<ModelConfig>>,
     ) -> ToolContext {
         let mut context = create_test_context();
         context.use_case_agents = Arc::new(use_case_agents);
@@ -2401,16 +2403,16 @@ mod tests {
 
     #[test]
     fn test_get_agent_for_use_case_fallback() {
-        use swissarmyhammer_config::ModelUseCase;
+        use swissarmyhammer_config::AgentUseCase;
 
         // Create context with only root agent
         let context = create_test_context();
         let agent_config = context.agent_config.clone();
 
         // Test that all use cases fall back to root agent when not configured
-        let rules_agent = context.get_agent_for_use_case(ModelUseCase::Rules);
-        let workflows_agent = context.get_agent_for_use_case(ModelUseCase::Workflows);
-        let root_agent = context.get_agent_for_use_case(ModelUseCase::Root);
+        let rules_agent = context.get_agent_for_use_case(AgentUseCase::Rules);
+        let workflows_agent = context.get_agent_for_use_case(AgentUseCase::Workflows);
+        let root_agent = context.get_agent_for_use_case(AgentUseCase::Root);
 
         // All should return the same agent config (root)
         assert!(Arc::ptr_eq(&rules_agent, &agent_config));
@@ -2420,28 +2422,28 @@ mod tests {
 
     #[test]
     fn test_get_agent_for_use_case_specific() {
-        use swissarmyhammer_config::ModelUseCase;
+        use swissarmyhammer_config::AgentUseCase;
 
         // Create context with use case specific agents
         let root_agent = Arc::new(ModelConfig::default());
         let rules_agent = Arc::new(ModelConfig::default());
 
         let mut use_case_agents = HashMap::new();
-        use_case_agents.insert(ModelUseCase::Rules, rules_agent.clone());
+        use_case_agents.insert(AgentUseCase::Rules, rules_agent.clone());
 
         let mut context = create_test_context_with_use_case_agents(use_case_agents);
         context.agent_config = root_agent.clone();
 
         // Test that Rules use case gets its specific agent (Arc-wrapped, so we can check pointer equality)
-        let resolved_rules_agent = context.get_agent_for_use_case(ModelUseCase::Rules);
+        let resolved_rules_agent = context.get_agent_for_use_case(AgentUseCase::Rules);
         assert!(Arc::ptr_eq(&resolved_rules_agent, &rules_agent));
 
         // Test that Workflows falls back to root agent
-        let resolved_workflows_agent = context.get_agent_for_use_case(ModelUseCase::Workflows);
+        let resolved_workflows_agent = context.get_agent_for_use_case(AgentUseCase::Workflows);
         assert!(Arc::ptr_eq(&resolved_workflows_agent, &root_agent));
 
         // Test that Root falls back to root agent
-        let resolved_root_agent = context.get_agent_for_use_case(ModelUseCase::Root);
+        let resolved_root_agent = context.get_agent_for_use_case(AgentUseCase::Root);
         assert!(Arc::ptr_eq(&resolved_root_agent, &root_agent));
     }
 }

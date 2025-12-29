@@ -3,10 +3,10 @@
 use crate::context::CliContext;
 use colored::Colorize;
 use comfy_table::{presets::UTF8_FULL, Cell, ContentArrangement, Table};
-use swissarmyhammer_config::model::{ModelManager, ModelUseCase};
+use swissarmyhammer_config::model::{AgentUseCase, ModelManager};
 
 /// Helper function to retrieve agent name and source for a given use case
-fn get_agent_info_for_use_case(use_case: ModelUseCase) -> (String, String) {
+fn get_agent_info_for_use_case(use_case: AgentUseCase) -> (String, String) {
     match ModelManager::get_agent_for_use_case(use_case) {
         Ok(Some(name)) => {
             let source = ModelManager::find_agent_by_name(&name)
@@ -33,9 +33,9 @@ pub async fn execute_show_command(
 
     // Show each use case
     for use_case in [
-        ModelUseCase::Root,
-        ModelUseCase::Rules,
-        ModelUseCase::Workflows,
+        AgentUseCase::Root,
+        AgentUseCase::Rules,
+        AgentUseCase::Workflows,
     ] {
         let (agent_name, source) = get_agent_info_for_use_case(use_case);
 

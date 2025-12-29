@@ -450,8 +450,8 @@ fn verify_config_preservation(config_path: &Path) -> Result<()> {
         "Should preserve custom data"
     );
     assert!(
-        updated_config.contains("models:"),
-        "Should add model section"
+        updated_config.contains("agents:"),
+        "Should add agents section"
     );
     Ok(())
 }
@@ -718,8 +718,8 @@ other_section:
         let fixed_config = fs::read_to_string(&config_path)?;
         let parsed: serde_yaml::Value = serde_yaml::from_str(&fixed_config)?;
         assert!(
-            parsed.get("models").is_some(),
-            "Should have valid models section. Actual: {:?}",
+            parsed.get("agents").is_some(),
+            "Should have valid agents section. Actual: {:?}",
             parsed
         );
     }

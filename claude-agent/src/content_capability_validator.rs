@@ -157,6 +157,17 @@ impl ContentCapabilityValidator {
                     })
                 }
             }
+
+            _ => {
+                // Unknown or unsupported content block type
+                warn!("Unknown content block type blocked");
+                Err(ContentCapabilityError::UnsupportedContentType {
+                    content_type: "unknown".to_string(),
+                    declared_capability: false,
+                    required_capability: "none".to_string(),
+                    supported_types: self.get_supported_content_types(),
+                })
+            }
         }
     }
 

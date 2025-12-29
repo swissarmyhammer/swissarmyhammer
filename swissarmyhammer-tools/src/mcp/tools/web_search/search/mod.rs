@@ -295,11 +295,13 @@ impl McpTool for WebSearchTool {
                 .send_progress_with_metadata(
                     &progress_token,
                     Some(0),
-                    format!("Searching for: {}", request.query),
+                    format!("Web search: 0/3 - Searching for: {}", request.query),
                     json!({
                         "query": request.query,
                         "results_count": request.results_count,
-                        "fetch_content": request.fetch_content
+                        "fetch_content": request.fetch_content,
+                        "current": 0,
+                        "total": 3
                     }),
                 )
                 .ok();
@@ -310,7 +312,15 @@ impl McpTool for WebSearchTool {
         // Send search progress notification (25%)
         if let Some(sender) = &_context.progress_sender {
             sender
-                .send_progress(&progress_token, Some(25), "Performing web search...")
+                .send_progress_with_metadata(
+                    &progress_token,
+                    Some(25),
+                    "Web search: 1/3 - Performing search...",
+                    json!({
+                        "current": 1,
+                        "total": 3
+                    }),
+                )
                 .ok();
         }
 
@@ -319,6 +329,21 @@ impl McpTool for WebSearchTool {
         let mut results = match duckduckgo_client.search(&request).await {
             Ok(results) => results,
             Err(DuckDuckGoError::NoResults) => {
+                // Send error notification
+                if let Some(sender) = &_context.progress_sender {
+                    sender
+                        .send_progress_with_metadata(
+                            &progress_token,
+                            None,
+                            "Web search: Failed - No results found",
+                            json!({
+                                "error": "no_results",
+                                "query": request.query
+                            }),
+                        )
+                        .ok();
+                }
+
                 // No web results found - provide informative response
                 let error = WebSearchError {
                     error_type: "no_results".to_string(),
@@ -337,6 +362,22 @@ impl McpTool for WebSearchTool {
                 ));
             }
             Err(e) => {
+                // Send error notification
+                if let Some(sender) = &_context.progress_sender {
+                    sender
+                        .send_progress_with_metadata(
+                            &progress_token,
+                            None,
+                            format!("Web search: Failed - {}", e),
+                            json!({
+                                "error": "search_failed",
+                                "details": e.to_string(),
+                                "query": request.query
+                            }),
+                        )
+                        .ok();
+                }
+
                 let error = WebSearchError {
                     error_type: "search_failed".to_string(),
                     error_details: format!("DuckDuckGo web search failed: {e}"),
@@ -367,9 +408,11 @@ impl McpTool for WebSearchTool {
                 .send_progress_with_metadata(
                     &progress_token,
                     Some(progress_after_search),
-                    format!("Retrieved {} search results", results.len()),
+                    format!("Web search: 2/3 - Retrieved {} results", results.len()),
                     json!({
-                        "results_count": results.len()
+                        "results_count": results.len(),
+                        "current": 2,
+                        "total": 3
                     }),
                 )
                 .ok();
@@ -429,11 +472,16 @@ impl McpTool for WebSearchTool {
                 .send_progress_with_metadata(
                     &progress_token,
                     Some(100),
-                    format!("Search complete: {} results", response.results.len()),
+                    format!(
+                        "Web search: 3/3 - Complete ({} results)",
+                        response.results.len()
+                    ),
                     json!({
                         "total_results": response.results.len(),
                         "with_content": with_content,
-                        "search_time_ms": search_time.as_millis() as u64
+                        "search_time_ms": search_time.as_millis() as u64,
+                        "current": 3,
+                        "total": 3
                     }),
                 )
                 .ok();

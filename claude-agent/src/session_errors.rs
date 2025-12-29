@@ -619,7 +619,7 @@ mod tests {
     #[test]
     fn test_session_not_found_error() {
         let error = SessionSetupError::SessionNotFound {
-            session_id: SessionId("123".to_string().into()),
+            session_id: SessionId::new("123".to_string()),
             available_sessions: vec!["456".to_string()],
         };
 
@@ -819,7 +819,7 @@ mod tests {
     #[test]
     fn test_session_storage_failure_error() {
         let error = SessionSetupError::SessionStorageFailure {
-            session_id: Some(SessionId("123".to_string().into())),
+            session_id: Some(SessionId::new("123".to_string())),
             storage_error: "Disk full".to_string(),
             recovery_suggestion: "Free up disk space".to_string(),
         };

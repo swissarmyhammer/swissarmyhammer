@@ -9,7 +9,7 @@ use swissarmyhammer_common::test_utils::IsolatedTestEnvironment;
 use swissarmyhammer_config::model::{
     LlamaAgentConfig, LlmModelConfig, McpServerConfig, ModelSource,
 };
-use swissarmyhammer_config::{ModelConfig, ModelUseCase};
+use swissarmyhammer_config::{AgentUseCase, ModelConfig};
 use swissarmyhammer_git::GitOperations;
 use swissarmyhammer_tools::mcp::tool_handlers::ToolHandlers;
 use swissarmyhammer_tools::mcp::tool_registry::{McpTool, ToolContext};
@@ -26,7 +26,7 @@ async fn create_test_context_with_agent(rules_agent: ModelConfig) -> ToolContext
 
     // Create use case agents map with our test agent for Rules
     let mut use_case_agents = HashMap::new();
-    use_case_agents.insert(ModelUseCase::Rules, Arc::new(rules_agent));
+    use_case_agents.insert(AgentUseCase::Rules, Arc::new(rules_agent));
 
     let mut context = ToolContext::new(tool_handlers, git_ops, root_agent);
     context.use_case_agents = Arc::new(use_case_agents);
@@ -148,7 +148,7 @@ async fn test_tool_context_model_resolution() {
     let context = create_test_context_with_agent(qwen_config).await;
 
     // Get agent for Rules use case
-    let rules_agent = context.get_agent_for_use_case(ModelUseCase::Rules);
+    let rules_agent = context.get_agent_for_use_case(AgentUseCase::Rules);
 
     eprintln!("\n=== ToolContext Agent Resolution ===");
     eprintln!(
@@ -160,19 +160,19 @@ async fn test_tool_context_model_resolution() {
     assert!(
         matches!(
             rules_agent.executor_type(),
-            swissarmyhammer_config::model::AgentExecutorType::LlamaAgent
+            swissarmyhammer_config::model::ModelExecutorType::LlamaAgent
         ),
         "Rules should use LlamaAgent"
     );
 
     // Root should fall back to default (ClaudeCode)
-    let root_agent = context.get_agent_for_use_case(ModelUseCase::Root);
+    let root_agent = context.get_agent_for_use_case(AgentUseCase::Root);
     eprintln!("Root agent executor type: {:?}", root_agent.executor_type());
 
     assert!(
         matches!(
             root_agent.executor_type(),
-            swissarmyhammer_config::model::AgentExecutorType::ClaudeCode
+            swissarmyhammer_config::model::ModelExecutorType::ClaudeCode
         ),
         "Root should use ClaudeCode (default)"
     );

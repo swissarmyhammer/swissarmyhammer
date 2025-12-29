@@ -68,7 +68,7 @@ pub fn consume_all_notifications(
 
 /// Create a test session ID with a given identifier
 pub fn test_session_id(id: &str) -> SessionId {
-    SessionId(id.into())
+    SessionId::new(id)
 }
 
 #[cfg(test)]

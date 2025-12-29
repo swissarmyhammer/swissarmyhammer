@@ -1,0 +1,95 @@
+{
+  "id": "01KDJGWB4WYRC3PKVQJT6PRJRJ",
+  "created_at": {
+    "secs_since_epoch": 1766926986,
+    "nanos_since_epoch": 396294000
+  },
+  "last_accessed": {
+    "secs_since_epoch": 1766926990,
+    "nanos_since_epoch": 58714000
+  },
+  "context": [
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926989,
+        "nanos_since_epoch": 998897000
+      },
+      "update": {
+        "sessionUpdate": "available_commands_update",
+        "availableCommands": [
+          {
+            "name": "create_plan",
+            "description": "Create an execution plan for complex tasks",
+            "input": null,
+            "_meta": {
+              "category": "planning",
+              "source": "core"
+            }
+          },
+          {
+            "name": "research_codebase",
+            "description": "Research and analyze the codebase structure",
+            "input": null,
+            "_meta": {
+              "category": "analysis",
+              "source": "core"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926989,
+        "nanos_since_epoch": 999636000
+      },
+      "update": {
+        "sessionUpdate": "user_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "/web agent client protocol"
+        }
+      }
+    },
+    {
+      "timestamp": {
+        "secs_since_epoch": 1766926990,
+        "nanos_since_epoch": 58698000
+      },
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": ""
+        }
+      }
+    }
+  ],
+  "client_capabilities": null,
+  "mcp_servers": [],
+  "cwd": "/var/folders/3k/6b488x1j6rg1f6w8fnyfwm9w0000gn/T/",
+  "available_commands": [
+    {
+      "name": "create_plan",
+      "description": "Create an execution plan for complex tasks",
+      "input": null,
+      "_meta": {
+        "category": "planning",
+        "source": "core"
+      }
+    },
+    {
+      "name": "research_codebase",
+      "description": "Research and analyze the codebase structure",
+      "input": null,
+      "_meta": {
+        "category": "analysis",
+        "source": "core"
+      }
+    }
+  ],
+  "turn_request_count": 1,
+  "turn_token_count": 6,
+  "current_mode": null,
+  "todos": []
+}

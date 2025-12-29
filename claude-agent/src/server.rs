@@ -45,12 +45,18 @@ impl ClaudeAgentServer {
     /// Create a new Claude Agent server with the given configuration
     pub async fn new(config: AgentConfig) -> crate::Result<Self> {
         let (agent, notification_receiver) = ClaudeAgent::new(config).await?;
+        let agent = Arc::new(agent);
+
+        // Start monitoring MCP server notifications for capability changes
+        // This spawns background tasks that automatically refresh available commands
+        // for all sessions when MCP servers send tools/list_changed or prompts/list_changed
+        let _monitoring_handles = ClaudeAgent::start_mcp_monitoring(Arc::clone(&agent));
 
         Ok(Self {
             // Arc is used for reference counting within async tasks, not for thread sharing
             // The agent is never sent across threads - see handle_requests for details
             #[allow(clippy::arc_with_non_send_sync)]
-            agent: Arc::new(agent),
+            agent,
             notification_receiver: Mutex::new(Some(notification_receiver)),
         })
     }
@@ -643,7 +649,7 @@ mod tests {
 
         // First, let's see how the protocol crate serializes SessionNotification
         let notification = SessionNotification {
-            session_id: SessionId("test123".to_string().into()),
+            session_id: SessionId::new("test123".to_string()),
             update: SessionUpdate::AgentThoughtChunk(agent_client_protocol::ContentChunk {
                 content: ContentBlock::Text(TextContent {
                     text: "test thought".to_string(),
@@ -941,6 +947,444 @@ mod tests {
         // Run both concurrently
         let (server_result, _) = tokio::join!(server_task, client_handle);
 
+        server_result.expect("Server should complete successfully");
+    }
+
+    /// Test that multiple concurrent requests are handled correctly.
+    /// This ensures the server can handle multiple requests being sent simultaneously
+    /// and that each request receives its corresponding response with the correct id.
+    #[tokio::test]
+    async fn test_multiple_concurrent_requests() {
+        let server = create_test_server().await;
+
+        let (mut client_writer, server_reader) = duplex(sizes::buffers::DUPLEX_STREAM_BUFFER);
+        let (server_writer, mut client_reader) = duplex(sizes::buffers::DUPLEX_STREAM_BUFFER);
+
+        let server_task = async {
+            server
+                .start_with_streams(server_reader, server_writer)
+                .await
+        };
+
+        let client_task = async move {
+            tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+
+            // Send multiple requests concurrently
+            let request1 = serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "initialize",
+                "params": {
+                    "client_capabilities": {
+                        "fs": {
+                            "read_text_file": true,
+                            "write_text_file": true
+                        },
+                        "terminal": true
+                    },
+                    "protocolVersion": "1.0.0"
+                }
+            });
+
+            let request2 = serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": 2,
+                "method": "initialize",
+                "params": {
+                    "client_capabilities": {
+                        "fs": {
+                            "read_text_file": true,
+                            "write_text_file": true
+                        },
+                        "terminal": true
+                    },
+                    "protocolVersion": "1.0.0"
+                }
+            });
+
+            let request3 = serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": 3,
+                "method": "initialize",
+                "params": {
+                    "client_capabilities": {
+                        "fs": {
+                            "read_text_file": true,
+                            "write_text_file": true
+                        },
+                        "terminal": true
+                    },
+                    "protocolVersion": "1.0.0"
+                }
+            });
+
+            // Send all three requests without waiting for responses
+            for request in [request1, request2, request3] {
+                let request_line = format!("{}\n", serde_json::to_string(&request).unwrap());
+                client_writer
+                    .write_all(request_line.as_bytes())
+                    .await
+                    .unwrap();
+            }
+            client_writer.flush().await.unwrap();
+
+            // Read all three responses
+            let mut reader = BufReader::new(&mut client_reader);
+            let mut responses = Vec::new();
+
+            for _ in 0..3 {
+                let mut response_line = String::new();
+                let read_result = tokio::time::timeout(
+                    tokio::time::Duration::from_secs(5),
+                    reader.read_line(&mut response_line),
+                )
+                .await;
+
+                assert!(
+                    read_result.is_ok(),
+                    "Should receive response within timeout"
+                );
+                assert!(!response_line.is_empty(), "Response should not be empty");
+
+                let response: serde_json::Value = serde_json::from_str(&response_line).unwrap();
+                responses.push(response);
+            }
+
+            // Verify we got exactly 3 responses
+            assert_eq!(responses.len(), 3, "Should receive 3 responses");
+
+            // Verify each response has the correct structure and id
+            let mut ids: Vec<i64> = responses
+                .iter()
+                .map(|r| r.get("id").unwrap().as_i64().unwrap())
+                .collect();
+            ids.sort();
+
+            assert_eq!(
+                ids,
+                vec![1, 2, 3],
+                "Should receive responses with ids 1, 2, 3"
+            );
+
+            // Verify all responses are success responses
+            for response in &responses {
+                assert_eq!(
+                    response.get("jsonrpc").unwrap().as_str().unwrap(),
+                    "2.0",
+                    "Response should have jsonrpc 2.0"
+                );
+                assert!(
+                    response.get("result").is_some(),
+                    "Response should have result field"
+                );
+                assert!(
+                    response.get("error").is_none(),
+                    "Response should not have error field"
+                );
+            }
+
+            drop(client_writer);
+            drop(reader);
+        };
+
+        let client_handle = tokio::spawn(client_task);
+        let (server_result, _) = tokio::join!(server_task, client_handle);
+        server_result.expect("Server should complete successfully");
+    }
+
+    /// Test that success responses follow JSON-RPC 2.0 format correctly.
+    /// Verifies the response contains: jsonrpc, id, and result fields.
+    /// This test validates compliance with JSON-RPC 2.0 specification:
+    /// - Response must have "jsonrpc": "2.0"
+    /// - Response must have "id" matching the request
+    /// - Success responses must have "result" field
+    /// - Success responses must NOT have "error" field
+    #[tokio::test]
+    async fn test_json_rpc_success_response_format() {
+        let server = create_test_server().await;
+
+        let (mut client_writer, server_reader) = duplex(sizes::buffers::DUPLEX_STREAM_BUFFER);
+        let (server_writer, mut client_reader) = duplex(sizes::buffers::DUPLEX_STREAM_BUFFER);
+
+        let server_task = async {
+            server
+                .start_with_streams(server_reader, server_writer)
+                .await
+        };
+
+        let client_task = async move {
+            tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+
+            // Send a valid request
+            let request = serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "initialize",
+                "params": {
+                    "client_capabilities": {
+                        "fs": {
+                            "read_text_file": true,
+                            "write_text_file": true
+                        },
+                        "terminal": true
+                    },
+                    "protocolVersion": "1.0.0"
+                }
+            });
+
+            let request_line = format!("{}\n", serde_json::to_string(&request).unwrap());
+            client_writer
+                .write_all(request_line.as_bytes())
+                .await
+                .unwrap();
+            client_writer.flush().await.unwrap();
+
+            // Read response
+            let mut reader = BufReader::new(&mut client_reader);
+            let mut response_line = String::new();
+            reader.read_line(&mut response_line).await.unwrap();
+
+            let response: serde_json::Value = serde_json::from_str(&response_line).unwrap();
+
+            // Verify JSON-RPC 2.0 success response format
+            assert_eq!(
+                response.get("jsonrpc").and_then(|v| v.as_str()),
+                Some("2.0"),
+                "Response must have jsonrpc field set to '2.0'"
+            );
+
+            assert_eq!(
+                response.get("id").and_then(|v| v.as_i64()),
+                Some(1),
+                "Response id must match request id"
+            );
+
+            assert!(
+                response.get("result").is_some(),
+                "Success response must have result field"
+            );
+
+            assert!(
+                response.get("error").is_none(),
+                "Success response must not have error field"
+            );
+
+            drop(client_writer);
+            drop(reader);
+        };
+
+        let client_handle = tokio::spawn(client_task);
+        let (server_result, _) = tokio::join!(server_task, client_handle);
+        server_result.expect("Server should complete successfully");
+    }
+
+    /// Test that error responses follow JSON-RPC 2.0 format correctly.
+    /// Verifies the response contains: jsonrpc, id, and error fields.
+    /// The error field must contain: code and message (data is optional).
+    /// This test validates compliance with JSON-RPC 2.0 specification:
+    /// - Response must have "jsonrpc": "2.0"
+    /// - Response must have "id" matching the request
+    /// - Error responses must have "error" object with "code" and "message"
+    /// - Error responses must NOT have "result" field
+    /// - Error code must be a non-zero integer
+    /// - Error message must be a non-empty string
+    #[tokio::test]
+    async fn test_json_rpc_error_response_format() {
+        let server = create_test_server().await;
+
+        let (mut client_writer, server_reader) = duplex(sizes::buffers::DUPLEX_STREAM_BUFFER);
+        let (server_writer, mut client_reader) = duplex(sizes::buffers::DUPLEX_STREAM_BUFFER);
+
+        let server_task = async {
+            server
+                .start_with_streams(server_reader, server_writer)
+                .await
+        };
+
+        let client_task = async move {
+            tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+
+            // Send an invalid request that will cause an error
+            let request = serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": 2,
+                "method": "session/prompt",
+                "params": {
+                    // Missing required sessionId field - will cause an error
+                    "content": [{"type": "text", "text": "test"}]
+                }
+            });
+
+            let request_line = format!("{}\n", serde_json::to_string(&request).unwrap());
+            client_writer
+                .write_all(request_line.as_bytes())
+                .await
+                .unwrap();
+            client_writer.flush().await.unwrap();
+
+            // Read response
+            let mut reader = BufReader::new(&mut client_reader);
+            let mut response_line = String::new();
+            reader.read_line(&mut response_line).await.unwrap();
+
+            let response: serde_json::Value = serde_json::from_str(&response_line).unwrap();
+
+            // Verify JSON-RPC 2.0 error response format
+            assert_eq!(
+                response.get("jsonrpc").and_then(|v| v.as_str()),
+                Some("2.0"),
+                "Error response must have jsonrpc field set to '2.0'"
+            );
+
+            assert_eq!(
+                response.get("id").and_then(|v| v.as_i64()),
+                Some(2),
+                "Error response id must match request id"
+            );
+
+            assert!(
+                response.get("result").is_none(),
+                "Error response must not have result field"
+            );
+
+            let error = response
+                .get("error")
+                .expect("Error response must have error field")
+                .as_object()
+                .expect("Error field must be an object");
+
+            // Verify error object structure per JSON-RPC 2.0 spec
+            assert!(
+                error.contains_key("code"),
+                "Error object must have code field"
+            );
+
+            let code = error
+                .get("code")
+                .and_then(|v| v.as_i64())
+                .expect("Error code must be an integer");
+
+            assert!(code != 0, "Error code must be non-zero (got {})", code);
+
+            assert!(
+                error.contains_key("message"),
+                "Error object must have message field"
+            );
+
+            let message = error
+                .get("message")
+                .and_then(|v| v.as_str())
+                .expect("Error message must be a string");
+
+            assert!(!message.is_empty(), "Error message must not be empty");
+
+            // Note: data field is optional in JSON-RPC 2.0 spec, so we don't require it
+
+            drop(client_writer);
+            drop(reader);
+        };
+
+        let client_handle = tokio::spawn(client_task);
+        let (server_result, _) = tokio::join!(server_task, client_handle);
+        server_result.expect("Server should complete successfully");
+    }
+
+    /// Test that responses preserve different id types (number and string).
+    /// JSON-RPC 2.0 allows id to be a number, string, or null.
+    /// The server must preserve the exact type and value of the id in the response.
+    #[tokio::test]
+    async fn test_json_rpc_response_id_preservation() {
+        let server = create_test_server().await;
+
+        let (mut client_writer, server_reader) = duplex(sizes::buffers::DUPLEX_STREAM_BUFFER);
+        let (server_writer, mut client_reader) = duplex(sizes::buffers::DUPLEX_STREAM_BUFFER);
+
+        let server_task = async {
+            server
+                .start_with_streams(server_reader, server_writer)
+                .await
+        };
+
+        let client_task = async move {
+            tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+
+            // Test with numeric id
+            let request1 = serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": 123,
+                "method": "initialize",
+                "params": {
+                    "client_capabilities": {
+                        "fs": {
+                            "read_text_file": true,
+                            "write_text_file": true
+                        },
+                        "terminal": true
+                    },
+                    "protocolVersion": "1.0.0"
+                }
+            });
+
+            client_writer
+                .write_all(format!("{}\n", serde_json::to_string(&request1).unwrap()).as_bytes())
+                .await
+                .unwrap();
+            client_writer.flush().await.unwrap();
+
+            // Test with string id
+            let request2 = serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": "test-id-string",
+                "method": "initialize",
+                "params": {
+                    "client_capabilities": {
+                        "fs": {
+                            "read_text_file": true,
+                            "write_text_file": true
+                        },
+                        "terminal": true
+                    },
+                    "protocolVersion": "1.0.0"
+                }
+            });
+
+            client_writer
+                .write_all(format!("{}\n", serde_json::to_string(&request2).unwrap()).as_bytes())
+                .await
+                .unwrap();
+            client_writer.flush().await.unwrap();
+
+            // Read both responses
+            let mut reader = BufReader::new(&mut client_reader);
+
+            // Read first response (numeric id)
+            let mut response1_line = String::new();
+            reader.read_line(&mut response1_line).await.unwrap();
+            let response1: serde_json::Value = serde_json::from_str(&response1_line).unwrap();
+
+            assert_eq!(
+                response1.get("id").and_then(|v| v.as_i64()),
+                Some(123),
+                "Response must preserve numeric id"
+            );
+
+            // Read second response (string id)
+            let mut response2_line = String::new();
+            reader.read_line(&mut response2_line).await.unwrap();
+            let response2: serde_json::Value = serde_json::from_str(&response2_line).unwrap();
+
+            assert_eq!(
+                response2.get("id").and_then(|v| v.as_str()),
+                Some("test-id-string"),
+                "Response must preserve string id"
+            );
+
+            drop(client_writer);
+            drop(reader);
+        };
+
+        let client_handle = tokio::spawn(client_task);
+        let (server_result, _) = tokio::join!(server_task, client_handle);
         server_result.expect("Server should complete successfully");
     }
 }

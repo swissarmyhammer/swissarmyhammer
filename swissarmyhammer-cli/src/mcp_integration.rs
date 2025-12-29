@@ -59,7 +59,7 @@ impl CliToolContext {
         let mcp_server_handle =
             Self::initialize_mcp_server(model_override, Some(working_dir.to_path_buf())).await?;
 
-        let tool_registry = Self::create_tool_registry();
+        let tool_registry = Self::create_tool_registry().await;
         let tool_registry_arc = Arc::new(RwLock::new(tool_registry));
 
         Ok(Self {
@@ -97,9 +97,9 @@ impl CliToolContext {
     }
 
     /// Create and populate tool registry
-    fn create_tool_registry() -> ToolRegistry {
+    async fn create_tool_registry() -> ToolRegistry {
         let mut tool_registry = ToolRegistry::new();
-        register_file_tools(&mut tool_registry);
+        register_file_tools(&mut tool_registry).await;
         register_flow_tools(&mut tool_registry);
         register_rules_tools(&mut tool_registry);
         register_shell_tools(&mut tool_registry);

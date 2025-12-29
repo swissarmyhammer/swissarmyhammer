@@ -2,6 +2,18 @@
 //!
 //! This module provides comprehensive tests for all three MCP transports
 //! using real EchoService instances and real rmcp clients - NO MOCKS.
+//!
+//! ## Capability Enforcement
+//!
+//! These tests use `ClientCapabilities::default()` which is appropriate because:
+//! - EchoService is a simple test service that only provides echo/status tools and prompts
+//! - It does not perform file system operations (no fs.read_text_file or fs.write_text_file)
+//! - It does not perform terminal operations (no terminal capability required)
+//! - The focus is on testing transport layer mechanics, not capability enforcement
+//!
+//! Capability enforcement for file system and terminal operations is comprehensively
+//! tested in the ACP integration tests (see `tests/acp_read_file_test.rs`,
+//! `tests/acp_write_file_test.rs`, and `src/acp/terminal.rs`).
 
 #[cfg(test)]
 mod tests {
@@ -339,7 +351,7 @@ mod tests {
 
         // Verify we have the real echo prompt
         assert!(!result.is_empty());
-        assert!(result.contains(&"echo_prompt".to_string()));
+        assert!(result.iter().any(|p| p.name == "echo_prompt"));
     }
 
     async fn test_get_prompt_impl(client: &RealTestClient) {
