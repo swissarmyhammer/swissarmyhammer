@@ -45,13 +45,13 @@
 //!         mcp_servers: vec![mcp_config],
 //!         ..Default::default()
 //!     };
-//!     
+//!
 //!     let mut agent = Agent::new(config).await?;
-//!     
+//!
 //!     // Generate response with tool access
 //!     let response = agent.generate("List files in the current directory").await?;
 //!     println!("{}", response);
-//!     
+//!
 //!     Ok(())
 //! }
 //! ```
@@ -127,7 +127,7 @@
 //!
 //! #### HTTP Servers (`HttpServerConfig`)
 //! - **Best for**: Production, microservices, distributed systems
-//! - **Communication**: Server-Sent Events over HTTP/HTTPS  
+//! - **Communication**: Server-Sent Events over HTTP/HTTPS
 //! - **Lifecycle**: Independent (server manages own lifecycle)
 //! - **Latency**: Network-dependent
 //! - **Isolation**: Full network isolation
@@ -175,7 +175,6 @@ pub mod tests;
 ///
 /// This module provides canonical model constants for all tests.
 /// Always use these constants instead of hardcoding model names.
-#[cfg(any(test, feature = "test-utils"))]
 pub mod test_models;
 
 #[cfg(test)]
