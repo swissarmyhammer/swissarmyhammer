@@ -1,0 +1,85 @@
+{
+  "calls": [
+    {
+      "method": "initialize",
+      "request": {
+        "clientCapabilities": {
+          "fs": {
+            "readTextFile": false,
+            "writeTextFile": false
+          },
+          "terminal": true
+        },
+        "protocolVersion": 1
+      },
+      "response": {
+        "agentCapabilities": {
+          "_meta": {
+            "streaming": true,
+            "tools": [
+              "fs_read",
+              "fs_write",
+              "fs_list"
+            ]
+          },
+          "loadSession": true,
+          "mcpCapabilities": {
+            "http": true,
+            "sse": false
+          },
+          "promptCapabilities": {
+            "_meta": {
+              "streaming": true
+            },
+            "audio": true,
+            "embeddedContext": true,
+            "image": true
+          },
+          "sessionCapabilities": {}
+        },
+        "agentInfo": {
+          "name": "claude-agent",
+          "title": "Claude Agent v0.3.0",
+          "version": "0.3.0"
+        },
+        "authMethods": [],
+        "protocolVersion": 1
+      },
+      "notifications": []
+    },
+    {
+      "method": "new_session",
+      "request": {
+        "cwd": "/Users/wballard/github/swissarmyhammer/acp-conformance",
+        "mcpServers": []
+      },
+      "response": {
+        "sessionId": "01KDJGX5AN57MCT0QH3PXDYEVJ"
+      },
+      "notifications": []
+    },
+    {
+      "method": "ext_method",
+      "request": {
+        "args": [
+          "hello world"
+        ],
+        "command": "echo",
+        "sessionId": "01KDJGX5AN57MCT0QH3PXDYEVJ"
+      },
+      "response": {
+        "terminalId": "term_01KDJGXAMXQWMYYTX62P9J9MBF"
+      },
+      "notifications": []
+    },
+    {
+      "method": "ext_method",
+      "request": {
+        "sessionId": "01KDJGX5AN57MCT0QH3PXDYEVJ",
+        "terminalId": "term_01KDJGXAMXQWMYYTX62P9J9MBF"
+      },
+      "response": null,
+      "notifications": []
+    }
+  ]
+}

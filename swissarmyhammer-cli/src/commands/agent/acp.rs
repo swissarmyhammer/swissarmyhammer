@@ -73,7 +73,8 @@ pub async fn handle_command(
     };
 
     // Create ACP server
-    let acp_server = Arc::new(AcpServer::new(agent_server, acp_config));
+    let (acp_server, _notification_rx) = AcpServer::new(agent_server, acp_config);
+    let acp_server = Arc::new(acp_server);
 
     // Run with stdio
     tracing::info!("Starting ACP server over stdio");

@@ -1,0 +1,95 @@
+{
+  "calls": [
+    {
+      "method": "initialize",
+      "request": {
+        "clientCapabilities": {
+          "fs": {
+            "readTextFile": false,
+            "writeTextFile": false
+          },
+          "terminal": true
+        },
+        "protocolVersion": 1
+      },
+      "response": {
+        "agentCapabilities": {
+          "_meta": {
+            "streaming": true,
+            "supports_modes": true,
+            "supports_plans": true,
+            "supports_slash_commands": true
+          },
+          "loadSession": true,
+          "mcpCapabilities": {
+            "http": true,
+            "sse": false
+          },
+          "promptCapabilities": {
+            "_meta": {
+              "streaming": true
+            },
+            "audio": false,
+            "embeddedContext": false,
+            "image": false
+          },
+          "sessionCapabilities": {}
+        },
+        "agentInfo": {
+          "name": "llama-agent",
+          "title": "LLaMA Agent v0.3.0",
+          "version": "0.3.0"
+        },
+        "authMethods": [],
+        "protocolVersion": 1
+      },
+      "notifications": []
+    },
+    {
+      "method": "new_session",
+      "request": {
+        "cwd": "/Users/wballard/github/swissarmyhammer/acp-conformance",
+        "mcpServers": []
+      },
+      "response": {
+        "sessionId": "01KDJGXFFM7598WDMQXTS0CXPY"
+      },
+      "notifications": []
+    },
+    {
+      "method": "ext_method",
+      "request": {
+        "args": [
+          "test output"
+        ],
+        "command": "echo",
+        "sessionId": "01KDJGXFFM7598WDMQXTS0CXPY"
+      },
+      "response": {
+        "terminalId": "term_01KDJGXFFSGJWYAW525E50MVJ1"
+      },
+      "notifications": []
+    },
+    {
+      "method": "ext_method",
+      "request": {
+        "sessionId": "01KDJGXFFM7598WDMQXTS0CXPY",
+        "terminalId": "term_01KDJGXFFSGJWYAW525E50MVJ1"
+      },
+      "response": {
+        "output": "\n",
+        "truncated": false
+      },
+      "notifications": []
+    },
+    {
+      "method": "ext_method",
+      "request": {
+        "sessionId": "01KDJGXFFM7598WDMQXTS0CXPY",
+        "terminalId": "term_01KDJGXFFSGJWYAW525E50MVJ1"
+      },
+      "response": null,
+      "notifications": []
+    }
+  ]
+}

@@ -1,0 +1,422 @@
+{
+  "calls": [
+    {
+      "method": "initialize",
+      "request": {
+        "clientCapabilities": {
+          "fs": {
+            "readTextFile": false,
+            "writeTextFile": false
+          },
+          "terminal": false
+        },
+        "protocolVersion": 1
+      },
+      "response": {
+        "agentCapabilities": {
+          "_meta": {
+            "streaming": true,
+            "supports_modes": true,
+            "supports_plans": true,
+            "supports_slash_commands": true
+          },
+          "loadSession": true,
+          "mcpCapabilities": {
+            "http": true,
+            "sse": false
+          },
+          "promptCapabilities": {
+            "_meta": {
+              "streaming": true
+            },
+            "audio": false,
+            "embeddedContext": false,
+            "image": false
+          },
+          "sessionCapabilities": {}
+        },
+        "agentInfo": {
+          "name": "llama-agent",
+          "title": "LLaMA Agent v0.3.0",
+          "version": "0.3.0"
+        },
+        "authMethods": [],
+        "protocolVersion": 1
+      },
+      "notifications": []
+    },
+    {
+      "method": "new_session",
+      "request": {
+        "cwd": "/Users/wballard/github/swissarmyhammer/acp-conformance",
+        "mcpServers": []
+      },
+      "response": {
+        "sessionId": "01KDJGK50WEWSW0BXS01343Y9J"
+      },
+      "notifications": []
+    },
+    {
+      "method": "prompt",
+      "request": {
+        "prompt": [
+          {
+            "text": "Create a todo item using the mcp__test-mcp-server__create-plan tool with goal 'Implement user authentication'. This is a multi-step task that requires planning.",
+            "type": "text"
+          }
+        ],
+        "sessionId": "01KDJGK50WEWSW0BXS01343Y9J"
+      },
+      "response": {
+        "_meta": {
+          "tokens_generated": 405,
+          "tool_calls_executed": 1
+        },
+        "stopReason": "end_turn"
+      },
+      "notifications": [
+        {
+          "sessionId": "01KDJGK50WEWSW0BXS01343Y9J",
+          "update": {
+            "content": {
+              "text": "{\n",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDJGK50WEWSW0BXS01343Y9J",
+          "update": {
+            "content": {
+              "text": " ",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDJGK50WEWSW0BXS01343Y9J",
+          "update": {
+            "content": {
+              "text": " \"",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDJGK50WEWSW0BXS01343Y9J",
+          "update": {
+            "content": {
+              "text": "function",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDJGK50WEWSW0BXS01343Y9J",
+          "update": {
+            "content": {
+              "text": "_name",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDJGK50WEWSW0BXS01343Y9J",
+          "update": {
+            "content": {
+              "text": "\":",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDJGK50WEWSW0BXS01343Y9J",
+          "update": {
+            "content": {
+              "text": " \"",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDJGK50WEWSW0BXS01343Y9J",
+          "update": {
+            "content": {
+              "text": "create",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDJGK50WEWSW0BXS01343Y9J",
+          "update": {
+            "content": {
+              "text": "-plan",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDJGK50WEWSW0BXS01343Y9J",
+          "update": {
+            "content": {
+              "text": "\",\n",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDJGK50WEWSW0BXS01343Y9J",
+          "update": {
+            "content": {
+              "text": " ",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDJGK50WEWSW0BXS01343Y9J",
+          "update": {
+            "content": {
+              "text": " \"",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDJGK50WEWSW0BXS01343Y9J",
+          "update": {
+            "content": {
+              "text": "arguments",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDJGK50WEWSW0BXS01343Y9J",
+          "update": {
+            "content": {
+              "text": "\":",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDJGK50WEWSW0BXS01343Y9J",
+          "update": {
+            "content": {
+              "text": " {\n",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDJGK50WEWSW0BXS01343Y9J",
+          "update": {
+            "content": {
+              "text": "   ",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDJGK50WEWSW0BXS01343Y9J",
+          "update": {
+            "content": {
+              "text": " \"",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDJGK50WEWSW0BXS01343Y9J",
+          "update": {
+            "content": {
+              "text": "goal",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDJGK50WEWSW0BXS01343Y9J",
+          "update": {
+            "content": {
+              "text": "\":",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDJGK50WEWSW0BXS01343Y9J",
+          "update": {
+            "content": {
+              "text": " \"",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDJGK50WEWSW0BXS01343Y9J",
+          "update": {
+            "content": {
+              "text": "Implement",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDJGK50WEWSW0BXS01343Y9J",
+          "update": {
+            "content": {
+              "text": " user",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDJGK50WEWSW0BXS01343Y9J",
+          "update": {
+            "content": {
+              "text": " authentication",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDJGK50WEWSW0BXS01343Y9J",
+          "update": {
+            "content": {
+              "text": "\"\n",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDJGK50WEWSW0BXS01343Y9J",
+          "update": {
+            "content": {
+              "text": " ",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDJGK50WEWSW0BXS01343Y9J",
+          "update": {
+            "content": {
+              "text": " }\n",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDJGK50WEWSW0BXS01343Y9J",
+          "update": {
+            "content": {
+              "text": "}",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDJGK50WEWSW0BXS01343Y9J",
+          "update": {
+            "content": {
+              "text": "",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDJGK50WEWSW0BXS01343Y9J",
+          "update": {
+            "rawInput": {
+              "goal": "Implement user authentication"
+            },
+            "sessionUpdate": "tool_call",
+            "title": "create-plan",
+            "toolCallId": "01KDJGKAMB9VQ2JDTD4F9YS85W"
+          }
+        },
+        {
+          "Log": {
+            "data": {
+              "message": "Creating plan for: Implement user authentication"
+            },
+            "level": "info",
+            "logger": "test-mcp-server"
+          }
+        },
+        {
+          "Progress": {
+            "message": "Creating step 1/4",
+            "progress": 1.0,
+            "progressToken": "create-plan-1",
+            "total": 4.0
+          }
+        },
+        {
+          "Progress": {
+            "message": "Creating step 2/4",
+            "progress": 2.0,
+            "progressToken": "create-plan-1",
+            "total": 4.0
+          }
+        },
+        {
+          "Progress": {
+            "message": "Creating step 3/4",
+            "progress": 3.0,
+            "progressToken": "create-plan-1",
+            "total": 4.0
+          }
+        },
+        {
+          "Progress": {
+            "message": "Creating step 4/4",
+            "progress": 4.0,
+            "progressToken": "create-plan-1",
+            "total": 4.0
+          }
+        },
+        {
+          "sessionId": "01KDJGK50WEWSW0BXS01343Y9J",
+          "update": {
+            "rawOutput": "{\n  \"plan\": {\n    \"goal\": \"Implement user authentication\",\n    \"steps\": [\n      {\n        \"description\": \"Analyze requirements\",\n        \"id\": 1,\n        \"status\": \"pending\"\n      },\n      {\n        \"description\": \"Design solution\",\n        \"id\": 2,\n        \"status\": \"pending\"\n      },\n      {\n        \"description\": \"Implement solution\",\n        \"id\": 3,\n        \"status\": \"pending\"\n      },\n      {\n        \"description\": \"Test and validate\",\n        \"id\": 4,\n        \"status\": \"pending\"\n      }\n    ]\n  }\n}",
+            "sessionUpdate": "tool_call_update",
+            "status": "completed",
+            "toolCallId": "01KDJGKAMB9VQ2JDTD4F9YS85W"
+          }
+        }
+      ]
+    }
+  ]
+}

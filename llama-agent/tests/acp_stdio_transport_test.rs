@@ -4,9 +4,9 @@
 //! The actual stdio methods are tested via the example binary which successfully compiles.
 
 mod stdio_tests {
-    use llama_agent::acp::test_utils::create_test_acp_server;
+    use llama_agent::acp::test_utils::create_acp_server;
+    use llama_agent::AgentConfig;
     use std::sync::Arc;
-    use tempfile::TempDir;
 
     /// Test that AcpServer can be created with stdio transport capability
     ///
@@ -15,19 +15,19 @@ mod stdio_tests {
     /// from integration tests. See src/examples/acp_stdio.rs for working usage.
     #[tokio::test]
     async fn test_acp_server_creation_for_stdio() {
-        let temp_dir = TempDir::new().unwrap();
-        let server = create_test_acp_server(temp_dir.path()).await;
+        let config = AgentConfig::default();
+        let server_result = create_acp_server(config).await;
 
-        if server.is_err() {
+        if server_result.is_err() {
             // Backend initialization error is expected in test environment when tests run in parallel
             // The important verification is that the code compiles and the API exists
             return;
         }
 
-        let server = server.unwrap();
+        let (server, _notification_rx) = server_result.unwrap();
 
         // Verify it's wrapped in Arc as required by start_stdio and start_with_streams
-        let _arc_server: Arc<_> = server;
+        let _arc_server: Arc<_> = Arc::new(server);
 
         // The stdio transport methods exist and are demonstrated in:
         // - src/examples/acp_stdio.rs (working example)
@@ -37,10 +37,10 @@ mod stdio_tests {
     /// Test that start_with_streams is properly exposed
     #[tokio::test]
     async fn test_start_with_streams_exposed() {
-        let temp_dir = TempDir::new().unwrap();
+        let config = AgentConfig::default();
 
         // Attempt to create server - may fail if backend already initialized
-        let server_result = create_test_acp_server(temp_dir.path()).await;
+        let server_result = create_acp_server(config).await;
 
         if server_result.is_err() {
             // Backend initialization error is expected in test environment
@@ -48,7 +48,8 @@ mod stdio_tests {
             return;
         }
 
-        let server = server_result.unwrap();
+        let (server, _notification_rx) = server_result.unwrap();
+        let server = Arc::new(server);
 
         // Create mock streams
         let (reader, writer) = tokio::io::duplex(4096);

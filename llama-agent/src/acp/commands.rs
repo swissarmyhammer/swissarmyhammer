@@ -171,6 +171,14 @@ mod tests {
         async fn shutdown_all(&self) -> Result<(), MCPError> {
             Ok(())
         }
+
+        async fn set_session(&self, _session_id: agent_client_protocol::SessionId) {
+            // No-op for mock
+        }
+
+        async fn clear_session(&self) {
+            // No-op for mock
+        }
     }
 
     #[tokio::test]

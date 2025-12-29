@@ -1,0 +1,30 @@
+{
+  "calls": [
+    {
+      "method": "new_session",
+      "request": {
+        "cwd": "/var/folders/3k/6b488x1j6rg1f6w8fnyfwm9w0000gn/T/",
+        "mcpServers": []
+      },
+      "response": {
+        "sessionId": "01KDJGV43094QGNWQP52HD2HQ8"
+      },
+      "notifications": []
+    },
+    {
+      "method": "set_session_mode",
+      "request": {
+        "modeId": "test-mode",
+        "sessionId": "01KDJGV43094QGNWQP52HD2HQ8"
+      },
+      "response": {
+        "_meta": {
+          "message": "Session modes are not yet implemented",
+          "mode_id": "test-mode",
+          "mode_set": false
+        }
+      },
+      "notifications": []
+    }
+  ]
+}

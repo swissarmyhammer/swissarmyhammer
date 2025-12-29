@@ -1,3 +1,18 @@
 [profile.default]
 slow-timeout = "5s"
 status-level = "slow"
+
+# Limit concurrency for heavy LLM-based tests
+# Use test-threads to limit overall parallelism, or use test-groups for finer control
+
+# Define a test group for resource-intensive tests
+[test-groups.acp-conformance]
+# loads models, so we can't go nuts on concurrency
+max-threads = 4
+
+# Apply the group to acp-conformance package tests
+[[profile.default.overrides]]
+filter = "package(acp-conformance)"
+test-group = "acp-conformance"
+# Also increase timeout for these slower tests
+slow-timeout = "60s"

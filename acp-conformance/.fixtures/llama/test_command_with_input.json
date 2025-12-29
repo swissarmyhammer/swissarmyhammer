@@ -1,0 +1,257 @@
+{
+  "calls": [
+    {
+      "method": "new_session",
+      "request": {
+        "cwd": "/var/folders/3k/6b488x1j6rg1f6w8fnyfwm9w0000gn/T/",
+        "mcpServers": []
+      },
+      "response": {
+        "sessionId": "01KDJGW70VM5188WW73F3ETPVT"
+      },
+      "notifications": []
+    },
+    {
+      "method": "prompt",
+      "request": {
+        "prompt": [
+          {
+            "text": "/web agent client protocol",
+            "type": "text"
+          }
+        ],
+        "sessionId": "01KDJGW70VM5188WW73F3ETPVT"
+      },
+      "response": {
+        "_meta": {
+          "tokens_generated": 152,
+          "tool_calls_executed": 1
+        },
+        "stopReason": "end_turn"
+      },
+      "notifications": [
+        {
+          "sessionId": "01KDJGW70VM5188WW73F3ETPVT",
+          "update": {
+            "content": {
+              "text": "{\n",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDJGW70VM5188WW73F3ETPVT",
+          "update": {
+            "content": {
+              "text": " ",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDJGW70VM5188WW73F3ETPVT",
+          "update": {
+            "content": {
+              "text": " \"",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDJGW70VM5188WW73F3ETPVT",
+          "update": {
+            "content": {
+              "text": "function",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDJGW70VM5188WW73F3ETPVT",
+          "update": {
+            "content": {
+              "text": "_name",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDJGW70VM5188WW73F3ETPVT",
+          "update": {
+            "content": {
+              "text": "\":",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDJGW70VM5188WW73F3ETPVT",
+          "update": {
+            "content": {
+              "text": " \"",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDJGW70VM5188WW73F3ETPVT",
+          "update": {
+            "content": {
+              "text": "list",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDJGW70VM5188WW73F3ETPVT",
+          "update": {
+            "content": {
+              "text": "-files",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDJGW70VM5188WW73F3ETPVT",
+          "update": {
+            "content": {
+              "text": "\",\n",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDJGW70VM5188WW73F3ETPVT",
+          "update": {
+            "content": {
+              "text": " ",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDJGW70VM5188WW73F3ETPVT",
+          "update": {
+            "content": {
+              "text": " \"",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDJGW70VM5188WW73F3ETPVT",
+          "update": {
+            "content": {
+              "text": "arguments",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDJGW70VM5188WW73F3ETPVT",
+          "update": {
+            "content": {
+              "text": "\":",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDJGW70VM5188WW73F3ETPVT",
+          "update": {
+            "content": {
+              "text": " {}\n",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDJGW70VM5188WW73F3ETPVT",
+          "update": {
+            "content": {
+              "text": "}",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDJGW70VM5188WW73F3ETPVT",
+          "update": {
+            "content": {
+              "text": "",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDJGW70VM5188WW73F3ETPVT",
+          "update": {
+            "rawInput": {},
+            "sessionUpdate": "tool_call",
+            "title": "list-files",
+            "toolCallId": "01KDJGW8M7VZ0RW1PNMKXGCT8Y"
+          }
+        },
+        {
+          "Log": {
+            "data": {
+              "message": "Listing files in: ."
+            },
+            "level": "info",
+            "logger": "test-mcp-server"
+          }
+        },
+        {
+          "Progress": {
+            "message": "Processing file 1/3",
+            "progress": 1.0,
+            "progressToken": "list-files-1",
+            "total": 3.0
+          }
+        },
+        {
+          "Progress": {
+            "message": "Processing file 2/3",
+            "progress": 2.0,
+            "progressToken": "list-files-1",
+            "total": 3.0
+          }
+        },
+        {
+          "Progress": {
+            "message": "Processing file 3/3",
+            "progress": 3.0,
+            "progressToken": "list-files-1",
+            "total": 3.0
+          }
+        },
+        {
+          "sessionId": "01KDJGW70VM5188WW73F3ETPVT",
+          "update": {
+            "rawOutput": "{\n  \"count\": 3,\n  \"files\": [\n    \"file1.txt\",\n    \"file2.txt\",\n    \"file3.txt\"\n  ],\n  \"path\": \".\"\n}",
+            "sessionUpdate": "tool_call_update",
+            "status": "completed",
+            "toolCallId": "01KDJGW8M7VZ0RW1PNMKXGCT8Y"
+          }
+        }
+      ]
+    }
+  ]
+}

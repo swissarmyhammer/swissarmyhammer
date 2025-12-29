@@ -4,7 +4,7 @@
 //! file system and terminal operations, eliminating manual JSON parsing boilerplate
 //! and reducing errors.
 
-use crate::{validation, Error, Result};
+use crate::{validation, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -163,14 +163,7 @@ impl TerminalExitResponse {
     ///
     /// Ok(TerminalExitResponse) if parsing succeeds, Error::Validation otherwise
     pub fn from_json(value: &Value) -> Result<Self> {
-        // exit_code might be i32 or u64, handle both
-        let exit_code = if let Some(code) = value.get("exit_code").and_then(|v| v.as_i64()) {
-            code as i32
-        } else {
-            return Err(Error::Validation(
-                "Field 'exit_code' must be a number".to_string(),
-            ));
-        };
+        let exit_code = validation::require_i64_field(value, "exit_code")? as i32;
 
         let signaled = value
             .get("signaled")
@@ -500,5 +493,85 @@ mod tests {
         let cloned = terminal_release.clone();
         assert_eq!(terminal_release, cloned);
         assert!(!format!("{:?}", terminal_release).is_empty());
+    }
+
+    #[test]
+    fn test_terminal_exit_response_with_negative_exit_code() {
+        // Some systems use negative exit codes for signals
+        let json = json!({"exit_code": -9, "signaled": true});
+        let response = TerminalExitResponse::from_json(&json).unwrap();
+        assert_eq!(response.exit_code, -9);
+        assert!(response.signaled);
+    }
+
+    #[test]
+    fn test_terminal_output_response_with_binary_data() {
+        // Output might contain non-UTF8 characters represented as replacement chars
+        let json = json!({"output": "test\u{FFFD}binary\u{FFFD}data", "truncated": false});
+        let response = TerminalOutputResponse::from_json(&json).unwrap();
+        assert!(response.output.contains('\u{FFFD}'));
+    }
+
+    #[test]
+    fn test_file_read_response_with_windows_line_endings() {
+        let json = json!({"content": "line1\r\nline2\r\nline3"});
+        let response = FileReadResponse::from_json(&json).unwrap();
+        assert!(response.content.contains("\r\n"));
+        assert_eq!(response.content.matches("\r\n").count(), 2);
+    }
+
+    #[test]
+    fn test_terminal_create_response_with_uuid_terminal_id() {
+        let json = json!({"terminal_id": "550e8400-e29b-41d4-a716-446655440000"});
+        let response = TerminalCreateResponse::from_json(&json).unwrap();
+        assert_eq!(response.terminal_id, "550e8400-e29b-41d4-a716-446655440000");
+    }
+
+    #[test]
+    fn test_response_inequality() {
+        // Test that different values produce different responses
+        let response1 = FileReadResponse::new("content1".to_string());
+        let response2 = FileReadResponse::new("content2".to_string());
+        assert_ne!(response1, response2);
+
+        let response1 = TerminalExitResponse::new(0, false);
+        let response2 = TerminalExitResponse::new(1, false);
+        assert_ne!(response1, response2);
+
+        let response1 = TerminalExitResponse::new(0, false);
+        let response2 = TerminalExitResponse::new(0, true);
+        assert_ne!(response1, response2);
+    }
+
+    #[test]
+    fn test_terminal_output_truncated_variations() {
+        // Test explicit truncated: true
+        let json = json!({"output": "...", "truncated": true});
+        let response = TerminalOutputResponse::from_json(&json).unwrap();
+        assert!(response.truncated);
+
+        // Test explicit truncated: false
+        let json = json!({"output": "...", "truncated": false});
+        let response = TerminalOutputResponse::from_json(&json).unwrap();
+        assert!(!response.truncated);
+
+        // Test missing truncated field (defaults to false)
+        let json = json!({"output": "..."});
+        let response = TerminalOutputResponse::from_json(&json).unwrap();
+        assert!(!response.truncated);
+    }
+
+    #[test]
+    fn test_response_json_field_case_sensitivity() {
+        // JSON field names are case-sensitive
+        // These should fail because fields have wrong case
+        let json = json!({"Content": "test"}); // Capital C
+        assert!(FileReadResponse::from_json(&json).is_err());
+
+        let json = json!({"SUCCESS": true}); // All caps
+        assert!(FileWriteResponse::from_json(&json).is_err());
+
+        let json = json!({"terminalId": "term-1"}); // camelCase
+        assert!(TerminalCreateResponse::from_json(&json).is_err());
     }
 }

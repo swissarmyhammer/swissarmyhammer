@@ -160,6 +160,25 @@ pub fn require_number_field(value: &Value, field: &str) -> Result<u64> {
         .ok_or_else(|| Error::Validation(format!("Field '{}' must be a number", field)))
 }
 
+/// Extracts a required signed number field from a JSON value as i64.
+///
+/// This is useful for fields that may contain negative values, such as
+/// exit codes from terminal processes.
+///
+/// # Arguments
+///
+/// * `value` - The JSON value to extract from
+/// * `field` - The field name to extract
+///
+/// # Returns
+///
+/// Ok(i64) if field exists and is a number, Error::Validation otherwise
+pub fn require_i64_field(value: &Value, field: &str) -> Result<i64> {
+    require_field(value, field)?
+        .as_i64()
+        .ok_or_else(|| Error::Validation(format!("Field '{}' must be a number", field)))
+}
+
 /// Validates that a JSON array field exists and is non-empty.
 ///
 /// # Arguments
@@ -408,5 +427,100 @@ mod tests {
         let inner = require_field(nested, "inner").unwrap();
         let deep_value = require_string_field(inner, "value").unwrap();
         assert_eq!(deep_value, "deep");
+    }
+
+    #[test]
+    fn test_require_i64_field() {
+        let value = json!({
+            "positive": 42,
+            "negative": -1,
+            "zero": 0,
+            "large_negative": -128,
+            "string": "not a number"
+        });
+
+        // Valid i64 values
+        assert_eq!(require_i64_field(&value, "positive").unwrap(), 42);
+        assert_eq!(require_i64_field(&value, "negative").unwrap(), -1);
+        assert_eq!(require_i64_field(&value, "zero").unwrap(), 0);
+        assert_eq!(require_i64_field(&value, "large_negative").unwrap(), -128);
+
+        // Invalid cases
+        assert!(require_i64_field(&value, "string").is_err());
+        assert!(require_i64_field(&value, "missing").is_err());
+    }
+
+    #[test]
+    fn test_require_i64_field_with_signal_codes() {
+        // Test exit codes that would be returned by killed processes
+        let value = json!({
+            "sigterm": 143,
+            "sigkill": 137,
+            "sigsegv": 139
+        });
+
+        assert_eq!(require_i64_field(&value, "sigterm").unwrap(), 143);
+        assert_eq!(require_i64_field(&value, "sigkill").unwrap(), 137);
+        assert_eq!(require_i64_field(&value, "sigsegv").unwrap(), 139);
+    }
+
+    #[test]
+    fn test_validation_error_messages_are_descriptive() {
+        let value = json!({"name": "test"});
+
+        // Check error messages contain field names
+        let err = require_field(&value, "missing").unwrap_err();
+        assert!(err.to_string().contains("missing"));
+
+        let err = require_string_field(&value, "nonexistent").unwrap_err();
+        assert!(err.to_string().contains("nonexistent"));
+
+        let err = require_bool_field(&value, "name").unwrap_err();
+        assert!(err.to_string().contains("name"));
+    }
+
+    #[test]
+    fn test_require_capability_logs_correctly() {
+        // Test that require_capability returns correct values
+        // (tracing output is tested via test_log in integration tests)
+        assert_eq!(require_capability(true, "test").unwrap(), Some(()));
+        assert_eq!(require_capability(false, "test").unwrap(), None);
+    }
+
+    #[test]
+    fn test_validate_session_id_with_uuid_format() {
+        // Common session ID formats
+        assert!(validate_session_id("550e8400-e29b-41d4-a716-446655440000").is_ok());
+        assert!(validate_session_id("01HZZZZZZZZZZZZZZZZZZZZZZ").is_ok()); // ULID format
+        assert!(validate_session_id("sess_abc123").is_ok()); // Prefixed format
+    }
+
+    #[test]
+    fn test_require_non_empty_array_with_single_element() {
+        let value = json!({
+            "single": [1],
+            "empty": []
+        });
+
+        // Single element should be valid
+        let arr = require_non_empty_array(&value, "single").unwrap();
+        assert_eq!(arr.len(), 1);
+
+        // Empty should fail
+        assert!(require_non_empty_array(&value, "empty").is_err());
+    }
+
+    #[test]
+    fn test_validate_required_fields_error_lists_all_missing() {
+        let value = json!({"a": 1});
+
+        let err = validate_required_fields(&value, &["a", "b", "c"]).unwrap_err();
+        let msg = err.to_string();
+
+        // Should list both missing fields
+        assert!(msg.contains("b"));
+        assert!(msg.contains("c"));
+        // Should not list present field
+        assert!(!msg.contains("Missing") || !msg.contains(": a,"));
     }
 }

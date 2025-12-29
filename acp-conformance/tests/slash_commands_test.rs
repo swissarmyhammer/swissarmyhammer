@@ -1,14 +1,13 @@
 //! Conformance tests for ACP slash commands protocol
 
-mod agent_fixtures;
+mod common;
 
-use agent_client_protocol::Agent;
 use agent_client_protocol_extras::AgentWithFixture;
 use rstest::rstest;
 
 #[rstest]
-#[case::llama(agent_fixtures::llama_agent_factory())]
-#[case::claude(agent_fixtures::claude_agent_factory())]
+#[case::llama(common::llama_agent_factory())]
+#[case::claude(common::claude_agent_factory())]
 #[awt]
 #[test_log::test(tokio::test)]
 #[serial_test::serial]
@@ -23,8 +22,8 @@ async fn test_command_structure_validation(
 }
 
 #[rstest]
-#[case::llama(agent_fixtures::llama_agent_factory())]
-#[case::claude(agent_fixtures::claude_agent_factory())]
+#[case::llama(common::llama_agent_factory())]
+#[case::claude(common::claude_agent_factory())]
 #[awt]
 #[test_log::test(tokio::test)]
 #[serial_test::serial]
@@ -39,8 +38,8 @@ async fn test_advertise_commands(
 }
 
 #[rstest]
-#[case::llama(agent_fixtures::llama_agent_factory())]
-#[case::claude(agent_fixtures::claude_agent_factory())]
+#[case::llama(common::llama_agent_factory())]
+#[case::claude(common::claude_agent_factory())]
 #[awt]
 #[test_log::test(tokio::test)]
 #[serial_test::serial]
@@ -55,8 +54,8 @@ async fn test_run_command(
 }
 
 #[rstest]
-#[case::llama(agent_fixtures::llama_agent_factory())]
-#[case::claude(agent_fixtures::claude_agent_factory())]
+#[case::llama(common::llama_agent_factory())]
+#[case::claude(common::claude_agent_factory())]
 #[awt]
 #[test_log::test(tokio::test)]
 #[serial_test::serial]
@@ -71,8 +70,8 @@ async fn test_command_field_validation(
 }
 
 #[rstest]
-#[case::llama(agent_fixtures::llama_agent_factory())]
-#[case::claude(agent_fixtures::claude_agent_factory())]
+#[case::llama(common::llama_agent_factory())]
+#[case::claude(common::claude_agent_factory())]
 #[awt]
 #[test_log::test(tokio::test)]
 #[serial_test::serial]
@@ -87,8 +86,8 @@ async fn test_command_input_hint(
 }
 
 #[rstest]
-#[case::llama(agent_fixtures::llama_agent_factory())]
-#[case::claude(agent_fixtures::claude_agent_factory())]
+#[case::llama(common::llama_agent_factory())]
+#[case::claude(common::claude_agent_factory())]
 #[awt]
 #[test_log::test(tokio::test)]
 #[serial_test::serial]
@@ -103,8 +102,8 @@ async fn test_command_with_input(
 }
 
 #[rstest]
-#[case::llama(agent_fixtures::llama_agent_factory())]
-#[case::claude(agent_fixtures::claude_agent_factory())]
+#[case::llama(common::llama_agent_factory())]
+#[case::claude(common::claude_agent_factory())]
 #[awt]
 #[test_log::test(tokio::test)]
 #[serial_test::serial]

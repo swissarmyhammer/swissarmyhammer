@@ -1,0 +1,83 @@
+{
+  "calls": [
+    {
+      "method": "initialize",
+      "request": {
+        "clientCapabilities": {
+          "fs": {
+            "readTextFile": true,
+            "writeTextFile": true
+          },
+          "terminal": false
+        },
+        "protocolVersion": 1
+      },
+      "response": {
+        "agentCapabilities": {
+          "_meta": {
+            "streaming": true,
+            "tools": [
+              "fs_read",
+              "fs_write",
+              "fs_list"
+            ]
+          },
+          "loadSession": true,
+          "mcpCapabilities": {
+            "http": true,
+            "sse": false
+          },
+          "promptCapabilities": {
+            "_meta": {
+              "streaming": true
+            },
+            "audio": true,
+            "embeddedContext": true,
+            "image": true
+          },
+          "sessionCapabilities": {}
+        },
+        "agentInfo": {
+          "name": "claude-agent",
+          "title": "Claude Agent v0.3.0",
+          "version": "0.3.0"
+        },
+        "authMethods": [],
+        "protocolVersion": 1
+      },
+      "notifications": []
+    },
+    {
+      "method": "new_session",
+      "request": {
+        "cwd": "/Users/wballard/github/swissarmyhammer/acp-conformance",
+        "mcpServers": []
+      },
+      "response": {
+        "sessionId": "01KDJGP65WE2VDBS85FJ8K5A6Z"
+      },
+      "notifications": []
+    },
+    {
+      "method": "ext_method",
+      "request": {
+        "content": "Integration test content",
+        "path": "/var/folders/3k/6b488x1j6rg1f6w8fnyfwm9w0000gn/T/acp_conformance_integration_test.txt",
+        "sessionId": "01KDJGP65WE2VDBS85FJ8K5A6Z"
+      },
+      "response": {},
+      "notifications": []
+    },
+    {
+      "method": "ext_method",
+      "request": {
+        "path": "/var/folders/3k/6b488x1j6rg1f6w8fnyfwm9w0000gn/T/acp_conformance_integration_test.txt",
+        "sessionId": "01KDJGP65WE2VDBS85FJ8K5A6Z"
+      },
+      "response": {
+        "content": "Integration test content"
+      },
+      "notifications": []
+    }
+  ]
+}

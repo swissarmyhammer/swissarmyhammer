@@ -1,0 +1,41 @@
+[package]
+name = "model-context-protocol-extras"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+
+[dependencies]
+# MCP protocol
+rmcp.workspace = true
+
+# Async runtime
+tokio = { workspace = true, features = ["sync", "rt", "net", "time"] }
+async-trait.workspace = true
+
+# HTTP server
+axum.workspace = true
+
+# HTTP client for proxy
+reqwest.workspace = true
+
+# Serialization
+serde.workspace = true
+serde_json.workspace = true
+
+# Logging
+tracing.workspace = true
+
+# Error handling
+thiserror.workspace = true
+
+[dev-dependencies]
+test-log.workspace = true
+tracing-subscriber.workspace = true
+tokio = { workspace = true, features = ["full"] }
+
+[lints]
+workspace = true

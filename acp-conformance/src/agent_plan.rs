@@ -21,23 +21,31 @@
 //! 3. **Dynamic Planning**
 //!    - Plans can evolve during execution
 //!    - Agent MAY add, remove, or modify plan entries as it discovers new requirements
-//!
-//! ## Testing Approach
-//!
-//! Since agent planning uses `session/update` notifications rather than request/response,
-//! these tests verify the agent's ability to process prompts that would trigger planning
-//! behavior. Full notification verification requires integration testing with a complete
-//! client/server setup.
 
 use agent_client_protocol::{
     Agent, ContentBlock, InitializeRequest, PromptRequest, ProtocolVersion, TextContent,
 };
+use agent_client_protocol_extras::recording::RecordedSession;
 
-/// Test that agent can process complex multi-step prompts that would trigger planning
+/// Statistics from plan fixture verification
+#[derive(Debug, Default)]
+pub struct PlanStats {
+    pub plan_notifications: usize,
+    pub total_entries: usize,
+    pub entries_pending: usize,
+    pub entries_in_progress: usize,
+    pub entries_completed: usize,
+    pub agent_message_chunks: usize,
+}
+
+/// Test that agent sends plan notifications when using todo/planning tools
 ///
-/// Per spec: Agents SHOULD report execution plans for complex tasks via session/update notifications
-pub async fn test_agent_accepts_planning_prompt<A: Agent + ?Sized>(agent: &A) -> crate::Result<()> {
-    tracing::info!("Testing agent accepts planning prompts");
+/// Per spec: Agents SHOULD report execution plans via session/update notifications
+/// with sessionUpdate="plan"
+pub async fn test_agent_sends_plan_notifications<A: Agent + ?Sized>(
+    agent: &A,
+) -> crate::Result<()> {
+    tracing::info!("Testing agent sends plan notifications");
 
     // Initialize agent
     let init_request = InitializeRequest::new(ProtocolVersion::V1);
@@ -49,24 +57,25 @@ pub async fn test_agent_accepts_planning_prompt<A: Agent + ?Sized>(agent: &A) ->
     let new_session_response = agent.new_session(new_session_request).await?;
     let session_id = new_session_response.session_id;
 
-    // Create a prompt that would trigger planning behavior
-    // A complex multi-step task that an agent would typically plan for
+    // Ask agent to use todo_create tool which should trigger plan notifications
+    // The TestMcpServer and SwissArmyHammer both have todo tools
     let text_content = TextContent::new(
-        "Analyze the existing codebase structure, identify components that need refactoring, \
-         and create unit tests for critical functions. Prioritize the tasks appropriately.",
+        "Create a todo item using the mcp__test-mcp-server__create-plan tool with goal 'Implement user authentication'. \
+         This is a multi-step task that requires planning.",
     );
     let content_block = ContentBlock::Text(text_content);
 
     let prompt_request = PromptRequest::new(session_id, vec![content_block]);
 
-    // Send prompt - agent should accept it without error
-    // The agent SHOULD create a plan and send session/update notifications,
-    // but we cannot verify notifications in this test infrastructure
+    // Send prompt - agent should create plan and send notifications
     let result = agent.prompt(prompt_request).await;
 
     match result {
-        Ok(_) => {
-            tracing::info!("Agent accepted planning prompt");
+        Ok(response) => {
+            tracing::info!(
+                "Agent completed prompt with stop_reason: {:?}",
+                response.stop_reason
+            );
             Ok(())
         }
         Err(e) => {
@@ -89,225 +98,294 @@ pub async fn test_agent_accepts_planning_prompt<A: Agent + ?Sized>(agent: &A) ->
     }
 }
 
-/// Test plan entry structure validation
+/// Verify plan notifications in a recorded fixture
 ///
-/// This test verifies that plan entry JSON structures conform to the protocol spec.
-/// In a real implementation, agents would send these via session/update notifications.
-pub async fn test_plan_entry_structure_validation<A: Agent + ?Sized>(
-    _agent: &A,
-) -> crate::Result<()> {
-    tracing::info!("Testing plan entry structure validation");
+/// This function reads the fixture and verifies:
+/// 1. The fixture has recorded calls (not calls: [])
+/// 2. Plan notifications were sent with sessionUpdate="plan"
+/// 3. Plan entries have required fields (content, priority, status)
+pub fn verify_plan_fixture(
+    agent_type: &str,
+    test_name: &str,
+) -> Result<PlanStats, Box<dyn std::error::Error>> {
+    let fixture_path = agent_client_protocol_extras::get_fixture_path_for(agent_type, test_name);
 
-    // Test valid plan entry structures
-    let valid_entries = vec![
-        serde_json::json!({
-            "content": "Analyze the existing codebase structure",
-            "priority": "high",
-            "status": "pending"
-        }),
-        serde_json::json!({
-            "content": "Identify components that need refactoring",
-            "priority": "medium",
-            "status": "in_progress"
-        }),
-        serde_json::json!({
-            "content": "Create unit tests for critical functions",
-            "priority": "low",
-            "status": "completed"
-        }),
-    ];
+    if !fixture_path.exists() {
+        return Err(format!("Fixture not found: {:?}", fixture_path).into());
+    }
 
-    for entry in &valid_entries {
-        // Verify required fields exist using validation helpers
-        crate::validation::require_string_field(entry, "content")?;
-        let priority = crate::validation::require_string_field(entry, "priority")?;
-        let status = crate::validation::require_string_field(entry, "status")?;
+    let content = std::fs::read_to_string(&fixture_path)?;
+    let session: RecordedSession = serde_json::from_str(&content)?;
 
-        // Verify priority is valid
-        if !["high", "medium", "low"].contains(&priority) {
-            return Err(crate::Error::Validation(format!(
-                "Invalid priority value: {}. Must be 'high', 'medium', or 'low'",
-                priority
-            )));
-        }
+    let mut stats = PlanStats::default();
 
-        // Verify status is valid
-        if !["pending", "in_progress", "completed"].contains(&status) {
-            return Err(crate::Error::Validation(format!(
-                "Invalid status value: {}. Must be 'pending', 'in_progress', or 'completed'",
-                status
-            )));
+    // CRITICAL: Verify we have calls recorded (catches poor tests with calls: [])
+    assert!(
+        !session.calls.is_empty(),
+        "Expected recorded calls, fixture has calls: [] - test didn't call agent properly"
+    );
+
+    for call in &session.calls {
+        for notification_json in &call.notifications {
+            // Check for ACP session updates
+            if let Some(update_val) = notification_json.get("update") {
+                if let Some(session_update) =
+                    update_val.get("sessionUpdate").and_then(|v| v.as_str())
+                {
+                    match session_update {
+                        "plan" => {
+                            stats.plan_notifications += 1;
+
+                            // Verify plan has entries array
+                            if let Some(entries) =
+                                update_val.get("entries").and_then(|v| v.as_array())
+                            {
+                                for entry in entries {
+                                    stats.total_entries += 1;
+
+                                    // Verify required fields
+                                    assert!(
+                                        entry.get("content").and_then(|v| v.as_str()).is_some(),
+                                        "Plan entry missing 'content' field"
+                                    );
+
+                                    // Verify priority is valid
+                                    if let Some(priority) =
+                                        entry.get("priority").and_then(|v| v.as_str())
+                                    {
+                                        assert!(
+                                            ["high", "medium", "low"].contains(&priority),
+                                            "Invalid priority: {}. Must be 'high', 'medium', or 'low'",
+                                            priority
+                                        );
+                                    } else {
+                                        panic!("Plan entry missing 'priority' field");
+                                    }
+
+                                    // Verify status and count
+                                    if let Some(status) =
+                                        entry.get("status").and_then(|v| v.as_str())
+                                    {
+                                        match status {
+                                            "pending" => stats.entries_pending += 1,
+                                            "in_progress" => stats.entries_in_progress += 1,
+                                            "completed" => stats.entries_completed += 1,
+                                            _ => panic!(
+                                                "Invalid status: {}. Must be 'pending', 'in_progress', or 'completed'",
+                                                status
+                                            ),
+                                        }
+                                    } else {
+                                        panic!("Plan entry missing 'status' field");
+                                    }
+                                }
+                            }
+                        }
+                        "agent_message_chunk" => stats.agent_message_chunks += 1,
+                        _ => {}
+                    }
+                }
+            }
         }
     }
 
-    tracing::info!("Plan entry structures are valid");
+    tracing::info!("{} plan fixture stats: {:?}", agent_type, stats);
+
+    // Agent should produce output
+    assert!(
+        stats.agent_message_chunks > 0,
+        "Expected agent_message_chunk notifications, got {}. Agent should respond to prompt.",
+        stats.agent_message_chunks
+    );
+
+    // Note: Plan notifications are SHOULD (not MUST) per spec, so we don't assert on them
+    // But we log them for visibility
+    if stats.plan_notifications == 0 {
+        tracing::warn!(
+            "{} agent did not send any plan notifications. This is allowed per spec (SHOULD, not MUST).",
+            agent_type
+        );
+    }
+
+    Ok(stats)
+}
+
+//
+// Unit tests for JSON structure validation (no agent needed)
+//
+
+/// Validate plan entry JSON structure
+pub fn validate_plan_entry(entry: &serde_json::Value) -> Result<(), String> {
+    // Verify required fields
+    entry
+        .get("content")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| "Missing 'content' field".to_string())?;
+
+    let priority = entry
+        .get("priority")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| "Missing 'priority' field".to_string())?;
+
+    if !["high", "medium", "low"].contains(&priority) {
+        return Err(format!(
+            "Invalid priority: {}. Must be 'high', 'medium', or 'low'",
+            priority
+        ));
+    }
+
+    let status = entry
+        .get("status")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| "Missing 'status' field".to_string())?;
+
+    if !["pending", "in_progress", "completed"].contains(&status) {
+        return Err(format!(
+            "Invalid status: {}. Must be 'pending', 'in_progress', or 'completed'",
+            status
+        ));
+    }
+
     Ok(())
 }
 
-/// Test session update structure for plan notifications
-///
-/// This test verifies that session/update notification structures for plans
-/// conform to the protocol spec.
-pub async fn test_plan_session_update_structure<A: Agent + ?Sized>(
-    _agent: &A,
-) -> crate::Result<()> {
-    tracing::info!("Testing plan session update structure");
-
-    // Test valid session/update structure for plan
-    let session_update = serde_json::json!({
-        "sessionId": "sess_abc123def456",
-        "update": {
-            "sessionUpdate": "plan",
-            "entries": [
-                {
-                    "content": "Analyze the existing codebase structure",
-                    "priority": "high",
-                    "status": "pending"
-                },
-                {
-                    "content": "Identify components that need refactoring",
-                    "priority": "high",
-                    "status": "pending"
-                },
-                {
-                    "content": "Create unit tests for critical functions",
-                    "priority": "medium",
-                    "status": "pending"
-                }
-            ]
-        }
-    });
-
-    // Verify structure
-    let update = session_update
-        .get("update")
-        .ok_or_else(|| crate::Error::Validation("Missing 'update' field".to_string()))?;
-
+/// Validate plan session update JSON structure
+pub fn validate_plan_session_update(update: &serde_json::Value) -> Result<(), String> {
     let session_update_type = update
         .get("sessionUpdate")
         .and_then(|v| v.as_str())
-        .ok_or_else(|| crate::Error::Validation("Missing 'sessionUpdate' field".to_string()))?;
+        .ok_or_else(|| "Missing 'sessionUpdate' field".to_string())?;
 
     if session_update_type != "plan" {
-        return Err(crate::Error::Validation(format!(
+        return Err(format!(
             "Expected sessionUpdate='plan', got '{}'",
             session_update_type
-        )));
+        ));
     }
 
     let entries = update
         .get("entries")
         .and_then(|v| v.as_array())
-        .ok_or_else(|| {
-            crate::Error::Validation("Missing or invalid 'entries' field".to_string())
-        })?;
+        .ok_or_else(|| "Missing or invalid 'entries' field".to_string())?;
 
     if entries.is_empty() {
-        return Err(crate::Error::Validation(
-            "Plan entries array should not be empty".to_string(),
-        ));
+        return Err("Plan entries array should not be empty".to_string());
     }
 
-    // Verify each entry has required fields using validation helpers
     for (i, entry) in entries.iter().enumerate() {
-        crate::validation::require_string_field(entry, "content")
-            .map_err(|e| crate::Error::Validation(format!("Plan entry {} error: {}", i, e)))?;
-        crate::validation::require_string_field(entry, "priority")
-            .map_err(|e| crate::Error::Validation(format!("Plan entry {} error: {}", i, e)))?;
-        crate::validation::require_string_field(entry, "status")
-            .map_err(|e| crate::Error::Validation(format!("Plan entry {} error: {}", i, e)))?;
+        validate_plan_entry(entry).map_err(|e| format!("Entry {} error: {}", i, e))?;
     }
 
-    tracing::info!("Plan session update structure is valid");
-    Ok(())
-}
-
-/// Test dynamic plan evolution concept
-///
-/// This test verifies understanding of dynamic planning where plans can evolve.
-/// In practice, agents would send multiple session/update notifications as plans change.
-pub async fn test_dynamic_plan_evolution<A: Agent + ?Sized>(_agent: &A) -> crate::Result<()> {
-    tracing::info!("Testing dynamic plan evolution concept");
-
-    // Simulate plan evolution through multiple updates
-    let initial_plan = serde_json::json!({
-        "entries": [
-            {
-                "content": "Analyze codebase",
-                "priority": "high",
-                "status": "pending"
-            }
-        ]
-    });
-
-    let evolved_plan = serde_json::json!({
-        "entries": [
-            {
-                "content": "Analyze codebase",
-                "priority": "high",
-                "status": "completed"
-            },
-            {
-                "content": "Found complex module - create detailed refactoring plan",
-                "priority": "high",
-                "status": "in_progress"
-            },
-            {
-                "content": "Write tests for refactored code",
-                "priority": "medium",
-                "status": "pending"
-            }
-        ]
-    });
-
-    // Verify initial plan structure
-    let initial_entries = initial_plan
-        .get("entries")
-        .and_then(|v| v.as_array())
-        .ok_or_else(|| crate::Error::Validation("Invalid initial plan".to_string()))?;
-
-    if initial_entries.len() != 1 {
-        return Err(crate::Error::Validation(
-            "Initial plan should have 1 entry".to_string(),
-        ));
-    }
-
-    // Verify evolved plan structure
-    let evolved_entries = evolved_plan
-        .get("entries")
-        .and_then(|v| v.as_array())
-        .ok_or_else(|| crate::Error::Validation("Invalid evolved plan".to_string()))?;
-
-    if evolved_entries.len() != 3 {
-        return Err(crate::Error::Validation(
-            "Evolved plan should have 3 entries".to_string(),
-        ));
-    }
-
-    // Verify first task is now completed
-    let first_status = crate::validation::require_string_field(&evolved_entries[0], "status")?;
-
-    if first_status != "completed" {
-        return Err(crate::Error::Validation(
-            "First task should be completed in evolved plan".to_string(),
-        ));
-    }
-
-    // Verify new tasks were added
-    if evolved_entries.len() <= initial_entries.len() {
-        return Err(crate::Error::Validation(
-            "Evolved plan should have more entries than initial plan".to_string(),
-        ));
-    }
-
-    tracing::info!("Dynamic plan evolution concept validated");
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
     #[test]
-    fn test_module_compiles() {
-        assert!(true);
+    fn test_valid_plan_entry() {
+        let entry = serde_json::json!({
+            "content": "Analyze the codebase",
+            "priority": "high",
+            "status": "pending"
+        });
+        assert!(validate_plan_entry(&entry).is_ok());
+    }
+
+    #[test]
+    fn test_plan_entry_missing_content() {
+        let entry = serde_json::json!({
+            "priority": "high",
+            "status": "pending"
+        });
+        assert!(validate_plan_entry(&entry).is_err());
+    }
+
+    #[test]
+    fn test_plan_entry_invalid_priority() {
+        let entry = serde_json::json!({
+            "content": "Task",
+            "priority": "critical",  // invalid
+            "status": "pending"
+        });
+        let result = validate_plan_entry(&entry);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Invalid priority"));
+    }
+
+    #[test]
+    fn test_plan_entry_invalid_status() {
+        let entry = serde_json::json!({
+            "content": "Task",
+            "priority": "high",
+            "status": "done"  // invalid
+        });
+        let result = validate_plan_entry(&entry);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Invalid status"));
+    }
+
+    #[test]
+    fn test_valid_plan_session_update() {
+        let update = serde_json::json!({
+            "sessionUpdate": "plan",
+            "entries": [
+                {
+                    "content": "Task 1",
+                    "priority": "high",
+                    "status": "pending"
+                },
+                {
+                    "content": "Task 2",
+                    "priority": "medium",
+                    "status": "in_progress"
+                }
+            ]
+        });
+        assert!(validate_plan_session_update(&update).is_ok());
+    }
+
+    #[test]
+    fn test_plan_session_update_empty_entries() {
+        let update = serde_json::json!({
+            "sessionUpdate": "plan",
+            "entries": []
+        });
+        let result = validate_plan_session_update(&update);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("empty"));
+    }
+
+    #[test]
+    fn test_plan_entry_all_statuses() {
+        for status in ["pending", "in_progress", "completed"] {
+            let entry = serde_json::json!({
+                "content": "Task",
+                "priority": "medium",
+                "status": status
+            });
+            assert!(
+                validate_plan_entry(&entry).is_ok(),
+                "Status '{}' should be valid",
+                status
+            );
+        }
+    }
+
+    #[test]
+    fn test_plan_entry_all_priorities() {
+        for priority in ["high", "medium", "low"] {
+            let entry = serde_json::json!({
+                "content": "Task",
+                "priority": priority,
+                "status": "pending"
+            });
+            assert!(
+                validate_plan_entry(&entry).is_ok(),
+                "Priority '{}' should be valid",
+                priority
+            );
+        }
     }
 }

@@ -1,14 +1,13 @@
 //! Conformance tests for ACP file system protocol
 
-mod agent_fixtures;
+mod common;
 
-use agent_client_protocol::Agent;
 use agent_client_protocol_extras::AgentWithFixture;
 use rstest::rstest;
 
 #[rstest]
-#[case::llama(agent_fixtures::llama_agent_factory())]
-#[case::claude(agent_fixtures::claude_agent_factory())]
+#[case::llama(common::llama_agent_factory())]
+#[case::claude(common::claude_agent_factory())]
 #[awt]
 #[test_log::test(tokio::test)]
 #[serial_test::serial]
@@ -17,14 +16,25 @@ async fn test_read_text_file_capability_check(
     #[future]
     agent: Box<dyn AgentWithFixture>,
 ) {
+    let agent_type = agent.agent_type();
+
     acp_conformance::file_system::test_read_text_file_capability_check(&*agent)
         .await
         .expect("test_read_text_file_capability_check should succeed");
+
+    drop(agent);
+    tokio::time::sleep(tokio::time::Duration::from_millis(1500)).await;
+
+    acp_conformance::file_system::verify_file_system_fixture(
+        agent_type,
+        "test_read_text_file_capability_check",
+    )
+    .expect("Fixture verification should succeed");
 }
 
 #[rstest]
-#[case::llama(agent_fixtures::llama_agent_factory())]
-#[case::claude(agent_fixtures::claude_agent_factory())]
+#[case::llama(common::llama_agent_factory())]
+#[case::claude(common::claude_agent_factory())]
 #[awt]
 #[test_log::test(tokio::test)]
 #[serial_test::serial]
@@ -33,14 +43,25 @@ async fn test_write_text_file_capability_check(
     #[future]
     agent: Box<dyn AgentWithFixture>,
 ) {
+    let agent_type = agent.agent_type();
+
     acp_conformance::file_system::test_write_text_file_capability_check(&*agent)
         .await
         .expect("test_write_text_file_capability_check should succeed");
+
+    drop(agent);
+    tokio::time::sleep(tokio::time::Duration::from_millis(1500)).await;
+
+    acp_conformance::file_system::verify_file_system_fixture(
+        agent_type,
+        "test_write_text_file_capability_check",
+    )
+    .expect("Fixture verification should succeed");
 }
 
 #[rstest]
-#[case::llama(agent_fixtures::llama_agent_factory())]
-#[case::claude(agent_fixtures::claude_agent_factory())]
+#[case::llama(common::llama_agent_factory())]
+#[case::claude(common::claude_agent_factory())]
 #[awt]
 #[test_log::test(tokio::test)]
 #[serial_test::serial]
@@ -49,14 +70,25 @@ async fn test_read_text_file_basic(
     #[future]
     agent: Box<dyn AgentWithFixture>,
 ) {
+    let agent_type = agent.agent_type();
+
     acp_conformance::file_system::test_read_text_file_basic(&*agent)
         .await
         .expect("test_read_text_file_basic should succeed");
+
+    drop(agent);
+    tokio::time::sleep(tokio::time::Duration::from_millis(1500)).await;
+
+    acp_conformance::file_system::verify_file_system_fixture(
+        agent_type,
+        "test_read_text_file_basic",
+    )
+    .expect("Fixture verification should succeed");
 }
 
 #[rstest]
-#[case::llama(agent_fixtures::llama_agent_factory())]
-#[case::claude(agent_fixtures::claude_agent_factory())]
+#[case::llama(common::llama_agent_factory())]
+#[case::claude(common::claude_agent_factory())]
 #[awt]
 #[test_log::test(tokio::test)]
 #[serial_test::serial]
@@ -65,14 +97,25 @@ async fn test_read_text_file_with_range(
     #[future]
     agent: Box<dyn AgentWithFixture>,
 ) {
+    let agent_type = agent.agent_type();
+
     acp_conformance::file_system::test_read_text_file_with_range(&*agent)
         .await
         .expect("test_read_text_file_with_range should succeed");
+
+    drop(agent);
+    tokio::time::sleep(tokio::time::Duration::from_millis(1500)).await;
+
+    acp_conformance::file_system::verify_file_system_fixture(
+        agent_type,
+        "test_read_text_file_with_range",
+    )
+    .expect("Fixture verification should succeed");
 }
 
 #[rstest]
-#[case::llama(agent_fixtures::llama_agent_factory())]
-#[case::claude(agent_fixtures::claude_agent_factory())]
+#[case::llama(common::llama_agent_factory())]
+#[case::claude(common::claude_agent_factory())]
 #[awt]
 #[test_log::test(tokio::test)]
 #[serial_test::serial]
@@ -81,14 +124,25 @@ async fn test_write_text_file_basic(
     #[future]
     agent: Box<dyn AgentWithFixture>,
 ) {
+    let agent_type = agent.agent_type();
+
     acp_conformance::file_system::test_write_text_file_basic(&*agent)
         .await
         .expect("test_write_text_file_basic should succeed");
+
+    drop(agent);
+    tokio::time::sleep(tokio::time::Duration::from_millis(1500)).await;
+
+    acp_conformance::file_system::verify_file_system_fixture(
+        agent_type,
+        "test_write_text_file_basic",
+    )
+    .expect("Fixture verification should succeed");
 }
 
 #[rstest]
-#[case::llama(agent_fixtures::llama_agent_factory())]
-#[case::claude(agent_fixtures::claude_agent_factory())]
+#[case::llama(common::llama_agent_factory())]
+#[case::claude(common::claude_agent_factory())]
 #[awt]
 #[test_log::test(tokio::test)]
 #[serial_test::serial]
@@ -97,14 +151,25 @@ async fn test_write_text_file_creates_new(
     #[future]
     agent: Box<dyn AgentWithFixture>,
 ) {
+    let agent_type = agent.agent_type();
+
     acp_conformance::file_system::test_write_text_file_creates_new(&*agent)
         .await
         .expect("test_write_text_file_creates_new should succeed");
+
+    drop(agent);
+    tokio::time::sleep(tokio::time::Duration::from_millis(1500)).await;
+
+    acp_conformance::file_system::verify_file_system_fixture(
+        agent_type,
+        "test_write_text_file_creates_new",
+    )
+    .expect("Fixture verification should succeed");
 }
 
 #[rstest]
-#[case::llama(agent_fixtures::llama_agent_factory())]
-#[case::claude(agent_fixtures::claude_agent_factory())]
+#[case::llama(common::llama_agent_factory())]
+#[case::claude(common::claude_agent_factory())]
 #[awt]
 #[test_log::test(tokio::test)]
 #[serial_test::serial]
@@ -113,7 +178,18 @@ async fn test_read_write_integration(
     #[future]
     agent: Box<dyn AgentWithFixture>,
 ) {
+    let agent_type = agent.agent_type();
+
     acp_conformance::file_system::test_read_write_integration(&*agent)
         .await
         .expect("test_read_write_integration should succeed");
+
+    drop(agent);
+    tokio::time::sleep(tokio::time::Duration::from_millis(1500)).await;
+
+    acp_conformance::file_system::verify_file_system_fixture(
+        agent_type,
+        "test_read_write_integration",
+    )
+    .expect("Fixture verification should succeed");
 }

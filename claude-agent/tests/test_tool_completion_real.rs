@@ -16,7 +16,7 @@
 
 use agent_client_protocol::{
     Agent, ClientCapabilities, FileSystemCapability, InitializeRequest, NewSessionRequest,
-    PromptRequest, ProtocolVersion, SessionUpdate,
+    PromptRequest, SessionUpdate,
 };
 use claude_agent::{AgentConfig, ClaudeAgent};
 

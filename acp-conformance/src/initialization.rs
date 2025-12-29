@@ -30,6 +30,16 @@
 use agent_client_protocol::{
     Agent, ClientCapabilities, FileSystemCapability, InitializeRequest, ProtocolVersion,
 };
+use agent_client_protocol_extras::recording::RecordedSession;
+
+/// Statistics from initialization fixture verification
+#[derive(Debug, Default)]
+pub struct InitializationStats {
+    pub initialize_calls: usize,
+    pub protocol_version: Option<i64>,
+    pub has_agent_info: bool,
+    pub has_agent_capabilities: bool,
+}
 
 /// Test basic initialization with minimal capabilities
 pub async fn test_minimal_initialization<A: Agent + ?Sized>(agent: &A) -> crate::Result<()> {
@@ -266,6 +276,90 @@ pub fn validate_initialization_response(
     }
 
     Ok(())
+}
+
+/// Verify initialization fixture has proper recordings
+///
+/// This function reads the fixture and verifies:
+/// 1. The fixture has recorded calls (not calls: [])
+/// 2. An initialize method call was recorded
+/// 3. Response has required fields (protocol_version, agent_capabilities, auth_methods)
+pub fn verify_initialization_fixture(
+    agent_type: &str,
+    test_name: &str,
+) -> Result<InitializationStats, Box<dyn std::error::Error>> {
+    let fixture_path = agent_client_protocol_extras::get_fixture_path_for(agent_type, test_name);
+
+    if !fixture_path.exists() {
+        return Err(format!("Fixture not found: {:?}", fixture_path).into());
+    }
+
+    let content = std::fs::read_to_string(&fixture_path)?;
+    let session: RecordedSession = serde_json::from_str(&content)?;
+
+    let mut stats = InitializationStats::default();
+
+    // CRITICAL: Verify we have calls recorded (catches poor tests with calls: [])
+    assert!(
+        !session.calls.is_empty(),
+        "Expected recorded calls, fixture has calls: [] - test didn't call agent properly"
+    );
+
+    for call in &session.calls {
+        if call.method == "initialize" {
+            stats.initialize_calls += 1;
+
+            // Check response has required fields
+            let response_json = &call.response;
+
+            // Validate protocol_version
+            if let Some(version) = response_json
+                .get("protocolVersion")
+                .and_then(|v| v.as_i64())
+            {
+                stats.protocol_version = Some(version);
+            }
+
+            // Validate agent_capabilities
+            if response_json.get("agentCapabilities").is_some() {
+                stats.has_agent_capabilities = true;
+            }
+
+            // Validate auth_methods (required, may be empty)
+            assert!(
+                response_json.get("authMethods").is_some(),
+                "Initialize response missing required 'authMethods' field"
+            );
+
+            // Check for agent_info (optional but recommended)
+            if response_json.get("agentInfo").is_some() {
+                stats.has_agent_info = true;
+            }
+        }
+    }
+
+    tracing::info!("{} initialization fixture stats: {:?}", agent_type, stats);
+
+    // At least one initialize call
+    assert!(
+        stats.initialize_calls > 0,
+        "Expected at least one initialize call, got {}",
+        stats.initialize_calls
+    );
+
+    // Protocol version should be set
+    assert!(
+        stats.protocol_version.is_some(),
+        "Expected protocolVersion in response"
+    );
+
+    // Agent capabilities should be present
+    assert!(
+        stats.has_agent_capabilities,
+        "Expected agentCapabilities in response"
+    );
+
+    Ok(stats)
 }
 
 #[cfg(test)]

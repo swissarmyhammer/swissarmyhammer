@@ -1,0 +1,1093 @@
+{
+  "calls": [
+    {
+      "method": "initialize",
+      "request": {
+        "clientCapabilities": {
+          "fs": {
+            "readTextFile": false,
+            "writeTextFile": false
+          },
+          "terminal": false
+        },
+        "protocolVersion": 1
+      },
+      "response": {
+        "agentCapabilities": {
+          "_meta": {
+            "streaming": true,
+            "tools": [
+              "fs_read",
+              "fs_write",
+              "fs_list"
+            ]
+          },
+          "loadSession": true,
+          "mcpCapabilities": {
+            "http": true,
+            "sse": false
+          },
+          "promptCapabilities": {
+            "_meta": {
+              "streaming": true
+            },
+            "audio": true,
+            "embeddedContext": true,
+            "image": true
+          },
+          "sessionCapabilities": {}
+        },
+        "agentInfo": {
+          "name": "claude-agent",
+          "title": "Claude Agent v0.3.0",
+          "version": "0.3.0"
+        },
+        "authMethods": [],
+        "protocolVersion": 1
+      },
+      "notifications": []
+    },
+    {
+      "method": "new_session",
+      "request": {
+        "cwd": "/Users/wballard/github/swissarmyhammer/acp-conformance",
+        "mcpServers": []
+      },
+      "response": {
+        "sessionId": "01KDJGRBS5AWFD20A325VZ4VCD"
+      },
+      "notifications": []
+    },
+    {
+      "method": "prompt",
+      "request": {
+        "prompt": [
+          {
+            "text": "Hello",
+            "type": "text"
+          }
+        ],
+        "sessionId": "01KDJGRBS5AWFD20A325VZ4VCD"
+      },
+      "response": {
+        "_meta": {
+          "claude_response": "Hello! Is there something I can help you with? I'm ready to assist with software engineering tasks like debugging, writing code, refactoring, or exploring your codebase.",
+          "processed": true,
+          "session_messages": 3,
+          "streaming": false
+        },
+        "stopReason": "end_turn"
+      },
+      "notifications": []
+    },
+    {
+      "method": "prompt",
+      "request": {
+        "prompt": [
+          {
+            "text": "How are you?",
+            "type": "text"
+          }
+        ],
+        "sessionId": "01KDJGRBS5AWFD20A325VZ4VCD"
+      },
+      "response": {
+        "_meta": {
+          "claude_response": "I'm doing well, thanks for asking! Ready to help whenever you need assistance with your project. What can I do for you today?",
+          "processed": true,
+          "session_messages": 23,
+          "streaming": false
+        },
+        "stopReason": "end_turn"
+      },
+      "notifications": [
+        {
+          "_meta": {
+            "available_agents": [
+              [
+                "general-purpose",
+                "General Purpose",
+                null
+              ],
+              [
+                "statusline-setup",
+                "Statusline Setup",
+                null
+              ],
+              [
+                "Explore",
+                "Explore",
+                null
+              ],
+              [
+                "Plan",
+                "Plan",
+                null
+              ]
+            ],
+            "source": "claude_cli_init"
+          },
+          "sessionId": "01KDJGRBS5AWFD20A325VZ4VCD",
+          "update": {
+            "availableCommands": [
+              {
+                "_meta": {
+                  "category": "claude_builtin",
+                  "source": "claude_cli"
+                },
+                "description": "Claude: compact",
+                "input": null,
+                "name": "compact"
+              },
+              {
+                "_meta": {
+                  "category": "claude_builtin",
+                  "source": "claude_cli"
+                },
+                "description": "Claude: context",
+                "input": null,
+                "name": "context"
+              },
+              {
+                "_meta": {
+                  "category": "claude_builtin",
+                  "source": "claude_cli"
+                },
+                "description": "Claude: cost",
+                "input": null,
+                "name": "cost"
+              },
+              {
+                "_meta": {
+                  "category": "claude_builtin",
+                  "source": "claude_cli"
+                },
+                "description": "Claude: init",
+                "input": null,
+                "name": "init"
+              },
+              {
+                "_meta": {
+                  "category": "claude_builtin",
+                  "source": "claude_cli"
+                },
+                "description": "Claude: pr-comments",
+                "input": null,
+                "name": "pr-comments"
+              },
+              {
+                "_meta": {
+                  "category": "claude_builtin",
+                  "source": "claude_cli"
+                },
+                "description": "Claude: release-notes",
+                "input": null,
+                "name": "release-notes"
+              },
+              {
+                "_meta": {
+                  "category": "claude_builtin",
+                  "source": "claude_cli"
+                },
+                "description": "Claude: review",
+                "input": null,
+                "name": "review"
+              },
+              {
+                "_meta": {
+                  "category": "claude_builtin",
+                  "source": "claude_cli"
+                },
+                "description": "Claude: security-review",
+                "input": null,
+                "name": "security-review"
+              }
+            ],
+            "sessionUpdate": "available_commands_update"
+          }
+        },
+        {
+          "_meta": {
+            "session_id": "01KDJGRBS5AWFD20A325VZ4VCD",
+            "timestamp": 1766926860,
+            "update_type": "available_commands"
+          },
+          "sessionId": "01KDJGRBS5AWFD20A325VZ4VCD",
+          "update": {
+            "availableCommands": [
+              {
+                "_meta": {
+                  "category": "planning",
+                  "source": "core"
+                },
+                "description": "Create an execution plan for complex tasks",
+                "input": null,
+                "name": "create_plan"
+              },
+              {
+                "_meta": {
+                  "category": "analysis",
+                  "source": "core"
+                },
+                "description": "Research and analyze the codebase structure",
+                "input": null,
+                "name": "research_codebase"
+              }
+            ],
+            "sessionUpdate": "available_commands_update"
+          }
+        },
+        {
+          "sessionId": "01KDJGRBS5AWFD20A325VZ4VCD",
+          "update": {
+            "content": {
+              "text": "Hello",
+              "type": "text"
+            },
+            "sessionUpdate": "user_message_chunk"
+          }
+        },
+        {
+          "_meta": {
+            "available_agents": [
+              [
+                "general-purpose",
+                "General Purpose",
+                null
+              ],
+              [
+                "statusline-setup",
+                "Statusline Setup",
+                null
+              ],
+              [
+                "Explore",
+                "Explore",
+                null
+              ],
+              [
+                "Plan",
+                "Plan",
+                null
+              ]
+            ],
+            "source": "claude_cli_init"
+          },
+          "sessionId": "01KDJGRBS5AWFD20A325VZ4VCD",
+          "update": {
+            "availableCommands": [
+              {
+                "_meta": {
+                  "category": "claude_builtin",
+                  "source": "claude_cli"
+                },
+                "description": "Claude: compact",
+                "input": null,
+                "name": "compact"
+              },
+              {
+                "_meta": {
+                  "category": "claude_builtin",
+                  "source": "claude_cli"
+                },
+                "description": "Claude: context",
+                "input": null,
+                "name": "context"
+              },
+              {
+                "_meta": {
+                  "category": "claude_builtin",
+                  "source": "claude_cli"
+                },
+                "description": "Claude: cost",
+                "input": null,
+                "name": "cost"
+              },
+              {
+                "_meta": {
+                  "category": "claude_builtin",
+                  "source": "claude_cli"
+                },
+                "description": "Claude: init",
+                "input": null,
+                "name": "init"
+              },
+              {
+                "_meta": {
+                  "category": "claude_builtin",
+                  "source": "claude_cli"
+                },
+                "description": "Claude: pr-comments",
+                "input": null,
+                "name": "pr-comments"
+              },
+              {
+                "_meta": {
+                  "category": "claude_builtin",
+                  "source": "claude_cli"
+                },
+                "description": "Claude: release-notes",
+                "input": null,
+                "name": "release-notes"
+              },
+              {
+                "_meta": {
+                  "category": "claude_builtin",
+                  "source": "claude_cli"
+                },
+                "description": "Claude: review",
+                "input": null,
+                "name": "review"
+              },
+              {
+                "_meta": {
+                  "category": "claude_builtin",
+                  "source": "claude_cli"
+                },
+                "description": "Claude: security-review",
+                "input": null,
+                "name": "security-review"
+              }
+            ],
+            "sessionUpdate": "available_commands_update"
+          }
+        },
+        {
+          "sessionId": "01KDJGRBS5AWFD20A325VZ4VCD",
+          "update": {
+            "content": {
+              "text": "Hello! Is",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDJGRBS5AWFD20A325VZ4VCD",
+          "update": {
+            "content": {
+              "text": "Hello! Is",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDJGRBS5AWFD20A325VZ4VCD",
+          "update": {
+            "content": {
+              "text": " there something",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDJGRBS5AWFD20A325VZ4VCD",
+          "update": {
+            "content": {
+              "text": " there something",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDJGRBS5AWFD20A325VZ4VCD",
+          "update": {
+            "content": {
+              "text": " I",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDJGRBS5AWFD20A325VZ4VCD",
+          "update": {
+            "content": {
+              "text": " I",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDJGRBS5AWFD20A325VZ4VCD",
+          "update": {
+            "content": {
+              "text": " can help",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDJGRBS5AWFD20A325VZ4VCD",
+          "update": {
+            "content": {
+              "text": " can help",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDJGRBS5AWFD20A325VZ4VCD",
+          "update": {
+            "content": {
+              "text": " you with?",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDJGRBS5AWFD20A325VZ4VCD",
+          "update": {
+            "content": {
+              "text": " you with?",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDJGRBS5AWFD20A325VZ4VCD",
+          "update": {
+            "content": {
+              "text": " I'm ready",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDJGRBS5AWFD20A325VZ4VCD",
+          "update": {
+            "content": {
+              "text": " I'm ready",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDJGRBS5AWFD20A325VZ4VCD",
+          "update": {
+            "content": {
+              "text": " to assist with software",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDJGRBS5AWFD20A325VZ4VCD",
+          "update": {
+            "content": {
+              "text": " to assist with software",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDJGRBS5AWFD20A325VZ4VCD",
+          "update": {
+            "content": {
+              "text": " engineering",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDJGRBS5AWFD20A325VZ4VCD",
+          "update": {
+            "content": {
+              "text": " engineering",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDJGRBS5AWFD20A325VZ4VCD",
+          "update": {
+            "content": {
+              "text": " tasks",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDJGRBS5AWFD20A325VZ4VCD",
+          "update": {
+            "content": {
+              "text": " tasks",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDJGRBS5AWFD20A325VZ4VCD",
+          "update": {
+            "content": {
+              "text": " like",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDJGRBS5AWFD20A325VZ4VCD",
+          "update": {
+            "content": {
+              "text": " like",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDJGRBS5AWFD20A325VZ4VCD",
+          "update": {
+            "content": {
+              "text": " debugging",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDJGRBS5AWFD20A325VZ4VCD",
+          "update": {
+            "content": {
+              "text": " debugging",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDJGRBS5AWFD20A325VZ4VCD",
+          "update": {
+            "content": {
+              "text": ",",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDJGRBS5AWFD20A325VZ4VCD",
+          "update": {
+            "content": {
+              "text": ",",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDJGRBS5AWFD20A325VZ4VCD",
+          "update": {
+            "content": {
+              "text": " writing",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDJGRBS5AWFD20A325VZ4VCD",
+          "update": {
+            "content": {
+              "text": " writing",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDJGRBS5AWFD20A325VZ4VCD",
+          "update": {
+            "content": {
+              "text": " code, ref",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDJGRBS5AWFD20A325VZ4VCD",
+          "update": {
+            "content": {
+              "text": " code, ref",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDJGRBS5AWFD20A325VZ4VCD",
+          "update": {
+            "content": {
+              "text": "actoring, or exploring",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDJGRBS5AWFD20A325VZ4VCD",
+          "update": {
+            "content": {
+              "text": "actoring, or exploring",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDJGRBS5AWFD20A325VZ4VCD",
+          "update": {
+            "content": {
+              "text": " your",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDJGRBS5AWFD20A325VZ4VCD",
+          "update": {
+            "content": {
+              "text": " your",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDJGRBS5AWFD20A325VZ4VCD",
+          "update": {
+            "content": {
+              "text": " c",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDJGRBS5AWFD20A325VZ4VCD",
+          "update": {
+            "content": {
+              "text": " c",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDJGRBS5AWFD20A325VZ4VCD",
+          "update": {
+            "content": {
+              "text": "odebase.",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDJGRBS5AWFD20A325VZ4VCD",
+          "update": {
+            "content": {
+              "text": "odebase.",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDJGRBS5AWFD20A325VZ4VCD",
+          "update": {
+            "content": {
+              "text": "Hello! Is there something I can help you with? I'm ready to assist with software engineering tasks like debugging, writing code, refactoring, or exploring your codebase.",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDJGRBS5AWFD20A325VZ4VCD",
+          "update": {
+            "content": {
+              "text": "How are you?",
+              "type": "text"
+            },
+            "sessionUpdate": "user_message_chunk"
+          }
+        },
+        {
+          "_meta": {
+            "available_agents": [
+              [
+                "general-purpose",
+                "General Purpose",
+                null
+              ],
+              [
+                "statusline-setup",
+                "Statusline Setup",
+                null
+              ],
+              [
+                "Explore",
+                "Explore",
+                null
+              ],
+              [
+                "Plan",
+                "Plan",
+                null
+              ]
+            ],
+            "source": "claude_cli_init"
+          },
+          "sessionId": "01KDJGRBS5AWFD20A325VZ4VCD",
+          "update": {
+            "availableCommands": [
+              {
+                "_meta": {
+                  "category": "claude_builtin",
+                  "source": "claude_cli"
+                },
+                "description": "Claude: compact",
+                "input": null,
+                "name": "compact"
+              },
+              {
+                "_meta": {
+                  "category": "claude_builtin",
+                  "source": "claude_cli"
+                },
+                "description": "Claude: context",
+                "input": null,
+                "name": "context"
+              },
+              {
+                "_meta": {
+                  "category": "claude_builtin",
+                  "source": "claude_cli"
+                },
+                "description": "Claude: cost",
+                "input": null,
+                "name": "cost"
+              },
+              {
+                "_meta": {
+                  "category": "claude_builtin",
+                  "source": "claude_cli"
+                },
+                "description": "Claude: init",
+                "input": null,
+                "name": "init"
+              },
+              {
+                "_meta": {
+                  "category": "claude_builtin",
+                  "source": "claude_cli"
+                },
+                "description": "Claude: pr-comments",
+                "input": null,
+                "name": "pr-comments"
+              },
+              {
+                "_meta": {
+                  "category": "claude_builtin",
+                  "source": "claude_cli"
+                },
+                "description": "Claude: release-notes",
+                "input": null,
+                "name": "release-notes"
+              },
+              {
+                "_meta": {
+                  "category": "claude_builtin",
+                  "source": "claude_cli"
+                },
+                "description": "Claude: review",
+                "input": null,
+                "name": "review"
+              },
+              {
+                "_meta": {
+                  "category": "claude_builtin",
+                  "source": "claude_cli"
+                },
+                "description": "Claude: security-review",
+                "input": null,
+                "name": "security-review"
+              }
+            ],
+            "sessionUpdate": "available_commands_update"
+          }
+        },
+        {
+          "sessionId": "01KDJGRBS5AWFD20A325VZ4VCD",
+          "update": {
+            "content": {
+              "text": "I'm doing well,",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDJGRBS5AWFD20A325VZ4VCD",
+          "update": {
+            "content": {
+              "text": "I'm doing well,",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDJGRBS5AWFD20A325VZ4VCD",
+          "update": {
+            "content": {
+              "text": " thanks",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDJGRBS5AWFD20A325VZ4VCD",
+          "update": {
+            "content": {
+              "text": " thanks",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDJGRBS5AWFD20A325VZ4VCD",
+          "update": {
+            "content": {
+              "text": " for asking! Ready",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDJGRBS5AWFD20A325VZ4VCD",
+          "update": {
+            "content": {
+              "text": " for asking! Ready",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDJGRBS5AWFD20A325VZ4VCD",
+          "update": {
+            "content": {
+              "text": " to help whenever",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDJGRBS5AWFD20A325VZ4VCD",
+          "update": {
+            "content": {
+              "text": " to help whenever",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDJGRBS5AWFD20A325VZ4VCD",
+          "update": {
+            "content": {
+              "text": " you need assistance",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDJGRBS5AWFD20A325VZ4VCD",
+          "update": {
+            "content": {
+              "text": " you need assistance",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDJGRBS5AWFD20A325VZ4VCD",
+          "update": {
+            "content": {
+              "text": " with your",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDJGRBS5AWFD20A325VZ4VCD",
+          "update": {
+            "content": {
+              "text": " with your",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDJGRBS5AWFD20A325VZ4VCD",
+          "update": {
+            "content": {
+              "text": " project",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDJGRBS5AWFD20A325VZ4VCD",
+          "update": {
+            "content": {
+              "text": " project",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDJGRBS5AWFD20A325VZ4VCD",
+          "update": {
+            "content": {
+              "text": ".",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDJGRBS5AWFD20A325VZ4VCD",
+          "update": {
+            "content": {
+              "text": ".",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDJGRBS5AWFD20A325VZ4VCD",
+          "update": {
+            "content": {
+              "text": " What",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDJGRBS5AWFD20A325VZ4VCD",
+          "update": {
+            "content": {
+              "text": " What",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDJGRBS5AWFD20A325VZ4VCD",
+          "update": {
+            "content": {
+              "text": " can",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDJGRBS5AWFD20A325VZ4VCD",
+          "update": {
+            "content": {
+              "text": " can",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDJGRBS5AWFD20A325VZ4VCD",
+          "update": {
+            "content": {
+              "text": " I ",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDJGRBS5AWFD20A325VZ4VCD",
+          "update": {
+            "content": {
+              "text": " I ",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDJGRBS5AWFD20A325VZ4VCD",
+          "update": {
+            "content": {
+              "text": "do for you today?",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDJGRBS5AWFD20A325VZ4VCD",
+          "update": {
+            "content": {
+              "text": "do for you today?",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDJGRBS5AWFD20A325VZ4VCD",
+          "update": {
+            "content": {
+              "text": "I'm doing well, thanks for asking! Ready to help whenever you need assistance with your project. What can I do for you today?",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        }
+      ]
+    }
+  ]
+}

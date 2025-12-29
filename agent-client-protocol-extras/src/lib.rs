@@ -29,6 +29,62 @@ pub use playback::PlaybackAgent;
 pub use recording::RecordingAgent;
 pub use test_mcp_server::{start_test_mcp_server, TestMcpServer};
 
+// Re-export MCP notification types for convenience
+pub use model_context_protocol_extras::{
+    start_proxy, McpNotification, McpNotificationSource, McpProxy,
+};
+
+/// Result of starting a test MCP server with notification capture
+pub struct TestMcpServerWithCapture {
+    /// URL where clients should connect (the proxy URL)
+    pub url: String,
+    /// The proxy that captures notifications
+    pub proxy: McpProxy,
+}
+
+impl McpNotificationSource for TestMcpServerWithCapture {
+    fn url(&self) -> &str {
+        &self.url
+    }
+
+    fn subscribe(&self) -> tokio::sync::broadcast::Receiver<McpNotification> {
+        self.proxy.subscribe()
+    }
+}
+
+/// Start a test MCP server with notification capture via proxy
+///
+/// This starts TestMcpServer and wraps it with McpProxy for notification capture.
+/// Use this for recording tests where you need to capture MCP notifications.
+///
+/// # Returns
+/// * `TestMcpServerWithCapture` - provides URL and notification subscription
+pub async fn start_test_mcp_server_with_capture(
+) -> Result<TestMcpServerWithCapture, Box<dyn std::error::Error + Send + Sync>> {
+    // Start the actual test MCP server
+    let server_url =
+        start_test_mcp_server()
+            .await
+            .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> {
+                Box::new(std::io::Error::new(
+                    std::io::ErrorKind::Other,
+                    e.to_string(),
+                ))
+            })?;
+
+    // Wrap with proxy for notification capture
+    let proxy = start_proxy(&server_url).await?;
+    let url = proxy.url().to_string();
+
+    tracing::info!(
+        "TestMcpServer with capture: {} -> proxy at {}",
+        server_url,
+        url
+    );
+
+    Ok(TestMcpServerWithCapture { url, proxy })
+}
+
 /// Wrap agent with fixture (recording or playback)
 ///
 /// Returns PlaybackAgent if fixture exists, RecordingAgent if not.
@@ -53,6 +109,14 @@ pub fn with_fixture<A: AgentWithFixture + 'static>(
 pub trait AgentWithFixture: Agent {
     /// Agent type identifier for fixture organization (e.g., "claude", "llama")
     fn agent_type(&self) -> &'static str;
+
+    /// Returns true if this agent is in playback mode (replaying from fixture)
+    ///
+    /// When true, tests should skip verification of side effects (like file creation)
+    /// since playback mode doesn't actually perform those operations.
+    fn is_playback(&self) -> bool {
+        false // Default: not playback (real agent or recording)
+    }
 }
 
 /// Get fixture path for a test
@@ -92,25 +156,6 @@ pub enum FixtureMode {
     Record { path: PathBuf },
     /// Playback mode - replay from fixture
     Playback { path: PathBuf },
-}
-
-/// Resolve fixture path to mode (internal helper for trait)
-fn resolve_fixture_path(fixture_path: Option<PathBuf>) -> FixtureMode {
-    match fixture_path {
-        Some(path) => {
-            if path.exists() {
-                tracing::info!("Fixture exists, using playback: {:?}", path);
-                FixtureMode::Playback { path }
-            } else {
-                tracing::info!("Fixture missing, using record: {:?}", path);
-                FixtureMode::Record { path }
-            }
-        }
-        None => {
-            tracing::info!("No fixture path provided, using normal mode");
-            FixtureMode::Normal
-        }
-    }
 }
 
 /// Extract test name from current thread name

@@ -1,14 +1,13 @@
 //! Conformance tests for ACP prompt turn protocol
 
-mod agent_fixtures;
+mod common;
 
-use agent_client_protocol::Agent;
 use agent_client_protocol_extras::AgentWithFixture;
 use rstest::rstest;
 
 #[rstest]
-#[case::llama(agent_fixtures::llama_agent_factory())]
-#[case::claude(agent_fixtures::claude_agent_factory())]
+#[case::llama(common::llama_agent_factory())]
+#[case::claude(common::claude_agent_factory())]
 #[awt]
 #[test_log::test(tokio::test)]
 #[serial_test::serial]
@@ -17,14 +16,26 @@ async fn test_basic_prompt_response(
     #[future]
     agent: Box<dyn AgentWithFixture>,
 ) {
+    let agent_type = agent.agent_type();
+
     acp_conformance::prompt_turn::test_basic_prompt_response(&*agent)
         .await
         .expect("Basic prompt response should succeed");
+
+    drop(agent);
+    tokio::time::sleep(tokio::time::Duration::from_millis(1500)).await;
+
+    acp_conformance::prompt_turn::verify_prompt_fixture_with_response(
+        agent_type,
+        "test_basic_prompt_response",
+        1,
+    )
+    .expect("Fixture verification should succeed");
 }
 
 #[rstest]
-#[case::llama(agent_fixtures::llama_agent_factory())]
-#[case::claude(agent_fixtures::claude_agent_factory())]
+#[case::llama(common::llama_agent_factory())]
+#[case::claude(common::claude_agent_factory())]
 #[awt]
 #[test_log::test(tokio::test)]
 #[serial_test::serial]
@@ -33,14 +44,26 @@ async fn test_prompt_completion(
     #[future]
     agent: Box<dyn AgentWithFixture>,
 ) {
+    let agent_type = agent.agent_type();
+
     acp_conformance::prompt_turn::test_prompt_completion(&*agent)
         .await
         .expect("Prompt completion test should succeed");
+
+    drop(agent);
+    tokio::time::sleep(tokio::time::Duration::from_millis(1500)).await;
+
+    acp_conformance::prompt_turn::verify_prompt_fixture_with_response(
+        agent_type,
+        "test_prompt_completion",
+        1,
+    )
+    .expect("Fixture verification should succeed");
 }
 
 #[rstest]
-#[case::llama(agent_fixtures::llama_agent_factory())]
-#[case::claude(agent_fixtures::claude_agent_factory())]
+#[case::llama(common::llama_agent_factory())]
+#[case::claude(common::claude_agent_factory())]
 #[awt]
 #[test_log::test(tokio::test)]
 #[serial_test::serial]
@@ -49,14 +72,26 @@ async fn test_stop_reasons(
     #[future]
     agent: Box<dyn AgentWithFixture>,
 ) {
+    let agent_type = agent.agent_type();
+
     acp_conformance::prompt_turn::test_stop_reasons(&*agent)
         .await
         .expect("Stop reasons test should succeed");
+
+    drop(agent);
+    tokio::time::sleep(tokio::time::Duration::from_millis(1500)).await;
+
+    acp_conformance::prompt_turn::verify_prompt_fixture_with_response(
+        agent_type,
+        "test_stop_reasons",
+        1,
+    )
+    .expect("Fixture verification should succeed");
 }
 
 #[rstest]
-#[case::llama(agent_fixtures::llama_agent_factory())]
-#[case::claude(agent_fixtures::claude_agent_factory())]
+#[case::llama(common::llama_agent_factory())]
+#[case::claude(common::claude_agent_factory())]
 #[awt]
 #[test_log::test(tokio::test)]
 #[serial_test::serial]
@@ -65,14 +100,28 @@ async fn test_cancellation(
     #[future]
     agent: Box<dyn AgentWithFixture>,
 ) {
+    let agent_type = agent.agent_type();
+
     acp_conformance::prompt_turn::test_cancellation(&*agent)
         .await
         .expect("Cancellation test should succeed");
+
+    drop(agent);
+    tokio::time::sleep(tokio::time::Duration::from_millis(1500)).await;
+
+    // Cancellation test doesn't send prompts, just creates session and cancels
+    let stats =
+        acp_conformance::prompt_turn::verify_prompt_turn_fixture(agent_type, "test_cancellation")
+            .expect("Fixture verification should succeed");
+
+    // Should have at least init and session creation
+    assert!(stats.initialize_calls >= 1, "Expected initialize calls");
+    assert!(stats.new_session_calls >= 1, "Expected new_session calls");
 }
 
 #[rstest]
-#[case::llama(agent_fixtures::llama_agent_factory())]
-#[case::claude(agent_fixtures::claude_agent_factory())]
+#[case::llama(common::llama_agent_factory())]
+#[case::claude(common::claude_agent_factory())]
 #[awt]
 #[test_log::test(tokio::test)]
 #[serial_test::serial]
@@ -81,7 +130,20 @@ async fn test_multiple_prompts(
     #[future]
     agent: Box<dyn AgentWithFixture>,
 ) {
+    let agent_type = agent.agent_type();
+
     acp_conformance::prompt_turn::test_multiple_prompts(&*agent)
         .await
         .expect("Multiple prompts test should succeed");
+
+    drop(agent);
+    tokio::time::sleep(tokio::time::Duration::from_millis(1500)).await;
+
+    // This test sends 2 prompts
+    acp_conformance::prompt_turn::verify_prompt_fixture_with_response(
+        agent_type,
+        "test_multiple_prompts",
+        2,
+    )
+    .expect("Fixture verification should succeed");
 }

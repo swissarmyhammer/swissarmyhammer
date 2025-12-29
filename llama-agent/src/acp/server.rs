@@ -1417,7 +1417,22 @@ impl agent_client_protocol::Agent for AcpServer {
             // Execute each tool call
             for tool_call in tool_calls {
                 let tool_name = tool_call.name.clone();
-                tracing::info!("Processing tool call: {} (id: {})", tool_name, tool_call.id);
+                let tool_call_id = tool_call.id.clone();
+                tracing::info!("Processing tool call: {} (id: {})", tool_name, tool_call_id);
+
+                // Send initial ToolCall notification with pending status (per ACP spec)
+                let initial_tool_call = agent_client_protocol::ToolCall::new(
+                    agent_client_protocol::ToolCallId::new(tool_call_id.to_string()),
+                    &tool_name,
+                )
+                .status(agent_client_protocol::ToolCallStatus::Pending)
+                .raw_input(tool_call.arguments.clone());
+
+                let tool_call_notification = agent_client_protocol::SessionNotification::new(
+                    request.session_id.clone(),
+                    agent_client_protocol::SessionUpdate::ToolCall(initial_tool_call),
+                );
+                self.broadcast_notification(tool_call_notification);
 
                 // Handle tool call with permission checking and execution
                 let mut permission_storage = super::permissions::PermissionStorage::new();
@@ -2105,7 +2120,8 @@ mod tests {
         ));
 
         let config = AcpConfig::default();
-        AcpServer::new(agent_server, config)
+        let (server, _notification_rx) = AcpServer::new(agent_server, config);
+        server
     }
 
     #[tokio::test]
@@ -2382,7 +2398,8 @@ mod tests {
         };
         custom_acp_config.permission_policy = crate::acp::permissions::PermissionPolicy::AlwaysAsk;
 
-        let server = Arc::new(AcpServer::new(agent_server, custom_acp_config));
+        let (acp_server, _notification_rx) = AcpServer::new(agent_server, custom_acp_config);
+        let server = Arc::new(acp_server);
 
         let request = agent_client_protocol::InitializeRequest::new(
             agent_client_protocol::ProtocolVersion::V1,
@@ -2832,7 +2849,8 @@ mod tests {
         ];
         config.default_mode_id = "general-purpose".to_string();
 
-        AcpServer::new(agent_server, config)
+        let (server, _notification_rx) = AcpServer::new(agent_server, config);
+        server
     }
 
     #[tokio::test]

@@ -28,6 +28,7 @@ members = [
     "acp-conformance",
     "claude-agent",
     "agent-client-protocol-extras",
+    "model-context-protocol-extras",
 ]
 resolver = "2"
 

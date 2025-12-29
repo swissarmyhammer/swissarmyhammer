@@ -161,18 +161,51 @@ impl Agent for PlaybackAgent {
         &self,
         _request: LoadSessionRequest,
     ) -> agent_client_protocol::Result<LoadSessionResponse> {
-        Err(agent_client_protocol::Error::method_not_found())
+        let (response_json, notifications) = self.get_next_call("load_session")?;
+        self.replay_notifications(notifications);
+
+        serde_json::from_value(response_json).map_err(|e| {
+            tracing::error!("Failed to deserialize load_session response: {}", e);
+            agent_client_protocol::Error::internal_error()
+        })
     }
 
     async fn set_session_mode(
         &self,
         _request: SetSessionModeRequest,
     ) -> agent_client_protocol::Result<SetSessionModeResponse> {
-        Err(agent_client_protocol::Error::method_not_found())
+        let (response_json, notifications) = self.get_next_call("set_session_mode")?;
+        self.replay_notifications(notifications);
+
+        serde_json::from_value(response_json).map_err(|e| {
+            tracing::error!("Failed to deserialize set_session_mode response: {}", e);
+            agent_client_protocol::Error::internal_error()
+        })
     }
 
     async fn ext_method(&self, _request: ExtRequest) -> agent_client_protocol::Result<ExtResponse> {
-        Err(agent_client_protocol::Error::method_not_found())
+        let (response_json, notifications) = self.get_next_call("ext_method")?;
+        self.replay_notifications(notifications);
+
+        // Check if response is an error
+        if let Some(error) = response_json.get("error") {
+            let code = error.get("code").and_then(|c| c.as_i64()).unwrap_or(-32603) as i32;
+            let message = error
+                .get("message")
+                .and_then(|m| m.as_str())
+                .unwrap_or("Internal error")
+                .to_string();
+            let mut err = agent_client_protocol::Error::new(code, message);
+            if let Some(data) = error.get("data").cloned() {
+                err = err.data(data);
+            }
+            return Err(err);
+        }
+
+        serde_json::from_value(response_json).map_err(|e| {
+            tracing::error!("Failed to deserialize ext_method response: {}", e);
+            agent_client_protocol::Error::internal_error()
+        })
     }
 
     async fn ext_notification(
@@ -186,5 +219,9 @@ impl Agent for PlaybackAgent {
 impl crate::AgentWithFixture for PlaybackAgent {
     fn agent_type(&self) -> &'static str {
         self.agent_type
+    }
+
+    fn is_playback(&self) -> bool {
+        true
     }
 }

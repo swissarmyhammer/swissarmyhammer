@@ -1,0 +1,290 @@
+{
+  "calls": [
+    {
+      "method": "initialize",
+      "request": {
+        "clientCapabilities": {
+          "fs": {
+            "readTextFile": false,
+            "writeTextFile": false
+          },
+          "terminal": false
+        },
+        "protocolVersion": 1
+      },
+      "response": {
+        "agentCapabilities": {
+          "_meta": {
+            "streaming": true,
+            "supports_modes": true,
+            "supports_plans": true,
+            "supports_slash_commands": true
+          },
+          "loadSession": true,
+          "mcpCapabilities": {
+            "http": true,
+            "sse": false
+          },
+          "promptCapabilities": {
+            "_meta": {
+              "streaming": true
+            },
+            "audio": false,
+            "embeddedContext": false,
+            "image": false
+          },
+          "sessionCapabilities": {}
+        },
+        "agentInfo": {
+          "name": "llama-agent",
+          "title": "LLaMA Agent v0.3.0",
+          "version": "0.3.0"
+        },
+        "authMethods": [],
+        "protocolVersion": 1
+      },
+      "notifications": []
+    },
+    {
+      "method": "new_session",
+      "request": {
+        "cwd": "/Users/wballard/github/swissarmyhammer/acp-conformance",
+        "mcpServers": []
+      },
+      "response": {
+        "sessionId": "01KDJGRFB1JMVN2T6X4A2BKSJE"
+      },
+      "notifications": []
+    },
+    {
+      "method": "prompt",
+      "request": {
+        "prompt": [
+          {
+            "text": "What is 2+2?",
+            "type": "text"
+          }
+        ],
+        "sessionId": "01KDJGRFB1JMVN2T6X4A2BKSJE"
+      },
+      "response": {
+        "_meta": {
+          "tokens_generated": 230
+        },
+        "stopReason": "end_turn"
+      },
+      "notifications": [
+        {
+          "sessionId": "01KDJGRFB1JMVN2T6X4A2BKSJE",
+          "update": {
+            "content": {
+              "text": "I",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDJGRFB1JMVN2T6X4A2BKSJE",
+          "update": {
+            "content": {
+              "text": " can",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDJGRFB1JMVN2T6X4A2BKSJE",
+          "update": {
+            "content": {
+              "text": "'t",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDJGRFB1JMVN2T6X4A2BKSJE",
+          "update": {
+            "content": {
+              "text": " use",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDJGRFB1JMVN2T6X4A2BKSJE",
+          "update": {
+            "content": {
+              "text": " the",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDJGRFB1JMVN2T6X4A2BKSJE",
+          "update": {
+            "content": {
+              "text": " tools",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDJGRFB1JMVN2T6X4A2BKSJE",
+          "update": {
+            "content": {
+              "text": " for",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDJGRFB1JMVN2T6X4A2BKSJE",
+          "update": {
+            "content": {
+              "text": " this",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDJGRFB1JMVN2T6X4A2BKSJE",
+          "update": {
+            "content": {
+              "text": " simple",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDJGRFB1JMVN2T6X4A2BKSJE",
+          "update": {
+            "content": {
+              "text": " arithmetic",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDJGRFB1JMVN2T6X4A2BKSJE",
+          "update": {
+            "content": {
+              "text": " question",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDJGRFB1JMVN2T6X4A2BKSJE",
+          "update": {
+            "content": {
+              "text": ".",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDJGRFB1JMVN2T6X4A2BKSJE",
+          "update": {
+            "content": {
+              "text": " ",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDJGRFB1JMVN2T6X4A2BKSJE",
+          "update": {
+            "content": {
+              "text": "2",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDJGRFB1JMVN2T6X4A2BKSJE",
+          "update": {
+            "content": {
+              "text": "+",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDJGRFB1JMVN2T6X4A2BKSJE",
+          "update": {
+            "content": {
+              "text": "2",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDJGRFB1JMVN2T6X4A2BKSJE",
+          "update": {
+            "content": {
+              "text": " equals",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDJGRFB1JMVN2T6X4A2BKSJE",
+          "update": {
+            "content": {
+              "text": " ",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDJGRFB1JMVN2T6X4A2BKSJE",
+          "update": {
+            "content": {
+              "text": "4",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDJGRFB1JMVN2T6X4A2BKSJE",
+          "update": {
+            "content": {
+              "text": ".\n",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDJGRFB1JMVN2T6X4A2BKSJE",
+          "update": {
+            "content": {
+              "text": "",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        }
+      ]
+    }
+  ]
+}

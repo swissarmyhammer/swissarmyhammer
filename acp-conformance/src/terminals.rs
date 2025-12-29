@@ -42,8 +42,17 @@
 use agent_client_protocol::{
     Agent, ClientCapabilities, ExtRequest, InitializeRequest, ProtocolVersion,
 };
+use agent_client_protocol_extras::recording::RecordedSession;
 use serde_json::json;
 use std::sync::Arc;
+
+/// Statistics from terminals fixture verification
+#[derive(Debug, Default)]
+pub struct TerminalsStats {
+    pub initialize_calls: usize,
+    pub new_session_calls: usize,
+    pub ext_method_calls: usize,
+}
 
 /// Test that agent properly checks terminal capability before allowing terminal operations
 pub async fn test_terminal_capability_check<A: Agent + ?Sized>(agent: &A) -> crate::Result<()> {
@@ -604,6 +613,54 @@ pub async fn test_terminal_timeout<A: Agent + ?Sized>(agent: &A) -> crate::Resul
     let _ = agent.ext_method(release_request).await;
 
     Ok(())
+}
+
+/// Verify terminals fixture has proper recordings
+pub fn verify_terminals_fixture(
+    agent_type: &str,
+    test_name: &str,
+) -> Result<TerminalsStats, Box<dyn std::error::Error>> {
+    let fixture_path = agent_client_protocol_extras::get_fixture_path_for(agent_type, test_name);
+
+    if !fixture_path.exists() {
+        return Err(format!("Fixture not found: {:?}", fixture_path).into());
+    }
+
+    let content = std::fs::read_to_string(&fixture_path)?;
+    let session: RecordedSession = serde_json::from_str(&content)?;
+
+    let mut stats = TerminalsStats::default();
+
+    // CRITICAL: Verify we have calls recorded (catches poor tests with calls: [])
+    assert!(
+        !session.calls.is_empty(),
+        "Expected recorded calls, fixture has calls: [] - test didn't call agent properly"
+    );
+
+    for call in &session.calls {
+        match call.method.as_str() {
+            "initialize" => stats.initialize_calls += 1,
+            "new_session" => stats.new_session_calls += 1,
+            "ext_method" => stats.ext_method_calls += 1,
+            _ => {}
+        }
+    }
+
+    tracing::info!("{} terminals fixture stats: {:?}", agent_type, stats);
+
+    // Should have at least initialize and new_session
+    assert!(
+        stats.initialize_calls >= 1,
+        "Expected at least 1 initialize call, got {}",
+        stats.initialize_calls
+    );
+    assert!(
+        stats.new_session_calls >= 1,
+        "Expected at least 1 new_session call, got {}",
+        stats.new_session_calls
+    );
+
+    Ok(stats)
 }
 
 #[cfg(test)]

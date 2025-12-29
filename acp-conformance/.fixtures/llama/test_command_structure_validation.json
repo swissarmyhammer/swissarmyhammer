@@ -1,0 +1,15 @@
+{
+  "calls": [
+    {
+      "method": "new_session",
+      "request": {
+        "cwd": "/var/folders/3k/6b488x1j6rg1f6w8fnyfwm9w0000gn/T/",
+        "mcpServers": []
+      },
+      "response": {
+        "sessionId": "01KDJGW24WRV9SDSG9X4ANBRT8"
+      },
+      "notifications": []
+    }
+  ]
+}

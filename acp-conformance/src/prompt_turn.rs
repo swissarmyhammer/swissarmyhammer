@@ -48,6 +48,18 @@ use agent_client_protocol::{
     Agent, ClientCapabilities, ContentBlock, InitializeRequest, NewSessionRequest, PromptRequest,
     ProtocolVersion, StopReason, TextContent,
 };
+use agent_client_protocol_extras::recording::RecordedSession;
+
+/// Statistics from prompt turn fixture verification
+#[derive(Debug, Default)]
+pub struct PromptTurnStats {
+    pub initialize_calls: usize,
+    pub new_session_calls: usize,
+    pub prompt_calls: usize,
+    pub cancel_calls: usize,
+    pub agent_message_chunks: usize,
+    pub user_message_chunks: usize,
+}
 
 /// Test basic prompt-response cycle
 pub async fn test_basic_prompt_response<A: Agent + ?Sized>(agent: &A) -> crate::Result<()> {
@@ -238,4 +250,102 @@ pub async fn test_multiple_prompts<A: Agent + ?Sized>(agent: &A) -> crate::Resul
             Ok(())
         }
     }
+}
+
+/// Verify prompt turn fixture has proper recordings
+///
+/// This function reads the fixture and verifies:
+/// 1. The fixture has recorded calls (not calls: [])
+/// 2. Initialize, new_session, and prompt calls were recorded
+/// 3. Agent message chunks were produced (agent responded)
+pub fn verify_prompt_turn_fixture(
+    agent_type: &str,
+    test_name: &str,
+) -> Result<PromptTurnStats, Box<dyn std::error::Error>> {
+    let fixture_path = agent_client_protocol_extras::get_fixture_path_for(agent_type, test_name);
+
+    if !fixture_path.exists() {
+        return Err(format!("Fixture not found: {:?}", fixture_path).into());
+    }
+
+    let content = std::fs::read_to_string(&fixture_path)?;
+    let session: RecordedSession = serde_json::from_str(&content)?;
+
+    let mut stats = PromptTurnStats::default();
+
+    // CRITICAL: Verify we have calls recorded (catches poor tests with calls: [])
+    assert!(
+        !session.calls.is_empty(),
+        "Expected recorded calls, fixture has calls: [] - test didn't call agent properly"
+    );
+
+    for call in &session.calls {
+        match call.method.as_str() {
+            "initialize" => stats.initialize_calls += 1,
+            "new_session" => stats.new_session_calls += 1,
+            "prompt" => {
+                stats.prompt_calls += 1;
+                // Count notifications
+                for notification_json in &call.notifications {
+                    if let Some(update_val) = notification_json.get("update") {
+                        if let Some(session_update) =
+                            update_val.get("sessionUpdate").and_then(|v| v.as_str())
+                        {
+                            match session_update {
+                                "agent_message_chunk" => stats.agent_message_chunks += 1,
+                                "user_message_chunk" => stats.user_message_chunks += 1,
+                                _ => {}
+                            }
+                        }
+                    }
+                }
+            }
+            "cancel" => stats.cancel_calls += 1,
+            _ => {}
+        }
+    }
+
+    tracing::info!("{} prompt turn fixture stats: {:?}", agent_type, stats);
+
+    Ok(stats)
+}
+
+/// Verify prompt turn fixture with expected call counts
+pub fn verify_prompt_fixture_with_response(
+    agent_type: &str,
+    test_name: &str,
+    expected_prompts: usize,
+) -> Result<PromptTurnStats, Box<dyn std::error::Error>> {
+    let stats = verify_prompt_turn_fixture(agent_type, test_name)?;
+
+    // Should have initialize
+    assert!(
+        stats.initialize_calls >= 1,
+        "Expected at least 1 initialize call, got {}",
+        stats.initialize_calls
+    );
+
+    // Should have new_session
+    assert!(
+        stats.new_session_calls >= 1,
+        "Expected at least 1 new_session call, got {}",
+        stats.new_session_calls
+    );
+
+    // Should have expected number of prompts
+    assert!(
+        stats.prompt_calls >= expected_prompts,
+        "Expected at least {} prompt calls, got {}",
+        expected_prompts,
+        stats.prompt_calls
+    );
+
+    // Should have agent response chunks
+    assert!(
+        stats.agent_message_chunks > 0,
+        "Expected agent_message_chunk notifications, got {}. Agent should produce output.",
+        stats.agent_message_chunks
+    );
+
+    Ok(stats)
 }

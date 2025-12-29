@@ -1,0 +1,26 @@
+{
+  "calls": [
+    {
+      "method": "new_session",
+      "request": {
+        "cwd": "/var/folders/3k/6b488x1j6rg1f6w8fnyfwm9w0000gn/T/",
+        "mcpServers": []
+      },
+      "response": {
+        "sessionId": "01KDJGTAX4K6RXVG7PEABXED0F"
+      },
+      "notifications": []
+    },
+    {
+      "method": "new_session",
+      "request": {
+        "cwd": "/var/folders/3k/6b488x1j6rg1f6w8fnyfwm9w0000gn/T/",
+        "mcpServers": []
+      },
+      "response": {
+        "sessionId": "01KDJGTHRYJDAG5H9KWQYBV832"
+      },
+      "notifications": []
+    }
+  ]
+}

@@ -35,8 +35,19 @@
 //!    - Mode IDs and names must not be empty
 
 use agent_client_protocol::{
-    Agent, LoadSessionRequest, NewSessionRequest, SessionId, SessionModeId, SetSessionModeRequest,
+    Agent, InitializeRequest, LoadSessionRequest, NewSessionRequest, ProtocolVersion, SessionId,
+    SessionModeId, SetSessionModeRequest,
 };
+use agent_client_protocol_extras::recording::RecordedSession;
+
+/// Statistics from session fixture verification
+#[derive(Debug, Default)]
+pub struct SessionStats {
+    pub new_session_calls: usize,
+    pub load_session_calls: usize,
+    pub set_session_mode_calls: usize,
+    pub session_ids_found: usize,
+}
 
 /// Test creating a new session with minimal parameters
 pub async fn test_new_session_minimal<A: Agent + ?Sized>(agent: &A) -> crate::Result<()> {
@@ -117,6 +128,11 @@ pub async fn test_session_ids_unique<A: Agent + ?Sized>(agent: &A) -> crate::Res
 pub async fn test_load_nonexistent_session<A: Agent + ?Sized>(agent: &A) -> crate::Result<()> {
     tracing::info!("Testing load of nonexistent session");
 
+    // Initialize agent first (required by ACP protocol)
+    let init_request = InitializeRequest::new(ProtocolVersion::V1);
+    let _init_response = agent.initialize(init_request).await?;
+
+    // Try to load a nonexistent session
     let fake_session_id = SessionId::new("01HZZZZZZZZZZZZZZZZZZZZZZ");
     let cwd = std::env::temp_dir();
     let request = LoadSessionRequest::new(fake_session_id, cwd);
@@ -481,6 +497,82 @@ pub async fn test_session_mode_independence<A: Agent + ?Sized>(agent: &A) -> cra
     }
 
     Ok(())
+}
+
+/// Verify session fixture has proper recordings
+///
+/// This function reads the fixture and verifies:
+/// 1. The fixture has recorded calls (not calls: [])
+/// 2. Session-related method calls were recorded
+/// 3. Session IDs were returned in responses
+pub fn verify_session_fixture(
+    agent_type: &str,
+    test_name: &str,
+) -> Result<SessionStats, Box<dyn std::error::Error>> {
+    let fixture_path = agent_client_protocol_extras::get_fixture_path_for(agent_type, test_name);
+
+    if !fixture_path.exists() {
+        return Err(format!("Fixture not found: {:?}", fixture_path).into());
+    }
+
+    let content = std::fs::read_to_string(&fixture_path)?;
+    let session: RecordedSession = serde_json::from_str(&content)?;
+
+    let mut stats = SessionStats::default();
+
+    // CRITICAL: Verify we have calls recorded (catches poor tests with calls: [])
+    assert!(
+        !session.calls.is_empty(),
+        "Expected recorded calls, fixture has calls: [] - test didn't call agent properly"
+    );
+
+    for call in &session.calls {
+        match call.method.as_str() {
+            "new_session" => {
+                stats.new_session_calls += 1;
+                // Verify response has session_id
+                if call.response.get("sessionId").is_some() {
+                    stats.session_ids_found += 1;
+                }
+            }
+            "load_session" => {
+                stats.load_session_calls += 1;
+            }
+            "set_session_mode" => {
+                stats.set_session_mode_calls += 1;
+            }
+            _ => {}
+        }
+    }
+
+    tracing::info!("{} session fixture stats: {:?}", agent_type, stats);
+
+    Ok(stats)
+}
+
+/// Verify session fixture for tests that create new sessions
+pub fn verify_new_session_fixture(
+    agent_type: &str,
+    test_name: &str,
+    expected_calls: usize,
+) -> Result<SessionStats, Box<dyn std::error::Error>> {
+    let stats = verify_session_fixture(agent_type, test_name)?;
+
+    assert!(
+        stats.new_session_calls >= expected_calls,
+        "Expected at least {} new_session calls, got {}",
+        expected_calls,
+        stats.new_session_calls
+    );
+
+    assert!(
+        stats.session_ids_found >= expected_calls,
+        "Expected at least {} session IDs in responses, got {}",
+        expected_calls,
+        stats.session_ids_found
+    );
+
+    Ok(stats)
 }
 
 #[cfg(test)]

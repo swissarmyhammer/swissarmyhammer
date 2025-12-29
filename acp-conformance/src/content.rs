@@ -31,6 +31,15 @@ use agent_client_protocol::{
     InitializeRequest, PromptRequest, ProtocolVersion, ResourceLink, TextContent,
     TextResourceContents,
 };
+use agent_client_protocol_extras::recording::RecordedSession;
+
+/// Statistics from content fixture verification
+#[derive(Debug, Default)]
+pub struct ContentStats {
+    pub initialize_calls: usize,
+    pub new_session_calls: usize,
+    pub prompt_calls: usize,
+}
 
 /// Test that agents accept text content blocks
 ///
@@ -343,6 +352,71 @@ pub async fn test_content_validation<A: Agent + ?Sized>(agent: &A) -> crate::Res
             }
         }
     }
+}
+
+/// Verify content fixture has proper recordings
+///
+/// This function reads the fixture and verifies:
+/// 1. The fixture has recorded calls (not calls: [])
+/// 2. Initialize, new_session, and prompt calls were recorded
+pub fn verify_content_fixture(
+    agent_type: &str,
+    test_name: &str,
+) -> Result<ContentStats, Box<dyn std::error::Error>> {
+    let fixture_path = agent_client_protocol_extras::get_fixture_path_for(agent_type, test_name);
+
+    if !fixture_path.exists() {
+        return Err(format!("Fixture not found: {:?}", fixture_path).into());
+    }
+
+    let content = std::fs::read_to_string(&fixture_path)?;
+    let session: RecordedSession = serde_json::from_str(&content)?;
+
+    let mut stats = ContentStats::default();
+
+    // CRITICAL: Verify we have calls recorded (catches poor tests with calls: [])
+    assert!(
+        !session.calls.is_empty(),
+        "Expected recorded calls, fixture has calls: [] - test didn't call agent properly"
+    );
+
+    for call in &session.calls {
+        match call.method.as_str() {
+            "initialize" => stats.initialize_calls += 1,
+            "new_session" => stats.new_session_calls += 1,
+            "prompt" => stats.prompt_calls += 1,
+            _ => {}
+        }
+    }
+
+    tracing::info!("{} content fixture stats: {:?}", agent_type, stats);
+
+    // Should have at least initialize (new_session is optional if test skipped due to missing capability)
+    assert!(
+        stats.initialize_calls >= 1,
+        "Expected at least 1 initialize call, got {}",
+        stats.initialize_calls
+    );
+
+    Ok(stats)
+}
+
+/// Verify content fixture with expected prompt count
+pub fn verify_content_fixture_with_prompts(
+    agent_type: &str,
+    test_name: &str,
+    expected_prompts: usize,
+) -> Result<ContentStats, Box<dyn std::error::Error>> {
+    let stats = verify_content_fixture(agent_type, test_name)?;
+
+    assert!(
+        stats.prompt_calls >= expected_prompts,
+        "Expected at least {} prompt calls, got {}",
+        expected_prompts,
+        stats.prompt_calls
+    );
+
+    Ok(stats)
 }
 
 #[cfg(test)]

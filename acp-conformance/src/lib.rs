@@ -146,4 +146,91 @@ mod tests {
             _ => panic!("Expected Protocol error"),
         }
     }
+
+    #[test]
+    fn test_all_error_variants_are_distinct() {
+        // Ensure each error variant is distinguishable
+        let protocol = Error::Protocol("msg".to_string());
+        let validation = Error::Validation("msg".to_string());
+        let timeout = Error::Timeout("msg".to_string());
+        let io = Error::Io(std::io::Error::new(std::io::ErrorKind::Other, "msg"));
+        let json = Error::Json(serde_json::from_str::<()>("invalid").unwrap_err());
+
+        // Verify distinct display outputs
+        assert!(protocol.to_string().starts_with("Protocol"));
+        assert!(validation.to_string().starts_with("Validation"));
+        assert!(timeout.to_string().starts_with("Timeout"));
+        assert!(io.to_string().starts_with("IO"));
+        assert!(json.to_string().starts_with("JSON"));
+    }
+
+    #[test]
+    fn test_error_with_empty_message() {
+        let error = Error::Protocol("".to_string());
+        assert_eq!(error.to_string(), "Protocol error: ");
+
+        let error = Error::Validation("".to_string());
+        assert_eq!(error.to_string(), "Validation error: ");
+    }
+
+    #[test]
+    fn test_error_with_special_characters() {
+        let error = Error::Protocol("Error with 'quotes' and \"double quotes\"".to_string());
+        assert!(error.to_string().contains("'quotes'"));
+        assert!(error.to_string().contains("\"double quotes\""));
+
+        let error = Error::Validation("Unicode: 你好世界 🌍".to_string());
+        assert!(error.to_string().contains("你好世界"));
+        assert!(error.to_string().contains("🌍"));
+    }
+
+    #[test]
+    fn test_io_error_conversion_preserves_kind() {
+        let io_error = std::io::Error::new(std::io::ErrorKind::NotFound, "file not found");
+        let error: Error = io_error.into();
+
+        match error {
+            Error::Io(e) => assert_eq!(e.kind(), std::io::ErrorKind::NotFound),
+            _ => panic!("Expected Io error"),
+        }
+    }
+
+    #[test]
+    fn test_error_chain_with_multiple_conversions() {
+        fn parse_json() -> std::result::Result<(), serde_json::Error> {
+            serde_json::from_str::<serde_json::Value>("invalid")?;
+            Ok(())
+        }
+
+        fn do_work() -> Result<()> {
+            parse_json()?;
+            Ok(())
+        }
+
+        let result = do_work();
+        assert!(result.is_err());
+        assert!(matches!(result.unwrap_err(), Error::Json(_)));
+    }
+
+    #[test]
+    fn test_result_type_with_complex_value() {
+        fn returns_complex() -> Result<Vec<String>> {
+            Ok(vec!["a".to_string(), "b".to_string(), "c".to_string()])
+        }
+
+        let result = returns_complex();
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap().len(), 3);
+    }
+
+    #[test]
+    fn test_error_source_chain() {
+        use std::error::Error as StdError;
+
+        let io_error = std::io::Error::new(std::io::ErrorKind::Other, "root cause");
+        let error = Error::Io(io_error);
+
+        // Verify the error has a source
+        assert!(error.source().is_some());
+    }
 }

@@ -316,7 +316,7 @@ fn test_multiple_tool_results_different_statuses() {
 fn test_tool_result_missing_should_be_detected() {
     // Test that missing tool results are detectable
 
-    let tool_calls = vec![
+    let _tool_calls = vec![
         ToolCallRequest {
             id: "call_1".to_string(),
             name: "fs_read".to_string(),

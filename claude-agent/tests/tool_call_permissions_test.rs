@@ -649,7 +649,7 @@ async fn test_permission_expiration() {
 
 #[tokio::test]
 async fn test_auto_approved_fs_read_bypasses_policy() {
-    let (_, handler, session_id, temp_dir) = create_test_environment();
+    let (_, _handler, _session_id, _temp_dir) = create_test_environment();
 
     // Create permissions with fs_read in auto_approved list
     let session_manager = Arc::new(SessionManager::new());

@@ -54,7 +54,7 @@
         "mcpServers": []
       },
       "response": {
-        "sessionId": "01KDFZ2G950MYQBA19795YMKN4"
+        "sessionId": "01KDJGYQK5C12RQJZF5VMX5NMN"
       },
       "notifications": []
     },
@@ -67,11 +67,11 @@
             "type": "text"
           }
         ],
-        "sessionId": "01KDFZ2G950MYQBA19795YMKN4"
+        "sessionId": "01KDJGYQK5C12RQJZF5VMX5NMN"
       },
       "response": {
         "_meta": {
-          "claude_response": "I'll call both of those MCP tools for you in parallel.Both MCP tools executed successfully:\n\n**list-files (/tmp):**\n- Found 3 files in /tmp\n- Files: file1.txt, file2.txt, file3.txt\n\n**create-plan (goal: 'test'):**\nCreated a 4-step plan with the following pending steps:\n1. Analyze requirements\n2. Design solution\n3. Implement solution\n4. Test and validateBoth MCP tools executed successfully:\n\n**list-files (/tmp):**\n- Found 3 files in /tmp\n- Files: file1.txt, file2.txt, file3.txt\n\n**create-plan (goal: 'test'):**\nCreated a 4-step plan with the following pending steps:\n1. Analyze requirements\n2. Design solution\n3. Implement solution\n4. Test and validate",
+          "claude_response": "Done! Here are the results:\n\n**List Files (`/tmp`):**\n- Found 3 files: `file1.txt`, `file2.txt`, `file3.txt`\n\n**Create Plan (goal: \"test\"):**\n| Step | Description | Status |\n|------|-------------|--------|\n| 1 | Analyze requirements | pending |\n| 2 | Design solution | pending |\n| 3 | Implement solution | pending |\n| 4 | Test and validate | pending |\n\nIs there anything else you'd like me to do with these results?",
           "processed": true,
           "session_messages": 3,
           "streaming": false
@@ -105,7 +105,7 @@
             ],
             "source": "claude_cli_init"
           },
-          "sessionId": "01KDFZ2G950MYQBA19795YMKN4",
+          "sessionId": "01KDJGYQK5C12RQJZF5VMX5NMN",
           "update": {
             "availableCommands": [
               {
@@ -186,11 +186,11 @@
         },
         {
           "_meta": {
-            "session_id": "01KDFZ2G950MYQBA19795YMKN4",
-            "timestamp": 1766841210,
+            "session_id": "01KDJGYQK5C12RQJZF5VMX5NMN",
+            "timestamp": 1766927072,
             "update_type": "available_commands"
           },
-          "sessionId": "01KDFZ2G950MYQBA19795YMKN4",
+          "sessionId": "01KDJGYQK5C12RQJZF5VMX5NMN",
           "update": {
             "availableCommands": [
               {
@@ -216,7 +216,7 @@
           }
         },
         {
-          "sessionId": "01KDFZ2G950MYQBA19795YMKN4",
+          "sessionId": "01KDJGYQK5C12RQJZF5VMX5NMN",
           "update": {
             "content": {
               "text": "Use the mcp__test-mcp-server__list-files tool with path '/tmp' and mcp__test-mcp-server__create-plan tool with goal 'test'",
@@ -251,7 +251,7 @@
             ],
             "source": "claude_cli_init"
           },
-          "sessionId": "01KDFZ2G950MYQBA19795YMKN4",
+          "sessionId": "01KDJGYQK5C12RQJZF5VMX5NMN",
           "update": {
             "availableCommands": [
               {
@@ -331,157 +331,7 @@
           }
         },
         {
-          "sessionId": "01KDFZ2G950MYQBA19795YMKN4",
-          "update": {
-            "content": {
-              "text": "I'll call",
-              "type": "text"
-            },
-            "sessionUpdate": "agent_message_chunk"
-          }
-        },
-        {
-          "sessionId": "01KDFZ2G950MYQBA19795YMKN4",
-          "update": {
-            "content": {
-              "text": "I'll call",
-              "type": "text"
-            },
-            "sessionUpdate": "agent_message_chunk"
-          }
-        },
-        {
-          "sessionId": "01KDFZ2G950MYQBA19795YMKN4",
-          "update": {
-            "content": {
-              "text": " both",
-              "type": "text"
-            },
-            "sessionUpdate": "agent_message_chunk"
-          }
-        },
-        {
-          "sessionId": "01KDFZ2G950MYQBA19795YMKN4",
-          "update": {
-            "content": {
-              "text": " both",
-              "type": "text"
-            },
-            "sessionUpdate": "agent_message_chunk"
-          }
-        },
-        {
-          "sessionId": "01KDFZ2G950MYQBA19795YMKN4",
-          "update": {
-            "content": {
-              "text": " of those M",
-              "type": "text"
-            },
-            "sessionUpdate": "agent_message_chunk"
-          }
-        },
-        {
-          "sessionId": "01KDFZ2G950MYQBA19795YMKN4",
-          "update": {
-            "content": {
-              "text": " of those M",
-              "type": "text"
-            },
-            "sessionUpdate": "agent_message_chunk"
-          }
-        },
-        {
-          "sessionId": "01KDFZ2G950MYQBA19795YMKN4",
-          "update": {
-            "content": {
-              "text": "CP tools",
-              "type": "text"
-            },
-            "sessionUpdate": "agent_message_chunk"
-          }
-        },
-        {
-          "sessionId": "01KDFZ2G950MYQBA19795YMKN4",
-          "update": {
-            "content": {
-              "text": "CP tools",
-              "type": "text"
-            },
-            "sessionUpdate": "agent_message_chunk"
-          }
-        },
-        {
-          "sessionId": "01KDFZ2G950MYQBA19795YMKN4",
-          "update": {
-            "content": {
-              "text": " for you in",
-              "type": "text"
-            },
-            "sessionUpdate": "agent_message_chunk"
-          }
-        },
-        {
-          "sessionId": "01KDFZ2G950MYQBA19795YMKN4",
-          "update": {
-            "content": {
-              "text": " for you in",
-              "type": "text"
-            },
-            "sessionUpdate": "agent_message_chunk"
-          }
-        },
-        {
-          "sessionId": "01KDFZ2G950MYQBA19795YMKN4",
-          "update": {
-            "content": {
-              "text": " parallel",
-              "type": "text"
-            },
-            "sessionUpdate": "agent_message_chunk"
-          }
-        },
-        {
-          "sessionId": "01KDFZ2G950MYQBA19795YMKN4",
-          "update": {
-            "content": {
-              "text": " parallel",
-              "type": "text"
-            },
-            "sessionUpdate": "agent_message_chunk"
-          }
-        },
-        {
-          "sessionId": "01KDFZ2G950MYQBA19795YMKN4",
-          "update": {
-            "content": {
-              "text": ".",
-              "type": "text"
-            },
-            "sessionUpdate": "agent_message_chunk"
-          }
-        },
-        {
-          "sessionId": "01KDFZ2G950MYQBA19795YMKN4",
-          "update": {
-            "content": {
-              "text": ".",
-              "type": "text"
-            },
-            "sessionUpdate": "agent_message_chunk"
-          }
-        },
-        {
-          "sessionId": "01KDFZ2G950MYQBA19795YMKN4",
-          "update": {
-            "content": {
-              "text": "I'll call both of those MCP tools for you in parallel.",
-              "type": "text"
-            },
-            "sessionUpdate": "agent_message_chunk"
-          }
-        },
-        {
-          "sessionId": "01KDFZ2G950MYQBA19795YMKN4",
+          "sessionId": "01KDJGYQK5C12RQJZF5VMX5NMN",
           "update": {
             "_meta": {
               "permission_options": [
@@ -513,22 +363,22 @@
             },
             "sessionUpdate": "tool_call",
             "title": "mcp__test-mcp-server__list-files",
-            "toolCallId": "toolu_012oFb6RS7bGawGc9Kojta21"
+            "toolCallId": "toolu_015rjVvLC4onCB4HPduys4mZ"
           }
         },
         {
-          "sessionId": "01KDFZ2G950MYQBA19795YMKN4",
+          "sessionId": "01KDJGYQK5C12RQJZF5VMX5NMN",
           "update": {
             "rawInput": {
               "path": "/tmp"
             },
             "sessionUpdate": "tool_call",
             "title": "mcp__test-mcp-server__list-files",
-            "toolCallId": "tool_8"
+            "toolCallId": "tool_1"
           }
         },
         {
-          "sessionId": "01KDFZ2G950MYQBA19795YMKN4",
+          "sessionId": "01KDJGYQK5C12RQJZF5VMX5NMN",
           "update": {
             "_meta": {
               "permission_options": [
@@ -560,22 +410,55 @@
             },
             "sessionUpdate": "tool_call",
             "title": "mcp__test-mcp-server__create-plan",
-            "toolCallId": "toolu_01Vg4JfsZq6BsU1xnpVyrdUb"
+            "toolCallId": "toolu_01VstZWpa3ycZK85g2XcU98x"
           }
         },
         {
-          "sessionId": "01KDFZ2G950MYQBA19795YMKN4",
+          "sessionId": "01KDJGYQK5C12RQJZF5VMX5NMN",
           "update": {
             "rawInput": {
               "goal": "test"
             },
             "sessionUpdate": "tool_call",
             "title": "mcp__test-mcp-server__create-plan",
-            "toolCallId": "tool_9"
+            "toolCallId": "tool_2"
           }
         },
         {
-          "sessionId": "01KDFZ2G950MYQBA19795YMKN4",
+          "Log": {
+            "data": {
+              "message": "Listing files in: /tmp"
+            },
+            "level": "info",
+            "logger": "test-mcp-server"
+          }
+        },
+        {
+          "Progress": {
+            "message": "Processing file 1/3",
+            "progress": 1.0,
+            "progressToken": "list-files-1",
+            "total": 3.0
+          }
+        },
+        {
+          "Progress": {
+            "message": "Processing file 2/3",
+            "progress": 2.0,
+            "progressToken": "list-files-1",
+            "total": 3.0
+          }
+        },
+        {
+          "Progress": {
+            "message": "Processing file 3/3",
+            "progress": 3.0,
+            "progressToken": "list-files-1",
+            "total": 3.0
+          }
+        },
+        {
+          "sessionId": "01KDJGYQK5C12RQJZF5VMX5NMN",
           "update": {
             "content": [
               {
@@ -588,11 +471,52 @@
             ],
             "sessionUpdate": "tool_call_update",
             "status": "completed",
-            "toolCallId": "toolu_012oFb6RS7bGawGc9Kojta21"
+            "toolCallId": "toolu_015rjVvLC4onCB4HPduys4mZ"
           }
         },
         {
-          "sessionId": "01KDFZ2G950MYQBA19795YMKN4",
+          "Log": {
+            "data": {
+              "message": "Creating plan for: test"
+            },
+            "level": "info",
+            "logger": "test-mcp-server"
+          }
+        },
+        {
+          "Progress": {
+            "message": "Creating step 1/4",
+            "progress": 1.0,
+            "progressToken": "create-plan-1",
+            "total": 4.0
+          }
+        },
+        {
+          "Progress": {
+            "message": "Creating step 2/4",
+            "progress": 2.0,
+            "progressToken": "create-plan-1",
+            "total": 4.0
+          }
+        },
+        {
+          "Progress": {
+            "message": "Creating step 3/4",
+            "progress": 3.0,
+            "progressToken": "create-plan-1",
+            "total": 4.0
+          }
+        },
+        {
+          "Progress": {
+            "message": "Creating step 4/4",
+            "progress": 4.0,
+            "progressToken": "create-plan-1",
+            "total": 4.0
+          }
+        },
+        {
+          "sessionId": "01KDJGYQK5C12RQJZF5VMX5NMN",
           "update": {
             "content": [
               {
@@ -605,251 +529,271 @@
             ],
             "sessionUpdate": "tool_call_update",
             "status": "completed",
-            "toolCallId": "toolu_01Vg4JfsZq6BsU1xnpVyrdUb"
+            "toolCallId": "toolu_01VstZWpa3ycZK85g2XcU98x"
           }
         },
         {
-          "sessionId": "01KDFZ2G950MYQBA19795YMKN4",
+          "sessionId": "01KDJGYQK5C12RQJZF5VMX5NMN",
           "update": {
             "content": {
-              "text": "Both",
+              "text": "Done",
               "type": "text"
             },
             "sessionUpdate": "agent_message_chunk"
           }
         },
         {
-          "sessionId": "01KDFZ2G950MYQBA19795YMKN4",
+          "sessionId": "01KDJGYQK5C12RQJZF5VMX5NMN",
           "update": {
             "content": {
-              "text": "Both",
+              "text": "Done",
               "type": "text"
             },
             "sessionUpdate": "agent_message_chunk"
           }
         },
         {
-          "sessionId": "01KDFZ2G950MYQBA19795YMKN4",
+          "sessionId": "01KDJGYQK5C12RQJZF5VMX5NMN",
           "update": {
             "content": {
-              "text": " M",
+              "text": "! Here",
               "type": "text"
             },
             "sessionUpdate": "agent_message_chunk"
           }
         },
         {
-          "sessionId": "01KDFZ2G950MYQBA19795YMKN4",
+          "sessionId": "01KDJGYQK5C12RQJZF5VMX5NMN",
           "update": {
             "content": {
-              "text": " M",
+              "text": "! Here",
               "type": "text"
             },
             "sessionUpdate": "agent_message_chunk"
           }
         },
         {
-          "sessionId": "01KDFZ2G950MYQBA19795YMKN4",
+          "sessionId": "01KDJGYQK5C12RQJZF5VMX5NMN",
           "update": {
             "content": {
-              "text": "CP tools execute",
+              "text": " are",
               "type": "text"
             },
             "sessionUpdate": "agent_message_chunk"
           }
         },
         {
-          "sessionId": "01KDFZ2G950MYQBA19795YMKN4",
+          "sessionId": "01KDJGYQK5C12RQJZF5VMX5NMN",
           "update": {
             "content": {
-              "text": "d successfully:",
+              "text": " are",
               "type": "text"
             },
             "sessionUpdate": "agent_message_chunk"
           }
         },
         {
-          "sessionId": "01KDFZ2G950MYQBA19795YMKN4",
+          "sessionId": "01KDJGYQK5C12RQJZF5VMX5NMN",
           "update": {
             "content": {
-              "text": "CP tools execute",
+              "text": " the results:\n\n**List",
               "type": "text"
             },
             "sessionUpdate": "agent_message_chunk"
           }
         },
         {
-          "sessionId": "01KDFZ2G950MYQBA19795YMKN4",
+          "sessionId": "01KDJGYQK5C12RQJZF5VMX5NMN",
           "update": {
             "content": {
-              "text": "d successfully:",
+              "text": " the results:\n\n**List",
               "type": "text"
             },
             "sessionUpdate": "agent_message_chunk"
           }
         },
         {
-          "sessionId": "01KDFZ2G950MYQBA19795YMKN4",
+          "sessionId": "01KDJGYQK5C12RQJZF5VMX5NMN",
           "update": {
             "content": {
-              "text": "\n\n**list",
+              "text": " Files (`",
               "type": "text"
             },
             "sessionUpdate": "agent_message_chunk"
           }
         },
         {
-          "sessionId": "01KDFZ2G950MYQBA19795YMKN4",
+          "sessionId": "01KDJGYQK5C12RQJZF5VMX5NMN",
           "update": {
             "content": {
-              "text": "\n\n**list",
+              "text": " Files (`",
               "type": "text"
             },
             "sessionUpdate": "agent_message_chunk"
           }
         },
         {
-          "sessionId": "01KDFZ2G950MYQBA19795YMKN4",
+          "sessionId": "01KDJGYQK5C12RQJZF5VMX5NMN",
           "update": {
             "content": {
-              "text": "-files ",
+              "text": "/",
               "type": "text"
             },
             "sessionUpdate": "agent_message_chunk"
           }
         },
         {
-          "sessionId": "01KDFZ2G950MYQBA19795YMKN4",
+          "sessionId": "01KDJGYQK5C12RQJZF5VMX5NMN",
           "update": {
             "content": {
-              "text": "-files ",
+              "text": "/",
               "type": "text"
             },
             "sessionUpdate": "agent_message_chunk"
           }
         },
         {
-          "sessionId": "01KDFZ2G950MYQBA19795YMKN4",
+          "sessionId": "01KDJGYQK5C12RQJZF5VMX5NMN",
           "update": {
             "content": {
-              "text": "(/tmp):**\n- Foun",
+              "text": "tmp`):**\n- Foun",
               "type": "text"
             },
             "sessionUpdate": "agent_message_chunk"
           }
         },
         {
-          "sessionId": "01KDFZ2G950MYQBA19795YMKN4",
+          "sessionId": "01KDJGYQK5C12RQJZF5VMX5NMN",
           "update": {
             "content": {
-              "text": "(/tmp):**\n- Foun",
+              "text": "tmp`):**\n- Foun",
               "type": "text"
             },
             "sessionUpdate": "agent_message_chunk"
           }
         },
         {
-          "sessionId": "01KDFZ2G950MYQBA19795YMKN4",
+          "sessionId": "01KDJGYQK5C12RQJZF5VMX5NMN",
           "update": {
             "content": {
-              "text": "d 3 files in",
+              "text": "d 3 files:",
               "type": "text"
             },
             "sessionUpdate": "agent_message_chunk"
           }
         },
         {
-          "sessionId": "01KDFZ2G950MYQBA19795YMKN4",
+          "sessionId": "01KDJGYQK5C12RQJZF5VMX5NMN",
           "update": {
             "content": {
-              "text": "d 3 files in",
+              "text": "d 3 files:",
               "type": "text"
             },
             "sessionUpdate": "agent_message_chunk"
           }
         },
         {
-          "sessionId": "01KDFZ2G950MYQBA19795YMKN4",
+          "sessionId": "01KDJGYQK5C12RQJZF5VMX5NMN",
           "update": {
             "content": {
-              "text": " /tmp\n- Files",
+              "text": " `",
               "type": "text"
             },
             "sessionUpdate": "agent_message_chunk"
           }
         },
         {
-          "sessionId": "01KDFZ2G950MYQBA19795YMKN4",
+          "sessionId": "01KDJGYQK5C12RQJZF5VMX5NMN",
           "update": {
             "content": {
-              "text": " /tmp\n- Files",
+              "text": " `",
               "type": "text"
             },
             "sessionUpdate": "agent_message_chunk"
           }
         },
         {
-          "sessionId": "01KDFZ2G950MYQBA19795YMKN4",
+          "sessionId": "01KDJGYQK5C12RQJZF5VMX5NMN",
           "update": {
             "content": {
-              "text": ": file1.txt, file2",
+              "text": "file1.txt`, `file2",
               "type": "text"
             },
             "sessionUpdate": "agent_message_chunk"
           }
         },
         {
-          "sessionId": "01KDFZ2G950MYQBA19795YMKN4",
+          "sessionId": "01KDJGYQK5C12RQJZF5VMX5NMN",
           "update": {
             "content": {
-              "text": ": file1.txt, file2",
+              "text": "file1.txt`, `file2",
               "type": "text"
             },
             "sessionUpdate": "agent_message_chunk"
           }
         },
         {
-          "sessionId": "01KDFZ2G950MYQBA19795YMKN4",
+          "sessionId": "01KDJGYQK5C12RQJZF5VMX5NMN",
           "update": {
             "content": {
-              "text": ".txt, file3.txt",
+              "text": ".txt`, `file3.txt",
               "type": "text"
             },
             "sessionUpdate": "agent_message_chunk"
           }
         },
         {
-          "sessionId": "01KDFZ2G950MYQBA19795YMKN4",
+          "sessionId": "01KDJGYQK5C12RQJZF5VMX5NMN",
           "update": {
             "content": {
-              "text": ".txt, file3.txt",
+              "text": ".txt`, `file3.txt",
               "type": "text"
             },
             "sessionUpdate": "agent_message_chunk"
           }
         },
         {
-          "sessionId": "01KDFZ2G950MYQBA19795YMKN4",
+          "sessionId": "01KDJGYQK5C12RQJZF5VMX5NMN",
           "update": {
             "content": {
-              "text": "\n\n**create-plan (",
+              "text": "`",
               "type": "text"
             },
             "sessionUpdate": "agent_message_chunk"
           }
         },
         {
-          "sessionId": "01KDFZ2G950MYQBA19795YMKN4",
+          "sessionId": "01KDJGYQK5C12RQJZF5VMX5NMN",
           "update": {
             "content": {
-              "text": "\n\n**create-plan (",
+              "text": "`",
               "type": "text"
             },
             "sessionUpdate": "agent_message_chunk"
           }
         },
         {
-          "sessionId": "01KDFZ2G950MYQBA19795YMKN4",
+          "sessionId": "01KDJGYQK5C12RQJZF5VMX5NMN",
+          "update": {
+            "content": {
+              "text": "\n\n**Create Plan (",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDJGYQK5C12RQJZF5VMX5NMN",
+          "update": {
+            "content": {
+              "text": "\n\n**Create Plan (",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDJGYQK5C12RQJZF5VMX5NMN",
           "update": {
             "content": {
               "text": "goal",
@@ -859,7 +803,7 @@
           }
         },
         {
-          "sessionId": "01KDFZ2G950MYQBA19795YMKN4",
+          "sessionId": "01KDJGYQK5C12RQJZF5VMX5NMN",
           "update": {
             "content": {
               "text": "goal",
@@ -869,240 +813,330 @@
           }
         },
         {
-          "sessionId": "01KDFZ2G950MYQBA19795YMKN4",
+          "sessionId": "01KDJGYQK5C12RQJZF5VMX5NMN",
           "update": {
             "content": {
-              "text": ":",
+              "text": ": \"",
               "type": "text"
             },
             "sessionUpdate": "agent_message_chunk"
           }
         },
         {
-          "sessionId": "01KDFZ2G950MYQBA19795YMKN4",
+          "sessionId": "01KDJGYQK5C12RQJZF5VMX5NMN",
           "update": {
             "content": {
-              "text": ":",
+              "text": ": \"",
               "type": "text"
             },
             "sessionUpdate": "agent_message_chunk"
           }
         },
         {
-          "sessionId": "01KDFZ2G950MYQBA19795YMKN4",
+          "sessionId": "01KDJGYQK5C12RQJZF5VMX5NMN",
           "update": {
             "content": {
-              "text": " ",
+              "text": "test\"):**\n|",
               "type": "text"
             },
             "sessionUpdate": "agent_message_chunk"
           }
         },
         {
-          "sessionId": "01KDFZ2G950MYQBA19795YMKN4",
+          "sessionId": "01KDJGYQK5C12RQJZF5VMX5NMN",
           "update": {
             "content": {
-              "text": " ",
+              "text": "test\"):**\n|",
               "type": "text"
             },
             "sessionUpdate": "agent_message_chunk"
           }
         },
         {
-          "sessionId": "01KDFZ2G950MYQBA19795YMKN4",
+          "sessionId": "01KDJGYQK5C12RQJZF5VMX5NMN",
           "update": {
             "content": {
-              "text": "'test'):**\nCreate",
+              "text": " Step",
               "type": "text"
             },
             "sessionUpdate": "agent_message_chunk"
           }
         },
         {
-          "sessionId": "01KDFZ2G950MYQBA19795YMKN4",
+          "sessionId": "01KDJGYQK5C12RQJZF5VMX5NMN",
           "update": {
             "content": {
-              "text": "'test'):**\nCreate",
+              "text": " Step",
               "type": "text"
             },
             "sessionUpdate": "agent_message_chunk"
           }
         },
         {
-          "sessionId": "01KDFZ2G950MYQBA19795YMKN4",
+          "sessionId": "01KDJGYQK5C12RQJZF5VMX5NMN",
           "update": {
             "content": {
-              "text": "d a ",
+              "text": " | Description | Status |\n|---",
               "type": "text"
             },
             "sessionUpdate": "agent_message_chunk"
           }
         },
         {
-          "sessionId": "01KDFZ2G950MYQBA19795YMKN4",
+          "sessionId": "01KDJGYQK5C12RQJZF5VMX5NMN",
           "update": {
             "content": {
-              "text": "d a ",
+              "text": " | Description | Status |\n|---",
               "type": "text"
             },
             "sessionUpdate": "agent_message_chunk"
           }
         },
         {
-          "sessionId": "01KDFZ2G950MYQBA19795YMKN4",
+          "sessionId": "01KDJGYQK5C12RQJZF5VMX5NMN",
           "update": {
             "content": {
-              "text": "4",
+              "text": "---|-------------|--------|\n| ",
               "type": "text"
             },
             "sessionUpdate": "agent_message_chunk"
           }
         },
         {
-          "sessionId": "01KDFZ2G950MYQBA19795YMKN4",
+          "sessionId": "01KDJGYQK5C12RQJZF5VMX5NMN",
           "update": {
             "content": {
-              "text": "4",
+              "text": "---|-------------|--------|\n| ",
               "type": "text"
             },
             "sessionUpdate": "agent_message_chunk"
           }
         },
         {
-          "sessionId": "01KDFZ2G950MYQBA19795YMKN4",
+          "sessionId": "01KDJGYQK5C12RQJZF5VMX5NMN",
           "update": {
             "content": {
-              "text": "-step plan with the",
+              "text": "1 ",
               "type": "text"
             },
             "sessionUpdate": "agent_message_chunk"
           }
         },
         {
-          "sessionId": "01KDFZ2G950MYQBA19795YMKN4",
+          "sessionId": "01KDJGYQK5C12RQJZF5VMX5NMN",
           "update": {
             "content": {
-              "text": "-step plan with the",
+              "text": "1 ",
               "type": "text"
             },
             "sessionUpdate": "agent_message_chunk"
           }
         },
         {
-          "sessionId": "01KDFZ2G950MYQBA19795YMKN4",
+          "sessionId": "01KDJGYQK5C12RQJZF5VMX5NMN",
           "update": {
             "content": {
-              "text": " following pending",
+              "text": "| Analyze requirements | pending",
               "type": "text"
             },
             "sessionUpdate": "agent_message_chunk"
           }
         },
         {
-          "sessionId": "01KDFZ2G950MYQBA19795YMKN4",
+          "sessionId": "01KDJGYQK5C12RQJZF5VMX5NMN",
           "update": {
             "content": {
-              "text": " following pending",
+              "text": "| Analyze requirements | pending",
               "type": "text"
             },
             "sessionUpdate": "agent_message_chunk"
           }
         },
         {
-          "sessionId": "01KDFZ2G950MYQBA19795YMKN4",
+          "sessionId": "01KDJGYQK5C12RQJZF5VMX5NMN",
           "update": {
             "content": {
-              "text": " steps:\n1. Analyze requirements",
+              "text": " |\n| 2 | Design",
               "type": "text"
             },
             "sessionUpdate": "agent_message_chunk"
           }
         },
         {
-          "sessionId": "01KDFZ2G950MYQBA19795YMKN4",
+          "sessionId": "01KDJGYQK5C12RQJZF5VMX5NMN",
           "update": {
             "content": {
-              "text": " steps:\n1. Analyze requirements",
+              "text": " |\n| 2 | Design",
               "type": "text"
             },
             "sessionUpdate": "agent_message_chunk"
           }
         },
         {
-          "sessionId": "01KDFZ2G950MYQBA19795YMKN4",
+          "sessionId": "01KDJGYQK5C12RQJZF5VMX5NMN",
           "update": {
             "content": {
-              "text": "\n2. Design solution",
+              "text": " solution | pending |\n| 3",
               "type": "text"
             },
             "sessionUpdate": "agent_message_chunk"
           }
         },
         {
-          "sessionId": "01KDFZ2G950MYQBA19795YMKN4",
+          "sessionId": "01KDJGYQK5C12RQJZF5VMX5NMN",
           "update": {
             "content": {
-              "text": "\n2. Design solution",
+              "text": " solution | pending |\n| 3",
               "type": "text"
             },
             "sessionUpdate": "agent_message_chunk"
           }
         },
         {
-          "sessionId": "01KDFZ2G950MYQBA19795YMKN4",
+          "sessionId": "01KDJGYQK5C12RQJZF5VMX5NMN",
           "update": {
             "content": {
-              "text": "\n3. Implement solution\n4.",
+              "text": " | Implement solution | pending |",
               "type": "text"
             },
             "sessionUpdate": "agent_message_chunk"
           }
         },
         {
-          "sessionId": "01KDFZ2G950MYQBA19795YMKN4",
+          "sessionId": "01KDJGYQK5C12RQJZF5VMX5NMN",
           "update": {
             "content": {
-              "text": "\n3. Implement solution\n4.",
+              "text": " | Implement solution | pending |",
               "type": "text"
             },
             "sessionUpdate": "agent_message_chunk"
           }
         },
         {
-          "sessionId": "01KDFZ2G950MYQBA19795YMKN4",
+          "sessionId": "01KDJGYQK5C12RQJZF5VMX5NMN",
           "update": {
             "content": {
-              "text": " Test and validate",
+              "text": "\n| 4 | Test an",
               "type": "text"
             },
             "sessionUpdate": "agent_message_chunk"
           }
         },
         {
-          "sessionId": "01KDFZ2G950MYQBA19795YMKN4",
+          "sessionId": "01KDJGYQK5C12RQJZF5VMX5NMN",
           "update": {
             "content": {
-              "text": " Test and validate",
+              "text": "\n| 4 | Test an",
               "type": "text"
             },
             "sessionUpdate": "agent_message_chunk"
           }
         },
         {
-          "sessionId": "01KDFZ2G950MYQBA19795YMKN4",
+          "sessionId": "01KDJGYQK5C12RQJZF5VMX5NMN",
           "update": {
             "content": {
-              "text": "Both MCP tools executed successfully:\n\n**list-files (/tmp):**\n- Found 3 files in /tmp\n- Files: file1.txt, file2.txt, file3.txt\n\n**create-plan (goal: 'test'):**\nCreated a 4-step plan with the following pending steps:\n1. Analyze requirements\n2. Design solution\n3. Implement solution\n4. Test and validate",
+              "text": "d validate | pending |\n\nIs",
               "type": "text"
             },
             "sessionUpdate": "agent_message_chunk"
           }
         },
         {
-          "sessionId": "01KDFZ2G950MYQBA19795YMKN4",
+          "sessionId": "01KDJGYQK5C12RQJZF5VMX5NMN",
           "update": {
             "content": {
-              "text": "Both MCP tools executed successfully:\n\n**list-files (/tmp):**\n- Found 3 files in /tmp\n- Files: file1.txt, file2.txt, file3.txt\n\n**create-plan (goal: 'test'):**\nCreated a 4-step plan with the following pending steps:\n1. Analyze requirements\n2. Design solution\n3. Implement solution\n4. Test and validate",
+              "text": "d validate | pending |\n\nIs",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDJGYQK5C12RQJZF5VMX5NMN",
+          "update": {
+            "content": {
+              "text": " there anything else",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDJGYQK5C12RQJZF5VMX5NMN",
+          "update": {
+            "content": {
+              "text": " there anything else",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDJGYQK5C12RQJZF5VMX5NMN",
+          "update": {
+            "content": {
+              "text": " you'd like me to ",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDJGYQK5C12RQJZF5VMX5NMN",
+          "update": {
+            "content": {
+              "text": " you'd like me to ",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDJGYQK5C12RQJZF5VMX5NMN",
+          "update": {
+            "content": {
+              "text": "do with these results",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDJGYQK5C12RQJZF5VMX5NMN",
+          "update": {
+            "content": {
+              "text": "do with these results",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDJGYQK5C12RQJZF5VMX5NMN",
+          "update": {
+            "content": {
+              "text": "?",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDJGYQK5C12RQJZF5VMX5NMN",
+          "update": {
+            "content": {
+              "text": "?",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDJGYQK5C12RQJZF5VMX5NMN",
+          "update": {
+            "content": {
+              "text": "Done! Here are the results:\n\n**List Files (`/tmp`):**\n- Found 3 files: `file1.txt`, `file2.txt`, `file3.txt`\n\n**Create Plan (goal: \"test\"):**\n| Step | Description | Status |\n|------|-------------|--------|\n| 1 | Analyze requirements | pending |\n| 2 | Design solution | pending |\n| 3 | Implement solution | pending |\n| 4 | Test and validate | pending |\n\nIs there anything else you'd like me to do with these results?",
               "type": "text"
             },
             "sessionUpdate": "agent_message_chunk"

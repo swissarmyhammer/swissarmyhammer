@@ -1,0 +1,106 @@
+{
+  "calls": [
+    {
+      "method": "initialize",
+      "request": {
+        "clientCapabilities": {
+          "fs": {
+            "readTextFile": false,
+            "writeTextFile": false
+          },
+          "terminal": true
+        },
+        "protocolVersion": 1
+      },
+      "response": {
+        "agentCapabilities": {
+          "_meta": {
+            "streaming": true,
+            "supports_modes": true,
+            "supports_plans": true,
+            "supports_slash_commands": true
+          },
+          "loadSession": true,
+          "mcpCapabilities": {
+            "http": true,
+            "sse": false
+          },
+          "promptCapabilities": {
+            "_meta": {
+              "streaming": true
+            },
+            "audio": false,
+            "embeddedContext": false,
+            "image": false
+          },
+          "sessionCapabilities": {}
+        },
+        "agentInfo": {
+          "name": "llama-agent",
+          "title": "LLaMA Agent v0.3.0",
+          "version": "0.3.0"
+        },
+        "authMethods": [],
+        "protocolVersion": 1
+      },
+      "notifications": []
+    },
+    {
+      "method": "new_session",
+      "request": {
+        "cwd": "/Users/wballard/github/swissarmyhammer/acp-conformance",
+        "mcpServers": []
+      },
+      "response": {
+        "sessionId": "01KDJGX7EH5GR6QXNJCPADFA5C"
+      },
+      "notifications": []
+    },
+    {
+      "method": "ext_method",
+      "request": {
+        "args": [
+          "10"
+        ],
+        "command": "sleep",
+        "sessionId": "01KDJGX7EH5GR6QXNJCPADFA5C"
+      },
+      "response": {
+        "terminalId": "term_01KDJGX7EPB1C5VNDA5Z186MJV"
+      },
+      "notifications": []
+    },
+    {
+      "method": "ext_method",
+      "request": {
+        "sessionId": "01KDJGX7EH5GR6QXNJCPADFA5C",
+        "terminalId": "term_01KDJGX7EPB1C5VNDA5Z186MJV"
+      },
+      "response": {
+        "killed": true
+      },
+      "notifications": []
+    },
+    {
+      "method": "ext_method",
+      "request": {
+        "sessionId": "01KDJGX7EH5GR6QXNJCPADFA5C",
+        "terminalId": "term_01KDJGX7EPB1C5VNDA5Z186MJV"
+      },
+      "response": {
+        "output": "usage: sleep number[unit] [...]\nUnit can be 's' (seconds, the default), m (minutes), h (hours), or d (days).\n",
+        "truncated": false
+      },
+      "notifications": []
+    },
+    {
+      "method": "ext_method",
+      "request": {
+        "sessionId": "01KDJGX7EH5GR6QXNJCPADFA5C",
+        "terminalId": "term_01KDJGX7EPB1C5VNDA5Z186MJV"
+      },
+      "response": null,
+      "notifications": []
+    }
+  ]
+}

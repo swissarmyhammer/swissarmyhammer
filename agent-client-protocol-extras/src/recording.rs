@@ -6,7 +6,9 @@ use agent_client_protocol::{
     LoadSessionResponse, NewSessionRequest, NewSessionResponse, PromptRequest, PromptResponse,
     SetSessionModeRequest, SetSessionModeResponse,
 };
+use model_context_protocol_extras::McpNotification;
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
@@ -34,7 +36,10 @@ pub struct RecordingAgent<A> {
     calls: Arc<Mutex<Vec<RecordedCall>>>,
     /// Buffer for notifications received during current method call
     pub(crate) notification_buffer: Arc<Mutex<Vec<serde_json::Value>>>,
-    /// Task handle for notification capture
+    /// Set of seen notification keys for deduplication
+    seen_notifications: Arc<Mutex<HashSet<u64>>>,
+    /// Task handle for notification capture (unused but kept for future)
+    #[allow(dead_code)]
     notification_task: Option<tokio::task::JoinHandle<()>>,
 }
 
@@ -46,6 +51,7 @@ impl<A> RecordingAgent<A> {
             path,
             calls: Arc::new(Mutex::new(Vec::new())),
             notification_buffer: Arc::new(Mutex::new(Vec::new())),
+            seen_notifications: Arc::new(Mutex::new(HashSet::new())),
             notification_task: None,
         }
     }
@@ -63,7 +69,7 @@ impl<A> RecordingAgent<A> {
 
         // Spawn thread to capture notifications until channel closes
         std::thread::spawn(move || {
-            tracing::info!("RecordingAgent: Starting notification capture thread");
+            tracing::info!("RecordingAgent: Starting ACP notification capture thread");
             let mut count = 0;
 
             // Continuously poll for notifications until channel closes
@@ -72,7 +78,7 @@ impl<A> RecordingAgent<A> {
                 match receiver.try_recv() {
                     Ok(notification) => {
                         count += 1;
-                        tracing::info!("RecordingAgent: Captured notification #{}", count);
+                        tracing::info!("RecordingAgent: Captured ACP notification #{}", count);
                         if let Ok(json) = serde_json::to_value(&notification) {
                             buffer.lock().unwrap().push(json);
                         }
@@ -89,19 +95,82 @@ impl<A> RecordingAgent<A> {
                         // Continue capturing even if we lagged
                     }
                     Err(tokio::sync::broadcast::error::TryRecvError::Closed) => {
-                        tracing::info!("Notification channel closed, stopping capture");
+                        tracing::info!("ACP notification channel closed, stopping capture");
                         break;
                     }
                 }
             }
 
             tracing::info!(
-                "RecordingAgent: Capture thread complete ({} notifications)",
+                "RecordingAgent: ACP capture thread complete ({} notifications)",
                 count
             );
         });
 
         agent
+    }
+
+    /// Add MCP notification source for capture
+    ///
+    /// Spawns a thread to consume MCP notifications and convert them to JSON.
+    /// Deduplicates notifications using their dedup_key.
+    pub fn add_mcp_source(&self, mut receiver: tokio::sync::broadcast::Receiver<McpNotification>) {
+        let buffer = Arc::clone(&self.notification_buffer);
+        let seen = Arc::clone(&self.seen_notifications);
+
+        std::thread::spawn(move || {
+            tracing::info!("RecordingAgent: Starting MCP notification capture thread");
+            let mut count = 0;
+            let mut deduped = 0;
+
+            loop {
+                match receiver.try_recv() {
+                    Ok(notification) => {
+                        let key = notification.dedup_key();
+
+                        // Check for duplicate
+                        let mut seen_set = seen.lock().unwrap();
+                        if seen_set.contains(&key) {
+                            deduped += 1;
+                            tracing::debug!(
+                                "RecordingAgent: Deduped MCP notification (key={})",
+                                key
+                            );
+                            continue;
+                        }
+                        seen_set.insert(key);
+                        drop(seen_set);
+
+                        count += 1;
+                        tracing::info!("RecordingAgent: Captured MCP notification #{}", count);
+
+                        // Convert MCP notification to JSON
+                        if let Ok(json) = serde_json::to_value(&notification) {
+                            buffer.lock().unwrap().push(json);
+                        }
+                    }
+                    Err(tokio::sync::broadcast::error::TryRecvError::Empty) => {
+                        std::thread::sleep(std::time::Duration::from_millis(1));
+                    }
+                    Err(tokio::sync::broadcast::error::TryRecvError::Lagged(skipped)) => {
+                        tracing::warn!(
+                            "MCP receiver lagged by {}, some notifications may be lost",
+                            skipped
+                        );
+                    }
+                    Err(tokio::sync::broadcast::error::TryRecvError::Closed) => {
+                        tracing::info!("MCP notification channel closed, stopping capture");
+                        break;
+                    }
+                }
+            }
+
+            tracing::info!(
+                "RecordingAgent: MCP capture thread complete ({} captured, {} deduped)",
+                count,
+                deduped
+            );
+        });
     }
 
     /// Get access to notification buffer for external capture
@@ -118,16 +187,6 @@ impl<A> RecordingAgent<A> {
             request: serde_json::to_value(req).unwrap_or_default(),
             response: serde_json::to_value(resp).unwrap_or_default(),
             notifications: Vec::new(), // Filled in Drop
-        };
-        self.calls.lock().unwrap().push(call);
-    }
-
-    fn record(&self, method: &str, req: &impl Serialize, resp: &impl Serialize) {
-        let call = RecordedCall {
-            method: method.to_string(),
-            request: serde_json::to_value(req).unwrap_or_default(),
-            response: serde_json::to_value(resp).unwrap_or_default(),
-            notifications: Vec::new(), // TODO: Capture notifications
         };
         self.calls.lock().unwrap().push(call);
     }
@@ -257,9 +316,27 @@ impl<A: Agent> Agent for RecordingAgent<A> {
     }
 
     async fn ext_method(&self, request: ExtRequest) -> agent_client_protocol::Result<ExtResponse> {
-        let response = self.inner.ext_method(request.clone()).await?;
-        self.record_with_notifications("ext_method", &request, &response);
-        Ok(response)
+        let result = self.inner.ext_method(request.clone()).await;
+        match &result {
+            Ok(response) => {
+                self.record_with_notifications("ext_method", &request, response);
+            }
+            Err(e) => {
+                // Record error responses too (for capability check tests that expect errors)
+                self.record_with_notifications(
+                    "ext_method",
+                    &request,
+                    &serde_json::json!({
+                        "error": {
+                            "code": e.code,
+                            "message": &e.message,
+                            "data": &e.data
+                        }
+                    }),
+                );
+            }
+        }
+        result
     }
 
     async fn ext_notification(
