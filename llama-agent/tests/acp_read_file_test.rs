@@ -10,6 +10,7 @@
 mod acp_read_file_tests {
     use llama_agent::acp::AcpServer;
     use llama_agent::AgentServer;
+    use serial_test::serial;
     use std::sync::Arc;
     use tempfile::TempDir;
 
@@ -103,6 +104,7 @@ mod acp_read_file_tests {
 
     /// Test reading a file outside allowed paths
     #[tokio::test]
+    #[serial]
     async fn test_read_text_file_path_security() {
         use agent_client_protocol::Agent;
 
@@ -168,6 +170,7 @@ mod acp_read_file_tests {
 
     /// Test reading a nonexistent file
     #[tokio::test]
+    #[serial]
     async fn test_read_text_file_not_found() {
         use agent_client_protocol::Agent;
 
@@ -229,6 +232,7 @@ mod acp_read_file_tests {
 
     /// Test reading a file with relative path (should be rejected)
     #[tokio::test]
+    #[serial]
     async fn test_read_text_file_relative_path() {
         use agent_client_protocol::Agent;
 
@@ -289,6 +293,7 @@ mod acp_read_file_tests {
 
     /// Test reading a large file (should respect max_file_size limit)
     #[tokio::test]
+    #[serial]
     async fn test_read_text_file_size_limit() {
         use agent_client_protocol::Agent;
 

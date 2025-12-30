@@ -15,7 +15,6 @@ members = [
     "swissarmyhammer-templating",
     "swissarmyhammer-prompts",
     "swissarmyhammer-modes",
-    "swissarmyhammer-agent-executor",
     "swissarmyhammer-rules",
     "swissarmyhammer-workflow",
     "swissarmyhammer-mcp-proxy",

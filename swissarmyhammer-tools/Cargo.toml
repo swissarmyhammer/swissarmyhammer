@@ -23,7 +23,9 @@ swissarmyhammer-git = { path = "../swissarmyhammer-git" }
 swissarmyhammer-todo = { path = "../swissarmyhammer-todo" }
 swissarmyhammer-shell = { path = "../swissarmyhammer-shell" }
 swissarmyhammer-rules = { path = "../swissarmyhammer-rules" }
-swissarmyhammer-agent-executor = { path = "../swissarmyhammer-agent-executor" }
+# ACP agents (direct usage, no executor wrapper)
+claude-agent = { path = "../claude-agent" }
+llama-agent = { workspace = true }
 swissarmyhammer-workflow = { path = "../swissarmyhammer-workflow" }
 swissarmyhammer-mcp-proxy = { path = "../swissarmyhammer-mcp-proxy" }
 

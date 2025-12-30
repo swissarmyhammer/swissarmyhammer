@@ -15,6 +15,7 @@
 use llama_embedding::{BatchProcessor, EmbeddingConfig, EmbeddingModel};
 use llama_loader::ModelSource;
 use rstest::rstest;
+use serial_test::serial;
 use std::io::{BufWriter, Write};
 use std::path::Path;
 use std::sync::Arc;
@@ -71,7 +72,7 @@ async fn create_test_file(num_texts: usize) -> Result<NamedTempFile, Box<dyn std
 
 /// Test 1: Single Text Embedding with Dimension Validation
 #[tokio::test]
-
+#[serial]
 async fn test_single_text_embedding() {
     let config = create_qwen_config();
     let mut model = EmbeddingModel::new(config)
@@ -109,7 +110,7 @@ async fn test_single_text_embedding() {
 
 /// Test 2: Model Loading (HuggingFace and caching)
 #[tokio::test]
-
+#[serial]
 async fn test_model_loading_and_caching() {
     // Test HuggingFace model loading
     let config = create_qwen_config();
@@ -159,7 +160,7 @@ async fn test_model_loading_and_caching() {
 
 /// Test 3: Batch Processing Tests with Various Sizes
 #[tokio::test]
-
+#[serial]
 async fn test_batch_processing_various_sizes() {
     let config = create_qwen_config();
     let mut model = EmbeddingModel::new(config)
@@ -212,7 +213,7 @@ async fn test_batch_processing_various_sizes() {
 
 /// Test 4: Batch Consistency (same results as individual processing)
 #[tokio::test]
-
+#[serial]
 async fn test_batch_consistency() {
     let config = create_qwen_config();
     let mut model = EmbeddingModel::new(config)
@@ -266,6 +267,7 @@ async fn test_batch_consistency() {
 #[case(32)]
 #[case(64)]
 #[tokio::test]
+#[serial]
 async fn test_file_processing_different_sizes(#[case] file_size: usize) {
     let config = create_qwen_config();
     let mut model = EmbeddingModel::new(config)
@@ -324,7 +326,7 @@ async fn test_file_processing_different_sizes(#[case] file_size: usize) {
 
 /// Test 7: MD5 Hash Consistency Tests
 #[tokio::test]
-
+#[serial]
 async fn test_md5_hash_consistency() {
     let config = create_qwen_config();
     let mut model = EmbeddingModel::new(config)
@@ -379,7 +381,7 @@ async fn test_md5_hash_consistency() {
 
 /// Test 8: Error Handling Tests
 #[tokio::test]
-
+#[serial]
 async fn test_error_handling() {
     // Test model not loaded error
     let config = create_qwen_config();
@@ -419,7 +421,7 @@ async fn test_error_handling() {
 
 /// Test 9: Integration with llama-loader (cache scenarios)
 #[tokio::test]
-
+#[serial]
 async fn test_llama_loader_integration() {
     let config = create_qwen_config();
 
@@ -476,7 +478,7 @@ async fn test_llama_loader_integration() {
 
 /// Test 10: Edge Cases and Text Handling
 #[tokio::test]
-
+#[serial]
 async fn test_edge_cases_and_text_handling() {
     let config = create_qwen_config();
     let mut model = EmbeddingModel::new(config)
@@ -521,7 +523,7 @@ async fn test_edge_cases_and_text_handling() {
 
 /// Test 11: Normalization functionality
 #[tokio::test]
-
+#[serial]
 async fn test_embedding_normalization() {
     // Test with normalization enabled
     let mut config = create_qwen_config();
@@ -567,7 +569,7 @@ fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
 
 /// Test Summary and Success Criteria Validation
 #[tokio::test]
-
+#[serial]
 async fn test_success_criteria_summary() {
     println!("=== llama-embedding Integration Test Summary ===");
     println!();

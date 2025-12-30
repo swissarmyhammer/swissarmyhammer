@@ -4,8 +4,7 @@ use serde_json::json;
 use std::collections::HashMap;
 
 use swissarmyhammer::test_utils::IsolatedTestEnvironment;
-use swissarmyhammer_config::model::{LlamaAgentConfig, ModelConfig};
-use swissarmyhammer_workflow::actions::AgentExecutionContext;
+use swissarmyhammer_config::model::{LlamaAgentConfig, ModelConfig, ModelExecutorType};
 use swissarmyhammer_workflow::template_context::WorkflowTemplateContext;
 
 fn process_workflow_step(
@@ -29,14 +28,11 @@ fn process_workflow_step(
         .expect("Failed to create context");
     let mut context_with_config = context;
     context_with_config.set_agent_config(config.clone());
-    let execution_context = AgentExecutionContext::new(&context_with_config);
+    let agent_config = context_with_config.get_agent_config();
 
-    // Verify execution context is properly configured
-    assert_eq!(execution_context.executor_type(), config.executor_type());
-    println!(
-        "    ✓ Step {} execution context created successfully",
-        step_name
-    );
+    // Verify agent config is properly configured
+    assert_eq!(agent_config.executor_type(), config.executor_type());
+    println!("    ✓ Step {} agent config created successfully", step_name);
 }
 
 fn verify_accumulated_context(accumulated_context: &HashMap<String, serde_json::Value>) {
@@ -119,10 +115,10 @@ async fn test_error_recovery_scenarios() {
                 WorkflowTemplateContext::with_vars(vars.clone()).expect("Failed to create context");
             let mut context_with_config = context;
             context_with_config.set_agent_config(config.clone());
-            let execution_context = AgentExecutionContext::new(&context_with_config);
+            let agent_config = context_with_config.get_agent_config();
 
-            // Verify execution context is properly configured for error scenarios
-            assert_eq!(execution_context.executor_type(), config.executor_type());
+            // Verify agent config is properly configured for error scenarios
+            assert_eq!(agent_config.executor_type(), config.executor_type());
             println!(
                 "  ✓ Scenario {} with {} context created successfully",
                 scenario_name, executor_name
@@ -159,13 +155,10 @@ async fn test_variable_templating_patterns() {
         let context = WorkflowTemplateContext::with_vars(vars).expect("Failed to create context");
         let mut context_with_config = context;
         context_with_config.set_agent_config(ModelConfig::claude_code());
-        let execution_context = AgentExecutionContext::new(&context_with_config);
+        let agent_config = context_with_config.get_agent_config();
 
         // Test that complex variables don't break context creation
-        assert_eq!(
-            execution_context.executor_type(),
-            swissarmyhammer_config::model::ModelExecutorType::ClaudeCode
-        );
+        assert_eq!(agent_config.executor_type(), ModelExecutorType::ClaudeCode);
         println!("  ✓ Template pattern {} handled successfully", test_name);
     }
 
@@ -193,10 +186,10 @@ fn test_condition_execution(
         WorkflowTemplateContext::with_vars(vars.clone()).expect("Failed to create context");
     let mut context_with_config = context;
     context_with_config.set_agent_config(config.clone());
-    let execution_context = AgentExecutionContext::new(&context_with_config);
+    let agent_config = context_with_config.get_agent_config();
 
-    // Test conditional execution context creation
-    assert_eq!(execution_context.executor_type(), config.executor_type());
+    // Test conditional context creation
+    assert_eq!(agent_config.executor_type(), config.executor_type());
     if should_execute {
         println!(
             "    ✓ Condition {} with {} executed successfully",
@@ -274,13 +267,10 @@ fn process_state_transition(
         .expect("Failed to create context");
     let mut context_with_config = context;
     context_with_config.set_agent_config(ModelConfig::claude_code());
-    let execution_context = AgentExecutionContext::new(&context_with_config);
+    let agent_config = context_with_config.get_agent_config();
 
-    // Verify execution context for state persistence
-    assert_eq!(
-        execution_context.executor_type(),
-        swissarmyhammer_config::model::ModelExecutorType::ClaudeCode
-    );
+    // Verify agent config for state persistence
+    assert_eq!(agent_config.executor_type(), ModelExecutorType::ClaudeCode);
     println!("  ✓ State {} processed successfully", new_status);
 
     // Verify state accumulation
@@ -341,13 +331,10 @@ fn test_error_case(test_case: &str, vars: HashMap<String, serde_json::Value>) {
         Ok(ctx) => {
             let mut context_with_config = ctx;
             context_with_config.set_agent_config(ModelConfig::claude_code());
-            let execution_context = AgentExecutionContext::new(&context_with_config);
+            let agent_config = context_with_config.get_agent_config();
 
-            // Verify execution context creation with special cases
-            assert_eq!(
-                execution_context.executor_type(),
-                swissarmyhammer_config::model::ModelExecutorType::ClaudeCode
-            );
+            // Verify config creation with special cases
+            assert_eq!(agent_config.executor_type(), ModelExecutorType::ClaudeCode);
             println!("  ✓ Error case {} handled gracefully", test_case);
         }
         Err(e) => {

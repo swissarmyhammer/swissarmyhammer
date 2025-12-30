@@ -3,20 +3,20 @@
 //! These tests verify that rules can use {% include "_partials/..." %} to include
 //! shared partial templates from the rule library.
 
-use std::sync::Arc;
-use swissarmyhammer_agent_executor::LlamaAgentExecutorWrapper;
 use swissarmyhammer_common::error::SwissArmyHammerError;
 use swissarmyhammer_common::test_utils::IsolatedTestEnvironment;
-use swissarmyhammer_config::LlamaAgentConfig;
-use swissarmyhammer_rules::{Rule, RuleChecker, Severity};
+use swissarmyhammer_config::model::{LlamaAgentConfig, ModelConfig};
+use swissarmyhammer_rules::{AgentConfig, Rule, RuleChecker, Severity};
 
-/// Create a test agent with default configuration
-fn create_test_agent() -> Arc<LlamaAgentExecutorWrapper> {
-    let config = LlamaAgentConfig::for_testing();
-    let mcp_server = agent_client_protocol::McpServer::Http(
-        agent_client_protocol::McpServerHttp::new("test", "http://localhost:8080/mcp"),
-    );
-    Arc::new(LlamaAgentExecutorWrapper::new(config, mcp_server))
+/// Create a test agent config with local LlamaAgent for fast test execution
+///
+/// Uses a small test model instead of Claude Code to avoid API calls
+/// and speed up test execution.
+fn create_test_agent_config() -> AgentConfig {
+    AgentConfig {
+        model_config: ModelConfig::llama_agent(LlamaAgentConfig::for_testing()),
+        mcp_config: None,
+    }
 }
 
 /// Check if an error is due to agent unavailability and skip test if so
@@ -24,7 +24,10 @@ fn create_test_agent() -> Arc<LlamaAgentExecutorWrapper> {
 /// Returns true if the test should be skipped, false otherwise.
 fn skip_if_agent_unavailable(err: &SwissArmyHammerError) -> bool {
     let err_string = err.to_string();
-    if err_string.contains("agent") || err_string.contains("Agent") {
+    if err_string.contains("agent")
+        || err_string.contains("Agent")
+        || err_string.contains("Claude CLI not found")
+    {
         eprintln!("Skipping test - agent not available: {}", err);
         true
     } else {
@@ -34,13 +37,14 @@ fn skip_if_agent_unavailable(err: &SwissArmyHammerError) -> bool {
 
 #[tokio::test]
 async fn test_rule_checker_with_partial_includes() {
-    let agent = create_test_agent();
-    let mut checker = RuleChecker::new(agent).expect("Failed to create checker");
-
-    if checker.initialize().await.is_err() {
-        eprintln!("Skipping test - agent initialization failed");
-        return;
-    }
+    let agent_config = create_test_agent_config();
+    let checker = match RuleChecker::new(agent_config) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("Skipping test - failed to create checker: {}", e);
+            return;
+        }
+    };
 
     // Create a temp directory with partials and rules
     let _env = IsolatedTestEnvironment::new().expect("Failed to create test environment");
@@ -85,7 +89,7 @@ If no issues found, respond with "PASS".
     std::fs::write(&test_file, "fn main() {}\n").unwrap();
 
     // Try to check the file with the rule that uses a partial
-    let result = checker.check_file(&rule, &test_file, None).await;
+    let result = checker.check_file(&rule, &test_file).await;
 
     // If this fails, check if it's because partials aren't working
     if let Err(err) = result {
@@ -109,13 +113,14 @@ If no issues found, respond with "PASS".
 
 #[tokio::test]
 async fn test_rule_with_builtin_partial() {
-    let agent = create_test_agent();
-    let mut checker = RuleChecker::new(agent).expect("Failed to create checker");
-
-    if checker.initialize().await.is_err() {
-        eprintln!("Skipping test - agent initialization failed");
-        return;
-    }
+    let agent_config = create_test_agent_config();
+    let checker = match RuleChecker::new(agent_config) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("Skipping test - failed to create checker: {}", e);
+            return;
+        }
+    };
 
     // Create a rule that uses a builtin partial (these ship with swissarmyhammer)
     let rule = Rule::new(
@@ -135,7 +140,7 @@ async fn test_rule_with_builtin_partial() {
     std::fs::write(&test_file, "fn main() {}\n").unwrap();
 
     // Try to check with a rule that uses a builtin partial
-    let result = checker.check_file(&rule, &test_file, None).await;
+    let result = checker.check_file(&rule, &test_file).await;
 
     // Should not fail with "Partial does not exist"
     if let Err(err) = result {

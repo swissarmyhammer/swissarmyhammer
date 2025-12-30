@@ -11,6 +11,7 @@
 mod acp_write_file_tests {
     use llama_agent::acp::AcpServer;
     use llama_agent::AgentServer;
+    use serial_test::serial;
     use std::sync::Arc;
     use tempfile::TempDir;
 
@@ -104,6 +105,7 @@ mod acp_write_file_tests {
 
     /// Test writing a file outside allowed paths
     #[tokio::test]
+    #[serial]
     async fn test_write_text_file_path_security() {
         use agent_client_protocol::Agent;
 
@@ -169,6 +171,7 @@ mod acp_write_file_tests {
 
     /// Test writing to a file with relative path (should be rejected)
     #[tokio::test]
+    #[serial]
     async fn test_write_text_file_relative_path() {
         use agent_client_protocol::Agent;
 
@@ -230,6 +233,7 @@ mod acp_write_file_tests {
 
     /// Test overwriting an existing file
     #[tokio::test]
+    #[serial]
     async fn test_write_text_file_overwrite() {
         use agent_client_protocol::Agent;
 
@@ -301,6 +305,7 @@ mod acp_write_file_tests {
 
     /// Test writing an empty file
     #[tokio::test]
+    #[serial]
     async fn test_write_text_file_empty() {
         use agent_client_protocol::Agent;
 
@@ -366,6 +371,7 @@ mod acp_write_file_tests {
 
     /// Test writing to a subdirectory
     #[tokio::test]
+    #[serial]
     async fn test_write_text_file_subdirectory() {
         use agent_client_protocol::Agent;
 
@@ -437,6 +443,7 @@ mod acp_write_file_tests {
 
     /// Test writing a file with unicode content
     #[tokio::test]
+    #[serial]
     async fn test_write_text_file_unicode() {
         use agent_client_protocol::Agent;
 
@@ -506,6 +513,7 @@ mod acp_write_file_tests {
 
     /// Test writing to a nonexistent parent directory (should fail)
     #[tokio::test]
+    #[serial]
     async fn test_write_text_file_nonexistent_parent() {
         use agent_client_protocol::Agent;
 

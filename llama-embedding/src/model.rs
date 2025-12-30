@@ -322,8 +322,10 @@ impl EmbeddingModel {
 mod tests {
     use super::*;
     use llama_loader::ModelSource;
+    use serial_test::serial;
 
     #[tokio::test]
+    #[serial]
     async fn test_embedding_model_creation() {
         let config = EmbeddingConfig::default();
         let result = EmbeddingModel::new(config).await;

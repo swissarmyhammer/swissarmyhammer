@@ -12,6 +12,7 @@ use claude_agent::tools::{
     InternalToolRequest, PermissionOptionKind, ToolCallHandler, ToolCallResult, ToolPermissions,
 };
 use serde_json::json;
+use serial_test::serial;
 use std::sync::Arc;
 use tempfile::TempDir;
 
@@ -30,7 +31,8 @@ fn create_test_environment() -> (
     TempDir,
 ) {
     let temp_dir = TempDir::new().unwrap();
-    let session_manager = Arc::new(SessionManager::new());
+    let storage_path = temp_dir.path().join("sessions");
+    let session_manager = Arc::new(SessionManager::new().with_storage_path(Some(storage_path)));
     let permission_engine = create_test_permission_engine();
 
     // Create permissions that use the policy engine (no auto-approved tools)
@@ -61,6 +63,7 @@ fn create_test_environment() -> (
 }
 
 #[tokio::test]
+#[serial]
 async fn test_fs_read_allowed_by_default_policy() {
     let (_, handler, session_id, temp_dir) = create_test_environment();
 
@@ -99,6 +102,7 @@ async fn test_fs_read_allowed_by_default_policy() {
 }
 
 #[tokio::test]
+#[serial]
 async fn test_fs_write_requires_permission_by_default_policy() {
     let (_, handler, session_id, temp_dir) = create_test_environment();
 
@@ -164,6 +168,7 @@ async fn test_fs_write_requires_permission_by_default_policy() {
 }
 
 #[tokio::test]
+#[serial]
 async fn test_terminal_requires_permission_and_no_allow_always() {
     let (_, handler, session_id, _) = create_test_environment();
 
@@ -218,12 +223,14 @@ async fn test_terminal_requires_permission_and_no_allow_always() {
 }
 
 #[tokio::test]
+#[serial]
 async fn test_stored_permission_allows_tool_without_prompt() {
     let temp_dir = TempDir::new().unwrap();
     let storage = FilePermissionStorage::new(temp_dir.path().to_path_buf());
     let permission_engine = Arc::new(PermissionPolicyEngine::new(Box::new(storage)));
 
-    let session_manager = Arc::new(SessionManager::new());
+    let storage_path = temp_dir.path().join("sessions");
+    let session_manager = Arc::new(SessionManager::new().with_storage_path(Some(storage_path)));
     let permissions = ToolPermissions {
         require_permission_for: vec![],
         auto_approved: vec![],
@@ -291,12 +298,14 @@ async fn test_stored_permission_allows_tool_without_prompt() {
 }
 
 #[tokio::test]
+#[serial]
 async fn test_stored_permission_denies_tool() {
     let temp_dir = TempDir::new().unwrap();
     let storage = FilePermissionStorage::new(temp_dir.path().to_path_buf());
     let permission_engine = Arc::new(PermissionPolicyEngine::new(Box::new(storage)));
 
-    let session_manager = Arc::new(SessionManager::new());
+    let storage_path = temp_dir.path().join("sessions");
+    let session_manager = Arc::new(SessionManager::new().with_storage_path(Some(storage_path)));
     let permissions = ToolPermissions {
         require_permission_for: vec![],
         auto_approved: vec![],
@@ -356,6 +365,7 @@ async fn test_stored_permission_denies_tool() {
 }
 
 #[tokio::test]
+#[serial]
 async fn test_custom_policy_denies_tool() {
     let temp_dir = TempDir::new().unwrap();
     let storage = FilePermissionStorage::new(temp_dir.path().to_path_buf());
@@ -374,7 +384,8 @@ async fn test_custom_policy_denies_tool() {
         custom_policies,
     ));
 
-    let session_manager = Arc::new(SessionManager::new());
+    let storage_path = temp_dir.path().join("sessions");
+    let session_manager = Arc::new(SessionManager::new().with_storage_path(Some(storage_path)));
     let permissions = ToolPermissions {
         require_permission_for: vec![],
         auto_approved: vec![],
@@ -425,6 +436,7 @@ async fn test_custom_policy_denies_tool() {
 }
 
 #[tokio::test]
+#[serial]
 async fn test_custom_policy_allows_tool() {
     let temp_dir = TempDir::new().unwrap();
     let storage = FilePermissionStorage::new(temp_dir.path().to_path_buf());
@@ -443,7 +455,8 @@ async fn test_custom_policy_allows_tool() {
         custom_policies,
     ));
 
-    let session_manager = Arc::new(SessionManager::new());
+    let storage_path = temp_dir.path().join("sessions");
+    let session_manager = Arc::new(SessionManager::new().with_storage_path(Some(storage_path)));
     let permissions = ToolPermissions {
         require_permission_for: vec![],
         auto_approved: vec![],
@@ -498,6 +511,7 @@ async fn test_custom_policy_allows_tool() {
 }
 
 #[tokio::test]
+#[serial]
 async fn test_pattern_matching_in_permissions() {
     let temp_dir = TempDir::new().unwrap();
     let storage = FilePermissionStorage::new(temp_dir.path().to_path_buf());
@@ -509,7 +523,8 @@ async fn test_pattern_matching_in_permissions() {
         .await
         .unwrap();
 
-    let session_manager = Arc::new(SessionManager::new());
+    let storage_path = temp_dir.path().join("sessions");
+    let session_manager = Arc::new(SessionManager::new().with_storage_path(Some(storage_path)));
     let permissions = ToolPermissions {
         require_permission_for: vec![],
         auto_approved: vec![],
@@ -577,6 +592,7 @@ async fn test_pattern_matching_in_permissions() {
 }
 
 #[tokio::test]
+#[serial]
 async fn test_permission_expiration() {
     use std::time::Duration;
 
@@ -597,7 +613,8 @@ async fn test_permission_expiration() {
     // Wait a moment to ensure expiration
     tokio::time::sleep(Duration::from_millis(10)).await;
 
-    let session_manager = Arc::new(SessionManager::new());
+    let storage_path = temp_dir.path().join("sessions");
+    let session_manager = Arc::new(SessionManager::new().with_storage_path(Some(storage_path)));
     let permissions = ToolPermissions {
         require_permission_for: vec![],
         auto_approved: vec![],
@@ -648,11 +665,12 @@ async fn test_permission_expiration() {
 }
 
 #[tokio::test]
+#[serial]
 async fn test_auto_approved_fs_read_bypasses_policy() {
-    let (_, _handler, _session_id, _temp_dir) = create_test_environment();
-
     // Create permissions with fs_read in auto_approved list
-    let session_manager = Arc::new(SessionManager::new());
+    let test_dir = TempDir::new().unwrap();
+    let storage_path = test_dir.path().join("sessions");
+    let session_manager = Arc::new(SessionManager::new().with_storage_path(Some(storage_path)));
     let permission_engine = create_test_permission_engine();
 
     let permissions = ToolPermissions {
@@ -670,8 +688,6 @@ async fn test_auto_approved_fs_read_bypasses_policy() {
             .write_text_file(true))
         .terminal(true);
     handler.set_client_capabilities(capabilities);
-
-    let test_dir = TempDir::new().unwrap();
     let internal_session_id = session_manager
         .create_session(test_dir.path().to_path_buf(), None)
         .unwrap();
@@ -711,8 +727,11 @@ async fn test_auto_approved_fs_read_bypasses_policy() {
 }
 
 #[tokio::test]
+#[serial]
 async fn test_auto_approved_fs_write_bypasses_policy() {
-    let session_manager = Arc::new(SessionManager::new());
+    let test_dir = TempDir::new().unwrap();
+    let storage_path = test_dir.path().join("sessions");
+    let session_manager = Arc::new(SessionManager::new().with_storage_path(Some(storage_path)));
     let permission_engine = create_test_permission_engine();
 
     // Create permissions with fs_write in auto_approved list
@@ -732,7 +751,6 @@ async fn test_auto_approved_fs_write_bypasses_policy() {
         .terminal(true);
     handler.set_client_capabilities(capabilities);
 
-    let test_dir = TempDir::new().unwrap();
     let internal_session_id = session_manager
         .create_session(test_dir.path().to_path_buf(), None)
         .unwrap();
@@ -773,8 +791,11 @@ async fn test_auto_approved_fs_write_bypasses_policy() {
 }
 
 #[tokio::test]
+#[serial]
 async fn test_auto_approved_terminal_bypasses_policy() {
-    let session_manager = Arc::new(SessionManager::new());
+    let test_dir = TempDir::new().unwrap();
+    let storage_path = test_dir.path().join("sessions");
+    let session_manager = Arc::new(SessionManager::new().with_storage_path(Some(storage_path)));
     let permission_engine = create_test_permission_engine();
 
     // Create permissions with terminal_create in auto_approved list
@@ -793,8 +814,6 @@ async fn test_auto_approved_terminal_bypasses_policy() {
             .write_text_file(true))
         .terminal(true);
     handler.set_client_capabilities(capabilities);
-
-    let test_dir = TempDir::new().unwrap();
     let internal_session_id = session_manager
         .create_session(test_dir.path().to_path_buf(), None)
         .unwrap();
@@ -832,8 +851,11 @@ async fn test_auto_approved_terminal_bypasses_policy() {
 }
 
 #[tokio::test]
+#[serial]
 async fn test_auto_approved_multiple_tools() {
-    let session_manager = Arc::new(SessionManager::new());
+    let test_dir = TempDir::new().unwrap();
+    let storage_path = test_dir.path().join("sessions");
+    let session_manager = Arc::new(SessionManager::new().with_storage_path(Some(storage_path)));
     let permission_engine = create_test_permission_engine();
 
     // Create permissions with multiple tools in auto_approved list
@@ -856,8 +878,6 @@ async fn test_auto_approved_multiple_tools() {
             .write_text_file(true))
         .terminal(true);
     handler.set_client_capabilities(capabilities);
-
-    let test_dir = TempDir::new().unwrap();
     let internal_session_id = session_manager
         .create_session(test_dir.path().to_path_buf(), None)
         .unwrap();
@@ -923,8 +943,11 @@ async fn test_auto_approved_multiple_tools() {
 }
 
 #[tokio::test]
+#[serial]
 async fn test_non_auto_approved_tool_still_requires_permission() {
-    let session_manager = Arc::new(SessionManager::new());
+    let test_dir = TempDir::new().unwrap();
+    let storage_path = test_dir.path().join("sessions");
+    let session_manager = Arc::new(SessionManager::new().with_storage_path(Some(storage_path)));
     let permission_engine = create_test_permission_engine();
 
     // Create permissions with only fs_read in auto_approved list
@@ -943,8 +966,6 @@ async fn test_non_auto_approved_tool_still_requires_permission() {
             .write_text_file(true))
         .terminal(true);
     handler.set_client_capabilities(capabilities);
-
-    let test_dir = TempDir::new().unwrap();
     let internal_session_id = session_manager
         .create_session(test_dir.path().to_path_buf(), None)
         .unwrap();
@@ -981,6 +1002,7 @@ async fn test_non_auto_approved_tool_still_requires_permission() {
 }
 
 #[tokio::test]
+#[serial]
 async fn test_auto_approved_with_deny_policy_still_denied() {
     let temp_dir = TempDir::new().unwrap();
     let storage = FilePermissionStorage::new(temp_dir.path().to_path_buf());
@@ -999,7 +1021,8 @@ async fn test_auto_approved_with_deny_policy_still_denied() {
         custom_policies,
     ));
 
-    let session_manager = Arc::new(SessionManager::new());
+    let storage_path = temp_dir.path().join("sessions");
+    let session_manager = Arc::new(SessionManager::new().with_storage_path(Some(storage_path)));
 
     // Even though fs_write is in auto_approved, the deny policy should not be bypassed
     // (auto_approved bypasses policy evaluation, so this actually tests that behavior)
@@ -1018,14 +1041,12 @@ async fn test_auto_approved_with_deny_policy_still_denied() {
             .write_text_file(true))
         .terminal(true);
     handler.set_client_capabilities(capabilities);
-
-    let test_dir = TempDir::new().unwrap();
     let internal_session_id = session_manager
-        .create_session(test_dir.path().to_path_buf(), None)
+        .create_session(temp_dir.path().to_path_buf(), None)
         .unwrap();
     let session_id = agent_client_protocol::SessionId::new(internal_session_id.to_string());
 
-    let test_file = test_dir.path().join("auto_approved_but_denied.txt");
+    let test_file = temp_dir.path().join("auto_approved_but_denied.txt");
 
     // fs_write is auto-approved, which bypasses policy evaluation
     // So it should succeed even though there's a deny policy
@@ -1061,6 +1082,7 @@ async fn test_auto_approved_with_deny_policy_still_denied() {
 // ===== ACP Client Capability Enforcement Tests =====
 
 #[tokio::test]
+#[serial]
 async fn test_fs_read_fails_without_read_capability() {
     let (session_manager, _, _, temp_dir) = create_test_environment();
     let permission_engine = create_test_permission_engine();
@@ -1118,6 +1140,7 @@ async fn test_fs_read_fails_without_read_capability() {
 }
 
 #[tokio::test]
+#[serial]
 async fn test_fs_write_fails_without_write_capability() {
     let (session_manager, _, _, temp_dir) = create_test_environment();
     let permission_engine = create_test_permission_engine();
@@ -1191,6 +1214,7 @@ async fn test_fs_write_fails_without_write_capability() {
 }
 
 #[tokio::test]
+#[serial]
 async fn test_terminal_fails_without_terminal_capability() {
     let (session_manager, _, _, temp_dir) = create_test_environment();
     let permission_engine = create_test_permission_engine();
@@ -1255,6 +1279,7 @@ async fn test_terminal_fails_without_terminal_capability() {
 }
 
 #[tokio::test]
+#[serial]
 async fn test_operations_fail_with_no_capabilities() {
     let (session_manager, _, _, temp_dir) = create_test_environment();
     let permission_engine = create_test_permission_engine();

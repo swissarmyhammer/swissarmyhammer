@@ -5,6 +5,7 @@
 
 use llama_agent::types::{ModelConfig, ModelSource, RetryConfig};
 use llama_agent::{AgentAPI, AgentConfig, AgentServer, ParallelConfig, QueueConfig, SessionConfig};
+use serial_test::serial;
 use std::time::{Duration, Instant};
 use tracing::{info, warn};
 
@@ -44,6 +45,7 @@ fn create_test_agent_config() -> AgentConfig {
 /// Test that AgentServer uses cache on second initialization
 /// This is the core test that verifies cache hit behavior
 #[tokio::test]
+#[serial]
 async fn test_agent_server_cache_hit_on_restart() {
     let config = create_test_agent_config();
 
@@ -148,6 +150,7 @@ async fn test_agent_server_cache_hit_on_restart() {
 
 /// Test that multiple AgentServer instances can share cached models
 #[tokio::test]
+#[serial]
 async fn test_agent_server_concurrent_cache_sharing() {
     let config = create_test_agent_config();
 

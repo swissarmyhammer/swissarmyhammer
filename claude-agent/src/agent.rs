@@ -5831,17 +5831,13 @@ mod tests {
         let agent = create_test_agent().await;
 
         // Test that authentication is properly rejected since we declare no auth methods
-        let request = AuthenticateRequest::new(agent_client_protocol::AuthMethodId(
-            "none".to_string().into(),
-        ));
+        let request = AuthenticateRequest::new(agent_client_protocol::AuthMethodId::new("none"));
 
         let result = agent.authenticate(request).await;
         assert!(result.is_err(), "Authentication should be rejected");
 
         // Test with a different method to ensure all methods are rejected
-        let request2 = AuthenticateRequest::new(agent_client_protocol::AuthMethodId(
-            "basic".to_string().into(),
-        ));
+        let request2 = AuthenticateRequest::new(agent_client_protocol::AuthMethodId::new("basic"));
 
         let result2 = agent.authenticate(request2).await;
         assert!(
@@ -5885,12 +5881,8 @@ mod tests {
         let new_response = agent.new_session(new_request).await.unwrap();
 
         // Now load it
-        let load_request = LoadSessionRequest {
-            session_id: new_response.session_id,
-            cwd: std::path::PathBuf::from("/tmp"),
-            mcp_servers: vec![],
-            meta: None,
-        };
+        let load_request =
+            LoadSessionRequest::new(new_response.session_id, std::path::PathBuf::from("/tmp"));
 
         let load_response = agent.load_session(load_request).await.unwrap();
         assert!(load_response.meta.is_some());
@@ -5940,12 +5932,8 @@ mod tests {
         let mut notification_receiver = agent.notification_sender.sender.subscribe();
 
         // Now load the session - should trigger history replay
-        let load_request = LoadSessionRequest {
-            session_id: new_response.session_id,
-            cwd: std::path::PathBuf::from("/tmp"),
-            mcp_servers: vec![],
-            meta: None,
-        };
+        let load_request =
+            LoadSessionRequest::new(new_response.session_id, std::path::PathBuf::from("/tmp"));
 
         let load_response = agent.load_session(load_request).await.unwrap();
 
@@ -6042,7 +6030,7 @@ mod tests {
                         .read_text_file(true)
                         .write_text_file(true))
                     .terminal(true)
-                    .meta(Some(serde_json::json!({"streaming": true}))),
+                    .meta(serde_json::json!({"streaming": true}).as_object().cloned()),
             );
 
         let init_response = agent.initialize(init_request).await.unwrap();
@@ -6059,19 +6047,16 @@ mod tests {
         let nonexistent_session_id = "01ARZ3NDEKTSV4RRFFQ69G5FAV"; // Valid ULID format
         let session_id_wrapper = SessionId::new(nonexistent_session_id.to_string());
 
-        let request = LoadSessionRequest {
-            session_id: session_id_wrapper.clone(),
-            cwd: std::path::PathBuf::from("/tmp"),
-            mcp_servers: vec![],
-            meta: None,
-        };
+        let request =
+            LoadSessionRequest::new(session_id_wrapper.clone(), std::path::PathBuf::from("/tmp"));
 
         let result = agent.load_session(request).await;
         assert!(result.is_err(), "Loading nonexistent session should fail");
 
         let error = result.unwrap_err();
         assert_eq!(
-            error.code, -32602,
+            error.code,
+            agent_client_protocol::ErrorCode::Other(-32602),
             "Should return invalid params error for nonexistent session"
         );
 
@@ -6089,12 +6074,10 @@ mod tests {
         let agent = create_test_agent().await;
 
         // Test with an invalid ULID format - should fail at parsing stage
-        let request = LoadSessionRequest {
-            session_id: SessionId::new("invalid_session_format".to_string()),
-            cwd: std::path::PathBuf::from("/tmp"),
-            mcp_servers: vec![],
-            meta: None,
-        };
+        let request = LoadSessionRequest::new(
+            SessionId::new("invalid_session_format".to_string()),
+            std::path::PathBuf::from("/tmp"),
+        );
 
         let result = agent.load_session(request).await;
         assert!(
@@ -6104,7 +6087,8 @@ mod tests {
 
         let error = result.unwrap_err();
         assert_eq!(
-            error.code, -32602,
+            error.code,
+            agent_client_protocol::ErrorCode::Other(-32602),
             "Should return invalid params error for invalid ULID"
         );
         // This should fail at parse_session_id stage, so it won't have our custom error data
@@ -6118,11 +6102,15 @@ mod tests {
         let new_session_request = NewSessionRequest::new(std::env::temp_dir());
         let session_response = agent.new_session(new_session_request).await.unwrap();
 
-        let request = SetSessionModeRequest {
-            session_id: session_response.session_id.clone(),
-            mode_id: SessionModeId("interactive".to_string().into()),
-            meta: Some(serde_json::json!({"mode": "interactive"})),
-        };
+        let request = SetSessionModeRequest::new(
+            session_response.session_id.clone(),
+            SessionModeId::new("interactive"),
+        )
+        .meta(
+            serde_json::json!({"mode": "interactive"})
+                .as_object()
+                .cloned(),
+        );
 
         let response = agent.set_session_mode(request).await.unwrap();
         assert!(response.meta.is_some());
@@ -6147,17 +6135,17 @@ mod tests {
         let new_session_request = NewSessionRequest::new(std::path::PathBuf::from("/tmp"));
         let new_session_response = agent.new_session(new_session_request).await.unwrap();
 
-        let request = PromptRequest {
-            session_id: new_session_response.session_id,
-            prompt: vec![agent_client_protocol::ContentBlock::Text(
-                agent_client_protocol::TextContent {
-                    text: "Hello, world!".to_string(),
-                    annotations: None,
-                    meta: None,
-                },
+        let request = PromptRequest::new(
+            new_session_response.session_id,
+            vec![agent_client_protocol::ContentBlock::Text(
+                agent_client_protocol::TextContent::new("Hello, world!".to_string()),
             )],
-            meta: Some(serde_json::json!({"prompt": "Hello, world!"})),
-        };
+        )
+        .meta(
+            serde_json::json!({"prompt": "Hello, world!"})
+                .as_object()
+                .cloned(),
+        );
 
         let response = agent.prompt(request).await.unwrap();
         assert!(response.meta.is_some());
@@ -6167,10 +6155,12 @@ mod tests {
     async fn test_cancel() {
         let agent = create_test_agent().await;
 
-        let notification = CancelNotification {
-            session_id: SessionId::new("test_session".to_string()),
-            meta: Some(serde_json::json!({"reason": "user_request"})),
-        };
+        let notification = CancelNotification::new(SessionId::new("test_session".to_string()))
+            .meta(
+                serde_json::json!({"reason": "user_request"})
+                    .as_object()
+                    .cloned(),
+            );
 
         let result = agent.cancel(notification).await;
         assert!(result.is_ok());
@@ -6180,23 +6170,23 @@ mod tests {
     async fn test_ext_method() {
         let agent = create_test_agent().await;
 
-        let request = ExtRequest {
-            method: "test_method".to_string().into(),
-            params: Arc::from(RawValue::from_string("{}".to_string()).unwrap()),
-        };
+        let request = ExtRequest::new(
+            "test_method",
+            Arc::from(RawValue::from_string("{}".to_string()).unwrap()),
+        );
 
         let response = agent.ext_method(request).await.unwrap();
-        assert!(!response.get().is_empty());
+        assert!(!response.0.get().is_empty());
     }
 
     #[tokio::test]
     async fn test_ext_notification() {
         let agent = create_test_agent().await;
 
-        let notification = ExtNotification {
-            method: "test_notification".to_string().into(),
-            params: Arc::from(RawValue::from_string("{}".to_string()).unwrap()),
-        };
+        let notification = ExtNotification::new(
+            "test_notification",
+            Arc::from(RawValue::from_string("{}".to_string()).unwrap()),
+        );
 
         let result = agent.ext_notification(notification.clone()).await;
         assert!(result.is_ok());
@@ -6226,17 +6216,17 @@ mod tests {
         let new_session_response = agent.new_session(new_session_request).await.unwrap();
 
         // Send prompt
-        let prompt_request = PromptRequest {
-            session_id: new_session_response.session_id.clone(),
-            prompt: vec![agent_client_protocol::ContentBlock::Text(
-                agent_client_protocol::TextContent {
-                    text: "Hello, how are you?".to_string(),
-                    annotations: None,
-                    meta: None,
-                },
+        let prompt_request = PromptRequest::new(
+            new_session_response.session_id.clone(),
+            vec![agent_client_protocol::ContentBlock::Text(
+                agent_client_protocol::TextContent::new("Hello, how are you?".to_string()),
             )],
-            meta: Some(serde_json::json!({"test": "full_flow"})),
-        };
+        )
+        .meta(
+            serde_json::json!({"test": "full_flow"})
+                .as_object()
+                .cloned(),
+        );
 
         let prompt_response = agent.prompt(prompt_request).await.unwrap();
 
@@ -6284,17 +6274,12 @@ mod tests {
         let agent = create_test_agent().await;
 
         // Test invalid session ID
-        let prompt_request = PromptRequest {
-            session_id: SessionId::new("invalid-uuid".to_string()),
-            prompt: vec![agent_client_protocol::ContentBlock::Text(
-                agent_client_protocol::TextContent {
-                    text: "Hello".to_string(),
-                    annotations: None,
-                    meta: None,
-                },
+        let prompt_request = PromptRequest::new(
+            SessionId::new("invalid-uuid".to_string()),
+            vec![agent_client_protocol::ContentBlock::Text(
+                agent_client_protocol::TextContent::new("Hello".to_string()),
             )],
-            meta: None,
-        };
+        );
 
         let result = agent.prompt(prompt_request).await;
         assert!(result.is_err());
@@ -6479,7 +6464,7 @@ mod tests {
                             .read_text_file(true)
                             .write_text_file(true))
                         .terminal(true)
-                        .meta(Some(serde_json::json!({"streaming": true}))),
+                        .meta(serde_json::json!({"streaming": true}).as_object().cloned()),
                 );
             })
             .unwrap();
@@ -6630,7 +6615,7 @@ mod tests {
                             .read_text_file(true)
                             .write_text_file(true))
                         .terminal(true)
-                        .meta(Some(serde_json::json!({"streaming": true}))),
+                        .meta(serde_json::json!({"streaming": true}).as_object().cloned()),
                 );
             })
             .unwrap();
@@ -6668,7 +6653,7 @@ mod tests {
                             .read_text_file(true)
                             .write_text_file(true))
                         .terminal(true)
-                        .meta(Some(serde_json::json!({"streaming": true}))),
+                        .meta(serde_json::json!({"streaming": true}).as_object().cloned()),
                 );
             })
             .unwrap();
@@ -6787,7 +6772,7 @@ mod tests {
                             .read_text_file(true)
                             .write_text_file(true))
                         .terminal(true)
-                        .meta(Some(serde_json::json!({"streaming": true}))),
+                        .meta(serde_json::json!({"streaming": true}).as_object().cloned()),
                 );
             })
             .unwrap();
@@ -6884,7 +6869,7 @@ mod tests {
                         .read_text_file(true)
                         .write_text_file(true))
                     .terminal(true)
-                    .meta(Some(serde_json::json!({"streaming": true}))),
+                    .meta(serde_json::json!({"streaming": true}).as_object().cloned()),
             );
 
         let init_response = agent.initialize(init_request).await.unwrap();
@@ -6892,9 +6877,8 @@ mod tests {
         assert!(init_response.auth_methods.is_empty());
 
         // Test authenticate - should fail since we declare no auth methods
-        let auth_request = AuthenticateRequest::new(agent_client_protocol::AuthMethodId(
-            "none".to_string().into(),
-        ));
+        let auth_request =
+            AuthenticateRequest::new(agent_client_protocol::AuthMethodId::new("none"));
 
         let auth_result = agent.authenticate(auth_request).await;
         assert!(
@@ -6930,7 +6914,7 @@ mod tests {
 
         // Test invalid session ID
         let invalid_prompt = PromptRequest {
-            session_id: SessionId("invalid-uuid".to_string().into()),
+            session_id: SessionId::new("invalid-uuid".to_string()),
             prompt: vec![ContentBlock::Text(TextContent {
                 text: "Hello".to_string(),
                 annotations: None,
@@ -7214,14 +7198,16 @@ mod tests {
         let agent = create_test_agent().await;
 
         // Test that our negotiation method works correctly with supported versions
-        let negotiated_v1 = agent.negotiate_protocol_version(&agent_client_protocol::V1);
+        let negotiated_v1 =
+            agent.negotiate_protocol_version(&agent_client_protocol::ProtocolVersion::V1);
         assert_eq!(
             negotiated_v1,
             agent_client_protocol::ProtocolVersion::V1,
             "V1 should be negotiated to V1 when supported"
         );
 
-        let negotiated_v0 = agent.negotiate_protocol_version(&agent_client_protocol::V0);
+        let negotiated_v0 =
+            agent.negotiate_protocol_version(&agent_client_protocol::ProtocolVersion::V0);
         assert_eq!(
             negotiated_v0,
             agent_client_protocol::ProtocolVersion::V0,
@@ -7230,11 +7216,13 @@ mod tests {
 
         // Verify that our SUPPORTED_PROTOCOL_VERSIONS contains both V0 and V1
         assert!(
-            ClaudeAgent::SUPPORTED_PROTOCOL_VERSIONS.contains(&agent_client_protocol::V0),
+            ClaudeAgent::SUPPORTED_PROTOCOL_VERSIONS
+                .contains(&agent_client_protocol::ProtocolVersion::V0),
             "Agent should support V0"
         );
         assert!(
-            ClaudeAgent::SUPPORTED_PROTOCOL_VERSIONS.contains(&agent_client_protocol::V1),
+            ClaudeAgent::SUPPORTED_PROTOCOL_VERSIONS
+                .contains(&agent_client_protocol::ProtocolVersion::V1),
             "Agent should support V1"
         );
 
@@ -7242,7 +7230,7 @@ mod tests {
         let latest = ClaudeAgent::SUPPORTED_PROTOCOL_VERSIONS
             .iter()
             .max()
-            .unwrap_or(&agent_client_protocol::V1);
+            .unwrap_or(&agent_client_protocol::ProtocolVersion::V1);
         assert_eq!(
             *latest,
             agent_client_protocol::ProtocolVersion::V1,
@@ -9245,7 +9233,7 @@ mod tests {
 
         let tool_handler = agent.tool_handler.read().await;
         let report = tool_handler
-            .create_tool_call_report(&SessionId(session_id.clone().into()), tool_name, &tool_args)
+            .create_tool_call_report(&SessionId::new(session_id.clone()), tool_name, &tool_args)
             .await;
         let tool_call_id = report.tool_call_id.clone();
         drop(tool_handler);
@@ -9276,7 +9264,7 @@ mod tests {
 
         let tool_handler = agent.tool_handler.read().await;
         let report = tool_handler
-            .create_tool_call_report(&SessionId(session_id.clone().into()), tool_name, &tool_args)
+            .create_tool_call_report(&SessionId::new(session_id.clone()), tool_name, &tool_args)
             .await;
         let tool_call_id = report.tool_call_id.clone();
 
@@ -9807,7 +9795,7 @@ mod tests {
                             .read_text_file(true)
                             .write_text_file(true))
                         .terminal(true)
-                        .meta(Some(serde_json::json!({"streaming": true}))),
+                        .meta(serde_json::json!({"streaming": true}).as_object().cloned()),
                 );
             })
             .unwrap();

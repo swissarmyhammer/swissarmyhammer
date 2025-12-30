@@ -42,7 +42,7 @@ pub enum Base64ValidationError {
 /// # Examples
 ///
 /// ```
-/// use lib::base64_validation::validate_base64_format;
+/// use claude_agent::base64_validation::validate_base64_format;
 ///
 /// assert!(validate_base64_format("SGVsbG8gV29ybGQ=").is_ok());
 /// assert!(validate_base64_format("").is_err());

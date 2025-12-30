@@ -6,6 +6,7 @@
 mod acp_tests {
     use llama_agent::types::SessionConfig;
     use llama_agent::SessionManager;
+    use serial_test::serial;
     use swissarmyhammer_todo::{Priority, TodoItemExt, TodoStorage};
     use tempfile::TempDir;
 
@@ -41,6 +42,7 @@ mod acp_tests {
     }
 
     #[tokio::test]
+    #[serial]
     async fn test_session_todos_empty_initially() {
         let (manager, _temp_dir) = create_test_session_manager();
 
@@ -53,6 +55,7 @@ mod acp_tests {
     }
 
     #[tokio::test]
+    #[serial]
     async fn test_session_todos_can_be_manually_added() {
         let (manager, _temp_dir) = create_test_session_manager();
 
@@ -78,6 +81,7 @@ mod acp_tests {
     }
 
     #[tokio::test]
+    #[serial]
     async fn test_todos_from_storage_can_be_synced_to_session() {
         let (manager, _temp_dir) = create_test_session_manager();
 
@@ -111,6 +115,7 @@ mod acp_tests {
     }
 
     #[tokio::test]
+    #[serial]
     async fn test_multiple_todos_sync_correctly() {
         let (manager, _temp_dir) = create_test_session_manager();
 
@@ -162,6 +167,7 @@ mod acp_tests {
     }
 
     #[tokio::test]
+    #[serial]
     async fn test_completed_todos_remain_in_session_but_marked_done() {
         let (manager, _temp_dir) = create_test_session_manager();
 
@@ -238,6 +244,7 @@ mod acp_tests {
     }
 
     #[tokio::test]
+    #[serial]
     async fn test_session_todos_persist_across_saves() {
         let temp_dir = tempfile::tempdir().unwrap();
 
@@ -328,6 +335,7 @@ mod acp_tests {
     }
 
     #[tokio::test]
+    #[serial]
     async fn test_empty_todo_list_clears_session_todos() {
         let (manager, _temp_dir) = create_test_session_manager();
 
@@ -370,6 +378,7 @@ mod acp_tests {
     }
 
     #[tokio::test]
+    #[serial]
     async fn test_todos_ordered_as_in_storage() {
         let (manager, _temp_dir) = create_test_session_manager();
 

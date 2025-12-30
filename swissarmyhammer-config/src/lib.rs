@@ -365,6 +365,9 @@ pub fn load_configuration_for_cli() -> ConfigurationResult<TemplateContext> {
 ///
 /// Used in conjunction with [`DEFAULT_TEST_LLM_MODEL_FILENAME`] to configure
 /// test LlamaAgent instances across all packages.
+///
+/// Uses unsloth's Qwen3-4B-Instruct (4B params) for test execution.
+/// Qwen3 has improved instruction-following capabilities.
 pub const DEFAULT_TEST_LLM_MODEL_REPO: &str = "unsloth/Qwen3-4B-Instruct-2507-GGUF";
 
 /// Default LLM model filename for testing
@@ -372,8 +375,9 @@ pub const DEFAULT_TEST_LLM_MODEL_REPO: &str = "unsloth/Qwen3-4B-Instruct-2507-GG
 /// This constant specifies the specific GGUF file within the repository
 /// defined by [`DEFAULT_TEST_LLM_MODEL_REPO`].
 ///
-/// This file will be automatically downloaded by llama.cpp when first accessed.
-pub const DEFAULT_TEST_LLM_MODEL_FILENAME: &str = "Qwen3-4B-Instruct-2507-Q4_K_M.gguf";
+/// Qwen3-4B with IQ4_NL quantization - good quality/speed balance for tests.
+/// IQ4_NL (importance quantization non-linear) provides good quality-per-bit.
+pub const DEFAULT_TEST_LLM_MODEL_FILENAME: &str = "Qwen3-4B-Instruct-2507-IQ4_NL.gguf";
 
 /// Default embedding model for testing
 ///

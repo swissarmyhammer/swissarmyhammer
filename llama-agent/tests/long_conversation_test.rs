@@ -13,6 +13,7 @@ use llama_agent::{
     },
     AgentServer,
 };
+use serial_test::serial;
 use std::time::SystemTime;
 use tracing::info;
 
@@ -42,11 +43,12 @@ fn create_test_config() -> AgentConfig {
 
 /// Test that agent can handle a conversation with many turns (50+ messages)
 #[tokio::test]
+#[serial]
 #[ignore] // Requires model download and significant compute time
 async fn test_long_conversation_many_turns() {
-    tracing_subscriber::fmt()
+    let _ = tracing_subscriber::fmt()
         .with_max_level(tracing::Level::INFO)
-        .init();
+        .try_init();
 
     info!("Starting long conversation test with many turns");
 
@@ -97,11 +99,12 @@ async fn test_long_conversation_many_turns() {
 
 /// Test that agent can handle individual messages with large content
 #[tokio::test]
+#[serial]
 #[ignore] // Requires model download and significant compute time
 async fn test_long_conversation_large_messages() {
-    tracing_subscriber::fmt()
+    let _ = tracing_subscriber::fmt()
         .with_max_level(tracing::Level::INFO)
-        .init();
+        .try_init();
 
     info!("Starting test with large message content");
 
@@ -155,10 +158,11 @@ async fn test_long_conversation_large_messages() {
 
 /// Test conversation history integrity over many turns
 #[tokio::test]
+#[serial]
 async fn test_long_conversation_history_integrity() {
-    tracing_subscriber::fmt()
+    let _ = tracing_subscriber::fmt()
         .with_max_level(tracing::Level::INFO)
-        .init();
+        .try_init();
 
     info!("Starting conversation history integrity test");
 
@@ -231,10 +235,11 @@ async fn test_long_conversation_history_integrity() {
 
 /// Test token usage tracking across long conversations
 #[tokio::test]
+#[serial]
 async fn test_long_conversation_token_tracking() {
-    tracing_subscriber::fmt()
+    let _ = tracing_subscriber::fmt()
         .with_max_level(tracing::Level::INFO)
-        .init();
+        .try_init();
 
     info!("Starting token tracking test");
 
@@ -298,10 +303,11 @@ async fn test_long_conversation_token_tracking() {
 
 /// Test session persistence across long conversations
 #[tokio::test]
+#[serial]
 async fn test_long_conversation_persistence() {
-    tracing_subscriber::fmt()
+    let _ = tracing_subscriber::fmt()
         .with_max_level(tracing::Level::INFO)
-        .init();
+        .try_init();
 
     info!("Starting persistence test for long conversations");
 
@@ -345,10 +351,11 @@ async fn test_long_conversation_persistence() {
 
 /// Test memory stability with progressively longer conversations
 #[tokio::test]
+#[serial]
 async fn test_long_conversation_memory_stability() {
-    tracing_subscriber::fmt()
+    let _ = tracing_subscriber::fmt()
         .with_max_level(tracing::Level::INFO)
-        .init();
+        .try_init();
 
     info!("Starting memory stability test");
 
@@ -403,10 +410,11 @@ async fn test_long_conversation_memory_stability() {
 
 /// Test handling of mixed message types in long conversations
 #[tokio::test]
+#[serial]
 async fn test_long_conversation_mixed_message_types() {
-    tracing_subscriber::fmt()
+    let _ = tracing_subscriber::fmt()
         .with_max_level(tracing::Level::INFO)
-        .init();
+        .try_init();
 
     info!("Starting mixed message types test");
 
@@ -484,10 +492,11 @@ async fn test_long_conversation_mixed_message_types() {
 
 /// Test session listing with multiple long conversations
 #[tokio::test]
+#[serial]
 async fn test_multiple_long_conversations() {
-    tracing_subscriber::fmt()
+    let _ = tracing_subscriber::fmt()
         .with_max_level(tracing::Level::INFO)
-        .init();
+        .try_init();
 
     info!("Starting multiple long conversations test");
 

@@ -33,7 +33,9 @@ swissarmyhammer-common = { path = "../swissarmyhammer-common" }
 swissarmyhammer-prompts = { path = "../swissarmyhammer-prompts" }
 swissarmyhammer-shell = { path = "../swissarmyhammer-shell" }
 swissarmyhammer-templating = { path = "../swissarmyhammer-templating" }
-swissarmyhammer-agent-executor = { path = "../swissarmyhammer-agent-executor" }
+# ACP agents (direct usage, no executor wrapper)
+claude-agent = { path = "../claude-agent" }
+llama-agent = { workspace = true }
 
 # Template engine (legacy - being phased out)
 liquid = { workspace = true }
@@ -113,9 +115,6 @@ axum = { workspace = true }
 tower = { workspace = true }
 tower-http = { workspace = true, features = ["trace"] }
 hyper = { workspace = true }
-
-# LlamaAgent integration for local AI execution
-llama-agent = { workspace = true }
 
 # Progress bars and user interface
 indicatif = { workspace = true }

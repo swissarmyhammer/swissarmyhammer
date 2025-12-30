@@ -6,10 +6,8 @@
 
 use std::collections::HashMap;
 use swissarmyhammer::test_utils::IsolatedTestEnvironment;
-use swissarmyhammer_config::model::{LlamaAgentConfig, ModelConfig};
+use swissarmyhammer_config::model::{LlamaAgentConfig, ModelConfig, ModelExecutorType};
 use swissarmyhammer_config::{DEFAULT_TEST_LLM_MODEL_FILENAME, DEFAULT_TEST_LLM_MODEL_REPO};
-// Removed: use swissarmyhammer_tools::mcp::unified_server - not needed as LlamaAgent starts its own MCP server
-use swissarmyhammer_workflow::actions::AgentExecutionContext;
 use swissarmyhammer_workflow::template_context::WorkflowTemplateContext;
 use tracing::info;
 
@@ -54,14 +52,6 @@ fn create_workflow_context_with_llama_config() -> WorkflowTemplateContext {
     context_with_config
 }
 
-/// Helper function to assert the executor type is LlamaAgent
-fn assert_llama_agent_executor_type(execution_context: &AgentExecutionContext) {
-    assert_eq!(
-        execution_context.executor_type(),
-        swissarmyhammer_config::model::ModelExecutorType::LlamaAgent
-    );
-}
-
 /// Fast integration test validating LlamaAgent configuration and MCP server startup
 ///
 /// This test focuses on the configuration and server startup without expensive LLM operations:
@@ -76,11 +66,11 @@ async fn test_llama_mcp_integration_fast() {
     info!("Testing LlamaAgent MCP integration infrastructure (fast test)");
 
     let context_with_config = create_workflow_context_with_llama_config();
-    let execution_context = AgentExecutionContext::new(&context_with_config);
+    let agent_config = context_with_config.get_agent_config();
 
-    info!("LlamaAgent execution context created with integrated MCP server configuration");
+    info!("LlamaAgent configuration created with integrated MCP server configuration");
 
-    assert_llama_agent_executor_type(&execution_context);
+    assert_eq!(agent_config.executor_type(), ModelExecutorType::LlamaAgent);
 
     info!("LlamaAgent MCP integration infrastructure validated successfully");
 }
@@ -95,14 +85,14 @@ async fn test_llama_mcp_server_connectivity() {
     info!("Testing LlamaAgent MCP server integration configuration (fast)");
 
     let context_with_config = create_workflow_context_with_llama_config();
-    let execution_context = AgentExecutionContext::new(&context_with_config);
+    let agent_config = context_with_config.get_agent_config();
 
-    info!("LlamaAgent execution context created with integrated MCP server configuration");
+    info!("LlamaAgent configuration created with integrated MCP server configuration");
 
-    assert_llama_agent_executor_type(&execution_context);
+    assert_eq!(agent_config.executor_type(), ModelExecutorType::LlamaAgent);
 
     info!("LlamaAgent MCP server integration test completed successfully");
-    info!("LlamaAgent execution context successfully configured with integrated MCP server capability");
+    info!("LlamaAgent successfully configured with integrated MCP server capability");
 }
 
 /// Tests LlamaAgent model source configuration

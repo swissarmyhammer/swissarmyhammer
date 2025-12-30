@@ -1075,7 +1075,7 @@ mod tests {
         // Test: System messages should return None (metadata only)
         let translator = create_test_translator();
         let line = r#"{"type":"system","subtype":"init","session_id":"test"}"#;
-        let session_id = SessionId("test_session".into());
+        let session_id = SessionId::new("test_session");
 
         let result = translator.stream_json_to_acp(line, &session_id).await;
         assert!(result.is_ok());
@@ -1087,7 +1087,7 @@ mod tests {
         // Test: Result messages should return None (metadata only)
         let translator = create_test_translator();
         let line = r#"{"type":"result","subtype":"success","total_cost_usd":0.114}"#;
-        let session_id = SessionId("test_session".into());
+        let session_id = SessionId::new("test_session");
 
         let result = translator.stream_json_to_acp(line, &session_id).await;
         assert!(result.is_ok());
@@ -1099,7 +1099,7 @@ mod tests {
         // Test: User messages (from keepalive pings) should be filtered
         let translator = create_test_translator();
         let line = r#"{"type":"user","message":{"role":"user","content":""}}"#;
-        let session_id = SessionId("test_session".into());
+        let session_id = SessionId::new("test_session");
 
         let result = translator.stream_json_to_acp(line, &session_id).await;
         assert!(result.is_ok());
@@ -1138,7 +1138,7 @@ mod tests {
         // Test: Malformed JSON should return error
         let translator = create_test_translator();
         let line = r#"{"type":"assistant", invalid json"#;
-        let session_id = SessionId("test_session".into());
+        let session_id = SessionId::new("test_session");
 
         let result = translator.stream_json_to_acp(line, &session_id).await;
         assert!(result.is_err());
@@ -1149,7 +1149,7 @@ mod tests {
         // Test: Missing type field should return error
         let translator = create_test_translator();
         let line = r#"{"message":{"content":[{"type":"text","text":"Hello"}]}}"#;
-        let session_id = SessionId("test_session".into());
+        let session_id = SessionId::new("test_session");
 
         let result = translator.stream_json_to_acp(line, &session_id).await;
         assert!(result.is_err());
@@ -1160,7 +1160,7 @@ mod tests {
         // Test: Unknown type should return None (skip with warning)
         let translator = create_test_translator();
         let line = r#"{"type":"unknown_type","data":"something"}"#;
-        let session_id = SessionId("test_session".into());
+        let session_id = SessionId::new("test_session");
 
         let result = translator.stream_json_to_acp(line, &session_id).await;
         assert!(result.is_ok());
@@ -1227,7 +1227,7 @@ mod tests {
         // Test: Convert assistant tool use message from stream-json to ACP ToolCall
         let translator = create_test_translator();
         let line = r#"{"type":"assistant","message":{"content":[{"type":"tool_use","id":"toolu_123","name":"mcp__sah__files_read","input":{"path":"test.txt"}}]}}"#;
-        let session_id = SessionId("test_session".into());
+        let session_id = SessionId::new("test_session");
 
         let result = translator.stream_json_to_acp(line, &session_id).await;
         assert!(result.is_ok());
@@ -1266,7 +1266,7 @@ mod tests {
         let translator = create_test_translator();
         let line =
             r#"{"type":"assistant","message":{"content":[{"type":"text","text":"Hello back!"}]}}"#;
-        let session_id = SessionId("test_session".into());
+        let session_id = SessionId::new("test_session");
 
         let result = translator.stream_json_to_acp(line, &session_id).await;
         assert!(result.is_ok());
@@ -1294,7 +1294,7 @@ mod tests {
         // Test: stream_event with content_block_delta SHOULD be processed (real-time chunks)
         let translator = create_test_translator();
         let line = r#"{"type":"stream_event","event":{"type":"content_block_delta","delta":{"text":"Hello"}}}"#;
-        let session_id = SessionId("test_session".into());
+        let session_id = SessionId::new("test_session");
 
         let result = translator.stream_json_to_acp(line, &session_id).await;
         assert!(result.is_ok());
@@ -1324,7 +1324,7 @@ mod tests {
         // because tool_use does NOT come through stream_events
         let translator = create_test_translator();
         let line = r#"{"type":"assistant","message":{"content":[{"type":"tool_use","id":"toolu_456","name":"bash","input":{"command":"ls"}}]}}"#;
-        let session_id = SessionId("test_session".into());
+        let session_id = SessionId::new("test_session");
 
         let result = translator.stream_json_to_acp(line, &session_id).await;
         assert!(result.is_ok());
@@ -1363,7 +1363,7 @@ mod tests {
         // Test: Simulate the full scenario with chunks followed by full message
         // This is what the claude CLI actually sends with --include-partial-messages
         let translator = create_test_translator();
-        let session_id = SessionId("test_session".into());
+        let session_id = SessionId::new("test_session");
 
         // Step 1: Receive stream_event chunks (these should be processed)
         let chunk1 = r#"{"type":"stream_event","event":{"type":"content_block_delta","delta":{"text":"Hello"}}}"#;
@@ -1531,7 +1531,7 @@ mod tests {
         // Full tool call will come in the assistant message
         let translator = create_test_translator();
         let line = r#"{"type":"stream_event","event":{"type":"content_block_delta","index":0,"delta":{"input_json_delta":"{\"path\":"}}}"#;
-        let session_id = SessionId("test_session".into());
+        let session_id = SessionId::new("test_session");
 
         let result = translator.stream_json_to_acp(line, &session_id).await;
         assert!(result.is_ok());
@@ -1548,7 +1548,7 @@ mod tests {
     async fn test_stream_json_to_acp_tool_call_streaming_scenario() {
         // Test: Simulate a complete tool call streaming scenario
         let translator = create_test_translator();
-        let session_id = SessionId("test_session".into());
+        let session_id = SessionId::new("test_session");
 
         // Step 1: content_block_start with tool_use (not emitted)
         let start = r#"{"type":"stream_event","event":{"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"toolu_123","name":"read_file","input":{}}}}"#;
@@ -1604,7 +1604,7 @@ mod tests {
         // Test: tool_result with string content (legacy format)
         let translator = create_test_translator();
         let line = r#"{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_123","content":"File contents here"}]}}"#;
-        let session_id = SessionId("test_session".into());
+        let session_id = SessionId::new("test_session");
 
         let result = translator.stream_json_to_acp(line, &session_id).await;
         assert!(result.is_ok());
@@ -1650,7 +1650,7 @@ mod tests {
         // Test: tool_result with array of content blocks (current format)
         let translator = create_test_translator();
         let line = r#"{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_456","content":[{"type":"text","text":"First chunk"},{"type":"text","text":"Second chunk"}]}]}}"#;
-        let session_id = SessionId("test_session".into());
+        let session_id = SessionId::new("test_session");
 
         let result = translator.stream_json_to_acp(line, &session_id).await;
         assert!(result.is_ok());
@@ -1711,7 +1711,7 @@ mod tests {
         // Test: tool_result with empty content
         let translator = create_test_translator();
         let line = r#"{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_789","content":[]}]}}"#;
-        let session_id = SessionId("test_session".into());
+        let session_id = SessionId::new("test_session");
 
         let result = translator.stream_json_to_acp(line, &session_id).await;
         assert!(result.is_ok());

@@ -1565,14 +1565,11 @@ mod tests {
         let cwd = std::env::current_dir().unwrap();
         let mut session = Session::new(session_id, cwd);
 
-        let input_schema = agent_client_protocol::CommandInput {
-            r#type: "object".to_string(),
-            properties: Some(serde_json::json!({
-                "task": {"type": "string"}
-            })),
-            required: Some(vec!["task".to_string()]),
-            additional_properties: None,
-        };
+        let input_schema = agent_client_protocol::AvailableCommandInput::Unstructured(
+            agent_client_protocol::UnstructuredCommandInput::new(
+                "Enter task description".to_string(),
+            ),
+        );
 
         let initial_commands = vec![agent_client_protocol::AvailableCommand {
             name: "create_plan".to_string(),
@@ -1585,15 +1582,11 @@ mod tests {
         assert!(!session.has_available_commands_changed(&initial_commands));
 
         // Change input field - should detect difference
-        let updated_input_schema = agent_client_protocol::CommandInput {
-            r#type: "object".to_string(),
-            properties: Some(serde_json::json!({
-                "task": {"type": "string"},
-                "priority": {"type": "number"}
-            })),
-            required: Some(vec!["task".to_string()]),
-            additional_properties: None,
-        };
+        let updated_input_schema = agent_client_protocol::AvailableCommandInput::Unstructured(
+            agent_client_protocol::UnstructuredCommandInput::new(
+                "Enter task with priority".to_string(),
+            ),
+        );
 
         let updated_commands = vec![agent_client_protocol::AvailableCommand {
             name: "create_plan".to_string(),

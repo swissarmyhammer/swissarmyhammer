@@ -53,13 +53,15 @@
 //! ```no_run
 //! use claude_agent::claude_process::ClaudeProcessManager;
 //! use claude_agent::session::SessionId;
+//! use std::path::Path;
 //!
 //! # async fn example() -> claude_agent::Result<()> {
 //! let manager = ClaudeProcessManager::new();
 //! let session_id = SessionId::new();
+//! let cwd = Path::new("/tmp");
 //!
 //! // Spawn a new process
-//! manager.spawn_for_session(session_id).await?;
+//! manager.spawn_for_session(session_id.clone(), cwd, None, vec![]).await?;
 //!
 //! // Get the process and interact with it
 //! let process = manager.get_process(&session_id).await?;

@@ -684,7 +684,7 @@ mod tests {
 
         // Create a test notification
         let notification = SessionNotification {
-            session_id: SessionId("test123".to_string().into()),
+            session_id: SessionId::new("test123".to_string()),
             update: SessionUpdate::AgentThoughtChunk(agent_client_protocol::ContentChunk {
                 content: ContentBlock::Text(TextContent {
                     text: "test thought".to_string(),

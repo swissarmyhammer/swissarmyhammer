@@ -68,7 +68,7 @@ use url::Url;
 /// # Examples
 ///
 /// ```
-/// use claude_agent_lib::url_validation::is_allowed_scheme;
+/// use claude_agent::url_validation::is_allowed_scheme;
 /// use url::Url;
 ///
 /// let url = Url::parse("https://example.com").unwrap();
@@ -92,7 +92,7 @@ pub fn is_allowed_scheme(url: &Url, allowed_schemes: &[&str]) -> bool {
 /// # Examples
 ///
 /// ```
-/// use claude_agent_lib::url_validation::is_private_ipv4;
+/// use claude_agent::url_validation::is_private_ipv4;
 /// use std::net::Ipv4Addr;
 ///
 /// assert!(is_private_ipv4(&Ipv4Addr::new(192, 168, 1, 1)));
@@ -118,7 +118,7 @@ pub fn is_private_ipv4(ip: &Ipv4Addr) -> bool {
 /// # Examples
 ///
 /// ```
-/// use claude_agent_lib::url_validation::is_private_ipv6;
+/// use claude_agent::url_validation::is_private_ipv6;
 /// use std::net::Ipv6Addr;
 ///
 /// assert!(is_private_ipv6(&Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 1))); // ::1
@@ -139,7 +139,7 @@ pub fn is_private_ipv6(ip: &Ipv6Addr) -> bool {
 /// # Examples
 ///
 /// ```
-/// use claude_agent_lib::url_validation::is_ssrf_vulnerable_hostname;
+/// use claude_agent::url_validation::is_ssrf_vulnerable_hostname;
 ///
 /// assert!(is_ssrf_vulnerable_hostname("localhost"));
 /// assert!(is_ssrf_vulnerable_hostname("LOCALHOST"));
@@ -171,7 +171,7 @@ pub fn is_ssrf_vulnerable_hostname(hostname: &str) -> bool {
 /// # Examples
 ///
 /// ```
-/// use claude_agent_lib::url_validation::validate_url_against_ssrf;
+/// use claude_agent::url_validation::validate_url_against_ssrf;
 /// use url::Url;
 ///
 /// let safe_url = Url::parse("https://example.com").unwrap();

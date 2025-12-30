@@ -33,7 +33,7 @@ mod storage;
 
 // Re-export public types
 pub use cache::{CachedResult, RuleCache};
-pub use checker::{AgentFactory, CheckMode, RuleCheckRequest, RuleChecker};
+pub use checker::{AgentConfig, CheckMode, RuleCheckRequest, RuleChecker};
 pub use error::{RuleError, RuleViolation};
 pub use frontmatter::{parse_frontmatter, FrontmatterResult};
 pub use glob::{expand_files_for_rules, DEFAULT_PATTERN};

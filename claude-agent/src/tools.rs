@@ -3961,7 +3961,7 @@ mod tests {
     #[tokio::test]
     async fn test_tool_call_report_failure() {
         let handler = create_test_handler();
-        let session_id = agent_client_protocol::SessionId("test_session".into());
+        let session_id = agent_client_protocol::SessionId::new("test_session");
 
         // Create a tool call report
         let report = handler
@@ -4185,7 +4185,7 @@ mod tests {
             .create_session(session_dir.path().to_path_buf(), None)
             .unwrap();
 
-        let acp_session_id = agent_client_protocol::SessionId(session_id.to_string().into());
+        let acp_session_id = agent_client_protocol::SessionId::new(session_id.to_string());
 
         // Request to read file inside session boundary - should succeed
         let inside_request = InternalToolRequest {

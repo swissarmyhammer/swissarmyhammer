@@ -3,7 +3,7 @@
 //! This module provides the `RuleChecker` which performs rule checks against files:
 //! 1. Stage 1: Renders rule templates with context (language, target_path, etc.)
 //! 2. Stage 2: Renders .check prompt with rendered rule content
-//! 3. Executes via AgentExecutor (ClaudeCode or LlamaAgent)
+//! 3. Executes via ACP agents (ClaudeCode or LlamaAgent)
 //! 4. Parses responses and fails fast on violations
 
 use crate::{
@@ -12,37 +12,22 @@ use crate::{
 use futures_util::stream::{self, Stream, StreamExt};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use swissarmyhammer_agent_executor::{AgentExecutionContext, AgentExecutor};
 use swissarmyhammer_common::glob_utils::{expand_glob_patterns, GlobExpansionConfig};
+use swissarmyhammer_config::model::ModelConfig;
 use swissarmyhammer_config::TemplateContext;
 use swissarmyhammer_prompts::{PromptLibrary, PromptResolver};
+use swissarmyhammer_workflow::acp::{self, McpServerConfig};
 
-/// Factory trait for providing per-rule agents
+/// Configuration for creating ACP agents
 ///
-/// This allows different rules to use different agents, enabling per-rule
-/// tool filtering and other rule-specific agent configurations.
-pub trait AgentFactory: Send + Sync {
-    /// Get an agent for a specific rule
-    ///
-    /// # Arguments
-    ///
-    /// * `rule` - The rule that needs an agent
-    ///
-    /// # Returns
-    ///
-    /// An agent executor configured for this rule
-    fn get_agent_for_rule(&self, rule: &Rule) -> Arc<dyn AgentExecutor>;
-}
-
-/// Default agent factory that returns the same agent for all rules
-struct DefaultAgentFactory {
-    agent: Arc<dyn AgentExecutor>,
-}
-
-impl AgentFactory for DefaultAgentFactory {
-    fn get_agent_for_rule(&self, _rule: &Rule) -> Arc<dyn AgentExecutor> {
-        Arc::clone(&self.agent)
-    }
+/// This holds the model configuration and optional MCP server config
+/// needed to create ACP agents for rule checking.
+#[derive(Clone)]
+pub struct AgentConfig {
+    /// Model configuration
+    pub model_config: ModelConfig,
+    /// Optional MCP server configuration
+    pub mcp_config: Option<McpServerConfig>,
 }
 
 /// Check mode controlling fail-fast behavior
@@ -101,30 +86,30 @@ pub struct RuleCheckRequest {
     pub max_concurrency: Option<usize>,
 }
 
-/// Core rule checker that performs two-stage rendering and executes checks via LLM agent
+/// Core rule checker that performs two-stage rendering and executes checks via ACP agents
 ///
 /// The RuleChecker is the heart of the rules system. It:
 /// 1. Renders rule templates with repository context
 /// 2. Renders the .check prompt with the rendered rule
-/// 3. Executes via LlamaAgentExecutor
+/// 3. Executes via ACP agent (ClaudeAgent or LlamaAgent)
 /// 4. Parses responses and fails fast on violations
 ///
 /// # Examples
 ///
 /// ```no_run
-/// use swissarmyhammer_rules::{RuleChecker, Rule, Severity};
-/// use swissarmyhammer_agent_executor::{AgentExecutor, ClaudeCodeExecutor};
-/// use std::sync::Arc;
+/// use swissarmyhammer_rules::{RuleChecker, Rule, Severity, AgentConfig};
+/// use swissarmyhammer_config::model::ModelConfig;
 /// use std::path::PathBuf;
 ///
 /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
-/// // Create and initialize executor (using ClaudeCode as example)
-/// let mut executor = ClaudeCodeExecutor::new();
-/// executor.initialize().await?;
+/// // Create agent config
+/// let agent_config = AgentConfig {
+///     model_config: ModelConfig::default(),
+///     mcp_config: None,
+/// };
 ///
 /// // Create checker
-/// let agent: Arc<dyn AgentExecutor> = Arc::new(executor);
-/// let mut checker = RuleChecker::new(agent)?;
+/// let mut checker = RuleChecker::new(agent_config)?;
 /// checker.initialize().await?;
 ///
 /// // Create a rule and check a file
@@ -134,33 +119,33 @@ pub struct RuleCheckRequest {
 ///     Severity::Warning,
 /// );
 /// let target = PathBuf::from("src/main.rs");
-/// checker.check_file(&rule, &target, None).await?;
+/// checker.check_file(&rule, &target).await?;
 /// # Ok(())
 /// # }
 /// ```
 pub struct RuleChecker {
-    /// Agent factory for providing per-rule agents
-    agent_factory: Arc<dyn AgentFactory>,
+    /// Agent configuration for creating ACP agents
+    agent_config: AgentConfig,
     /// Prompt library containing the .check prompt (wrapped in Arc for sharing in streams)
     prompt_library: Arc<PromptLibrary>,
     /// Rule library for partial template support (loaded once for performance)
     rule_library: Arc<crate::RuleLibrary>,
     /// Cache for rule evaluation results (wrapped in Arc for sharing in streams)
     cache: Arc<RuleCache>,
+    /// Cached ACP agent handle (created lazily on first check, reused for all subsequent checks)
+    /// This avoids the expensive model loading for each check.
+    agent_handle: Arc<tokio::sync::Mutex<Option<acp::AcpAgentHandle>>>,
 }
 
 impl RuleChecker {
-    /// Create a new RuleChecker with the given agent executor
-    ///
-    /// This uses a default agent factory that returns the same agent for all rules.
-    /// For per-rule agent configuration (e.g., tool filtering), use `with_agent_factory`.
+    /// Create a new RuleChecker with the given agent configuration
     ///
     /// Loads the PromptLibrary containing the .check prompt from all sources
     /// (builtin, user, local).
     ///
     /// # Arguments
     ///
-    /// * `agent` - Agent executor wrapped in Arc for shared ownership
+    /// * `agent_config` - Configuration for creating ACP agents
     ///
     /// # Returns
     ///
@@ -176,39 +161,19 @@ impl RuleChecker {
     /// # Examples
     ///
     /// ```no_run
-    /// use swissarmyhammer_rules::RuleChecker;
-    /// use swissarmyhammer_agent_executor::{AgentExecutor, ClaudeCodeExecutor};
-    /// use std::sync::Arc;
+    /// use swissarmyhammer_rules::{RuleChecker, AgentConfig};
+    /// use swissarmyhammer_config::model::ModelConfig;
     ///
     /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
-    /// // Create and initialize executor (using ClaudeCode as example)
-    /// let mut executor = ClaudeCodeExecutor::new();
-    /// executor.initialize().await?;
-    ///
-    /// let agent: Arc<dyn AgentExecutor> = Arc::new(executor);
-    /// let checker = RuleChecker::new(agent)?;
+    /// let agent_config = AgentConfig {
+    ///     model_config: ModelConfig::default(),
+    ///     mcp_config: None,
+    /// };
+    /// let checker = RuleChecker::new(agent_config)?;
     /// # Ok(())
     /// # }
     /// ```
-    pub fn new(agent: Arc<dyn AgentExecutor>) -> Result<Self> {
-        let factory = Arc::new(DefaultAgentFactory { agent });
-        Self::with_agent_factory(factory)
-    }
-
-    /// Create a new RuleChecker with a custom agent factory
-    ///
-    /// This allows per-rule agent configuration, enabling features like per-rule
-    /// tool filtering or different models for different rules.
-    ///
-    /// # Arguments
-    ///
-    /// * `agent_factory` - Factory that provides agents for specific rules
-    ///
-    /// # Returns
-    ///
-    /// Returns a Result containing the initialized RuleChecker or an error if
-    /// the .check prompt cannot be loaded.
-    pub fn with_agent_factory(agent_factory: Arc<dyn AgentFactory>) -> Result<Self> {
+    pub fn new(agent_config: AgentConfig) -> Result<Self> {
         tracing::trace!("Creating RuleChecker");
 
         // Load all prompts including the builtin .check prompt
@@ -247,10 +212,11 @@ impl RuleChecker {
             .map_err(|e| RuleError::CheckError(format!("Failed to initialize cache: {}", e)))?;
 
         Ok(Self {
-            agent_factory,
+            agent_config,
             prompt_library: Arc::new(prompt_library),
             rule_library: Arc::new(rule_library),
             cache: Arc::new(cache),
+            agent_handle: Arc::new(tokio::sync::Mutex::new(None)),
         })
     }
 
@@ -296,15 +262,12 @@ impl RuleChecker {
     /// # Examples
     ///
     /// ```no_run
-    /// # use swissarmyhammer_rules::{RuleChecker, Rule, Severity};
-    /// # use swissarmyhammer_agent_executor::{AgentExecutor, ClaudeCodeExecutor};
-    /// # use std::sync::Arc;
+    /// # use swissarmyhammer_rules::{RuleChecker, Rule, Severity, AgentConfig};
+    /// # use swissarmyhammer_config::model::ModelConfig;
     /// # use std::path::PathBuf;
     /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
-    /// # let mut executor = ClaudeCodeExecutor::new();
-    /// # executor.initialize().await?;
-    /// # let agent: Arc<dyn AgentExecutor> = Arc::new(executor);
-    /// # let mut checker = RuleChecker::new(agent)?;
+    /// # let agent_config = AgentConfig { model_config: ModelConfig::default(), mcp_config: None };
+    /// # let mut checker = RuleChecker::new(agent_config)?;
     /// # checker.initialize().await?;
     /// let rule = Rule::new(
     ///     "test-rule".to_string(),
@@ -312,7 +275,7 @@ impl RuleChecker {
     ///     Severity::Error,
     /// );
     /// let target = PathBuf::from("src/main.rs");
-    /// match checker.check_file(&rule, &target, None).await? {
+    /// match checker.check_file(&rule, &target).await? {
     ///     None => println!("Check passed"),
     ///     Some(violation) => println!("Found violation: {}", violation),
     /// }
@@ -323,7 +286,6 @@ impl RuleChecker {
         &self,
         rule: &Rule,
         target_path: &Path,
-        override_agent: Option<&Arc<dyn AgentExecutor>>,
     ) -> Result<Option<RuleViolation>> {
         let check_start = std::time::Instant::now();
 
@@ -345,13 +307,7 @@ impl RuleChecker {
         let check_prompt_text = self.render_check_prompt(rule, target_path, &target_content)?;
 
         let result = self
-            .execute_and_parse_check(
-                override_agent,
-                check_prompt_text,
-                rule,
-                target_path,
-                check_start,
-            )
+            .execute_and_parse_check(check_prompt_text, rule, target_path, check_start)
             .await?;
 
         self.cache_check_result(&cache_key, &result);
@@ -499,27 +455,63 @@ impl RuleChecker {
         Ok(check_prompt_text)
     }
 
-    /// Execute the check via agent and parse the response
+    /// Get or create the ACP agent (lazy initialization)
+    ///
+    /// Creates the agent on first call and reuses it for subsequent calls.
+    /// This avoids the expensive model loading for each check.
+    async fn get_or_create_agent(&self) -> Result<()> {
+        let mut guard = self.agent_handle.lock().await;
+        if guard.is_none() {
+            tracing::debug!("Creating ACP agent (first check)...");
+            let start = std::time::Instant::now();
+            let agent = acp::create_agent(
+                &self.agent_config.model_config,
+                self.agent_config.mcp_config.clone(),
+            )
+            .await
+            .map_err(|e| RuleError::AgentError(format!("Failed to create agent: {}", e)))?;
+            tracing::debug!("ACP agent created in {:.2}s", start.elapsed().as_secs_f64());
+            *guard = Some(agent);
+        }
+        Ok(())
+    }
+
+    /// Execute the check via ACP agent and parse the response
     async fn execute_and_parse_check(
         &self,
-        override_agent: Option<&Arc<dyn AgentExecutor>>,
         check_prompt_text: String,
         rule: &Rule,
         target_path: &Path,
         check_start: std::time::Instant,
     ) -> Result<Option<RuleViolation>> {
-        // Use override agent if provided, otherwise get agent from factory for this rule
-        let agent = if let Some(agent) = override_agent {
-            agent
-        } else {
-            &self.agent_factory.get_agent_for_rule(rule)
+        tracing::trace!(
+            "execute_and_parse_check: starting for {} against {}",
+            target_path.display(),
+            rule.name
+        );
+
+        // Ensure agent is created (lazy initialization)
+        self.get_or_create_agent().await?;
+
+        // Create a session-scoped handle for this check
+        // This clones the agent Arc and creates a new notification receiver,
+        // allowing concurrent checks without blocking on the main mutex
+        let mut session_handle = {
+            let guard = self.agent_handle.lock().await;
+            let main_handle = guard
+                .as_ref()
+                .ok_or_else(|| RuleError::AgentError("Agent not initialized".to_string()))?;
+            // Clone the agent Arc and get a new notification receiver
+            acp::AcpAgentHandle {
+                agent: std::sync::Arc::clone(&main_handle.agent),
+                notification_rx: main_handle.notification_rx.resubscribe(),
+            }
+            // Lock is released here when guard goes out of scope
         };
 
-        let agent_config = swissarmyhammer_config::model::ModelConfig::default();
-        let agent_context = AgentExecutionContext::new(&agent_config);
-
-        let response = agent
-            .execute_prompt(String::new(), check_prompt_text, &agent_context)
+        // Execute prompt via ACP protocol
+        // For rule checking, no system prompt is needed - the check prompt contains everything
+        let response = acp::execute_prompt(&mut session_handle, None, check_prompt_text)
             .await
             .map_err(|e| RuleError::AgentError(format!("Agent execution failed: {}", e)))?;
 
@@ -638,17 +630,12 @@ impl RuleChecker {
     /// # Examples
     ///
     /// ```no_run
-    /// # use swissarmyhammer_rules::{RuleChecker, RuleCheckRequest, CheckMode};
+    /// # use swissarmyhammer_rules::{RuleChecker, RuleCheckRequest, CheckMode, AgentConfig};
+    /// # use swissarmyhammer_config::model::ModelConfig;
     /// # use futures_util::stream::StreamExt;
-    /// # use swissarmyhammer_agent_executor::{AgentExecutor, ClaudeCodeExecutor};
-    /// # use std::sync::Arc;
-    /// # async fn example() -> Result<(), Box<dyn std
-    ///
-    /// ::error::Error>> {
-    /// # let mut executor = ClaudeCodeExecutor::new();
-    /// # executor.initialize().await?;
-    /// # let agent: Arc<dyn AgentExecutor> = Arc::new(executor);
-    /// # let mut checker = RuleChecker::new(agent)?;
+    /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+    /// # let agent_config = AgentConfig { model_config: ModelConfig::default(), mcp_config: None };
+    /// # let mut checker = RuleChecker::new(agent_config)?;
     /// # checker.initialize().await?;
     /// let request = RuleCheckRequest {
     ///     rule_names: None,
@@ -657,6 +644,8 @@ impl RuleChecker {
     ///     patterns: vec!["**/*.rs".to_string()],
     ///     check_mode: CheckMode::CollectAll,
     ///     force: false,
+    ///     max_errors: None,
+    ///     max_concurrency: None,
     /// };
     ///
     /// let mut stream = checker.check(request).await?;
@@ -856,7 +845,7 @@ impl RuleChecker {
                         estimated_remaining_secs
                     );
 
-                    checker.check_file(&rule, &target, None).await
+                    checker.check_file(&rule, &target).await
                 }
             })
             .buffer_unordered(concurrency)
@@ -883,13 +872,15 @@ impl RuleChecker {
     /// Create a cloneable version of RuleChecker for streaming
     ///
     /// This allows the checker to be cloned and used in async stream operations
-    /// while maintaining shared access to the underlying agent factory and libraries.
+    /// while maintaining shared access to the underlying configuration and libraries.
+    /// The agent handle is shared across all clones so the agent is reused.
     fn clone_for_streaming(&self) -> Self {
         Self {
-            agent_factory: Arc::clone(&self.agent_factory),
+            agent_config: self.agent_config.clone(),
             prompt_library: Arc::clone(&self.prompt_library),
             rule_library: Arc::clone(&self.rule_library),
             cache: Arc::clone(&self.cache),
+            agent_handle: Arc::clone(&self.agent_handle),
         }
     }
 
@@ -939,21 +930,19 @@ mod tests {
     use super::*;
     use crate::Severity;
     use std::path::PathBuf;
-    use swissarmyhammer_agent_executor::LlamaAgentExecutorWrapper;
-    use swissarmyhammer_config::LlamaAgentConfig;
+    use swissarmyhammer_config::model::LlamaAgentConfig;
     use tempfile::TempDir;
 
-    fn create_test_agent() -> Arc<dyn AgentExecutor> {
-        let config = LlamaAgentConfig::for_testing();
-        let mcp_server = agent_client_protocol::McpServer::Http(
-            agent_client_protocol::McpServerHttp::new("test", "http://localhost:8080/mcp"),
-        );
-        Arc::new(LlamaAgentExecutorWrapper::new(config, mcp_server))
-    }
-
+    /// Create a test checker with local LlamaAgent for fast test execution
+    ///
+    /// Uses a small test model instead of Claude Code to avoid API calls
+    /// and speed up test execution.
     fn create_test_checker() -> RuleChecker {
-        let agent = create_test_agent();
-        RuleChecker::new(agent).expect("Failed to create test checker")
+        let agent_config = AgentConfig {
+            model_config: ModelConfig::llama_agent(LlamaAgentConfig::for_testing()),
+            mcp_config: None,
+        };
+        RuleChecker::new(agent_config).expect("Failed to create test checker")
     }
 
     #[test]
@@ -1019,7 +1008,7 @@ mod tests {
         );
 
         let nonexistent = PathBuf::from("/nonexistent/file.rs");
-        let result = checker.check_file(&rule, &nonexistent, None).await;
+        let result = checker.check_file(&rule, &nonexistent).await;
 
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("Failed to read"));

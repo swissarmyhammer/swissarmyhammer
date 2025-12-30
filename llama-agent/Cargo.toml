@@ -89,6 +89,7 @@ tracing-subscriber = { workspace = true }
 futures = { workspace = true }
 tokio-stream = { workspace = true }
 serde_json = { workspace = true }
+serial_test = { workspace = true }
 
 rstest = { workspace = true }
 criterion = "0.5"

@@ -119,6 +119,7 @@ swissarmyhammer-agent-executor/.swissarmyhammer
 swissarmyhammer-cli/.swissarmyhammer
 swissarmyhammer-workflow/.swissarmyhammer
 swissarmyhammer-tools/.swissarmyhammer
+swissarmyhammer-rules/.swissarmyhammer
 claude-agent/.swissarmyhammer/sessions
 acp-conformance/.swissarmyhammer/sessions
 
@@ -132,6 +133,10 @@ acp-conformance/.swissarmyhammer/sessions
 
 # SwissArmyHammer temporary todo files
 .swissarmyhammer/todo/
+
+# SwissArmyHammer session and plan files
+.swissarmyhammer/plans/
+.swissarmyhammer/sessions/
 
 # SwissArmyHammer config symlinks
 .swissarmyhammer/sah.yaml

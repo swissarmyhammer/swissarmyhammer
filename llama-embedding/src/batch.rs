@@ -570,6 +570,7 @@ impl BatchProcessor {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serial_test::serial;
     use std::io::Write;
     use tempfile::NamedTempFile;
 
@@ -836,6 +837,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial]
     async fn test_batch_processor_creation_and_basic_functionality() {
         let real_model = Arc::new(create_loaded_test_embedding_model().await);
         let processor = RealTestBatchProcessor::new(real_model, 4);
@@ -852,7 +854,7 @@ mod tests {
     }
 
     #[tokio::test]
-
+    #[serial]
     async fn test_batch_processor_single_batch_success() {
         let real_model = Arc::new(create_loaded_test_embedding_model().await);
         let mut processor = RealTestBatchProcessor::new(real_model, 4);
@@ -882,7 +884,7 @@ mod tests {
     }
 
     #[tokio::test]
-
+    #[serial]
     async fn test_batch_processor_model_not_loaded() {
         let real_model = Arc::new(create_test_embedding_model().await); // Not loaded
         let mut processor = RealTestBatchProcessor::new(real_model, 4);
@@ -898,7 +900,7 @@ mod tests {
     }
 
     #[tokio::test]
-
+    #[serial]
     async fn test_batch_processor_continue_on_error() {
         let real_model = Arc::new(create_loaded_test_embedding_model().await);
         let mut processor = RealTestBatchProcessor::new(real_model, 4);
@@ -923,7 +925,7 @@ mod tests {
     }
 
     #[tokio::test]
-
+    #[serial]
     async fn test_batch_processor_stop_on_error() {
         let real_model = Arc::new(create_loaded_test_embedding_model().await);
         let config = BatchConfig {
@@ -954,7 +956,7 @@ mod tests {
     }
 
     #[tokio::test]
-
+    #[serial]
     async fn test_batch_processor_empty_input() {
         let real_model = Arc::new(create_loaded_test_embedding_model().await);
         let mut processor = RealTestBatchProcessor::new(real_model, 4);
@@ -967,7 +969,7 @@ mod tests {
     }
 
     #[tokio::test]
-
+    #[serial]
     async fn test_batch_processor_large_batch_chunking() {
         let real_model = Arc::new(create_loaded_test_embedding_model().await);
         let mut processor = RealTestBatchProcessor::new(real_model, 3); // Small batch size
@@ -987,7 +989,7 @@ mod tests {
     }
 
     #[tokio::test]
-
+    #[serial]
     async fn test_batch_processor_memory_limit() {
         let real_model = Arc::new(create_loaded_test_embedding_model().await);
         let config = BatchConfig {
@@ -1016,7 +1018,7 @@ mod tests {
     }
 
     #[tokio::test]
-
+    #[serial]
     async fn test_batch_processor_progress_callback() {
         use std::sync::Mutex;
 
@@ -1062,7 +1064,7 @@ mod tests {
     }
 
     #[tokio::test]
-
+    #[serial]
     async fn test_batch_processor_custom_config() {
         let real_model = Arc::new(create_loaded_test_embedding_model().await);
         let config = BatchConfig {
@@ -1087,7 +1089,7 @@ mod tests {
     }
 
     #[tokio::test]
-
+    #[serial]
     async fn test_batch_processor_deterministic_results() {
         let real_model1 = Arc::new(create_loaded_test_embedding_model().await);
         let real_model2 = Arc::new(create_loaded_test_embedding_model().await);
@@ -1113,6 +1115,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial]
     async fn test_batch_processor_edge_cases() {
         let real_model = Arc::new(create_loaded_test_embedding_model().await);
         let mut processor = RealTestBatchProcessor::new(real_model, 4);

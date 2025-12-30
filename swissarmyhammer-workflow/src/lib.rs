@@ -3,11 +3,11 @@
 //! This module provides the core types for representing and executing workflows
 //! based on Mermaid state diagrams.
 
+pub mod acp;
 mod action_parser;
 pub mod actions;
 #[cfg(test)]
 mod actions_tests;
-mod agents;
 
 mod definition;
 pub mod error;
@@ -34,14 +34,17 @@ mod test_liquid_rendering;
 mod transition;
 mod transition_key;
 
+pub use acp::{
+    create_agent, execute_prompt, AcpError, AcpResult, AgentResponse, AgentResponseType,
+    McpServerConfig,
+};
 pub use actions::{
     is_valid_env_var_name, parse_action_from_description,
     parse_action_from_description_with_context, validate_command,
     validate_environment_variables_security, validate_working_directory_security, Action,
-    ActionError, ActionResult, AgentExecutionContext, AgentExecutor, LogAction, LogLevel,
-    PromptAction, SetVariableAction, ShellAction, SubWorkflowAction, WaitAction,
+    ActionError, ActionResult, LogAction, LogLevel, PromptAction, SetVariableAction, ShellAction,
+    SubWorkflowAction, WaitAction,
 };
-pub use agents::{LlamaAgentExecutor, LlamaAgentExecutorWrapper};
 
 pub use definition::{Workflow, WorkflowError, WorkflowName, WorkflowResult};
 pub use error_utils::{

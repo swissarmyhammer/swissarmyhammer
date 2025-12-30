@@ -2062,6 +2062,7 @@ fn filesystem_error_to_protocol_error(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serial_test::serial;
 
     async fn create_test_server() -> AcpServer {
         use crate::types::{
@@ -2125,6 +2126,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial]
     async fn test_initialize() {
         let server = Arc::new(create_test_server().await);
 
@@ -2152,6 +2154,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial]
     async fn test_new_session() {
         let server = Arc::new(create_test_server().await);
 
@@ -2198,6 +2201,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial]
     async fn test_capability_advertisement() {
         let server = Arc::new(create_test_server().await);
 
@@ -2328,6 +2332,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial]
     async fn test_capability_advertisement_with_custom_config() {
         use crate::types::{
             AgentConfig, ModelConfig, ModelSource, ParallelConfig, QueueConfig, RetryConfig,
@@ -2449,6 +2454,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial]
     async fn test_client_capabilities_stored_and_transferred_to_sessions() {
         let server = Arc::new(create_test_server().await);
 
@@ -2602,6 +2608,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial]
     async fn test_session_id_bidirectional_mapping() {
         use crate::types::ids::SessionId as LlamaSessionId;
 
@@ -2650,6 +2657,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial]
     async fn test_multiple_session_mappings() {
         use crate::types::ids::SessionId as LlamaSessionId;
 
@@ -2699,6 +2707,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial]
     async fn test_get_nonexistent_session() {
         use agent_client_protocol::SessionId;
 
@@ -2712,6 +2721,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial]
     async fn test_json_rpc_request_parsing_valid_request() {
         let server = Arc::new(create_test_server().await);
 
@@ -2763,6 +2773,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial]
     async fn test_json_rpc_request_parsing_invalid_json() {
         use tokio::io::DuplexStream;
 
@@ -2854,6 +2865,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial]
     async fn test_session_modes_in_new_session_response() {
         let server = Arc::new(create_test_server_with_modes().await);
 
@@ -2937,6 +2949,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial]
     async fn test_set_session_mode_changes_mode() {
         let server = Arc::new(create_test_server().await);
 
@@ -2974,6 +2987,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial]
     async fn test_set_session_mode_with_invalid_session() {
         let server = Arc::new(create_test_server().await);
 
@@ -2994,6 +3008,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial]
     async fn test_build_session_mode_state() {
         use agent_client_protocol::{SessionMode, SessionModeId, SessionModeState};
 
@@ -3022,6 +3037,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial]
     async fn test_json_rpc_request_parsing_missing_method() {
         use tokio::io::DuplexStream;
 
@@ -3044,6 +3060,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial]
     async fn test_json_rpc_notification_vs_request() {
         let server = Arc::new(create_test_server().await);
         let writer_buf: Vec<u8> = Vec::new();
@@ -3076,6 +3093,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial]
     async fn test_json_rpc_request_with_null_params() {
         let server = Arc::new(create_test_server().await);
         let writer_buf: Vec<u8> = Vec::new();
@@ -3112,6 +3130,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial]
     async fn test_json_rpc_request_with_missing_params() {
         let server = Arc::new(create_test_server().await);
         let writer_buf: Vec<u8> = Vec::new();
@@ -3145,6 +3164,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial]
     async fn test_json_rpc_unknown_method() {
         use tokio::io::DuplexStream;
 
@@ -3166,6 +3186,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial]
     async fn test_json_rpc_request_with_invalid_params_type() {
         let server = Arc::new(create_test_server().await);
         let writer_buf: Vec<u8> = Vec::new();
@@ -3199,6 +3220,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial]
     async fn test_json_rpc_extension_method_routing() {
         use tokio::io::DuplexStream;
 
@@ -3220,6 +3242,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial]
     async fn test_set_session_mode() {
         use agent_client_protocol::Agent;
 
@@ -3289,6 +3312,7 @@ mod tests {
     /// - Error codes match the JSON-RPC 2.0 specification
     /// - Error responses do not contain a "result" field
     #[tokio::test]
+    #[serial]
     async fn test_json_rpc_error_response_format_and_codes() {
         let server = Arc::new(create_test_server().await);
 

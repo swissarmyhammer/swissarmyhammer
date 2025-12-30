@@ -60,14 +60,11 @@ use syntect::parsing::SyntaxSet;
 use syntect::util::as_24_bit_terminal_escaped;
 use thiserror::Error;
 
-use swissarmyhammer_config::model::{ModelConfig, ModelExecutorConfig, ModelExecutorType};
+use swissarmyhammer_config::model::ModelExecutorType;
 use swissarmyhammer_prompts::{PromptLibrary, PromptResolver};
 
-// Re-export types from agent-executor crate
-pub use swissarmyhammer_agent_executor::{
-    ActionError as AgentExecutorError, ActionResult as AgentExecutorResult,
-    AgentResponse as AgentExecutorResponse, AgentResponseType as AgentExecutorResponseType,
-};
+// ACP agent integration
+use crate::acp::{self, AgentResponse, McpServerConfig};
 
 thread_local! {
     /// Thread-local test storage registry for tests
@@ -160,120 +157,20 @@ impl Severity for ActionError {
     }
 }
 
-/// Agent execution context for prompt execution
-#[derive(Debug)]
-pub struct AgentExecutionContext<'a> {
-    /// Reference to the workflow template context
-    pub workflow_context: &'a WorkflowTemplateContext,
-}
+// AgentResponse and AgentResponseType are now defined in the acp module
+// Use: crate::acp::{AgentResponse, AgentResponseType}
 
-impl<'a> AgentExecutionContext<'a> {
-    /// Create a new agent execution context
-    pub fn new(workflow_context: &'a WorkflowTemplateContext) -> Self {
-        Self { workflow_context }
-    }
-
-    /// Get agent configuration from workflow context
-    pub fn agent_config(&self) -> ModelConfig {
-        self.workflow_context.get_agent_config()
-    }
-
-    /// Get executor type
-    pub fn executor_type(&self) -> ModelExecutorType {
-        self.agent_config().executor_type()
-    }
-
-    /// Check if quiet mode is enabled
-    pub fn quiet(&self) -> bool {
-        self.agent_config().quiet
-    }
-}
-
-/// Response type from agent execution
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct AgentResponse {
-    /// The primary response content from the agent
-    pub content: String,
-    /// Optional metadata about the response
-    pub metadata: Option<serde_json::Value>,
-    /// Response status/type for different kinds of responses
-    pub response_type: AgentResponseType,
-}
-
-/// Type of agent response
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub enum AgentResponseType {
-    /// Standard successful text response
-    Success,
-    /// Partial response (streaming, timeout, etc.)
-    Partial,
-    /// Error response with error details
-    Error,
-}
-
-impl AgentResponse {
-    /// Create a successful response
-    pub fn success(content: String) -> Self {
-        Self {
-            content,
-            metadata: None,
-            response_type: AgentResponseType::Success,
-        }
-    }
-
-    /// Create a successful response with metadata
-    pub fn success_with_metadata(content: String, metadata: serde_json::Value) -> Self {
-        Self {
-            content,
-            metadata: Some(metadata),
-            response_type: AgentResponseType::Success,
-        }
-    }
-
-    /// Create an error response
-    pub fn error(content: String) -> Self {
-        Self {
-            content,
-            metadata: None,
-            response_type: AgentResponseType::Error,
-        }
-    }
-
-    /// Create a partial response
-    pub fn partial(content: String) -> Self {
-        Self {
-            content,
-            metadata: None,
-            response_type: AgentResponseType::Partial,
-        }
-    }
-
-    /// Check if this is a successful response
-    pub fn is_success(&self) -> bool {
-        matches!(self.response_type, AgentResponseType::Success)
-    }
-
-    /// Check if this is an error response
-    pub fn is_error(&self) -> bool {
-        matches!(self.response_type, AgentResponseType::Error)
-    }
-}
-
-/// Re-export the canonical AgentExecutor trait from agent-executor crate
-/// This eliminates the duplicate trait definition that was causing type incompatibility
-pub use swissarmyhammer_agent_executor::AgentExecutor;
-
-/// Convert agent-executor error to workflow ActionError
-fn convert_agent_executor_error(err: swissarmyhammer_agent_executor::ActionError) -> ActionError {
-    use swissarmyhammer_agent_executor::ActionError as AEError;
+/// Convert ACP error to workflow ActionError
+fn convert_acp_error(err: acp::AcpError) -> ActionError {
     match err {
-        AEError::ClaudeError(msg) => ActionError::ClaudeError(msg),
-        AEError::VariableError(msg) => ActionError::VariableError(msg),
-        AEError::ParseError(msg) => ActionError::ParseError(msg),
-        AEError::ExecutionError(msg) => ActionError::ExecutionError(msg),
-        AEError::IoError(err) => ActionError::IoError(err),
-        AEError::JsonError(err) => ActionError::JsonError(err),
-        AEError::RateLimit { message, wait_time } => ActionError::RateLimit { message, wait_time },
+        acp::AcpError::InitializationError(msg) => ActionError::ClaudeError(msg),
+        acp::AcpError::SessionError(msg) => ActionError::ExecutionError(msg),
+        acp::AcpError::PromptError(msg) => ActionError::ExecutionError(msg),
+        acp::AcpError::AgentNotAvailable(msg) => ActionError::ClaudeError(msg),
+        acp::AcpError::ConfigurationError(msg) => ActionError::ExecutionError(msg),
+        acp::AcpError::RateLimit { message, wait_time } => {
+            ActionError::RateLimit { message, wait_time }
+        }
     }
 }
 
@@ -601,7 +498,7 @@ impl PromptAction {
 
         let quiet = self.is_quiet_mode(context);
         let response = self
-            .execute_prompt_with_executor(context, user_prompt, system_prompt)
+            .execute_prompt_with_agent(context, user_prompt, system_prompt)
             .await?;
 
         self.log_response_if_not_quiet(&response.content, quiet);
@@ -620,31 +517,30 @@ impl PromptAction {
                 .unwrap_or(false)
     }
 
-    /// Execute prompt with executor
-    async fn execute_prompt_with_executor(
+    /// Execute prompt with ACP agent
+    async fn execute_prompt_with_agent(
         &self,
         context: &WorkflowTemplateContext,
         user_prompt: String,
         system_prompt: Option<String>,
-    ) -> ActionResult<AgentExecutorResponse> {
-        let workflow_execution_context = AgentExecutionContext::new(context);
-        let executor = self.get_executor(&workflow_execution_context).await?;
+    ) -> ActionResult<AgentResponse> {
+        let agent_config = context.get_agent_config();
+        let mcp_config = self.get_mcp_config_from_context(context)?;
 
-        let agent_config = workflow_execution_context.agent_config();
-        let agent_exec_context =
-            swissarmyhammer_agent_executor::AgentExecutionContext::new(&agent_config);
+        // Create ACP agent based on model configuration
+        let mut agent = acp::create_agent(&agent_config, Some(mcp_config))
+            .await
+            .map_err(convert_acp_error)?;
 
-        executor
-            .execute_prompt(
-                system_prompt.unwrap_or_default(),
-                user_prompt,
-                &agent_exec_context,
-            )
+        // Execute prompt via ACP protocol
+        let response = acp::execute_prompt(&mut agent, system_prompt, user_prompt)
             .await
             .map_err(|e| {
                 tracing::error!("Prompt execution failed: {:?}", e);
-                convert_agent_executor_error(e)
-            })
+                convert_acp_error(e)
+            })?;
+
+        Ok(response)
     }
 
     /// Log response if not in quiet mode
@@ -672,7 +568,7 @@ impl PromptAction {
     fn store_response_in_context(
         &self,
         context: &mut WorkflowTemplateContext,
-        response: &AgentExecutorResponse,
+        response: &AgentResponse,
     ) -> ActionResult<()> {
         if let Some(var_name) = &self.result_variable {
             let response_value = serde_json::to_value(response).unwrap_or_default();
@@ -688,105 +584,25 @@ impl PromptAction {
         Ok(())
     }
 
-    /// Get executor based on execution context (lazy initialization)
-    async fn get_executor(
-        &self,
-        context: &AgentExecutionContext<'_>,
-    ) -> ActionResult<Box<dyn AgentExecutor>> {
-        tracing::debug!("Creating executor on-demand for prompt execution");
-
-        match context.executor_type() {
-            ModelExecutorType::ClaudeCode => self.create_claude_executor(context).await,
-            ModelExecutorType::LlamaAgent => self.create_llama_executor(context).await,
-        }
-    }
-
-    /// Create ClaudeCode executor
-    async fn create_claude_executor(
-        &self,
-        context: &AgentExecutionContext<'_>,
-    ) -> ActionResult<Box<dyn AgentExecutor>> {
-        tracing::info!("Using ClaudeCode");
-
-        let mcp_server =
-            self.create_mcp_server_from_context(context.workflow_context, "ClaudeCode")?;
-
-        let mut executor = crate::agents::ClaudeCodeExecutor::new(mcp_server);
-        executor.initialize().await.map_err(|e| {
-            ActionError::ExecutionError(format!("Failed to initialize ClaudeCode: {}", e))
-        })?;
-
-        Ok(Box::new(executor))
-    }
-
-    /// Create LlamaAgent executor
-    async fn create_llama_executor(
-        &self,
-        context: &AgentExecutionContext<'_>,
-    ) -> ActionResult<Box<dyn AgentExecutor>> {
-        tracing::info!("Using LlamaAgent with singleton pattern");
-
-        let agent_config = context.agent_config();
-        let llama_config = match agent_config.executor {
-            ModelExecutorConfig::LlamaAgent(config) => config,
-            _ => {
-                return Err(ActionError::ExecutionError(
-                    "Expected LlamaAgent configuration".to_string(),
-                ))
-            }
-        };
-
-        let mcp_server =
-            self.create_mcp_server_from_context(context.workflow_context, "LlamaAgent")?;
-
-        let mut executor =
-            crate::agents::LlamaAgentExecutorWrapper::new(llama_config.clone(), mcp_server);
-        executor.initialize().await.map_err(|e| {
-            ActionError::ExecutionError(format!("Failed to initialize LlamaAgent: {}", e))
-        })?;
-
-        Ok(Box::new(executor))
-    }
-
-    /// Create MCP server configuration from workflow context
-    ///
-    /// This helper consolidates the duplicated logic of extracting the MCP port
-    /// from context and creating the McpServer configuration.
-    fn create_mcp_server_from_context(
+    /// Get MCP server configuration from workflow context
+    fn get_mcp_config_from_context(
         &self,
         context: &WorkflowTemplateContext,
-        executor_name: &str,
-    ) -> ActionResult<agent_client_protocol::McpServer> {
-        let port = self.get_mcp_port(context, executor_name)?;
-        Ok(self.create_mcp_server_config(port))
-    }
-
-    /// Get MCP server port from context
-    fn get_mcp_port(
-        &self,
-        context: &WorkflowTemplateContext,
-        executor_name: &str,
-    ) -> ActionResult<u16> {
-        context
+    ) -> ActionResult<McpServerConfig> {
+        let port = context
             .get("_mcp_server_port")
             .and_then(|v| v.as_u64())
             .map(|p| p as u16)
             .ok_or_else(|| {
-                ActionError::ExecutionError(format!(
-                    "Failed to initialize {}: MCP server must be started before running workflows",
-                    executor_name
-                ))
-            })
-    }
+                ActionError::ExecutionError(
+                    "MCP server must be started before running workflows. \
+                     Ensure _mcp_server_port is set in the workflow context."
+                        .to_string(),
+                )
+            })?;
 
-    /// Create MCP server configuration
-    fn create_mcp_server_config(&self, port: u16) -> agent_client_protocol::McpServer {
-        tracing::info!("Creating executor with MCP server on port {}", port);
-
-        agent_client_protocol::McpServer::Http(agent_client_protocol::McpServerHttp::new(
-            "swissarmyhammer",
-            format!("http://127.0.0.1:{}/mcp", port),
-        ))
+        tracing::info!("Using MCP server on port {}", port);
+        Ok(McpServerConfig::from_port(port))
     }
 }
 
@@ -2158,8 +1974,9 @@ pub fn parse_action_from_description(description: &str) -> ActionResult<Option<B
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::acp::AgentResponseType;
     use crate::action_parser::ActionParser;
-    use crate::agents::ClaudeCodeExecutor;
+    use swissarmyhammer_config::ModelConfig;
 
     use swissarmyhammer_common::test_utils::IsolatedTestEnvironment;
 
@@ -2318,42 +2135,20 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_agent_execution_context() {
-        let mut context = WorkflowTemplateContext::with_vars_for_test(HashMap::new());
+    async fn test_acp_agent_creation() {
+        // Test ACP agent creation with Claude config
+        let config = ModelConfig::claude_code();
+        let mcp_config = McpServerConfig::from_port(8080);
 
-        // Set up agent config
-        context.set_agent_config(ModelConfig::default());
-
-        let execution_context = AgentExecutionContext::new(&context);
-        assert_eq!(
-            execution_context.executor_type(),
-            ModelExecutorType::ClaudeCode
-        );
-        assert!(!execution_context.quiet());
-    }
-
-    #[tokio::test]
-    async fn test_claude_executor_initialization() {
-        let mcp_server = agent_client_protocol::McpServer::Http(
-            agent_client_protocol::McpServerHttp::new("test", "http://localhost:8080/mcp"),
-        );
-        let mut executor = ClaudeCodeExecutor::new(mcp_server);
-
-        // Test initial state
-        assert_eq!(executor.executor_type(), ModelExecutorType::ClaudeCode);
-
-        // Test initialization - may fail if Claude CLI is not available
-        match executor.initialize().await {
-            Ok(()) => {
-                // Claude CLI is available - test shutdown
-                assert!(executor.shutdown().await.is_ok());
+        // Agent creation may fail if Claude CLI is not available
+        match acp::create_agent(&config, Some(mcp_config)).await {
+            Ok(_agent) => {
+                // Agent created successfully
             }
-            Err(swissarmyhammer_agent_executor::ActionError::ExecutionError(msg))
-                if msg.contains("Claude CLI not found") =>
-            {
+            Err(acp::AcpError::AgentNotAvailable(msg)) if msg.contains("Claude CLI not found") => {
                 // This is expected in environments without Claude CLI
             }
-            Err(e) => panic!("Unexpected error during initialization: {}", e),
+            Err(e) => panic!("Unexpected error during agent creation: {}", e),
         }
     }
 
@@ -2361,75 +2156,44 @@ mod tests {
     /*
     #[tokio::test]
     #[serial]
-    async fn test_llama_executor_initialization() {
+    async fn test_llama_acp_agent_creation() {
         // Skip test if LlamaAgent testing is disabled
 
+        let llama_config = swissarmyhammer_config::model::LlamaAgentConfig::for_testing();
+        let config = ModelConfig::llama_agent(llama_config);
 
-        let config = swissarmyhammer_config::LlamaAgentConfig::for_testing();
-        let mut executor = LlamaAgentExecutor::new(config);
+        let mcp_config = McpServerConfig::from_port(8080);
 
-        // Test initial state
-        assert_eq!(executor.executor_type(), ModelExecutorType::LlamaAgent);
-
-        // Test initialization (should always succeed for now)
-        assert!(executor.initialize().await.is_ok());
-        assert!(executor.shutdown().await.is_ok());
+        // Test agent creation
+        match acp::create_agent(&config, Some(mcp_config)).await {
+            Ok(_agent) => {
+                // Agent created successfully
+            }
+            Err(e) => panic!("Unexpected error during agent creation: {}", e),
+        }
     }
     */
 
     #[tokio::test]
-    async fn test_executor_creation_claude() {
+    async fn test_acp_agent_creation_from_context() {
         let mut vars = HashMap::new();
         vars.insert("_mcp_server_port".to_string(), 8080_u64.into());
         let mut context = WorkflowTemplateContext::with_vars_for_test(vars);
         context.set_agent_config(ModelConfig::default());
 
-        let execution_context = AgentExecutionContext::new(&context);
         let action = PromptAction::new("test".to_string());
+        let mcp_config = action.get_mcp_config_from_context(&context).unwrap();
+        let agent_config = context.get_agent_config();
 
         // This test may fail if claude CLI is not available - that's expected
-        match action.get_executor(&execution_context).await {
-            Ok(executor) => {
-                assert_eq!(executor.executor_type(), ModelExecutorType::ClaudeCode);
+        match acp::create_agent(&agent_config, Some(mcp_config)).await {
+            Ok(_agent) => {
+                // Agent created successfully
             }
-            Err(ActionError::ExecutionError(msg)) if msg.contains("Claude CLI not found") => {
+            Err(acp::AcpError::AgentNotAvailable(msg)) if msg.contains("Claude CLI not found") => {
                 // This is expected in environments without Claude CLI
             }
             Err(e) => panic!("Unexpected error: {}", e),
-        }
-    }
-
-    #[tokio::test]
-    #[serial_test::serial]
-    async fn test_executor_creation_llama_agent() {
-        let mut context = WorkflowTemplateContext::with_vars_for_test(HashMap::new());
-
-        use swissarmyhammer_config::model::LlamaAgentConfig;
-        let llama_config = LlamaAgentConfig::for_testing();
-        context.set_agent_config(ModelConfig::llama_agent(llama_config));
-
-        let execution_context = AgentExecutionContext::new(&context);
-        let action = PromptAction::new("test".to_string());
-
-        // LlamaAgent now requires MCP server to be pre-started, so this should fail
-        // with a specific message indicating the MCP server is not running
-        match action.get_executor(&execution_context).await {
-            Ok(_) => {
-                panic!("Expected LlamaAgent executor creation to fail without MCP server");
-            }
-            Err(e) => {
-                let error_msg = e.to_string();
-                assert!(
-                    error_msg.contains("Failed to initialize LlamaAgent"),
-                    "Error should start with 'Failed to initialize LlamaAgent', got: {}",
-                    error_msg
-                );
-                assert!(
-                    error_msg.contains("MCP server must be started before running workflows"),
-                    "Error should explain MCP server requirement, got: {}",
-                    error_msg
-                );
-            }
         }
     }
 
@@ -3402,12 +3166,11 @@ mod tests {
         );
     }
 
-    // NOTE: These tests were removed because they test internal implementation details
-    // of ClaudeCodeExecutor that are now in the agent-executor crate. The workflow
-    // crate only exposes the public AgentExecutor trait interface.
+    // NOTE: These tests were removed because they tested internal implementation details.
+    // The workflow crate now uses ACP agents directly via the acp module.
 
     #[tokio::test]
-    async fn test_prompt_action_with_claude_executor() {
+    async fn test_prompt_action_with_acp_agent() {
         let _guard = IsolatedTestEnvironment::new();
 
         // Create a simple prompt action
@@ -3443,73 +3206,6 @@ mod tests {
                     e
                 );
                 // Other errors might be expected in test environments
-            }
-        }
-    }
-
-    #[tokio::test]
-    async fn test_agent_executor_creation_claude_code() {
-        let _guard = IsolatedTestEnvironment::new();
-
-        let mut vars = HashMap::new();
-        vars.insert("_mcp_server_port".to_string(), 8080_u64.into());
-        let mut context = WorkflowTemplateContext::with_vars_for_test(vars);
-        context.set_agent_config(swissarmyhammer_config::model::ModelConfig::claude_code());
-
-        let execution_context = AgentExecutionContext::new(&context);
-        let action = PromptAction::new("test".to_string());
-
-        match action.get_executor(&execution_context).await {
-            Ok(executor) => {
-                assert_eq!(executor.executor_type(), ModelExecutorType::ClaudeCode);
-            }
-            Err(ActionError::ExecutionError(msg)) if msg.contains("Claude CLI not found") => {
-                // Expected in environments without Claude CLI
-            }
-            Err(e) => panic!("Unexpected error: {}", e),
-        }
-    }
-
-    #[tokio::test]
-    #[serial_test::serial]
-    async fn test_agent_executor_creation_llama_agent() {
-        // Skip test if LlamaAgent testing is disabled
-
-        let _guard = IsolatedTestEnvironment::new();
-
-        let mut context = WorkflowTemplateContext::with_vars_for_test(HashMap::new());
-        let llama_config = swissarmyhammer_config::model::LlamaAgentConfig::for_testing();
-        println!("DEBUG: Created llama_config for testing");
-        context.set_agent_config(swissarmyhammer_config::model::ModelConfig::llama_agent(
-            llama_config,
-        ));
-
-        let execution_context = AgentExecutionContext::new(&context);
-
-        // Debug: Print the executor type and config
-        println!(
-            "DEBUG: executor_type = {:?}",
-            execution_context.executor_type()
-        );
-
-        // LlamaAgent should now create successfully
-        let action = PromptAction::new("test".to_string());
-        match action.get_executor(&execution_context).await {
-            Ok(executor) => {
-                println!("DEBUG: LlamaAgent executor created successfully");
-                // Verify we got a LlamaAgent executor
-                assert!(
-                    !executor.supports_streaming(),
-                    "LlamaAgent should not support streaming by default"
-                );
-            }
-            Err(e) => {
-                println!("DEBUG: LlamaAgent executor creation failed: {}", e);
-                // May fail in some environments due to model availability, but shouldn't be hardcoded disabled
-                assert!(
-                    !e.to_string().contains("temporarily disabled"),
-                    "Should not be hardcoded as disabled"
-                );
             }
         }
     }

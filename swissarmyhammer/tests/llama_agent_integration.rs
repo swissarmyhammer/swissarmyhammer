@@ -4,7 +4,6 @@ use std::collections::HashMap;
 use std::time::Duration;
 use swissarmyhammer::test_utils::IsolatedTestEnvironment;
 use swissarmyhammer_config::model::{LlamaAgentConfig, ModelConfig};
-use swissarmyhammer_workflow::actions::AgentExecutionContext;
 use swissarmyhammer_workflow::template_context::WorkflowTemplateContext;
 use tokio::time::timeout;
 
@@ -12,7 +11,7 @@ use tokio::time::timeout;
 async fn test_executor_compatibility() {
     let _guard = IsolatedTestEnvironment::new().expect("Failed to create test environment");
 
-    // Test that both executor types can be created with identical interfaces
+    // Test that both executor types have proper configurations
     for (executor_name, config) in [
         ("Claude", ModelConfig::claude_code()),
         (
@@ -26,16 +25,16 @@ async fn test_executor_compatibility() {
             WorkflowTemplateContext::with_vars(HashMap::new()).expect("Failed to create context");
         let mut context_with_config = context;
         context_with_config.set_agent_config(config.clone());
-        let execution_context = AgentExecutionContext::new(&context_with_config);
 
-        // Verify execution context is properly configured
-        assert_eq!(execution_context.executor_type(), config.executor_type());
+        // Verify context is properly configured
+        let agent_config = context_with_config.get_agent_config();
+        assert_eq!(agent_config.executor_type(), config.executor_type());
         println!("✓ {} executor context created successfully", executor_name);
     }
 }
 
 #[tokio::test]
-async fn test_agent_execution_context() {
+async fn test_agent_config_creation() {
     let _guard = IsolatedTestEnvironment::new().expect("Failed to create test environment");
 
     // Test context creation with different configurations
@@ -53,17 +52,14 @@ async fn test_agent_execution_context() {
         let mut context_with_config = context;
         context_with_config.set_agent_config(config.clone());
 
-        let execution_context = AgentExecutionContext::new(&context_with_config);
-
-        // Verify context was created properly
-        assert!(!execution_context.quiet()); // Test a real method that exists
-        assert_eq!(execution_context.executor_type(), config.executor_type());
-        println!("✓ {} execution context created successfully", name);
+        let agent_config = context_with_config.get_agent_config();
+        assert_eq!(agent_config.executor_type(), config.executor_type());
+        println!("✓ {} config created successfully", name);
     }
 }
 
 #[tokio::test]
-async fn test_executor_factory_patterns() {
+async fn test_factory_patterns() {
     let _guard = IsolatedTestEnvironment::new().expect("Failed to create test environment");
 
     // Test factory with different context patterns
@@ -91,10 +87,9 @@ async fn test_executor_factory_patterns() {
         let mut context_with_config = context;
         let config = ModelConfig::claude_code();
         context_with_config.set_agent_config(config.clone());
-        let execution_context = AgentExecutionContext::new(&context_with_config);
 
-        // Verify execution context with different variable patterns
-        assert_eq!(execution_context.executor_type(), config.executor_type());
+        let agent_config = context_with_config.get_agent_config();
+        assert_eq!(agent_config.executor_type(), config.executor_type());
         println!("✓ Factory pattern {} succeeded", test_name);
     }
 }
@@ -147,19 +142,19 @@ async fn test_configuration_serialization() {
 async fn test_timeout_handling() {
     let _guard = IsolatedTestEnvironment::new().expect("Failed to create test environment");
 
-    // Test that execution context creation handles timeouts gracefully
+    // Test that context creation handles timeouts gracefully
     let context =
         WorkflowTemplateContext::with_vars(HashMap::new()).expect("Failed to create context");
     let mut context_with_config = context;
     let config = ModelConfig::claude_code();
     context_with_config.set_agent_config(config.clone());
 
-    // Test with a very short timeout - execution context creation should be very fast
+    // Test with a very short timeout - context creation should be very fast
     let result = timeout(
         Duration::from_millis(100), // Short timeout
         async {
-            let execution_context = AgentExecutionContext::new(&context_with_config);
-            assert_eq!(execution_context.executor_type(), config.executor_type());
+            let agent_config = context_with_config.get_agent_config();
+            assert_eq!(agent_config.executor_type(), config.executor_type());
             Ok::<(), String>(())
         },
     )
@@ -167,13 +162,13 @@ async fn test_timeout_handling() {
 
     match result {
         Ok(Ok(())) => {
-            println!("✓ Execution context creation was very fast (completed within 100ms)");
+            println!("✓ Context creation was very fast (completed within 100ms)");
         }
         Ok(Err(e)) => {
-            panic!("Execution context creation failed unexpectedly: {}", e);
+            panic!("Context creation failed unexpectedly: {}", e);
         }
         Err(_) => {
-            panic!("Execution context creation timed out (should be instant)");
+            panic!("Context creation timed out (should be instant)");
         }
     }
 
@@ -248,8 +243,7 @@ async fn test_repetition_configuration_integration() {
     let _guard = IsolatedTestEnvironment::new().expect("Failed to create test environment");
 
     // This test verifies that repetition detection configuration gets passed
-    // through to the llama-agent properly. Due to the mock implementation in tests,
-    // this mainly verifies the configuration conversion doesn't panic.
+    // through to the llama-agent properly.
 
     let small_model_config = LlamaAgentConfig::for_testing();
     let agent_config = ModelConfig::llama_agent(small_model_config);
@@ -258,12 +252,9 @@ async fn test_repetition_configuration_integration() {
         WorkflowTemplateContext::with_vars(HashMap::new()).expect("Failed to create context");
     let mut context_with_config = context;
     context_with_config.set_agent_config(agent_config.clone());
-    let execution_context = AgentExecutionContext::new(&context_with_config);
 
-    // Verify execution context is properly configured with repetition detection settings
-    assert_eq!(
-        execution_context.executor_type(),
-        agent_config.executor_type()
-    );
-    println!("✓ LlamaAgent execution context with repetition config created successfully");
+    // Verify context is properly configured with repetition detection settings
+    let config = context_with_config.get_agent_config();
+    assert_eq!(config.executor_type(), agent_config.executor_type());
+    println!("✓ LlamaAgent context with repetition config created successfully");
 }

@@ -12,13 +12,10 @@ use rmcp::ErrorData as McpError;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
 use std::time::Instant;
-use swissarmyhammer_agent_executor::AgentExecutor;
-use swissarmyhammer_config::{AgentUseCase, ModelConfig};
-use swissarmyhammer_mcp_proxy::{start_proxy_server, FilteringMcpProxy, ToolFilter};
+use swissarmyhammer_config::AgentUseCase;
 use swissarmyhammer_rules::{
-    AgentFactory, RuleCheckRequest as DomainRuleCheckRequest, RuleChecker, RuleViolation, Severity,
+    AgentConfig, RuleCheckRequest as DomainRuleCheckRequest, RuleChecker, RuleViolation, Severity,
 };
 use swissarmyhammer_todo::TodoId;
 
@@ -28,178 +25,28 @@ const PROGRESS_INITIALIZED: u32 = 10;
 const PROGRESS_CHECKING: u32 = 20;
 const PROGRESS_COMPLETE: u32 = 100;
 
-/// Agent factory that provides per-rule agents with tool filtering support
+/// Create agent configuration for rule checking
 ///
-/// This factory implements the unified streaming approach:
-/// - Rules without tool filtering get the shared default agent
-/// - Rules with tool filtering get a dedicated filtered agent (lazy-created and cached)
-struct RuleCheckAgentFactory {
-    /// Default agent for rules without tool filtering
-    default_agent: Arc<dyn AgentExecutor>,
-    /// Cached filtered agents by rule name
-    filtered_agents: tokio::sync::RwLock<HashMap<String, Arc<dyn AgentExecutor>>>,
-    /// Upstream MCP URL for creating proxies
-    upstream_url: String,
-    /// Tool context for creating agents
-    agent_config: ModelConfig,
-}
-
-impl RuleCheckAgentFactory {
-    /// Create a new agent factory
-    fn new(
-        default_agent: Arc<dyn AgentExecutor>,
-        upstream_url: String,
-        agent_config: ModelConfig,
-    ) -> Self {
-        Self {
-            default_agent,
-            filtered_agents: tokio::sync::RwLock::new(HashMap::new()),
-            upstream_url,
-            agent_config,
-        }
-    }
-
-    /// Create a filtered agent for a specific rule (with proxy)
-    async fn create_filtered_agent_for_rule(
-        &self,
-        rule: &swissarmyhammer_rules::Rule,
-    ) -> Result<Arc<dyn AgentExecutor>, String> {
-        tracing::info!(
-            "Creating filtered agent for rule '{}' with tool restrictions",
-            rule.name
-        );
-
-        // Create tool filter from rule
-        let filter = ToolFilter::new(
-            rule.get_allowed_tools().unwrap_or_default(),
-            rule.get_denied_tools().unwrap_or_default(),
-        )
-        .map_err(|e| format!("Invalid tool filter in rule '{}': {}", rule.name, e))?;
-
-        // Create and start proxy
-        let proxy = Arc::new(FilteringMcpProxy::new(self.upstream_url.clone(), filter));
-        let (proxy_port, _proxy_handle) = start_proxy_server(proxy, None)
-            .await
-            .map_err(|e| format!("Failed to start proxy for rule '{}': {}", rule.name, e))?;
-
-        // Create agent pointing to proxy
-        let proxy_server =
-            agent_client_protocol::McpServer::Http(agent_client_protocol::McpServerHttp::new(
-                format!("sah-filtered-{}", rule.name.replace('/', "-")),
-                format!("http://127.0.0.1:{}/mcp", proxy_port),
-            ));
-
-        let agent = swissarmyhammer_agent_executor::AgentExecutorFactory::create_executor(
-            &self.agent_config,
-            proxy_server,
-        )
-        .await
-        .map_err(|e| {
-            format!(
-                "Failed to create filtered agent for rule '{}': {}",
-                rule.name, e
-            )
-        })?;
-
-        tracing::info!(
-            "Filtered agent created for rule '{}' on port {}",
-            rule.name,
-            proxy_port
-        );
-
-        Ok(Arc::from(agent))
-    }
-}
-
-impl AgentFactory for RuleCheckAgentFactory {
-    fn get_agent_for_rule(&self, rule: &swissarmyhammer_rules::Rule) -> Arc<dyn AgentExecutor> {
-        // If rule has no tool filtering, return default agent
-        if !rule.has_tool_filter() {
-            return Arc::clone(&self.default_agent);
-        }
-
-        // For filtered rules, we need to check the cache and potentially create a new agent
-        // This is async, but the trait method is sync, so we'll use a blocking approach
-        let rule_name = rule.name.clone();
-
-        // Try to get from cache first
-        {
-            let cache = tokio::runtime::Handle::current()
-                .block_on(async { self.filtered_agents.read().await });
-            if let Some(agent) = cache.get(&rule_name) {
-                tracing::debug!("Using cached filtered agent for rule '{}'", rule_name);
-                return Arc::clone(agent);
-            }
-        }
-
-        // Not in cache, create it (this will block)
-        tracing::debug!("Creating new filtered agent for rule '{}'", rule_name);
-        let agent = tokio::runtime::Handle::current().block_on(async {
-            self.create_filtered_agent_for_rule(rule)
-                .await
-                .unwrap_or_else(|e| {
-                    tracing::error!("Failed to create filtered agent: {}, using default", e);
-                    Arc::clone(&self.default_agent)
-                })
-        });
-
-        // Cache it
-        let mut cache = tokio::runtime::Handle::current()
-            .block_on(async { self.filtered_agents.write().await });
-        cache.insert(rule_name.clone(), Arc::clone(&agent));
-
-        agent
-    }
-}
-
-/// Create an agent executor from agent configuration using the centralized factory
-///
-/// This now uses the centralized AgentExecutorFactory from swissarmyhammer_agent_executor,
-/// eliminating code duplication between CLI and MCP tool implementations.
+/// Creates an AgentConfig from the tool context for rule checking.
+/// Note: Rule checking does NOT use MCP tools - it's a simple prompt
+/// that checks code against rules and returns PASS/VIOLATION.
+/// Therefore, mcp_config is always None for rule checking.
 ///
 /// # Arguments
 ///
-/// * `config` - The agent configuration specifying which executor to use
-/// * `context` - The tool context containing MCP server port
+/// * `context` - The tool context containing agent configuration
 ///
 /// # Returns
 ///
-/// * `Result<Arc<dyn AgentExecutor>, McpError>` - The initialized agent executor
-///
-/// # Errors
-///
-/// Returns an error if agent initialization fails
-async fn create_agent_from_config(
-    config: &ModelConfig,
-    context: &ToolContext,
-) -> Result<Arc<dyn AgentExecutor>, McpError> {
-    tracing::debug!(
-        "Creating executor via centralized factory for {:?}",
-        config.executor_type()
-    );
+/// * `Result<AgentConfig, McpError>` - The agent configuration
+async fn create_agent_config(context: &ToolContext) -> Result<AgentConfig, McpError> {
+    let model_config = context.get_agent_for_use_case(AgentUseCase::Rules);
 
-    // Get MCP server port from context
-    let port = *context.mcp_server_port.read().await;
-    let port = port.ok_or_else(|| {
-        McpError::internal_error("MCP server port not available in context".to_string(), None)
-    })?;
-
-    // Create McpServer configuration using agent-client-protocol types
-    let mcp_server =
-        agent_client_protocol::McpServer::Http(agent_client_protocol::McpServerHttp::new(
-            "swissarmyhammer",
-            format!("http://127.0.0.1:{}/mcp", port),
-        ));
-
-    tracing::info!("Creating agent executor with MCP server on port {}", port);
-
-    // Use the centralized factory from agent-executor crate
-    swissarmyhammer_agent_executor::AgentExecutorFactory::create_executor(config, mcp_server)
-        .await
-        .map(Arc::from)
-        .map_err(|e| {
-            McpError::internal_error(format!("Failed to create agent executor: {}", e), None)
-        })
+    Ok(AgentConfig {
+        model_config: (*model_config).clone(),
+        // Rule checking does not need MCP tools - it's a simple prompt/response
+        mcp_config: None,
+    })
 }
 
 /// Request structure for rule checking operations via MCP
@@ -549,44 +396,6 @@ impl RuleCheckTool {
         Self
     }
 
-    /// Create and start a proxy server for a specific rule
-    ///
-    /// # Arguments
-    ///
-    /// * `rule` - The rule to create a proxy for
-    /// * `upstream_url` - The upstream MCP server URL
-    ///
-    /// # Returns
-    ///
-    /// Tuple of (proxy_port, proxy_handle)
-    /// Get upstream URL for proxy server
-    ///
-    /// # Arguments
-    ///
-    /// * `context` - The tool context
-    ///
-    /// # Returns
-    ///
-    /// The upstream URL for the MCP server
-    async fn get_upstream_url(context: &ToolContext) -> Result<String, McpError> {
-        {
-            let server_lock = context.mcp_server.read().await;
-            if server_lock.is_none() {
-                return Err(McpError::internal_error(
-                    "MCP server not available in context - required for tool filtering".to_string(),
-                    None,
-                ));
-            }
-        }
-
-        let upstream_port =
-            context.mcp_server_port.read().await.ok_or_else(|| {
-                McpError::internal_error("MCP server port not set".to_string(), None)
-            })?;
-
-        Ok(format!("http://127.0.0.1:{}/mcp", upstream_port))
-    }
-
     /// Load rules from the library and filter them based on request parameters
     ///
     /// # Arguments
@@ -711,14 +520,13 @@ impl RuleCheckTool {
         }
     }
 
-    /// Collect violations using unified streaming path for all rules
+    /// Collect violations using ACP agents
     ///
-    /// This uses the AgentFactory pattern to provide per-rule agents, eliminating
-    /// the need for separate filtered/unfiltered code paths.
+    /// Creates an ACP agent and uses the RuleChecker to check all rules.
     ///
     /// # Arguments
     ///
-    /// * `filtered_rules` - Rules with tool filtering
+    /// * `filtered_rules` - Rules with tool filtering (currently treated the same)
     /// * `unfiltered_rules` - Rules without tool filtering
     /// * `patterns` - File patterns to check
     /// * `request` - The rule check request
@@ -741,26 +549,24 @@ impl RuleCheckTool {
         let start_time = Instant::now();
 
         tracing::info!(
-            "Processing {} total rules ({} filtered, {} unfiltered) via unified streaming",
+            "Processing {} total rules ({} filtered, {} unfiltered) via ACP agents",
             total_rules,
             filtered_rules.len(),
             unfiltered_rules.len()
         );
 
-        // Check if MCP server is available for filtered rules
-        let server_available = context.mcp_server.read().await.is_some();
-        if !filtered_rules.is_empty() && !server_available {
+        // Note: Tool filtering for rules is not yet supported with ACP agents
+        // All rules will use the same agent configuration
+        if !filtered_rules.is_empty() {
             tracing::warn!(
-                "Skipping {} filtered rules - MCP server not available in context (test mode?)",
+                "Tool filtering for {} rules is not supported yet with ACP agents - using default agent",
                 filtered_rules.len()
             );
         }
 
-        // Combine all rules into a single list for unified streaming
+        // Combine all rules into a single list
         let mut all_rules = Vec::new();
-        if server_available {
-            all_rules.extend_from_slice(filtered_rules);
-        }
+        all_rules.extend_from_slice(filtered_rules);
         all_rules.extend_from_slice(unfiltered_rules);
 
         if all_rules.is_empty() {
@@ -768,32 +574,13 @@ impl RuleCheckTool {
             return Ok(Vec::new());
         }
 
-        // Create agent factory that provides per-rule agents
-        let default_agent = create_agent_from_config(
-            &context.get_agent_for_use_case(AgentUseCase::Rules),
-            context,
-        )
-        .await?;
+        // Create agent config from tool context
+        let agent_config = create_agent_config(context).await?;
 
-        let upstream_url = Self::get_upstream_url(context).await?;
-        let agent_config = context.get_agent_for_use_case(AgentUseCase::Rules);
-
-        let factory = Arc::new(RuleCheckAgentFactory::new(
-            default_agent,
-            upstream_url,
-            (*agent_config).clone(),
-        ));
-
-        // Create checker with agent factory
-        let checker = RuleChecker::with_agent_factory(factory).map_err(|e| {
+        // Create checker with agent config
+        let checker = RuleChecker::new(agent_config).map_err(|e| {
             McpError::internal_error(format!("Failed to create rule checker: {}", e), None)
         })?;
-
-        // Initialize checker
-        // Note: RuleChecker::initialize is a no-op now, but we keep it for API compatibility
-        // checker.initialize().await.map_err(|e| {
-        //     McpError::internal_error(format!("Failed to initialize rule checker: {}", e), None)
-        // })?;
 
         // Build request with all rules
         let rule_names: Vec<String> = all_rules.iter().map(|r| r.name.clone()).collect();
@@ -813,7 +600,7 @@ impl RuleCheckTool {
             context,
             progress_token,
             Some(PROGRESS_CHECKING),
-            format!("Checking {} rules via unified streaming", all_rules.len()),
+            format!("Checking {} rules via ACP agents", all_rules.len()),
             json!({
                 "total_rules": total_rules,
                 "rule_names": rule_names
@@ -877,7 +664,7 @@ impl RuleCheckTool {
 
         let elapsed = start_time.elapsed();
         tracing::info!(
-            "Unified streaming check completed: found {} violations in {:.2}s",
+            "ACP agent check completed: found {} violations in {:.2}s",
             violations.len(),
             elapsed.as_secs_f64()
         );

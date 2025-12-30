@@ -26,3 +26,4 @@ tokio-stream = "0.1"
 tempfile = { workspace = true }
 tokio = { workspace = true, features = ["test-util"] }
 rstest = { workspace = true }
+serial_test = { workspace = true }

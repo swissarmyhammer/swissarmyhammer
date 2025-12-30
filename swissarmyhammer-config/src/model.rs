@@ -446,11 +446,10 @@ impl ModelConfig {
 impl LlamaAgentConfig {
     /// Configuration optimized for testing with small, fast models
     ///
-    /// Uses the 1.5B Qwen3-Coder model with Q4_K_M quantization which provides:
-    /// - Fast test execution (small model size)
-    /// - Good tool calling capabilities
-    /// - Reasonable output quality for testing
-    /// - Balanced settings to avoid repetition issues
+    /// Uses Qwen2.5-1.5B with Q4_K_M quantization which provides:
+    /// - Fast model loading (~3-5 seconds)
+    /// - Quick inference for simple prompts
+    /// - Good quality responses for testing
     pub fn for_testing() -> Self {
         Self {
             model: LlmModelConfig {

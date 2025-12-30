@@ -3,9 +3,9 @@ description: "671B: Strong agents, MIT licensed"
 ---
 quiet: false
 executor:
-    type: llama-agent
-    config:
-        model:
-            source: !HuggingFace
-                repo: "unsloth/DeepSeek-V3.1-Terminus-GGUF"
-                folder: "UD-Q2_K_XL"
+  type: llama-agent
+  config:
+    model:
+      source: !HuggingFace
+        repo: "unsloth/DeepSeek-V3.1-Terminus-GGUF"
+        folder: "IQ4_NL"

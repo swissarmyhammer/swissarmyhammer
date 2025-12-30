@@ -790,7 +790,7 @@ mod tests {
     #[test]
     fn test_session_expired_error() {
         let error = SessionSetupError::SessionExpired {
-            session_id: SessionId("123".to_string().into()),
+            session_id: SessionId::new("123".to_string()),
             expired_at: "2024-01-01T00:00:00Z".to_string(),
             max_age_seconds: 3600,
         };
@@ -806,7 +806,7 @@ mod tests {
     #[test]
     fn test_session_corrupted_error() {
         let error = SessionSetupError::SessionCorrupted {
-            session_id: SessionId("123".to_string().into()),
+            session_id: SessionId::new("123".to_string()),
             corruption_details: "Invalid JSON in message history".to_string(),
         };
 
@@ -837,7 +837,7 @@ mod tests {
     #[test]
     fn test_session_history_replay_failed_error() {
         let error = SessionSetupError::SessionHistoryReplayFailed {
-            session_id: SessionId("123".to_string().into()),
+            session_id: SessionId::new("123".to_string()),
             failed_at_message: 5,
             total_messages: 10,
             error_details: "Message format changed".to_string(),
@@ -963,7 +963,7 @@ mod tests {
     #[test]
     fn test_partial_session_cleanup_failed_error() {
         let error = SessionSetupError::PartialSessionCleanupFailed {
-            session_id: SessionId("123".to_string().into()),
+            session_id: SessionId::new("123".to_string()),
             cleanup_errors: vec!["Failed to close file".to_string()],
             resources_not_cleaned: vec!["file_handle_1".to_string()],
         };

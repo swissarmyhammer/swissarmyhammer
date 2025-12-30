@@ -5,6 +5,7 @@
 
 use llama_loader::ModelLoader;
 use llama_loader::RetryConfig;
+use serial_test::serial;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tempfile::TempDir;
@@ -30,6 +31,7 @@ fn create_test_retry_config() -> RetryConfig {
 /// 3. Both loads return equivalent models
 #[tokio::test]
 #[traced_test]
+#[serial]
 async fn test_model_cache_hit_behavior() {
     // Use a temporary directory to isolate cache behavior
     let _temp_dir = TempDir::new().expect("Failed to create temp directory");
@@ -132,6 +134,7 @@ async fn test_model_cache_hit_behavior() {
 /// Test that verifies ModelLoader with same configuration reuses cached models
 #[tokio::test]
 #[traced_test]
+#[serial]
 async fn test_model_loader_cache_reuse() {
     let _temp_dir = TempDir::new().expect("Failed to create temp directory");
 
@@ -205,6 +208,7 @@ async fn test_model_loader_cache_reuse() {
 /// This test shows what the implementation should look like once cache_hit is properly tracked
 #[tokio::test]
 #[traced_test]
+#[serial]
 async fn test_cache_hit_metadata_field() {
     let _temp_dir = TempDir::new().expect("Failed to create temp directory");
 

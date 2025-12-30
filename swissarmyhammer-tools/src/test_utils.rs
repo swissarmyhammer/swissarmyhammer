@@ -2,9 +2,11 @@
 
 use crate::mcp::tool_handlers::ToolHandlers;
 use crate::mcp::tool_registry::ToolContext;
+use std::collections::HashMap;
 use std::sync::Arc;
 
-use swissarmyhammer_config::model::ModelConfig;
+use swissarmyhammer_config::model::{LlamaAgentConfig, ModelConfig};
+use swissarmyhammer_config::AgentUseCase;
 use swissarmyhammer_git::GitOperations;
 use tokio::sync::Mutex as TokioMutex;
 
@@ -21,13 +23,24 @@ pub mod git_test_helpers;
 /// This function creates a ToolContext similar to the one in swissarmyhammer,
 /// but available for testing MCP tools in swissarmyhammer-tools.
 /// Each call creates a unique test directory to prevent conflicts between parallel tests.
+///
+/// IMPORTANT: This context configures the Rules use case to use a local LlamaAgent
+/// with a small test model instead of Claude Code. This prevents tests from making
+/// expensive Claude API calls and speeds up test execution significantly.
 #[cfg(test)]
 pub async fn create_test_context() -> ToolContext {
     let git_ops: Arc<TokioMutex<Option<GitOperations>>> = Arc::new(TokioMutex::new(None));
     let tool_handlers = Arc::new(ToolHandlers::new());
     let agent_config = Arc::new(ModelConfig::default());
 
-    let context = ToolContext::new(tool_handlers, git_ops, agent_config);
+    let mut context = ToolContext::new(tool_handlers, git_ops, agent_config);
+
+    // Configure Rules use case to use a local LlamaAgent with fast test model
+    // This prevents rule checking tests from making Claude API calls
+    let mut use_case_agents = HashMap::new();
+    let rules_agent = Arc::new(ModelConfig::llama_agent(LlamaAgentConfig::for_testing()));
+    use_case_agents.insert(AgentUseCase::Rules, rules_agent);
+    context.use_case_agents = Arc::new(use_case_agents);
 
     // Set a test MCP server port for tests that need it
     *context.mcp_server_port.write().await = Some(8080);

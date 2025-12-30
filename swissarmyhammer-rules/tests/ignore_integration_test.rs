@@ -1,19 +1,20 @@
 //! Integration tests for per-file rule ignore directives
 
 use std::path::PathBuf;
-use swissarmyhammer_agent_executor::LlamaAgentExecutorWrapper;
 use swissarmyhammer_common::test_utils::IsolatedTestEnvironment;
 use swissarmyhammer_common::SwissArmyHammerError;
-use swissarmyhammer_config::LlamaAgentConfig;
-use swissarmyhammer_rules::{Rule, RuleChecker, RuleViolation, Severity};
+use swissarmyhammer_config::model::{LlamaAgentConfig, ModelConfig};
+use swissarmyhammer_rules::{AgentConfig, Rule, RuleChecker, RuleViolation, Severity};
 
-/// Create a test agent for integration tests
-fn create_test_agent() -> std::sync::Arc<dyn swissarmyhammer_agent_executor::AgentExecutor> {
-    let config = LlamaAgentConfig::for_testing();
-    let mcp_server = agent_client_protocol::McpServer::Http(
-        agent_client_protocol::McpServerHttp::new("test", "http://localhost:8080/mcp"),
-    );
-    std::sync::Arc::new(LlamaAgentExecutorWrapper::new(config, mcp_server))
+/// Create a test agent config with local LlamaAgent for fast test execution
+///
+/// Uses a small test model instead of Claude Code to avoid API calls
+/// and speed up test execution.
+fn create_test_agent_config() -> AgentConfig {
+    AgentConfig {
+        model_config: ModelConfig::llama_agent(LlamaAgentConfig::for_testing()),
+        mcp_config: None,
+    }
 }
 
 /// Helper function to create a test environment with a file
@@ -21,8 +22,8 @@ fn setup_test_with_file(
     content: &str,
     filename: &str,
 ) -> (RuleChecker, IsolatedTestEnvironment, PathBuf) {
-    let agent = create_test_agent();
-    let checker = RuleChecker::new(agent).expect("Failed to create checker");
+    let agent_config = create_test_agent_config();
+    let checker = RuleChecker::new(agent_config).expect("Failed to create checker");
     let env = IsolatedTestEnvironment::new().expect("Failed to create test environment");
     let test_file = env.temp_dir().join(filename);
     std::fs::write(&test_file, content).unwrap();
@@ -62,15 +63,15 @@ async fn test_ignore_with_variations<F>(rule: &Rule, test_cases: &[(&str, &str)]
 where
     F: Fn(usize) -> String,
 {
-    let agent = create_test_agent();
-    let checker = RuleChecker::new(agent).expect("Failed to create checker");
+    let agent_config = create_test_agent_config();
+    let checker = RuleChecker::new(agent_config).expect("Failed to create checker");
     let _env = IsolatedTestEnvironment::new().expect("Failed to create test environment");
     let temp_dir = _env.temp_dir();
 
     for (i, (filename, content)) in test_cases.iter().enumerate() {
         let test_file = temp_dir.join(filename);
         std::fs::write(&test_file, content).unwrap();
-        let result = checker.check_file(rule, &test_file, None).await;
+        let result = checker.check_file(rule, &test_file).await;
         assert!(result.is_ok(), "{}", assertion_msg(i));
     }
 }
@@ -84,7 +85,7 @@ async fn test_ignore_directive_single_rule() {
         "test.rs",
     );
 
-    let result = checker.check_file(&rule, &test_file, None).await;
+    let result = checker.check_file(&rule, &test_file).await;
     assert_rule_ignored(result, "no-unwrap", "via file directive");
 }
 
@@ -98,10 +99,10 @@ async fn test_ignore_directive_glob_pattern() {
         "test.rs",
     );
 
-    let result1 = checker.check_file(&rule1, &test_file, None).await;
+    let result1 = checker.check_file(&rule1, &test_file).await;
     assert_rule_ignored(result1, "no-unwrap", "by glob pattern no-*");
 
-    let result2 = checker.check_file(&rule2, &test_file, None).await;
+    let result2 = checker.check_file(&rule2, &test_file).await;
     assert_rule_ignored(result2, "no-panic", "by glob pattern no-*");
 }
 
@@ -115,10 +116,10 @@ async fn test_ignore_directive_multiple_patterns() {
         "test.rs",
     );
 
-    let result1 = checker.check_file(&rule1, &test_file, None).await;
+    let result1 = checker.check_file(&rule1, &test_file).await;
     assert_rule_ignored(result1, "no-unwrap", "");
 
-    let result2 = checker.check_file(&rule2, &test_file, None).await;
+    let result2 = checker.check_file(&rule2, &test_file).await;
     assert_rule_ignored(result2, "complexity-check", "");
 }
 
@@ -156,7 +157,7 @@ async fn test_ignore_directive_not_applied_to_different_rule() {
     // Since we're using a test agent, we can't predict the outcome,
     // but we verify that the ignore doesn't apply to unmatched rules
     // The key is that this doesn't panic or error due to the ignore logic itself
-    let _result = checker.check_file(&rule, &test_file, None).await;
+    let _result = checker.check_file(&rule, &test_file).await;
     // Result can be Ok or Err depending on LLM, but shouldn't crash
 }
 
@@ -167,7 +168,7 @@ async fn test_ignore_directive_empty_file() {
     let (checker, _temp_dir, test_file) = setup_test_with_file("", "empty.rs");
 
     // Should proceed to normal checking (no ignores found)
-    let _result = checker.check_file(&rule, &test_file, None).await;
+    let _result = checker.check_file(&rule, &test_file).await;
     // Result depends on LLM, but shouldn't crash
 }
 
@@ -178,7 +179,7 @@ async fn test_ignore_directive_suffix_glob() {
     let (checker, _temp_dir, test_file) =
         setup_test_with_file("// sah rule ignore *-unwrap\nfn main() {}", "test.rs");
 
-    let result = checker.check_file(&rule, &test_file, None).await;
+    let result = checker.check_file(&rule, &test_file).await;
     assert_rule_ignored(result, "allow-unwrap", "by glob pattern *-unwrap");
 }
 
@@ -189,7 +190,7 @@ async fn test_ignore_directive_question_mark_glob() {
     let (checker, _temp_dir, test_file) =
         setup_test_with_file("// sah rule ignore test-?-rule\nfn main() {}", "test.rs");
 
-    let result = checker.check_file(&rule, &test_file, None).await;
+    let result = checker.check_file(&rule, &test_file).await;
     assert_rule_ignored(result, "test-a-rule", "by glob pattern test-?-rule");
 }
 
@@ -201,7 +202,7 @@ async fn test_ignore_directive_case_sensitive() {
         setup_test_with_file("// sah rule ignore No-Unwrap\nfn main() {}", "test.rs");
 
     // Should NOT be ignored because rule names are case-sensitive
-    let _result = checker.check_file(&rule, &test_file, None).await;
+    let _result = checker.check_file(&rule, &test_file).await;
     // Will proceed to normal checking since ignore doesn't match
 }
 
