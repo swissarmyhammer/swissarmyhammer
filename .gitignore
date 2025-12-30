@@ -170,3 +170,5 @@ cc.json
 .swissarmyhammer/workflow-runs/
 .llama-sessions
 acp-conformance/.swissarmyhammer/
+
+.acp
