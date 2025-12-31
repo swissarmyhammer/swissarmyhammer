@@ -30,7 +30,7 @@ swissarmyhammer-common = { path = "../swissarmyhammer-common" }
 swissarmyhammer-config = { path = "../swissarmyhammer-config" }
 swissarmyhammer-templating = { path = "../swissarmyhammer-templating" }
 swissarmyhammer-prompts = { path = "../swissarmyhammer-prompts" }
-swissarmyhammer-workflow = { path = "../swissarmyhammer-workflow" }
+swissarmyhammer-agent = { path = "../swissarmyhammer-agent" }
 
 # File system and utilities
 walkdir = { workspace = true }

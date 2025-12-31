@@ -39,7 +39,6 @@ enum CapabilityType {
 /// Mapping of tool name patterns to required ACP capabilities
 /// This provides a robust, maintainable way to enforce capability checks
 /// without relying on fragile string matching in the hot path.
-
 const TOOL_CAPABILITY_MAP: &[(&str, CapabilityType)] = &[
     // Filesystem read operations
     ("fs/read", CapabilityType::FsRead),
@@ -77,6 +76,7 @@ pub struct AgentServer {
     mcp_client: Arc<dyn MCPClient>,
     /// Per-session MCP clients for ACP sessions
     /// Maps SessionId to a vector of MCP clients created from session/new mcpServers parameter
+    #[allow(clippy::type_complexity)]
     pub(crate) session_mcp_clients: Arc<
         tokio::sync::RwLock<
             std::collections::HashMap<crate::types::SessionId, Vec<Arc<dyn MCPClient>>>,
@@ -146,7 +146,6 @@ impl AgentServer {
     /// let client_caps = initialize_request.client_capabilities;
     /// agent_server.set_client_capabilities(client_caps).await;
     /// ```
-
     pub async fn set_client_capabilities(
         &self,
         capabilities: agent_client_protocol::ClientCapabilities,
@@ -159,7 +158,6 @@ impl AgentServer {
     ///
     /// Returns the client capabilities if they have been set via an ACP initialize
     /// request, or None if running in non-ACP mode or before initialization.
-
     pub async fn get_client_capabilities(
         &self,
     ) -> Option<agent_client_protocol::ClientCapabilities> {
@@ -189,7 +187,6 @@ impl AgentServer {
     ///
     /// * `Ok(())` - If the operation is allowed
     /// * `Err(AgentError)` - If the client lacks the required capability
-
     async fn check_tool_capability(&self, tool_name: &str) -> Result<(), AgentError> {
         // Get client capabilities
         let caps = self.client_capabilities.read().await;
@@ -1953,7 +1950,6 @@ impl AgentServer {
     /// # Returns
     ///
     /// `Ok(())` if sync succeeds, `Err` if the session doesn't exist or sync fails
-
     async fn sync_session_todos(&self, session_id: &SessionId) -> Result<(), AgentError> {
         use swissarmyhammer_todo::TodoStorage;
 

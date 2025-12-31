@@ -289,7 +289,7 @@ impl BatchProcessor {
             texts.len(),
             self.config.batch_size
         );
-        let total_batches = (texts.len() + self.config.batch_size - 1) / self.config.batch_size;
+        let total_batches = texts.len().div_ceil(self.config.batch_size);
         let mut all_results = Vec::new();
         let start_time = Instant::now();
 
@@ -786,7 +786,7 @@ mod tests {
 
         /// Process multiple texts in batches
         pub async fn process_texts(&mut self, texts: Vec<String>) -> Result<Vec<EmbeddingResult>> {
-            let total_batches = (texts.len() + self.config.batch_size - 1) / self.config.batch_size;
+            let total_batches = texts.len().div_ceil(self.config.batch_size);
             let mut all_results = Vec::new();
             let start_time = Instant::now();
 

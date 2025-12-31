@@ -362,8 +362,8 @@ impl TerminalManager {
         let stdout_buffer = output_buffer.clone();
         let stdout_truncated = buffer_truncated.clone();
         let stdout = child.stdout.take();
-        let stdout_task = if let Some(mut stdout) = stdout {
-            Some(tokio::spawn(async move {
+        let stdout_task = stdout.map(|mut stdout| {
+            tokio::spawn(async move {
                 let mut buf = vec![0u8; 4096];
                 loop {
                     match stdout.read(&mut buf).await {
@@ -384,17 +384,15 @@ impl TerminalManager {
                         }
                     }
                 }
-            }))
-        } else {
-            None
-        };
+            })
+        });
 
         // Capture stderr (merge into same buffer)
         let stderr_buffer = output_buffer.clone();
         let stderr_truncated = buffer_truncated.clone();
         let stderr = child.stderr.take();
-        let stderr_task = if let Some(mut stderr) = stderr {
-            Some(tokio::spawn(async move {
+        let stderr_task = stderr.map(|mut stderr| {
+            tokio::spawn(async move {
                 let mut buf = vec![0u8; 4096];
                 loop {
                     match stderr.read(&mut buf).await {
@@ -414,10 +412,8 @@ impl TerminalManager {
                         }
                     }
                 }
-            }))
-        } else {
-            None
-        };
+            })
+        });
 
         // 8. Create enhanced terminal session with running process
         let session = TerminalSession {

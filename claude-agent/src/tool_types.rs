@@ -535,7 +535,7 @@ impl ToolCallContent {
         match self {
             ToolCallContent::Content { content } => {
                 // ToolCallContent::Content is a tuple variant wrapping a Content struct
-                let content_block = agent_client_protocol::ContentBlock::from(content.clone());
+                let content_block = content.clone();
                 agent_client_protocol::ToolCallContent::from(content_block)
             }
             ToolCallContent::Diff {

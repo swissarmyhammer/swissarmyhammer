@@ -17,6 +17,7 @@ members = [
     "swissarmyhammer-modes",
     "swissarmyhammer-rules",
     "swissarmyhammer-workflow",
+    "swissarmyhammer-agent",
     "swissarmyhammer-mcp-proxy",
     "markdowndown",
     "llama-agent",

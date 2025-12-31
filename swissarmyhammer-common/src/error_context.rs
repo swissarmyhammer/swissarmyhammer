@@ -48,20 +48,15 @@ pub trait IoResultExt<T> {
 impl<T, E: std::error::Error> IoResultExt<T> for std::result::Result<T, E> {
     fn with_io_context<P: AsRef<Path>>(self, path: P, action: &str) -> crate::Result<T> {
         self.map_err(|e| {
-            SwissArmyHammerError::Io(std::io::Error::new(
-                std::io::ErrorKind::Other,
-                format!("{action} '{}': {e}", path.as_ref().display()),
-            ))
+            SwissArmyHammerError::Io(std::io::Error::other(format!(
+                "{action} '{}': {e}",
+                path.as_ref().display()
+            )))
         })
     }
 
     fn with_io_message(self, message: String) -> crate::Result<T> {
-        self.map_err(|e| {
-            SwissArmyHammerError::Io(std::io::Error::new(
-                std::io::ErrorKind::Other,
-                format!("{message}: {e}"),
-            ))
-        })
+        self.map_err(|e| SwissArmyHammerError::Io(std::io::Error::other(format!("{message}: {e}"))))
     }
 
     fn to_other_error(self) -> crate::Result<T> {

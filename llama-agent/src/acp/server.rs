@@ -639,6 +639,7 @@ impl AcpServer {
     /// # Arguments
     ///
     /// * `notification` - The session notification to broadcast
+    ///
     /// Clear session context on all MCP clients for a session
     async fn clear_mcp_session_context(&self, llama_session_id: &crate::types::SessionId) {
         let session_clients = self.agent_server.session_mcp_clients.read().await;
@@ -1417,7 +1418,7 @@ impl agent_client_protocol::Agent for AcpServer {
             // Execute each tool call
             for tool_call in tool_calls {
                 let tool_name = tool_call.name.clone();
-                let tool_call_id = tool_call.id.clone();
+                let tool_call_id = tool_call.id;
                 tracing::info!("Processing tool call: {} (id: {})", tool_name, tool_call_id);
 
                 // Send initial ToolCall notification with pending status (per ACP spec)

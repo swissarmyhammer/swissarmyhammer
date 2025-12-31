@@ -55,19 +55,15 @@ pub struct AgentConfig {
 /// Mode for Claude agent operation
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub enum ClaudeAgentMode {
     /// Normal mode - interacts with real Claude API
+    #[default]
     Normal,
     /// Record mode - records interactions to a file
     Record { output_path: std::path::PathBuf },
     /// Playback mode - replays from a recorded file
     Playback { input_path: std::path::PathBuf },
-}
-
-impl Default for ClaudeAgentMode {
-    fn default() -> Self {
-        Self::Normal
-    }
 }
 
 /// Configuration for Claude SDK integration

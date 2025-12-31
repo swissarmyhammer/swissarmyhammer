@@ -511,7 +511,6 @@ impl RequestQueue {
     ///
     /// Returns Ok(()) if capability is available or if not in ACP mode.
     /// Returns Err if in ACP mode and capability is missing.
-
     fn check_file_read_capability(session: &Session) -> Result<(), QueueError> {
         if let Some(ref caps) = session.client_capabilities {
             if !caps.fs.read_text_file {
@@ -528,7 +527,6 @@ impl RequestQueue {
     ///
     /// Returns Ok(()) if capability is available or if not in ACP mode.
     /// Returns Err if in ACP mode and capability is missing.
-
     fn check_file_write_capability(session: &Session) -> Result<(), QueueError> {
         if let Some(ref caps) = session.client_capabilities {
             if !caps.fs.write_text_file {

@@ -839,7 +839,7 @@ fn process_output_line(
     *ctx.line_count += 1;
 
     // Send batched progress notifications every batch_size lines
-    if *ctx.line_count % ctx.batch_size == 0 {
+    if (*ctx.line_count).is_multiple_of(ctx.batch_size) {
         if let Some(sender) = ctx.progress_sender {
             sender
                 .send_progress(

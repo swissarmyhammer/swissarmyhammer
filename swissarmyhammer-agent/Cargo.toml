@@ -1,0 +1,26 @@
+[package]
+name = "swissarmyhammer-agent"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "Unified ACP agent creation and execution for SwissArmyHammer"
+
+[dependencies]
+agent-client-protocol.workspace = true
+claude-agent = { path = "../claude-agent" }
+llama-agent = { path = "../llama-agent" }
+swissarmyhammer-common = { path = "../swissarmyhammer-common" }
+swissarmyhammer-config = { path = "../swissarmyhammer-config" }
+thiserror.workspace = true
+tokio = { workspace = true, features = ["sync", "rt", "time"] }
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+which.workspace = true
+
+[lints]
+workspace = true

@@ -220,7 +220,7 @@ fn ensure_swissarmyhammer_dir() -> Result<PathBuf, std::io::Error> {
             // If not in a git repo, create in current directory
             SwissarmyhammerDirectory::from_custom_root(std::env::current_dir()?)
         })
-        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
+        .map_err(|e| std::io::Error::other(e.to_string()))?;
 
     Ok(sah_dir.root().to_path_buf())
 }

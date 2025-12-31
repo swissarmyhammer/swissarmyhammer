@@ -520,6 +520,7 @@ pub struct ClaudeAgent {
     ///
     /// Stores agent id, name, and description tuples parsed from the Claude CLI
     /// init JSON. Used to provide ACP session modes functionality.
+    #[allow(clippy::type_complexity)]
     available_agents: Arc<RwLock<Option<Vec<(String, String, Option<String>)>>>>,
     /// Path validator for secure file operations
     ///
@@ -1310,6 +1311,7 @@ impl ClaudeAgent {
     /// - Enable/disable specific tools based on mode
     /// - Configure different prompting strategies per mode
     /// - Apply mode-specific system prompts
+    ///
     /// Validate a prompt request for common issues
     async fn validate_prompt_request(
         &self,
@@ -2927,11 +2929,8 @@ impl ClaudeAgent {
     ) -> crate::Result<()> {
         // Update the plan entry status in PlanManager
         let mut plan_manager = self.plan_manager.write().await;
-        let was_updated = plan_manager.update_plan_entry_status(
-            &session_id.to_string(),
-            entry_id,
-            new_status.clone(),
-        );
+        let was_updated =
+            plan_manager.update_plan_entry_status(&session_id.to_string(), entry_id, new_status);
 
         if !was_updated {
             return Err(crate::AgentError::Protocol(format!(
@@ -5130,7 +5129,7 @@ impl ClaudeAgent {
                 // Use checked_add to prevent integer overflow
                 start_index
                     .checked_add(limit_count as usize)
-                    .ok_or_else(|| agent_client_protocol::Error::invalid_params())?
+                    .ok_or_else(agent_client_protocol::Error::invalid_params)?
                     .min(lines.len())
             }
             None => lines.len(),

@@ -49,7 +49,7 @@ pub async fn download_with_retry(
                 ModelError::Network(msg) => ModelError::LoadingFailed(format_download_error(
                     filename,
                     repo,
-                    &std::io::Error::new(std::io::ErrorKind::Other, msg),
+                    &std::io::Error::other(msg),
                     retry_config.max_retries,
                 )),
                 other => other,

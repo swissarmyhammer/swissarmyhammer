@@ -12,11 +12,11 @@ use crate::{
 use futures_util::stream::{self, Stream, StreamExt};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use swissarmyhammer_agent::{self as acp, McpServerConfig};
 use swissarmyhammer_common::glob_utils::{expand_glob_patterns, GlobExpansionConfig};
 use swissarmyhammer_config::model::ModelConfig;
 use swissarmyhammer_config::TemplateContext;
 use swissarmyhammer_prompts::{PromptLibrary, PromptResolver};
-use swissarmyhammer_workflow::acp::{self, McpServerConfig};
 
 /// Configuration for creating ACP agents
 ///

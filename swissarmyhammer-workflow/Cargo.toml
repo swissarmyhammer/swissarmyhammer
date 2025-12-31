@@ -33,9 +33,8 @@ swissarmyhammer-common = { path = "../swissarmyhammer-common" }
 swissarmyhammer-prompts = { path = "../swissarmyhammer-prompts" }
 swissarmyhammer-shell = { path = "../swissarmyhammer-shell" }
 swissarmyhammer-templating = { path = "../swissarmyhammer-templating" }
-# ACP agents (direct usage, no executor wrapper)
-claude-agent = { path = "../claude-agent" }
-llama-agent = { workspace = true }
+# ACP agent creation and execution (unified interface)
+swissarmyhammer-agent = { path = "../swissarmyhammer-agent" }
 
 # Template engine (legacy - being phased out)
 liquid = { workspace = true }
@@ -87,7 +86,6 @@ zstd = "0.13"
 memmap2 = "0.9"
 rayon = "1.8"
 base64 = "0.22"
-which = "8.0.0"
 
 # Git operations
 git2 = { workspace = true }
@@ -123,8 +121,6 @@ indicatif = { workspace = true }
 clap = { workspace = true }
 dialoguer = { workspace = true }
 is-terminal = { workspace = true }
-agent-client-protocol = { workspace = true }
-
 
 # NEVER add features or feature flags to this Cargo.toml!
 # SwissArmyHammer provides ALL functionality ALL the time.

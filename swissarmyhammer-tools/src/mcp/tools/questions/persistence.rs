@@ -108,7 +108,7 @@ pub fn load_all_questions() -> Result<Vec<QuestionAnswerEntry>> {
         let path = entry.path();
 
         // Only process .yaml files
-        if !path.extension().is_some_and(|ext| ext == "yaml") {
+        if path.extension().is_none_or(|ext| ext != "yaml") {
             continue;
         }
 

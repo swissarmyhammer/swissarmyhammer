@@ -136,7 +136,7 @@ impl ClaudeClient {
                                 arr.iter()
                                     .filter_map(|agent_arr| {
                                         let agent_tuple = agent_arr.as_array()?;
-                                        let id = agent_tuple.get(0)?.as_str()?.to_string();
+                                        let id = agent_tuple.first()?.as_str()?.to_string();
                                         let name = agent_tuple.get(1)?.as_str()?.to_string();
                                         let description = agent_tuple.get(2).and_then(|v| {
                                             if v.is_null() {

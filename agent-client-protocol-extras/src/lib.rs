@@ -66,10 +66,7 @@ pub async fn start_test_mcp_server_with_capture(
         start_test_mcp_server()
             .await
             .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> {
-                Box::new(std::io::Error::new(
-                    std::io::ErrorKind::Other,
-                    e.to_string(),
-                ))
+                Box::new(std::io::Error::other(e.to_string()))
             })?;
 
     // Wrap with proxy for notification capture

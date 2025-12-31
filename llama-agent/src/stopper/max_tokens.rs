@@ -293,7 +293,7 @@ impl Stopper for MaxTokensStopper {
             Some(FinishReason::Stopped(message))
         } else {
             // Continue generation - log progress at intervals
-            if self.tokens_generated > 0 && self.tokens_generated % 100 == 0 {
+            if self.tokens_generated > 0 && self.tokens_generated.is_multiple_of(100) {
                 debug!(
                     "Generation progress: {}/{} tokens ({}% complete)",
                     self.tokens_generated,
