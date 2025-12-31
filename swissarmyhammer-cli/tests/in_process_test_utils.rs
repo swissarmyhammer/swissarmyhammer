@@ -793,7 +793,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "Test has intermittent issues with exit code detection"]
     async fn test_in_process_utilities() {
         setup_test();
         println!("=== STARTING TEST ===");

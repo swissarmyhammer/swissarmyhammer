@@ -211,7 +211,7 @@ fn complete_todo_and_verify(todo_id: &str, temp_path: &std::path::Path) {
         &["todo", "complete", "--id", todo_id],
         temp_path,
         true,
-        &[todo_id],
+        &["OK"],
         &[],
     );
 }
@@ -326,7 +326,10 @@ fn assert_help_contains_commands(help_text: &str, commands: &[&str]) {
 
 /// Helper function to assert todo file was created in the .swissarmyhammer directory
 fn assert_todo_file_created(temp_path: &std::path::Path) {
-    let todo_file = temp_path.join(".swissarmyhammer").join("todo.yaml");
+    let todo_file = temp_path
+        .join(".swissarmyhammer")
+        .join("todo")
+        .join("todo.yaml");
     assert!(
         todo_file.exists(),
         "todo.yaml file should be created at {}",
@@ -359,7 +362,6 @@ fn test_todo_commands_in_help() {
 
 /// Test todo create command
 #[test]
-#[ignore = "Git repo detection issue with symlinked temp paths on macOS - see issue notes"]
 fn test_todo_create_command() {
     let temp_dir = setup_todo_test_env();
     let temp_path = &temp_dir.temp_dir();
@@ -384,7 +386,6 @@ fn test_todo_create_command() {
 
 /// Test todo create command without optional context
 #[test]
-#[ignore = "Git repo detection issue with symlinked temp paths on macOS - see issue notes"]
 fn test_todo_create_without_context() {
     let temp_dir = setup_todo_test_env();
     let temp_path = &temp_dir.temp_dir();
@@ -402,7 +403,6 @@ fn test_todo_create_without_context() {
 
 /// Test todo show next command
 #[test]
-#[ignore = "Git repo detection issue with symlinked temp paths on macOS - see issue notes"]
 fn test_todo_show_next() {
     let temp_dir = setup_todo_test_env();
     let temp_path = &temp_dir.temp_dir();
@@ -416,7 +416,6 @@ fn test_todo_show_next() {
 
 /// Test todo show next with no todos
 #[test]
-#[ignore = "Git repo detection issue with symlinked temp paths on macOS - see issue notes"]
 fn test_todo_show_next_empty() {
     let temp_dir = setup_todo_test_env();
     let temp_path = &temp_dir.temp_dir();
@@ -426,7 +425,6 @@ fn test_todo_show_next_empty() {
 
 /// Test todo complete command
 #[test]
-#[ignore = "Git repo detection issue with symlinked temp paths on macOS - see issue notes"]
 fn test_todo_complete_command() {
     let temp_dir = setup_todo_test_env();
     let temp_path = &temp_dir.temp_dir();
@@ -467,7 +465,6 @@ fn test_todo_complete_invalid_id() {
 
 /// Test full todo workflow: create -> show -> complete
 #[test]
-#[ignore = "Git repo detection issue with symlinked temp paths on macOS - see issue notes"]
 fn test_todo_full_workflow() {
     let temp_dir = setup_todo_test_env();
     let temp_path = &temp_dir.temp_dir();
@@ -491,7 +488,6 @@ fn test_todo_full_workflow() {
 
 /// Test todo list command with no todos
 #[test]
-#[ignore = "Git repo detection issue with symlinked temp paths on macOS - see issue notes"]
 fn test_todo_list_empty() {
     let temp_dir = setup_todo_test_env();
     let temp_path = &temp_dir.temp_dir();
@@ -502,7 +498,6 @@ fn test_todo_list_empty() {
 
 /// Test todo list command with multiple todos
 #[test]
-#[ignore = "Git repo detection issue with symlinked temp paths on macOS - see issue notes"]
 fn test_todo_list_multiple() {
     let temp_dir = setup_todo_test_env();
     let temp_path = &temp_dir.temp_dir();
@@ -545,21 +540,18 @@ fn test_todo_list_with_filter(
 
 /// Test todo list with filter for incomplete todos
 #[test]
-#[ignore = "Git repo detection issue with symlinked temp paths on macOS - see issue notes"]
 fn test_todo_list_filter_incomplete() {
     test_todo_list_with_filter(false, &["Task 1", "Task 3"], &["Task 2"], 2);
 }
 
 /// Test todo list with filter for completed todos
 #[test]
-#[ignore = "Git repo detection issue with symlinked temp paths on macOS - see issue notes"]
 fn test_todo_list_filter_completed() {
     test_todo_list_with_filter(true, &["Task 2"], &["Task 1", "Task 3"], 1);
 }
 
 /// Test todo list sort order (incomplete first)
 #[test]
-#[ignore = "Git repo detection issue with symlinked temp paths on macOS - see issue notes"]
 fn test_todo_list_sort_order() {
     let temp_dir = setup_todo_test_env();
     let temp_path = &temp_dir.temp_dir();

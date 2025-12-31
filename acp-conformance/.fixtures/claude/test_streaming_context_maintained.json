@@ -1,0 +1,630 @@
+{
+  "calls": [
+    {
+      "method": "initialize",
+      "request": {
+        "clientCapabilities": {
+          "_meta": {
+            "streaming": true
+          },
+          "fs": {
+            "readTextFile": false,
+            "writeTextFile": false
+          },
+          "terminal": false
+        },
+        "protocolVersion": 1
+      },
+      "response": {
+        "agentCapabilities": {
+          "_meta": {
+            "streaming": true,
+            "tools": [
+              "fs_read",
+              "fs_write",
+              "fs_list"
+            ]
+          },
+          "loadSession": true,
+          "mcpCapabilities": {
+            "http": true,
+            "sse": false
+          },
+          "promptCapabilities": {
+            "_meta": {
+              "streaming": true
+            },
+            "audio": true,
+            "embeddedContext": true,
+            "image": true
+          },
+          "sessionCapabilities": {}
+        },
+        "agentInfo": {
+          "name": "claude-agent",
+          "title": "Claude Agent v0.3.0",
+          "version": "0.3.0"
+        },
+        "authMethods": [],
+        "protocolVersion": 1
+      },
+      "notifications": []
+    },
+    {
+      "method": "new_session",
+      "request": {
+        "cwd": "/Users/wballard/github/swissarmyhammer/acp-conformance",
+        "mcpServers": []
+      },
+      "response": {
+        "sessionId": "01KDT6BWG0AQDB9BSA9ENCEA7Q"
+      },
+      "notifications": []
+    },
+    {
+      "method": "prompt",
+      "request": {
+        "prompt": [
+          {
+            "text": "My favorite color is blue. Remember this.",
+            "type": "text"
+          }
+        ],
+        "sessionId": "01KDT6BWG0AQDB9BSA9ENCEA7Q"
+      },
+      "response": {
+        "_meta": {
+          "streaming": true
+        },
+        "stopReason": "end_turn"
+      },
+      "notifications": []
+    },
+    {
+      "method": "prompt",
+      "request": {
+        "prompt": [
+          {
+            "text": "What is my favorite color?",
+            "type": "text"
+          }
+        ],
+        "sessionId": "01KDT6BWG0AQDB9BSA9ENCEA7Q"
+      },
+      "response": {
+        "_meta": {
+          "streaming": true
+        },
+        "stopReason": "end_turn"
+      },
+      "notifications": [
+        {
+          "_meta": {
+            "available_agents": [
+              [
+                "general-purpose",
+                "General Purpose",
+                null
+              ],
+              [
+                "statusline-setup",
+                "Statusline Setup",
+                null
+              ],
+              [
+                "Explore",
+                "Explore",
+                null
+              ],
+              [
+                "Plan",
+                "Plan",
+                null
+              ]
+            ],
+            "source": "claude_cli_init"
+          },
+          "sessionId": "01KDT6BWG0AQDB9BSA9ENCEA7Q",
+          "update": {
+            "availableCommands": [
+              {
+                "_meta": {
+                  "category": "claude_builtin",
+                  "source": "claude_cli"
+                },
+                "description": "Claude: compact",
+                "input": null,
+                "name": "compact"
+              },
+              {
+                "_meta": {
+                  "category": "claude_builtin",
+                  "source": "claude_cli"
+                },
+                "description": "Claude: context",
+                "input": null,
+                "name": "context"
+              },
+              {
+                "_meta": {
+                  "category": "claude_builtin",
+                  "source": "claude_cli"
+                },
+                "description": "Claude: cost",
+                "input": null,
+                "name": "cost"
+              },
+              {
+                "_meta": {
+                  "category": "claude_builtin",
+                  "source": "claude_cli"
+                },
+                "description": "Claude: init",
+                "input": null,
+                "name": "init"
+              },
+              {
+                "_meta": {
+                  "category": "claude_builtin",
+                  "source": "claude_cli"
+                },
+                "description": "Claude: pr-comments",
+                "input": null,
+                "name": "pr-comments"
+              },
+              {
+                "_meta": {
+                  "category": "claude_builtin",
+                  "source": "claude_cli"
+                },
+                "description": "Claude: release-notes",
+                "input": null,
+                "name": "release-notes"
+              },
+              {
+                "_meta": {
+                  "category": "claude_builtin",
+                  "source": "claude_cli"
+                },
+                "description": "Claude: review",
+                "input": null,
+                "name": "review"
+              },
+              {
+                "_meta": {
+                  "category": "claude_builtin",
+                  "source": "claude_cli"
+                },
+                "description": "Claude: security-review",
+                "input": null,
+                "name": "security-review"
+              }
+            ],
+            "sessionUpdate": "available_commands_update"
+          }
+        },
+        {
+          "_meta": {
+            "session_id": "01KDT6BWG0AQDB9BSA9ENCEA7Q",
+            "timestamp": 1767184409,
+            "update_type": "available_commands"
+          },
+          "sessionId": "01KDT6BWG0AQDB9BSA9ENCEA7Q",
+          "update": {
+            "availableCommands": [
+              {
+                "_meta": {
+                  "category": "planning",
+                  "source": "core"
+                },
+                "description": "Create an execution plan for complex tasks",
+                "input": null,
+                "name": "create_plan"
+              },
+              {
+                "_meta": {
+                  "category": "analysis",
+                  "source": "core"
+                },
+                "description": "Research and analyze the codebase structure",
+                "input": null,
+                "name": "research_codebase"
+              }
+            ],
+            "sessionUpdate": "available_commands_update"
+          }
+        },
+        {
+          "sessionId": "01KDT6BWG0AQDB9BSA9ENCEA7Q",
+          "update": {
+            "content": {
+              "text": "My favorite color is blue. Remember this.",
+              "type": "text"
+            },
+            "sessionUpdate": "user_message_chunk"
+          }
+        },
+        {
+          "_meta": {
+            "available_agents": [
+              [
+                "general-purpose",
+                "General Purpose",
+                null
+              ],
+              [
+                "statusline-setup",
+                "Statusline Setup",
+                null
+              ],
+              [
+                "Explore",
+                "Explore",
+                null
+              ],
+              [
+                "Plan",
+                "Plan",
+                null
+              ]
+            ],
+            "source": "claude_cli_init"
+          },
+          "sessionId": "01KDT6BWG0AQDB9BSA9ENCEA7Q",
+          "update": {
+            "availableCommands": [
+              {
+                "_meta": {
+                  "category": "claude_builtin",
+                  "source": "claude_cli"
+                },
+                "description": "Claude: compact",
+                "input": null,
+                "name": "compact"
+              },
+              {
+                "_meta": {
+                  "category": "claude_builtin",
+                  "source": "claude_cli"
+                },
+                "description": "Claude: context",
+                "input": null,
+                "name": "context"
+              },
+              {
+                "_meta": {
+                  "category": "claude_builtin",
+                  "source": "claude_cli"
+                },
+                "description": "Claude: cost",
+                "input": null,
+                "name": "cost"
+              },
+              {
+                "_meta": {
+                  "category": "claude_builtin",
+                  "source": "claude_cli"
+                },
+                "description": "Claude: init",
+                "input": null,
+                "name": "init"
+              },
+              {
+                "_meta": {
+                  "category": "claude_builtin",
+                  "source": "claude_cli"
+                },
+                "description": "Claude: pr-comments",
+                "input": null,
+                "name": "pr-comments"
+              },
+              {
+                "_meta": {
+                  "category": "claude_builtin",
+                  "source": "claude_cli"
+                },
+                "description": "Claude: release-notes",
+                "input": null,
+                "name": "release-notes"
+              },
+              {
+                "_meta": {
+                  "category": "claude_builtin",
+                  "source": "claude_cli"
+                },
+                "description": "Claude: review",
+                "input": null,
+                "name": "review"
+              },
+              {
+                "_meta": {
+                  "category": "claude_builtin",
+                  "source": "claude_cli"
+                },
+                "description": "Claude: security-review",
+                "input": null,
+                "name": "security-review"
+              }
+            ],
+            "sessionUpdate": "available_commands_update"
+          }
+        },
+        {
+          "sessionId": "01KDT6BWG0AQDB9BSA9ENCEA7Q",
+          "update": {
+            "content": {
+              "text": "Got",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDT6BWG0AQDB9BSA9ENCEA7Q",
+          "update": {
+            "content": {
+              "text": "Got",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDT6BWG0AQDB9BSA9ENCEA7Q",
+          "update": {
+            "content": {
+              "text": " it! Your",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDT6BWG0AQDB9BSA9ENCEA7Q",
+          "update": {
+            "content": {
+              "text": " it! Your",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDT6BWG0AQDB9BSA9ENCEA7Q",
+          "update": {
+            "content": {
+              "text": " favorite color is blue. I",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDT6BWG0AQDB9BSA9ENCEA7Q",
+          "update": {
+            "content": {
+              "text": " favorite color is blue. I",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDT6BWG0AQDB9BSA9ENCEA7Q",
+          "update": {
+            "content": {
+              "text": "'ll remember that for our",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDT6BWG0AQDB9BSA9ENCEA7Q",
+          "update": {
+            "content": {
+              "text": " conversation.",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDT6BWG0AQDB9BSA9ENCEA7Q",
+          "update": {
+            "content": {
+              "text": "'ll remember that for our",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDT6BWG0AQDB9BSA9ENCEA7Q",
+          "update": {
+            "content": {
+              "text": " conversation.",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDT6BWG0AQDB9BSA9ENCEA7Q",
+          "update": {
+            "content": {
+              "text": "Got it! Your favorite color is blue. I'll remember that for our conversation.",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDT6BWG0AQDB9BSA9ENCEA7Q",
+          "update": {
+            "content": {
+              "text": "What is my favorite color?",
+              "type": "text"
+            },
+            "sessionUpdate": "user_message_chunk"
+          }
+        },
+        {
+          "_meta": {
+            "available_agents": [
+              [
+                "general-purpose",
+                "General Purpose",
+                null
+              ],
+              [
+                "statusline-setup",
+                "Statusline Setup",
+                null
+              ],
+              [
+                "Explore",
+                "Explore",
+                null
+              ],
+              [
+                "Plan",
+                "Plan",
+                null
+              ]
+            ],
+            "source": "claude_cli_init"
+          },
+          "sessionId": "01KDT6BWG0AQDB9BSA9ENCEA7Q",
+          "update": {
+            "availableCommands": [
+              {
+                "_meta": {
+                  "category": "claude_builtin",
+                  "source": "claude_cli"
+                },
+                "description": "Claude: compact",
+                "input": null,
+                "name": "compact"
+              },
+              {
+                "_meta": {
+                  "category": "claude_builtin",
+                  "source": "claude_cli"
+                },
+                "description": "Claude: context",
+                "input": null,
+                "name": "context"
+              },
+              {
+                "_meta": {
+                  "category": "claude_builtin",
+                  "source": "claude_cli"
+                },
+                "description": "Claude: cost",
+                "input": null,
+                "name": "cost"
+              },
+              {
+                "_meta": {
+                  "category": "claude_builtin",
+                  "source": "claude_cli"
+                },
+                "description": "Claude: init",
+                "input": null,
+                "name": "init"
+              },
+              {
+                "_meta": {
+                  "category": "claude_builtin",
+                  "source": "claude_cli"
+                },
+                "description": "Claude: pr-comments",
+                "input": null,
+                "name": "pr-comments"
+              },
+              {
+                "_meta": {
+                  "category": "claude_builtin",
+                  "source": "claude_cli"
+                },
+                "description": "Claude: release-notes",
+                "input": null,
+                "name": "release-notes"
+              },
+              {
+                "_meta": {
+                  "category": "claude_builtin",
+                  "source": "claude_cli"
+                },
+                "description": "Claude: review",
+                "input": null,
+                "name": "review"
+              },
+              {
+                "_meta": {
+                  "category": "claude_builtin",
+                  "source": "claude_cli"
+                },
+                "description": "Claude: security-review",
+                "input": null,
+                "name": "security-review"
+              }
+            ],
+            "sessionUpdate": "available_commands_update"
+          }
+        },
+        {
+          "sessionId": "01KDT6BWG0AQDB9BSA9ENCEA7Q",
+          "update": {
+            "content": {
+              "text": "Your",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDT6BWG0AQDB9BSA9ENCEA7Q",
+          "update": {
+            "content": {
+              "text": "Your",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDT6BWG0AQDB9BSA9ENCEA7Q",
+          "update": {
+            "content": {
+              "text": " favorite color is blue.",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDT6BWG0AQDB9BSA9ENCEA7Q",
+          "update": {
+            "content": {
+              "text": " favorite color is blue.",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDT6BWG0AQDB9BSA9ENCEA7Q",
+          "update": {
+            "content": {
+              "text": "Your favorite color is blue.",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        }
+      ]
+    }
+  ]
+}

@@ -948,26 +948,6 @@ mod tests {
         assert_eq!(context.messages[0].content, "Hello");
     }
 
-    /// Test basic query functionality
-    ///
-    /// This test requires the `claude` CLI binary to be installed and available in PATH.
-    /// It also makes real API calls to Claude and costs money.
-    /// Run with: cargo test --ignored test_basic_query
-    #[tokio::test]
-    #[ignore = "Makes real Claude API calls - run manually"]
-    async fn test_basic_query() {
-        let client = ClaudeClient::new().unwrap();
-        let session_id = SessionId::new();
-        let cwd = std::path::PathBuf::from("/tmp");
-        let response = client.query("Hello", &session_id, &cwd).await.unwrap();
-        // Claude's response won't necessarily contain the exact prompt
-        // Just verify we get a non-empty response
-        assert!(
-            !response.is_empty(),
-            "Expected non-empty response from Claude API"
-        );
-    }
-
     #[test]
     fn test_message_roles() {
         let user_msg = ClaudeMessage {

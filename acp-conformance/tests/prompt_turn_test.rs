@@ -147,3 +147,56 @@ async fn test_multiple_prompts(
     )
     .expect("Fixture verification should succeed");
 }
+
+#[rstest]
+#[case::llama(common::llama_agent_factory())]
+#[case::claude(common::claude_agent_factory())]
+#[awt]
+#[test_log::test(tokio::test)]
+#[serial_test::serial]
+async fn test_streaming_capability(
+    #[case]
+    #[future]
+    agent: Box<dyn AgentWithFixture>,
+) {
+    let agent_type = agent.agent_type();
+
+    acp_conformance::prompt_turn::test_streaming_capability(&*agent)
+        .await
+        .expect("Streaming capability test should succeed");
+
+    drop(agent);
+    tokio::time::sleep(tokio::time::Duration::from_millis(1500)).await;
+
+    acp_conformance::prompt_turn::verify_streaming_fixture(agent_type, "test_streaming_capability")
+        .expect("Fixture verification should succeed");
+}
+
+#[rstest]
+#[case::llama(common::llama_agent_factory())]
+#[case::claude(common::claude_agent_factory())]
+#[awt]
+#[test_log::test(tokio::test)]
+#[serial_test::serial]
+async fn test_streaming_context_maintained(
+    #[case]
+    #[future]
+    agent: Box<dyn AgentWithFixture>,
+) {
+    let agent_type = agent.agent_type();
+
+    acp_conformance::prompt_turn::test_streaming_context_maintained(&*agent)
+        .await
+        .expect("Streaming context test should succeed");
+
+    drop(agent);
+    tokio::time::sleep(tokio::time::Duration::from_millis(1500)).await;
+
+    // This test sends 2 prompts with streaming
+    acp_conformance::prompt_turn::verify_prompt_fixture_with_response(
+        agent_type,
+        "test_streaming_context_maintained",
+        2,
+    )
+    .expect("Fixture verification should succeed");
+}

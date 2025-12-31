@@ -14,6 +14,7 @@ mod acp_tests {
     use llama_agent::acp::AcpServer;
     use llama_agent::types::{ModelConfig, ModelSource};
     use llama_agent::AgentServer;
+    use serial_test::serial;
     use std::sync::Arc;
     use tempfile::TempDir;
 
@@ -91,11 +92,9 @@ mod acp_tests {
 
     /// Test basic protocol initialization
     ///
-    /// This test is currently ignored because it requires the Agent trait
-    /// to be implemented for AcpServer. The actual RPC layer is implemented
-    /// in the initialize_handler and follows the ACP protocol.
+    /// Tests the ACP protocol flow: initialize -> new_session
     #[tokio::test]
-    #[ignore = "Requires Agent trait implementation and model for initialization"]
+    #[serial]
     async fn test_basic_acp_protocol() {
         use agent_client_protocol::Agent;
 
@@ -138,15 +137,6 @@ mod acp_tests {
     /// - Notification handler monitors via tokio::select!
     /// - Both handlers complete gracefully without hanging
     ///
-    /// NOTE: This test is ignored because it requires spawning the server, which has Send trait
-    /// issues due to the Agent trait implementation using trait objects. The shutdown coordination
-    /// mechanism is tested in test_shutdown_coordination_without_model below.
-    #[tokio::test]
-    #[ignore = "Send trait issues with Agent trait objects - tested in test_shutdown_coordination_without_model"]
-    async fn test_shutdown_coordination() {
-        // This test is disabled - see test_shutdown_coordination_without_model for shutdown testing
-    }
-
     /// Test shutdown coordination without requiring a model
     ///
     /// This is a unit test that verifies the shutdown coordination mechanism works
@@ -233,7 +223,7 @@ mod acp_tests {
     ///
     /// This test verifies that loading a nonexistent session returns an error.
     #[tokio::test]
-    #[ignore = "Requires valid model for AgentServer initialization"]
+    #[serial]
     async fn test_load_session_nonexistent() {
         use agent_client_protocol::Agent;
         use std::path::PathBuf;
@@ -259,7 +249,7 @@ mod acp_tests {
     ///
     /// This test verifies that loading a session with an invalid ID format returns an error.
     #[tokio::test]
-    #[ignore = "Requires valid model for AgentServer initialization"]
+    #[serial]
     async fn test_load_session_invalid_id_format() {
         use agent_client_protocol::Agent;
         use std::path::PathBuf;

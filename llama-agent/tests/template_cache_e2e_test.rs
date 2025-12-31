@@ -5,17 +5,10 @@
 //! other template cache tests, these focus on complete workflows and
 //! integration scenarios.
 //!
-//! # Test Organization
-//!
-//! - **Basic Integration Tests**: Run without requiring a real model
-//! - **Performance Tests**: Marked with `#[ignore]`, require real model
-//! - **Stress Tests**: Marked with `#[ignore]`, require real model
-//!
 //! # No Mocks Policy
 //!
 //! Following project standards, these tests use real data structures and
-//! APIs without any mocks. Tests that require model operations are ignored
-//! by default and can be run explicitly when needed.
+//! APIs without any mocks.
 
 use llama_agent::{
     template_cache::TemplateCache,
@@ -471,55 +464,6 @@ fn test_cache_entry_deletion() {
     // Delete again should return false
     let deleted_again = cache.delete(hash).unwrap();
     assert!(!deleted_again);
-}
-
-// ============================================================================
-// Performance Tests (Require Real Model - Ignored by Default)
-// ============================================================================
-
-/// Performance test: Verify cache provides speedup.
-///
-/// This test requires a real model to run and measures actual performance.
-/// Expected: First session ~450-500ms, second session ~10-20ms
-///
-/// To run: cargo nextest run --ignored template_cache_e2e
-#[tokio::test]
-#[ignore = "Requires real model file to measure actual performance"]
-async fn test_cache_performance_benefit() {
-    // This test would:
-    // 1. Load a real model
-    // 2. Create first session with template (cache miss)
-    // 3. Measure time to process template
-    // 4. Create second session with same template (cache hit)
-    // 5. Measure time to load from cache
-    // 6. Verify second session is significantly faster (>90% speedup)
-    //
-    // Implementation requires:
-    // - Real model file path
-    // - ModelManager integration
-    // - Context creation
-    // - Actual KV cache save/load operations
-}
-
-/// Stress test: Multiple concurrent sessions with shared template.
-///
-/// This test requires a real model and measures concurrent performance.
-/// Expected: 10 sessions complete much faster with caching than without.
-///
-/// To run: cargo nextest run --ignored template_cache_e2e
-#[tokio::test]
-#[ignore = "Requires real model file and tests concurrent behavior"]
-async fn test_concurrent_sessions_cache_sharing() {
-    // This test would:
-    // 1. Load a real model
-    // 2. Create 10 sessions concurrently with same template
-    // 3. Verify only first session processes template (cache miss)
-    // 4. Verify other 9 sessions load from cache (cache hits)
-    // 5. Measure total time and verify significant speedup
-    //
-    // Expected results:
-    // - Cache stats show 1 miss, 9 hits
-    // - Total time for 10 sessions < 1000ms (vs ~4500ms without cache)
 }
 
 // ============================================================================

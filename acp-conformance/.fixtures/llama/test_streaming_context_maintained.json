@@ -1,0 +1,432 @@
+{
+  "calls": [
+    {
+      "method": "initialize",
+      "request": {
+        "clientCapabilities": {
+          "_meta": {
+            "streaming": true
+          },
+          "fs": {
+            "readTextFile": false,
+            "writeTextFile": false
+          },
+          "terminal": false
+        },
+        "protocolVersion": 1
+      },
+      "response": {
+        "agentCapabilities": {
+          "_meta": {
+            "streaming": true,
+            "supports_modes": true,
+            "supports_plans": true,
+            "supports_slash_commands": true
+          },
+          "loadSession": true,
+          "mcpCapabilities": {
+            "http": true,
+            "sse": false
+          },
+          "promptCapabilities": {
+            "_meta": {
+              "streaming": true
+            },
+            "audio": false,
+            "embeddedContext": false,
+            "image": false
+          },
+          "sessionCapabilities": {}
+        },
+        "agentInfo": {
+          "name": "llama-agent",
+          "title": "LLaMA Agent v0.3.0",
+          "version": "0.3.0"
+        },
+        "authMethods": [],
+        "protocolVersion": 1
+      },
+      "notifications": []
+    },
+    {
+      "method": "new_session",
+      "request": {
+        "cwd": "/Users/wballard/github/swissarmyhammer/acp-conformance",
+        "mcpServers": []
+      },
+      "response": {
+        "sessionId": "01KDT6BXYQC50CZ07S4R2H9WXV"
+      },
+      "notifications": []
+    },
+    {
+      "method": "prompt",
+      "request": {
+        "prompt": [
+          {
+            "text": "My favorite color is blue. Remember this.",
+            "type": "text"
+          }
+        ],
+        "sessionId": "01KDT6BXYQC50CZ07S4R2H9WXV"
+      },
+      "response": {
+        "_meta": {
+          "tokens_generated": 350
+        },
+        "stopReason": "end_turn"
+      },
+      "notifications": []
+    },
+    {
+      "method": "prompt",
+      "request": {
+        "prompt": [
+          {
+            "text": "What is my favorite color?",
+            "type": "text"
+          }
+        ],
+        "sessionId": "01KDT6BXYQC50CZ07S4R2H9WXV"
+      },
+      "response": {
+        "_meta": {
+          "tokens_generated": 27
+        },
+        "stopReason": "end_turn"
+      },
+      "notifications": [
+        {
+          "sessionId": "01KDT6BXYQC50CZ07S4R2H9WXV",
+          "update": {
+            "content": {
+              "text": "I",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDT6BXYQC50CZ07S4R2H9WXV",
+          "update": {
+            "content": {
+              "text": "'ll",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDT6BXYQC50CZ07S4R2H9WXV",
+          "update": {
+            "content": {
+              "text": " remember",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDT6BXYQC50CZ07S4R2H9WXV",
+          "update": {
+            "content": {
+              "text": " that",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDT6BXYQC50CZ07S4R2H9WXV",
+          "update": {
+            "content": {
+              "text": " your",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDT6BXYQC50CZ07S4R2H9WXV",
+          "update": {
+            "content": {
+              "text": " favorite",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDT6BXYQC50CZ07S4R2H9WXV",
+          "update": {
+            "content": {
+              "text": " color",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDT6BXYQC50CZ07S4R2H9WXV",
+          "update": {
+            "content": {
+              "text": " is",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDT6BXYQC50CZ07S4R2H9WXV",
+          "update": {
+            "content": {
+              "text": " blue",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDT6BXYQC50CZ07S4R2H9WXV",
+          "update": {
+            "content": {
+              "text": ".",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDT6BXYQC50CZ07S4R2H9WXV",
+          "update": {
+            "content": {
+              "text": " Is",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDT6BXYQC50CZ07S4R2H9WXV",
+          "update": {
+            "content": {
+              "text": " there",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDT6BXYQC50CZ07S4R2H9WXV",
+          "update": {
+            "content": {
+              "text": " anything",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDT6BXYQC50CZ07S4R2H9WXV",
+          "update": {
+            "content": {
+              "text": " specific",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDT6BXYQC50CZ07S4R2H9WXV",
+          "update": {
+            "content": {
+              "text": " you",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDT6BXYQC50CZ07S4R2H9WXV",
+          "update": {
+            "content": {
+              "text": "'d",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDT6BXYQC50CZ07S4R2H9WXV",
+          "update": {
+            "content": {
+              "text": " like",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDT6BXYQC50CZ07S4R2H9WXV",
+          "update": {
+            "content": {
+              "text": " to",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDT6BXYQC50CZ07S4R2H9WXV",
+          "update": {
+            "content": {
+              "text": " do",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDT6BXYQC50CZ07S4R2H9WXV",
+          "update": {
+            "content": {
+              "text": " or",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDT6BXYQC50CZ07S4R2H9WXV",
+          "update": {
+            "content": {
+              "text": " explore",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDT6BXYQC50CZ07S4R2H9WXV",
+          "update": {
+            "content": {
+              "text": " related",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDT6BXYQC50CZ07S4R2H9WXV",
+          "update": {
+            "content": {
+              "text": " to",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDT6BXYQC50CZ07S4R2H9WXV",
+          "update": {
+            "content": {
+              "text": " this",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDT6BXYQC50CZ07S4R2H9WXV",
+          "update": {
+            "content": {
+              "text": "?",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDT6BXYQC50CZ07S4R2H9WXV",
+          "update": {
+            "content": {
+              "text": "",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDT6BXYQC50CZ07S4R2H9WXV",
+          "update": {
+            "content": {
+              "text": "Your",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDT6BXYQC50CZ07S4R2H9WXV",
+          "update": {
+            "content": {
+              "text": " favorite",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDT6BXYQC50CZ07S4R2H9WXV",
+          "update": {
+            "content": {
+              "text": " color",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDT6BXYQC50CZ07S4R2H9WXV",
+          "update": {
+            "content": {
+              "text": " is",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDT6BXYQC50CZ07S4R2H9WXV",
+          "update": {
+            "content": {
+              "text": " blue",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDT6BXYQC50CZ07S4R2H9WXV",
+          "update": {
+            "content": {
+              "text": ".",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDT6BXYQC50CZ07S4R2H9WXV",
+          "update": {
+            "content": {
+              "text": "",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        }
+      ]
+    }
+  ]
+}

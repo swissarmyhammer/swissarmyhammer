@@ -44,7 +44,6 @@ fn create_test_config() -> AgentConfig {
 /// Test that agent can handle a conversation with many turns (50+ messages)
 #[tokio::test]
 #[serial]
-#[ignore] // Requires model download and significant compute time
 async fn test_long_conversation_many_turns() {
     let _ = tracing_subscriber::fmt()
         .with_max_level(tracing::Level::INFO)
@@ -100,7 +99,6 @@ async fn test_long_conversation_many_turns() {
 /// Test that agent can handle individual messages with large content
 #[tokio::test]
 #[serial]
-#[ignore] // Requires model download and significant compute time
 async fn test_long_conversation_large_messages() {
     let _ = tracing_subscriber::fmt()
         .with_max_level(tracing::Level::INFO)

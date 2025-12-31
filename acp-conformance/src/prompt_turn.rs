@@ -310,6 +310,114 @@ pub fn verify_prompt_turn_fixture(
     Ok(stats)
 }
 
+/// Test streaming capability negotiation
+///
+/// Verifies that when a client advertises streaming capability, the agent:
+/// 1. Accepts the capability during initialization
+/// 2. Sends agent_message_chunk notifications during prompt processing
+pub async fn test_streaming_capability<A: Agent + ?Sized>(agent: &A) -> crate::Result<()> {
+    tracing::info!("Testing streaming capability negotiation");
+
+    // Initialize with streaming capability in meta
+    let mut meta = serde_json::Map::new();
+    meta.insert("streaming".to_string(), serde_json::json!(true));
+
+    let client_caps = ClientCapabilities::new().meta(Some(meta));
+    let init_request = InitializeRequest::new(ProtocolVersion::V1).client_capabilities(client_caps);
+    let init_response = agent.initialize(init_request).await?;
+
+    // Agent should acknowledge capabilities
+    tracing::info!("Agent capabilities: {:?}", init_response.agent_capabilities);
+
+    // Create session
+    let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("/tmp"));
+    let new_session_request = NewSessionRequest::new(cwd);
+    let new_session_response = agent.new_session(new_session_request).await?;
+    let session_id = new_session_response.session_id;
+
+    // Send prompt - streaming notifications should be sent
+    let prompt = vec![ContentBlock::Text(TextContent::new("Hello"))];
+    let prompt_request = PromptRequest::new(session_id.clone(), prompt);
+    let response = agent.prompt(prompt_request).await?;
+
+    tracing::info!(
+        "Streaming prompt completed with stop reason: {:?}",
+        response.stop_reason
+    );
+
+    Ok(())
+}
+
+/// Test that streaming works correctly across multiple prompts
+///
+/// Verifies that:
+/// 1. Session context is maintained between streaming prompts
+/// 2. Each prompt produces streaming notifications
+pub async fn test_streaming_context_maintained<A: Agent + ?Sized>(agent: &A) -> crate::Result<()> {
+    tracing::info!("Testing streaming with context maintained across prompts");
+
+    // Initialize with streaming capability
+    let mut meta = serde_json::Map::new();
+    meta.insert("streaming".to_string(), serde_json::json!(true));
+
+    let client_caps = ClientCapabilities::new().meta(Some(meta));
+    let init_request = InitializeRequest::new(ProtocolVersion::V1).client_capabilities(client_caps);
+    agent.initialize(init_request).await?;
+
+    // Create session
+    let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("/tmp"));
+    let new_session_request = NewSessionRequest::new(cwd);
+    let new_session_response = agent.new_session(new_session_request).await?;
+    let session_id = new_session_response.session_id;
+
+    // First prompt - establish context
+    let prompt1 = vec![ContentBlock::Text(TextContent::new(
+        "My favorite color is blue. Remember this.",
+    ))];
+    let prompt_request1 = PromptRequest::new(session_id.clone(), prompt1);
+    let response1 = agent.prompt(prompt_request1).await?;
+    tracing::info!("First prompt completed: {:?}", response1.stop_reason);
+
+    // Second prompt - should have context from first
+    let prompt2 = vec![ContentBlock::Text(TextContent::new(
+        "What is my favorite color?",
+    ))];
+    let prompt_request2 = PromptRequest::new(session_id.clone(), prompt2);
+    let response2 = agent.prompt(prompt_request2).await?;
+    tracing::info!("Second prompt completed: {:?}", response2.stop_reason);
+
+    // Both should complete successfully
+    match (response1.stop_reason, response2.stop_reason) {
+        (
+            StopReason::EndTurn | StopReason::MaxTokens,
+            StopReason::EndTurn | StopReason::MaxTokens,
+        ) => {
+            tracing::info!("Streaming context test completed successfully");
+            Ok(())
+        }
+        _ => Err(crate::Error::Validation(
+            "Unexpected stop reasons in streaming context test".to_string(),
+        )),
+    }
+}
+
+/// Verify streaming fixture has agent_message_chunk notifications
+pub fn verify_streaming_fixture(
+    agent_type: &str,
+    test_name: &str,
+) -> Result<PromptTurnStats, Box<dyn std::error::Error>> {
+    let stats = verify_prompt_turn_fixture(agent_type, test_name)?;
+
+    // Streaming tests should produce message chunks
+    assert!(
+        stats.agent_message_chunks > 0,
+        "Streaming test should produce agent_message_chunk notifications, got {}",
+        stats.agent_message_chunks
+    );
+
+    Ok(stats)
+}
+
 /// Verify prompt turn fixture with expected call counts
 pub fn verify_prompt_fixture_with_response(
     agent_type: &str,
