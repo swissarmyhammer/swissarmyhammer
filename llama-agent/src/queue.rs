@@ -948,45 +948,6 @@ impl Drop for RequestQueue {
             info!("Closed sender channel to signal workers to shutdown");
         }
 
-        // Wait for all workers to complete gracefully
-        // This ensures LlamaContext objects are properly dropped before Metal cleanup
-        let handles = std::mem::take(&mut self.worker_handles);
-        if !handles.is_empty() {
-            info!("Waiting for {} workers to complete...", handles.len());
-
-            // Use std::thread to block and wait for async tasks
-            // We can't use tokio::runtime here as we might not be in a tokio context during Drop
-            let wait_result = std::thread::spawn(move || {
-                // Create a minimal tokio runtime just for waiting
-                let rt = tokio::runtime::Runtime::new().unwrap();
-                rt.block_on(async {
-                    let mut completed = 0;
-                    for (i, handle) in handles.into_iter().enumerate() {
-                        match handle.await {
-                            Ok(()) => {
-                                completed += 1;
-                                debug!("Worker {} completed successfully", i);
-                            }
-                            Err(e) => {
-                                warn!("Worker {} join error: {:?}", i, e);
-                            }
-                        }
-                    }
-                    completed
-                })
-            })
-            .join();
-
-            match wait_result {
-                Ok(completed) => {
-                    info!("All {} workers completed successfully", completed);
-                }
-                Err(e) => {
-                    warn!("Error waiting for workers: {:?}", e);
-                }
-            }
-        }
-
         // Clear session state cache to release any remaining references
         {
             let mut cache = self.session_state_cache.lock().unwrap();
@@ -1000,6 +961,9 @@ impl Drop for RequestQueue {
             }
         }
 
+        // Note: Worker handles will be aborted when dropped
+        // For graceful shutdown with proper cleanup, use shutdown() or shutdown_with_timeout()
+        // instead of relying on Drop, which must be non-blocking to avoid hanging tests
         info!("RequestQueue cleanup complete");
     }
 }
