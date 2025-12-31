@@ -1,4 +1,5 @@
 use std::process;
+use std::sync::atomic::{AtomicBool, Ordering};
 mod cli;
 mod commands;
 mod context;
@@ -20,6 +21,32 @@ use owo_colors::OwoColorize;
 use std::path::PathBuf;
 use std::sync::Arc;
 use swissarmyhammer_config::TemplateContext;
+
+/// Track if we've already performed shutdown to prevent double-shutdown
+static SHUTDOWN_PERFORMED: AtomicBool = AtomicBool::new(false);
+
+/// Perform graceful shutdown before process exit
+///
+/// This ensures the global LlamaAgent executor is properly shut down before
+/// process termination, preventing Metal device cleanup assertion failures on macOS.
+///
+/// NOTE: This function creates a new tokio runtime, so it should NOT be called
+/// from within an existing tokio runtime context.
+fn shutdown_before_exit() {
+    // Only shutdown once
+    if SHUTDOWN_PERFORMED.swap(true, Ordering::SeqCst) {
+        return;
+    }
+
+    // Create a minimal tokio runtime to execute the async shutdown
+    if let Ok(rt) = tokio::runtime::Runtime::new() {
+        if let Err(e) = rt.block_on(
+            swissarmyhammer_agent_executor::llama::LlamaAgentExecutor::shutdown_global_executor(),
+        ) {
+            eprintln!("Warning: Failed to shutdown global executor: {}", e);
+        }
+    }
+}
 
 /// Global flags extracted from command-line arguments
 struct GlobalFlags {
@@ -261,6 +288,7 @@ fn unwrap_or_exit<T, E: std::fmt::Display>(result: Result<T, E>, message: &str) 
         Ok(value) => value,
         Err(e) => {
             eprintln!("{}: {}", message, e);
+            shutdown_before_exit();
             process::exit(EXIT_ERROR);
         }
     }
@@ -278,6 +306,7 @@ fn handle_cwd_flag(args: &[String]) {
             );
         } else {
             eprintln!("--cwd requires a path argument");
+            shutdown_before_exit();
             process::exit(EXIT_ERROR);
         }
     }
@@ -344,10 +373,12 @@ fn handle_cli_parse_error(error: clap::Error) -> ! {
     match error.kind() {
         ErrorKind::DisplayHelp | ErrorKind::DisplayVersion => {
             print!("{}", error);
+            shutdown_before_exit();
             process::exit(EXIT_SUCCESS);
         }
         _ => {
             eprintln!("{}", error);
+            shutdown_before_exit();
             process::exit(EXIT_ERROR);
         }
     }
@@ -401,6 +432,18 @@ async fn main() {
 
     // Handle dynamic command dispatch
     let exit_code = handle_dynamic_matches(matches, cli_tool_context, template_context).await;
+
+    // Shutdown global LlamaAgent executor before exit to prevent Metal cleanup crashes
+    // We're already in a tokio runtime, so we can call the async function directly
+    if SHUTDOWN_PERFORMED.swap(true, Ordering::SeqCst) == false {
+        if let Err(e) =
+            swissarmyhammer_agent_executor::llama::LlamaAgentExecutor::shutdown_global_executor()
+                .await
+        {
+            eprintln!("Warning: Failed to shutdown global executor: {}", e);
+        }
+    }
+
     process::exit(exit_code);
 }
 

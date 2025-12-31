@@ -597,6 +597,26 @@ impl LlamaAgentExecutor {
             .cloned()
             .map_err(|e: ActionError| e)
     }
+
+    /// Shutdown the global executor if it exists
+    ///
+    /// This function should be called before program exit to ensure proper cleanup
+    /// of Metal resources and worker threads. It will:
+    /// 1. Check if the global executor is initialized
+    /// 2. Lock and shutdown the executor
+    /// 3. Drop the Arc reference
+    ///
+    /// This prevents Metal device cleanup assertion failures on macOS by ensuring
+    /// all LlamaContext objects are properly dropped before C++ static destructors run.
+    pub async fn shutdown_global_executor() -> ActionResult<()> {
+        if let Some(executor_arc) = GLOBAL_LLAMA_EXECUTOR.get() {
+            tracing::info!("Shutting down global LlamaAgent executor");
+            let mut executor = executor_arc.lock().await;
+            executor.shutdown().await?;
+            tracing::info!("Global LlamaAgent executor shutdown complete");
+        }
+        Ok(())
+    }
 }
 
 impl Drop for LlamaAgentExecutor {

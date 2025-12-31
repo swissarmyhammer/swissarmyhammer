@@ -150,7 +150,7 @@ pub struct QueuedRequest {
 }
 
 pub struct RequestQueue {
-    sender: mpsc::Sender<QueuedRequest>,
+    sender: Option<mpsc::Sender<QueuedRequest>>,
     worker_handles: Vec<JoinHandle<()>>,
     metrics: Arc<QueueMetrics>,
     _chat_template: Arc<ChatTemplateEngine>,
@@ -207,7 +207,7 @@ impl RequestQueue {
         );
 
         Self {
-            sender,
+            sender: Some(sender),
             worker_handles,
             metrics,
             _chat_template: chat_template,
@@ -239,7 +239,13 @@ impl RequestQueue {
         self.metrics.record_request_submitted();
 
         // Try to send to queue
-        if self.sender.try_send(queued_request).is_err() {
+        let sender = self.sender.as_ref().ok_or_else(|| {
+            warn!("Queue is shutting down, rejecting request");
+            self.metrics.record_request_failed();
+            QueueError::WorkerError("Queue is shutting down".to_string())
+        })?;
+
+        if sender.try_send(queued_request).is_err() {
             warn!("Queue is full, rejecting request");
             self.metrics.record_request_failed(); // Adjust queue size back down
             return Err(QueueError::Full);
@@ -281,7 +287,13 @@ impl RequestQueue {
         self.metrics.record_request_submitted();
 
         // Try to send to queue
-        if self.sender.try_send(queued_request).is_err() {
+        let sender = self.sender.as_ref().ok_or_else(|| {
+            warn!("Queue is shutting down, rejecting streaming request");
+            self.metrics.record_request_failed();
+            QueueError::WorkerError("Queue is shutting down".to_string())
+        })?;
+
+        if sender.try_send(queued_request).is_err() {
             warn!("Queue is full, rejecting streaming request");
             self.metrics.record_request_failed(); // Adjust queue size back down
             return Err(QueueError::Full);
@@ -929,8 +941,66 @@ impl Drop for RequestQueue {
             "RequestQueue dropping - {} worker handles remaining",
             self.worker_handles.len()
         );
-        // Note: worker_handles will be aborted when dropped
-        // For graceful shutdown, call shutdown() method instead
+
+        // Drop sender to signal workers to shut down
+        // This closes the channel, causing receiver.recv() to return None
+        if self.sender.take().is_some() {
+            info!("Closed sender channel to signal workers to shutdown");
+        }
+
+        // Wait for all workers to complete gracefully
+        // This ensures LlamaContext objects are properly dropped before Metal cleanup
+        let handles = std::mem::take(&mut self.worker_handles);
+        if !handles.is_empty() {
+            info!("Waiting for {} workers to complete...", handles.len());
+
+            // Use std::thread to block and wait for async tasks
+            // We can't use tokio::runtime here as we might not be in a tokio context during Drop
+            let wait_result = std::thread::spawn(move || {
+                // Create a minimal tokio runtime just for waiting
+                let rt = tokio::runtime::Runtime::new().unwrap();
+                rt.block_on(async {
+                    let mut completed = 0;
+                    for (i, handle) in handles.into_iter().enumerate() {
+                        match handle.await {
+                            Ok(()) => {
+                                completed += 1;
+                                debug!("Worker {} completed successfully", i);
+                            }
+                            Err(e) => {
+                                warn!("Worker {} join error: {:?}", i, e);
+                            }
+                        }
+                    }
+                    completed
+                })
+            })
+            .join();
+
+            match wait_result {
+                Ok(completed) => {
+                    info!("All {} workers completed successfully", completed);
+                }
+                Err(e) => {
+                    warn!("Error waiting for workers: {:?}", e);
+                }
+            }
+        }
+
+        // Clear session state cache to release any remaining references
+        {
+            let mut cache = self.session_state_cache.lock().unwrap();
+            let cache_size = cache.len();
+            if cache_size > 0 {
+                info!(
+                    "Clearing {} session state cache entries before cleanup",
+                    cache_size
+                );
+                cache.clear();
+            }
+        }
+
+        info!("RequestQueue cleanup complete");
     }
 }
 
