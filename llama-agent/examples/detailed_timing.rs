@@ -115,8 +115,8 @@ async fn measure_generation(
             println!("Context state: NOT PRESENT");
         }
 
-        if let Some(template_count) = session.template_token_count {
-            println!("Template cache: {} tokens", template_count);
+        if session.cached_token_count > 0 {
+            println!("Cached token count: {} tokens", session.cached_token_count);
         }
     }
 

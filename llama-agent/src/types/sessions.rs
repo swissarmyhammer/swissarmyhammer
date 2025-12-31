@@ -239,34 +239,43 @@ pub struct Session {
     /// incremental processing where only new tokens are sent to the model.
     /// None indicates no context state is being tracked (full processing mode).
     pub context_state: Option<ContextState>,
-    /// Number of tokens in the cached template (if template caching is enabled)
+
+    /// Number of messages that have been processed and saved in the session KV cache
     ///
-    /// This field tracks the size of the session's template (system prompt + tools)
-    /// that has been pre-processed and cached in the KV cache. When set, the generator
-    /// can skip processing these tokens and start decoding from this offset position.
+    /// This tracks how many messages from the conversation history are already
+    /// stored in the KV cache. When continuing a multi-turn conversation, only
+    /// messages from this count onward need to be rendered and processed.
     ///
-    /// # Template Caching Workflow
+    /// # Multi-Turn Workflow
     ///
-    /// 1. **Lazy Initialization**: Template is initialized on the first generation request
-    ///    for a session, not at session creation time
-    /// 2. **Cache Key**: Templates are cached based on a hash of the system prompt and
-    ///    tools JSON structure
-    /// 3. **Cache Hit**: If another session has the same template, the KV cache is loaded
-    ///    from disk rather than reprocessing
-    /// 4. **Cache Miss**: Template is processed, saved to disk, and this field is set
-    /// 5. **Generation**: Generator uses this offset to skip template tokens during decode
+    /// 1. Turn 1: Process all messages (0 to N), save cache, set to N
+    /// 2. Turn 2: New message added (N to N+1), render only message N+1, append to cache
+    /// 3. Turn 3: Another message (N+1 to N+2), render only message N+2, append to cache
     ///
-    /// # Value Semantics
+    /// This enables efficient multi-turn conversations without reprocessing the
+    /// entire conversation history on each turn.
+    #[serde(default)]
+    pub cached_message_count: usize,
+
+    /// Number of tokens that have been processed and saved in the session state cache
     ///
-    /// - `None`: Template caching not initialized for this session (first generation pending)
-    /// - `Some(n)`: Template has `n` tokens cached in KV cache, start processing at position `n`
+    /// This tracks how many tokens from the conversation were processed when the
+    /// session state was last saved. When restoring state and continuing generation,
+    /// this value is used as the template_token_count offset to skip reprocessing
+    /// tokens that are already in the restored KV cache.
     ///
-    /// # Performance Impact
+    /// # Multi-Turn Workflow with State Caching
     ///
-    /// Template caching provides significant performance benefits for sessions with the same
-    /// tools and system prompt, as the template only needs to be processed once and can be
-    /// reused across multiple sessions via KV cache sharing.
-    pub template_token_count: Option<usize>,
+    /// 1. Turn 1: Process all N tokens, save state, set cached_token_count = N
+    /// 2. Turn 2: Restore state (KV cache has N tokens), tokenize full prompt → M tokens
+    ///    Process only tokens N..M using cached_token_count as offset
+    /// 3. Turn 3: Restore state (KV cache has M tokens), tokenize full prompt → P tokens
+    ///    Process only tokens M..P using cached_token_count as offset
+    ///
+    /// This allows efficient incremental processing where the restored KV cache
+    /// contains all previous tokens and only new tokens need to be processed.
+    #[serde(default)]
+    pub cached_token_count: usize,
 }
 
 /// Prompt template for session compaction.

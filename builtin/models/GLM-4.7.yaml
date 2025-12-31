@@ -9,3 +9,5 @@ executor:
       source: !HuggingFace
         repo: "unsloth/GLM-4.7-GGUF"
         folder: "IQ4_NL"
+    batch_size: 256
+    ubatch_size: 128

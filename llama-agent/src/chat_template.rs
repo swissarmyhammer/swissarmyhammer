@@ -209,6 +209,90 @@ impl ChatTemplateEngine {
         model: &LlamaModel,
         model_config: Option<&ModelConfig>,
     ) -> Result<String, TemplateError> {
+        self.render_session_with_config_and_prompt(session, model, model_config, true)
+    }
+
+    /// Render messages starting from a specific offset for incremental processing
+    ///
+    /// This method is used for multi-turn conversations where earlier messages are
+    /// already in the KV cache. Only messages from `message_offset` onward are rendered.
+    pub fn render_session_from_offset(
+        &self,
+        session: &Session,
+        model: &LlamaModel,
+        model_config: Option<&ModelConfig>,
+        message_offset: usize,
+        add_generation_prompt: bool,
+    ) -> Result<String, TemplateError> {
+        debug!(
+            "Rendering session from message offset {} (total messages: {})",
+            message_offset,
+            session.messages.len()
+        );
+
+        // Convert session messages to the format expected by llama-cpp-2
+        let mut chat_messages = Vec::new();
+
+        // Only render messages from the offset onward
+        for message in session.messages.iter().skip(message_offset) {
+            let role = message.role.as_str().to_string();
+            let content = &message.content;
+
+            // Handle tool calls and results properly
+            match message.role {
+                crate::types::MessageRole::Tool => {
+                    // Tool response message
+                    if let Some(tool_call_id) = &message.tool_call_id {
+                        let formatted_content =
+                            format!("Tool result for call {}: {}", tool_call_id, content);
+                        chat_messages.push((role, formatted_content));
+                    } else {
+                        chat_messages.push((role, content.clone()));
+                    }
+                }
+                _ => {
+                    chat_messages.push((role, content.clone()));
+                }
+            }
+        }
+
+        // Include available tools in the template context if present
+        let tools_context = if !session.available_tools.is_empty() {
+            debug!(
+                "Session has {} available tools, formatting for template",
+                session.available_tools.len()
+            );
+            Some(self.format_tools_for_template(&session.available_tools)?)
+        } else {
+            debug!("Session has no available tools");
+            None
+        };
+
+        // Apply the model's chat template
+        let rendered = self.apply_chat_template_with_tools_and_prompt(
+            model,
+            &chat_messages,
+            tools_context.as_deref(),
+            model_config,
+            add_generation_prompt,
+        )?;
+
+        debug!(
+            "Rendered {} new messages, prompt length: {}",
+            session.messages.len() - message_offset,
+            rendered.len()
+        );
+        Ok(rendered)
+    }
+
+    /// Render a session with control over generation prompt
+    pub fn render_session_with_config_and_prompt(
+        &self,
+        session: &Session,
+        model: &LlamaModel,
+        model_config: Option<&ModelConfig>,
+        add_generation_prompt: bool,
+    ) -> Result<String, TemplateError> {
         debug!("Rendering session with {} messages", session.messages.len());
 
         // Convert session messages to the format expected by llama-cpp-2
@@ -249,11 +333,12 @@ impl ChatTemplateEngine {
         };
 
         // Apply the model's chat template
-        let rendered = self.apply_chat_template_with_tools(
+        let rendered = self.apply_chat_template_with_tools_and_prompt(
             model,
             &chat_messages,
             tools_context.as_deref(),
             model_config,
+            add_generation_prompt,
         )?;
 
         debug!("Rendered prompt length: {}", rendered.len());
@@ -473,22 +558,55 @@ impl ChatTemplateEngine {
         tools_context: Option<&str>,
         model_config: Option<&ModelConfig>,
     ) -> Result<String, TemplateError> {
-        self.format_chat_template_for_model(model, messages, tools_context, model_config)
+        self.apply_chat_template_with_tools_and_prompt(
+            model,
+            messages,
+            tools_context,
+            model_config,
+            true,
+        )
     }
 
-    /// Format chat template based on model type
-    fn format_chat_template_for_model(
+    /// Apply chat template with control over generation prompt
+    fn apply_chat_template_with_tools_and_prompt(
         &self,
         model: &LlamaModel,
         messages: &[(String, String)],
         tools_context: Option<&str>,
         model_config: Option<&ModelConfig>,
+        add_generation_prompt: bool,
+    ) -> Result<String, TemplateError> {
+        self.format_chat_template_for_model_with_prompt(
+            model,
+            messages,
+            tools_context,
+            model_config,
+            add_generation_prompt,
+        )
+    }
+
+    /// Format chat template with control over generation prompt
+    fn format_chat_template_for_model_with_prompt(
+        &self,
+        model: &LlamaModel,
+        messages: &[(String, String)],
+        tools_context: Option<&str>,
+        model_config: Option<&ModelConfig>,
+        add_generation_prompt: bool,
     ) -> Result<String, TemplateError> {
         // First, try to use the model's native chat template functionality
         // This is the preferred approach as it uses the model's actual template
-        match self.format_chat_template_native(model, messages, tools_context) {
+        match self.format_chat_template_native_with_prompt(
+            model,
+            messages,
+            tools_context,
+            add_generation_prompt,
+        ) {
             Ok(result) => {
-                debug!("Successfully used native chat template");
+                debug!(
+                    "Successfully used native chat template (add_generation_prompt={})",
+                    add_generation_prompt
+                );
                 return Ok(result);
             }
             Err(e) => {
@@ -692,11 +810,12 @@ impl ChatTemplateEngine {
     /// This method tries to use llama-cpp-2's built-in template functionality
     /// which leverages the model's actual chat template. Falls back to the
     /// legacy implementation if native templates are not available.
-    fn format_chat_template_native(
+    fn format_chat_template_native_with_prompt(
         &self,
         model: &LlamaModel,
         messages: &[(String, String)],
         tools_context: Option<&str>,
+        add_generation_prompt: bool,
     ) -> Result<String, TemplateError> {
         debug!("Attempting to use native chat template functionality");
 
@@ -731,11 +850,12 @@ impl ChatTemplateEngine {
                 }
 
                 // Apply the native chat template
-                match model.apply_chat_template(&template, &chat_messages, true) {
+                match model.apply_chat_template(&template, &chat_messages, add_generation_prompt) {
                     Ok(formatted) => {
                         debug!(
-                            "Successfully applied native chat template, {} characters",
-                            formatted.len()
+                            "Successfully applied native chat template, {} characters (add_generation_prompt={})",
+                            formatted.len(),
+                            add_generation_prompt
                         );
                         return Ok(formatted);
                     }
@@ -1187,8 +1307,9 @@ mod qwen3coder_model_integration {
             updated_at: SystemTime::now(),
             compaction_history: Vec::new(),
             transcript_path: None,
-        context_state: None,
-        template_token_count: None,
+            context_state: None,
+            cached_message_count: 0,
+            cached_token_count: 0,
         }
     }
 
@@ -1772,8 +1893,9 @@ mod qwen3coder_integration_tests {
             updated_at: SystemTime::now(),
             compaction_history: Vec::new(),
             transcript_path: None,
-        context_state: None,
-        template_token_count: None,
+            context_state: None,
+            cached_message_count: 0,
+            cached_token_count: 0,
         }
     }
 
@@ -4199,7 +4321,8 @@ mod tests {
             compaction_history: Vec::new(),
             transcript_path: None,
             context_state: None,
-            template_token_count: None,
+            cached_message_count: 0,
+            cached_token_count: 0,
         }
     }
 
@@ -6716,7 +6839,8 @@ mod template_only_tests {
             compaction_history: Vec::new(),
             transcript_path: None,
             context_state: None,
-            template_token_count: None,
+            cached_message_count: 0,
+            cached_token_count: 0,
         };
 
         // Add a simple tool

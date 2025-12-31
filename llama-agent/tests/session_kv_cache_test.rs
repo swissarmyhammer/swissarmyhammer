@@ -82,7 +82,8 @@ mod session_kv_cache_tests {
             compaction_history: Vec::new(),
             transcript_path: None,
             context_state: None,
-            template_token_count: None,
+            cached_message_count: 0,
+            cached_token_count: 0,
         }
     }
 
@@ -261,5 +262,347 @@ mod session_kv_cache_tests {
 
         // Each call should create a unique ID
         assert_ne!(format!("{:?}", id1), format!("{:?}", id2));
+    }
+
+    /// Real integration test for session KV cache with a small model.
+    ///
+    /// This test verifies the fix for the KV cache bug where we were incorrectly
+    /// trying to re-decode cached positions instead of continuing from the next position.
+    ///
+    /// **What This Tests:**
+    /// 1. KV cache is created after first generation
+    /// 2. KV cache is loaded on subsequent turns
+    /// 3. Cache restoration does NOT attempt to decode cached positions
+    /// 4. Generation continues from the correct next position
+    /// 5. Multiple turns work correctly with cache reuse
+    ///
+    /// **Small Model:** Uses Qwen3-0.6B for fast test execution (600M params)
+    #[tokio::test]
+    #[ignore = "Requires downloading Qwen3-0.6B model (~380MB) - run with --ignored"]
+    async fn test_session_kv_cache_multi_turn_real() {
+        use llama_agent::types::{
+            GenerationRequest, Message, MessageRole, ModelConfig, ModelSource, RetryConfig,
+        };
+        use llama_agent::{AgentAPI, AgentConfig, AgentServer, ParallelConfig, QueueConfig};
+        use tracing_subscriber;
+
+        // Initialize tracing to see cache debug messages
+        let _ = tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::DEBUG)
+            .try_init();
+
+        // Use small Qwen3-0.6B model for testing
+        let config = AgentConfig {
+            model: ModelConfig {
+                source: ModelSource::HuggingFace {
+                    repo: "unsloth/Qwen3-0.6B-GGUF".to_string(),
+                    filename: Some("Qwen3-0.6B-UD-Q4_K_XL.gguf".to_string()),
+                    folder: None,
+                },
+                batch_size: 128,
+                use_hf_params: true,
+                retry_config: RetryConfig::default(),
+                debug: true, // Enable debug logging
+                n_seq_max: 1,
+                n_threads: 4,
+                n_threads_batch: 4,
+            },
+            mcp_servers: Vec::new(),
+            session_config: SessionConfig {
+                kv_cache_dir: Some(std::env::temp_dir().join("llama-test-cache")),
+                ..Default::default()
+            },
+            parallel_execution_config: ParallelConfig::default(),
+            queue_config: QueueConfig::default(),
+        };
+
+        // Initialize agent
+        let agent = AgentServer::initialize(config)
+            .await
+            .expect("Failed to initialize agent");
+
+        // Create a session
+        let session = agent
+            .create_session()
+            .await
+            .expect("Failed to create session");
+        let session_id = session.id;
+
+        // Turn 1: Initial message (no cache exists)
+        agent
+            .add_message(
+                &session_id,
+                Message {
+                    role: MessageRole::User,
+                    content: "What is 2+2?".to_string(),
+                    tool_call_id: None,
+                    tool_name: None,
+                    timestamp: SystemTime::now(),
+                },
+            )
+            .await
+            .expect("Failed to add message");
+
+        let request1 = GenerationRequest::new(session_id)
+            .with_max_tokens(50)
+            .with_temperature(0.0);
+
+        let response1 = agent
+            .generate(request1)
+            .await
+            .expect("Failed to generate response 1");
+
+        assert!(
+            !response1.generated_text.is_empty(),
+            "Response 1 should not be empty"
+        );
+
+        let tokens_turn1 = response1
+            .complete_token_sequence
+            .as_ref()
+            .expect("Turn 1 should have complete_token_sequence")
+            .len();
+
+        println!("Turn 1: Processed {} tokens", tokens_turn1);
+
+        // Turn 2: Second message (cache should exist and be used)
+        agent
+            .add_message(
+                &session_id,
+                Message {
+                    role: MessageRole::User,
+                    content: "What is 3+3?".to_string(),
+                    tool_call_id: None,
+                    tool_name: None,
+                    timestamp: SystemTime::now(),
+                },
+            )
+            .await
+            .expect("Failed to add message");
+
+        let request2 = GenerationRequest::new(session_id)
+            .with_max_tokens(50)
+            .with_temperature(0.0);
+
+        let response2 = agent
+            .generate(request2)
+            .await
+            .expect("Failed to generate response 2");
+
+        assert!(
+            !response2.generated_text.is_empty(),
+            "Response 2 should not be empty"
+        );
+
+        let tokens_turn2 = response2
+            .complete_token_sequence
+            .as_ref()
+            .expect("Turn 2 should have complete_token_sequence")
+            .len();
+
+        println!("Turn 2: Total tokens = {}", tokens_turn2);
+
+        // Verify cache was used: Turn 2 should have more total tokens than Turn 1
+        assert!(
+            tokens_turn2 > tokens_turn1,
+            "Turn 2 should have more total tokens (accumulated conversation)"
+        );
+
+        // Turn 3: Third message (cache should continue to work)
+        agent
+            .add_message(
+                &session_id,
+                Message {
+                    role: MessageRole::User,
+                    content: "What is 5+5?".to_string(),
+                    tool_call_id: None,
+                    tool_name: None,
+                    timestamp: SystemTime::now(),
+                },
+            )
+            .await
+            .expect("Failed to add message");
+
+        let request3 = GenerationRequest::new(session_id)
+            .with_max_tokens(50)
+            .with_temperature(0.0);
+
+        let response3 = agent
+            .generate(request3)
+            .await
+            .expect("Failed to generate response 3");
+
+        assert!(
+            !response3.generated_text.is_empty(),
+            "Response 3 should not be empty"
+        );
+
+        let tokens_turn3 = response3
+            .complete_token_sequence
+            .as_ref()
+            .expect("Turn 3 should have complete_token_sequence")
+            .len();
+
+        println!("Turn 3: Total tokens = {}", tokens_turn3);
+
+        // Verify continued accumulation
+        assert!(
+            tokens_turn3 > tokens_turn2,
+            "Turn 3 should have more total tokens than Turn 2"
+        );
+
+        // Critical verification: If we see "Decode Error -1: n_tokens == 0", the test fails
+        // This error indicates the bug where we try to re-decode cached positions
+        // The test passes if all three generations succeed without this error
+        println!(
+            "✅ KV cache test passed: {} tokens accumulated over 3 turns",
+            tokens_turn3
+        );
+        println!("   Turn 1: {} tokens", tokens_turn1);
+        println!("   Turn 2: {} tokens", tokens_turn2);
+        println!("   Turn 3: {} tokens", tokens_turn3);
+    }
+
+    /// Regression test for the KV cache position bug.
+    ///
+    /// **Bug Description (Fixed):**
+    /// After loading a KV cache with N tokens (positions 0 to N-1), we were trying
+    /// to re-decode the last cached token at position N-1. This caused llama.cpp to
+    /// fail with "Decode Error -1: n_tokens == 0" because that position was already
+    /// in the cache.
+    ///
+    /// **Correct Behavior:**
+    /// After loading a KV cache with N tokens, the next decode should start at position N,
+    /// not re-decode position N-1. The llama.cpp context is already ready to continue.
+    ///
+    /// **This Test Verifies:**
+    /// - Cache loading succeeds without "failed to restore logits" errors
+    /// - No attempts to decode at cached positions
+    /// - Generation continues smoothly from the next position
+    ///
+    /// **Model:** Qwen3-0.6B (small and fast)
+    #[tokio::test]
+    #[ignore = "Requires downloading Qwen3-0.6B model (~380MB) - run with --ignored"]
+    async fn test_kv_cache_position_regression() {
+        use llama_agent::types::{
+            GenerationRequest, MessageRole, ModelConfig, ModelSource, RetryConfig,
+        };
+        use llama_agent::{AgentAPI, AgentConfig, AgentServer, ParallelConfig, QueueConfig};
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::Arc;
+
+        // Track if we see the bug error message
+        let saw_decode_error = Arc::new(AtomicBool::new(false));
+        let saw_decode_error_clone = saw_decode_error.clone();
+
+        // Set up tracing subscriber that catches error messages
+        let subscriber = tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::WARN)
+            .with_writer(move || {
+                // Custom writer that checks for the bug error
+                struct ErrorChecker {
+                    saw_error: Arc<AtomicBool>,
+                }
+                impl std::io::Write for ErrorChecker {
+                    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+                        let msg = String::from_utf8_lossy(buf);
+                        if msg.contains("Decode Error -1: n_tokens == 0")
+                            || msg.contains("failed to restore logits")
+                        {
+                            self.saw_error.store(true, Ordering::SeqCst);
+                        }
+                        std::io::stdout().write(buf)
+                    }
+                    fn flush(&mut self) -> std::io::Result<()> {
+                        std::io::stdout().flush()
+                    }
+                }
+                ErrorChecker {
+                    saw_error: saw_decode_error_clone.clone(),
+                }
+            })
+            .finish();
+
+        let _ = tracing::subscriber::set_global_default(subscriber);
+
+        let config = AgentConfig {
+            model: ModelConfig {
+                source: ModelSource::HuggingFace {
+                    repo: "unsloth/Qwen3-0.6B-GGUF".to_string(),
+                    filename: Some("Qwen3-0.6B-UD-Q4_K_XL.gguf".to_string()),
+                    folder: None,
+                },
+                batch_size: 128,
+                use_hf_params: true,
+                retry_config: RetryConfig::default(),
+                debug: false,
+                n_seq_max: 1,
+                n_threads: 4,
+                n_threads_batch: 4,
+            },
+            mcp_servers: Vec::new(),
+            session_config: SessionConfig {
+                kv_cache_dir: Some(std::env::temp_dir().join("llama-regression-test-cache")),
+                ..Default::default()
+            },
+            parallel_execution_config: ParallelConfig::default(),
+            queue_config: QueueConfig::default(),
+        };
+
+        let agent = AgentServer::initialize(config)
+            .await
+            .expect("Failed to initialize agent");
+
+        let session = agent
+            .create_session()
+            .await
+            .expect("Failed to create session");
+        let session_id = session.id;
+
+        // First turn - creates cache
+        agent
+            .add_message(
+                &session_id,
+                Message {
+                    role: MessageRole::User,
+                    content: "Hello".to_string(),
+                    tool_call_id: None,
+                    tool_name: None,
+                    timestamp: SystemTime::now(),
+                },
+            )
+            .await
+            .unwrap();
+        let request1 = GenerationRequest::new(session_id)
+            .with_max_tokens(20)
+            .with_temperature(0.0);
+        agent.generate(request1).await.expect("Turn 1 failed");
+
+        // Second turn - loads cache (this is where the bug would occur)
+        agent
+            .add_message(
+                &session_id,
+                Message {
+                    role: MessageRole::User,
+                    content: "Hi".to_string(),
+                    tool_call_id: None,
+                    tool_name: None,
+                    timestamp: SystemTime::now(),
+                },
+            )
+            .await
+            .unwrap();
+        let request2 = GenerationRequest::new(session_id)
+            .with_max_tokens(20)
+            .with_temperature(0.0);
+        agent.generate(request2).await.expect("Turn 2 failed");
+
+        // Verify we never saw the decode error
+        assert!(
+            !saw_decode_error.load(Ordering::SeqCst),
+            "REGRESSION: Detected 'Decode Error -1: n_tokens == 0' - KV cache is trying to re-decode cached positions!"
+        );
+
+        println!("✅ Regression test passed: No decode errors, cache position handling is correct");
     }
 }

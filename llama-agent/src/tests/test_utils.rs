@@ -19,7 +19,8 @@ pub fn create_test_session_with_messages(message_count: usize) -> Session {
         compaction_history: Vec::new(),
         transcript_path: None,
         context_state: None,
-        template_token_count: None,
+        cached_message_count: 0,
+        cached_token_count: 0,
     };
 
     // Add alternating user/assistant messages
@@ -56,7 +57,8 @@ pub fn create_large_content_session(message_count: usize, words_per_message: usi
         compaction_history: Vec::new(),
         transcript_path: None,
         context_state: None,
-        template_token_count: None,
+        cached_message_count: 0,
+        cached_token_count: 0,
     };
 
     for i in 0..message_count {
@@ -90,7 +92,8 @@ pub fn create_session_with_tool_calls() -> Session {
         compaction_history: Vec::new(),
         transcript_path: None,
         context_state: None,
-        template_token_count: None,
+        cached_message_count: 0,
+        cached_token_count: 0,
     };
 
     // Add user message
@@ -137,7 +140,8 @@ pub fn create_session_with_incomplete_tool_calls() -> Session {
         compaction_history: Vec::new(),
         transcript_path: None,
         context_state: None,
-        template_token_count: None,
+        cached_message_count: 0,
+        cached_token_count: 0,
     };
 
     // Add user message
@@ -440,7 +444,8 @@ pub fn create_session_with_messages(count: usize) -> Session {
         compaction_history: Vec::new(),
         transcript_path: None,
         context_state: None,
-        template_token_count: None,
+        cached_message_count: 0,
+        cached_token_count: 0,
     }
 }
 
@@ -481,7 +486,8 @@ pub fn create_session_with_sample_conversation() -> Session {
         compaction_history: Vec::new(),
         transcript_path: None,
         context_state: None,
-        template_token_count: None,
+        cached_message_count: 0,
+        cached_token_count: 0,
     }
 }
 

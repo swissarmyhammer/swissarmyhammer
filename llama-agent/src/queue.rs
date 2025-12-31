@@ -8,14 +8,22 @@ use crate::types::{
 };
 use llama_common::async_utils;
 use llama_cpp_2::model::LlamaModel;
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
-use tokio::sync::{mpsc, oneshot, Mutex as TokioMutex};
+use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, trace, warn};
 use ulid::Ulid;
+
+/// In-memory cache of session states for efficient multi-turn conversations
+/// Maps session_id -> (state_bytes, message_count)
+///
+/// The state_bytes contain the complete llama.cpp context state including KV cache,
+/// allowing us to restore a session without disk I/O.
+type SessionStateCache = Arc<Mutex<HashMap<String, Vec<u8>>>>;
 
 #[derive(Debug, Default)]
 pub struct QueueMetrics {
@@ -147,6 +155,9 @@ pub struct RequestQueue {
     metrics: Arc<QueueMetrics>,
     _chat_template: Arc<ChatTemplateEngine>,
     _session_config: crate::types::SessionConfig,
+    /// Kept alive for duration of queue - workers hold references to this cache
+    #[allow(dead_code)]
+    session_state_cache: SessionStateCache,
 }
 
 impl RequestQueue {
@@ -156,9 +167,10 @@ impl RequestQueue {
         session_config: crate::types::SessionConfig,
     ) -> Self {
         let (sender, receiver) = mpsc::channel(config.max_queue_size);
-        let receiver = Arc::new(TokioMutex::new(receiver));
+        let receiver = Arc::new(tokio::sync::Mutex::new(receiver));
         let metrics = Arc::new(QueueMetrics::new());
         let chat_template = Arc::new(ChatTemplateEngine::new());
+        let session_state_cache: SessionStateCache = Arc::new(Mutex::new(HashMap::new()));
 
         let mut worker_handles = Vec::new();
 
@@ -170,6 +182,7 @@ impl RequestQueue {
             let metrics = metrics.clone();
             let chat_template = chat_template.clone();
             let session_config = session_config.clone();
+            let session_state_cache = session_state_cache.clone();
 
             let handle = tokio::spawn(async move {
                 Self::worker_loop(
@@ -180,6 +193,7 @@ impl RequestQueue {
                     metrics,
                     chat_template,
                     session_config,
+                    session_state_cache,
                 )
                 .await;
             });
@@ -198,6 +212,7 @@ impl RequestQueue {
             metrics,
             _chat_template: chat_template,
             _session_config: session_config,
+            session_state_cache,
         }
     }
 
@@ -286,12 +301,13 @@ impl RequestQueue {
 
     async fn worker_loop(
         worker_id: usize,
-        receiver: Arc<TokioMutex<mpsc::Receiver<QueuedRequest>>>,
+        receiver: Arc<tokio::sync::Mutex<mpsc::Receiver<QueuedRequest>>>,
         model_manager: Arc<ModelManager>,
         _config: QueueConfig,
         metrics: Arc<QueueMetrics>,
         chat_template: Arc<ChatTemplateEngine>,
         session_config: crate::types::SessionConfig,
+        session_state_cache: SessionStateCache,
     ) {
         info!("Worker {} started", worker_id);
 
@@ -336,6 +352,7 @@ impl RequestQueue {
                 metrics.clone(),
                 chat_template.clone(),
                 session_config.clone(),
+                session_state_cache.clone(),
             )
             .await;
         }
@@ -348,6 +365,7 @@ impl RequestQueue {
         metrics: Arc<QueueMetrics>,
         chat_template: Arc<ChatTemplateEngine>,
         session_config: crate::types::SessionConfig,
+        session_state_cache: SessionStateCache,
     ) {
         let start_time = Instant::now();
 
@@ -414,6 +432,7 @@ impl RequestQueue {
                         &queued_request.cancellation_token,
                         &chat_template,
                         &session_config,
+                        &session_state_cache,
                     )
                 })
                 .await;
@@ -462,7 +481,8 @@ impl RequestQueue {
         model_manager: &ModelManager,
         cancellation_token: &CancellationToken,
         chat_template: &ChatTemplateEngine,
-        session_config: &crate::types::SessionConfig,
+        _session_config: &crate::types::SessionConfig,
+        session_state_cache: &SessionStateCache,
     ) -> Result<GenerationResponse, QueueError> {
         let start_time = Instant::now();
 
@@ -471,7 +491,36 @@ impl RequestQueue {
             worker_id, request_id
         );
 
-        // Format the session messages into a prompt using ChatTemplateEngine
+        // Check if we have a cached state in memory for this session
+        let has_cached_state = {
+            let cache = session_state_cache.lock().unwrap();
+            cache.contains_key(&session.id.to_string())
+        };
+        let can_use_cache = has_cached_state && session.cached_message_count > 0;
+
+        // Log session status
+        if can_use_cache {
+            info!(
+                "Worker {} continuing session {} from memory: {} cached messages, {} new messages to process",
+                worker_id, session.id, session.cached_message_count,
+                session.messages.len() - session.cached_message_count
+            );
+        } else {
+            info!(
+                "Worker {} starting new session {}: processing all {} messages",
+                worker_id,
+                session.id,
+                session.messages.len()
+            );
+        }
+
+        // Always render the FULL conversation - the restored state will have the KV cache
+        // for already-processed tokens, so llama.cpp will only process new ones
+        info!(
+            "Worker {} rendering full conversation: {} messages",
+            worker_id,
+            session.messages.len()
+        );
         let prompt = match chat_template.render_session_with_config(
             session,
             model,
@@ -486,9 +535,14 @@ impl RequestQueue {
                 )));
             }
         };
-        trace!("Formatted prompt: {}", prompt);
 
-        // Create session-aware context that can reuse KV cache state
+        debug!(
+            "Worker {} rendered prompt length: {} bytes",
+            worker_id,
+            prompt.len()
+        );
+
+        // Create context for this request
         let mut ctx = match model_manager.create_session_context(model, &session.id) {
             Ok(context) => context,
             Err(e) => {
@@ -500,198 +554,61 @@ impl RequestQueue {
             }
         };
 
-        // Try to load existing session KV cache to avoid reprocessing conversation history
-        let kv_cache_dir = session_config.get_model_kv_cache_dir(model_manager.get_config());
-        let max_tokens = ctx.n_ctx() as usize;
-        let mut effective_token_offset: Option<usize> = None;
+        // Track the actual KV cache position after state restoration
+        let kv_cache_position: i32;
 
-        let has_cache = model_manager.has_session_kv_cache(&session.id, &kv_cache_dir);
-        info!(
-            "Worker {} checking for session KV cache: has_cache={}, session_id={}, cache_dir={}",
-            worker_id,
-            has_cache,
-            session.id,
-            kv_cache_dir.display()
-        );
-
-        if has_cache {
+        // Restore session state from memory cache if available
+        if can_use_cache {
             info!(
-                "Worker {} found existing session KV cache for session {}, validating...",
+                "Worker {} restoring session state from memory for session {}",
                 worker_id, session.id
             );
 
-            // Tokenize the current prompt to compare with cached tokens
-            use llama_cpp_2::model::AddBos;
-            let current_tokens: Vec<i32> = model
-                .str_to_token(&prompt, AddBos::Always)
-                .map_err(|e| QueueError::WorkerError(format!("Failed to tokenize prompt: {}", e)))?
-                .into_iter()
-                .map(|t| t.0)
-                .collect();
-
-            info!(
-                "Worker {} tokenized current prompt to {} tokens",
-                worker_id,
-                current_tokens.len()
-            );
-
-            // Check if we have a token metadata file
-            let tokens_file = kv_cache_dir.join(format!("{}.tokens", session.id));
-            info!(
-                "Worker {} checking for token metadata at {}",
-                worker_id,
-                tokens_file.display()
-            );
-
-            let should_load_cache = if tokens_file.exists() {
-                info!("Worker {} found token metadata file", worker_id);
-                // Read the cached token sequence
-                match std::fs::read(&tokens_file) {
-                    Ok(bytes) => {
-                        // Tokens are stored as i32 values (4 bytes each)
-                        let cached_token_ids: Vec<i32> = bytes
-                            .chunks_exact(4)
-                            .map(|chunk| {
-                                i32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]])
-                            })
-                            .collect();
-
-                        // Check if cached tokens are a prefix of current tokens
-                        let matches = cached_token_ids.len() <= current_tokens.len()
-                            && cached_token_ids
-                                .iter()
-                                .zip(current_tokens.iter())
-                                .all(|(a, b)| a == b);
-
-                        if matches && !cached_token_ids.is_empty() {
-                            info!(
-                                "Worker {} cached tokens ({}) match current prompt prefix - will use cache",
-                                worker_id, cached_token_ids.len()
-                            );
-                            effective_token_offset = Some(cached_token_ids.len());
-                            true
-                        } else {
-                            info!(
-                                "Worker {} cached tokens don't match current prompt - deleting old cache",
-                                worker_id
-                            );
-                            // Delete the mismatched cache files
-                            let _ =
-                                model_manager.delete_session_kv_cache(&session.id, &kv_cache_dir);
-                            let _ = std::fs::remove_file(&tokens_file);
-                            false
-                        }
-                    }
-                    Err(e) => {
-                        warn!(
-                            "Worker {} failed to read token metadata: {}, deleting cache",
-                            worker_id, e
-                        );
-                        // Delete corrupted cache
-                        let _ = model_manager.delete_session_kv_cache(&session.id, &kv_cache_dir);
-                        let _ = std::fs::remove_file(&tokens_file);
-                        false
-                    }
-                }
-            } else {
-                // No token metadata, delete the cache to be safe
-                debug!(
-                    "Worker {} no token metadata found for session cache - deleting cache",
-                    worker_id
-                );
-                let _ = model_manager.delete_session_kv_cache(&session.id, &kv_cache_dir);
-                false
+            let state_bytes = {
+                let cache = session_state_cache.lock().unwrap();
+                cache.get(&session.id.to_string()).cloned()
             };
 
-            // Only load the cache if tokens match
-            if should_load_cache {
-                match model_manager.load_session_kv_cache(
-                    &mut ctx,
-                    &session.id,
-                    &kv_cache_dir,
-                    max_tokens,
-                ) {
-                    Ok(cached_tokens) => {
-                        debug!(
-                            "Worker {} successfully loaded {} tokens from session KV cache",
-                            worker_id,
-                            cached_tokens.len()
-                        );
+            if let Some(bytes) = state_bytes {
+                let bytes_len = bytes.len();
+                let bytes_read = unsafe { ctx.set_state_data(&bytes) };
 
-                        // CRITICAL: After loading KV cache, we must re-decode the last cached token
-                        // to restore the logits before continuing with new tokens.
-                        // llama.cpp requires valid logits in the context to continue decoding.
-                        if !cached_tokens.is_empty() {
-                            use llama_cpp_2::llama_batch::LlamaBatch;
-                            let last_token = cached_tokens[cached_tokens.len() - 1];
-                            let last_position = (cached_tokens.len() - 1) as i32;
+                // Query the actual KV cache position for sequence 0
+                kv_cache_position = ctx.kv_cache_seq_pos_max(0);
 
-                            let mut batch = LlamaBatch::new(model_manager.get_batch_size(), 1);
-                            if let Err(e) = batch.add(last_token, last_position, &[0], true) {
-                                warn!(
-                                    "Worker {} failed to prepare logit restoration batch: {}, will process full prompt",
-                                    worker_id, e
-                                );
-                                effective_token_offset = None;
-                            } else {
-                                match ctx.decode(&mut batch) {
-                                    Ok(()) => {
-                                        debug!(
-                                            "Worker {} successfully restored logits by re-decoding last cached token at position {}",
-                                            worker_id, last_position
-                                        );
-                                    }
-                                    Err(e) => {
-                                        warn!(
-                                            "Worker {} failed to restore logits: {}, will process full prompt",
-                                            worker_id, e
-                                        );
-                                        effective_token_offset = None;
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        warn!(
-                            "Worker {} failed to load session KV cache: {}, will process full prompt",
-                            worker_id, e
-                        );
-                        effective_token_offset = None;
-                    }
-                }
+                info!(
+                    "Worker {} restored state: {} bytes available, {} bytes read, {} cached messages, KV cache position: {}",
+                    worker_id, bytes_len, bytes_read, session.cached_message_count, kv_cache_position
+                );
+            } else {
+                warn!(
+                    "Worker {} expected cached state but not found in memory - will process all messages",
+                    worker_id
+                );
+                return Err(QueueError::WorkerError(
+                    "Expected state cache missing from memory".to_string(),
+                ));
             }
         } else {
-            debug!(
-                "Worker {} no session KV cache found for session {}, will process full prompt",
-                worker_id, session.id
-            );
+            // No cached state, start from position 0
+            kv_cache_position = -1; // -1 means no tokens in KV cache
         }
 
         // Use GenerationHelper to consolidate generation logic
         let batch_size = model_manager.get_batch_size();
 
-        // Determine the token offset to use:
-        // 1. If we successfully loaded and verified a KV cache, use its common prefix length
-        // 2. Otherwise, fall back to the template token count if available
-        let token_offset = effective_token_offset.or(session.template_token_count);
-
-        if let Some(count) = token_offset {
-            let cache_type = if effective_token_offset.is_some() {
-                "session KV cache"
-            } else {
-                "template cache"
-            };
-            debug!(
-                "Queue worker {} using {} ({} tokens already in KV cache) for request {} - skipping cached token processing",
-                worker_id, cache_type, count, request_id
+        // Use the actual KV cache position as the template offset
+        // kv_cache_position is the LAST filled position (0-indexed), so the next token goes at position+1
+        let template_token_count = if kv_cache_position >= 0 {
+            let next_position = (kv_cache_position + 1) as usize;
+            info!(
+                "Worker {} using token offset: {} tokens already in KV cache (position 0 to {})",
+                worker_id, next_position, kv_cache_position
             );
+            Some(next_position)
         } else {
-            debug!(
-                "Queue worker {} processing full prompt (no cached tokens) for request {}",
-                worker_id, request_id
-            );
-        }
+            None
+        };
 
         debug!(
             "Queue worker {} calling GenerationHelper for request {}",
@@ -705,7 +622,7 @@ impl RequestQueue {
                 request,
                 cancellation_token,
                 batch_size,
-                token_offset,
+                template_token_count,
             ) {
                 Ok(result) => {
                     debug!(
@@ -775,78 +692,60 @@ impl RequestQueue {
             worker_id, request_id, generation_time, tokens_generated, final_finish_reason
         );
 
-        // Save session KV cache if we have the complete token sequence
+        // Save session state to memory for future turns
+        // This captures the complete context state including KV cache
+        let state_size = ctx.get_state_size();
         info!(
-            "Worker {} checking if complete_token_sequence exists: {}",
+            "Worker {} saving session state to memory: {} bytes for {} messages",
             worker_id,
-            generation_result.complete_token_sequence.is_some()
+            state_size,
+            session.messages.len()
         );
 
-        if let Some(ref token_sequence) = generation_result.complete_token_sequence {
+        let mut state_bytes = vec![0u8; state_size];
+        let bytes_written = unsafe { ctx.copy_state_data(state_bytes.as_mut_ptr()) };
+
+        if bytes_written > 0 {
+            // Truncate to actual size written
+            state_bytes.truncate(bytes_written);
+
+            // Store in memory cache
+            let mut cache = session_state_cache.lock().unwrap();
+            cache.insert(session.id.to_string(), state_bytes);
             info!(
-                "Worker {} has complete token sequence with {} tokens",
+                "Worker {} cached {} bytes of state for session {} ({} messages)",
                 worker_id,
-                token_sequence.len()
+                bytes_written,
+                session.id,
+                session.messages.len()
             );
-            // Convert Vec<i32> to Vec<LlamaToken>
-            let llama_tokens: Vec<llama_cpp_2::token::LlamaToken> = token_sequence
-                .iter()
-                .map(|&id| llama_cpp_2::token::LlamaToken(id))
-                .collect();
 
-            match model_manager.save_session_kv_cache(
-                &ctx,
-                &session.id,
-                &llama_tokens,
-                &kv_cache_dir,
-                session_config.max_kv_cache_files,
-            ) {
-                Ok(cache_file) => {
-                    debug!(
-                        "Worker {} saved {} tokens to session KV cache at {} for request {}",
-                        worker_id,
-                        llama_tokens.len(),
-                        cache_file.display(),
-                        request_id
-                    );
+            // Apply LRU eviction if needed (keep cpu_cores / 2 most recent, minimum 1)
+            let cache_limit = std::thread::available_parallelism()
+                .map(|n| (n.get() / 2).max(1))
+                .unwrap_or(4); // Default to 4 if detection fails
 
-                    // Also save the token sequence for validation on next load
-                    let tokens_file = kv_cache_dir.join(format!("{}.tokens", session.id));
-                    let token_bytes: Vec<u8> = token_sequence
-                        .iter()
-                        .flat_map(|&id| id.to_le_bytes())
-                        .collect();
-
-                    // Ensure directory exists
-                    if let Err(e) = std::fs::create_dir_all(&kv_cache_dir) {
-                        warn!(
-                            "Worker {} failed to create cache directory: {}",
-                            worker_id, e
-                        );
-                    } else if let Err(e) = std::fs::write(&tokens_file, token_bytes) {
-                        warn!(
-                            "Worker {} failed to save token metadata for session {}: {}",
-                            worker_id, session.id, e
-                        );
-                    } else {
-                        debug!(
-                            "Worker {} saved token metadata ({} tokens) to {}",
-                            worker_id,
-                            token_sequence.len(),
-                            tokens_file.display()
-                        );
-                    }
+            if cache.len() > cache_limit {
+                // Simple approach: remove entries until we're at limit
+                // In production, would track access time for proper LRU
+                let to_remove: Vec<String> = cache
+                    .keys()
+                    .take(cache.len() - cache_limit)
+                    .cloned()
+                    .collect();
+                for key in to_remove {
+                    cache.remove(&key);
                 }
-                Err(e) => {
-                    warn!(
-                        "Worker {} failed to save session KV cache for request {}: {}",
-                        worker_id, request_id, e
-                    );
-                }
+                info!(
+                    "Worker {} evicted old session states (limit: {}), now have {} cached",
+                    worker_id,
+                    cache_limit,
+                    cache.len()
+                );
             }
         } else {
-            debug!(
-                "Worker {} no complete token sequence available, skipping session KV cache save for request {}",
+            warn!(
+                "Worker {} failed to copy state data (wrote 0 bytes) for request {}",
                 worker_id, request_id
             );
         }
@@ -910,19 +809,6 @@ impl RequestQueue {
 
         // Use GenerationHelper for streaming - consolidated generation logic
         let batch_size = model_manager.get_batch_size();
-        let template_token_count = session.template_token_count;
-
-        if let Some(count) = template_token_count {
-            debug!(
-                "Queue worker {} using template cache ({} tokens already in KV cache) for streaming request {} - skipping template token processing",
-                worker_id, count, request_id
-            );
-        } else {
-            debug!(
-                "Queue worker {} processing full prompt (no cached template) for streaming request {}",
-                worker_id, request_id
-            );
-        }
 
         match GenerationHelper::generate_stream_with_borrowed_model_and_template_offset(
             model,
@@ -932,7 +818,7 @@ impl RequestQueue {
             &stream_sender,
             cancellation_token,
             batch_size,
-            template_token_count,
+            None, // No template offset - session state caching handles this
         ) {
             Ok(()) => {
                 debug!(
@@ -1100,7 +986,8 @@ mod tests {
             compaction_history: Vec::new(),
             transcript_path: None,
             context_state: None,
-            template_token_count: None,
+            cached_message_count: 0,
+            cached_token_count: 0,
         }
     }
 

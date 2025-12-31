@@ -161,7 +161,6 @@ pub mod resources;
 pub mod session;
 pub mod stopper;
 pub mod storage;
-pub mod template_cache;
 pub mod types;
 pub mod validation;
 
@@ -197,9 +196,6 @@ pub use generation::{GenerationConfig, GenerationError, LlamaCppGenerator, TextG
 
 // Re-export session compaction functionality
 pub use session::{CompactionResult, CompactionStats, CompactionSummary};
-
-// Re-export template cache functionality
-pub use template_cache::{CacheStats, TemplateCache, TemplateCacheEntry, TemplateCacheError};
 
 /// Re-export rmcp transport configuration for direct integration with rmcp.
 ///

@@ -427,11 +427,6 @@ impl AgentServer {
     pub async fn get_model_metadata(&self) -> Option<llama_loader::ModelMetadata> {
         self.model_manager.get_metadata().await
     }
-
-    /// Get template cache statistics
-    pub fn get_template_cache_stats(&self) -> crate::template_cache::CacheStats {
-        self.model_manager.get_template_cache_stats()
-    }
 }
 
 #[async_trait]
@@ -546,7 +541,7 @@ impl AgentAPI for AgentServer {
         self.maybe_auto_compact(&request.session_id).await?;
 
         // Get session from session manager
-        let mut session = self
+        let session = self
             .session_manager
             .get_session(&request.session_id)
             .await?
@@ -555,113 +550,6 @@ impl AgentAPI for AgentServer {
                     request.session_id.to_string(),
                 ))
             })?;
-
-        // Initialize template cache on first generation for this session
-        if session.template_token_count.is_none() {
-            debug!("Initializing template cache for session: {}", session.id);
-
-            // Template initialization must happen within with_model to access the model
-            // but initialize_session_with_template is async, so we need to handle this carefully
-            let template_token_count = self
-                .model_manager
-                .with_model(|model| {
-                    // Create context for template initialization
-                    let mut ctx = self
-                        .model_manager
-                        .create_session_context(model, &session.id)
-                        .map_err(|e| {
-                            crate::types::ModelError::LoadingFailed(format!(
-                                "Failed to create context for template initialization: {}",
-                                e
-                            ))
-                        })?;
-
-                    // Extract template components synchronously
-                    let (system_prompt, tools_json) = self
-                        .chat_template
-                        .extract_template_components(&session)
-                        .map_err(|e| {
-                            crate::types::ModelError::LoadingFailed(format!(
-                                "Failed to extract template: {}",
-                                e
-                            ))
-                        })?;
-
-                    // Hash template for cache lookup
-                    let template_hash = crate::template_cache::TemplateCache::hash_template(
-                        &system_prompt,
-                        &tools_json,
-                    );
-
-                    // Check cache synchronously
-                    let cache_hit = {
-                        let cache = self.model_manager.template_cache();
-                        let mut cache_guard = cache.lock().unwrap();
-                        cache_guard
-                            .get(template_hash)
-                            .map(|entry| entry.token_count)
-                    };
-
-                    if let Some(token_count) = cache_hit {
-                        // Cache HIT - load KV cache from file
-                        debug!(
-                            "Loading cached template {} ({} tokens)",
-                            template_hash, token_count
-                        );
-
-                        let n_ctx = ctx.n_ctx() as usize;
-                        let _tokens = self.model_manager.load_template_kv_cache(
-                            &mut ctx,
-                            template_hash,
-                            n_ctx,
-                        )?;
-
-                        debug!(
-                            "Session initialized with cached template: {} tokens",
-                            token_count
-                        );
-                        return Ok(token_count);
-                    }
-
-                    // Cache MISS - need to process template
-                    // This requires async operations, so we'll need to defer this
-                    // For now, return an error indicating async processing is needed
-                    Err(crate::types::ModelError::LoadingFailed(
-                        "Template cache miss - async processing required".to_string(),
-                    ))
-                })
-                .await;
-
-            match template_token_count {
-                Ok(Ok(count)) => {
-                    // Cache hit - update session with count
-                    debug!(
-                        "Template cache hit for session {}: {} tokens",
-                        session.id, count
-                    );
-                    session.template_token_count = Some(count);
-                    self.session_manager
-                        .update_session(session.clone())
-                        .await
-                        .map_err(AgentError::Session)?;
-                }
-                Ok(Err(e)) if e.to_string().contains("async processing required") => {
-                    // Cache miss - skip template initialization for now
-                    // The template will be processed as part of the normal prompt on first generation
-                    debug!(
-                        "Template cache miss for session {}, will process with first generation",
-                        session.id
-                    );
-                }
-                Ok(Err(e)) => {
-                    // Other error
-                    return Err(AgentError::Model(e));
-                }
-                Err(e) => {
-                    return Err(AgentError::Model(e));
-                }
-            }
-        }
 
         // Security: Validate input before processing
         self.validate_generation_request_with_session(&request, &session)?;
@@ -716,6 +604,25 @@ impl AgentAPI for AgentServer {
                 response.tokens_generated, response.finish_reason
             );
             debug!("Generated text:\n{}\n", response.generated_text);
+
+            // Update cached_message_count after each generation to enable incremental caching
+            // This must happen INSIDE the loop so subsequent turns can use the cache
+            working_session.cached_message_count = working_session.messages.len();
+
+            // Update cached_token_count from the complete token sequence
+            // This tracks how many tokens are in the saved state's KV cache
+            if let Some(ref token_seq) = response.complete_token_sequence {
+                working_session.cached_token_count = token_seq.len();
+                debug!(
+                    "Updated session {} cached_token_count to {} tokens after generation",
+                    working_session.id, working_session.cached_token_count
+                );
+            }
+
+            debug!(
+                "Updated session {} cached_message_count to {} after generation",
+                working_session.id, working_session.cached_message_count
+            );
 
             // Check if response contains tool calls
             match &response.finish_reason {
@@ -850,6 +757,12 @@ impl AgentAPI for AgentServer {
             "Complete generation workflow finished: {} total tokens",
             total_tokens
         );
+
+        // Save final session state to session manager
+        self.session_manager
+            .update_session(working_session.clone())
+            .await
+            .map_err(AgentError::Session)?;
 
         Ok(final_response)
     }
@@ -1350,7 +1263,8 @@ impl AgentServer {
                     compaction_history: Vec::new(),
                     transcript_path: None,
                     context_state: None,
-                    template_token_count: None,
+                    cached_message_count: 0,
+                    cached_token_count: 0,
                 };
 
                 model_manager

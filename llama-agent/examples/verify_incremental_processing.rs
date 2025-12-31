@@ -123,10 +123,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         } else {
             println!("   ✗ context_state: NOT PRESENT");
         }
-        if let Some(template_count) = session.template_token_count {
-            println!("   ✓ template_cache: {} tokens", template_count);
+        if session.cached_token_count > 0 {
+            println!(
+                "   ✓ cached_token_count: {} tokens",
+                session.cached_token_count
+            );
         } else {
-            println!("   ✗ template_cache: NOT PRESENT");
+            println!("   ✗ cached_token_count: 0 tokens");
         }
     }
 
