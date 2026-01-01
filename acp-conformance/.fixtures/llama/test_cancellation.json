@@ -52,14 +52,14 @@
         "mcpServers": []
       },
       "response": {
-        "sessionId": "01KDJGR0GZQS0V3BBMWFYJZFH4"
+        "sessionId": "01KDWCNFR42ZV9ANYX2J7TX16Y"
       },
       "notifications": []
     },
     {
       "method": "cancel",
       "request": {
-        "sessionId": "01KDJGR0GZQS0V3BBMWFYJZFH4"
+        "sessionId": "01KDWCNFR42ZV9ANYX2J7TX16Y"
       },
       "response": null,
       "notifications": []

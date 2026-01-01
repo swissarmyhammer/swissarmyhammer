@@ -294,7 +294,7 @@ impl GenerationHelper {
             sampling::LlamaSampler,
         };
         use std::time::Instant;
-        use tracing::{debug, trace};
+        use tracing::debug;
 
         let start_time = Instant::now();
 
@@ -376,45 +376,48 @@ impl GenerationHelper {
                 );
             }
 
-            let token_str = match model.token_to_str(token, Special::Tokenize) {
-                Ok(s) => s,
-                Err(e) => {
-                    trace!("Failed to convert token to string in streaming: {}", e);
-                    continue;
-                }
-            };
-
-            if generated_text.capacity() - generated_text.len() < token_str.len() {
-                generated_text.reserve(token_str.len() * STRING_CAPACITY_MULTIPLIER);
-            }
-            generated_text.push_str(&token_str);
+            // Always increment token count and advance model state, even if token can't be converted to string
             tokens_generated += 1;
 
-            // Send the token as a stream chunk
-            let chunk = StreamChunk {
-                text: token_str.clone(),
-                is_complete: false,
-                token_count: tokens_generated,
-                finish_reason: None,
-            };
+            // Try to convert token to string and send if successful
+            if let Ok(token_str) = model.token_to_str(token, Special::Tokenize) {
+                if generated_text.capacity() - generated_text.len() < token_str.len() {
+                    generated_text.reserve(token_str.len() * STRING_CAPACITY_MULTIPLIER);
+                }
+                generated_text.push_str(&token_str);
 
-            if stream_sender.try_send(Ok(chunk)).is_err() {
-                warn!("Stream receiver disconnected, stopping generation");
-                return Ok(());
-            }
+                // Send the token as a stream chunk
+                let chunk = StreamChunk {
+                    text: token_str.clone(),
+                    is_complete: false,
+                    token_count: tokens_generated,
+                    finish_reason: None,
+                };
 
-            // Check for stop tokens
-            if Self::should_stop(&generated_text, &request.stop_tokens) {
-                debug!("Stop token detected in streaming");
-                return Self::handle_streaming_completion(
-                    &generated_text,
-                    tokens_generated,
-                    start_time,
-                    stream_sender,
-                    "StopToken",
+                if stream_sender.try_send(Ok(chunk)).is_err() {
+                    warn!("Stream receiver disconnected, stopping generation");
+                    return Ok(());
+                }
+
+                // Check for stop tokens
+                if Self::should_stop(&generated_text, &request.stop_tokens) {
+                    debug!("Stop token detected in streaming");
+                    return Self::handle_streaming_completion(
+                        &generated_text,
+                        tokens_generated,
+                        start_time,
+                        stream_sender,
+                        "StopToken",
+                    );
+                }
+            } else {
+                tracing::trace!(
+                    "Token {} could not be converted to string, continuing generation",
+                    tokens_generated
                 );
             }
 
+            // Always update batch and decode to advance model state
             batch.clear();
             batch.add(token, n_cur as i32, &[0], true).map_err(|e| {
                 let _ = stream_sender.try_send(Err(QueueError::WorkerError(format!(
@@ -659,27 +662,30 @@ impl GenerationHelper {
                 break;
             }
 
-            let token_str = match model.token_to_str(token, Special::Tokenize) {
-                Ok(s) => s,
-                Err(e) => {
-                    tracing::trace!("Failed to convert token to string: {}", e);
-                    continue;
-                }
-            };
-
-            if generated_text.capacity() - generated_text.len() < token_str.len() {
-                generated_text.reserve(token_str.len() * STRING_CAPACITY_MULTIPLIER);
-            }
-            generated_text.push_str(&token_str);
+            // Always increment token count and advance model state
             tokens_generated += 1;
 
-            // Check for stop tokens
-            if Self::should_stop(&generated_text, &request.stop_tokens) {
-                finish_reason =
-                    crate::types::FinishReason::Stopped("Stop token detected".to_string());
-                break;
+            // Try to convert token to string
+            if let Ok(token_str) = model.token_to_str(token, Special::Tokenize) {
+                if generated_text.capacity() - generated_text.len() < token_str.len() {
+                    generated_text.reserve(token_str.len() * STRING_CAPACITY_MULTIPLIER);
+                }
+                generated_text.push_str(&token_str);
+
+                // Check for stop tokens
+                if Self::should_stop(&generated_text, &request.stop_tokens) {
+                    finish_reason =
+                        crate::types::FinishReason::Stopped("Stop token detected".to_string());
+                    break;
+                }
+            } else {
+                tracing::trace!(
+                    "Token {} could not be converted to string, continuing generation",
+                    tokens_generated
+                );
             }
 
+            // Always update batch and decode to advance model state
             batch.clear();
             batch
                 .add(token, n_cur as i32, &[0], true)
@@ -922,45 +928,48 @@ impl GenerationHelper {
                 );
             }
 
-            let token_str = match model.token_to_str(token, Special::Tokenize) {
-                Ok(s) => s,
-                Err(e) => {
-                    tracing::trace!("Failed to convert token to string in streaming: {}", e);
-                    continue;
-                }
-            };
-
-            if generated_text.capacity() - generated_text.len() < token_str.len() {
-                generated_text.reserve(token_str.len() * STRING_CAPACITY_MULTIPLIER);
-            }
-            generated_text.push_str(&token_str);
+            // Always increment token count and advance model state, even if token can't be converted to string
             tokens_generated += 1;
 
-            // Send the token as a stream chunk
-            let chunk = StreamChunk {
-                text: token_str.clone(),
-                is_complete: false,
-                token_count: tokens_generated,
-                finish_reason: None,
-            };
+            // Try to convert token to string and send if successful
+            if let Ok(token_str) = model.token_to_str(token, Special::Tokenize) {
+                if generated_text.capacity() - generated_text.len() < token_str.len() {
+                    generated_text.reserve(token_str.len() * STRING_CAPACITY_MULTIPLIER);
+                }
+                generated_text.push_str(&token_str);
 
-            if stream_sender.try_send(Ok(chunk)).is_err() {
-                warn!("Stream receiver disconnected, stopping generation");
-                return Ok(());
-            }
+                // Send the token as a stream chunk
+                let chunk = StreamChunk {
+                    text: token_str.clone(),
+                    is_complete: false,
+                    token_count: tokens_generated,
+                    finish_reason: None,
+                };
 
-            // Check for stop tokens
-            if Self::should_stop(&generated_text, &request.stop_tokens) {
-                debug!("Stop token detected in streaming with template offset");
-                return Self::handle_streaming_completion(
-                    &generated_text,
-                    tokens_generated,
-                    start_time,
-                    stream_sender,
-                    "StopToken",
+                if stream_sender.try_send(Ok(chunk)).is_err() {
+                    warn!("Stream receiver disconnected, stopping generation");
+                    return Ok(());
+                }
+
+                // Check for stop tokens
+                if Self::should_stop(&generated_text, &request.stop_tokens) {
+                    debug!("Stop token detected in streaming with template offset");
+                    return Self::handle_streaming_completion(
+                        &generated_text,
+                        tokens_generated,
+                        start_time,
+                        stream_sender,
+                        "StopToken",
+                    );
+                }
+            } else {
+                tracing::trace!(
+                    "Token {} could not be converted to string, continuing generation",
+                    tokens_generated
                 );
             }
 
+            // Always update batch and decode to advance model state
             batch.clear();
             batch.add(token, n_cur as i32, &[0], true).map_err(|e| {
                 let _ = stream_sender.try_send(Err(QueueError::WorkerError(format!(
@@ -1010,7 +1019,7 @@ impl GenerationHelper {
             model::{AddBos, Special},
             sampling::LlamaSampler,
         };
-        use tracing::{debug, trace};
+        use tracing::debug;
 
         // Tokenize the prompt
         let tokens_list = model
@@ -1084,41 +1093,45 @@ impl GenerationHelper {
                 break;
             }
 
-            let token_str = match model.token_to_str(token, Special::Tokenize) {
-                Ok(s) => s,
-                Err(e) => {
-                    trace!("Failed to convert token to string: {}", e);
-                    continue;
-                }
-            };
-
-            // Efficient string concatenation
-            if generated_text.capacity() - generated_text.len() < token_str.len() {
-                generated_text.reserve(token_str.len() * STRING_CAPACITY_MULTIPLIER);
-            }
-            generated_text.push_str(&token_str);
+            // Always increment token count and advance model state
             tokens_generated += 1;
 
-            // Check for stop tokens
-            let should_stop = Self::should_stop(&generated_text, &request.stop_tokens);
-            tracing::trace!(
-                "generate_common: Generated token '{}', should_stop={}",
-                token_str,
-                should_stop
-            );
+            // Try to convert token to string
+            if let Ok(token_str) = model.token_to_str(token, Special::Tokenize) {
+                // Efficient string concatenation
+                if generated_text.capacity() - generated_text.len() < token_str.len() {
+                    generated_text.reserve(token_str.len() * STRING_CAPACITY_MULTIPLIER);
+                }
+                generated_text.push_str(&token_str);
 
-            // Call the token handler with the current token
-            if let Some(result) = token_handler(&token_str, tokens_generated, should_stop)? {
-                tracing::trace!("generate_common: Token handler returned Some result, completing");
-                return Ok(result);
+                // Check for stop tokens
+                let should_stop = Self::should_stop(&generated_text, &request.stop_tokens);
+                tracing::trace!(
+                    "generate_common: Generated token '{}', should_stop={}",
+                    token_str,
+                    should_stop
+                );
+
+                // Call the token handler with the current token
+                if let Some(result) = token_handler(&token_str, tokens_generated, should_stop)? {
+                    tracing::trace!(
+                        "generate_common: Token handler returned Some result, completing"
+                    );
+                    return Ok(result);
+                }
+
+                if should_stop {
+                    tracing::trace!("generate_common: Stop token detected, breaking out of loop");
+                    break;
+                }
+            } else {
+                tracing::trace!(
+                    "Token {} could not be converted to string, continuing generation",
+                    tokens_generated
+                );
             }
 
-            if should_stop {
-                tracing::trace!("generate_common: Stop token detected, breaking out of loop");
-                break;
-            }
-
-            // Prepare next batch for continued generation
+            // Always prepare next batch for continued generation
             batch.clear();
             batch
                 .add(token, n_cur as i32, &[0], true)

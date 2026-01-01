@@ -52,7 +52,7 @@
         "mcpServers": []
       },
       "response": {
-        "sessionId": "01KDJGK50WEWSW0BXS01343Y9J"
+        "sessionId": "01KDWCDA6VZVB3ATMC3E784JXE"
       },
       "notifications": []
     },
@@ -65,7 +65,7 @@
             "type": "text"
           }
         ],
-        "sessionId": "01KDJGK50WEWSW0BXS01343Y9J"
+        "sessionId": "01KDWCDA6VZVB3ATMC3E784JXE"
       },
       "response": {
         "_meta": {
@@ -76,7 +76,7 @@
       },
       "notifications": [
         {
-          "sessionId": "01KDJGK50WEWSW0BXS01343Y9J",
+          "sessionId": "01KDWCDA6VZVB3ATMC3E784JXE",
           "update": {
             "content": {
               "text": "{\n",
@@ -86,7 +86,7 @@
           }
         },
         {
-          "sessionId": "01KDJGK50WEWSW0BXS01343Y9J",
+          "sessionId": "01KDWCDA6VZVB3ATMC3E784JXE",
           "update": {
             "content": {
               "text": " ",
@@ -96,7 +96,7 @@
           }
         },
         {
-          "sessionId": "01KDJGK50WEWSW0BXS01343Y9J",
+          "sessionId": "01KDWCDA6VZVB3ATMC3E784JXE",
           "update": {
             "content": {
               "text": " \"",
@@ -106,7 +106,7 @@
           }
         },
         {
-          "sessionId": "01KDJGK50WEWSW0BXS01343Y9J",
+          "sessionId": "01KDWCDA6VZVB3ATMC3E784JXE",
           "update": {
             "content": {
               "text": "function",
@@ -116,7 +116,7 @@
           }
         },
         {
-          "sessionId": "01KDJGK50WEWSW0BXS01343Y9J",
+          "sessionId": "01KDWCDA6VZVB3ATMC3E784JXE",
           "update": {
             "content": {
               "text": "_name",
@@ -126,7 +126,7 @@
           }
         },
         {
-          "sessionId": "01KDJGK50WEWSW0BXS01343Y9J",
+          "sessionId": "01KDWCDA6VZVB3ATMC3E784JXE",
           "update": {
             "content": {
               "text": "\":",
@@ -136,7 +136,7 @@
           }
         },
         {
-          "sessionId": "01KDJGK50WEWSW0BXS01343Y9J",
+          "sessionId": "01KDWCDA6VZVB3ATMC3E784JXE",
           "update": {
             "content": {
               "text": " \"",
@@ -146,7 +146,7 @@
           }
         },
         {
-          "sessionId": "01KDJGK50WEWSW0BXS01343Y9J",
+          "sessionId": "01KDWCDA6VZVB3ATMC3E784JXE",
           "update": {
             "content": {
               "text": "create",
@@ -156,7 +156,7 @@
           }
         },
         {
-          "sessionId": "01KDJGK50WEWSW0BXS01343Y9J",
+          "sessionId": "01KDWCDA6VZVB3ATMC3E784JXE",
           "update": {
             "content": {
               "text": "-plan",
@@ -166,7 +166,7 @@
           }
         },
         {
-          "sessionId": "01KDJGK50WEWSW0BXS01343Y9J",
+          "sessionId": "01KDWCDA6VZVB3ATMC3E784JXE",
           "update": {
             "content": {
               "text": "\",\n",
@@ -176,7 +176,7 @@
           }
         },
         {
-          "sessionId": "01KDJGK50WEWSW0BXS01343Y9J",
+          "sessionId": "01KDWCDA6VZVB3ATMC3E784JXE",
           "update": {
             "content": {
               "text": " ",
@@ -186,7 +186,7 @@
           }
         },
         {
-          "sessionId": "01KDJGK50WEWSW0BXS01343Y9J",
+          "sessionId": "01KDWCDA6VZVB3ATMC3E784JXE",
           "update": {
             "content": {
               "text": " \"",
@@ -196,7 +196,7 @@
           }
         },
         {
-          "sessionId": "01KDJGK50WEWSW0BXS01343Y9J",
+          "sessionId": "01KDWCDA6VZVB3ATMC3E784JXE",
           "update": {
             "content": {
               "text": "arguments",
@@ -206,7 +206,7 @@
           }
         },
         {
-          "sessionId": "01KDJGK50WEWSW0BXS01343Y9J",
+          "sessionId": "01KDWCDA6VZVB3ATMC3E784JXE",
           "update": {
             "content": {
               "text": "\":",
@@ -216,7 +216,7 @@
           }
         },
         {
-          "sessionId": "01KDJGK50WEWSW0BXS01343Y9J",
+          "sessionId": "01KDWCDA6VZVB3ATMC3E784JXE",
           "update": {
             "content": {
               "text": " {\n",
@@ -226,7 +226,7 @@
           }
         },
         {
-          "sessionId": "01KDJGK50WEWSW0BXS01343Y9J",
+          "sessionId": "01KDWCDA6VZVB3ATMC3E784JXE",
           "update": {
             "content": {
               "text": "   ",
@@ -236,7 +236,7 @@
           }
         },
         {
-          "sessionId": "01KDJGK50WEWSW0BXS01343Y9J",
+          "sessionId": "01KDWCDA6VZVB3ATMC3E784JXE",
           "update": {
             "content": {
               "text": " \"",
@@ -246,7 +246,7 @@
           }
         },
         {
-          "sessionId": "01KDJGK50WEWSW0BXS01343Y9J",
+          "sessionId": "01KDWCDA6VZVB3ATMC3E784JXE",
           "update": {
             "content": {
               "text": "goal",
@@ -256,7 +256,7 @@
           }
         },
         {
-          "sessionId": "01KDJGK50WEWSW0BXS01343Y9J",
+          "sessionId": "01KDWCDA6VZVB3ATMC3E784JXE",
           "update": {
             "content": {
               "text": "\":",
@@ -266,7 +266,7 @@
           }
         },
         {
-          "sessionId": "01KDJGK50WEWSW0BXS01343Y9J",
+          "sessionId": "01KDWCDA6VZVB3ATMC3E784JXE",
           "update": {
             "content": {
               "text": " \"",
@@ -276,7 +276,7 @@
           }
         },
         {
-          "sessionId": "01KDJGK50WEWSW0BXS01343Y9J",
+          "sessionId": "01KDWCDA6VZVB3ATMC3E784JXE",
           "update": {
             "content": {
               "text": "Implement",
@@ -286,7 +286,7 @@
           }
         },
         {
-          "sessionId": "01KDJGK50WEWSW0BXS01343Y9J",
+          "sessionId": "01KDWCDA6VZVB3ATMC3E784JXE",
           "update": {
             "content": {
               "text": " user",
@@ -296,7 +296,7 @@
           }
         },
         {
-          "sessionId": "01KDJGK50WEWSW0BXS01343Y9J",
+          "sessionId": "01KDWCDA6VZVB3ATMC3E784JXE",
           "update": {
             "content": {
               "text": " authentication",
@@ -306,7 +306,7 @@
           }
         },
         {
-          "sessionId": "01KDJGK50WEWSW0BXS01343Y9J",
+          "sessionId": "01KDWCDA6VZVB3ATMC3E784JXE",
           "update": {
             "content": {
               "text": "\"\n",
@@ -316,7 +316,7 @@
           }
         },
         {
-          "sessionId": "01KDJGK50WEWSW0BXS01343Y9J",
+          "sessionId": "01KDWCDA6VZVB3ATMC3E784JXE",
           "update": {
             "content": {
               "text": " ",
@@ -326,7 +326,7 @@
           }
         },
         {
-          "sessionId": "01KDJGK50WEWSW0BXS01343Y9J",
+          "sessionId": "01KDWCDA6VZVB3ATMC3E784JXE",
           "update": {
             "content": {
               "text": " }\n",
@@ -336,7 +336,7 @@
           }
         },
         {
-          "sessionId": "01KDJGK50WEWSW0BXS01343Y9J",
+          "sessionId": "01KDWCDA6VZVB3ATMC3E784JXE",
           "update": {
             "content": {
               "text": "}",
@@ -346,24 +346,13 @@
           }
         },
         {
-          "sessionId": "01KDJGK50WEWSW0BXS01343Y9J",
+          "sessionId": "01KDWCDA6VZVB3ATMC3E784JXE",
           "update": {
             "content": {
               "text": "",
               "type": "text"
             },
             "sessionUpdate": "agent_message_chunk"
-          }
-        },
-        {
-          "sessionId": "01KDJGK50WEWSW0BXS01343Y9J",
-          "update": {
-            "rawInput": {
-              "goal": "Implement user authentication"
-            },
-            "sessionUpdate": "tool_call",
-            "title": "create-plan",
-            "toolCallId": "01KDJGKAMB9VQ2JDTD4F9YS85W"
           }
         },
         {
@@ -381,6 +370,17 @@
             "progress": 1.0,
             "progressToken": "create-plan-1",
             "total": 4.0
+          }
+        },
+        {
+          "sessionId": "01KDWCDA6VZVB3ATMC3E784JXE",
+          "update": {
+            "rawInput": {
+              "goal": "Implement user authentication"
+            },
+            "sessionUpdate": "tool_call",
+            "title": "create-plan",
+            "toolCallId": "01KDWCDC8PYR3RW5CGC91FEF25"
           }
         },
         {
@@ -408,12 +408,12 @@
           }
         },
         {
-          "sessionId": "01KDJGK50WEWSW0BXS01343Y9J",
+          "sessionId": "01KDWCDA6VZVB3ATMC3E784JXE",
           "update": {
             "rawOutput": "{\n  \"plan\": {\n    \"goal\": \"Implement user authentication\",\n    \"steps\": [\n      {\n        \"description\": \"Analyze requirements\",\n        \"id\": 1,\n        \"status\": \"pending\"\n      },\n      {\n        \"description\": \"Design solution\",\n        \"id\": 2,\n        \"status\": \"pending\"\n      },\n      {\n        \"description\": \"Implement solution\",\n        \"id\": 3,\n        \"status\": \"pending\"\n      },\n      {\n        \"description\": \"Test and validate\",\n        \"id\": 4,\n        \"status\": \"pending\"\n      }\n    ]\n  }\n}",
             "sessionUpdate": "tool_call_update",
             "status": "completed",
-            "toolCallId": "01KDJGKAMB9VQ2JDTD4F9YS85W"
+            "toolCallId": "01KDWCDC8PYR3RW5CGC91FEF25"
           }
         }
       ]

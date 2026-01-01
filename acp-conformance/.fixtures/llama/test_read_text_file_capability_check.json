@@ -52,7 +52,7 @@
         "mcpServers": []
       },
       "response": {
-        "sessionId": "01KDJKD5Q7YSR7KWFF6ZPTJCMQ"
+        "sessionId": "01KDWCHF7NS4G8R4BEYK1MTTCR"
       },
       "notifications": []
     },
@@ -60,7 +60,7 @@
       "method": "ext_method",
       "request": {
         "path": "/tmp/test.txt",
-        "sessionId": "01KDJKD5Q7YSR7KWFF6ZPTJCMQ"
+        "sessionId": "01KDWCHF7NS4G8R4BEYK1MTTCR"
       },
       "response": {
         "error": {

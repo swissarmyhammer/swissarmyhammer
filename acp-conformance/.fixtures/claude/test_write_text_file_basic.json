@@ -54,7 +54,7 @@
         "mcpServers": []
       },
       "response": {
-        "sessionId": "01KDJGPCSM3WMNZQG7KJQ0MQDE"
+        "sessionId": "01KDWCKAKHD9SCF4R3PBJ9H9VY"
       },
       "notifications": []
     },
@@ -63,7 +63,7 @@
       "request": {
         "content": "Test content\nLine 2\nLine 3",
         "path": "/var/folders/3k/6b488x1j6rg1f6w8fnyfwm9w0000gn/T/acp_conformance_write_test.txt",
-        "sessionId": "01KDJGPCSM3WMNZQG7KJQ0MQDE"
+        "sessionId": "01KDWCKAKHD9SCF4R3PBJ9H9VY"
       },
       "response": {},
       "notifications": []

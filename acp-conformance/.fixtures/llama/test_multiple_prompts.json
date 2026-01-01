@@ -52,7 +52,7 @@
         "mcpServers": []
       },
       "response": {
-        "sessionId": "01KDJGR6Y5P1F9VJBS0JHX30SM"
+        "sessionId": "01KDWCP1D93E8A2Q4HR7RS09NS"
       },
       "notifications": []
     },
@@ -65,7 +65,7 @@
             "type": "text"
           }
         ],
-        "sessionId": "01KDJGR6Y5P1F9VJBS0JHX30SM"
+        "sessionId": "01KDWCP1D93E8A2Q4HR7RS09NS"
       },
       "response": {
         "_meta": {
@@ -84,17 +84,17 @@
             "type": "text"
           }
         ],
-        "sessionId": "01KDJGR6Y5P1F9VJBS0JHX30SM"
+        "sessionId": "01KDWCP1D93E8A2Q4HR7RS09NS"
       },
       "response": {
         "_meta": {
-          "tokens_generated": 702
+          "tokens_generated": 186
         },
         "stopReason": "end_turn"
       },
       "notifications": [
         {
-          "sessionId": "01KDJGR6Y5P1F9VJBS0JHX30SM",
+          "sessionId": "01KDWCP1D93E8A2Q4HR7RS09NS",
           "update": {
             "content": {
               "text": "Hello",
@@ -104,7 +104,7 @@
           }
         },
         {
-          "sessionId": "01KDJGR6Y5P1F9VJBS0JHX30SM",
+          "sessionId": "01KDWCP1D93E8A2Q4HR7RS09NS",
           "update": {
             "content": {
               "text": "!",
@@ -114,7 +114,7 @@
           }
         },
         {
-          "sessionId": "01KDJGR6Y5P1F9VJBS0JHX30SM",
+          "sessionId": "01KDWCP1D93E8A2Q4HR7RS09NS",
           "update": {
             "content": {
               "text": " How",
@@ -124,7 +124,7 @@
           }
         },
         {
-          "sessionId": "01KDJGR6Y5P1F9VJBS0JHX30SM",
+          "sessionId": "01KDWCP1D93E8A2Q4HR7RS09NS",
           "update": {
             "content": {
               "text": " can",
@@ -134,7 +134,7 @@
           }
         },
         {
-          "sessionId": "01KDJGR6Y5P1F9VJBS0JHX30SM",
+          "sessionId": "01KDWCP1D93E8A2Q4HR7RS09NS",
           "update": {
             "content": {
               "text": " I",
@@ -144,7 +144,7 @@
           }
         },
         {
-          "sessionId": "01KDJGR6Y5P1F9VJBS0JHX30SM",
+          "sessionId": "01KDWCP1D93E8A2Q4HR7RS09NS",
           "update": {
             "content": {
               "text": " assist",
@@ -154,7 +154,7 @@
           }
         },
         {
-          "sessionId": "01KDJGR6Y5P1F9VJBS0JHX30SM",
+          "sessionId": "01KDWCP1D93E8A2Q4HR7RS09NS",
           "update": {
             "content": {
               "text": " you",
@@ -164,7 +164,7 @@
           }
         },
         {
-          "sessionId": "01KDJGR6Y5P1F9VJBS0JHX30SM",
+          "sessionId": "01KDWCP1D93E8A2Q4HR7RS09NS",
           "update": {
             "content": {
               "text": " today",
@@ -174,7 +174,7 @@
           }
         },
         {
-          "sessionId": "01KDJGR6Y5P1F9VJBS0JHX30SM",
+          "sessionId": "01KDWCP1D93E8A2Q4HR7RS09NS",
           "update": {
             "content": {
               "text": "?",
@@ -184,7 +184,7 @@
           }
         },
         {
-          "sessionId": "01KDJGR6Y5P1F9VJBS0JHX30SM",
+          "sessionId": "01KDWCP1D93E8A2Q4HR7RS09NS",
           "update": {
             "content": {
               "text": "",
@@ -194,7 +194,7 @@
           }
         },
         {
-          "sessionId": "01KDJGR6Y5P1F9VJBS0JHX30SM",
+          "sessionId": "01KDWCP1D93E8A2Q4HR7RS09NS",
           "update": {
             "content": {
               "text": "I",
@@ -204,7 +204,7 @@
           }
         },
         {
-          "sessionId": "01KDJGR6Y5P1F9VJBS0JHX30SM",
+          "sessionId": "01KDWCP1D93E8A2Q4HR7RS09NS",
           "update": {
             "content": {
               "text": "'m",
@@ -214,7 +214,7 @@
           }
         },
         {
-          "sessionId": "01KDJGR6Y5P1F9VJBS0JHX30SM",
+          "sessionId": "01KDWCP1D93E8A2Q4HR7RS09NS",
           "update": {
             "content": {
               "text": " doing",
@@ -224,7 +224,7 @@
           }
         },
         {
-          "sessionId": "01KDJGR6Y5P1F9VJBS0JHX30SM",
+          "sessionId": "01KDWCP1D93E8A2Q4HR7RS09NS",
           "update": {
             "content": {
               "text": " well",
@@ -234,7 +234,7 @@
           }
         },
         {
-          "sessionId": "01KDJGR6Y5P1F9VJBS0JHX30SM",
+          "sessionId": "01KDWCP1D93E8A2Q4HR7RS09NS",
           "update": {
             "content": {
               "text": ",",
@@ -244,7 +244,7 @@
           }
         },
         {
-          "sessionId": "01KDJGR6Y5P1F9VJBS0JHX30SM",
+          "sessionId": "01KDWCP1D93E8A2Q4HR7RS09NS",
           "update": {
             "content": {
               "text": " thank",
@@ -254,7 +254,7 @@
           }
         },
         {
-          "sessionId": "01KDJGR6Y5P1F9VJBS0JHX30SM",
+          "sessionId": "01KDWCP1D93E8A2Q4HR7RS09NS",
           "update": {
             "content": {
               "text": " you",
@@ -264,7 +264,7 @@
           }
         },
         {
-          "sessionId": "01KDJGR6Y5P1F9VJBS0JHX30SM",
+          "sessionId": "01KDWCP1D93E8A2Q4HR7RS09NS",
           "update": {
             "content": {
               "text": " for",
@@ -274,7 +274,7 @@
           }
         },
         {
-          "sessionId": "01KDJGR6Y5P1F9VJBS0JHX30SM",
+          "sessionId": "01KDWCP1D93E8A2Q4HR7RS09NS",
           "update": {
             "content": {
               "text": " asking",
@@ -284,7 +284,7 @@
           }
         },
         {
-          "sessionId": "01KDJGR6Y5P1F9VJBS0JHX30SM",
+          "sessionId": "01KDWCP1D93E8A2Q4HR7RS09NS",
           "update": {
             "content": {
               "text": "!",
@@ -294,197 +294,7 @@
           }
         },
         {
-          "sessionId": "01KDJGR6Y5P1F9VJBS0JHX30SM",
-          "update": {
-            "content": {
-              "text": " I",
-              "type": "text"
-            },
-            "sessionUpdate": "agent_message_chunk"
-          }
-        },
-        {
-          "sessionId": "01KDJGR6Y5P1F9VJBS0JHX30SM",
-          "update": {
-            "content": {
-              "text": "'m",
-              "type": "text"
-            },
-            "sessionUpdate": "agent_message_chunk"
-          }
-        },
-        {
-          "sessionId": "01KDJGR6Y5P1F9VJBS0JHX30SM",
-          "update": {
-            "content": {
-              "text": " here",
-              "type": "text"
-            },
-            "sessionUpdate": "agent_message_chunk"
-          }
-        },
-        {
-          "sessionId": "01KDJGR6Y5P1F9VJBS0JHX30SM",
-          "update": {
-            "content": {
-              "text": " and",
-              "type": "text"
-            },
-            "sessionUpdate": "agent_message_chunk"
-          }
-        },
-        {
-          "sessionId": "01KDJGR6Y5P1F9VJBS0JHX30SM",
-          "update": {
-            "content": {
-              "text": " ready",
-              "type": "text"
-            },
-            "sessionUpdate": "agent_message_chunk"
-          }
-        },
-        {
-          "sessionId": "01KDJGR6Y5P1F9VJBS0JHX30SM",
-          "update": {
-            "content": {
-              "text": " to",
-              "type": "text"
-            },
-            "sessionUpdate": "agent_message_chunk"
-          }
-        },
-        {
-          "sessionId": "01KDJGR6Y5P1F9VJBS0JHX30SM",
-          "update": {
-            "content": {
-              "text": " help",
-              "type": "text"
-            },
-            "sessionUpdate": "agent_message_chunk"
-          }
-        },
-        {
-          "sessionId": "01KDJGR6Y5P1F9VJBS0JHX30SM",
-          "update": {
-            "content": {
-              "text": " you",
-              "type": "text"
-            },
-            "sessionUpdate": "agent_message_chunk"
-          }
-        },
-        {
-          "sessionId": "01KDJGR6Y5P1F9VJBS0JHX30SM",
-          "update": {
-            "content": {
-              "text": " with",
-              "type": "text"
-            },
-            "sessionUpdate": "agent_message_chunk"
-          }
-        },
-        {
-          "sessionId": "01KDJGR6Y5P1F9VJBS0JHX30SM",
-          "update": {
-            "content": {
-              "text": " whatever",
-              "type": "text"
-            },
-            "sessionUpdate": "agent_message_chunk"
-          }
-        },
-        {
-          "sessionId": "01KDJGR6Y5P1F9VJBS0JHX30SM",
-          "update": {
-            "content": {
-              "text": " you",
-              "type": "text"
-            },
-            "sessionUpdate": "agent_message_chunk"
-          }
-        },
-        {
-          "sessionId": "01KDJGR6Y5P1F9VJBS0JHX30SM",
-          "update": {
-            "content": {
-              "text": "'d",
-              "type": "text"
-            },
-            "sessionUpdate": "agent_message_chunk"
-          }
-        },
-        {
-          "sessionId": "01KDJGR6Y5P1F9VJBS0JHX30SM",
-          "update": {
-            "content": {
-              "text": " like",
-              "type": "text"
-            },
-            "sessionUpdate": "agent_message_chunk"
-          }
-        },
-        {
-          "sessionId": "01KDJGR6Y5P1F9VJBS0JHX30SM",
-          "update": {
-            "content": {
-              "text": " to",
-              "type": "text"
-            },
-            "sessionUpdate": "agent_message_chunk"
-          }
-        },
-        {
-          "sessionId": "01KDJGR6Y5P1F9VJBS0JHX30SM",
-          "update": {
-            "content": {
-              "text": " discuss",
-              "type": "text"
-            },
-            "sessionUpdate": "agent_message_chunk"
-          }
-        },
-        {
-          "sessionId": "01KDJGR6Y5P1F9VJBS0JHX30SM",
-          "update": {
-            "content": {
-              "text": " or",
-              "type": "text"
-            },
-            "sessionUpdate": "agent_message_chunk"
-          }
-        },
-        {
-          "sessionId": "01KDJGR6Y5P1F9VJBS0JHX30SM",
-          "update": {
-            "content": {
-              "text": " work",
-              "type": "text"
-            },
-            "sessionUpdate": "agent_message_chunk"
-          }
-        },
-        {
-          "sessionId": "01KDJGR6Y5P1F9VJBS0JHX30SM",
-          "update": {
-            "content": {
-              "text": " on",
-              "type": "text"
-            },
-            "sessionUpdate": "agent_message_chunk"
-          }
-        },
-        {
-          "sessionId": "01KDJGR6Y5P1F9VJBS0JHX30SM",
-          "update": {
-            "content": {
-              "text": ".",
-              "type": "text"
-            },
-            "sessionUpdate": "agent_message_chunk"
-          }
-        },
-        {
-          "sessionId": "01KDJGR6Y5P1F9VJBS0JHX30SM",
+          "sessionId": "01KDWCP1D93E8A2Q4HR7RS09NS",
           "update": {
             "content": {
               "text": " How",
@@ -494,7 +304,7 @@
           }
         },
         {
-          "sessionId": "01KDJGR6Y5P1F9VJBS0JHX30SM",
+          "sessionId": "01KDWCP1D93E8A2Q4HR7RS09NS",
           "update": {
             "content": {
               "text": " can",
@@ -504,7 +314,7 @@
           }
         },
         {
-          "sessionId": "01KDJGR6Y5P1F9VJBS0JHX30SM",
+          "sessionId": "01KDWCP1D93E8A2Q4HR7RS09NS",
           "update": {
             "content": {
               "text": " I",
@@ -514,7 +324,7 @@
           }
         },
         {
-          "sessionId": "01KDJGR6Y5P1F9VJBS0JHX30SM",
+          "sessionId": "01KDWCP1D93E8A2Q4HR7RS09NS",
           "update": {
             "content": {
               "text": " assist",
@@ -524,7 +334,7 @@
           }
         },
         {
-          "sessionId": "01KDJGR6Y5P1F9VJBS0JHX30SM",
+          "sessionId": "01KDWCP1D93E8A2Q4HR7RS09NS",
           "update": {
             "content": {
               "text": " you",
@@ -534,7 +344,7 @@
           }
         },
         {
-          "sessionId": "01KDJGR6Y5P1F9VJBS0JHX30SM",
+          "sessionId": "01KDWCP1D93E8A2Q4HR7RS09NS",
           "update": {
             "content": {
               "text": " today",
@@ -544,17 +354,17 @@
           }
         },
         {
-          "sessionId": "01KDJGR6Y5P1F9VJBS0JHX30SM",
+          "sessionId": "01KDWCP1D93E8A2Q4HR7RS09NS",
           "update": {
             "content": {
-              "text": "?\n",
+              "text": "?",
               "type": "text"
             },
             "sessionUpdate": "agent_message_chunk"
           }
         },
         {
-          "sessionId": "01KDJGR6Y5P1F9VJBS0JHX30SM",
+          "sessionId": "01KDWCP1D93E8A2Q4HR7RS09NS",
           "update": {
             "content": {
               "text": "",

@@ -54,7 +54,7 @@
         "mcpServers": []
       },
       "response": {
-        "sessionId": "01KDJGRZ26YPNTB2EZEVY7SJ4H"
+        "sessionId": "01KDWCQDN7EZ6Z2KNTRZCWBAVP"
       },
       "notifications": []
     },
@@ -67,11 +67,11 @@
             "type": "text"
           }
         ],
-        "sessionId": "01KDJGRZ26YPNTB2EZEVY7SJ4H"
+        "sessionId": "01KDWCQDN7EZ6Z2KNTRZCWBAVP"
       },
       "response": {
         "_meta": {
-          "claude_response": "Hello! 👋\n\nIs there something specific I can help you with in this codebase? I see you're working on an ACP (Agent Client Protocol) conformance testing project.",
+          "claude_response": "Hello! 👋\n\nIs there something I can help you with?",
           "processed": true,
           "session_messages": 3,
           "streaming": false
@@ -101,11 +101,16 @@
                 "Plan",
                 "Plan",
                 null
+              ],
+              [
+                "claude-code-guide",
+                "Claude Code Guide",
+                null
               ]
             ],
             "source": "claude_cli_init"
           },
-          "sessionId": "01KDJGRZ26YPNTB2EZEVY7SJ4H",
+          "sessionId": "01KDWCQDN7EZ6Z2KNTRZCWBAVP",
           "update": {
             "availableCommands": [
               {
@@ -186,11 +191,11 @@
         },
         {
           "_meta": {
-            "session_id": "01KDJGRZ26YPNTB2EZEVY7SJ4H",
-            "timestamp": 1766926882,
+            "session_id": "01KDWCQDN7EZ6Z2KNTRZCWBAVP",
+            "timestamp": 1767258178,
             "update_type": "available_commands"
           },
-          "sessionId": "01KDJGRZ26YPNTB2EZEVY7SJ4H",
+          "sessionId": "01KDWCQDN7EZ6Z2KNTRZCWBAVP",
           "update": {
             "availableCommands": [
               {
@@ -216,7 +221,7 @@
           }
         },
         {
-          "sessionId": "01KDJGRZ26YPNTB2EZEVY7SJ4H",
+          "sessionId": "01KDWCQDN7EZ6Z2KNTRZCWBAVP",
           "update": {
             "content": {
               "text": "Say hello",
@@ -247,11 +252,16 @@
                 "Plan",
                 "Plan",
                 null
+              ],
+              [
+                "claude-code-guide",
+                "Claude Code Guide",
+                null
               ]
             ],
             "source": "claude_cli_init"
           },
-          "sessionId": "01KDJGRZ26YPNTB2EZEVY7SJ4H",
+          "sessionId": "01KDWCQDN7EZ6Z2KNTRZCWBAVP",
           "update": {
             "availableCommands": [
               {
@@ -331,7 +341,7 @@
           }
         },
         {
-          "sessionId": "01KDJGRZ26YPNTB2EZEVY7SJ4H",
+          "sessionId": "01KDWCQDN7EZ6Z2KNTRZCWBAVP",
           "update": {
             "content": {
               "text": "Hello! ",
@@ -341,7 +351,7 @@
           }
         },
         {
-          "sessionId": "01KDJGRZ26YPNTB2EZEVY7SJ4H",
+          "sessionId": "01KDWCQDN7EZ6Z2KNTRZCWBAVP",
           "update": {
             "content": {
               "text": "Hello! ",
@@ -351,7 +361,7 @@
           }
         },
         {
-          "sessionId": "01KDJGRZ26YPNTB2EZEVY7SJ4H",
+          "sessionId": "01KDWCQDN7EZ6Z2KNTRZCWBAVP",
           "update": {
             "content": {
               "text": "👋",
@@ -361,7 +371,7 @@
           }
         },
         {
-          "sessionId": "01KDJGRZ26YPNTB2EZEVY7SJ4H",
+          "sessionId": "01KDWCQDN7EZ6Z2KNTRZCWBAVP",
           "update": {
             "content": {
               "text": "👋",
@@ -371,7 +381,7 @@
           }
         },
         {
-          "sessionId": "01KDJGRZ26YPNTB2EZEVY7SJ4H",
+          "sessionId": "01KDWCQDN7EZ6Z2KNTRZCWBAVP",
           "update": {
             "content": {
               "text": "\n\nIs",
@@ -381,7 +391,7 @@
           }
         },
         {
-          "sessionId": "01KDJGRZ26YPNTB2EZEVY7SJ4H",
+          "sessionId": "01KDWCQDN7EZ6Z2KNTRZCWBAVP",
           "update": {
             "content": {
               "text": "\n\nIs",
@@ -391,290 +401,50 @@
           }
         },
         {
-          "sessionId": "01KDJGRZ26YPNTB2EZEVY7SJ4H",
+          "sessionId": "01KDWCQDN7EZ6Z2KNTRZCWBAVP",
           "update": {
             "content": {
-              "text": " there something",
+              "text": " there something I can help",
               "type": "text"
             },
             "sessionUpdate": "agent_message_chunk"
           }
         },
         {
-          "sessionId": "01KDJGRZ26YPNTB2EZEVY7SJ4H",
+          "sessionId": "01KDWCQDN7EZ6Z2KNTRZCWBAVP",
           "update": {
             "content": {
-              "text": " there something",
+              "text": " there something I can help",
               "type": "text"
             },
             "sessionUpdate": "agent_message_chunk"
           }
         },
         {
-          "sessionId": "01KDJGRZ26YPNTB2EZEVY7SJ4H",
+          "sessionId": "01KDWCQDN7EZ6Z2KNTRZCWBAVP",
           "update": {
             "content": {
-              "text": " specific",
+              "text": " you with?",
               "type": "text"
             },
             "sessionUpdate": "agent_message_chunk"
           }
         },
         {
-          "sessionId": "01KDJGRZ26YPNTB2EZEVY7SJ4H",
+          "sessionId": "01KDWCQDN7EZ6Z2KNTRZCWBAVP",
           "update": {
             "content": {
-              "text": " specific",
+              "text": " you with?",
               "type": "text"
             },
             "sessionUpdate": "agent_message_chunk"
           }
         },
         {
-          "sessionId": "01KDJGRZ26YPNTB2EZEVY7SJ4H",
+          "sessionId": "01KDWCQDN7EZ6Z2KNTRZCWBAVP",
           "update": {
             "content": {
-              "text": " I",
-              "type": "text"
-            },
-            "sessionUpdate": "agent_message_chunk"
-          }
-        },
-        {
-          "sessionId": "01KDJGRZ26YPNTB2EZEVY7SJ4H",
-          "update": {
-            "content": {
-              "text": " I",
-              "type": "text"
-            },
-            "sessionUpdate": "agent_message_chunk"
-          }
-        },
-        {
-          "sessionId": "01KDJGRZ26YPNTB2EZEVY7SJ4H",
-          "update": {
-            "content": {
-              "text": " can help you with in",
-              "type": "text"
-            },
-            "sessionUpdate": "agent_message_chunk"
-          }
-        },
-        {
-          "sessionId": "01KDJGRZ26YPNTB2EZEVY7SJ4H",
-          "update": {
-            "content": {
-              "text": " can help you with in",
-              "type": "text"
-            },
-            "sessionUpdate": "agent_message_chunk"
-          }
-        },
-        {
-          "sessionId": "01KDJGRZ26YPNTB2EZEVY7SJ4H",
-          "update": {
-            "content": {
-              "text": " this c",
-              "type": "text"
-            },
-            "sessionUpdate": "agent_message_chunk"
-          }
-        },
-        {
-          "sessionId": "01KDJGRZ26YPNTB2EZEVY7SJ4H",
-          "update": {
-            "content": {
-              "text": " this c",
-              "type": "text"
-            },
-            "sessionUpdate": "agent_message_chunk"
-          }
-        },
-        {
-          "sessionId": "01KDJGRZ26YPNTB2EZEVY7SJ4H",
-          "update": {
-            "content": {
-              "text": "odebase? I see",
-              "type": "text"
-            },
-            "sessionUpdate": "agent_message_chunk"
-          }
-        },
-        {
-          "sessionId": "01KDJGRZ26YPNTB2EZEVY7SJ4H",
-          "update": {
-            "content": {
-              "text": "odebase? I see",
-              "type": "text"
-            },
-            "sessionUpdate": "agent_message_chunk"
-          }
-        },
-        {
-          "sessionId": "01KDJGRZ26YPNTB2EZEVY7SJ4H",
-          "update": {
-            "content": {
-              "text": " you're",
-              "type": "text"
-            },
-            "sessionUpdate": "agent_message_chunk"
-          }
-        },
-        {
-          "sessionId": "01KDJGRZ26YPNTB2EZEVY7SJ4H",
-          "update": {
-            "content": {
-              "text": " you're",
-              "type": "text"
-            },
-            "sessionUpdate": "agent_message_chunk"
-          }
-        },
-        {
-          "sessionId": "01KDJGRZ26YPNTB2EZEVY7SJ4H",
-          "update": {
-            "content": {
-              "text": " working on",
-              "type": "text"
-            },
-            "sessionUpdate": "agent_message_chunk"
-          }
-        },
-        {
-          "sessionId": "01KDJGRZ26YPNTB2EZEVY7SJ4H",
-          "update": {
-            "content": {
-              "text": " working on",
-              "type": "text"
-            },
-            "sessionUpdate": "agent_message_chunk"
-          }
-        },
-        {
-          "sessionId": "01KDJGRZ26YPNTB2EZEVY7SJ4H",
-          "update": {
-            "content": {
-              "text": " an",
-              "type": "text"
-            },
-            "sessionUpdate": "agent_message_chunk"
-          }
-        },
-        {
-          "sessionId": "01KDJGRZ26YPNTB2EZEVY7SJ4H",
-          "update": {
-            "content": {
-              "text": " an",
-              "type": "text"
-            },
-            "sessionUpdate": "agent_message_chunk"
-          }
-        },
-        {
-          "sessionId": "01KDJGRZ26YPNTB2EZEVY7SJ4H",
-          "update": {
-            "content": {
-              "text": " A",
-              "type": "text"
-            },
-            "sessionUpdate": "agent_message_chunk"
-          }
-        },
-        {
-          "sessionId": "01KDJGRZ26YPNTB2EZEVY7SJ4H",
-          "update": {
-            "content": {
-              "text": " A",
-              "type": "text"
-            },
-            "sessionUpdate": "agent_message_chunk"
-          }
-        },
-        {
-          "sessionId": "01KDJGRZ26YPNTB2EZEVY7SJ4H",
-          "update": {
-            "content": {
-              "text": "CP (Agent Client",
-              "type": "text"
-            },
-            "sessionUpdate": "agent_message_chunk"
-          }
-        },
-        {
-          "sessionId": "01KDJGRZ26YPNTB2EZEVY7SJ4H",
-          "update": {
-            "content": {
-              "text": "CP (Agent Client",
-              "type": "text"
-            },
-            "sessionUpdate": "agent_message_chunk"
-          }
-        },
-        {
-          "sessionId": "01KDJGRZ26YPNTB2EZEVY7SJ4H",
-          "update": {
-            "content": {
-              "text": " Protocol) conform",
-              "type": "text"
-            },
-            "sessionUpdate": "agent_message_chunk"
-          }
-        },
-        {
-          "sessionId": "01KDJGRZ26YPNTB2EZEVY7SJ4H",
-          "update": {
-            "content": {
-              "text": " Protocol) conform",
-              "type": "text"
-            },
-            "sessionUpdate": "agent_message_chunk"
-          }
-        },
-        {
-          "sessionId": "01KDJGRZ26YPNTB2EZEVY7SJ4H",
-          "update": {
-            "content": {
-              "text": "ance testing",
-              "type": "text"
-            },
-            "sessionUpdate": "agent_message_chunk"
-          }
-        },
-        {
-          "sessionId": "01KDJGRZ26YPNTB2EZEVY7SJ4H",
-          "update": {
-            "content": {
-              "text": "ance testing",
-              "type": "text"
-            },
-            "sessionUpdate": "agent_message_chunk"
-          }
-        },
-        {
-          "sessionId": "01KDJGRZ26YPNTB2EZEVY7SJ4H",
-          "update": {
-            "content": {
-              "text": " project.",
-              "type": "text"
-            },
-            "sessionUpdate": "agent_message_chunk"
-          }
-        },
-        {
-          "sessionId": "01KDJGRZ26YPNTB2EZEVY7SJ4H",
-          "update": {
-            "content": {
-              "text": " project.",
-              "type": "text"
-            },
-            "sessionUpdate": "agent_message_chunk"
-          }
-        },
-        {
-          "sessionId": "01KDJGRZ26YPNTB2EZEVY7SJ4H",
-          "update": {
-            "content": {
-              "text": "Hello! 👋\n\nIs there something specific I can help you with in this codebase? I see you're working on an ACP (Agent Client Protocol) conformance testing project.",
+              "text": "Hello! 👋\n\nIs there something I can help you with?",
               "type": "text"
             },
             "sessionUpdate": "agent_message_chunk"

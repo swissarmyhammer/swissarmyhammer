@@ -54,7 +54,7 @@
         "mcpServers": []
       },
       "response": {
-        "sessionId": "01KDJGXRB787YDQMQMM135B2DH"
+        "sessionId": "01KDWCYY3ZRFQ9G6R6NQXKRZH8"
       },
       "notifications": []
     },
@@ -65,20 +65,35 @@
           "test"
         ],
         "command": "echo",
-        "sessionId": "01KDJGXRB787YDQMQMM135B2DH"
+        "sessionId": "01KDWCYY3ZRFQ9G6R6NQXKRZH8"
       },
       "response": {
-        "terminalId": "term_01KDJGXWKB5MAEHWQA2BY339S2"
+        "terminalId": "term_01KDWCZ1MSQRTRW84NGC8GQRET"
       },
       "notifications": []
     },
     {
       "method": "ext_method",
       "request": {
-        "sessionId": "01KDJGXRB787YDQMQMM135B2DH",
-        "terminalId": "term_01KDJGXWKB5MAEHWQA2BY339S2"
+        "sessionId": "01KDWCYY3ZRFQ9G6R6NQXKRZH8",
+        "terminalId": "term_01KDWCZ1MSQRTRW84NGC8GQRET"
       },
       "response": null,
+      "notifications": []
+    },
+    {
+      "method": "ext_method",
+      "request": {
+        "sessionId": "01KDWCYY3ZRFQ9G6R6NQXKRZH8",
+        "terminalId": "term_01KDWCZ1MSQRTRW84NGC8GQRET"
+      },
+      "response": {
+        "error": {
+          "code": -32600,
+          "data": null,
+          "message": "Protocol error: Terminal not found: term_01KDWCZ1MSQRTRW84NGC8GQRET"
+        }
+      },
       "notifications": []
     }
   ]

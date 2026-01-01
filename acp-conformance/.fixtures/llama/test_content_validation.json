@@ -52,7 +52,7 @@
         "mcpServers": []
       },
       "response": {
-        "sessionId": "01KDJKCZ71S20GRYRTAF0X3M4V"
+        "sessionId": "01KDWCFESB3WXRZEV5627VXNSN"
       },
       "notifications": []
     },
@@ -69,7 +69,7 @@
             "type": "text"
           }
         ],
-        "sessionId": "01KDJKCZ71S20GRYRTAF0X3M4V"
+        "sessionId": "01KDWCFESB3WXRZEV5627VXNSN"
       },
       "response": {
         "_meta": {
@@ -80,7 +80,7 @@
       },
       "notifications": [
         {
-          "sessionId": "01KDJKCZ71S20GRYRTAF0X3M4V",
+          "sessionId": "01KDWCFESB3WXRZEV5627VXNSN",
           "update": {
             "content": {
               "text": "{\n",
@@ -90,7 +90,7 @@
           }
         },
         {
-          "sessionId": "01KDJKCZ71S20GRYRTAF0X3M4V",
+          "sessionId": "01KDWCFESB3WXRZEV5627VXNSN",
           "update": {
             "content": {
               "text": " ",
@@ -100,7 +100,7 @@
           }
         },
         {
-          "sessionId": "01KDJKCZ71S20GRYRTAF0X3M4V",
+          "sessionId": "01KDWCFESB3WXRZEV5627VXNSN",
           "update": {
             "content": {
               "text": " \"",
@@ -110,7 +110,7 @@
           }
         },
         {
-          "sessionId": "01KDJKCZ71S20GRYRTAF0X3M4V",
+          "sessionId": "01KDWCFESB3WXRZEV5627VXNSN",
           "update": {
             "content": {
               "text": "function",
@@ -120,7 +120,7 @@
           }
         },
         {
-          "sessionId": "01KDJKCZ71S20GRYRTAF0X3M4V",
+          "sessionId": "01KDWCFESB3WXRZEV5627VXNSN",
           "update": {
             "content": {
               "text": "_name",
@@ -130,7 +130,7 @@
           }
         },
         {
-          "sessionId": "01KDJKCZ71S20GRYRTAF0X3M4V",
+          "sessionId": "01KDWCFESB3WXRZEV5627VXNSN",
           "update": {
             "content": {
               "text": "\":",
@@ -140,7 +140,7 @@
           }
         },
         {
-          "sessionId": "01KDJKCZ71S20GRYRTAF0X3M4V",
+          "sessionId": "01KDWCFESB3WXRZEV5627VXNSN",
           "update": {
             "content": {
               "text": " \"",
@@ -150,7 +150,7 @@
           }
         },
         {
-          "sessionId": "01KDJKCZ71S20GRYRTAF0X3M4V",
+          "sessionId": "01KDWCFESB3WXRZEV5627VXNSN",
           "update": {
             "content": {
               "text": "list",
@@ -160,7 +160,7 @@
           }
         },
         {
-          "sessionId": "01KDJKCZ71S20GRYRTAF0X3M4V",
+          "sessionId": "01KDWCFESB3WXRZEV5627VXNSN",
           "update": {
             "content": {
               "text": "-files",
@@ -170,7 +170,7 @@
           }
         },
         {
-          "sessionId": "01KDJKCZ71S20GRYRTAF0X3M4V",
+          "sessionId": "01KDWCFESB3WXRZEV5627VXNSN",
           "update": {
             "content": {
               "text": "\",\n",
@@ -180,7 +180,7 @@
           }
         },
         {
-          "sessionId": "01KDJKCZ71S20GRYRTAF0X3M4V",
+          "sessionId": "01KDWCFESB3WXRZEV5627VXNSN",
           "update": {
             "content": {
               "text": " ",
@@ -190,7 +190,7 @@
           }
         },
         {
-          "sessionId": "01KDJKCZ71S20GRYRTAF0X3M4V",
+          "sessionId": "01KDWCFESB3WXRZEV5627VXNSN",
           "update": {
             "content": {
               "text": " \"",
@@ -200,7 +200,7 @@
           }
         },
         {
-          "sessionId": "01KDJKCZ71S20GRYRTAF0X3M4V",
+          "sessionId": "01KDWCFESB3WXRZEV5627VXNSN",
           "update": {
             "content": {
               "text": "arguments",
@@ -210,7 +210,7 @@
           }
         },
         {
-          "sessionId": "01KDJKCZ71S20GRYRTAF0X3M4V",
+          "sessionId": "01KDWCFESB3WXRZEV5627VXNSN",
           "update": {
             "content": {
               "text": "\":",
@@ -220,7 +220,7 @@
           }
         },
         {
-          "sessionId": "01KDJKCZ71S20GRYRTAF0X3M4V",
+          "sessionId": "01KDWCFESB3WXRZEV5627VXNSN",
           "update": {
             "content": {
               "text": " {}\n",
@@ -230,7 +230,7 @@
           }
         },
         {
-          "sessionId": "01KDJKCZ71S20GRYRTAF0X3M4V",
+          "sessionId": "01KDWCFESB3WXRZEV5627VXNSN",
           "update": {
             "content": {
               "text": "}",
@@ -240,7 +240,7 @@
           }
         },
         {
-          "sessionId": "01KDJKCZ71S20GRYRTAF0X3M4V",
+          "sessionId": "01KDWCFESB3WXRZEV5627VXNSN",
           "update": {
             "content": {
               "text": "",
@@ -250,12 +250,12 @@
           }
         },
         {
-          "sessionId": "01KDJKCZ71S20GRYRTAF0X3M4V",
+          "sessionId": "01KDWCFESB3WXRZEV5627VXNSN",
           "update": {
             "rawInput": {},
             "sessionUpdate": "tool_call",
             "title": "list-files",
-            "toolCallId": "01KDJKD0V3ZDDK8J96P4QKTK93"
+            "toolCallId": "01KDWCFGQX7NYSD1J9Y86NZN3R"
           }
         },
         {
@@ -292,12 +292,12 @@
           }
         },
         {
-          "sessionId": "01KDJKCZ71S20GRYRTAF0X3M4V",
+          "sessionId": "01KDWCFESB3WXRZEV5627VXNSN",
           "update": {
             "rawOutput": "{\n  \"count\": 3,\n  \"files\": [\n    \"file1.txt\",\n    \"file2.txt\",\n    \"file3.txt\"\n  ],\n  \"path\": \".\"\n}",
             "sessionUpdate": "tool_call_update",
             "status": "completed",
-            "toolCallId": "01KDJKD0V3ZDDK8J96P4QKTK93"
+            "toolCallId": "01KDWCFGQX7NYSD1J9Y86NZN3R"
           }
         }
       ]

@@ -54,7 +54,7 @@
         "mcpServers": []
       },
       "response": {
-        "sessionId": "01KDJGXBAYPG94KV0G1D95D1B0"
+        "sessionId": "01KDWCZR087KVP57JTKYTJE8T1"
       },
       "notifications": []
     },
@@ -65,18 +65,18 @@
           "10"
         ],
         "command": "sleep",
-        "sessionId": "01KDJGXBAYPG94KV0G1D95D1B0"
+        "sessionId": "01KDWCZR087KVP57JTKYTJE8T1"
       },
       "response": {
-        "terminalId": "term_01KDJGXFBMDCBF147TYFT66QKV"
+        "terminalId": "term_01KDWCZVP9WJQFP5M70516Q5XD"
       },
       "notifications": []
     },
     {
       "method": "ext_method",
       "request": {
-        "sessionId": "01KDJGXBAYPG94KV0G1D95D1B0",
-        "terminalId": "term_01KDJGXFBMDCBF147TYFT66QKV"
+        "sessionId": "01KDWCZR087KVP57JTKYTJE8T1",
+        "terminalId": "term_01KDWCZVP9WJQFP5M70516Q5XD"
       },
       "response": null,
       "notifications": []
@@ -84,8 +84,8 @@
     {
       "method": "ext_method",
       "request": {
-        "sessionId": "01KDJGXBAYPG94KV0G1D95D1B0",
-        "terminalId": "term_01KDJGXFBMDCBF147TYFT66QKV"
+        "sessionId": "01KDWCZR087KVP57JTKYTJE8T1",
+        "terminalId": "term_01KDWCZVP9WJQFP5M70516Q5XD"
       },
       "response": {
         "exitStatus": {
@@ -100,8 +100,8 @@
     {
       "method": "ext_method",
       "request": {
-        "sessionId": "01KDJGXBAYPG94KV0G1D95D1B0",
-        "terminalId": "term_01KDJGXFBMDCBF147TYFT66QKV"
+        "sessionId": "01KDWCZR087KVP57JTKYTJE8T1",
+        "terminalId": "term_01KDWCZVP9WJQFP5M70516Q5XD"
       },
       "response": null,
       "notifications": []

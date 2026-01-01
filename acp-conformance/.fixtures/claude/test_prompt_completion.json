@@ -54,7 +54,7 @@
         "mcpServers": []
       },
       "response": {
-        "sessionId": "01KDJGRMVGK4B3V1R7915GY3SR"
+        "sessionId": "01KDWCPME1HXFC9W943122K5R2"
       },
       "notifications": []
     },
@@ -67,7 +67,7 @@
             "type": "text"
           }
         ],
-        "sessionId": "01KDJGRMVGK4B3V1R7915GY3SR"
+        "sessionId": "01KDWCPME1HXFC9W943122K5R2"
       },
       "response": {
         "_meta": {
@@ -101,11 +101,16 @@
                 "Plan",
                 "Plan",
                 null
+              ],
+              [
+                "claude-code-guide",
+                "Claude Code Guide",
+                null
               ]
             ],
             "source": "claude_cli_init"
           },
-          "sessionId": "01KDJGRMVGK4B3V1R7915GY3SR",
+          "sessionId": "01KDWCPME1HXFC9W943122K5R2",
           "update": {
             "availableCommands": [
               {
@@ -186,11 +191,11 @@
         },
         {
           "_meta": {
-            "session_id": "01KDJGRMVGK4B3V1R7915GY3SR",
-            "timestamp": 1766926869,
+            "session_id": "01KDWCPME1HXFC9W943122K5R2",
+            "timestamp": 1767258153,
             "update_type": "available_commands"
           },
-          "sessionId": "01KDJGRMVGK4B3V1R7915GY3SR",
+          "sessionId": "01KDWCPME1HXFC9W943122K5R2",
           "update": {
             "availableCommands": [
               {
@@ -216,7 +221,7 @@
           }
         },
         {
-          "sessionId": "01KDJGRMVGK4B3V1R7915GY3SR",
+          "sessionId": "01KDWCPME1HXFC9W943122K5R2",
           "update": {
             "content": {
               "text": "What is 2+2?",
@@ -247,11 +252,16 @@
                 "Plan",
                 "Plan",
                 null
+              ],
+              [
+                "claude-code-guide",
+                "Claude Code Guide",
+                null
               ]
             ],
             "source": "claude_cli_init"
           },
-          "sessionId": "01KDJGRMVGK4B3V1R7915GY3SR",
+          "sessionId": "01KDWCPME1HXFC9W943122K5R2",
           "update": {
             "availableCommands": [
               {
@@ -331,7 +341,7 @@
           }
         },
         {
-          "sessionId": "01KDJGRMVGK4B3V1R7915GY3SR",
+          "sessionId": "01KDWCPME1HXFC9W943122K5R2",
           "update": {
             "content": {
               "text": "4",
@@ -341,7 +351,7 @@
           }
         },
         {
-          "sessionId": "01KDJGRMVGK4B3V1R7915GY3SR",
+          "sessionId": "01KDWCPME1HXFC9W943122K5R2",
           "update": {
             "content": {
               "text": "4",
@@ -351,7 +361,7 @@
           }
         },
         {
-          "sessionId": "01KDJGRMVGK4B3V1R7915GY3SR",
+          "sessionId": "01KDWCPME1HXFC9W943122K5R2",
           "update": {
             "content": {
               "text": "4",

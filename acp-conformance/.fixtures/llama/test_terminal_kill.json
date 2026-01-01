@@ -52,7 +52,7 @@
         "mcpServers": []
       },
       "response": {
-        "sessionId": "01KDJGX7EH5GR6QXNJCPADFA5C"
+        "sessionId": "01KDWCZ5PZMHGW1Q7ZCARY0E39"
       },
       "notifications": []
     },
@@ -63,18 +63,18 @@
           "10"
         ],
         "command": "sleep",
-        "sessionId": "01KDJGX7EH5GR6QXNJCPADFA5C"
+        "sessionId": "01KDWCZ5PZMHGW1Q7ZCARY0E39"
       },
       "response": {
-        "terminalId": "term_01KDJGX7EPB1C5VNDA5Z186MJV"
+        "terminalId": "term_01KDWCZ5Q3VWZWG0AAQGT3VYDJ"
       },
       "notifications": []
     },
     {
       "method": "ext_method",
       "request": {
-        "sessionId": "01KDJGX7EH5GR6QXNJCPADFA5C",
-        "terminalId": "term_01KDJGX7EPB1C5VNDA5Z186MJV"
+        "sessionId": "01KDWCZ5PZMHGW1Q7ZCARY0E39",
+        "terminalId": "term_01KDWCZ5Q3VWZWG0AAQGT3VYDJ"
       },
       "response": {
         "killed": true
@@ -84,8 +84,8 @@
     {
       "method": "ext_method",
       "request": {
-        "sessionId": "01KDJGX7EH5GR6QXNJCPADFA5C",
-        "terminalId": "term_01KDJGX7EPB1C5VNDA5Z186MJV"
+        "sessionId": "01KDWCZ5PZMHGW1Q7ZCARY0E39",
+        "terminalId": "term_01KDWCZ5Q3VWZWG0AAQGT3VYDJ"
       },
       "response": {
         "output": "usage: sleep number[unit] [...]\nUnit can be 's' (seconds, the default), m (minutes), h (hours), or d (days).\n",
@@ -96,8 +96,8 @@
     {
       "method": "ext_method",
       "request": {
-        "sessionId": "01KDJGX7EH5GR6QXNJCPADFA5C",
-        "terminalId": "term_01KDJGX7EPB1C5VNDA5Z186MJV"
+        "sessionId": "01KDWCZ5PZMHGW1Q7ZCARY0E39",
+        "terminalId": "term_01KDWCZ5Q3VWZWG0AAQGT3VYDJ"
       },
       "response": null,
       "notifications": []

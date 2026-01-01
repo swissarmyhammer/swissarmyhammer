@@ -54,14 +54,14 @@
         "mcpServers": []
       },
       "response": {
-        "sessionId": "01KDJGR4A5HWBB7MHP59MTPPYV"
+        "sessionId": "01KDWCQQK2J8AWT2082V4QM7MS"
       },
       "notifications": []
     },
     {
       "method": "cancel",
       "request": {
-        "sessionId": "01KDJGR4A5HWBB7MHP59MTPPYV"
+        "sessionId": "01KDWCQQK2J8AWT2082V4QM7MS"
       },
       "response": null,
       "notifications": []

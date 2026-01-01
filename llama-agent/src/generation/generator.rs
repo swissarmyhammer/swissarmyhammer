@@ -552,52 +552,52 @@ impl<'a> TextGenerator for LlamaCppGenerator<'a> {
                 break;
             }
 
-            // Convert token to string with buffer reuse
-            let token_str = match self.model.token_to_str(token, Special::Tokenize) {
-                Ok(s) => s,
-                Err(e) => {
-                    trace!("Failed to convert token to string: {}", e);
-                    // Continue generation - this may happen with some tokens and shouldn't be fatal
-                    continue;
-                }
-            };
-
-            // Efficient string concatenation (matches queue.rs pattern)
-            if generated_text.capacity() - generated_text.len() < token_str.len() {
-                generated_text.reserve(token_str.len() * STRING_CAPACITY_MULTIPLIER);
-            }
-            generated_text.push_str(&token_str);
+            // Always increment token count and advance model state
             tokens_generated += 1;
 
-            // Check stoppers for early termination
-            {
-                let context = self
-                    .context
-                    .lock()
-                    .map_err(|_| GenerationError::ContextLock)?;
-                for stopper in &mut stoppers {
-                    if let Some(FinishReason::Stopped(reason)) =
-                        stopper.should_stop(&context, &batch)
-                    {
-                        finish_reason = FinishReason::Stopped(reason);
-                        break;
+            // Try to convert token to string
+            if let Ok(token_str) = self.model.token_to_str(token, Special::Tokenize) {
+                // Efficient string concatenation (matches queue.rs pattern)
+                if generated_text.capacity() - generated_text.len() < token_str.len() {
+                    generated_text.reserve(token_str.len() * STRING_CAPACITY_MULTIPLIER);
+                }
+                generated_text.push_str(&token_str);
+
+                // Check stoppers for early termination
+                {
+                    let context = self
+                        .context
+                        .lock()
+                        .map_err(|_| GenerationError::ContextLock)?;
+                    for stopper in &mut stoppers {
+                        if let Some(FinishReason::Stopped(reason)) =
+                            stopper.should_stop(&context, &batch)
+                        {
+                            finish_reason = FinishReason::Stopped(reason);
+                            break;
+                        }
                     }
                 }
+
+                // If a stopper triggered, break out of the generation loop
+                if !matches!(finish_reason, FinishReason::Stopped(ref r) if r == "Maximum tokens reached")
+                {
+                    break;
+                }
+
+                // Check for stop tokens in the generated text
+                if self.should_stop(&generated_text, &config.stop_tokens) {
+                    finish_reason = FinishReason::Stopped("Stop token detected".to_string());
+                    break;
+                }
+            } else {
+                trace!(
+                    "Token {} could not be converted to string, continuing generation",
+                    tokens_generated
+                );
             }
 
-            // If a stopper triggered, break out of the generation loop
-            if !matches!(finish_reason, FinishReason::Stopped(ref r) if r == "Maximum tokens reached")
-            {
-                break;
-            }
-
-            // Check for stop tokens in the generated text
-            if self.should_stop(&generated_text, &config.stop_tokens) {
-                finish_reason = FinishReason::Stopped("Stop token detected".to_string());
-                break;
-            }
-
-            // Prepare next batch for continued generation
+            // Always prepare next batch for continued generation
             batch.clear();
             if let Err(e) = batch.add(token, n_cur as i32, &[0], true) {
                 error!("Failed to add continuation token: {}", e);
@@ -742,65 +742,65 @@ impl<'a> TextGenerator for LlamaCppGenerator<'a> {
                 );
             }
 
-            // Convert token to string
-            let token_text = match self.model.token_to_str(token, Special::Tokenize) {
-                Ok(s) => s,
-                Err(e) => {
-                    trace!("Failed to convert token to string in streaming: {}", e);
-                    // Continue generation - this may happen with some tokens and shouldn't be fatal
-                    continue;
-                }
-            };
-
-            generated_text.push_str(&token_text);
+            // Always increment token count and advance model state
             tokens_generated += 1;
 
-            // Send the streaming chunk immediately (matches queue.rs:924-932)
-            let chunk = StreamChunk {
-                text: token_text.clone(),
-                is_complete: false,
-                token_count: tokens_generated,
-                finish_reason: None,
-            };
+            // Try to convert token to string and send if successful
+            if let Ok(token_text) = self.model.token_to_str(token, Special::Tokenize) {
+                generated_text.push_str(&token_text);
 
-            if stream_sender.send(Ok(chunk)).is_err() {
-                warn!("Stream receiver disconnected, stopping generation");
-                return Ok(());
-            }
+                // Send the streaming chunk immediately (matches queue.rs:924-932)
+                let chunk = StreamChunk {
+                    text: token_text.clone(),
+                    is_complete: false,
+                    token_count: tokens_generated,
+                    finish_reason: None,
+                };
 
-            // Check stoppers for early termination
-            {
-                let context = self
-                    .context
-                    .lock()
-                    .map_err(|_| GenerationError::ContextLock)?;
-                for stopper in &mut stoppers {
-                    if let Some(crate::types::FinishReason::Stopped(reason)) =
-                        stopper.should_stop(&context, &batch)
-                    {
-                        return self.handle_streaming_completion(
-                            &generated_text,
-                            tokens_generated,
-                            start_time,
-                            &stream_sender,
-                            &reason,
-                        );
+                if stream_sender.send(Ok(chunk)).is_err() {
+                    warn!("Stream receiver disconnected, stopping generation");
+                    return Ok(());
+                }
+
+                // Check stoppers for early termination
+                {
+                    let context = self
+                        .context
+                        .lock()
+                        .map_err(|_| GenerationError::ContextLock)?;
+                    for stopper in &mut stoppers {
+                        if let Some(crate::types::FinishReason::Stopped(reason)) =
+                            stopper.should_stop(&context, &batch)
+                        {
+                            return self.handle_streaming_completion(
+                                &generated_text,
+                                tokens_generated,
+                                start_time,
+                                &stream_sender,
+                                &reason,
+                            );
+                        }
                     }
                 }
-            }
 
-            // Check for stop tokens in the accumulated generated text
-            if self.should_stop(&generated_text, &config.stop_tokens) {
-                return self.handle_streaming_completion(
-                    &generated_text,
-                    tokens_generated,
-                    start_time,
-                    &stream_sender,
-                    "StopToken",
+                // Check for stop tokens in the accumulated generated text
+                if self.should_stop(&generated_text, &config.stop_tokens) {
+                    return self.handle_streaming_completion(
+                        &generated_text,
+                        tokens_generated,
+                        start_time,
+                        &stream_sender,
+                        "StopToken",
+                    );
+                }
+            } else {
+                trace!(
+                    "Token {} could not be converted to string in streaming, continuing generation",
+                    tokens_generated
                 );
             }
 
-            // Prepare next batch for continued generation
+            // Always prepare next batch for continued generation
             batch.clear();
             if let Err(e) = batch.add(token, n_cur as i32, &[0], true) {
                 error!("Failed to add continuation token for streaming: {}", e);
@@ -908,51 +908,52 @@ impl<'a> TextGenerator for LlamaCppGenerator<'a> {
                 break;
             }
 
-            // Convert token to string with buffer reuse
-            let token_str = match self.model.token_to_str(token, Special::Tokenize) {
-                Ok(s) => s,
-                Err(e) => {
-                    trace!("Failed to convert token to string: {}", e);
-                    continue;
-                }
-            };
-
-            // Efficient string concatenation
-            if generated_text.capacity() - generated_text.len() < token_str.len() {
-                generated_text.reserve(token_str.len() * STRING_CAPACITY_MULTIPLIER);
-            }
-            generated_text.push_str(&token_str);
+            // Always increment token count and advance model state
             tokens_generated += 1;
 
-            // Check stoppers for early termination
-            {
-                let context = self
-                    .context
-                    .lock()
-                    .map_err(|_| GenerationError::ContextLock)?;
-                for stopper in &mut stoppers {
-                    if let Some(FinishReason::Stopped(reason)) =
-                        stopper.should_stop(&context, &batch)
-                    {
-                        finish_reason = FinishReason::Stopped(reason);
-                        break;
+            // Try to convert token to string
+            if let Ok(token_str) = self.model.token_to_str(token, Special::Tokenize) {
+                // Efficient string concatenation
+                if generated_text.capacity() - generated_text.len() < token_str.len() {
+                    generated_text.reserve(token_str.len() * STRING_CAPACITY_MULTIPLIER);
+                }
+                generated_text.push_str(&token_str);
+
+                // Check stoppers for early termination
+                {
+                    let context = self
+                        .context
+                        .lock()
+                        .map_err(|_| GenerationError::ContextLock)?;
+                    for stopper in &mut stoppers {
+                        if let Some(FinishReason::Stopped(reason)) =
+                            stopper.should_stop(&context, &batch)
+                        {
+                            finish_reason = FinishReason::Stopped(reason);
+                            break;
+                        }
                     }
                 }
+
+                // If a stopper triggered, break out of the generation loop
+                if !matches!(finish_reason, FinishReason::Stopped(ref r) if r == "Maximum tokens reached")
+                {
+                    break;
+                }
+
+                // Check for stop tokens in the generated text
+                if self.should_stop(&generated_text, &config.stop_tokens) {
+                    finish_reason = FinishReason::Stopped("Stop token detected".to_string());
+                    break;
+                }
+            } else {
+                trace!(
+                    "Token {} could not be converted to string, continuing generation",
+                    tokens_generated
+                );
             }
 
-            // If a stopper triggered, break out of the generation loop
-            if !matches!(finish_reason, FinishReason::Stopped(ref r) if r == "Maximum tokens reached")
-            {
-                break;
-            }
-
-            // Check for stop tokens in the generated text
-            if self.should_stop(&generated_text, &config.stop_tokens) {
-                finish_reason = FinishReason::Stopped("Stop token detected".to_string());
-                break;
-            }
-
-            // Prepare next batch for continued generation
+            // Always prepare next batch for continued generation
             batch.clear();
             if let Err(e) = batch.add(token, n_cur as i32, &[0], true) {
                 error!("Failed to add continuation token: {}", e);
@@ -1067,64 +1068,65 @@ impl<'a> TextGenerator for LlamaCppGenerator<'a> {
                 );
             }
 
-            // Convert token to string
-            let token_text = match self.model.token_to_str(token, Special::Tokenize) {
-                Ok(s) => s,
-                Err(e) => {
-                    trace!("Failed to convert token to string in streaming: {}", e);
-                    continue;
-                }
-            };
-
-            generated_text.push_str(&token_text);
+            // Always increment token count and advance model state
             tokens_generated += 1;
 
-            // Send the streaming chunk immediately
-            let chunk = StreamChunk {
-                text: token_text.clone(),
-                is_complete: false,
-                token_count: tokens_generated,
-                finish_reason: None,
-            };
+            // Try to convert token to string and send if successful
+            if let Ok(token_text) = self.model.token_to_str(token, Special::Tokenize) {
+                generated_text.push_str(&token_text);
 
-            if stream_sender.send(Ok(chunk)).is_err() {
-                warn!("Stream receiver disconnected, stopping generation");
-                return Ok(());
-            }
+                // Send the streaming chunk immediately
+                let chunk = StreamChunk {
+                    text: token_text.clone(),
+                    is_complete: false,
+                    token_count: tokens_generated,
+                    finish_reason: None,
+                };
 
-            // Check stoppers for early termination
-            {
-                let context = self
-                    .context
-                    .lock()
-                    .map_err(|_| GenerationError::ContextLock)?;
-                for stopper in &mut stoppers {
-                    if let Some(crate::types::FinishReason::Stopped(reason)) =
-                        stopper.should_stop(&context, &batch)
-                    {
-                        return self.handle_streaming_completion(
-                            &generated_text,
-                            tokens_generated,
-                            start_time,
-                            &stream_sender,
-                            &reason,
-                        );
+                if stream_sender.send(Ok(chunk)).is_err() {
+                    warn!("Stream receiver disconnected, stopping generation");
+                    return Ok(());
+                }
+
+                // Check stoppers for early termination
+                {
+                    let context = self
+                        .context
+                        .lock()
+                        .map_err(|_| GenerationError::ContextLock)?;
+                    for stopper in &mut stoppers {
+                        if let Some(crate::types::FinishReason::Stopped(reason)) =
+                            stopper.should_stop(&context, &batch)
+                        {
+                            return self.handle_streaming_completion(
+                                &generated_text,
+                                tokens_generated,
+                                start_time,
+                                &stream_sender,
+                                &reason,
+                            );
+                        }
                     }
                 }
-            }
 
-            // Check for stop tokens in the accumulated generated text
-            if self.should_stop(&generated_text, &config.stop_tokens) {
-                return self.handle_streaming_completion(
-                    &generated_text,
-                    tokens_generated,
-                    start_time,
-                    &stream_sender,
-                    "StopToken",
+                // Check for stop tokens in the accumulated generated text
+                if self.should_stop(&generated_text, &config.stop_tokens) {
+                    return self.handle_streaming_completion(
+                        &generated_text,
+                        tokens_generated,
+                        start_time,
+                        &stream_sender,
+                        "StopToken",
+                    );
+                }
+            } else {
+                trace!(
+                    "Token {} could not be converted to string in streaming, continuing generation",
+                    tokens_generated
                 );
             }
 
-            // Prepare next batch for continued generation
+            // Always prepare next batch for continued generation
             batch.clear();
             if let Err(e) = batch.add(token, n_cur as i32, &[0], true) {
                 error!("Failed to add continuation token for streaming: {}", e);

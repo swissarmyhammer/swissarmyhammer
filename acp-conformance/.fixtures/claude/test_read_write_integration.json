@@ -54,7 +54,7 @@
         "mcpServers": []
       },
       "response": {
-        "sessionId": "01KDJGP65WE2VDBS85FJ8K5A6Z"
+        "sessionId": "01KDWCHYFJ4SVAYJ2C0MKV2WSJ"
       },
       "notifications": []
     },
@@ -63,7 +63,7 @@
       "request": {
         "content": "Integration test content",
         "path": "/var/folders/3k/6b488x1j6rg1f6w8fnyfwm9w0000gn/T/acp_conformance_integration_test.txt",
-        "sessionId": "01KDJGP65WE2VDBS85FJ8K5A6Z"
+        "sessionId": "01KDWCHYFJ4SVAYJ2C0MKV2WSJ"
       },
       "response": {},
       "notifications": []
@@ -72,7 +72,7 @@
       "method": "ext_method",
       "request": {
         "path": "/var/folders/3k/6b488x1j6rg1f6w8fnyfwm9w0000gn/T/acp_conformance_integration_test.txt",
-        "sessionId": "01KDJGP65WE2VDBS85FJ8K5A6Z"
+        "sessionId": "01KDWCHYFJ4SVAYJ2C0MKV2WSJ"
       },
       "response": {
         "content": "Integration test content"

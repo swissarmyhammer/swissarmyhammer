@@ -52,7 +52,7 @@
         "mcpServers": []
       },
       "response": {
-        "sessionId": "01KDJGXMJ1H8TRJMKP6EEYC2JK"
+        "sessionId": "01KDWD0HRHYGH0YDH15Y79GPF2"
       },
       "notifications": []
     },
@@ -63,20 +63,35 @@
           "test"
         ],
         "command": "echo",
-        "sessionId": "01KDJGXMJ1H8TRJMKP6EEYC2JK"
+        "sessionId": "01KDWD0HRHYGH0YDH15Y79GPF2"
       },
       "response": {
-        "terminalId": "term_01KDJGXMJ51VNVK54906CKRCEF"
+        "terminalId": "term_01KDWD0HRNRVW4X4B965WX3SWN"
       },
       "notifications": []
     },
     {
       "method": "ext_method",
       "request": {
-        "sessionId": "01KDJGXMJ1H8TRJMKP6EEYC2JK",
-        "terminalId": "term_01KDJGXMJ51VNVK54906CKRCEF"
+        "sessionId": "01KDWD0HRHYGH0YDH15Y79GPF2",
+        "terminalId": "term_01KDWD0HRNRVW4X4B965WX3SWN"
       },
       "response": null,
+      "notifications": []
+    },
+    {
+      "method": "ext_method",
+      "request": {
+        "sessionId": "01KDWD0HRHYGH0YDH15Y79GPF2",
+        "terminalId": "term_01KDWD0HRNRVW4X4B965WX3SWN"
+      },
+      "response": {
+        "error": {
+          "code": -32603,
+          "data": null,
+          "message": "Internal error"
+        }
+      },
       "notifications": []
     }
   ]

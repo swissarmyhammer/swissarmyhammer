@@ -52,7 +52,7 @@
         "mcpServers": []
       },
       "response": {
-        "sessionId": "01KDJKE0BDEJN2TM9K7HRTDD17"
+        "sessionId": "01KDWCZMDPY3PW5XERYV6356F5"
       },
       "notifications": []
     },
@@ -63,7 +63,7 @@
           "hello"
         ],
         "command": "echo",
-        "sessionId": "01KDJKE0BDEJN2TM9K7HRTDD17"
+        "sessionId": "01KDWCZMDPY3PW5XERYV6356F5"
       },
       "response": {
         "error": {

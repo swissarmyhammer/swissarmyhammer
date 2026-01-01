@@ -54,7 +54,7 @@
         "mcpServers": []
       },
       "response": {
-        "sessionId": "01KDJKCY21A5XQDRZ4SHCGQXWH"
+        "sessionId": "01KDWCEF2Q59PA8J6THTDN3FRG"
       },
       "notifications": []
     },
@@ -71,11 +71,11 @@
             "type": "text"
           }
         ],
-        "sessionId": "01KDJKCY21A5XQDRZ4SHCGQXWH"
+        "sessionId": "01KDWCEF2Q59PA8J6THTDN3FRG"
       },
       "response": {
         "_meta": {
-          "claude_response": "Hi! I see you sent two messages. How can I help you today?",
+          "claude_response": "It looks like you sent two messages that got concatenated together (\"First message\" and \"Second message\"). Is there something specific I can help you with?",
           "processed": true,
           "session_messages": 3,
           "streaming": false
@@ -114,7 +114,7 @@
             ],
             "source": "claude_cli_init"
           },
-          "sessionId": "01KDJKCY21A5XQDRZ4SHCGQXWH",
+          "sessionId": "01KDWCEF2Q59PA8J6THTDN3FRG",
           "update": {
             "availableCommands": [
               {
@@ -195,11 +195,11 @@
         },
         {
           "_meta": {
-            "session_id": "01KDJKCY21A5XQDRZ4SHCGQXWH",
-            "timestamp": 1766929633,
+            "session_id": "01KDWCEF2Q59PA8J6THTDN3FRG",
+            "timestamp": 1767257885,
             "update_type": "available_commands"
           },
-          "sessionId": "01KDJKCY21A5XQDRZ4SHCGQXWH",
+          "sessionId": "01KDWCEF2Q59PA8J6THTDN3FRG",
           "update": {
             "availableCommands": [
               {
@@ -225,7 +225,7 @@
           }
         },
         {
-          "sessionId": "01KDJKCY21A5XQDRZ4SHCGQXWH",
+          "sessionId": "01KDWCEF2Q59PA8J6THTDN3FRG",
           "update": {
             "content": {
               "text": "First message",
@@ -235,7 +235,7 @@
           }
         },
         {
-          "sessionId": "01KDJKCY21A5XQDRZ4SHCGQXWH",
+          "sessionId": "01KDWCEF2Q59PA8J6THTDN3FRG",
           "update": {
             "content": {
               "text": "Second message",
@@ -275,7 +275,7 @@
             ],
             "source": "claude_cli_init"
           },
-          "sessionId": "01KDJKCY21A5XQDRZ4SHCGQXWH",
+          "sessionId": "01KDWCEF2Q59PA8J6THTDN3FRG",
           "update": {
             "availableCommands": [
               {
@@ -355,87 +355,47 @@
           }
         },
         {
-          "sessionId": "01KDJKCY21A5XQDRZ4SHCGQXWH",
+          "sessionId": "01KDWCEF2Q59PA8J6THTDN3FRG",
           "update": {
             "content": {
-              "text": "Hi",
+              "text": "It",
               "type": "text"
             },
             "sessionUpdate": "agent_message_chunk"
           }
         },
         {
-          "sessionId": "01KDJKCY21A5XQDRZ4SHCGQXWH",
+          "sessionId": "01KDWCEF2Q59PA8J6THTDN3FRG",
           "update": {
             "content": {
-              "text": "Hi",
+              "text": "It",
               "type": "text"
             },
             "sessionUpdate": "agent_message_chunk"
           }
         },
         {
-          "sessionId": "01KDJKCY21A5XQDRZ4SHCGQXWH",
+          "sessionId": "01KDWCEF2Q59PA8J6THTDN3FRG",
           "update": {
             "content": {
-              "text": "!",
+              "text": " looks like you sent",
               "type": "text"
             },
             "sessionUpdate": "agent_message_chunk"
           }
         },
         {
-          "sessionId": "01KDJKCY21A5XQDRZ4SHCGQXWH",
+          "sessionId": "01KDWCEF2Q59PA8J6THTDN3FRG",
           "update": {
             "content": {
-              "text": "!",
+              "text": " looks like you sent",
               "type": "text"
             },
             "sessionUpdate": "agent_message_chunk"
           }
         },
         {
-          "sessionId": "01KDJKCY21A5XQDRZ4SHCGQXWH",
-          "update": {
-            "content": {
-              "text": " I see",
-              "type": "text"
-            },
-            "sessionUpdate": "agent_message_chunk"
-          }
-        },
-        {
-          "sessionId": "01KDJKCY21A5XQDRZ4SHCGQXWH",
-          "update": {
-            "content": {
-              "text": " I see",
-              "type": "text"
-            },
-            "sessionUpdate": "agent_message_chunk"
-          }
-        },
-        {
-          "sessionId": "01KDJKCY21A5XQDRZ4SHCGQXWH",
-          "update": {
-            "content": {
-              "text": " you sent",
-              "type": "text"
-            },
-            "sessionUpdate": "agent_message_chunk"
-          }
-        },
-        {
-          "sessionId": "01KDJKCY21A5XQDRZ4SHCGQXWH",
-          "update": {
-            "content": {
-              "text": " you sent",
-              "type": "text"
-            },
-            "sessionUpdate": "agent_message_chunk"
-          }
-        },
-        {
-          "sessionId": "01KDJKCY21A5XQDRZ4SHCGQXWH",
+          "sessionId": "01KDWCEF2Q59PA8J6THTDN3FRG",
           "update": {
             "content": {
               "text": " two",
@@ -445,7 +405,7 @@
           }
         },
         {
-          "sessionId": "01KDJKCY21A5XQDRZ4SHCGQXWH",
+          "sessionId": "01KDWCEF2Q59PA8J6THTDN3FRG",
           "update": {
             "content": {
               "text": " two",
@@ -455,70 +415,190 @@
           }
         },
         {
-          "sessionId": "01KDJKCY21A5XQDRZ4SHCGQXWH",
+          "sessionId": "01KDWCEF2Q59PA8J6THTDN3FRG",
           "update": {
             "content": {
-              "text": " messages. How",
+              "text": " messages that",
               "type": "text"
             },
             "sessionUpdate": "agent_message_chunk"
           }
         },
         {
-          "sessionId": "01KDJKCY21A5XQDRZ4SHCGQXWH",
+          "sessionId": "01KDWCEF2Q59PA8J6THTDN3FRG",
           "update": {
             "content": {
-              "text": " messages. How",
+              "text": " messages that",
               "type": "text"
             },
             "sessionUpdate": "agent_message_chunk"
           }
         },
         {
-          "sessionId": "01KDJKCY21A5XQDRZ4SHCGQXWH",
+          "sessionId": "01KDWCEF2Q59PA8J6THTDN3FRG",
           "update": {
             "content": {
-              "text": " can I help you today",
+              "text": " got",
               "type": "text"
             },
             "sessionUpdate": "agent_message_chunk"
           }
         },
         {
-          "sessionId": "01KDJKCY21A5XQDRZ4SHCGQXWH",
+          "sessionId": "01KDWCEF2Q59PA8J6THTDN3FRG",
           "update": {
             "content": {
-              "text": " can I help you today",
+              "text": " got",
               "type": "text"
             },
             "sessionUpdate": "agent_message_chunk"
           }
         },
         {
-          "sessionId": "01KDJKCY21A5XQDRZ4SHCGQXWH",
+          "sessionId": "01KDWCEF2Q59PA8J6THTDN3FRG",
           "update": {
             "content": {
-              "text": "?",
+              "text": " concaten",
               "type": "text"
             },
             "sessionUpdate": "agent_message_chunk"
           }
         },
         {
-          "sessionId": "01KDJKCY21A5XQDRZ4SHCGQXWH",
+          "sessionId": "01KDWCEF2Q59PA8J6THTDN3FRG",
           "update": {
             "content": {
-              "text": "?",
+              "text": " concaten",
               "type": "text"
             },
             "sessionUpdate": "agent_message_chunk"
           }
         },
         {
-          "sessionId": "01KDJKCY21A5XQDRZ4SHCGQXWH",
+          "sessionId": "01KDWCEF2Q59PA8J6THTDN3FRG",
           "update": {
             "content": {
-              "text": "Hi! I see you sent two messages. How can I help you today?",
+              "text": "ated together (\"",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDWCEF2Q59PA8J6THTDN3FRG",
+          "update": {
+            "content": {
+              "text": "ated together (\"",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDWCEF2Q59PA8J6THTDN3FRG",
+          "update": {
+            "content": {
+              "text": "First message",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDWCEF2Q59PA8J6THTDN3FRG",
+          "update": {
+            "content": {
+              "text": "First message",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDWCEF2Q59PA8J6THTDN3FRG",
+          "update": {
+            "content": {
+              "text": "\" and \"Second message",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDWCEF2Q59PA8J6THTDN3FRG",
+          "update": {
+            "content": {
+              "text": "\"). Is",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDWCEF2Q59PA8J6THTDN3FRG",
+          "update": {
+            "content": {
+              "text": "\" and \"Second message",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDWCEF2Q59PA8J6THTDN3FRG",
+          "update": {
+            "content": {
+              "text": "\"). Is",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDWCEF2Q59PA8J6THTDN3FRG",
+          "update": {
+            "content": {
+              "text": " there something specific I",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDWCEF2Q59PA8J6THTDN3FRG",
+          "update": {
+            "content": {
+              "text": " there something specific I",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDWCEF2Q59PA8J6THTDN3FRG",
+          "update": {
+            "content": {
+              "text": " can help you with?",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDWCEF2Q59PA8J6THTDN3FRG",
+          "update": {
+            "content": {
+              "text": " can help you with?",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDWCEF2Q59PA8J6THTDN3FRG",
+          "update": {
+            "content": {
+              "text": "It looks like you sent two messages that got concatenated together (\"First message\" and \"Second message\"). Is there something specific I can help you with?",
               "type": "text"
             },
             "sessionUpdate": "agent_message_chunk"

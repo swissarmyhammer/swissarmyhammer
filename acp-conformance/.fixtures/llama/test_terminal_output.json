@@ -52,7 +52,7 @@
         "mcpServers": []
       },
       "response": {
-        "sessionId": "01KDJGXFFM7598WDMQXTS0CXPY"
+        "sessionId": "01KDWD10MY04JG3QGFWMCBERSK"
       },
       "notifications": []
     },
@@ -63,18 +63,18 @@
           "test output"
         ],
         "command": "echo",
-        "sessionId": "01KDJGXFFM7598WDMQXTS0CXPY"
+        "sessionId": "01KDWD10MY04JG3QGFWMCBERSK"
       },
       "response": {
-        "terminalId": "term_01KDJGXFFSGJWYAW525E50MVJ1"
+        "terminalId": "term_01KDWD10N24R053SQJG51SRX1Y"
       },
       "notifications": []
     },
     {
       "method": "ext_method",
       "request": {
-        "sessionId": "01KDJGXFFM7598WDMQXTS0CXPY",
-        "terminalId": "term_01KDJGXFFSGJWYAW525E50MVJ1"
+        "sessionId": "01KDWD10MY04JG3QGFWMCBERSK",
+        "terminalId": "term_01KDWD10N24R053SQJG51SRX1Y"
       },
       "response": {
         "output": "\n",
@@ -85,8 +85,8 @@
     {
       "method": "ext_method",
       "request": {
-        "sessionId": "01KDJGXFFM7598WDMQXTS0CXPY",
-        "terminalId": "term_01KDJGXFFSGJWYAW525E50MVJ1"
+        "sessionId": "01KDWD10MY04JG3QGFWMCBERSK",
+        "terminalId": "term_01KDWD10N24R053SQJG51SRX1Y"
       },
       "response": null,
       "notifications": []

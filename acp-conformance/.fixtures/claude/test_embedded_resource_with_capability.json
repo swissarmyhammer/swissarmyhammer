@@ -54,7 +54,7 @@
         "mcpServers": []
       },
       "response": {
-        "sessionId": "01KDJGM98154QDG9XZYQ818SAX"
+        "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290"
       },
       "notifications": []
     },
@@ -71,11 +71,11 @@
             "type": "resource"
           }
         ],
-        "sessionId": "01KDJGM98154QDG9XZYQ818SAX"
+        "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290"
       },
       "response": {
         "_meta": {
-          "claude_response": "I see you've shared a file listing from `/Users/wballard/github/swissarmyhammer/acp-conformance/src`. This appears to be a Rust project with several modules:\n\n- `agent_plan.rs`\n- `content.rs`\n- `file_system.rs`\n- `initialization.rs`\n- `lib.rs`\n- `prompt_turn.rs`\n- `responses.rs`\n- `sessions.rs`\n- `terminals.rs`\n- `tool_calls.rs`\n- `validation.rs`\n\nWhat would you like to do with this codebase? I can help you:\n- Explore and understand the code structure\n- Fix bugs or issues\n- Add new features\n- Run tests\n- Or anything else you need",
+          "claude_response": "I see you've shared the `tests/protocol/agent_test.rs` file. This is a Rust test file for testing agent protocol functionality, specifically focusing on plan notifications.\n\nThe file contains:\n\n1. **A helper struct `PlanNotificationHarness`** - Wraps a `ConformanceHarness` and provides methods to:\n   - Create new sessions\n   - Send conversation turns\n   - Collect plan notifications from the event stream\n\n2. **One test: `test_agent_sends_plan_notifications`** - Tests that an agent properly sends plan notifications during a conversation. It:\n   - Creates a session with a system prompt instructing the agent to create plans\n   - Sends a user message asking to \"make a plan to say hello\"\n   - Collects notifications and verifies at least one plan notification was received\n   - Checks that notifications are properly structured (have `kind`, `title`, `body`, and `data` fields)\n\nThe test uses the `acp_client` crate for types like `PlanNotification` and `ConversationTurnParams`.\n\nIs there something specific you'd like me to help you with regarding this test file? For example:\n- Running the tests\n- Adding new test cases\n- Fixing issues\n- Understanding how it works in more detail",
           "processed": true,
           "session_messages": 3,
           "streaming": false
@@ -105,11 +105,16 @@
                 "Plan",
                 "Plan",
                 null
+              ],
+              [
+                "claude-code-guide",
+                "Claude Code Guide",
+                null
               ]
             ],
             "source": "claude_cli_init"
           },
-          "sessionId": "01KDJGM98154QDG9XZYQ818SAX",
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
           "update": {
             "availableCommands": [
               {
@@ -190,11 +195,11 @@
         },
         {
           "_meta": {
-            "session_id": "01KDJGM98154QDG9XZYQ818SAX",
-            "timestamp": 1766926728,
+            "session_id": "01KDWCGFHXC4XNBMX8M9S4A290",
+            "timestamp": 1767257951,
             "update_type": "available_commands"
           },
-          "sessionId": "01KDJGM98154QDG9XZYQ818SAX",
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
           "update": {
             "availableCommands": [
               {
@@ -220,7 +225,7 @@
           }
         },
         {
-          "sessionId": "01KDJGM98154QDG9XZYQ818SAX",
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
           "update": {
             "content": {
               "resource": {
@@ -255,11 +260,16 @@
                 "Plan",
                 "Plan",
                 null
+              ],
+              [
+                "claude-code-guide",
+                "Claude Code Guide",
+                null
               ]
             ],
             "source": "claude_cli_init"
           },
-          "sessionId": "01KDJGM98154QDG9XZYQ818SAX",
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
           "update": {
             "availableCommands": [
               {
@@ -339,7 +349,7 @@
           }
         },
         {
-          "sessionId": "01KDJGM98154QDG9XZYQ818SAX",
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
           "update": {
             "content": {
               "text": "I see",
@@ -349,7 +359,7 @@
           }
         },
         {
-          "sessionId": "01KDJGM98154QDG9XZYQ818SAX",
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
           "update": {
             "content": {
               "text": "I see",
@@ -359,7 +369,7 @@
           }
         },
         {
-          "sessionId": "01KDJGM98154QDG9XZYQ818SAX",
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
           "update": {
             "content": {
               "text": " you've share",
@@ -369,7 +379,7 @@
           }
         },
         {
-          "sessionId": "01KDJGM98154QDG9XZYQ818SAX",
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
           "update": {
             "content": {
               "text": " you've share",
@@ -379,567 +389,107 @@
           }
         },
         {
-          "sessionId": "01KDJGM98154QDG9XZYQ818SAX",
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
           "update": {
             "content": {
-              "text": "d a",
+              "text": "d the",
               "type": "text"
             },
             "sessionUpdate": "agent_message_chunk"
           }
         },
         {
-          "sessionId": "01KDJGM98154QDG9XZYQ818SAX",
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
           "update": {
             "content": {
-              "text": "d a",
+              "text": "d the",
               "type": "text"
             },
             "sessionUpdate": "agent_message_chunk"
           }
         },
         {
-          "sessionId": "01KDJGM98154QDG9XZYQ818SAX",
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
           "update": {
             "content": {
-              "text": " file listing",
+              "text": " `",
               "type": "text"
             },
             "sessionUpdate": "agent_message_chunk"
           }
         },
         {
-          "sessionId": "01KDJGM98154QDG9XZYQ818SAX",
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
           "update": {
             "content": {
-              "text": " file listing",
+              "text": " `",
               "type": "text"
             },
             "sessionUpdate": "agent_message_chunk"
           }
         },
         {
-          "sessionId": "01KDJGM98154QDG9XZYQ818SAX",
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
           "update": {
             "content": {
-              "text": " from",
+              "text": "tests",
               "type": "text"
             },
             "sessionUpdate": "agent_message_chunk"
           }
         },
         {
-          "sessionId": "01KDJGM98154QDG9XZYQ818SAX",
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
           "update": {
             "content": {
-              "text": " from",
+              "text": "tests",
               "type": "text"
             },
             "sessionUpdate": "agent_message_chunk"
           }
         },
         {
-          "sessionId": "01KDJGM98154QDG9XZYQ818SAX",
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
           "update": {
             "content": {
-              "text": " `/",
+              "text": "/protocol",
               "type": "text"
             },
             "sessionUpdate": "agent_message_chunk"
           }
         },
         {
-          "sessionId": "01KDJGM98154QDG9XZYQ818SAX",
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
           "update": {
             "content": {
-              "text": " `/",
+              "text": "/protocol",
               "type": "text"
             },
             "sessionUpdate": "agent_message_chunk"
           }
         },
         {
-          "sessionId": "01KDJGM98154QDG9XZYQ818SAX",
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
           "update": {
             "content": {
-              "text": "Users",
+              "text": "/agent",
               "type": "text"
             },
             "sessionUpdate": "agent_message_chunk"
           }
         },
         {
-          "sessionId": "01KDJGM98154QDG9XZYQ818SAX",
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
           "update": {
             "content": {
-              "text": "Users",
+              "text": "/agent",
               "type": "text"
             },
             "sessionUpdate": "agent_message_chunk"
           }
         },
         {
-          "sessionId": "01KDJGM98154QDG9XZYQ818SAX",
-          "update": {
-            "content": {
-              "text": "/w",
-              "type": "text"
-            },
-            "sessionUpdate": "agent_message_chunk"
-          }
-        },
-        {
-          "sessionId": "01KDJGM98154QDG9XZYQ818SAX",
-          "update": {
-            "content": {
-              "text": "/w",
-              "type": "text"
-            },
-            "sessionUpdate": "agent_message_chunk"
-          }
-        },
-        {
-          "sessionId": "01KDJGM98154QDG9XZYQ818SAX",
-          "update": {
-            "content": {
-              "text": "ball",
-              "type": "text"
-            },
-            "sessionUpdate": "agent_message_chunk"
-          }
-        },
-        {
-          "sessionId": "01KDJGM98154QDG9XZYQ818SAX",
-          "update": {
-            "content": {
-              "text": "ball",
-              "type": "text"
-            },
-            "sessionUpdate": "agent_message_chunk"
-          }
-        },
-        {
-          "sessionId": "01KDJGM98154QDG9XZYQ818SAX",
-          "update": {
-            "content": {
-              "text": "ard/github",
-              "type": "text"
-            },
-            "sessionUpdate": "agent_message_chunk"
-          }
-        },
-        {
-          "sessionId": "01KDJGM98154QDG9XZYQ818SAX",
-          "update": {
-            "content": {
-              "text": "ard/github",
-              "type": "text"
-            },
-            "sessionUpdate": "agent_message_chunk"
-          }
-        },
-        {
-          "sessionId": "01KDJGM98154QDG9XZYQ818SAX",
-          "update": {
-            "content": {
-              "text": "/sw",
-              "type": "text"
-            },
-            "sessionUpdate": "agent_message_chunk"
-          }
-        },
-        {
-          "sessionId": "01KDJGM98154QDG9XZYQ818SAX",
-          "update": {
-            "content": {
-              "text": "/sw",
-              "type": "text"
-            },
-            "sessionUpdate": "agent_message_chunk"
-          }
-        },
-        {
-          "sessionId": "01KDJGM98154QDG9XZYQ818SAX",
-          "update": {
-            "content": {
-              "text": "iss",
-              "type": "text"
-            },
-            "sessionUpdate": "agent_message_chunk"
-          }
-        },
-        {
-          "sessionId": "01KDJGM98154QDG9XZYQ818SAX",
-          "update": {
-            "content": {
-              "text": "iss",
-              "type": "text"
-            },
-            "sessionUpdate": "agent_message_chunk"
-          }
-        },
-        {
-          "sessionId": "01KDJGM98154QDG9XZYQ818SAX",
-          "update": {
-            "content": {
-              "text": "arm",
-              "type": "text"
-            },
-            "sessionUpdate": "agent_message_chunk"
-          }
-        },
-        {
-          "sessionId": "01KDJGM98154QDG9XZYQ818SAX",
-          "update": {
-            "content": {
-              "text": "arm",
-              "type": "text"
-            },
-            "sessionUpdate": "agent_message_chunk"
-          }
-        },
-        {
-          "sessionId": "01KDJGM98154QDG9XZYQ818SAX",
-          "update": {
-            "content": {
-              "text": "yh",
-              "type": "text"
-            },
-            "sessionUpdate": "agent_message_chunk"
-          }
-        },
-        {
-          "sessionId": "01KDJGM98154QDG9XZYQ818SAX",
-          "update": {
-            "content": {
-              "text": "yh",
-              "type": "text"
-            },
-            "sessionUpdate": "agent_message_chunk"
-          }
-        },
-        {
-          "sessionId": "01KDJGM98154QDG9XZYQ818SAX",
-          "update": {
-            "content": {
-              "text": "ammer",
-              "type": "text"
-            },
-            "sessionUpdate": "agent_message_chunk"
-          }
-        },
-        {
-          "sessionId": "01KDJGM98154QDG9XZYQ818SAX",
-          "update": {
-            "content": {
-              "text": "ammer",
-              "type": "text"
-            },
-            "sessionUpdate": "agent_message_chunk"
-          }
-        },
-        {
-          "sessionId": "01KDJGM98154QDG9XZYQ818SAX",
-          "update": {
-            "content": {
-              "text": "/a",
-              "type": "text"
-            },
-            "sessionUpdate": "agent_message_chunk"
-          }
-        },
-        {
-          "sessionId": "01KDJGM98154QDG9XZYQ818SAX",
-          "update": {
-            "content": {
-              "text": "/a",
-              "type": "text"
-            },
-            "sessionUpdate": "agent_message_chunk"
-          }
-        },
-        {
-          "sessionId": "01KDJGM98154QDG9XZYQ818SAX",
-          "update": {
-            "content": {
-              "text": "cp",
-              "type": "text"
-            },
-            "sessionUpdate": "agent_message_chunk"
-          }
-        },
-        {
-          "sessionId": "01KDJGM98154QDG9XZYQ818SAX",
-          "update": {
-            "content": {
-              "text": "cp",
-              "type": "text"
-            },
-            "sessionUpdate": "agent_message_chunk"
-          }
-        },
-        {
-          "sessionId": "01KDJGM98154QDG9XZYQ818SAX",
-          "update": {
-            "content": {
-              "text": "-",
-              "type": "text"
-            },
-            "sessionUpdate": "agent_message_chunk"
-          }
-        },
-        {
-          "sessionId": "01KDJGM98154QDG9XZYQ818SAX",
-          "update": {
-            "content": {
-              "text": "-",
-              "type": "text"
-            },
-            "sessionUpdate": "agent_message_chunk"
-          }
-        },
-        {
-          "sessionId": "01KDJGM98154QDG9XZYQ818SAX",
-          "update": {
-            "content": {
-              "text": "conform",
-              "type": "text"
-            },
-            "sessionUpdate": "agent_message_chunk"
-          }
-        },
-        {
-          "sessionId": "01KDJGM98154QDG9XZYQ818SAX",
-          "update": {
-            "content": {
-              "text": "conform",
-              "type": "text"
-            },
-            "sessionUpdate": "agent_message_chunk"
-          }
-        },
-        {
-          "sessionId": "01KDJGM98154QDG9XZYQ818SAX",
-          "update": {
-            "content": {
-              "text": "ance/",
-              "type": "text"
-            },
-            "sessionUpdate": "agent_message_chunk"
-          }
-        },
-        {
-          "sessionId": "01KDJGM98154QDG9XZYQ818SAX",
-          "update": {
-            "content": {
-              "text": "ance/",
-              "type": "text"
-            },
-            "sessionUpdate": "agent_message_chunk"
-          }
-        },
-        {
-          "sessionId": "01KDJGM98154QDG9XZYQ818SAX",
-          "update": {
-            "content": {
-              "text": "src",
-              "type": "text"
-            },
-            "sessionUpdate": "agent_message_chunk"
-          }
-        },
-        {
-          "sessionId": "01KDJGM98154QDG9XZYQ818SAX",
-          "update": {
-            "content": {
-              "text": "src",
-              "type": "text"
-            },
-            "sessionUpdate": "agent_message_chunk"
-          }
-        },
-        {
-          "sessionId": "01KDJGM98154QDG9XZYQ818SAX",
-          "update": {
-            "content": {
-              "text": "`.",
-              "type": "text"
-            },
-            "sessionUpdate": "agent_message_chunk"
-          }
-        },
-        {
-          "sessionId": "01KDJGM98154QDG9XZYQ818SAX",
-          "update": {
-            "content": {
-              "text": "`.",
-              "type": "text"
-            },
-            "sessionUpdate": "agent_message_chunk"
-          }
-        },
-        {
-          "sessionId": "01KDJGM98154QDG9XZYQ818SAX",
-          "update": {
-            "content": {
-              "text": " This",
-              "type": "text"
-            },
-            "sessionUpdate": "agent_message_chunk"
-          }
-        },
-        {
-          "sessionId": "01KDJGM98154QDG9XZYQ818SAX",
-          "update": {
-            "content": {
-              "text": " This",
-              "type": "text"
-            },
-            "sessionUpdate": "agent_message_chunk"
-          }
-        },
-        {
-          "sessionId": "01KDJGM98154QDG9XZYQ818SAX",
-          "update": {
-            "content": {
-              "text": " appears to be a",
-              "type": "text"
-            },
-            "sessionUpdate": "agent_message_chunk"
-          }
-        },
-        {
-          "sessionId": "01KDJGM98154QDG9XZYQ818SAX",
-          "update": {
-            "content": {
-              "text": " appears to be a",
-              "type": "text"
-            },
-            "sessionUpdate": "agent_message_chunk"
-          }
-        },
-        {
-          "sessionId": "01KDJGM98154QDG9XZYQ818SAX",
-          "update": {
-            "content": {
-              "text": " Rust",
-              "type": "text"
-            },
-            "sessionUpdate": "agent_message_chunk"
-          }
-        },
-        {
-          "sessionId": "01KDJGM98154QDG9XZYQ818SAX",
-          "update": {
-            "content": {
-              "text": " Rust",
-              "type": "text"
-            },
-            "sessionUpdate": "agent_message_chunk"
-          }
-        },
-        {
-          "sessionId": "01KDJGM98154QDG9XZYQ818SAX",
-          "update": {
-            "content": {
-              "text": " project with",
-              "type": "text"
-            },
-            "sessionUpdate": "agent_message_chunk"
-          }
-        },
-        {
-          "sessionId": "01KDJGM98154QDG9XZYQ818SAX",
-          "update": {
-            "content": {
-              "text": " project with",
-              "type": "text"
-            },
-            "sessionUpdate": "agent_message_chunk"
-          }
-        },
-        {
-          "sessionId": "01KDJGM98154QDG9XZYQ818SAX",
-          "update": {
-            "content": {
-              "text": " several",
-              "type": "text"
-            },
-            "sessionUpdate": "agent_message_chunk"
-          }
-        },
-        {
-          "sessionId": "01KDJGM98154QDG9XZYQ818SAX",
-          "update": {
-            "content": {
-              "text": " several",
-              "type": "text"
-            },
-            "sessionUpdate": "agent_message_chunk"
-          }
-        },
-        {
-          "sessionId": "01KDJGM98154QDG9XZYQ818SAX",
-          "update": {
-            "content": {
-              "text": " modules:",
-              "type": "text"
-            },
-            "sessionUpdate": "agent_message_chunk"
-          }
-        },
-        {
-          "sessionId": "01KDJGM98154QDG9XZYQ818SAX",
-          "update": {
-            "content": {
-              "text": " modules:",
-              "type": "text"
-            },
-            "sessionUpdate": "agent_message_chunk"
-          }
-        },
-        {
-          "sessionId": "01KDJGM98154QDG9XZYQ818SAX",
-          "update": {
-            "content": {
-              "text": "\n\n-",
-              "type": "text"
-            },
-            "sessionUpdate": "agent_message_chunk"
-          }
-        },
-        {
-          "sessionId": "01KDJGM98154QDG9XZYQ818SAX",
-          "update": {
-            "content": {
-              "text": "\n\n-",
-              "type": "text"
-            },
-            "sessionUpdate": "agent_message_chunk"
-          }
-        },
-        {
-          "sessionId": "01KDJGM98154QDG9XZYQ818SAX",
-          "update": {
-            "content": {
-              "text": " `agent",
-              "type": "text"
-            },
-            "sessionUpdate": "agent_message_chunk"
-          }
-        },
-        {
-          "sessionId": "01KDJGM98154QDG9XZYQ818SAX",
-          "update": {
-            "content": {
-              "text": " `agent",
-              "type": "text"
-            },
-            "sessionUpdate": "agent_message_chunk"
-          }
-        },
-        {
-          "sessionId": "01KDJGM98154QDG9XZYQ818SAX",
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
           "update": {
             "content": {
               "text": "_",
@@ -949,7 +499,7 @@
           }
         },
         {
-          "sessionId": "01KDJGM98154QDG9XZYQ818SAX",
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
           "update": {
             "content": {
               "text": "_",
@@ -959,27 +509,207 @@
           }
         },
         {
-          "sessionId": "01KDJGM98154QDG9XZYQ818SAX",
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
           "update": {
             "content": {
-              "text": "plan",
+              "text": "test.rs",
               "type": "text"
             },
             "sessionUpdate": "agent_message_chunk"
           }
         },
         {
-          "sessionId": "01KDJGM98154QDG9XZYQ818SAX",
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
           "update": {
             "content": {
-              "text": "plan",
+              "text": "test.rs",
               "type": "text"
             },
             "sessionUpdate": "agent_message_chunk"
           }
         },
         {
-          "sessionId": "01KDJGM98154QDG9XZYQ818SAX",
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
+          "update": {
+            "content": {
+              "text": "` file. This is",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
+          "update": {
+            "content": {
+              "text": "` file. This is",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
+          "update": {
+            "content": {
+              "text": " a",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
+          "update": {
+            "content": {
+              "text": " a",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
+          "update": {
+            "content": {
+              "text": " Rust test file for testing",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
+          "update": {
+            "content": {
+              "text": " Rust test file for testing",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
+          "update": {
+            "content": {
+              "text": " agent",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
+          "update": {
+            "content": {
+              "text": " agent",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
+          "update": {
+            "content": {
+              "text": " protocol",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
+          "update": {
+            "content": {
+              "text": " protocol",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
+          "update": {
+            "content": {
+              "text": " functionality,",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
+          "update": {
+            "content": {
+              "text": " functionality,",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
+          "update": {
+            "content": {
+              "text": " specifically",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
+          "update": {
+            "content": {
+              "text": " specifically",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
+          "update": {
+            "content": {
+              "text": " focusing on plan",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
+          "update": {
+            "content": {
+              "text": " focusing on plan",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
+          "update": {
+            "content": {
+              "text": " notifications",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
+          "update": {
+            "content": {
+              "text": " notifications",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
           "update": {
             "content": {
               "text": ".",
@@ -989,7 +719,7 @@
           }
         },
         {
-          "sessionId": "01KDJGM98154QDG9XZYQ818SAX",
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
           "update": {
             "content": {
               "text": ".",
@@ -999,587 +729,1187 @@
           }
         },
         {
-          "sessionId": "01KDJGM98154QDG9XZYQ818SAX",
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
           "update": {
             "content": {
-              "text": "rs`",
+              "text": "\n\nThe",
               "type": "text"
             },
             "sessionUpdate": "agent_message_chunk"
           }
         },
         {
-          "sessionId": "01KDJGM98154QDG9XZYQ818SAX",
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
           "update": {
             "content": {
-              "text": "rs`",
+              "text": "\n\nThe",
               "type": "text"
             },
             "sessionUpdate": "agent_message_chunk"
           }
         },
         {
-          "sessionId": "01KDJGM98154QDG9XZYQ818SAX",
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
           "update": {
             "content": {
-              "text": "\n- `content",
+              "text": " file",
               "type": "text"
             },
             "sessionUpdate": "agent_message_chunk"
           }
         },
         {
-          "sessionId": "01KDJGM98154QDG9XZYQ818SAX",
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
           "update": {
             "content": {
-              "text": "\n- `content",
+              "text": " file",
               "type": "text"
             },
             "sessionUpdate": "agent_message_chunk"
           }
         },
         {
-          "sessionId": "01KDJGM98154QDG9XZYQ818SAX",
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
           "update": {
             "content": {
-              "text": ".rs`\n-",
+              "text": " contains:",
               "type": "text"
             },
             "sessionUpdate": "agent_message_chunk"
           }
         },
         {
-          "sessionId": "01KDJGM98154QDG9XZYQ818SAX",
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
           "update": {
             "content": {
-              "text": ".rs`\n-",
+              "text": " contains:",
               "type": "text"
             },
             "sessionUpdate": "agent_message_chunk"
           }
         },
         {
-          "sessionId": "01KDJGM98154QDG9XZYQ818SAX",
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
           "update": {
             "content": {
-              "text": " `file",
+              "text": "\n\n1. **A",
               "type": "text"
             },
             "sessionUpdate": "agent_message_chunk"
           }
         },
         {
-          "sessionId": "01KDJGM98154QDG9XZYQ818SAX",
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
           "update": {
             "content": {
-              "text": " `file",
+              "text": "\n\n1. **A",
               "type": "text"
             },
             "sessionUpdate": "agent_message_chunk"
           }
         },
         {
-          "sessionId": "01KDJGM98154QDG9XZYQ818SAX",
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
           "update": {
             "content": {
-              "text": "_system",
+              "text": " helper",
               "type": "text"
             },
             "sessionUpdate": "agent_message_chunk"
           }
         },
         {
-          "sessionId": "01KDJGM98154QDG9XZYQ818SAX",
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
           "update": {
             "content": {
-              "text": "_system",
+              "text": " helper",
               "type": "text"
             },
             "sessionUpdate": "agent_message_chunk"
           }
         },
         {
-          "sessionId": "01KDJGM98154QDG9XZYQ818SAX",
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
           "update": {
             "content": {
-              "text": ".rs`\n-",
+              "text": " struct",
               "type": "text"
             },
             "sessionUpdate": "agent_message_chunk"
           }
         },
         {
-          "sessionId": "01KDJGM98154QDG9XZYQ818SAX",
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
           "update": {
             "content": {
-              "text": ".rs`\n-",
+              "text": " struct",
               "type": "text"
             },
             "sessionUpdate": "agent_message_chunk"
           }
         },
         {
-          "sessionId": "01KDJGM98154QDG9XZYQ818SAX",
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
           "update": {
             "content": {
-              "text": " `initialization",
+              "text": " `P",
               "type": "text"
             },
             "sessionUpdate": "agent_message_chunk"
           }
         },
         {
-          "sessionId": "01KDJGM98154QDG9XZYQ818SAX",
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
           "update": {
             "content": {
-              "text": " `initialization",
+              "text": " `P",
               "type": "text"
             },
             "sessionUpdate": "agent_message_chunk"
           }
         },
         {
-          "sessionId": "01KDJGM98154QDG9XZYQ818SAX",
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
           "update": {
             "content": {
-              "text": ".rs`\n-",
+              "text": "lanNotification",
               "type": "text"
             },
             "sessionUpdate": "agent_message_chunk"
           }
         },
         {
-          "sessionId": "01KDJGM98154QDG9XZYQ818SAX",
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
           "update": {
             "content": {
-              "text": ".rs`\n-",
+              "text": "lanNotification",
               "type": "text"
             },
             "sessionUpdate": "agent_message_chunk"
           }
         },
         {
-          "sessionId": "01KDJGM98154QDG9XZYQ818SAX",
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
           "update": {
             "content": {
-              "text": " `lib",
+              "text": "H",
               "type": "text"
             },
             "sessionUpdate": "agent_message_chunk"
           }
         },
         {
-          "sessionId": "01KDJGM98154QDG9XZYQ818SAX",
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
           "update": {
             "content": {
-              "text": " `lib",
+              "text": "H",
               "type": "text"
             },
             "sessionUpdate": "agent_message_chunk"
           }
         },
         {
-          "sessionId": "01KDJGM98154QDG9XZYQ818SAX",
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
           "update": {
             "content": {
-              "text": ".rs`\n-",
+              "text": "ar",
               "type": "text"
             },
             "sessionUpdate": "agent_message_chunk"
           }
         },
         {
-          "sessionId": "01KDJGM98154QDG9XZYQ818SAX",
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
           "update": {
             "content": {
-              "text": ".rs`\n-",
+              "text": "ar",
               "type": "text"
             },
             "sessionUpdate": "agent_message_chunk"
           }
         },
         {
-          "sessionId": "01KDJGM98154QDG9XZYQ818SAX",
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
           "update": {
             "content": {
-              "text": " `prompt",
+              "text": "ness`** -",
               "type": "text"
             },
             "sessionUpdate": "agent_message_chunk"
           }
         },
         {
-          "sessionId": "01KDJGM98154QDG9XZYQ818SAX",
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
           "update": {
             "content": {
-              "text": " `prompt",
+              "text": "ness`** -",
               "type": "text"
             },
             "sessionUpdate": "agent_message_chunk"
           }
         },
         {
-          "sessionId": "01KDJGM98154QDG9XZYQ818SAX",
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
           "update": {
             "content": {
-              "text": "_turn",
+              "text": " Wr",
               "type": "text"
             },
             "sessionUpdate": "agent_message_chunk"
           }
         },
         {
-          "sessionId": "01KDJGM98154QDG9XZYQ818SAX",
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
           "update": {
             "content": {
-              "text": "_turn",
+              "text": " Wr",
               "type": "text"
             },
             "sessionUpdate": "agent_message_chunk"
           }
         },
         {
-          "sessionId": "01KDJGM98154QDG9XZYQ818SAX",
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
           "update": {
             "content": {
-              "text": ".rs`\n-",
+              "text": "aps a",
               "type": "text"
             },
             "sessionUpdate": "agent_message_chunk"
           }
         },
         {
-          "sessionId": "01KDJGM98154QDG9XZYQ818SAX",
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
           "update": {
             "content": {
-              "text": ".rs`\n-",
+              "text": "aps a",
               "type": "text"
             },
             "sessionUpdate": "agent_message_chunk"
           }
         },
         {
-          "sessionId": "01KDJGM98154QDG9XZYQ818SAX",
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
           "update": {
             "content": {
-              "text": " `responses",
+              "text": " `Con",
               "type": "text"
             },
             "sessionUpdate": "agent_message_chunk"
           }
         },
         {
-          "sessionId": "01KDJGM98154QDG9XZYQ818SAX",
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
           "update": {
             "content": {
-              "text": " `responses",
+              "text": " `Con",
               "type": "text"
             },
             "sessionUpdate": "agent_message_chunk"
           }
         },
         {
-          "sessionId": "01KDJGM98154QDG9XZYQ818SAX",
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
           "update": {
             "content": {
-              "text": ".rs`\n-",
+              "text": "form",
               "type": "text"
             },
             "sessionUpdate": "agent_message_chunk"
           }
         },
         {
-          "sessionId": "01KDJGM98154QDG9XZYQ818SAX",
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
           "update": {
             "content": {
-              "text": ".rs`\n-",
+              "text": "form",
               "type": "text"
             },
             "sessionUpdate": "agent_message_chunk"
           }
         },
         {
-          "sessionId": "01KDJGM98154QDG9XZYQ818SAX",
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
           "update": {
             "content": {
-              "text": " `sessions",
+              "text": "anceH",
               "type": "text"
             },
             "sessionUpdate": "agent_message_chunk"
           }
         },
         {
-          "sessionId": "01KDJGM98154QDG9XZYQ818SAX",
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
           "update": {
             "content": {
-              "text": " `sessions",
+              "text": "anceH",
               "type": "text"
             },
             "sessionUpdate": "agent_message_chunk"
           }
         },
         {
-          "sessionId": "01KDJGM98154QDG9XZYQ818SAX",
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
           "update": {
             "content": {
-              "text": ".rs`\n-",
+              "text": "arness` and provides",
               "type": "text"
             },
             "sessionUpdate": "agent_message_chunk"
           }
         },
         {
-          "sessionId": "01KDJGM98154QDG9XZYQ818SAX",
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
           "update": {
             "content": {
-              "text": ".rs`\n-",
+              "text": "arness` and provides",
               "type": "text"
             },
             "sessionUpdate": "agent_message_chunk"
           }
         },
         {
-          "sessionId": "01KDJGM98154QDG9XZYQ818SAX",
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
           "update": {
             "content": {
-              "text": " `terminals",
+              "text": " methods",
               "type": "text"
             },
             "sessionUpdate": "agent_message_chunk"
           }
         },
         {
-          "sessionId": "01KDJGM98154QDG9XZYQ818SAX",
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
           "update": {
             "content": {
-              "text": " `terminals",
+              "text": " methods",
               "type": "text"
             },
             "sessionUpdate": "agent_message_chunk"
           }
         },
         {
-          "sessionId": "01KDJGM98154QDG9XZYQ818SAX",
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
           "update": {
             "content": {
-              "text": ".rs`\n-",
+              "text": " to:",
               "type": "text"
             },
             "sessionUpdate": "agent_message_chunk"
           }
         },
         {
-          "sessionId": "01KDJGM98154QDG9XZYQ818SAX",
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
           "update": {
             "content": {
-              "text": ".rs`\n-",
+              "text": " to:",
               "type": "text"
             },
             "sessionUpdate": "agent_message_chunk"
           }
         },
         {
-          "sessionId": "01KDJGM98154QDG9XZYQ818SAX",
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
           "update": {
             "content": {
-              "text": " `tool_calls.",
+              "text": "\n   - Create",
               "type": "text"
             },
             "sessionUpdate": "agent_message_chunk"
           }
         },
         {
-          "sessionId": "01KDJGM98154QDG9XZYQ818SAX",
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
           "update": {
             "content": {
-              "text": " `tool_calls.",
+              "text": "\n   - Create",
               "type": "text"
             },
             "sessionUpdate": "agent_message_chunk"
           }
         },
         {
-          "sessionId": "01KDJGM98154QDG9XZYQ818SAX",
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
           "update": {
             "content": {
-              "text": "rs`\n- `",
+              "text": " new",
               "type": "text"
             },
             "sessionUpdate": "agent_message_chunk"
           }
         },
         {
-          "sessionId": "01KDJGM98154QDG9XZYQ818SAX",
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
           "update": {
             "content": {
-              "text": "rs`\n- `",
+              "text": " new",
               "type": "text"
             },
             "sessionUpdate": "agent_message_chunk"
           }
         },
         {
-          "sessionId": "01KDJGM98154QDG9XZYQ818SAX",
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
           "update": {
             "content": {
-              "text": "validation",
+              "text": " sessions",
               "type": "text"
             },
             "sessionUpdate": "agent_message_chunk"
           }
         },
         {
-          "sessionId": "01KDJGM98154QDG9XZYQ818SAX",
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
           "update": {
             "content": {
-              "text": "validation",
+              "text": " sessions",
               "type": "text"
             },
             "sessionUpdate": "agent_message_chunk"
           }
         },
         {
-          "sessionId": "01KDJGM98154QDG9XZYQ818SAX",
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
           "update": {
             "content": {
-              "text": ".rs`\n\nWhat",
+              "text": "\n   - Sen",
               "type": "text"
             },
             "sessionUpdate": "agent_message_chunk"
           }
         },
         {
-          "sessionId": "01KDJGM98154QDG9XZYQ818SAX",
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
           "update": {
             "content": {
-              "text": ".rs`\n\nWhat",
+              "text": "\n   - Sen",
               "type": "text"
             },
             "sessionUpdate": "agent_message_chunk"
           }
         },
         {
-          "sessionId": "01KDJGM98154QDG9XZYQ818SAX",
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
           "update": {
             "content": {
-              "text": " woul",
+              "text": "d conversation",
               "type": "text"
             },
             "sessionUpdate": "agent_message_chunk"
           }
         },
         {
-          "sessionId": "01KDJGM98154QDG9XZYQ818SAX",
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
           "update": {
             "content": {
-              "text": " woul",
+              "text": "d conversation",
               "type": "text"
             },
             "sessionUpdate": "agent_message_chunk"
           }
         },
         {
-          "sessionId": "01KDJGM98154QDG9XZYQ818SAX",
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
           "update": {
             "content": {
-              "text": "d you like to do with",
+              "text": " turns",
               "type": "text"
             },
             "sessionUpdate": "agent_message_chunk"
           }
         },
         {
-          "sessionId": "01KDJGM98154QDG9XZYQ818SAX",
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
           "update": {
             "content": {
-              "text": "d you like to do with",
+              "text": " turns",
               "type": "text"
             },
             "sessionUpdate": "agent_message_chunk"
           }
         },
         {
-          "sessionId": "01KDJGM98154QDG9XZYQ818SAX",
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
           "update": {
             "content": {
-              "text": " this c",
+              "text": "\n   - Collect",
               "type": "text"
             },
             "sessionUpdate": "agent_message_chunk"
           }
         },
         {
-          "sessionId": "01KDJGM98154QDG9XZYQ818SAX",
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
           "update": {
             "content": {
-              "text": " this c",
+              "text": "\n   - Collect",
               "type": "text"
             },
             "sessionUpdate": "agent_message_chunk"
           }
         },
         {
-          "sessionId": "01KDJGM98154QDG9XZYQ818SAX",
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
           "update": {
             "content": {
-              "text": "odebase? I can",
+              "text": " plan notifications from",
               "type": "text"
             },
             "sessionUpdate": "agent_message_chunk"
           }
         },
         {
-          "sessionId": "01KDJGM98154QDG9XZYQ818SAX",
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
           "update": {
             "content": {
-              "text": "odebase? I can",
+              "text": " plan notifications from",
               "type": "text"
             },
             "sessionUpdate": "agent_message_chunk"
           }
         },
         {
-          "sessionId": "01KDJGM98154QDG9XZYQ818SAX",
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
           "update": {
             "content": {
-              "text": " help you:",
+              "text": " the event",
               "type": "text"
             },
             "sessionUpdate": "agent_message_chunk"
           }
         },
         {
-          "sessionId": "01KDJGM98154QDG9XZYQ818SAX",
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
           "update": {
             "content": {
-              "text": " help you:",
+              "text": " the event",
               "type": "text"
             },
             "sessionUpdate": "agent_message_chunk"
           }
         },
         {
-          "sessionId": "01KDJGM98154QDG9XZYQ818SAX",
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
           "update": {
             "content": {
-              "text": "\n- Explore",
+              "text": " stream",
               "type": "text"
             },
             "sessionUpdate": "agent_message_chunk"
           }
         },
         {
-          "sessionId": "01KDJGM98154QDG9XZYQ818SAX",
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
           "update": {
             "content": {
-              "text": "\n- Explore",
+              "text": " stream",
               "type": "text"
             },
             "sessionUpdate": "agent_message_chunk"
           }
         },
         {
-          "sessionId": "01KDJGM98154QDG9XZYQ818SAX",
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
+          "update": {
+            "content": {
+              "text": "\n\n2. **One",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
+          "update": {
+            "content": {
+              "text": "\n\n2. **One",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
+          "update": {
+            "content": {
+              "text": " test:",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
+          "update": {
+            "content": {
+              "text": " test:",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
+          "update": {
+            "content": {
+              "text": " `test_agent",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
+          "update": {
+            "content": {
+              "text": " `test_agent",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
+          "update": {
+            "content": {
+              "text": "_sends",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
+          "update": {
+            "content": {
+              "text": "_sends",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
+          "update": {
+            "content": {
+              "text": "_plan_notifications`",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
+          "update": {
+            "content": {
+              "text": "_plan_notifications`",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
+          "update": {
+            "content": {
+              "text": "** - Tests",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
+          "update": {
+            "content": {
+              "text": "** - Tests",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
+          "update": {
+            "content": {
+              "text": " that an",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
+          "update": {
+            "content": {
+              "text": " that an",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
+          "update": {
+            "content": {
+              "text": " agent properly",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
+          "update": {
+            "content": {
+              "text": " agent properly",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
+          "update": {
+            "content": {
+              "text": " sends plan notifications during",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
+          "update": {
+            "content": {
+              "text": " sends plan notifications during",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
+          "update": {
+            "content": {
+              "text": " a",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
+          "update": {
+            "content": {
+              "text": " a",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
+          "update": {
+            "content": {
+              "text": " conversation.",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
+          "update": {
+            "content": {
+              "text": " conversation.",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
+          "update": {
+            "content": {
+              "text": " It:",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
+          "update": {
+            "content": {
+              "text": " It:",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
+          "update": {
+            "content": {
+              "text": "\n   - Creates a",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
+          "update": {
+            "content": {
+              "text": "\n   - Creates a",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
+          "update": {
+            "content": {
+              "text": " session",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
+          "update": {
+            "content": {
+              "text": " session",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
+          "update": {
+            "content": {
+              "text": " with a system",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
+          "update": {
+            "content": {
+              "text": " with a system",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
+          "update": {
+            "content": {
+              "text": " prompt",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
+          "update": {
+            "content": {
+              "text": " prompt",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
+          "update": {
+            "content": {
+              "text": " instruct",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
+          "update": {
+            "content": {
+              "text": " instruct",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
+          "update": {
+            "content": {
+              "text": "ing the agent to create",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
+          "update": {
+            "content": {
+              "text": "ing the agent to create",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
+          "update": {
+            "content": {
+              "text": " plans",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
+          "update": {
+            "content": {
+              "text": " plans",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
+          "update": {
+            "content": {
+              "text": "\n   - Sends",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
+          "update": {
+            "content": {
+              "text": "\n   - Sends",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
+          "update": {
+            "content": {
+              "text": " a user",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
+          "update": {
+            "content": {
+              "text": " a user",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
+          "update": {
+            "content": {
+              "text": " message asking",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
+          "update": {
+            "content": {
+              "text": " message asking",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
+          "update": {
+            "content": {
+              "text": " to",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
+          "update": {
+            "content": {
+              "text": " to",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
+          "update": {
+            "content": {
+              "text": " \"",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
+          "update": {
+            "content": {
+              "text": " \"",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
+          "update": {
+            "content": {
+              "text": "make",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
+          "update": {
+            "content": {
+              "text": "make",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
+          "update": {
+            "content": {
+              "text": " a plan to",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
+          "update": {
+            "content": {
+              "text": " a plan to",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
+          "update": {
+            "content": {
+              "text": " say",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
+          "update": {
+            "content": {
+              "text": " say",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
+          "update": {
+            "content": {
+              "text": " hello\"\n   -",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
+          "update": {
+            "content": {
+              "text": " hello\"\n   -",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
+          "update": {
+            "content": {
+              "text": " Coll",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
+          "update": {
+            "content": {
+              "text": " Coll",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
+          "update": {
+            "content": {
+              "text": "ects notifications",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
+          "update": {
+            "content": {
+              "text": "ects notifications",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
           "update": {
             "content": {
               "text": " an",
@@ -1589,7 +1919,7 @@
           }
         },
         {
-          "sessionId": "01KDJGM98154QDG9XZYQ818SAX",
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
           "update": {
             "content": {
               "text": " an",
@@ -1599,250 +1929,850 @@
           }
         },
         {
-          "sessionId": "01KDJGM98154QDG9XZYQ818SAX",
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
           "update": {
             "content": {
-              "text": "d understand the code structure",
+              "text": "d verifies at",
               "type": "text"
             },
             "sessionUpdate": "agent_message_chunk"
           }
         },
         {
-          "sessionId": "01KDJGM98154QDG9XZYQ818SAX",
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
           "update": {
             "content": {
-              "text": "d understand the code structure",
+              "text": "d verifies at",
               "type": "text"
             },
             "sessionUpdate": "agent_message_chunk"
           }
         },
         {
-          "sessionId": "01KDJGM98154QDG9XZYQ818SAX",
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
           "update": {
             "content": {
-              "text": "\n- Fix",
+              "text": " least one plan",
               "type": "text"
             },
             "sessionUpdate": "agent_message_chunk"
           }
         },
         {
-          "sessionId": "01KDJGM98154QDG9XZYQ818SAX",
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
           "update": {
             "content": {
-              "text": "\n- Fix",
+              "text": " least one plan",
               "type": "text"
             },
             "sessionUpdate": "agent_message_chunk"
           }
         },
         {
-          "sessionId": "01KDJGM98154QDG9XZYQ818SAX",
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
           "update": {
             "content": {
-              "text": " bugs",
+              "text": " notification was received",
               "type": "text"
             },
             "sessionUpdate": "agent_message_chunk"
           }
         },
         {
-          "sessionId": "01KDJGM98154QDG9XZYQ818SAX",
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
           "update": {
             "content": {
-              "text": " bugs",
+              "text": " notification was received",
               "type": "text"
             },
             "sessionUpdate": "agent_message_chunk"
           }
         },
         {
-          "sessionId": "01KDJGM98154QDG9XZYQ818SAX",
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
           "update": {
             "content": {
-              "text": " or issues",
+              "text": "\n   - Checks",
               "type": "text"
             },
             "sessionUpdate": "agent_message_chunk"
           }
         },
         {
-          "sessionId": "01KDJGM98154QDG9XZYQ818SAX",
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
           "update": {
             "content": {
-              "text": " or issues",
+              "text": "\n   - Checks",
               "type": "text"
             },
             "sessionUpdate": "agent_message_chunk"
           }
         },
         {
-          "sessionId": "01KDJGM98154QDG9XZYQ818SAX",
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
           "update": {
             "content": {
-              "text": "\n- Ad",
+              "text": " that notifications",
               "type": "text"
             },
             "sessionUpdate": "agent_message_chunk"
           }
         },
         {
-          "sessionId": "01KDJGM98154QDG9XZYQ818SAX",
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
           "update": {
             "content": {
-              "text": "\n- Ad",
+              "text": " that notifications",
               "type": "text"
             },
             "sessionUpdate": "agent_message_chunk"
           }
         },
         {
-          "sessionId": "01KDJGM98154QDG9XZYQ818SAX",
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
           "update": {
             "content": {
-              "text": "d new",
+              "text": " are properly structure",
               "type": "text"
             },
             "sessionUpdate": "agent_message_chunk"
           }
         },
         {
-          "sessionId": "01KDJGM98154QDG9XZYQ818SAX",
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
           "update": {
             "content": {
-              "text": "d new",
+              "text": " are properly structure",
               "type": "text"
             },
             "sessionUpdate": "agent_message_chunk"
           }
         },
         {
-          "sessionId": "01KDJGM98154QDG9XZYQ818SAX",
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
           "update": {
             "content": {
-              "text": " features\n- Run tests",
+              "text": "d (",
               "type": "text"
             },
             "sessionUpdate": "agent_message_chunk"
           }
         },
         {
-          "sessionId": "01KDJGM98154QDG9XZYQ818SAX",
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
           "update": {
             "content": {
-              "text": " features\n- Run tests",
+              "text": "d (",
               "type": "text"
             },
             "sessionUpdate": "agent_message_chunk"
           }
         },
         {
-          "sessionId": "01KDJGM98154QDG9XZYQ818SAX",
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
           "update": {
             "content": {
-              "text": "\n- Or",
+              "text": "have",
               "type": "text"
             },
             "sessionUpdate": "agent_message_chunk"
           }
         },
         {
-          "sessionId": "01KDJGM98154QDG9XZYQ818SAX",
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
           "update": {
             "content": {
-              "text": "\n- Or",
+              "text": "have",
               "type": "text"
             },
             "sessionUpdate": "agent_message_chunk"
           }
         },
         {
-          "sessionId": "01KDJGM98154QDG9XZYQ818SAX",
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
           "update": {
             "content": {
-              "text": " anything",
+              "text": " `kin",
               "type": "text"
             },
             "sessionUpdate": "agent_message_chunk"
           }
         },
         {
-          "sessionId": "01KDJGM98154QDG9XZYQ818SAX",
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
           "update": {
             "content": {
-              "text": " anything",
+              "text": " `kin",
               "type": "text"
             },
             "sessionUpdate": "agent_message_chunk"
           }
         },
         {
-          "sessionId": "01KDJGM98154QDG9XZYQ818SAX",
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
           "update": {
             "content": {
-              "text": " else you",
+              "text": "d`,",
               "type": "text"
             },
             "sessionUpdate": "agent_message_chunk"
           }
         },
         {
-          "sessionId": "01KDJGM98154QDG9XZYQ818SAX",
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
           "update": {
             "content": {
-              "text": " else you",
+              "text": "d`,",
               "type": "text"
             },
             "sessionUpdate": "agent_message_chunk"
           }
         },
         {
-          "sessionId": "01KDJGM98154QDG9XZYQ818SAX",
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
           "update": {
             "content": {
-              "text": " nee",
+              "text": " `title",
               "type": "text"
             },
             "sessionUpdate": "agent_message_chunk"
           }
         },
         {
-          "sessionId": "01KDJGM98154QDG9XZYQ818SAX",
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
           "update": {
             "content": {
-              "text": " nee",
+              "text": " `title",
               "type": "text"
             },
             "sessionUpdate": "agent_message_chunk"
           }
         },
         {
-          "sessionId": "01KDJGM98154QDG9XZYQ818SAX",
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
           "update": {
             "content": {
-              "text": "d",
+              "text": "`, `body",
               "type": "text"
             },
             "sessionUpdate": "agent_message_chunk"
           }
         },
         {
-          "sessionId": "01KDJGM98154QDG9XZYQ818SAX",
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
           "update": {
             "content": {
-              "text": "d",
+              "text": "`, `body",
               "type": "text"
             },
             "sessionUpdate": "agent_message_chunk"
           }
         },
         {
-          "sessionId": "01KDJGM98154QDG9XZYQ818SAX",
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
           "update": {
             "content": {
-              "text": "I see you've shared a file listing from `/Users/wballard/github/swissarmyhammer/acp-conformance/src`. This appears to be a Rust project with several modules:\n\n- `agent_plan.rs`\n- `content.rs`\n- `file_system.rs`\n- `initialization.rs`\n- `lib.rs`\n- `prompt_turn.rs`\n- `responses.rs`\n- `sessions.rs`\n- `terminals.rs`\n- `tool_calls.rs`\n- `validation.rs`\n\nWhat would you like to do with this codebase? I can help you:\n- Explore and understand the code structure\n- Fix bugs or issues\n- Add new features\n- Run tests\n- Or anything else you need",
+              "text": "`, an",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
+          "update": {
+            "content": {
+              "text": "`, an",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
+          "update": {
+            "content": {
+              "text": "d `data` fields)",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
+          "update": {
+            "content": {
+              "text": "d `data` fields)",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
+          "update": {
+            "content": {
+              "text": "\n\nThe test uses the",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
+          "update": {
+            "content": {
+              "text": "\n\nThe test uses the",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
+          "update": {
+            "content": {
+              "text": " `a",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
+          "update": {
+            "content": {
+              "text": " `a",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
+          "update": {
+            "content": {
+              "text": "cp",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
+          "update": {
+            "content": {
+              "text": "cp",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
+          "update": {
+            "content": {
+              "text": "_client` c",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
+          "update": {
+            "content": {
+              "text": "_client` c",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
+          "update": {
+            "content": {
+              "text": "rate for",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
+          "update": {
+            "content": {
+              "text": "rate for",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
+          "update": {
+            "content": {
+              "text": " types",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
+          "update": {
+            "content": {
+              "text": " types",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
+          "update": {
+            "content": {
+              "text": " like `P",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
+          "update": {
+            "content": {
+              "text": " like `P",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
+          "update": {
+            "content": {
+              "text": "lanNotification",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
+          "update": {
+            "content": {
+              "text": "lanNotification",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
+          "update": {
+            "content": {
+              "text": "` and `Convers",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
+          "update": {
+            "content": {
+              "text": "` and `Convers",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
+          "update": {
+            "content": {
+              "text": "ationTurn",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
+          "update": {
+            "content": {
+              "text": "ationTurn",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
+          "update": {
+            "content": {
+              "text": "Params",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
+          "update": {
+            "content": {
+              "text": "Params",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
+          "update": {
+            "content": {
+              "text": "`.",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
+          "update": {
+            "content": {
+              "text": "`.",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
+          "update": {
+            "content": {
+              "text": "\n\nIs there something specific",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
+          "update": {
+            "content": {
+              "text": "\n\nIs there something specific",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
+          "update": {
+            "content": {
+              "text": " you'd like me",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
+          "update": {
+            "content": {
+              "text": " you'd like me",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
+          "update": {
+            "content": {
+              "text": " to help you with regarding",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
+          "update": {
+            "content": {
+              "text": " to help you with regarding",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
+          "update": {
+            "content": {
+              "text": " this test file",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
+          "update": {
+            "content": {
+              "text": " this test file",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
+          "update": {
+            "content": {
+              "text": "?",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
+          "update": {
+            "content": {
+              "text": "?",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
+          "update": {
+            "content": {
+              "text": " For example:\n-",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
+          "update": {
+            "content": {
+              "text": " For example:\n-",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
+          "update": {
+            "content": {
+              "text": " Running",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
+          "update": {
+            "content": {
+              "text": " Running",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
+          "update": {
+            "content": {
+              "text": " the tests",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
+          "update": {
+            "content": {
+              "text": " the tests",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
+          "update": {
+            "content": {
+              "text": "\n- Adding",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
+          "update": {
+            "content": {
+              "text": "\n- Adding",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
+          "update": {
+            "content": {
+              "text": " new test",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
+          "update": {
+            "content": {
+              "text": " new test",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
+          "update": {
+            "content": {
+              "text": " cases\n- Fixing",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
+          "update": {
+            "content": {
+              "text": " cases\n- Fixing",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
+          "update": {
+            "content": {
+              "text": " issues",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
+          "update": {
+            "content": {
+              "text": " issues",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
+          "update": {
+            "content": {
+              "text": "\n- Understanding how it",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
+          "update": {
+            "content": {
+              "text": "\n- Understanding how it",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
+          "update": {
+            "content": {
+              "text": " works in",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
+          "update": {
+            "content": {
+              "text": " works in",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
+          "update": {
+            "content": {
+              "text": " more",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
+          "update": {
+            "content": {
+              "text": " more",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
+          "update": {
+            "content": {
+              "text": " detail",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
+          "update": {
+            "content": {
+              "text": " detail",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KDWCGFHXC4XNBMX8M9S4A290",
+          "update": {
+            "content": {
+              "text": "I see you've shared the `tests/protocol/agent_test.rs` file. This is a Rust test file for testing agent protocol functionality, specifically focusing on plan notifications.\n\nThe file contains:\n\n1. **A helper struct `PlanNotificationHarness`** - Wraps a `ConformanceHarness` and provides methods to:\n   - Create new sessions\n   - Send conversation turns\n   - Collect plan notifications from the event stream\n\n2. **One test: `test_agent_sends_plan_notifications`** - Tests that an agent properly sends plan notifications during a conversation. It:\n   - Creates a session with a system prompt instructing the agent to create plans\n   - Sends a user message asking to \"make a plan to say hello\"\n   - Collects notifications and verifies at least one plan notification was received\n   - Checks that notifications are properly structured (have `kind`, `title`, `body`, and `data` fields)\n\nThe test uses the `acp_client` crate for types like `PlanNotification` and `ConversationTurnParams`.\n\nIs there something specific you'd like me to help you with regarding this test file? For example:\n- Running the tests\n- Adding new test cases\n- Fixing issues\n- Understanding how it works in more detail",
               "type": "text"
             },
             "sessionUpdate": "agent_message_chunk"

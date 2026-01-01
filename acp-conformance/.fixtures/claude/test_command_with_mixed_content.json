@@ -7,7 +7,7 @@
         "mcpServers": []
       },
       "response": {
-        "sessionId": "01KDJGWH195THDZ8TXNZE3QXEX"
+        "sessionId": "01KDWCX51D04FG99Z1F0ZB28X7"
       },
       "notifications": []
     },
@@ -24,7 +24,7 @@
             "type": "text"
           }
         ],
-        "sessionId": "01KDJGWH195THDZ8TXNZE3QXEX"
+        "sessionId": "01KDWCX51D04FG99Z1F0ZB28X7"
       },
       "response": {
         "_meta": {
@@ -58,11 +58,16 @@
                 "Plan",
                 "Plan",
                 null
+              ],
+              [
+                "claude-code-guide",
+                "Claude Code Guide",
+                null
               ]
             ],
             "source": "claude_cli_init"
           },
-          "sessionId": "01KDJGWH195THDZ8TXNZE3QXEX",
+          "sessionId": "01KDWCX51D04FG99Z1F0ZB28X7",
           "update": {
             "availableCommands": [
               {
@@ -143,11 +148,11 @@
         },
         {
           "_meta": {
-            "session_id": "01KDJGWH195THDZ8TXNZE3QXEX",
-            "timestamp": 1766926996,
+            "session_id": "01KDWCX51D04FG99Z1F0ZB28X7",
+            "timestamp": 1767258366,
             "update_type": "available_commands"
           },
-          "sessionId": "01KDJGWH195THDZ8TXNZE3QXEX",
+          "sessionId": "01KDWCX51D04FG99Z1F0ZB28X7",
           "update": {
             "availableCommands": [
               {
@@ -173,7 +178,7 @@
           }
         },
         {
-          "sessionId": "01KDJGWH195THDZ8TXNZE3QXEX",
+          "sessionId": "01KDWCX51D04FG99Z1F0ZB28X7",
           "update": {
             "content": {
               "text": "/help",
@@ -183,7 +188,7 @@
           }
         },
         {
-          "sessionId": "01KDJGWH195THDZ8TXNZE3QXEX",
+          "sessionId": "01KDWCX51D04FG99Z1F0ZB28X7",
           "update": {
             "content": {
               "text": "I need assistance with this feature",
@@ -214,11 +219,16 @@
                 "Plan",
                 "Plan",
                 null
+              ],
+              [
+                "claude-code-guide",
+                "Claude Code Guide",
+                null
               ]
             ],
             "source": "claude_cli_init"
           },
-          "sessionId": "01KDJGWH195THDZ8TXNZE3QXEX",
+          "sessionId": "01KDWCX51D04FG99Z1F0ZB28X7",
           "update": {
             "availableCommands": [
               {

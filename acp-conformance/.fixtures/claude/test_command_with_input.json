@@ -7,7 +7,7 @@
         "mcpServers": []
       },
       "response": {
-        "sessionId": "01KDJGWB4WYRC3PKVQJT6PRJRJ"
+        "sessionId": "01KDWCY204TEZXPA3Z841TFAFR"
       },
       "notifications": []
     },
@@ -20,7 +20,7 @@
             "type": "text"
           }
         ],
-        "sessionId": "01KDJGWB4WYRC3PKVQJT6PRJRJ"
+        "sessionId": "01KDWCY204TEZXPA3Z841TFAFR"
       },
       "response": {
         "_meta": {
@@ -54,11 +54,16 @@
                 "Plan",
                 "Plan",
                 null
+              ],
+              [
+                "claude-code-guide",
+                "Claude Code Guide",
+                null
               ]
             ],
             "source": "claude_cli_init"
           },
-          "sessionId": "01KDJGWB4WYRC3PKVQJT6PRJRJ",
+          "sessionId": "01KDWCY204TEZXPA3Z841TFAFR",
           "update": {
             "availableCommands": [
               {
@@ -139,11 +144,11 @@
         },
         {
           "_meta": {
-            "session_id": "01KDJGWB4WYRC3PKVQJT6PRJRJ",
-            "timestamp": 1766926989,
+            "session_id": "01KDWCY204TEZXPA3Z841TFAFR",
+            "timestamp": 1767258396,
             "update_type": "available_commands"
           },
-          "sessionId": "01KDJGWB4WYRC3PKVQJT6PRJRJ",
+          "sessionId": "01KDWCY204TEZXPA3Z841TFAFR",
           "update": {
             "availableCommands": [
               {
@@ -169,7 +174,7 @@
           }
         },
         {
-          "sessionId": "01KDJGWB4WYRC3PKVQJT6PRJRJ",
+          "sessionId": "01KDWCY204TEZXPA3Z841TFAFR",
           "update": {
             "content": {
               "text": "/web agent client protocol",
@@ -200,11 +205,16 @@
                 "Plan",
                 "Plan",
                 null
+              ],
+              [
+                "claude-code-guide",
+                "Claude Code Guide",
+                null
               ]
             ],
             "source": "claude_cli_init"
           },
-          "sessionId": "01KDJGWB4WYRC3PKVQJT6PRJRJ",
+          "sessionId": "01KDWCY204TEZXPA3Z841TFAFR",
           "update": {
             "availableCommands": [
               {

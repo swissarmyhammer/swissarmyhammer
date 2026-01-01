@@ -52,7 +52,7 @@
         "mcpServers": []
       },
       "response": {
-        "sessionId": "01KDJGYBEDJ7EMT0YJQ0HYH5JC"
+        "sessionId": "01KDWD2D26YSCE3K9ZMC9HVSY9"
       },
       "notifications": []
     },
@@ -65,7 +65,7 @@
             "type": "text"
           }
         ],
-        "sessionId": "01KDJGYBEDJ7EMT0YJQ0HYH5JC"
+        "sessionId": "01KDWD2D26YSCE3K9ZMC9HVSY9"
       },
       "response": {
         "_meta": {
@@ -75,7 +75,7 @@
       },
       "notifications": [
         {
-          "sessionId": "01KDJGYBEDJ7EMT0YJQ0HYH5JC",
+          "sessionId": "01KDWD2D26YSCE3K9ZMC9HVSY9",
           "update": {
             "content": {
               "text": "Hello",
@@ -85,7 +85,7 @@
           }
         },
         {
-          "sessionId": "01KDJGYBEDJ7EMT0YJQ0HYH5JC",
+          "sessionId": "01KDWD2D26YSCE3K9ZMC9HVSY9",
           "update": {
             "content": {
               "text": "!",
@@ -95,7 +95,7 @@
           }
         },
         {
-          "sessionId": "01KDJGYBEDJ7EMT0YJQ0HYH5JC",
+          "sessionId": "01KDWD2D26YSCE3K9ZMC9HVSY9",
           "update": {
             "content": {
               "text": " How",
@@ -105,7 +105,7 @@
           }
         },
         {
-          "sessionId": "01KDJGYBEDJ7EMT0YJQ0HYH5JC",
+          "sessionId": "01KDWD2D26YSCE3K9ZMC9HVSY9",
           "update": {
             "content": {
               "text": " can",
@@ -115,7 +115,7 @@
           }
         },
         {
-          "sessionId": "01KDJGYBEDJ7EMT0YJQ0HYH5JC",
+          "sessionId": "01KDWD2D26YSCE3K9ZMC9HVSY9",
           "update": {
             "content": {
               "text": " I",
@@ -125,7 +125,7 @@
           }
         },
         {
-          "sessionId": "01KDJGYBEDJ7EMT0YJQ0HYH5JC",
+          "sessionId": "01KDWD2D26YSCE3K9ZMC9HVSY9",
           "update": {
             "content": {
               "text": " assist",
@@ -135,7 +135,7 @@
           }
         },
         {
-          "sessionId": "01KDJGYBEDJ7EMT0YJQ0HYH5JC",
+          "sessionId": "01KDWD2D26YSCE3K9ZMC9HVSY9",
           "update": {
             "content": {
               "text": " you",
@@ -145,7 +145,7 @@
           }
         },
         {
-          "sessionId": "01KDJGYBEDJ7EMT0YJQ0HYH5JC",
+          "sessionId": "01KDWD2D26YSCE3K9ZMC9HVSY9",
           "update": {
             "content": {
               "text": " today",
@@ -155,7 +155,7 @@
           }
         },
         {
-          "sessionId": "01KDJGYBEDJ7EMT0YJQ0HYH5JC",
+          "sessionId": "01KDWD2D26YSCE3K9ZMC9HVSY9",
           "update": {
             "content": {
               "text": "?",
@@ -165,7 +165,7 @@
           }
         },
         {
-          "sessionId": "01KDJGYBEDJ7EMT0YJQ0HYH5JC",
+          "sessionId": "01KDWD2D26YSCE3K9ZMC9HVSY9",
           "update": {
             "content": {
               "text": "",

@@ -7,7 +7,7 @@
         "mcpServers": []
       },
       "response": {
-        "sessionId": "01KDJGV43094QGNWQP52HD2HQ8"
+        "sessionId": "01KDWCSVAX3P3YK2Z1W8JMCVKD"
       },
       "notifications": []
     },
@@ -15,7 +15,7 @@
       "method": "set_session_mode",
       "request": {
         "modeId": "test-mode",
-        "sessionId": "01KDJGV43094QGNWQP52HD2HQ8"
+        "sessionId": "01KDWCSVAX3P3YK2Z1W8JMCVKD"
       },
       "response": {
         "_meta": {

@@ -52,7 +52,7 @@
         "mcpServers": []
       },
       "response": {
-        "sessionId": "01KDJGX1HHT8KK9GZVR0DENXBV"
+        "sessionId": "01KDWCZGKJYR8RTFCC310GN3ZC"
       },
       "notifications": []
     },
@@ -63,18 +63,18 @@
           "hello world"
         ],
         "command": "echo",
-        "sessionId": "01KDJGX1HHT8KK9GZVR0DENXBV"
+        "sessionId": "01KDWCZGKJYR8RTFCC310GN3ZC"
       },
       "response": {
-        "terminalId": "term_01KDJGX1HPXW1NXTPDBSVDWZAQ"
+        "terminalId": "term_01KDWCZGKPPXHGWJQES2KXN66Z"
       },
       "notifications": []
     },
     {
       "method": "ext_method",
       "request": {
-        "sessionId": "01KDJGX1HHT8KK9GZVR0DENXBV",
-        "terminalId": "term_01KDJGX1HPXW1NXTPDBSVDWZAQ"
+        "sessionId": "01KDWCZGKJYR8RTFCC310GN3ZC",
+        "terminalId": "term_01KDWCZGKPPXHGWJQES2KXN66Z"
       },
       "response": null,
       "notifications": []

@@ -54,7 +54,7 @@
         "mcpServers": []
       },
       "response": {
-        "sessionId": "01KDJGNZEPAC3WKP1SWXXH48F8"
+        "sessionId": "01KDWCJ8QB7WJ08MBT1ZHXPX9H"
       },
       "notifications": []
     },
@@ -64,7 +64,7 @@
         "limit": 2,
         "line": 2,
         "path": "/var/folders/3k/6b488x1j6rg1f6w8fnyfwm9w0000gn/T/acp_conformance_read_range_test.txt",
-        "sessionId": "01KDJGNZEPAC3WKP1SWXXH48F8"
+        "sessionId": "01KDWCJ8QB7WJ08MBT1ZHXPX9H"
       },
       "response": {
         "content": "Line 2\nLine 3"

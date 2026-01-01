@@ -54,7 +54,7 @@
         "mcpServers": []
       },
       "response": {
-        "sessionId": "01KDJGNH7Z4EJ7Z85Z59SSAPE8"
+        "sessionId": "01KDWCKS9S1YE34DPNQEGA2ES2"
       },
       "notifications": []
     },
@@ -62,7 +62,7 @@
       "method": "ext_method",
       "request": {
         "path": "/var/folders/3k/6b488x1j6rg1f6w8fnyfwm9w0000gn/T/acp_conformance_read_test.txt",
-        "sessionId": "01KDJGNH7Z4EJ7Z85Z59SSAPE8"
+        "sessionId": "01KDWCKS9S1YE34DPNQEGA2ES2"
       },
       "response": {
         "content": "Hello\nWorld\nTest"
