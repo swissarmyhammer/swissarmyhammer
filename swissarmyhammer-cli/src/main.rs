@@ -30,18 +30,27 @@ static SHUTDOWN_PERFORMED: AtomicBool = AtomicBool::new(false);
 /// This ensures the global LlamaAgent executor is properly shut down before
 /// process termination, preventing Metal device cleanup assertion failures on macOS.
 ///
-/// NOTE: This function creates a new tokio runtime, so it should NOT be called
-/// from within an existing tokio runtime context.
+/// This function safely handles both cases: when called from within a tokio runtime
+/// (e.g., during tests) and when called from outside a runtime (e.g., normal execution).
 fn shutdown_before_exit() {
     // Only shutdown once
     if SHUTDOWN_PERFORMED.swap(true, Ordering::SeqCst) {
         return;
     }
 
-    // Create a minimal tokio runtime to execute the async shutdown
+    // Check if we're already inside a tokio runtime
+    if tokio::runtime::Handle::try_current().is_ok() {
+        // We're inside a runtime (e.g., during tests). Skip explicit shutdown
+        // as the runtime will handle cleanup when it shuts down naturally.
+        // Attempting to block_on from within a runtime causes a panic.
+        return;
+    }
+
+    // Not in a runtime, create one for shutdown
     if let Ok(rt) = tokio::runtime::Runtime::new() {
         if let Err(e) = rt.block_on(
-            swissarmyhammer_agent_executor::llama::LlamaAgentExecutor::shutdown_global_executor(),
+            swissarmyhammer_agent_executor::llama::LlamaAgentExecutor::shutdown_global_executor(
+            ),
         ) {
             eprintln!("Warning: Failed to shutdown global executor: {}", e);
         }
