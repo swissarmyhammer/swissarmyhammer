@@ -655,7 +655,7 @@ impl AcpServer {
     }
 
     fn broadcast_notification(&self, notification: SessionNotification) {
-        tracing::info!("Broadcasting notification: {:?}", notification.update);
+        tracing::trace!("Broadcasting notification: {:?}", notification.update);
 
         // Record notification to raw message log for debugging
         if let Some(ref manager) = self.raw_message_manager {
@@ -666,7 +666,7 @@ impl AcpServer {
 
         match self.notification_tx.send(notification) {
             Ok(subscriber_count) => {
-                tracing::info!("Notification broadcast to {} subscribers", subscriber_count);
+                tracing::trace!("Notification broadcast to {} subscribers", subscriber_count);
             }
             Err(e) => {
                 tracing::warn!(
@@ -1346,74 +1346,114 @@ impl agent_client_protocol::Agent for AcpServer {
             }
         }
 
-        // Use AgentServer's streaming generate method
-        let generation_request = crate::types::GenerationRequest {
-            session_id: acp_session.llama_session_id,
-            max_tokens: None,
-            temperature: None,
-            top_p: None,
-            stop_tokens: vec![],
-            stopping_config: None,
-        };
-
-        let mut stream = self
-            .agent_server
-            .generate_stream(generation_request)
-            .await
-            .map_err(|e| {
-                tracing::error!("Agent streaming generation failed: {}", e);
-                Self::convert_error(e)
-            })?;
-
-        // Stream chunks and convert each to ACP notification
+        // Agentic loop: Continue generating until no more tool calls are produced
         let mut total_tokens = 0u32;
-        let mut generated_text = String::new();
-        let mut llama_finish_reason: Option<crate::types::FinishReason> = None;
-        while let Some(chunk_result) = stream.next().await {
-            match chunk_result {
-                Ok(chunk) => {
-                    total_tokens += chunk.token_count;
-                    generated_text.push_str(&chunk.text);
+        let mut total_tool_calls = 0usize;
+        let mut final_stop_reason = agent_client_protocol::StopReason::EndTurn;
+        let mut all_generated_text = String::new();
 
-                    // Capture finish reason from final chunk
-                    if chunk.is_complete {
-                        llama_finish_reason = chunk.finish_reason.clone();
+        loop {
+            // Use AgentServer's streaming generate method
+            let generation_request = crate::types::GenerationRequest {
+                session_id: acp_session.llama_session_id,
+                max_tokens: None,
+                temperature: None,
+                top_p: None,
+                stop_tokens: vec![],
+                stopping_config: None,
+            };
+
+            let mut stream = self
+                .agent_server
+                .generate_stream(generation_request)
+                .await
+                .map_err(|e| {
+                    tracing::error!("Agent streaming generation failed: {}", e);
+                    Self::convert_error(e)
+                })?;
+
+            // Stream chunks and convert each to ACP notification
+            let mut generated_text = String::new();
+            let mut llama_finish_reason: Option<crate::types::FinishReason> = None;
+            let mut turn_tokens = 0u32;
+            while let Some(chunk_result) = stream.next().await {
+                match chunk_result {
+                    Ok(chunk) => {
+                        turn_tokens += chunk.token_count;
+                        generated_text.push_str(&chunk.text);
+
+                        // Capture finish reason from final chunk
+                        if chunk.is_complete {
+                            llama_finish_reason = chunk.finish_reason.clone();
+                        }
+
+                        // Convert chunk to ACP notification
+                        let notification = super::translation::llama_chunk_to_acp_notification(
+                            request.session_id.clone(),
+                            chunk,
+                        );
+
+                        // Broadcast the notification
+                        self.broadcast_notification(notification);
                     }
-
-                    // Convert chunk to ACP notification
-                    let notification = super::translation::llama_chunk_to_acp_notification(
-                        request.session_id.clone(),
-                        chunk,
-                    );
-
-                    // Broadcast the notification
-                    self.broadcast_notification(notification);
-                }
-                Err(e) => {
-                    tracing::error!("Stream chunk error: {}", e);
-                    return Err(Self::convert_error(e));
+                    Err(e) => {
+                        tracing::error!("Stream chunk error: {}", e);
+                        return Err(Self::convert_error(e));
+                    }
                 }
             }
-        }
 
-        tracing::info!(
-            "Agent generation completed successfully: {} tokens generated",
-            total_tokens
-        );
+            total_tokens += turn_tokens;
+            all_generated_text.push_str(&generated_text);
 
-        // Extract and execute tool calls from the generated text
-        let tool_calls = self
-            .agent_server
-            .chat_template()
-            .extract_tool_calls(&generated_text)
-            .map_err(|e| {
-                tracing::error!("Failed to extract tool calls: {}", e);
-                Self::convert_error(e)
-            })?;
+            tracing::info!(
+                "Agent generation turn completed: {} tokens in this turn, {} total",
+                turn_tokens,
+                total_tokens
+            );
 
-        if !tool_calls.is_empty() {
+            // Log the generated content at info level
+            tracing::info!("Generated content: {}", generated_text);
+
+            // Extract and execute tool calls from the generated text
+            let tool_calls = self
+                .agent_server
+                .chat_template()
+                .extract_tool_calls(&generated_text)
+                .map_err(|e| {
+                    tracing::error!("Failed to extract tool calls: {}", e);
+                    Self::convert_error(e)
+                })?;
+
+            // Update stop reason from this turn's finish reason
+            if let Some(ref reason) = llama_finish_reason {
+                final_stop_reason = Self::map_finish_reason_to_stop_reason(reason);
+
+                // If we hit a hard limit (MaxTokens, Cancelled, etc.), break immediately
+                match final_stop_reason {
+                    agent_client_protocol::StopReason::MaxTokens
+                    | agent_client_protocol::StopReason::MaxTurnRequests
+                    | agent_client_protocol::StopReason::Cancelled
+                    | agent_client_protocol::StopReason::Refusal => {
+                        tracing::info!("Stopping agentic loop due to: {:?}", final_stop_reason);
+                        break;
+                    }
+                    _ => {}
+                }
+            }
+
+            if tool_calls.is_empty() {
+                // No tool calls - agent is done
+                tracing::info!("No tool calls detected, ending agentic loop");
+                break;
+            }
+
             let tool_calls_count = tool_calls.len();
-            tracing::info!("Detected {} tool calls in generated text", tool_calls_count);
+            total_tool_calls += tool_calls_count;
+            tracing::info!(
+                "Detected {} tool calls in generated text, executing them",
+                tool_calls_count
+            );
 
             // Execute each tool call
             for tool_call in tool_calls {
@@ -1518,52 +1558,34 @@ impl agent_client_protocol::Agent for AcpServer {
                 }
             }
 
-            // Determine stop reason from llama finish reason
-            // When tool calls are executed, we use the underlying finish reason
-            // (e.g., EndTurn for normal completion, MaxTokens if limit was hit)
-            let stop_reason = if let Some(ref reason) = llama_finish_reason {
-                Self::map_finish_reason_to_stop_reason(reason)
-            } else {
-                // Fallback to EndTurn if no finish reason was captured
-                agent_client_protocol::StopReason::EndTurn
-            };
-
-            let mut meta = serde_json::Map::new();
-            meta.insert(
-                "tokens_generated".to_string(),
-                serde_json::json!(total_tokens),
-            );
-            meta.insert(
-                "tool_calls_executed".to_string(),
-                serde_json::json!(tool_calls_count),
-            );
-
-            // Clear session context on MCP clients
-            self.clear_mcp_session_context(&acp_session.llama_session_id)
-                .await;
-
-            return Ok(agent_client_protocol::PromptResponse::new(stop_reason).meta(meta));
+            // Continue loop to generate agent's response to the tool results
+            tracing::info!("Continuing agentic loop after executing {} tool calls", tool_calls_count);
         }
 
-        // No tool calls - use llama finish reason to determine stop reason
-        let stop_reason = if let Some(ref reason) = llama_finish_reason {
-            Self::map_finish_reason_to_stop_reason(reason)
-        } else {
-            // Fallback to EndTurn if no finish reason was captured
-            agent_client_protocol::StopReason::EndTurn
-        };
+        // Agentic loop completed
+        tracing::info!(
+            "Agentic loop completed: {} tokens generated, {} tool calls executed",
+            total_tokens,
+            total_tool_calls
+        );
 
         let mut meta = serde_json::Map::new();
         meta.insert(
             "tokens_generated".to_string(),
             serde_json::json!(total_tokens),
         );
+        if total_tool_calls > 0 {
+            meta.insert(
+                "tool_calls_executed".to_string(),
+                serde_json::json!(total_tool_calls),
+            );
+        }
 
         // Clear session context on MCP clients
         self.clear_mcp_session_context(&acp_session.llama_session_id)
             .await;
 
-        Ok(agent_client_protocol::PromptResponse::new(stop_reason).meta(meta))
+        Ok(agent_client_protocol::PromptResponse::new(final_stop_reason).meta(meta))
     }
 
     async fn cancel(
