@@ -41,7 +41,7 @@ pub use config::GenerationConfig;
 pub use error::GenerationError;
 pub use generator::LlamaCppGenerator;
 
-use tracing::warn;
+use tracing::{trace, warn};
 
 use crate::types::{GenerationRequest, GenerationResponse, StreamChunk};
 // Note: Not using async_trait due to Send requirements with LlamaContext raw pointers
@@ -56,6 +56,25 @@ const DEFAULT_GENERATION_SEED: u32 = 1234;
 /// length multiplied by this factor. This reduces the number of allocations during generation
 /// while avoiding excessive memory overhead.
 pub(crate) const STRING_CAPACITY_MULTIPLIER: usize = 2;
+
+/// Convert a token to a string using lossy UTF-8 decoding.
+///
+/// This helper function is necessary for models like GLM-4.7 that use BPE tokenizers where
+/// individual tokens may contain partial UTF-8 byte sequences that only become valid when
+/// combined with adjacent tokens. Using lossy conversion allows generation to continue smoothly
+/// even when individual tokens can't be decoded as valid UTF-8.
+///
+/// See: https://github.com/ggml-org/llama.cpp/pull/5613
+fn token_to_str_lossy(
+    model: &llama_cpp_2::model::LlamaModel,
+    token: llama_cpp_2::token::LlamaToken,
+    special: llama_cpp_2::model::Special,
+) -> Result<String, GenerationError> {
+    match model.token_to_bytes(token, special) {
+        Ok(bytes) => Ok(String::from_utf8_lossy(&bytes).into_owned()),
+        Err(e) => Err(GenerationError::token_conversion(e)),
+    }
+}
 
 /// Core trait for text generation operations.
 ///
@@ -377,6 +396,18 @@ impl GenerationHelper {
             }
 
             // Always increment token count and advance model state, even if token can't be converted to string
+            let token_str = match token_to_str_lossy(model, token, Special::Tokenize) {
+                Ok(s) => s,
+                Err(e) => {
+                    trace!("Failed to convert token to string in streaming: {}", e);
+                    continue;
+                }
+            };
+
+            if generated_text.capacity() - generated_text.len() < token_str.len() {
+                generated_text.reserve(token_str.len() * STRING_CAPACITY_MULTIPLIER);
+            }
+            generated_text.push_str(&token_str);
             tokens_generated += 1;
 
             // Try to convert token to string and send if successful
@@ -567,9 +598,12 @@ impl GenerationHelper {
             .map_err(GenerationError::tokenization)?;
 
         let total_token_count = tokens_list.len();
-        debug!(
-            "Tokenized prompt to {} tokens, template offset: {}",
-            total_token_count, template_offset
+        use tracing::info;
+        info!(
+            "Tokenized prompt to {} tokens, template offset: {} (will process {} new tokens)",
+            total_token_count,
+            template_offset,
+            total_token_count.saturating_sub(template_offset)
         );
 
         // Validate that offset doesn't exceed token count

@@ -120,7 +120,7 @@ impl Default for SessionConfig {
             session_storage_dir: None, // Will use .llama-sessions/ by default
             session_ttl_hours: 24 * 7, // 1 week default
             auto_save_threshold: 5,    // Save after 5 messages
-            max_kv_cache_files: 16,    // Keep 16 most recently used KV cache files
+            max_kv_cache_files: 32,    // Keep 32 most recently used KV cache files
             kv_cache_dir,              // ~/.cache/llama-sessions/ or LLAMA_KV_CACHE_DIR
         }
     }

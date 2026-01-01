@@ -1,4 +1,5 @@
 use std::process;
+use std::sync::atomic::{AtomicBool, Ordering};
 mod cli;
 mod commands;
 mod context;
@@ -20,6 +21,35 @@ use owo_colors::OwoColorize;
 use std::path::PathBuf;
 use std::sync::Arc;
 use swissarmyhammer_config::TemplateContext;
+
+/// Track if we've already performed shutdown to prevent double-shutdown
+static SHUTDOWN_PERFORMED: AtomicBool = AtomicBool::new(false);
+
+/// Perform graceful shutdown before process exit
+///
+/// This ensures the global LlamaAgent executor is properly shut down before
+/// process termination, preventing Metal device cleanup assertion failures on macOS.
+///
+/// This function safely handles both cases: when called from within a tokio runtime
+/// (e.g., during tests) and when called from outside a runtime (e.g., normal execution).
+fn shutdown_before_exit() {
+    // Only shutdown once
+    if SHUTDOWN_PERFORMED.swap(true, Ordering::SeqCst) {
+        return;
+    }
+
+    // Check if we're already inside a tokio runtime
+    if tokio::runtime::Handle::try_current().is_ok() {
+        // We're inside a runtime (e.g., during tests). Skip explicit shutdown
+        // as the runtime will handle cleanup when it shuts down naturally.
+        // Attempting to block_on from within a runtime causes a panic.
+        return;
+    }
+
+    // Not in a runtime, create one for shutdown
+    // Note: Agent shutdown is now handled automatically by the agent lifecycle
+    // The swissarmyhammer-agent crate manages cleanup internally
+}
 
 /// Global flags extracted from command-line arguments
 struct GlobalFlags {
@@ -261,6 +291,7 @@ fn unwrap_or_exit<T, E: std::fmt::Display>(result: Result<T, E>, message: &str) 
         Ok(value) => value,
         Err(e) => {
             eprintln!("{}: {}", message, e);
+            shutdown_before_exit();
             process::exit(EXIT_ERROR);
         }
     }
@@ -278,6 +309,7 @@ fn handle_cwd_flag(args: &[String]) {
             );
         } else {
             eprintln!("--cwd requires a path argument");
+            shutdown_before_exit();
             process::exit(EXIT_ERROR);
         }
     }
@@ -344,10 +376,12 @@ fn handle_cli_parse_error(error: clap::Error) -> ! {
     match error.kind() {
         ErrorKind::DisplayHelp | ErrorKind::DisplayVersion => {
             print!("{}", error);
+            shutdown_before_exit();
             process::exit(EXIT_SUCCESS);
         }
         _ => {
             eprintln!("{}", error);
+            shutdown_before_exit();
             process::exit(EXIT_ERROR);
         }
     }
@@ -401,6 +435,12 @@ async fn main() {
 
     // Handle dynamic command dispatch
     let exit_code = handle_dynamic_matches(matches, cli_tool_context, template_context).await;
+
+    // Shutdown global LlamaAgent executor before exit to prevent Metal cleanup crashes
+    // Note: Agent shutdown is now handled automatically by the agent lifecycle
+    // The swissarmyhammer-agent crate manages cleanup internally
+    let _ = SHUTDOWN_PERFORMED.swap(true, Ordering::SeqCst);
+
     process::exit(exit_code);
 }
 

@@ -1,4 +1,3 @@
-use crate::template_cache::TemplateCache;
 use crate::types::{ModelConfig, ModelError, SessionId};
 use llama_cpp_2::{
     context::{params::LlamaContextParams, LlamaContext},
@@ -65,14 +64,6 @@ pub struct ModelManager {
     memory_usage_bytes: Arc<std::sync::atomic::AtomicU64>,
     // Session state tracking for KV cache optimization
     session_sequence_ids: Arc<RwLock<HashMap<SessionId, u32>>>,
-    /// Template KV cache for reusing processed templates across sessions
-    ///
-    /// Lock Poisoning Strategy: All `.lock().unwrap()` calls on this mutex are intentional.
-    /// If a thread panics while holding the lock, the cache becomes poisoned, which indicates
-    /// a serious bug in the template cache implementation. In this case, propagating the panic
-    /// is the correct behavior as it signals an unrecoverable error that should halt execution
-    /// rather than silently continuing with potentially corrupted cache state.
-    template_cache: Arc<Mutex<TemplateCache>>,
     /// KV cache metadata for tracking and LRU eviction
     kv_cache_metadata: Arc<Mutex<HashMap<SessionId, KVCacheMetadata>>>,
 }
@@ -124,16 +115,6 @@ impl ModelManager {
             }
         };
 
-        // Initialize template cache with platform-appropriate directory
-        let cache_dir = {
-            // Use platform-appropriate cache directory
-            let base = dirs::cache_dir().unwrap_or_else(|| PathBuf::from(".cache"));
-            base.join("llama-agent").join("templates")
-        };
-        let template_cache = Arc::new(Mutex::new(TemplateCache::new(cache_dir).map_err(|e| {
-            ModelError::LoadingFailed(format!("Failed to create template cache: {}", e))
-        })?));
-
         let manager = Self {
             model: Arc::new(RwLock::new(None)),
             backend,
@@ -142,7 +123,6 @@ impl ModelManager {
             metadata: RwLock::new(None),
             memory_usage_bytes: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             session_sequence_ids: Arc::new(RwLock::new(HashMap::new())),
-            template_cache,
             kv_cache_metadata: Arc::new(Mutex::new(HashMap::new())),
         };
         Ok(manager)
@@ -427,17 +407,6 @@ impl ModelManager {
         }
     }
 
-    /// Get reference to template cache for session initialization
-    pub fn template_cache(&self) -> Arc<Mutex<TemplateCache>> {
-        self.template_cache.clone()
-    }
-
-    /// Get template cache statistics
-    pub fn get_template_cache_stats(&self) -> crate::template_cache::CacheStats {
-        let cache = self.template_cache.lock().unwrap();
-        cache.stats()
-    }
-
     /// Evict oldest KV cache files if limit is exceeded
     fn evict_kv_cache_if_needed(
         &self,
@@ -633,228 +602,6 @@ impl ModelManager {
             Ok(false)
         }
     }
-
-    /// Save template KV cache state to file
-    ///
-    /// This uses the same underlying llama.cpp save mechanism as session caches,
-    /// but stores in the template cache directory with template-specific naming.
-    pub fn save_template_kv_cache(
-        &self,
-        context: &LlamaContext,
-        template_hash: u64,
-        tokens: &[llama_cpp_2::token::LlamaToken],
-    ) -> Result<PathBuf, ModelError> {
-        let cache = self.template_cache.lock().unwrap();
-        let template_file = cache
-            .cache_dir()
-            .join(format!("template_{:016x}.kv", template_hash));
-        drop(cache);
-
-        context
-            .save_session_file(&template_file, tokens)
-            .map_err(|e| {
-                ModelError::LoadingFailed(format!("Failed to save template KV cache: {}", e))
-            })?;
-
-        debug!(
-            "Saved template KV cache for hash {} to {}",
-            template_hash,
-            template_file.display()
-        );
-
-        Ok(template_file)
-    }
-
-    /// Load template KV cache state from file
-    ///
-    /// This loads a previously saved template KV cache into the context,
-    /// allowing instant reuse of the processed template state.
-    pub fn load_template_kv_cache(
-        &self,
-        context: &mut LlamaContext,
-        template_hash: u64,
-        max_tokens: usize,
-    ) -> Result<Vec<llama_cpp_2::token::LlamaToken>, ModelError> {
-        let cache = self.template_cache.lock().unwrap();
-        let template_file = cache
-            .cache_dir()
-            .join(format!("template_{:016x}.kv", template_hash));
-        drop(cache);
-
-        if !template_file.exists() {
-            debug!("No template cache file found for hash {}", template_hash);
-            return Ok(Vec::new());
-        }
-
-        let tokens = context
-            .load_session_file(&template_file, max_tokens)
-            .map_err(|e| {
-                ModelError::LoadingFailed(format!("Failed to load template KV cache: {}", e))
-            })?;
-
-        debug!(
-            "Loaded template KV cache for hash {} from {} (restored {} tokens)",
-            template_hash,
-            template_file.display(),
-            tokens.len()
-        );
-
-        Ok(tokens)
-    }
-
-    /// Check if template KV cache file exists
-    pub fn has_template_kv_cache(&self, template_hash: u64) -> bool {
-        let cache = self.template_cache.lock().unwrap();
-        let template_file = cache
-            .cache_dir()
-            .join(format!("template_{:016x}.kv", template_hash));
-        template_file.exists()
-    }
-
-    /// Initialize session with template caching
-    ///
-    /// This method checks if the session's template (system prompt + tools) has been
-    /// cached. If so, it loads the cached KV state. Otherwise, it processes the template
-    /// and saves it to the cache.
-    ///
-    /// Returns the number of tokens in the template.
-    pub async fn initialize_session_with_template(
-        &self,
-        session: &crate::types::Session,
-        context: &mut llama_cpp_2::context::LlamaContext<'_>,
-        chat_engine: &crate::chat_template::ChatTemplateEngine,
-    ) -> Result<usize, ModelError> {
-        let model = self.model.read().await;
-        let model_ref = model
-            .as_ref()
-            .ok_or_else(|| ModelError::LoadingFailed("Model not loaded".to_string()))?;
-
-        // Extract template components
-        let (system_prompt, tools_json) = chat_engine
-            .extract_template_components(session)
-            .map_err(|e| ModelError::LoadingFailed(format!("Failed to extract template: {}", e)))?;
-
-        // Hash template for cache lookup
-        let template_hash =
-            crate::template_cache::TemplateCache::hash_template(&system_prompt, &tools_json);
-
-        // Check cache - extract token_count in a scoped block to ensure we don't hold
-        // the cache lock across the await point when loading KV cache
-        let cache_hit = {
-            let mut cache = self.template_cache.lock().unwrap();
-            cache.get(template_hash).map(|entry| entry.token_count)
-        };
-
-        if let Some(token_count) = cache_hit {
-            drop(model);
-
-            // Cache HIT - load KV cache from file
-            debug!(
-                "Loading cached template {} ({} tokens)",
-                template_hash, token_count
-            );
-
-            let _tokens =
-                self.load_template_kv_cache(context, template_hash, context.n_ctx() as usize)?;
-
-            debug!(
-                "Session initialized with cached template: {} tokens",
-                token_count
-            );
-
-            return Ok(token_count);
-        }
-
-        // Cache MISS - process template and save
-        debug!("Processing new template {} for caching", template_hash);
-
-        let token_count = self
-            .process_and_cache_template(
-                template_hash,
-                &system_prompt,
-                &tools_json,
-                session,
-                context,
-                chat_engine,
-                model_ref,
-            )
-            .await?;
-
-        Ok(token_count)
-    }
-
-    /// Process template and save to cache
-    #[allow(clippy::too_many_arguments)]
-    async fn process_and_cache_template(
-        &self,
-        template_hash: u64,
-        system_prompt: &str,
-        tools_json: &str,
-        session: &crate::types::Session,
-        context: &mut llama_cpp_2::context::LlamaContext<'_>,
-        chat_engine: &crate::chat_template::ChatTemplateEngine,
-        model: &LlamaModel,
-    ) -> Result<usize, ModelError> {
-        use llama_cpp_2::llama_batch::LlamaBatch;
-        use llama_cpp_2::model::AddBos;
-
-        // Render template-only (system + tools)
-        let rendered = chat_engine
-            .render_template_only(session, model)
-            .map_err(|e| ModelError::LoadingFailed(format!("Failed to render template: {}", e)))?;
-
-        // Tokenize
-        let tokens: Vec<llama_cpp_2::token::LlamaToken> =
-            model.str_to_token(&rendered, AddBos::Always).map_err(|e| {
-                ModelError::LoadingFailed(format!("Failed to tokenize template: {}", e))
-            })?;
-
-        let token_count = tokens.len();
-
-        debug!(
-            "Tokenized template {} to {} tokens",
-            template_hash, token_count
-        );
-
-        // Process into KV cache (sequence 0)
-        let mut batch = LlamaBatch::new(self.config.batch_size as usize, 1);
-
-        for (i, token) in tokens.iter().enumerate() {
-            let is_last = i == tokens.len() - 1;
-            batch.add(*token, i as i32, &[0], is_last).map_err(|e| {
-                ModelError::LoadingFailed(format!("Failed to add token to batch: {}", e))
-            })?;
-        }
-
-        context
-            .decode(&mut batch)
-            .map_err(|e| ModelError::LoadingFailed(format!("Failed to decode template: {}", e)))?;
-
-        // Save KV cache to file
-        let kv_file_path = self.save_template_kv_cache(context, template_hash, &tokens)?;
-
-        // Update cache metadata
-        let mut cache = self.template_cache.lock().unwrap();
-        cache
-            .insert(
-                template_hash,
-                token_count,
-                system_prompt.to_string(),
-                tools_json.to_string(),
-            )
-            .map_err(|e| {
-                ModelError::LoadingFailed(format!("Failed to insert cache entry: {}", e))
-            })?;
-
-        debug!(
-            "Cached template {} ({} tokens) to {}",
-            template_hash,
-            token_count,
-            kv_file_path.display()
-        );
-
-        Ok(token_count)
-    }
 }
 
 #[cfg(test)]
@@ -870,10 +617,6 @@ mod tests {
     const TEST_N_SEQ_MAX: u32 = 1;
     const TEST_N_THREADS: i32 = 1;
     const TEST_N_THREADS_BATCH: i32 = 1;
-    const TEST_TOKEN_COUNT: usize = 50;
-    const TEST_TEMPLATE_HASH_1: u64 = 0x1234567890abcdef;
-    const TEST_TEMPLATE_HASH_2: u64 = 0xabcdef1234567890;
-    const TEST_TEMPLATE_HASH_3: u64 = 0xfedcba9876543210;
 
     fn create_test_config_local(folder: PathBuf, filename: Option<String>) -> ModelConfig {
         ModelConfig {
@@ -902,17 +645,6 @@ mod tests {
             use_hf_params: true,
             retry_config: crate::types::RetryConfig::default(),
             debug: false,
-        }
-    }
-
-    /// Test helper to create ModelManager or skip test if backend already initialized
-    fn create_test_manager_or_skip(config: ModelConfig) -> Option<ModelManager> {
-        match ModelManager::new(config) {
-            Ok(m) => Some(m),
-            Err(ModelError::LoadingFailed(msg)) if msg.contains("Backend already initialized") => {
-                None
-            }
-            Err(e) => panic!("Unexpected error: {:?}", e),
         }
     }
 
@@ -1327,197 +1059,5 @@ mod tests {
             .unwrap();
         assert!(deleted);
         assert!(!expected_path.exists());
-    }
-
-    // Template cache integration tests
-    #[tokio::test]
-    async fn test_model_manager_has_template_cache() {
-        let temp_dir = TempDir::new().unwrap();
-        let config = create_test_config_local(temp_dir.path().to_path_buf(), None);
-
-        match ModelManager::new(config) {
-            Ok(manager) => {
-                let cache = manager.template_cache();
-                let stats = cache.lock().unwrap().stats();
-                assert_eq!(stats.entries, 0);
-                assert_eq!(stats.hits, 0);
-                assert_eq!(stats.misses, 0);
-            }
-            Err(ModelError::LoadingFailed(msg)) if msg.contains("Backend already initialized") => {
-                // Expected in test environment
-            }
-            Err(e) => panic!("Unexpected error: {:?}", e),
-        }
-    }
-
-    #[tokio::test]
-    async fn test_get_template_cache_stats() {
-        let temp_dir = TempDir::new().unwrap();
-        let config = create_test_config_local(temp_dir.path().to_path_buf(), None);
-
-        match ModelManager::new(config) {
-            Ok(manager) => {
-                let stats = manager.get_template_cache_stats();
-                assert_eq!(stats.entries, 0);
-                assert_eq!(stats.hits, 0);
-                assert_eq!(stats.misses, 0);
-                assert_eq!(stats.hit_rate, 0.0);
-            }
-            Err(ModelError::LoadingFailed(msg)) if msg.contains("Backend already initialized") => {
-                // Expected in test environment
-            }
-            Err(e) => panic!("Unexpected error: {:?}", e),
-        }
-    }
-
-    #[tokio::test]
-    async fn test_template_cache_accessor_returns_same_cache() {
-        let temp_dir = TempDir::new().unwrap();
-        let config = create_test_config_local(temp_dir.path().to_path_buf(), None);
-
-        match ModelManager::new(config) {
-            Ok(manager) => {
-                let cache1 = manager.template_cache();
-                let cache2 = manager.template_cache();
-
-                // Both should point to the same cache (Arc clones)
-                // Verify by modifying through one and reading through the other
-                {
-                    let mut c1 = cache1.lock().unwrap();
-                    let hash = crate::template_cache::TemplateCache::hash_template("test", "tools");
-                    let _ = c1.insert(hash, 100, "test".to_string(), "tools".to_string());
-                }
-
-                let stats = cache2.lock().unwrap().stats();
-                assert_eq!(stats.entries, 1);
-            }
-            Err(ModelError::LoadingFailed(msg)) if msg.contains("Backend already initialized") => {
-                // Expected in test environment
-            }
-            Err(e) => panic!("Unexpected error: {:?}", e),
-        }
-    }
-
-    #[tokio::test]
-    async fn test_template_cache_stats_after_operations() {
-        let temp_dir = TempDir::new().unwrap();
-        let config = create_test_config_local(temp_dir.path().to_path_buf(), None);
-
-        match ModelManager::new(config) {
-            Ok(manager) => {
-                let cache = manager.template_cache();
-                let hash = crate::template_cache::TemplateCache::hash_template("sys", "tools");
-
-                // Insert entry
-                {
-                    let mut c = cache.lock().unwrap();
-                    let _ = c.insert(
-                        hash,
-                        TEST_TOKEN_COUNT,
-                        "sys".to_string(),
-                        "tools".to_string(),
-                    );
-                }
-
-                // Check stats after insert
-                let stats = manager.get_template_cache_stats();
-                assert_eq!(stats.entries, 1);
-                assert_eq!(stats.total_tokens, TEST_TOKEN_COUNT);
-
-                // Access the entry (cache hit)
-                {
-                    let mut c = cache.lock().unwrap();
-                    let entry = c.get(hash);
-                    assert!(entry.is_some());
-                    assert_eq!(entry.unwrap().token_count, TEST_TOKEN_COUNT);
-                }
-
-                // Check stats after hit
-                let stats = manager.get_template_cache_stats();
-                assert_eq!(stats.hits, 1);
-                assert_eq!(stats.misses, 0);
-                assert!(stats.hit_rate > 0.0);
-            }
-            Err(ModelError::LoadingFailed(msg)) if msg.contains("Backend already initialized") => {
-                // Expected in test environment
-            }
-            Err(e) => panic!("Unexpected error: {:?}", e),
-        }
-    }
-
-    // Template KV cache tests
-    #[tokio::test]
-    async fn test_has_template_kv_cache_nonexistent() {
-        let temp_dir = TempDir::new().unwrap();
-        let config = create_test_config_local(temp_dir.path().to_path_buf(), None);
-
-        if let Some(manager) = create_test_manager_or_skip(config) {
-            assert!(!manager.has_template_kv_cache(TEST_TEMPLATE_HASH_1));
-        }
-    }
-
-    #[tokio::test]
-    async fn test_template_cache_file_naming() {
-        let temp_dir = TempDir::new().unwrap();
-        let config = create_test_config_local(temp_dir.path().to_path_buf(), None);
-
-        if let Some(manager) = create_test_manager_or_skip(config) {
-            let cache = manager.template_cache.lock().unwrap();
-            let expected_file = cache.cache_dir().join("template_1234567890abcdef.kv");
-            drop(cache);
-
-            // Verify file path format
-            assert!(expected_file.to_string_lossy().contains("template_"));
-            assert!(expected_file.to_string_lossy().ends_with(".kv"));
-        }
-    }
-
-    #[tokio::test]
-    async fn test_has_template_kv_cache_existing() {
-        let temp_dir = TempDir::new().unwrap();
-        let config = create_test_config_local(temp_dir.path().to_path_buf(), None);
-
-        if let Some(manager) = create_test_manager_or_skip(config) {
-            let template_file = {
-                let cache = manager.template_cache.lock().unwrap();
-                cache
-                    .cache_dir()
-                    .join(format!("template_{:016x}.kv", TEST_TEMPLATE_HASH_2))
-            };
-
-            // Create a dummy template KV cache file
-            fs::write(&template_file, b"dummy template kv cache data")
-                .await
-                .unwrap();
-
-            // Should return true for existing template file
-            assert!(manager.has_template_kv_cache(TEST_TEMPLATE_HASH_2));
-
-            // Clean up
-            std::fs::remove_file(&template_file).unwrap();
-        }
-    }
-
-    #[tokio::test]
-    async fn test_template_kv_cache_file_path_generation() {
-        let temp_dir = TempDir::new().unwrap();
-        let config = create_test_config_local(temp_dir.path().to_path_buf(), None);
-
-        if let Some(manager) = create_test_manager_or_skip(config) {
-            let expected_file = {
-                let cache = manager.template_cache.lock().unwrap();
-                cache.cache_dir().join("template_fedcba9876543210.kv")
-            };
-
-            // Create the expected file
-            fs::write(&expected_file, b"test data").await.unwrap();
-
-            // Check that has_template_kv_cache finds it
-            assert!(manager.has_template_kv_cache(TEST_TEMPLATE_HASH_3));
-
-            // Clean up
-            std::fs::remove_file(&expected_file).unwrap();
-            assert!(!manager.has_template_kv_cache(TEST_TEMPLATE_HASH_3));
-        }
     }
 }

@@ -83,10 +83,12 @@ For each implementation step:
    - Refer to this draft plan to refresh your memory as you work
 
 4. **Create rules**:
+   - Once the DRAFT_PLAN.md is complete, review it for acceptance criteria that can be turned into rules
    - Identify new rules implied by the specification
    - For each criterion, use `rule_create` tool following the rules above
 
 5. **Create todos for implementation steps**:
+   - Once the DRAFT_PLAN.md is complete, review it for implementation steps that can be turned into todos
    - Break the plan down into small, iterative chunks that build on each other incrementally
    - Review and make sure the steps are small enough to be implemented safely (< 250 lines each), but big enough to move the project forward
    - Ensure todos build incrementally on each other

@@ -206,10 +206,6 @@ async fn test_session_state_preservation() {
         restored_session.transcript_path, original_session.transcript_path,
         "transcript_path should be preserved"
     );
-    assert_eq!(
-        restored_session.template_token_count, original_session.template_token_count,
-        "template_token_count should be preserved"
-    );
 
     // 7. ACP-specific fields (when feature is enabled)
 

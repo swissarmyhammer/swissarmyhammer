@@ -41,14 +41,12 @@ fn test_session_creation_without_acp() {
         compaction_history: Vec::new(),
         transcript_path: None,
         context_state: None,
-        template_token_count: None,
-
         todos: Vec::new(),
-
         available_commands: Vec::new(),
         current_mode: None,
-
         client_capabilities: None,
+        cached_message_count: 0,
+        cached_token_count: 0,
     };
 
     // Verify basic session properties
@@ -148,7 +146,7 @@ fn test_core_reexports_without_acp() {
     // Verify that non-ACP types are re-exported
     use llama_agent::{
         AgentServer, CompactionResult, GenerationConfig, ResourceLoader, SessionManager,
-        SessionStorage, TemplateCache,
+        SessionStorage,
     };
 
     // This is a compile-time test - just ensure the types are accessible
@@ -158,7 +156,6 @@ fn test_core_reexports_without_acp() {
     let _resource_loader_type = core::any::TypeId::of::<ResourceLoader>();
     let _session_manager_type = core::any::TypeId::of::<SessionManager>();
     let _session_storage_type = core::any::TypeId::of::<dyn SessionStorage>();
-    let _template_cache_type = core::any::TypeId::of::<TemplateCache>();
 }
 
 /// Test that ACP module is NOT available without the feature flag.
@@ -275,14 +272,12 @@ fn test_no_acp_dependencies_required() {
         compaction_history: vec![],
         transcript_path: None,
         context_state: None,
-        template_token_count: None,
-
         todos: Vec::new(),
-
         available_commands: Vec::new(),
         current_mode: None,
-
         client_capabilities: None,
+        cached_message_count: 0,
+        cached_token_count: 0,
     };
 
     assert!(session.messages.is_empty());

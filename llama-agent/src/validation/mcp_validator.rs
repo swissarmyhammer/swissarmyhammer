@@ -208,7 +208,6 @@ mod tests {
             compaction_history: Vec::new(),
             transcript_path: None,
             context_state: None,
-            template_token_count: None,
 
             todos: Vec::new(),
 
@@ -216,6 +215,8 @@ mod tests {
             current_mode: None,
 
             client_capabilities: None,
+            cached_message_count: 0,
+            cached_token_count: 0,
         }
     }
 

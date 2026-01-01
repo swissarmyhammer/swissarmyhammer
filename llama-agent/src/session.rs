@@ -147,11 +147,12 @@ impl SessionManager {
             compaction_history: Vec::new(),
             transcript_path: transcript_path.clone(),
             context_state: None,
-            template_token_count: None,
             todos: Vec::new(),
             available_commands: Vec::new(),
             current_mode: None,
             client_capabilities: None,
+            cached_message_count: 0,
+            cached_token_count: 0,
         };
 
         // If transcript path is provided, initialize the transcript file

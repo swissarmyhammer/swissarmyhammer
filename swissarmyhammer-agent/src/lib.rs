@@ -332,6 +332,27 @@ async fn create_llama_agent(
         vec![]
     };
 
+    // Convert MCP servers to ACP format before moving into agent_config
+    let acp_mcp_servers: Vec<agent_client_protocol::McpServer> = mcp_servers
+        .iter()
+        .filter_map(|server| match server {
+            llama_agent::types::MCPServerConfig::Http(http_config) => Some(
+                agent_client_protocol::McpServer::Http(agent_client_protocol::McpServerHttp::new(
+                    http_config.name.clone(),
+                    http_config.url.clone(),
+                )),
+            ),
+            llama_agent::types::MCPServerConfig::InProcess(process_config) => {
+                let mut stdio_server = agent_client_protocol::McpServerStdio::new(
+                    process_config.name.clone(),
+                    &process_config.command,
+                );
+                stdio_server.args = process_config.args.clone();
+                Some(agent_client_protocol::McpServer::Stdio(stdio_server))
+            }
+        })
+        .collect();
+
     let agent_config = llama_agent::types::AgentConfig {
         model: model_config,
         queue_config: llama_agent::types::QueueConfig {
@@ -350,8 +371,9 @@ async fn create_llama_agent(
             AcpError::InitializationError(format!("Failed to initialize Llama agent server: {}", e))
         })?;
 
-    // Create ACP server configuration
-    let acp_config = llama_agent::AcpConfig::default();
+    // Create ACP server configuration with MCP servers
+    let mut acp_config = llama_agent::AcpConfig::default();
+    acp_config.default_mcp_servers = acp_mcp_servers;
 
     // Create the ACP server (which implements Agent trait)
     let (acp_server, notification_rx) =

@@ -96,6 +96,25 @@ impl<'a> LlamaCppGenerator<'a> {
         ]
     }
 
+    /// Convert a token to a string using lossy UTF-8 decoding.
+    ///
+    /// This is necessary for models like GLM-4.7 that use BPE tokenizers where individual
+    /// tokens may contain partial UTF-8 byte sequences that only become valid when combined
+    /// with adjacent tokens. Using lossy conversion allows generation to continue smoothly
+    /// even when individual tokens can't be decoded as valid UTF-8.
+    ///
+    /// See: https://github.com/ggml-org/llama.cpp/pull/5613
+    fn token_to_str_lossy(
+        &self,
+        token: LlamaToken,
+        special: Special,
+    ) -> Result<String, GenerationError> {
+        match self.model.token_to_bytes(token, special) {
+            Ok(bytes) => Ok(String::from_utf8_lossy(&bytes).into_owned()),
+            Err(e) => Err(GenerationError::token_conversion(e)),
+        }
+    }
+
     /// Process the prompt into tokens with batch chunking.
     ///
     /// This consolidates the tokenization and batch processing logic that's
@@ -553,6 +572,21 @@ impl<'a> TextGenerator for LlamaCppGenerator<'a> {
             }
 
             // Always increment token count and advance model state
+            // Convert token to string with lossy UTF-8 decoding (handles BPE partial sequences)
+            let token_str = match self.token_to_str_lossy(token, Special::Tokenize) {
+                Ok(s) => s,
+                Err(e) => {
+                    trace!("Failed to convert token to string: {}", e);
+                    // Continue generation - this may happen with some tokens and shouldn't be fatal
+                    continue;
+                }
+            };
+
+            // Efficient string concatenation (matches queue.rs pattern)
+            if generated_text.capacity() - generated_text.len() < token_str.len() {
+                generated_text.reserve(token_str.len() * STRING_CAPACITY_MULTIPLIER);
+            }
+            generated_text.push_str(&token_str);
             tokens_generated += 1;
 
             // Try to convert token to string
@@ -743,6 +777,17 @@ impl<'a> TextGenerator for LlamaCppGenerator<'a> {
             }
 
             // Always increment token count and advance model state
+            // Convert token to string with lossy UTF-8 decoding (handles BPE partial sequences)
+            let token_text = match self.token_to_str_lossy(token, Special::Tokenize) {
+                Ok(s) => s,
+                Err(e) => {
+                    trace!("Failed to convert token to string in streaming: {}", e);
+                    // Continue generation - this may happen with some tokens and shouldn't be fatal
+                    continue;
+                }
+            };
+
+            generated_text.push_str(&token_text);
             tokens_generated += 1;
 
             // Try to convert token to string and send if successful
@@ -909,6 +954,20 @@ impl<'a> TextGenerator for LlamaCppGenerator<'a> {
             }
 
             // Always increment token count and advance model state
+            // Convert token to string with lossy UTF-8 decoding (handles BPE partial sequences)
+            let token_str = match self.token_to_str_lossy(token, Special::Tokenize) {
+                Ok(s) => s,
+                Err(e) => {
+                    trace!("Failed to convert token to string: {}", e);
+                    continue;
+                }
+            };
+
+            // Efficient string concatenation
+            if generated_text.capacity() - generated_text.len() < token_str.len() {
+                generated_text.reserve(token_str.len() * STRING_CAPACITY_MULTIPLIER);
+            }
+            generated_text.push_str(&token_str);
             tokens_generated += 1;
 
             // Try to convert token to string
@@ -1069,6 +1128,16 @@ impl<'a> TextGenerator for LlamaCppGenerator<'a> {
             }
 
             // Always increment token count and advance model state
+            // Convert token to string with lossy UTF-8 decoding (handles BPE partial sequences)
+            let token_text = match self.token_to_str_lossy(token, Special::Tokenize) {
+                Ok(s) => s,
+                Err(e) => {
+                    trace!("Failed to convert token to string in streaming: {}", e);
+                    continue;
+                }
+            };
+
+            generated_text.push_str(&token_text);
             tokens_generated += 1;
 
             // Try to convert token to string and send if successful

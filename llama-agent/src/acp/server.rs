@@ -1559,7 +1559,10 @@ impl agent_client_protocol::Agent for AcpServer {
             }
 
             // Continue loop to generate agent's response to the tool results
-            tracing::info!("Continuing agentic loop after executing {} tool calls", tool_calls_count);
+            tracing::info!(
+                "Continuing agentic loop after executing {} tool calls",
+                tool_calls_count
+            );
         }
 
         // Agentic loop completed
