@@ -34,7 +34,7 @@ pub struct GenerationConfig {
 impl Default for GenerationConfig {
     fn default() -> Self {
         Self {
-            max_tokens: 512,  // Matches agent compaction limit
+            max_tokens: 4096, // Matches model context size
             temperature: 0.7, // Reasonable default
             top_p: 0.9,       // Reasonable default
             stop_tokens: Vec::new(),
@@ -51,7 +51,7 @@ impl GenerationConfig {
     /// sampling behavior rather than the fixed greedy approach used in compaction.
     pub fn for_batch_generation() -> Self {
         Self {
-            max_tokens: 2048,
+            max_tokens: 4096, // Matches model context size
             temperature: 0.7,
             top_p: 0.9,
             stop_tokens: Vec::new(),
@@ -65,7 +65,7 @@ impl GenerationConfig {
     /// Optimized for streaming with reasonable token limits and responsive sampling.
     pub fn for_streaming() -> Self {
         Self {
-            max_tokens: 1024,
+            max_tokens: 4096, // Matches model context size
             temperature: 0.7,
             top_p: 0.9,
             stop_tokens: Vec::new(),

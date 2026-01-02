@@ -399,6 +399,7 @@ impl McpTool for EditFileTool {
 
         #[derive(Deserialize)]
         struct EditRequest {
+            #[serde(alias = "path", alias = "absolute_path")]
             file_path: String,
             old_string: String,
             new_string: String,

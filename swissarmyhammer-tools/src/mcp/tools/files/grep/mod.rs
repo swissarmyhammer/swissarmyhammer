@@ -504,6 +504,7 @@ impl GrepFileTool {
 #[derive(serde::Deserialize)]
 struct GrepRequest {
     pattern: String,
+    #[serde(alias = "file_path", alias = "absolute_path")]
     path: Option<String>,
     glob: Option<String>,
     #[serde(rename = "type")]

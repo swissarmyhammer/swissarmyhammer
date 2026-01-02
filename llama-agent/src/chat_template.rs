@@ -108,9 +108,13 @@ impl ToolParsingStrategy {
         // Convert to lowercase for case-insensitive matching
         let model_name_lower = model_name.to_lowercase();
 
-        // Qwen3Coder detection: must contain both "qwen3" and "coder"
+        // Qwen3Coder detection: Only Qwen3-Coder models use XML format
+        // Other Qwen models (qwen-next, qwen 2.5, etc.) use JSON format and should use Default parser
         if model_name_lower.contains("qwen3") && model_name_lower.contains("coder") {
-            debug!("Detected Qwen3Coder strategy for model: {}", model_name);
+            debug!(
+                "Detected Qwen3Coder strategy (XML-based tool calling) for model: {}",
+                model_name
+            );
             return Self::Qwen3Coder;
         }
 
@@ -1726,17 +1730,31 @@ impl StreamingToolCallParser for BufferedStreamingParser {
         // Try to parse whatever we have so far
         match self.base_parser.parse_tool_calls(&self.buffer) {
             Ok(calls) => {
-                // If we got tool calls, they're complete - reset buffer
+                // If we got tool calls, they're complete
                 if !calls.is_empty() {
-                    self.buffer.clear();
-                    self.completed_calls.extend(calls.clone());
-                    Ok(calls)
+                    // Only clear buffer of the content we successfully parsed
+                    // Keep track of what we've already returned to avoid duplicates
+                    let new_calls: Vec<ToolCall> = calls
+                        .into_iter()
+                        .filter(|call| !self.completed_calls.contains(call))
+                        .collect();
+
+                    if !new_calls.is_empty() {
+                        self.completed_calls.extend(new_calls.clone());
+                        // After successful parse, we can be more aggressive about clearing
+                        // but only if we're confident we extracted everything
+                        self.buffer.clear();
+                        Ok(new_calls)
+                    } else {
+                        Ok(vec![])
+                    }
                 } else {
                     Ok(vec![])
                 }
             }
             Err(_) => {
                 // Not ready yet, continue buffering
+                // Don't clear buffer - we need to accumulate more content
                 Ok(vec![])
             }
         }
@@ -3431,11 +3449,28 @@ impl Qwen3CoderStreamingParser {
     fn extract_complete_tool_call(&mut self) -> Result<Option<ToolCall>, TemplateError> {
         // Look for complete tool_call blocks in buffer
         if let Some(start) = self.state.buffer().find("<tool_call>") {
-            if let Some(end) = self.state.buffer()[start..].find("</tool_call>") {
-                let end_absolute = start + end + "</tool_call>".len();
+            // Search for closing tag AFTER the opening tag
+            let search_start = start + "<tool_call>".len();
+
+            if let Some(end_relative) = self.state.buffer()[search_start..].find("</tool_call>") {
+                // Calculate the absolute position of the end of the closing tag
+                let end_absolute = search_start + end_relative + "</tool_call>".len();
+
+                // Ensure we don't exceed buffer bounds
+                if end_absolute > self.state.buffer().len() {
+                    debug!("Invalid XML boundary detected, continuing to buffer");
+                    return Ok(None);
+                }
+
                 let xml_block = &self.state.buffer()[start..end_absolute];
 
                 debug!("Extracting complete tool call from buffer: '{}'", xml_block);
+
+                // Validate that we have a complete, well-formed tool call
+                if !xml_block.starts_with("<tool_call>") || !xml_block.ends_with("</tool_call>") {
+                    debug!("Tool call block has invalid boundaries, continuing to buffer");
+                    return Ok(None);
+                }
 
                 // Parse the complete tool call
                 match self.base_parser.parse_single_tool_call(xml_block) {
@@ -6835,6 +6870,250 @@ All done!"#;
 
             // Should have processed all tool calls
             assert_eq!(parser.get_completed_tool_calls().len(), 3);
+        }
+
+        /// Tests for streaming tool call parsing with chunk boundaries
+        /// These tests verify that tool calls are correctly parsed even when
+        /// XML tags are split across multiple chunks
+        #[test]
+        fn test_qwen_streaming_chunk_boundary_in_opening_tag() {
+            let mut parser = Qwen3CoderStreamingParser::new();
+
+            // Split the opening tag across chunks
+            let chunks = vec![
+                "<tool_ca",
+                "ll><files_write><file_path>/test/file.txt</file_path><content>Hello ",
+                "World!</content></files_write></tool_call>",
+            ];
+
+            let mut all_calls = Vec::new();
+            for chunk in chunks {
+                let calls = parser.process_delta(chunk).unwrap();
+                all_calls.extend(calls);
+            }
+
+            assert_eq!(all_calls.len(), 1);
+            assert_eq!(all_calls[0].name, "files_write");
+            assert_eq!(all_calls[0].arguments["file_path"], "/test/file.txt");
+            assert_eq!(all_calls[0].arguments["content"], "Hello World!");
+        }
+
+        #[test]
+        fn test_qwen_streaming_chunk_boundary_in_closing_tag() {
+            let mut parser = Qwen3CoderStreamingParser::new();
+
+            // Split the closing tag across chunks
+            let chunks = vec![
+                "<tool_call><files_write><file_path>/test.txt</file_path><content>Test content</content></files_write></tool_ca",
+                "ll>",
+            ];
+
+            let mut all_calls = Vec::new();
+            for chunk in chunks {
+                let calls = parser.process_delta(chunk).unwrap();
+                all_calls.extend(calls);
+            }
+
+            assert_eq!(all_calls.len(), 1);
+            assert_eq!(all_calls[0].name, "files_write");
+            assert_eq!(all_calls[0].arguments["content"], "Test content");
+        }
+
+        #[test]
+        fn test_qwen_streaming_chunk_boundary_in_content() {
+            let mut parser = Qwen3CoderStreamingParser::new();
+
+            // Split the content across multiple chunks, simulating a large file write
+            let chunks = vec![
+                "<tool_call><files_write><file_path>/test/file.txt</file_path><content>Line 1\n",
+                "Line 2\n",
+                "Line 3\n",
+                "Line 4</content></files_write></tool_call>",
+            ];
+
+            let mut all_calls = Vec::new();
+            for chunk in chunks {
+                let calls = parser.process_delta(chunk).unwrap();
+                all_calls.extend(calls);
+            }
+
+            assert_eq!(all_calls.len(), 1);
+            assert_eq!(all_calls[0].name, "files_write");
+            assert_eq!(
+                all_calls[0].arguments["content"],
+                "Line 1\nLine 2\nLine 3\nLine 4"
+            );
+        }
+
+        #[test]
+        fn test_qwen_streaming_very_small_chunks() {
+            let mut parser = Qwen3CoderStreamingParser::new();
+
+            // Simulate character-by-character streaming
+            let full_call = "<tool_call><test><param>value</param></test></tool_call>";
+
+            let mut all_calls = Vec::new();
+            for ch in full_call.chars() {
+                let chunk = ch.to_string();
+                let calls = parser.process_delta(&chunk).unwrap();
+                all_calls.extend(calls);
+            }
+
+            assert_eq!(all_calls.len(), 1);
+            assert_eq!(all_calls[0].name, "test");
+            assert_eq!(all_calls[0].arguments["param"], "value");
+        }
+
+        #[test]
+        fn test_buffered_streaming_chunk_boundary_json() {
+            let base_parser = ToolParserFactory::create_parser(ToolParsingStrategy::Default);
+            let mut parser = BufferedStreamingParser::new(base_parser);
+
+            // Split JSON tool call across chunks
+            let chunks = vec![
+                r#"{"function_name": "files_write", "arguments": {"file_path": "/test.txt", "con"#,
+                r#"tent": "Hello World!"}}"#,
+            ];
+
+            let mut all_calls = Vec::new();
+            for chunk in chunks {
+                let calls = parser.process_delta(chunk).unwrap();
+                all_calls.extend(calls);
+            }
+
+            assert_eq!(all_calls.len(), 1);
+            assert_eq!(all_calls[0].name, "files_write");
+            assert_eq!(all_calls[0].arguments["content"], "Hello World!");
+        }
+
+        #[test]
+        fn test_qwen_streaming_multiple_tool_calls_with_boundaries() {
+            let mut parser = Qwen3CoderStreamingParser::new();
+
+            // Multiple tool calls split across chunks
+            let chunks = vec![
+                "<tool_call><files_read><path>/file1.txt</path></files_read></too",
+                "l_call><tool_call><files_read><path>/file2.txt</path></files",
+                "_read></tool_call>",
+            ];
+
+            let mut all_calls = Vec::new();
+            for chunk in chunks {
+                let calls = parser.process_delta(chunk).unwrap();
+                all_calls.extend(calls);
+            }
+
+            assert_eq!(all_calls.len(), 2);
+            assert_eq!(all_calls[0].name, "files_read");
+            assert_eq!(all_calls[0].arguments["path"], "/file1.txt");
+            assert_eq!(all_calls[1].name, "files_read");
+            assert_eq!(all_calls[1].arguments["path"], "/file2.txt");
+        }
+
+        #[test]
+        fn test_qwen_streaming_tracks_all_completed_calls() {
+            let mut parser = Qwen3CoderStreamingParser::new();
+
+            // Send a complete tool call
+            let chunk = "<tool_call><test><param>value</param></test></tool_call>";
+
+            let calls1 = parser.process_delta(chunk).unwrap();
+            assert_eq!(calls1.len(), 1);
+
+            // If the model generates the same content again (different tool call with same params),
+            // it should be treated as a separate call since it has a new ID
+            let calls2 = parser.process_delta(chunk).unwrap();
+            assert_eq!(calls2.len(), 1);
+
+            // Total completed calls should be 2 (two separate invocations)
+            assert_eq!(parser.get_completed_tool_calls().len(), 2);
+
+            // Verify both calls have different IDs
+            let completed = parser.get_completed_tool_calls();
+            assert_ne!(completed[0].id, completed[1].id);
+        }
+
+        #[test]
+        fn test_buffered_streaming_no_premature_buffer_clear() {
+            let base_parser = ToolParserFactory::create_parser(ToolParsingStrategy::Default);
+            let mut parser = BufferedStreamingParser::new(base_parser);
+
+            // Send incomplete JSON that can't be parsed yet
+            let incomplete = r#"{"function_name": "test", "arguments": {"pa"#;
+            let calls = parser.process_delta(incomplete).unwrap();
+            assert_eq!(calls.len(), 0);
+
+            // Buffer should still contain the incomplete data
+            assert!(parser.is_parsing_tool_call());
+
+            // Complete the JSON
+            let complete = r#"ram": "value"}}"#;
+            let calls = parser.process_delta(complete).unwrap();
+            assert_eq!(calls.len(), 1);
+            assert_eq!(calls[0].name, "test");
+        }
+
+        #[test]
+        fn test_qwen_next_model_uses_json_not_xml() {
+            // Qwen-next models use JSON format, not XML, so they should use Default parser
+            assert_eq!(
+                ToolParsingStrategy::detect_from_model_name("qwen-next"),
+                ToolParsingStrategy::Default
+            );
+            assert_eq!(
+                ToolParsingStrategy::detect_from_model_name("Qwen-Next-30B"),
+                ToolParsingStrategy::Default
+            );
+            assert_eq!(
+                ToolParsingStrategy::detect_from_model_name("qwen_next"),
+                ToolParsingStrategy::Default
+            );
+            assert_eq!(
+                ToolParsingStrategy::detect_from_model_name("QwenNext-Instruct"),
+                ToolParsingStrategy::Default
+            );
+        }
+
+        #[test]
+        fn test_qwen_25_model_uses_json_not_xml() {
+            // Qwen 2.5 models use JSON format, not XML, so they should use Default parser
+            assert_eq!(
+                ToolParsingStrategy::detect_from_model_name("Qwen2.5-7B-Instruct"),
+                ToolParsingStrategy::Default
+            );
+            assert_eq!(
+                ToolParsingStrategy::detect_from_model_name("qwen-2.5-coder"),
+                ToolParsingStrategy::Default
+            );
+        }
+
+        #[test]
+        fn test_streaming_with_large_file_write_content() {
+            let mut parser = Qwen3CoderStreamingParser::new();
+
+            // Simulate a large file write split across many chunks
+            let header = "<tool_call><files_write><file_path>/large_file.txt</file_path><content>";
+            let footer = "</content></files_write></tool_call>";
+            let line = "This is a line of content that will be repeated many times.\n";
+
+            // Start with header
+            parser.process_delta(header).unwrap();
+
+            // Add 100 lines in separate chunks
+            for _ in 0..100 {
+                parser.process_delta(line).unwrap();
+            }
+
+            // Complete with footer
+            let calls = parser.process_delta(footer).unwrap();
+
+            assert_eq!(calls.len(), 1);
+            assert_eq!(calls[0].name, "files_write");
+            assert_eq!(calls[0].arguments["file_path"], "/large_file.txt");
+
+            // Verify content has all 100 lines
+            let content = calls[0].arguments["content"].as_str().unwrap();
+            assert_eq!(content.lines().count(), 100);
         }
     }
 }

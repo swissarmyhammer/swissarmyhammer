@@ -132,6 +132,7 @@ impl McpTool for WriteFileTool {
 
         #[derive(Deserialize)]
         struct WriteRequest {
+            #[serde(alias = "path", alias = "absolute_path")]
             file_path: String,
             content: String,
         }

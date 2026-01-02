@@ -13,7 +13,7 @@ mod unit_tests {
     fn test_generation_config_default() {
         let config = GenerationConfig::default();
 
-        assert_eq!(config.max_tokens, 512);
+        assert_eq!(config.max_tokens, 4096);
         assert_eq!(config.temperature, 0.7);
         assert_eq!(config.top_p, 0.9);
         assert!(config.stop_tokens.is_empty());
@@ -25,7 +25,7 @@ mod unit_tests {
     fn test_generation_config_for_batch() {
         let config = GenerationConfig::for_batch_generation();
 
-        assert_eq!(config.max_tokens, 2048);
+        assert_eq!(config.max_tokens, 4096);
         assert!(!config.use_greedy); // Should allow flexible sampling
     }
 
@@ -33,7 +33,7 @@ mod unit_tests {
     fn test_generation_config_for_streaming() {
         let config = GenerationConfig::for_streaming();
 
-        assert_eq!(config.max_tokens, 1024);
+        assert_eq!(config.max_tokens, 4096);
         assert!(!config.use_greedy); // Should allow flexible sampling
     }
 

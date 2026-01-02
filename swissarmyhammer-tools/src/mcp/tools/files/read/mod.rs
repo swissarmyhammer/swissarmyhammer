@@ -164,7 +164,7 @@ impl McpTool for ReadFileTool {
 
         #[derive(Deserialize)]
         struct ReadRequest {
-            #[serde(alias = "absolute_path")]
+            #[serde(alias = "absolute_path", alias = "file_path")]
             path: String,
             offset: Option<usize>,
             limit: Option<usize>,

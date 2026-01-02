@@ -71,6 +71,7 @@ impl McpTool for GlobFileTool {
         #[derive(Deserialize)]
         struct GlobRequest {
             pattern: String,
+            #[serde(alias = "file_path", alias = "absolute_path")]
             path: Option<String>,
             case_sensitive: Option<bool>,
             respect_git_ignore: Option<bool>,

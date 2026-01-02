@@ -66,7 +66,14 @@ impl Default for AcpConfig {
         Self {
             protocol_version: "0.1.0".to_string(),
             capabilities: AcpCapabilities::default(),
-            permission_policy: PermissionPolicy::AlwaysAsk,
+            // Default to allow all tools (opt-out security, not opt-in)
+            // Users can override with AlwaysAsk or custom RuleBased policy if they want opt-in
+            permission_policy: PermissionPolicy::RuleBased(vec![
+                crate::acp::permissions::PermissionRule {
+                    pattern: crate::acp::permissions::ToolPattern::All,
+                    action: crate::acp::permissions::PermissionAction::Allow,
+                },
+            ]),
             filesystem: FilesystemSettings::default(),
             terminal: TerminalSettings::default(),
             available_modes: Vec::new(),
@@ -305,6 +312,65 @@ mod tests {
         assert!(config.capabilities.supports_plans);
         assert!(config.capabilities.supports_slash_commands);
         assert!(config.capabilities.terminal);
+    }
+
+    #[test]
+    fn test_acp_config_default_permission_policy_allows_all() {
+        // Verify that the default permission policy allows all tools (opt-out security)
+        let config = AcpConfig::default();
+
+        // Default should be RuleBased with a rule that allows all tools
+        match &config.permission_policy {
+            PermissionPolicy::RuleBased(rules) => {
+                assert_eq!(
+                    rules.len(),
+                    1,
+                    "Default policy should have exactly one rule"
+                );
+
+                let rule = &rules[0];
+                assert!(
+                    matches!(rule.pattern, crate::acp::permissions::ToolPattern::All),
+                    "Default rule should match all tools"
+                );
+                assert_eq!(
+                    rule.action,
+                    crate::acp::permissions::PermissionAction::Allow,
+                    "Default rule should allow tools"
+                );
+            }
+            _ => panic!(
+                "Default permission policy should be RuleBased, not {:?}",
+                config.permission_policy
+            ),
+        }
+
+        // Verify the policy engine evaluates correctly
+        let engine =
+            crate::acp::permissions::PermissionPolicyEngine::new(config.permission_policy.clone());
+        let storage = crate::acp::permissions::PermissionStorage::new();
+
+        // Test that various tool names are allowed by default
+        let test_tools = vec![
+            "files_read",
+            "files_write",
+            "shell_execute",
+            "web_fetch",
+            "any_other_tool",
+        ];
+
+        for tool_name in test_tools {
+            let evaluation = engine.evaluate_tool_call(tool_name, &storage);
+            assert!(
+                matches!(
+                    evaluation,
+                    crate::acp::permissions::PermissionEvaluation::Allowed
+                ),
+                "Tool '{}' should be allowed by default, got {:?}",
+                tool_name,
+                evaluation
+            );
+        }
     }
 
     #[test]

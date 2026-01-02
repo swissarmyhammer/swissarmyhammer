@@ -1353,10 +1353,17 @@ impl agent_client_protocol::Agent for AcpServer {
         let mut all_generated_text = String::new();
 
         loop {
+            // Get model's actual context size for max_tokens
+            let model_context_size = self
+                .agent_server
+                .get_model_metadata()
+                .await
+                .map(|metadata| metadata.context_size as u32);
+
             // Use AgentServer's streaming generate method
             let generation_request = crate::types::GenerationRequest {
                 session_id: acp_session.llama_session_id,
-                max_tokens: None,
+                max_tokens: model_context_size, // Use model's actual context size
                 temperature: None,
                 top_p: None,
                 stop_tokens: vec![],

@@ -19,7 +19,7 @@ pub struct ToolDefinition {
 }
 
 /// A call to execute a specific tool with arguments.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ToolCall {
     pub id: ToolCallId,
     pub name: String,
