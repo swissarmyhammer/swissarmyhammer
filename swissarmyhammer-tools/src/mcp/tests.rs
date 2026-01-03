@@ -310,3 +310,215 @@ async fn test_mcp_server_does_not_expose_partial_templates() {
     let error_msg = result.unwrap_err().to_string();
     assert!(error_msg.contains("partial template"));
 }
+
+#[tokio::test]
+async fn test_reload_prompts_detects_no_changes() {
+    use std::fs;
+    use std::io::Write;
+
+    let test_dir = tempfile::tempdir().unwrap();
+    let original_dir = std::env::current_dir().expect("Failed to get current dir");
+    std::env::set_current_dir(test_dir.path()).expect("Failed to change dir");
+    let _guard = DirGuard(original_dir);
+
+    // Create a prompts directory
+    let prompts_dir = test_dir.path().join(".swissarmyhammer").join("prompts");
+    fs::create_dir_all(&prompts_dir).unwrap();
+
+    // Create a test prompt file
+    let prompt_file = prompts_dir.join("test_prompt.md");
+    let mut file = fs::File::create(&prompt_file).unwrap();
+    writeln!(
+        file,
+        "---\ntitle: Test Prompt\ndescription: A test prompt\n---\nHello {{{{ name }}}}!"
+    )
+    .unwrap();
+    file.sync_all().unwrap();
+
+    // Create server and load prompts
+    let library = PromptLibrary::new();
+    let server = McpServer::new_with_work_dir(library, test_dir.path().to_path_buf(), None)
+        .await
+        .unwrap();
+
+    // First reload - should detect changes (initial load)
+    let has_changes = server.reload_prompts().await.unwrap();
+    assert!(
+        has_changes,
+        "First reload should detect changes (initial load)"
+    );
+
+    // Touch the file but don't change content (simulate iCloud sync)
+    let metadata = fs::metadata(&prompt_file).unwrap();
+    let mtime = metadata.modified().unwrap();
+    let new_mtime = mtime + std::time::Duration::from_secs(1);
+    filetime::set_file_mtime(
+        &prompt_file,
+        filetime::FileTime::from_system_time(new_mtime),
+    )
+    .unwrap();
+
+    // Second reload - should NOT detect changes (same content)
+    let has_changes = server.reload_prompts().await.unwrap();
+    assert!(
+        !has_changes,
+        "Reload after timestamp-only change should not detect changes"
+    );
+}
+
+#[tokio::test]
+async fn test_reload_prompts_detects_content_changes() {
+    use std::fs;
+    use std::io::Write;
+
+    let test_dir = tempfile::tempdir().unwrap();
+    let original_dir = std::env::current_dir().expect("Failed to get current dir");
+    std::env::set_current_dir(test_dir.path()).expect("Failed to change dir");
+    let _guard = DirGuard(original_dir);
+
+    // Create a prompts directory
+    let prompts_dir = test_dir.path().join(".swissarmyhammer").join("prompts");
+    fs::create_dir_all(&prompts_dir).unwrap();
+
+    // Create a test prompt file
+    let prompt_file = prompts_dir.join("test_prompt.md");
+    let mut file = fs::File::create(&prompt_file).unwrap();
+    writeln!(
+        file,
+        "---\ntitle: Test Prompt\ndescription: A test prompt\n---\nHello {{{{ name }}}}!"
+    )
+    .unwrap();
+    file.sync_all().unwrap();
+
+    // Create server and load prompts
+    let library = PromptLibrary::new();
+    let server = McpServer::new_with_work_dir(library, test_dir.path().to_path_buf(), None)
+        .await
+        .unwrap();
+
+    // First reload
+    let has_changes = server.reload_prompts().await.unwrap();
+    assert!(has_changes, "First reload should detect changes");
+
+    // Modify the prompt content
+    let mut file = fs::File::create(&prompt_file).unwrap();
+    writeln!(
+        file,
+        "---\ntitle: Test Prompt\ndescription: A modified test prompt\n---\nGoodbye {{{{ name }}}}!"
+    )
+    .unwrap();
+    file.sync_all().unwrap();
+
+    // Second reload - should detect changes (content changed)
+    let has_changes = server.reload_prompts().await.unwrap();
+    assert!(
+        has_changes,
+        "Reload after content change should detect changes"
+    );
+}
+
+#[tokio::test]
+async fn test_reload_prompts_detects_new_prompts() {
+    use std::fs;
+    use std::io::Write;
+
+    let test_dir = tempfile::tempdir().unwrap();
+    let original_dir = std::env::current_dir().expect("Failed to get current dir");
+    std::env::set_current_dir(test_dir.path()).expect("Failed to change dir");
+    let _guard = DirGuard(original_dir);
+
+    // Create a prompts directory
+    let prompts_dir = test_dir.path().join(".swissarmyhammer").join("prompts");
+    fs::create_dir_all(&prompts_dir).unwrap();
+
+    // Create first prompt file
+    let prompt_file1 = prompts_dir.join("test_prompt1.md");
+    let mut file = fs::File::create(&prompt_file1).unwrap();
+    writeln!(
+        file,
+        "---\ntitle: Test Prompt 1\ndescription: First prompt\n---\nHello {{{{ name }}}}!"
+    )
+    .unwrap();
+    file.sync_all().unwrap();
+
+    // Create server and load prompts
+    let library = PromptLibrary::new();
+    let server = McpServer::new_with_work_dir(library, test_dir.path().to_path_buf(), None)
+        .await
+        .unwrap();
+
+    // First reload
+    let has_changes = server.reload_prompts().await.unwrap();
+    assert!(has_changes, "First reload should detect changes");
+
+    // Add a new prompt file
+    let prompt_file2 = prompts_dir.join("test_prompt2.md");
+    let mut file = fs::File::create(&prompt_file2).unwrap();
+    writeln!(
+        file,
+        "---\ntitle: Test Prompt 2\ndescription: Second prompt\n---\nGoodbye {{{{ name }}}}!"
+    )
+    .unwrap();
+    file.sync_all().unwrap();
+
+    // Second reload - should detect changes (new prompt added)
+    let has_changes = server.reload_prompts().await.unwrap();
+    assert!(
+        has_changes,
+        "Reload after adding new prompt should detect changes"
+    );
+}
+
+#[tokio::test]
+async fn test_reload_prompts_detects_deleted_prompts() {
+    use std::fs;
+    use std::io::Write;
+
+    let test_dir = tempfile::tempdir().unwrap();
+    let original_dir = std::env::current_dir().expect("Failed to get current dir");
+    std::env::set_current_dir(test_dir.path()).expect("Failed to change dir");
+    let _guard = DirGuard(original_dir);
+
+    // Create a prompts directory
+    let prompts_dir = test_dir.path().join(".swissarmyhammer").join("prompts");
+    fs::create_dir_all(&prompts_dir).unwrap();
+
+    // Create two prompt files
+    let prompt_file1 = prompts_dir.join("test_prompt1.md");
+    let mut file = fs::File::create(&prompt_file1).unwrap();
+    writeln!(
+        file,
+        "---\ntitle: Test Prompt 1\ndescription: First prompt\n---\nHello {{{{ name }}}}!"
+    )
+    .unwrap();
+    file.sync_all().unwrap();
+
+    let prompt_file2 = prompts_dir.join("test_prompt2.md");
+    let mut file = fs::File::create(&prompt_file2).unwrap();
+    writeln!(
+        file,
+        "---\ntitle: Test Prompt 2\ndescription: Second prompt\n---\nGoodbye {{{{ name }}}}!"
+    )
+    .unwrap();
+    file.sync_all().unwrap();
+
+    // Create server and load prompts
+    let library = PromptLibrary::new();
+    let server = McpServer::new_with_work_dir(library, test_dir.path().to_path_buf(), None)
+        .await
+        .unwrap();
+
+    // First reload
+    let has_changes = server.reload_prompts().await.unwrap();
+    assert!(has_changes, "First reload should detect changes");
+
+    // Delete one prompt file
+    fs::remove_file(&prompt_file2).unwrap();
+
+    // Second reload - should detect changes (prompt deleted)
+    let has_changes = server.reload_prompts().await.unwrap();
+    assert!(
+        has_changes,
+        "Reload after deleting prompt should detect changes"
+    );
+}

@@ -152,12 +152,12 @@ impl LoggingConfig {
                     .try_init()?;
             }
             (false, true) => {
-                // Human-readable formatting with timestamps
+                // Human-readable formatting with timestamps (always pretty)
                 tracing_subscriber::registry()
                     .with(env_filter)
                     .with(
                         fmt::layer()
-                            .with_ansi(self.pretty)
+                            .pretty() // enables multi-line, indented output
                             .with_timer(fmt::time::SystemTime)
                             .with_file(self.with_location)
                             .with_line_number(self.with_location),
@@ -165,12 +165,12 @@ impl LoggingConfig {
                     .try_init()?;
             }
             (false, false) => {
-                // Human-readable formatting without timestamps
+                // Human-readable formatting without timestamps (always pretty)
                 tracing_subscriber::registry()
                     .with(env_filter)
                     .with(
                         fmt::layer()
-                            .with_ansi(self.pretty)
+                            .pretty() // enables multi-line, indented output
                             .without_time()
                             .with_file(self.with_location)
                             .with_line_number(self.with_location),

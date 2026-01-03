@@ -88,7 +88,6 @@ impl QueueConfig {
 pub struct SessionConfig {
     pub max_sessions: usize,
     pub auto_compaction: Option<CompactionConfig>,
-    pub model_context_size: usize,
     /// Enable session persistence to disk
     pub persistence_enabled: bool,
     /// Directory for storing session files (defaults to .llama-sessions/)
@@ -115,7 +114,6 @@ impl Default for SessionConfig {
         Self {
             max_sessions: 1000,
             auto_compaction: None,
-            model_context_size: 4096, // Standard context window size
             persistence_enabled: false,
             session_storage_dir: None, // Will use .llama-sessions/ by default
             session_ttl_hours: 24 * 7, // 1 week default

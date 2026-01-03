@@ -19,7 +19,7 @@ impl Default for EmbeddingConfig {
         Self {
             model_source: ModelSource::HuggingFace {
                 repo: "Qwen/Qwen3-Embedding-0.6B-GGUF".to_string(),
-                filename: None,
+                filename: Some("Qwen3-Embedding-0.6B-Q8_0.gguf".to_string()),
                 folder: None,
             },
             normalize_embeddings: false,
@@ -129,7 +129,7 @@ mod tests {
         match config.model_source {
             ModelSource::HuggingFace { repo, filename, .. } => {
                 assert_eq!(repo, "Qwen/Qwen3-Embedding-0.6B-GGUF");
-                assert!(filename.is_none());
+                assert_eq!(filename.as_deref(), Some("Qwen3-Embedding-0.6B-Q8_0.gguf"));
             }
             _ => panic!("Expected HuggingFace model source"),
         }

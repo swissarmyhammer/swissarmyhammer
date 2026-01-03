@@ -11,7 +11,7 @@ fn test_embedding_config_default() {
     match &config.model_source {
         ModelSource::HuggingFace { repo, filename, .. } => {
             assert_eq!(repo, "Qwen/Qwen3-Embedding-0.6B-GGUF");
-            assert!(filename.is_none());
+            assert_eq!(filename.as_deref(), Some("Qwen3-Embedding-0.6B-Q8_0.gguf"));
         }
         _ => panic!("Expected HuggingFace model source"),
     }

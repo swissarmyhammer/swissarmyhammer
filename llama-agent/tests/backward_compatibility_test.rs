@@ -206,7 +206,6 @@ fn test_session_config_without_acp() {
         session_storage_dir: Some(temp_dir.path().join("sessions")),
         max_sessions: 100,
         auto_compaction: None,
-        model_context_size: 4096,
         session_ttl_hours: 24,
         auto_save_threshold: 10,
         max_kv_cache_files: 50,
@@ -215,7 +214,6 @@ fn test_session_config_without_acp() {
 
     assert!(config.persistence_enabled);
     assert_eq!(config.max_sessions, 100);
-    assert_eq!(config.model_context_size, 4096);
     assert_eq!(config.session_ttl_hours, 24);
 }
 

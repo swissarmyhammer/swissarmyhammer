@@ -245,23 +245,50 @@ impl ModelManager {
         &self,
         model: &'a LlamaModel,
     ) -> Result<LlamaContext<'a>, ModelError> {
-        // Search for any metadata key ending with .context_length
+        // Search for any metadata key ending with .context_length or containing max_position_embeddings
         let model_native_ctx = {
             let mut found_ctx = None;
             let meta_count = model.meta_count();
 
+            // First pass: log all metadata for debugging
+            debug!("=== GGUF Metadata (total {} keys) ===", meta_count);
             for i in 0..meta_count {
                 if let (Ok(key), Ok(value)) =
                     (model.meta_key_by_index(i), model.meta_val_str_by_index(i))
                 {
-                    if key.ends_with(".context_length") {
+                    // Log keys that might contain context info
+                    if key.contains("context") || key.contains("position") || key.contains("max") {
+                        debug!("  {}: {}", key, value);
+                    }
+                }
+            }
+
+            // Second pass: search for context length
+            for i in 0..meta_count {
+                if let (Ok(key), Ok(value)) =
+                    (model.meta_key_by_index(i), model.meta_val_str_by_index(i))
+                {
+                    // Check for context_length, max_position_embeddings, or n_ctx_train_override
+                    // Use contains() to catch keys with prefixes like "glm." or "llama."
+                    if key.ends_with(".context_length")
+                        || key.contains("max_position_embeddings")
+                        || key.contains("context_length")
+                    {
                         if let Ok(ctx_val) = value.parse::<usize>() {
-                            found_ctx = Some(ctx_val);
-                            debug!(
-                                "Found model context length in metadata '{}': {} tokens",
-                                key, ctx_val
-                            );
-                            break;
+                            // Skip suspiciously small values that are likely wrong
+                            if ctx_val > 8192 || !key.contains("ctx_train") {
+                                found_ctx = Some(ctx_val);
+                                debug!(
+                                    "Found model context length in metadata '{}': {} tokens",
+                                    key, ctx_val
+                                );
+                                break;
+                            } else {
+                                debug!(
+                                    "Skipping small context value in '{}': {} (likely incorrect metadata)",
+                                    key, ctx_val
+                                );
+                            }
                         } else {
                             warn!(
                                 "Failed to parse context_length from metadata '{}': {}",
@@ -275,7 +302,7 @@ impl ModelManager {
             found_ctx.unwrap_or_else(|| {
                 let ctx = model.n_ctx_train() as usize;
                 info!(
-                    "No .context_length metadata found, using n_ctx_train: {} tokens",
+                    "No .context_length or .max_position_embeddings metadata found, using n_ctx_train: {} tokens",
                     ctx
                 );
                 ctx

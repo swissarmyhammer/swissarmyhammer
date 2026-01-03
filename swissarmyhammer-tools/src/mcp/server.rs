@@ -6,7 +6,7 @@ use rmcp::model::*;
 use rmcp::service::RequestContext;
 use rmcp::{ErrorData as McpError, RoleServer, ServerHandler};
 use serde_json::Value;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -629,6 +629,42 @@ impl McpServer {
         template_args
     }
 
+    /// Compute a content signature for a set of prompts.
+    ///
+    /// This creates a deterministic snapshot of prompt content by serializing
+    /// all relevant fields (excluding metadata like source_path) to JSON.
+    /// Used to detect actual content changes vs. just file modification events.
+    ///
+    /// # Arguments
+    ///
+    /// * `prompts` - The prompts to compute signature for
+    ///
+    /// # Returns
+    ///
+    /// A BTreeMap where keys are prompt names and values are JSON representations
+    /// of the prompt content (excluding source_path)
+    fn compute_prompt_signature(
+        prompts: &[swissarmyhammer_prompts::Prompt],
+    ) -> BTreeMap<String, String> {
+        let mut signature = BTreeMap::new();
+        for prompt in prompts {
+            // Create a simplified representation without source_path
+            let content = serde_json::json!({
+                "name": prompt.name,
+                "description": prompt.description,
+                "category": prompt.category,
+                "tags": prompt.tags,
+                "template": prompt.template,
+                "parameters": prompt.parameters,
+            });
+            // Use compact JSON representation for comparison
+            if let Ok(json_str) = serde_json::to_string(&content) {
+                signature.insert(prompt.name.clone(), json_str);
+            }
+        }
+        signature
+    }
+
     /// Reload prompts from disk with retry logic.
     ///
     /// This method reloads all prompts from the file system and updates
@@ -636,13 +672,17 @@ impl McpServer {
     ///
     /// # Returns
     ///
-    /// * `Result<()>` - Ok if reload succeeds, error otherwise
-    pub async fn reload_prompts(&self) -> Result<()> {
+    /// * `Result<bool>` - Ok(true) if prompts changed, Ok(false) if no changes, error otherwise
+    ///
+    /// # Errors
+    ///
+    /// Returns error if prompt directories cannot be read or prompts cannot be loaded
+    pub async fn reload_prompts(&self) -> Result<bool> {
         self.reload_prompts_with_retry().await
     }
 
     /// Reload prompts with retry logic for transient file system errors
-    async fn reload_prompts_with_retry(&self) -> Result<()> {
+    async fn reload_prompts_with_retry(&self) -> Result<bool> {
         retry_with_backoff(
             || self.reload_prompts_internal(),
             Self::is_retryable_fs_error,
@@ -672,12 +712,18 @@ impl McpServer {
     }
 
     /// Internal reload method that performs the actual reload
-    async fn reload_prompts_internal(&self) -> Result<()> {
+    ///
+    /// # Returns
+    ///
+    /// * `Result<bool>` - Ok(true) if prompt content changed, Ok(false) if no changes
+    async fn reload_prompts_internal(&self) -> Result<bool> {
         let mut library = self.library.write().await;
         let mut resolver = PromptResolver::new();
 
-        // Get count before reload (default to 0 if library.list() fails)
-        let before_count = library.list().map(|p| p.len()).unwrap_or(0);
+        // Capture "before" state
+        let before_prompts = library.list().unwrap_or_default();
+        let before_count = before_prompts.len();
+        let before_signature = Self::compute_prompt_signature(&before_prompts);
 
         // Clear existing prompts and reload
         *library = PromptLibrary::new();
@@ -687,19 +733,28 @@ impl McpServer {
                 message: e.to_string(),
             })?;
 
-        let after_count = library
-            .list()
-            .map_err(|e| SwissArmyHammerError::Other {
-                message: e.to_string(),
-            })?
-            .len();
+        // Capture "after" state
+        let after_prompts = library.list().map_err(|e| SwissArmyHammerError::Other {
+            message: e.to_string(),
+        })?;
+        let after_count = after_prompts.len();
+        let after_signature = Self::compute_prompt_signature(&after_prompts);
+
+        // Compare signatures to detect actual content changes
+        let has_changes = before_signature != after_signature;
+
         tracing::info!(
-            "🔄 Reloaded prompts: {} → {} prompts",
+            "🔄 Reloaded prompts: {} → {} prompts{}",
             before_count,
-            after_count
+            after_count,
+            if has_changes {
+                " (content changed)"
+            } else {
+                " (no content changes)"
+            }
         );
 
-        Ok(())
+        Ok(has_changes)
     }
 
     /// Start watching prompt directories for file changes.

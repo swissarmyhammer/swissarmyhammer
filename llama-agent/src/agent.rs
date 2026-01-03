@@ -1491,8 +1491,16 @@ impl AgentAPI for AgentServer {
         let generate_summary =
             Self::create_summary_generator(self.model_manager.clone(), self.chat_template.clone());
 
+        // Get model context size from model metadata
+        let model_context_size = self
+            .model_manager
+            .get_metadata()
+            .await
+            .map(|metadata| metadata.context_size)
+            .unwrap_or(4096); // Fallback to 4096 if metadata unavailable
+
         self.session_manager
-            .auto_compact_sessions(config, generate_summary)
+            .auto_compact_sessions(config, model_context_size, generate_summary)
             .await
             .map_err(AgentError::Session)
     }

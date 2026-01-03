@@ -24,6 +24,46 @@ pub fn default_model_params() -> LlamaModelParams {
         .with_use_mlock(true)
 }
 
+/// Extract context length from GGUF metadata with priority handling
+///
+/// Priority order:
+/// 1. Keys containing "max_position_embeddings" or "context_length" with values > 8192
+/// 2. Fallback value (typically n_ctx_train)
+///
+/// # Arguments
+/// * `metadata` - Map of metadata keys to string values
+/// * `fallback_ctx` - Fallback context size (typically from n_ctx_train)
+///
+/// # Returns
+/// The detected context length in tokens
+pub fn extract_context_length_from_metadata(
+    metadata: &std::collections::HashMap<String, String>,
+    fallback_ctx: usize,
+) -> usize {
+    for (key, value) in metadata {
+        // Look for max_position_embeddings or context_length in metadata
+        if key.contains("max_position_embeddings") || key.contains("context_length") {
+            if let Ok(ctx_val) = value.parse::<usize>() {
+                // Skip suspiciously small values from n_ctx_train
+                if ctx_val > 8192 {
+                    tracing::info!(
+                        "Found model context length in metadata '{}': {} tokens",
+                        key,
+                        ctx_val
+                    );
+                    return ctx_val;
+                }
+            }
+        }
+    }
+
+    tracing::info!(
+        "No context_length/max_position_embeddings metadata found, using fallback: {} tokens",
+        fallback_ctx
+    );
+    fallback_ctx
+}
+
 /// Manages loading of LLAMA models from various sources
 pub struct ModelLoader {
     backend: Arc<LlamaBackend>,
@@ -115,7 +155,22 @@ impl ModelLoader {
             })?;
 
         let load_time = start_time.elapsed();
-        let context_size = model.n_ctx_train() as usize;
+
+        // Extract all metadata into a HashMap for context detection
+        let mut metadata_map = std::collections::HashMap::new();
+        let meta_count = model.meta_count();
+        for i in 0..meta_count {
+            if let (Ok(key), Ok(value)) =
+                (model.meta_key_by_index(i), model.meta_val_str_by_index(i))
+            {
+                metadata_map.insert(key, value);
+            }
+        }
+
+        // Detect context size with fallback to n_ctx_train
+        let context_size =
+            extract_context_length_from_metadata(&metadata_map, model.n_ctx_train() as usize);
+
         let metadata = ModelMetadata {
             source: ModelSource::HuggingFace {
                 repo: repo.to_string(),
@@ -205,7 +260,21 @@ impl ModelLoader {
             .to_string_lossy()
             .to_string();
 
-        let context_size = model.n_ctx_train() as usize;
+        // Extract all metadata into a HashMap for context detection
+        let mut metadata_map = std::collections::HashMap::new();
+        let meta_count = model.meta_count();
+        for i in 0..meta_count {
+            if let (Ok(key), Ok(value)) =
+                (model.meta_key_by_index(i), model.meta_val_str_by_index(i))
+            {
+                metadata_map.insert(key, value);
+            }
+        }
+
+        // Detect context size with fallback to n_ctx_train
+        let context_size =
+            extract_context_length_from_metadata(&metadata_map, model.n_ctx_train() as usize);
+
         let metadata = ModelMetadata {
             source: ModelSource::Local {
                 folder: folder.to_path_buf(),
@@ -436,5 +505,90 @@ mod tests {
         // We can't create a real LlamaBackend in unit tests
         // This test just verifies the structure compiles correctly
         // If this test runs, the struct definition is valid
+    }
+
+    #[test]
+    fn test_extract_context_length_from_max_position_embeddings() {
+        let mut metadata = std::collections::HashMap::new();
+        metadata.insert(
+            "glm.max_position_embeddings".to_string(),
+            "202752".to_string(),
+        );
+
+        let ctx = extract_context_length_from_metadata(&metadata, 4096);
+        assert_eq!(ctx, 202752, "Should use max_position_embeddings value");
+    }
+
+    #[test]
+    fn test_extract_context_length_from_context_length_key() {
+        let mut metadata = std::collections::HashMap::new();
+        metadata.insert("llama.context_length".to_string(), "131072".to_string());
+
+        let ctx = extract_context_length_from_metadata(&metadata, 4096);
+        assert_eq!(ctx, 131072, "Should use context_length value");
+    }
+
+    #[test]
+    fn test_extract_context_length_skips_small_values() {
+        let mut metadata = std::collections::HashMap::new();
+        // Small value that should be skipped
+        metadata.insert("llama.context_length".to_string(), "4096".to_string());
+
+        let ctx = extract_context_length_from_metadata(&metadata, 8192);
+        assert_eq!(ctx, 8192, "Should skip small values and use fallback");
+    }
+
+    #[test]
+    fn test_extract_context_length_uses_fallback_when_no_metadata() {
+        let metadata = std::collections::HashMap::new();
+
+        let ctx = extract_context_length_from_metadata(&metadata, 4096);
+        assert_eq!(ctx, 4096, "Should use fallback when no metadata found");
+    }
+
+    #[test]
+    fn test_extract_context_length_ignores_unparseable_values() {
+        let mut metadata = std::collections::HashMap::new();
+        metadata.insert(
+            "glm.max_position_embeddings".to_string(),
+            "invalid".to_string(),
+        );
+
+        let ctx = extract_context_length_from_metadata(&metadata, 8192);
+        assert_eq!(ctx, 8192, "Should use fallback when value is unparseable");
+    }
+
+    #[test]
+    fn test_extract_context_length_prefers_first_valid_key() {
+        let mut metadata = std::collections::HashMap::new();
+        // Note: HashMap iteration order is not guaranteed, but the function
+        // should pick the first valid value it encounters
+        metadata.insert(
+            "glm.max_position_embeddings".to_string(),
+            "202752".to_string(),
+        );
+        metadata.insert("llama.context_length".to_string(), "131072".to_string());
+
+        let ctx = extract_context_length_from_metadata(&metadata, 4096);
+        // Should use one of the valid values, not the fallback
+        assert!(
+            ctx > 8192,
+            "Should use a valid metadata value, not fallback"
+        );
+    }
+
+    #[test]
+    fn test_extract_context_length_handles_boundary_value() {
+        let mut metadata = std::collections::HashMap::new();
+        // Exactly 8192 should be skipped
+        metadata.insert("llama.context_length".to_string(), "8192".to_string());
+
+        let ctx = extract_context_length_from_metadata(&metadata, 4096);
+        assert_eq!(ctx, 4096, "Should skip 8192 (boundary) and use fallback");
+
+        // 8193 should be accepted
+        metadata.insert("llama.context_length".to_string(), "8193".to_string());
+        let ctx = extract_context_length_from_metadata(&metadata, 4096);
+        assert_eq!(ctx, 8193, "Should accept 8193 (just above boundary)");
     }
 }

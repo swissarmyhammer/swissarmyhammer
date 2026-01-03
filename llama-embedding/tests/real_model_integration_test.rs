@@ -41,7 +41,7 @@ fn create_qwen_config() -> EmbeddingConfig {
     EmbeddingConfig {
         model_source: ModelSource::HuggingFace {
             repo: "Qwen/Qwen3-Embedding-0.6B-GGUF".to_string(),
-            filename: None,
+            filename: Some("Qwen3-Embedding-0.6B-Q8_0.gguf".to_string()),
             folder: None,
         },
         normalize_embeddings: false,

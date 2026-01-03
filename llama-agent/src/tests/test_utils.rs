@@ -415,7 +415,6 @@ pub fn create_minimal_config() -> AgentConfig {
         session_config: SessionConfig {
             max_sessions: 10,
             auto_compaction: None,
-            model_context_size: 4096,
             persistence_enabled: false,
             session_storage_dir: None,
             session_ttl_hours: 24,

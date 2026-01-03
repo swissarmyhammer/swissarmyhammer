@@ -237,25 +237,32 @@ impl FileWatcherCallback for McpFileWatcherCallback {
     async fn on_file_changed(&self, paths: Vec<std::path::PathBuf>) -> Result<()> {
         tracing::info!("📄 Prompt file changed: {:?}", paths);
 
-        // Reload the library
-        if let Err(e) = self.server.reload_prompts().await {
-            tracing::error!("✗ Failed to reload prompts: {}", e);
-            return Err(e);
-        }
+        // Reload the library and check if content actually changed
+        let has_changes = match self.server.reload_prompts().await {
+            Ok(changed) => changed,
+            Err(e) => {
+                tracing::error!("✗ Failed to reload prompts: {}", e);
+                return Err(e);
+            }
+        };
         tracing::info!("✓ Prompts reloaded successfully");
 
-        // Send notification to client about prompt list change
-        let peer_clone = self.peer.clone();
-        tokio::spawn(async move {
-            match peer_clone.notify_prompt_list_changed().await {
-                Ok(_) => {
-                    tracing::info!("📢 Sent prompts/listChanged notification to client");
+        // Only send notification to client if content actually changed
+        if has_changes {
+            let peer_clone = self.peer.clone();
+            tokio::spawn(async move {
+                match peer_clone.notify_prompt_list_changed().await {
+                    Ok(_) => {
+                        tracing::info!("📢 Sent prompts/listChanged notification to client");
+                    }
+                    Err(e) => {
+                        tracing::error!("✗ Failed to send notification: {}", e);
+                    }
                 }
-                Err(e) => {
-                    tracing::error!("✗ Failed to send notification: {}", e);
-                }
-            }
-        });
+            });
+        } else {
+            tracing::info!("⏭️  Skipped notification (no content changes)");
+        }
 
         Ok(())
     }

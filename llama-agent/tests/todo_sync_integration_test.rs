@@ -27,7 +27,6 @@ mod acp_tests {
         let config = SessionConfig {
             max_sessions: 10,
             auto_compaction: None,
-            model_context_size: 4096,
             persistence_enabled: true,
             session_storage_dir: Some(temp_dir.path().join("sessions")),
             session_ttl_hours: 24,
@@ -263,7 +262,6 @@ mod acp_tests {
             let config = SessionConfig {
                 max_sessions: 10,
                 auto_compaction: None,
-                model_context_size: 4096,
                 persistence_enabled: true,
                 session_storage_dir: Some(sessions_path.clone()),
                 session_ttl_hours: 24,
@@ -308,7 +306,6 @@ mod acp_tests {
         let config = SessionConfig {
             max_sessions: 10,
             auto_compaction: None,
-            model_context_size: 4096,
             persistence_enabled: true,
             session_storage_dir: Some(sessions_path),
             session_ttl_hours: 24,

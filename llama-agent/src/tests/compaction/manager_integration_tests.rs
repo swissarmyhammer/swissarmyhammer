@@ -35,7 +35,10 @@ mod session_manager_compaction_tests {
         let manager = create_test_session_manager().await;
         let config = create_test_compaction_config();
 
-        let candidates = manager.get_compaction_candidates(&config).await.unwrap();
+        let candidates = manager
+            .get_compaction_candidates(&config, 4096)
+            .await
+            .unwrap();
 
         assert!(
             candidates.is_empty(),
@@ -72,7 +75,10 @@ mod session_manager_compaction_tests {
         // Leave session3 with minimal content
 
         let config = create_low_threshold_compaction_config(); // Very low threshold to trigger compaction
-        let candidates = manager.get_compaction_candidates(&config).await.unwrap();
+        let candidates = manager
+            .get_compaction_candidates(&config, 4096)
+            .await
+            .unwrap();
 
         // Should identify sessions with high token usage as candidates
         assert!(
@@ -133,7 +139,7 @@ mod session_manager_compaction_tests {
 
         let generate_summary = create_qwen_generate_summary_fn();
         let summary = manager
-            .auto_compact_sessions(&config, generate_summary)
+            .auto_compact_sessions(&config, 4096, generate_summary)
             .await
             .unwrap();
 
@@ -167,7 +173,10 @@ mod session_manager_compaction_tests {
             manager.add_message(&session2.id, message).await.unwrap();
         }
 
-        let candidates = manager.get_compaction_candidates(&config).await.unwrap();
+        let candidates = manager
+            .get_compaction_candidates(&config, 4096)
+            .await
+            .unwrap();
 
         // Should identify sessions with high token usage as candidates
         assert!(
@@ -183,7 +192,7 @@ mod session_manager_compaction_tests {
 
         let generate_summary = create_qwen_generate_summary_fn();
         let summary = manager
-            .auto_compact_sessions(&config, generate_summary)
+            .auto_compact_sessions(&config, 4096, generate_summary)
             .await
             .unwrap();
 
@@ -237,7 +246,7 @@ mod session_manager_compaction_tests {
         let _session1 = manager.create_session().await.unwrap();
         let _session2 = manager.create_session().await.unwrap();
 
-        let needs = manager.needs_compaction(&config).await.unwrap();
+        let needs = manager.needs_compaction(&config, 4096).await.unwrap();
 
         assert!(!needs, "Small sessions should not need compaction");
     }
@@ -265,7 +274,7 @@ mod session_manager_compaction_tests {
             manager.add_message(&session.id, message).await.unwrap();
         }
 
-        let needs = manager.needs_compaction(&config).await.unwrap();
+        let needs = manager.needs_compaction(&config, 4096).await.unwrap();
 
         assert!(
             needs,
@@ -483,7 +492,7 @@ mod session_manager_compaction_tests {
         };
 
         let high_candidates = manager
-            .get_compaction_candidates(&high_threshold_config)
+            .get_compaction_candidates(&high_threshold_config, 4096)
             .await
             .unwrap();
         assert!(
@@ -494,7 +503,7 @@ mod session_manager_compaction_tests {
         // Test with low threshold - should have candidates
         let low_threshold_config = create_low_threshold_compaction_config();
         let low_candidates = manager
-            .get_compaction_candidates(&low_threshold_config)
+            .get_compaction_candidates(&low_threshold_config, 4096)
             .await
             .unwrap();
 

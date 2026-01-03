@@ -10,7 +10,7 @@ async fn test_embedding_model_creation() {
     let config = EmbeddingConfig {
         model_source: ModelSource::HuggingFace {
             repo: "Qwen/Qwen3-Embedding-0.6B-GGUF".to_string(),
-            filename: None,
+            filename: Some("Qwen3-Embedding-0.6B-Q8_0.gguf".to_string()),
             folder: None,
         },
         normalize_embeddings: true,
@@ -53,7 +53,7 @@ fn test_embedding_config() {
             ..
         } => {
             assert_eq!(repo, "Qwen/Qwen3-Embedding-0.6B-GGUF");
-            assert!(filename.is_none());
+            assert_eq!(filename.as_deref(), Some("Qwen3-Embedding-0.6B-Q8_0.gguf"));
         }
         _ => panic!("Expected HuggingFace model source"),
     }

@@ -530,9 +530,14 @@ impl SessionManager {
     }
 
     /// Check if a session should be compacted based on model configuration and compaction config.
-    fn should_compact_session(&self, session: &Session, config: &CompactionConfig) -> bool {
+    fn should_compact_session(
+        &self,
+        session: &Session,
+        config: &CompactionConfig,
+        model_context_size: usize,
+    ) -> bool {
         let usage = session.token_usage();
-        let threshold_tokens = (self.config.model_context_size as f32 * config.threshold) as usize;
+        let threshold_tokens = (model_context_size as f32 * config.threshold) as usize;
         usage.total > threshold_tokens
     }
 
@@ -544,12 +549,13 @@ impl SessionManager {
     pub async fn get_compaction_candidates(
         &self,
         config: &CompactionConfig,
+        model_context_size: usize,
     ) -> Result<Vec<SessionId>, SessionError> {
         let sessions = self.sessions.read().await;
         let candidates: Vec<SessionId> = sessions
             .iter()
             .filter_map(|(id, session)| {
-                if self.should_compact_session(session, config) {
+                if self.should_compact_session(session, config, model_context_size) {
                     Some(*id)
                 } else {
                     None
@@ -593,13 +599,16 @@ impl SessionManager {
     pub async fn auto_compact_sessions<F, Fut>(
         &self,
         config: &CompactionConfig,
+        model_context_size: usize,
         generate_summary: F,
     ) -> Result<CompactionSummary, SessionError>
     where
         F: Fn(Vec<Message>) -> Fut + Send + Sync,
         Fut: std::future::Future<Output = Result<String, SessionError>> + Send,
     {
-        let candidates = self.get_compaction_candidates(config).await?;
+        let candidates = self
+            .get_compaction_candidates(config, model_context_size)
+            .await?;
 
         if candidates.is_empty() {
             return Ok(CompactionSummary::empty());
@@ -676,8 +685,14 @@ impl SessionManager {
     /// Evaluates all sessions against the model's context size and compaction configuration
     /// to determine if any sessions exceed the compaction threshold. Returns true if at least
     /// one session should be compacted, false otherwise.
-    pub async fn needs_compaction(&self, config: &CompactionConfig) -> Result<bool, SessionError> {
-        let candidates = self.get_compaction_candidates(config).await?;
+    pub async fn needs_compaction(
+        &self,
+        config: &CompactionConfig,
+        model_context_size: usize,
+    ) -> Result<bool, SessionError> {
+        let candidates = self
+            .get_compaction_candidates(config, model_context_size)
+            .await?;
         Ok(!candidates.is_empty())
     }
 }
@@ -743,7 +758,6 @@ mod tests {
         SessionConfig {
             max_sessions: 5,
             auto_compaction: None,
-            model_context_size: 4096,
             persistence_enabled: false,
             session_storage_dir: None,
             session_ttl_hours: 24,
@@ -957,7 +971,6 @@ mod tests {
         let config = SessionConfig {
             max_sessions: 2,
             auto_compaction: None,
-            model_context_size: 4096,
             persistence_enabled: false,
             session_storage_dir: None,
             session_ttl_hours: 24,
@@ -1067,7 +1080,7 @@ mod tests {
         let compaction_config = create_test_compaction_config();
 
         let candidates = manager
-            .get_compaction_candidates(&compaction_config)
+            .get_compaction_candidates(&compaction_config, 4096)
             .await
             .unwrap();
         assert!(candidates.is_empty());
@@ -1124,7 +1137,7 @@ mod tests {
 
         let generate_summary = create_qwen_generate_summary_fn();
         let summary = manager
-            .auto_compact_sessions(&compaction_config, generate_summary)
+            .auto_compact_sessions(&compaction_config, 4096, generate_summary)
             .await
             .unwrap();
 
@@ -1163,7 +1176,10 @@ mod tests {
         // Create sessions that won't need compaction
         manager.create_session().await.unwrap();
 
-        let needs = manager.needs_compaction(&compaction_config).await.unwrap();
+        let needs = manager
+            .needs_compaction(&compaction_config, 4096)
+            .await
+            .unwrap();
         assert!(!needs);
     }
 
@@ -1221,7 +1237,6 @@ mod tests {
         let config = SessionConfig {
             max_sessions: 5,
             auto_compaction: None,
-            model_context_size: 4096,
             persistence_enabled: true,
             session_storage_dir: Some(temp_dir.path().to_path_buf()),
             session_ttl_hours: 24,
@@ -1253,7 +1268,6 @@ mod tests {
         let config = SessionConfig {
             max_sessions: 5,
             auto_compaction: None,
-            model_context_size: 4096,
             persistence_enabled: true,
             session_storage_dir: Some(temp_dir.path().to_path_buf()),
             session_ttl_hours: 24,
@@ -1313,7 +1327,6 @@ mod tests {
         let config = SessionConfig {
             max_sessions: 5,
             auto_compaction: None,
-            model_context_size: 4096,
             persistence_enabled: true,
             session_storage_dir: Some(temp_dir.path().to_path_buf()),
             session_ttl_hours: 24,
@@ -1382,7 +1395,6 @@ mod tests {
         let config = SessionConfig {
             max_sessions: 5,
             auto_compaction: None,
-            model_context_size: 4096,
             persistence_enabled: true,
             session_storage_dir: Some(temp_dir.path().to_path_buf()),
             session_ttl_hours: 24,
@@ -1406,7 +1418,6 @@ mod tests {
         let config = SessionConfig {
             max_sessions: 5,
             auto_compaction: None,
-            model_context_size: 4096,
             persistence_enabled: true,
             session_storage_dir: Some(temp_dir.path().to_path_buf()),
             session_ttl_hours: 24,
@@ -1450,7 +1461,6 @@ mod tests {
         let config = SessionConfig {
             max_sessions: 5,
             auto_compaction: None,
-            model_context_size: 4096,
             persistence_enabled: true,
             session_storage_dir: Some(temp_dir.path().to_path_buf()),
             session_ttl_hours: 24,
@@ -1493,7 +1503,6 @@ mod tests {
         let config = SessionConfig {
             max_sessions: 5,
             auto_compaction: None,
-            model_context_size: 4096,
             persistence_enabled: true,
             session_storage_dir: Some(temp_dir.path().to_path_buf()),
             session_ttl_hours: 1, // 1 hour TTL (we'll use a very short duration for testing via direct storage call)
@@ -1548,7 +1557,6 @@ mod tests {
         let config = SessionConfig {
             max_sessions: 5,
             auto_compaction: None,
-            model_context_size: 4096,
             persistence_enabled: true,
             session_storage_dir: Some(temp_dir.path().to_path_buf()),
             session_ttl_hours: 24,
@@ -1582,7 +1590,6 @@ mod tests {
         let config = SessionConfig {
             max_sessions: 5,
             auto_compaction: None,
-            model_context_size: 4096,
             persistence_enabled: true,
             session_storage_dir: Some(temp_dir.path().to_path_buf()),
             session_ttl_hours: 24,
@@ -1710,7 +1717,6 @@ mod tests {
         let config = SessionConfig {
             max_sessions: 5,
             auto_compaction: None,
-            model_context_size: 4096,
             persistence_enabled: true,
             session_storage_dir: Some(temp_dir.path().to_path_buf()),
             session_ttl_hours: 24,
@@ -1931,7 +1937,6 @@ mod tests {
         let config = SessionConfig {
             max_sessions: 10,
             auto_compaction: None,
-            model_context_size: 4096,
             persistence_enabled: true,
             session_storage_dir: Some(temp_dir.path().to_path_buf()),
             session_ttl_hours: 24,
@@ -2003,7 +2008,6 @@ mod tests {
         let config2 = SessionConfig {
             max_sessions: 10,
             auto_compaction: None,
-            model_context_size: 4096,
             persistence_enabled: true,
             session_storage_dir: Some(temp_dir.path().to_path_buf()),
             session_ttl_hours: 24,
