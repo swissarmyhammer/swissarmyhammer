@@ -1375,4 +1375,61 @@ mod tests {
             "Should create stream when max_errors is None"
         );
     }
+
+    #[tokio::test]
+    async fn test_skip_glob_expansion_uses_direct_file_paths() {
+        use std::fs;
+        use tempfile::TempDir;
+
+        let temp_dir = TempDir::new().unwrap();
+        let test_file = temp_dir.path().join("test_file.rs");
+        fs::write(&test_file, "fn example() {}").unwrap();
+
+        // Change to temp directory so relative paths work
+        let original_dir = std::env::current_dir().unwrap();
+        std::env::set_current_dir(temp_dir.path()).unwrap();
+
+        let checker = create_test_checker();
+
+        // Test with skip_glob_expansion = true (should use file paths directly)
+        let request_with_skip = RuleCheckRequest {
+            rule_names: None,
+            severity: None,
+            category: None,
+            patterns: vec!["test_file.rs".to_string()],
+            skip_glob_expansion: true, // Key: skip globbing
+            check_mode: CheckMode::CollectAll,
+            force: false,
+            max_errors: None,
+            max_concurrency: None,
+        };
+
+        let result_with_skip = checker.check(request_with_skip).await;
+        assert!(
+            result_with_skip.is_ok(),
+            "Should successfully check with skip_glob_expansion=true"
+        );
+
+        // Test with skip_glob_expansion = false (should use glob expansion)
+        let request_without_skip = RuleCheckRequest {
+            rule_names: None,
+            severity: None,
+            category: None,
+            patterns: vec!["test_file.rs".to_string()],
+            skip_glob_expansion: false, // Will use glob expansion
+            check_mode: CheckMode::CollectAll,
+            force: false,
+            max_errors: None,
+            max_concurrency: None,
+        };
+
+        let result_without_skip = checker.check(request_without_skip).await;
+        assert!(
+            result_without_skip.is_ok(),
+            "Should successfully check with skip_glob_expansion=false"
+        );
+
+        // Restore original directory
+        std::env::set_current_dir(original_dir).unwrap();
+    }
 }

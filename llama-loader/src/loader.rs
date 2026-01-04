@@ -8,6 +8,7 @@ use llama_cpp_2::{
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Instant;
+use swissarmyhammer_common::Pretty;
 use tracing::info;
 
 /// Creates default model parameters optimized for Metal GPU offloading
@@ -92,7 +93,7 @@ impl ModelLoader {
         config.validate()?;
 
         let _start_time = Instant::now();
-        info!("Loading model from config: {:?}", config.source);
+        info!("Loading model from config: {}", Pretty(&config.source));
 
         match &config.source {
             ModelSource::HuggingFace {
@@ -221,7 +222,7 @@ impl ModelLoader {
         filename: Option<&str>,
     ) -> Result<LoadedModel, ModelError> {
         let start_time = Instant::now();
-        info!("Loading local model from folder: {:?}", folder);
+        info!("Loading local model from folder: {}", Pretty(&folder));
 
         let model_path = if let Some(filename) = filename {
             let path = folder.join(filename);
@@ -237,7 +238,7 @@ impl ModelLoader {
             self.auto_detect_model_file(folder).await?
         };
 
-        info!("Loading model from path: {:?}", model_path);
+        info!("Loading model from path: {}", Pretty(&model_path));
 
         // Get file metadata for proper size tracking
         let file_metadata = tokio::fs::metadata(&model_path).await?;
@@ -331,13 +332,13 @@ impl ModelLoader {
 
         // Prioritize BF16 files
         if !bf16_files.is_empty() {
-            info!("Found BF16 model file: {:?}", bf16_files[0]);
+            info!("Found BF16 model file: {}", Pretty(&bf16_files[0]));
             return Ok(bf16_files[0].clone());
         }
 
         // Fallback to first GGUF file
         if !gguf_files.is_empty() {
-            info!("Found GGUF model file: {:?}", gguf_files[0]);
+            info!("Found GGUF model file: {}", Pretty(&gguf_files[0]));
             return Ok(gguf_files[0].clone());
         }
 

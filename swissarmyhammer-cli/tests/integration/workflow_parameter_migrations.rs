@@ -232,7 +232,8 @@ async fn test_workflow_edge_cases() -> Result<()> {
 async fn test_cli_integration_hello_world_workflow() -> Result<()> {
     // Run from repo root where builtin workflows are located
     let repo_root = get_repo_root();
-    std::env::set_current_dir(&repo_root).unwrap();
+    let _env = IsolatedTestEnvironment::new()?;
+    std::env::set_current_dir(&repo_root)?;
 
     let result = run_sah_command_in_process(&[
         "flow",
@@ -255,7 +256,8 @@ async fn test_cli_integration_hello_world_workflow() -> Result<()> {
 async fn test_cli_integration_plan_workflow() -> Result<()> {
     // Run from repo root where builtin workflows are located
     let repo_root = get_repo_root();
-    std::env::set_current_dir(&repo_root).unwrap();
+    let _env = IsolatedTestEnvironment::new()?;
+    std::env::set_current_dir(&repo_root)?;
 
     let result = run_sah_command_in_process(&[
         "flow",

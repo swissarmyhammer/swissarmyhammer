@@ -159,11 +159,23 @@ pub enum FixtureMode {
 /// Extract test name from current thread name
 ///
 /// Parses thread names like "test_basic_prompt_response::case_1_llama_agent"
+/// or "integration::file_system::test_basic_prompt_response::case_1_llama_agent"
 /// and returns "test_basic_prompt_response"
 pub fn get_test_name_from_thread() -> String {
     std::thread::current()
         .name()
-        .and_then(|name| name.split("::").next())
+        .and_then(|name| {
+            let parts: Vec<&str> = name.split("::").collect();
+            // Find the part before the case (e.g., "case_1_llama")
+            // This handles both "test_name::case_x" and "module::test_name::case_x"
+            parts
+                .iter()
+                .rev()
+                .skip(1) // Skip the case part (last element)
+                .find(|part| part.starts_with("test_"))
+                .or_else(|| parts.iter().rev().nth(1)) // Fallback to second-to-last
+                .copied()
+        })
         .unwrap_or("unknown_test")
         .to_string()
 }

@@ -135,10 +135,10 @@ impl AcpServer {
     ///     let config = AcpConfig::default();
     ///     let agent_server = Arc::new(AgentServer::new(/* ... */).await?);
     ///     let acp_server = Arc::new(AcpServer::new(agent_server, config));
-    ///     
+    ///
     ///     // Start server with stdio transport
     ///     Arc::clone(&acp_server).start_stdio().await?;
-    ///     
+    ///
     ///     Ok(())
     /// }
     /// ```
@@ -977,7 +977,7 @@ impl agent_client_protocol::Agent for AcpServer {
         &self,
         request: agent_client_protocol::InitializeRequest,
     ) -> Result<agent_client_protocol::InitializeResponse, agent_client_protocol::Error> {
-        tracing::info!(
+        tracing::trace!(
             "Processing initialize request with protocol version {}",
             Pretty(&request.protocol_version)
         );
@@ -985,7 +985,7 @@ impl agent_client_protocol::Agent for AcpServer {
         // Negotiate protocol version with client
         let negotiated_version = Self::negotiate_protocol_version(&request.protocol_version);
 
-        tracing::info!(
+        tracing::trace!(
             "Negotiated protocol version: {}",
             Pretty(&negotiated_version)
         );
@@ -1003,8 +1003,8 @@ impl agent_client_protocol::Agent for AcpServer {
         }
 
         tracing::info!(
-            "Stored client capabilities for capability enforcement: {:?}",
-            request.client_capabilities
+            "Stored client capabilities for capability enforcement: {}",
+            Pretty(&request.client_capabilities)
         );
 
         // Build agent capabilities from config
