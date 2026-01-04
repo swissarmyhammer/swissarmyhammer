@@ -15,6 +15,7 @@ crate-type = ["lib"]
 llama-common = { workspace = true }
 llama-loader = { workspace = true }
 llama-cpp-2 = { workspace = true }
+swissarmyhammer-common = { path = "../swissarmyhammer-common" }
 tokio = { workspace = true, features = ["sync"] }
 md5 = "0.7"
 thiserror = { workspace = true }

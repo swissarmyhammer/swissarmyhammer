@@ -13,6 +13,7 @@ use llama_cpp_2::token::LlamaToken;
 use llama_loader::{ModelConfig, ModelLoader, ModelMetadata, RetryConfig};
 use std::sync::{Arc, OnceLock};
 use std::time::Instant;
+use swissarmyhammer_common::Pretty;
 use tracing::{debug, info};
 // Need access to raw FFI bindings for llama_log_set
 use std::ffi::c_void;
@@ -119,7 +120,10 @@ impl EmbeddingModel {
         self.model = Some(loaded_model.model);
         self.metadata = Some(loaded_model.metadata);
 
-        info!("Embedding model loaded successfully in {:?}", load_time);
+        info!(
+            "Embedding model loaded successfully in {}",
+            Pretty(&load_time)
+        );
 
         Ok(())
     }

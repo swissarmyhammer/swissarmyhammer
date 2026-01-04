@@ -138,7 +138,7 @@ impl ClaudeAgentServer {
                                 info!("Notification sent successfully");
                             }
                             Err(e) => {
-                                warn!("Notification channel error: {:?}", e);
+                                warn!("Notification channel error: {}", e);
                                 break;
                             }
                         }

@@ -3507,6 +3507,7 @@ dependencies = [
  "rstest 0.26.1",
  "serde",
  "serial_test",
+ "swissarmyhammer-common",
  "tempfile",
  "thiserror 1.0.69",
  "tokio",

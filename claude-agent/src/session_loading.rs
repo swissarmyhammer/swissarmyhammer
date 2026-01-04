@@ -10,6 +10,7 @@ use crate::{
 };
 use agent_client_protocol::{LoadSessionRequest, LoadSessionResponse, SessionNotification};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use swissarmyhammer_common::Pretty;
 use tracing::{error, info, warn};
 
 /// Enhanced session loader with comprehensive error handling
@@ -110,7 +111,7 @@ impl EnhancedSessionLoader {
         let now = SystemTime::now();
         if let Ok(age) = now.duration_since(session.last_accessed) {
             if age > self.max_session_age {
-                warn!("Session expired: {} (age: {:?})", session_id, age);
+                warn!("Session expired: {} (age: {})", session_id, Pretty(&age));
 
                 let expired_at = session
                     .last_accessed

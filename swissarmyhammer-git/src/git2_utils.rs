@@ -6,6 +6,7 @@
 use crate::error::{convert_git2_error, GitResult};
 use git2::Repository;
 use std::path::Path;
+use swissarmyhammer_common::Pretty;
 use tracing::debug;
 
 /// Add files to the index (matches original git2_utils interface)
@@ -18,7 +19,7 @@ use tracing::debug;
 /// * `Ok(())` - Files added successfully
 /// * `Err(GitError)` - Add operation failed
 pub fn add_files(repo: &Repository, paths: &[&str]) -> GitResult<()> {
-    debug!("Adding files to index: {:?}", paths);
+    debug!("Adding files to index: {}", Pretty(&paths));
 
     let mut index = repo
         .index()

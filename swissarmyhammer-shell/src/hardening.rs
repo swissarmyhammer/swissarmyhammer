@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
+use swissarmyhammer_common::Pretty;
 use tracing::{debug, error, info, warn};
 
 /// Advanced security configuration for shell command execution
@@ -590,11 +591,15 @@ impl HardenedSecurityValidator {
             // Log security assessment
             match assessment.threat_level {
                 ThreatLevel::Critical => {
-                    error!("Critical security threat detected: {:?}", assessment)
+                    error!("Critical security threat detected: {}", Pretty(&assessment))
                 }
-                ThreatLevel::High => warn!("High security threat detected: {:?}", assessment),
-                ThreatLevel::Medium => info!("Medium security threat detected: {:?}", assessment),
-                ThreatLevel::Low => debug!("Low security threat detected: {:?}", assessment),
+                ThreatLevel::High => {
+                    warn!("High security threat detected: {}", Pretty(&assessment))
+                }
+                ThreatLevel::Medium => {
+                    info!("Medium security threat detected: {}", Pretty(&assessment))
+                }
+                ThreatLevel::Low => debug!("Low security threat detected: {}", Pretty(&assessment)),
                 ThreatLevel::None => debug!("No security threats detected"),
             }
 
@@ -618,7 +623,7 @@ impl HardenedSecurityValidator {
             };
 
             // Log audit event (this would integrate with the existing audit system)
-            debug!("Security audit event: {:?}", audit_event);
+            debug!("Security audit event: {}", Pretty(&audit_event));
 
             return Ok(assessment);
         }
