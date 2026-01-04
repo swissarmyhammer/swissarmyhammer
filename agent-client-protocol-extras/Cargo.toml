@@ -20,6 +20,7 @@ tracing.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 model-context-protocol-extras = { path = "../model-context-protocol-extras" }
+swissarmyhammer-common = { path = "../swissarmyhammer-common" }
 
 [lints]
 workspace = true

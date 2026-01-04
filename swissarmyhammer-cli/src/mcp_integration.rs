@@ -149,9 +149,31 @@ pub mod response_formatting {
     use serde_json::Value;
 
     /// Format successful tool result for display
+    /// This is the ONE PLACE where we convert JSON output to YAML for display
     #[allow(dead_code)]
     pub fn format_success_response(result: &CallToolResult) -> String {
-        extract_text_content(result).unwrap_or_else(|| "Operation successful".to_string())
+        // First check if there's structured content - serialize it to YAML
+        if let Some(ref data) = result.structured_content {
+            return serde_yaml::to_string(data).unwrap_or_else(|_| {
+                serde_json::to_string_pretty(data)
+                    .unwrap_or_else(|_| "Operation successful".to_string())
+            });
+        }
+
+        // Try to extract text content and parse as JSON, then convert to YAML
+        if let Some(text) = extract_text_content(result) {
+            // Try to parse as JSON
+            if let Ok(json_value) = serde_json::from_str::<Value>(&text) {
+                // Successfully parsed as JSON - convert to YAML with leading newline
+                return serde_yaml::to_string(&json_value)
+                    .map(|yaml| format!("\n{}", yaml))
+                    .unwrap_or(text); // Fall back to original text if YAML serialization fails
+            }
+            // Not JSON, return as-is
+            return text;
+        }
+
+        "Operation successful".to_string()
     }
 
     /// Format error tool result for display

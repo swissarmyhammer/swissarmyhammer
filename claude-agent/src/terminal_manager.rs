@@ -8,6 +8,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 use swissarmyhammer_common::rate_limiter::{RateLimiter, RateLimiterConfig};
+use swissarmyhammer_common::Pretty;
 use tokio::io::AsyncReadExt;
 use tokio::process::{Child, Command};
 use tokio::sync::RwLock;
@@ -1182,7 +1183,10 @@ impl TerminalSession {
 
         match wait_result {
             Ok(Ok(status)) => {
-                tracing::debug!("Process terminated gracefully with status: {:?}", status);
+                tracing::debug!(
+                    "Process terminated gracefully with status: {}",
+                    Pretty(&status)
+                );
                 let exit_status = ExitStatus {
                     exit_code: status.code(),
                     signal: Self::get_signal_name(&status),

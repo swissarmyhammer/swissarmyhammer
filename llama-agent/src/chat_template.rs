@@ -3,6 +3,7 @@ use llama_cpp_2::model::{LlamaChatMessage, LlamaModel};
 use regex::Regex;
 use serde_json::{json, Value};
 use std::collections::HashMap;
+use swissarmyhammer_common::Pretty;
 
 use tracing::{debug, warn};
 
@@ -355,7 +356,7 @@ impl ChatTemplateEngine {
 
         // Try strategy-based parsing first if strategy is set
         if let Some(strategy) = &self.parsing_strategy {
-            debug!("Using strategy-based parsing: {:?}", strategy);
+            debug!("Using strategy-based parsing: {}", Pretty(strategy));
             let parser = ToolParserFactory::create_parser(strategy.clone());
             match parser.parse_tool_calls(generated_text) {
                 Ok(tool_calls) if !tool_calls.is_empty() => {
@@ -3985,9 +3986,15 @@ impl ToolCallParser for JsonToolCallParser {
 
             match serde_json::from_str::<Value>(json_str) {
                 Ok(json) => {
-                    debug!("JsonToolCallParser: Successfully parsed JSON: {:?}", json);
+                    debug!(
+                        "JsonToolCallParser: Successfully parsed JSON: {}",
+                        Pretty(&json)
+                    );
                     if let Some(tool_call) = self.parse_json_tool_call(&json)? {
-                        debug!("JsonToolCallParser: Extracted tool call: {:?}", tool_call);
+                        debug!(
+                            "JsonToolCallParser: Extracted tool call: {}",
+                            Pretty(&tool_call)
+                        );
                         tool_calls.push(tool_call);
                     } else {
                         debug!("JsonToolCallParser: JSON doesn't match tool call format");

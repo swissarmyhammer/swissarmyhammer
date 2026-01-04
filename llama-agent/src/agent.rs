@@ -13,6 +13,7 @@ use crate::types::{
 use async_trait::async_trait;
 use futures::{Stream, StreamExt};
 use llama_common::retry::{RetryConfig as CommonRetryConfig, RetryManager, RetryableError};
+use swissarmyhammer_common::Pretty;
 
 use std::path::PathBuf;
 use std::pin::Pin;
@@ -754,7 +755,7 @@ impl AgentServer {
 #[async_trait]
 impl AgentAPI for AgentServer {
     async fn initialize(config: AgentConfig) -> Result<Self, AgentError> {
-        info!("Initializing AgentServer with config: {:?}", config);
+        info!("Initializing AgentServer with config: {}", Pretty(&config));
 
         // Validate configuration
         config.validate()?;
@@ -1348,7 +1349,7 @@ impl AgentAPI for AgentServer {
             uptime: self.start_time.elapsed(),
         };
 
-        debug!("Health check completed: {:?}", health_status);
+        debug!("Health check completed: {}", Pretty(&health_status));
         Ok(health_status)
     }
 

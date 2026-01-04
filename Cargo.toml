@@ -191,10 +191,9 @@ unexpected_cfgs = { level = "warn", check-cfg = ['cfg(tarpaulin_include)'] }
 opt-level = 0       # No optimization for faster compilation
 debug = 0           # No debug info for maximum speed
 lto = false         # Disable link-time optimization
-codegen-units = 256
+split-debuginfo = "unpacked"
 
 [profile.dist]
 inherits = "release"
 lto = true
-codegen-units = 16
 strip = true

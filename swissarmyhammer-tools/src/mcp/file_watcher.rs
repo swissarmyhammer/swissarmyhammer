@@ -5,7 +5,7 @@ use rmcp::RoleServer;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
-use swissarmyhammer_common::{Result, SwissArmyHammerError};
+use swissarmyhammer_common::{Pretty, Result, SwissArmyHammerError};
 use swissarmyhammer_prompts::PromptResolver;
 use tokio::sync::Mutex;
 
@@ -137,7 +137,7 @@ impl FileWatcher {
                 .map_err(|e| SwissArmyHammerError::Other {
                     message: format!("Failed to watch directory {path:?}: {}", e),
                 })?;
-            tracing::info!("Watching directory: {:?}", path);
+            tracing::info!("Watching directory: {}", Pretty(&path));
         }
 
         // Spawn task to process events from async-watcher
@@ -146,7 +146,7 @@ impl FileWatcher {
             while let Some(events_result) = event_rx_clone.recv().await {
                 match events_result {
                     Ok(events) => {
-                        tracing::debug!("📁 Debounced file system events: {:?}", events);
+                        tracing::debug!("📁 Debounced file system events: {}", Pretty(&events));
 
                         // Filter for prompt files and collect all relevant paths
                         let relevant_paths: Vec<std::path::PathBuf> = events
@@ -156,7 +156,7 @@ impl FileWatcher {
                             .collect();
 
                         if !relevant_paths.is_empty() {
-                            tracing::info!("📄 Prompt file changed: {:?}", relevant_paths);
+                            tracing::info!("📄 Prompt file changed: {}", Pretty(&relevant_paths));
 
                             // Notify callback about the change
                             if let Err(e) = callback.on_file_changed(relevant_paths).await {
@@ -235,7 +235,7 @@ impl McpFileWatcherCallback {
 
 impl FileWatcherCallback for McpFileWatcherCallback {
     async fn on_file_changed(&self, paths: Vec<std::path::PathBuf>) -> Result<()> {
-        tracing::info!("📄 Prompt file changed: {:?}", paths);
+        tracing::info!("📄 Prompt file changed: {}", Pretty(&paths));
 
         // Reload the library and check if content actually changed
         let has_changes = match self.server.reload_prompts().await {

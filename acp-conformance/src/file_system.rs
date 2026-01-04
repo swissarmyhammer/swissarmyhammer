@@ -27,6 +27,7 @@ use agent_client_protocol::{
 use agent_client_protocol_extras::recording::RecordedSession;
 use serde_json::json;
 use std::sync::Arc;
+use swissarmyhammer_common::Pretty;
 
 /// Statistics from file system fixture verification
 #[derive(Debug, Default)]
@@ -472,7 +473,11 @@ pub fn verify_file_system_fixture(
         }
     }
 
-    tracing::info!("{} file system fixture stats: {:?}", agent_type, stats);
+    tracing::info!(
+        "{} file system fixture stats: {}",
+        agent_type,
+        Pretty(&stats)
+    );
 
     // Should have at least initialize and new_session
     assert!(

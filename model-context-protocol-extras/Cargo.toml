@@ -29,6 +29,9 @@ serde_json.workspace = true
 # Logging
 tracing.workspace = true
 
+# SwissArmyHammer utilities
+swissarmyhammer-common = { path = "../swissarmyhammer-common" }
+
 # Error handling
 thiserror.workspace = true
 

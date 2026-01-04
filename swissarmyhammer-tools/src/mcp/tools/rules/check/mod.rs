@@ -13,6 +13,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::collections::{HashMap, HashSet};
 use std::time::Instant;
+use swissarmyhammer_common::Pretty;
 use swissarmyhammer_config::AgentUseCase;
 use swissarmyhammer_rules::{
     AgentConfig, RuleCheckRequest as DomainRuleCheckRequest, RuleChecker, RuleViolation, Severity,
@@ -501,7 +502,10 @@ impl RuleCheckTool {
         tracing::info!("Found {} changed files", changed_files.len());
 
         if let Some(ref patterns) = request.file_paths {
-            tracing::info!("Intersecting changed files with patterns: {:?}", patterns);
+            tracing::info!(
+                "Intersecting changed files with patterns: {}",
+                Pretty(patterns)
+            );
             let matched_files = expand_glob_patterns(patterns).await?;
             let intersection: Vec<String> = changed_files
                 .intersection(&matched_files)
@@ -752,9 +756,9 @@ impl RuleCheckTool {
         request: &RuleCheckRequest,
         context: &ToolContext,
     ) -> (Instant, String) {
-        tracing::info!("Executing rule check with request: {:?}", request);
-        tracing::info!("Rule names filter: {:?}", request.rule_names);
-        tracing::info!("File paths: {:?}", request.file_paths);
+        tracing::info!("Executing rule check with request: {}", Pretty(request));
+        tracing::info!("Rule names filter: {}", Pretty(&request.rule_names));
+        tracing::info!("File paths: {}", Pretty(&request.file_paths));
 
         let start_time = Instant::now();
         let progress_token = generate_progress_token();

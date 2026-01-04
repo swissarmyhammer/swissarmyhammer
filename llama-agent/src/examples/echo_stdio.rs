@@ -6,6 +6,7 @@
 use anyhow::Result;
 use llama_agent::echo::EchoService;
 use rmcp::{transport::stdio, ServiceExt};
+use swissarmyhammer_common::Pretty;
 use tracing_subscriber::{self, EnvFilter};
 
 /// Example usage:
@@ -23,7 +24,7 @@ async fn main() -> Result<()> {
 
     // Create an instance of our echo service and serve with stdio transport
     let service = EchoService::new().serve(stdio()).await.map_err(|e| {
-        tracing::error!("serving error: {:?}", e);
+        tracing::error!("serving error: {}", Pretty(&e));
         e
     })?;
 

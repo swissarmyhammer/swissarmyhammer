@@ -31,6 +31,7 @@ use agent_client_protocol::{
     Agent, ClientCapabilities, FileSystemCapability, InitializeRequest, ProtocolVersion,
 };
 use agent_client_protocol_extras::recording::RecordedSession;
+use swissarmyhammer_common::Pretty;
 
 /// Statistics from initialization fixture verification
 #[derive(Debug, Default)]
@@ -182,7 +183,7 @@ fn validate_agent_capabilities_present(
     caps: &agent_client_protocol::AgentCapabilities,
 ) -> crate::Result<()> {
     // Agent capabilities are always present (required struct)
-    tracing::debug!("Agent capabilities: {:?}", caps);
+    tracing::debug!("Agent capabilities: {}", Pretty(caps));
     Ok(())
 }
 
@@ -193,7 +194,7 @@ fn validate_auth_methods(methods: &[agent_client_protocol::AuthMethod]) -> crate
     } else {
         tracing::info!("Agent declares {} auth method(s)", methods.len());
         for method in methods {
-            tracing::info!("  - Auth method: {:?}", method.id);
+            tracing::info!("  - Auth method: {}", Pretty(&method.id));
         }
     }
     Ok(())
@@ -262,13 +263,16 @@ pub fn validate_initialization_response(
     response: &agent_client_protocol::InitializeResponse,
 ) -> crate::Result<()> {
     // Protocol version is required
-    tracing::debug!("Protocol version: {:?}", response.protocol_version);
+    tracing::debug!("Protocol version: {}", Pretty(&response.protocol_version));
 
     // Agent capabilities are always present (required struct)
-    tracing::debug!("Agent capabilities: {:?}", response.agent_capabilities);
+    tracing::debug!(
+        "Agent capabilities: {}",
+        Pretty(&response.agent_capabilities)
+    );
 
     // Auth methods array is required (but may be empty)
-    tracing::debug!("Auth methods: {:?}", response.auth_methods);
+    tracing::debug!("Auth methods: {}", Pretty(&response.auth_methods));
 
     // Agent info is optional but recommended
     if response.agent_info.is_none() {
@@ -338,7 +342,11 @@ pub fn verify_initialization_fixture(
         }
     }
 
-    tracing::info!("{} initialization fixture stats: {:?}", agent_type, stats);
+    tracing::info!(
+        "{} initialization fixture stats: {}",
+        agent_type,
+        Pretty(&stats)
+    );
 
     // At least one initialize call
     assert!(

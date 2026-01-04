@@ -8,6 +8,7 @@ use llama_loader::RetryConfig;
 use serial_test::serial;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
+use swissarmyhammer_common::Pretty;
 use tempfile::TempDir;
 use tracing_test::traced_test;
 
@@ -56,7 +57,7 @@ async fn test_model_cache_hit_behavior() {
         .await;
 
     let first_load_time = start_time.elapsed();
-    tracing::info!("First load completed in: {:?}", first_load_time);
+    tracing::info!("First load completed in: {}", Pretty(&first_load_time));
 
     // Verify first load succeeded
     assert!(
@@ -68,7 +69,7 @@ async fn test_model_cache_hit_behavior() {
 
     // Get model metadata
     let metadata1 = &model1.metadata;
-    tracing::info!("First model metadata: {:?}", metadata1);
+    tracing::info!("First model metadata: {}", Pretty(&metadata1));
 
     // Second model load - should use cache
     tracing::info!("Starting second model load (should use cache)");
@@ -83,7 +84,7 @@ async fn test_model_cache_hit_behavior() {
         .await;
 
     let second_load_time = start_time.elapsed();
-    tracing::info!("Second load completed in: {:?}", second_load_time);
+    tracing::info!("Second load completed in: {}", Pretty(&second_load_time));
 
     // Verify second load succeeded
     assert!(
@@ -95,7 +96,7 @@ async fn test_model_cache_hit_behavior() {
 
     // Get second model metadata
     let metadata2 = &model2.metadata;
-    tracing::info!("Second model metadata: {:?}", metadata2);
+    tracing::info!("Second model metadata: {}", Pretty(&metadata2));
 
     // Verify both models have same metadata characteristics
     assert_eq!(metadata1.filename, metadata2.filename);
@@ -106,8 +107,8 @@ async fn test_model_cache_hit_behavior() {
     let speedup_ratio = first_load_time.as_millis() as f64 / second_load_time.as_millis() as f64;
 
     tracing::info!("Load time comparison:");
-    tracing::info!("  First load:  {:?}", first_load_time);
-    tracing::info!("  Second load: {:?}", second_load_time);
+    tracing::info!("  First load:  {}", Pretty(&first_load_time));
+    tracing::info!("  Second load: {}", Pretty(&second_load_time));
     tracing::info!("  Speedup:     {:.2}x", speedup_ratio);
 
     if speedup_ratio > 1.5 {
@@ -153,7 +154,7 @@ async fn test_model_loader_cache_reuse() {
         .await;
 
     let first_load_time = start_time.elapsed();
-    tracing::info!("First loader completed in: {:?}", first_load_time);
+    tracing::info!("First loader completed in: {}", Pretty(&first_load_time));
 
     assert!(
         model1.is_ok(),
@@ -173,7 +174,7 @@ async fn test_model_loader_cache_reuse() {
         .await;
 
     let second_load_time = start_time.elapsed();
-    tracing::info!("Second loader completed in: {:?}", second_load_time);
+    tracing::info!("Second loader completed in: {}", Pretty(&second_load_time));
 
     assert!(
         model2.is_ok(),
@@ -193,8 +194,8 @@ async fn test_model_loader_cache_reuse() {
     let speedup_ratio = first_load_time.as_millis() as f64 / second_load_time.as_millis() as f64;
 
     tracing::info!("ModelLoader comparison:");
-    tracing::info!("  First instance:  {:?}", first_load_time);
-    tracing::info!("  Second instance: {:?}", second_load_time);
+    tracing::info!("  First instance:  {}", Pretty(&first_load_time));
+    tracing::info!("  Second instance: {}", Pretty(&second_load_time));
     tracing::info!("  Speedup:         {:.2}x", speedup_ratio);
 
     if speedup_ratio > 1.5 {

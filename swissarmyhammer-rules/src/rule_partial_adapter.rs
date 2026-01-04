@@ -6,6 +6,7 @@
 use crate::rules::RuleLibrary;
 use std::borrow::Cow;
 use std::sync::Arc;
+use swissarmyhammer_common::Pretty;
 use swissarmyhammer_templating::partials::normalize_partial_name;
 
 /// Adapter that allows rules to be used as Liquid template partials
@@ -37,7 +38,7 @@ impl swissarmyhammer_templating::PartialLoader for RulePartialAdapter {
 
         // Try the requested name and all normalized variants
         let candidates = normalize_partial_name(name);
-        tracing::trace!("Trying candidates: {:?}", candidates);
+        tracing::trace!("Trying candidates: {}", Pretty(&candidates));
 
         for candidate in candidates {
             if self.library.get(&candidate).is_ok() {
@@ -52,7 +53,7 @@ impl swissarmyhammer_templating::PartialLoader for RulePartialAdapter {
 
     fn names(&self) -> Vec<String> {
         let names = self.library.list_names().unwrap_or_default();
-        tracing::trace!("RulePartialAdapter::names returning: {:?}", names);
+        tracing::trace!("RulePartialAdapter::names returning: {}", Pretty(&names));
         names
     }
 
@@ -61,7 +62,7 @@ impl swissarmyhammer_templating::PartialLoader for RulePartialAdapter {
 
         // Try the requested name and all normalized variants
         let candidates = normalize_partial_name(name);
-        tracing::trace!("Trying candidates: {:?}", candidates);
+        tracing::trace!("Trying candidates: {}", Pretty(&candidates));
 
         for candidate in candidates {
             if let Ok(rule) = self.library.get(&candidate) {

@@ -28,6 +28,7 @@ use agent_client_protocol_extras::AgentWithFixture;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::SystemTime;
+use swissarmyhammer_common::Pretty;
 
 /// Default timeout for user permission prompts in seconds
 ///
@@ -855,12 +856,12 @@ impl ClaudeAgent {
 
     /// Log incoming request for debugging purposes
     fn log_request<T: std::fmt::Debug>(&self, method: &str, request: &T) {
-        tracing::debug!("Handling {} request: {:?}", method, request);
+        tracing::debug!("Handling {} request: {}", method, Pretty(request));
     }
 
     /// Log outgoing response for debugging purposes
     fn log_response<T: std::fmt::Debug>(&self, method: &str, response: &T) {
-        tracing::debug!("Returning {} response: {:?}", method, response);
+        tracing::debug!("Returning {} response: {}", method, Pretty(response));
     }
 
     /// Get the tool handler for processing tool calls
@@ -1975,7 +1976,7 @@ impl ClaudeAgent {
             .query_stream_with_context(&prompt_text, &context, agent_mode)
             .await
             .map_err(|e| {
-                tracing::error!("Claude API error: {:?}", e);
+                tracing::error!("Claude API error: {}", Pretty(&e));
                 agent_client_protocol::Error::internal_error()
             })?;
 
@@ -3536,7 +3537,7 @@ impl Agent for ClaudeAgent {
                     );
                 }
                 _ => {
-                    tracing::debug!("  Block {}: {:?}", i + 1, block);
+                    tracing::debug!("  Block {}: {}", i + 1, Pretty(block));
                 }
             }
         }
@@ -4428,7 +4429,10 @@ impl ClaudeAgent {
                         crate::tools::PermissionOptionKind::AllowAlways => "allow-always",
                         crate::tools::PermissionOptionKind::RejectAlways => "reject-always",
                         _ => {
-                            tracing::warn!("Unexpected stored permission kind: {:?}", stored_kind);
+                            tracing::warn!(
+                                "Unexpected stored permission kind: {}",
+                                Pretty(&stored_kind)
+                            );
                             "allow-once"
                         }
                     };
@@ -4564,7 +4568,7 @@ impl ClaudeAgent {
         &self,
         params: ReadTextFileParams,
     ) -> Result<ReadTextFileResponse, agent_client_protocol::Error> {
-        tracing::debug!("Processing fs/read_text_file request: {:?}", params);
+        tracing::debug!("Processing fs/read_text_file request: {}", Pretty(&params));
 
         // Audit logging for file access attempt
         tracing::info!(
@@ -4675,7 +4679,7 @@ impl ClaudeAgent {
         &self,
         params: WriteTextFileParams,
     ) -> Result<WriteTextFileResponse, agent_client_protocol::Error> {
-        tracing::debug!("Processing fs/write_text_file request: {:?}", params);
+        tracing::debug!("Processing fs/write_text_file request: {}", Pretty(&params));
 
         // Audit logging for file write attempt
         tracing::info!(
@@ -4785,7 +4789,7 @@ impl ClaudeAgent {
         &self,
         params: crate::terminal_manager::TerminalOutputParams,
     ) -> Result<crate::terminal_manager::TerminalOutputResponse, agent_client_protocol::Error> {
-        tracing::debug!("Processing terminal/output request: {:?}", params);
+        tracing::debug!("Processing terminal/output request: {}", Pretty(&params));
 
         // Check client terminal capability before allowing operation
         {
@@ -4832,7 +4836,7 @@ impl ClaudeAgent {
         &self,
         params: crate::terminal_manager::TerminalReleaseParams,
     ) -> Result<serde_json::Value, agent_client_protocol::Error> {
-        tracing::debug!("Processing terminal/release request: {:?}", params);
+        tracing::debug!("Processing terminal/release request: {}", Pretty(&params));
 
         // Check client terminal capability before allowing operation
         {
@@ -4879,7 +4883,10 @@ impl ClaudeAgent {
         &self,
         params: crate::terminal_manager::TerminalOutputParams,
     ) -> Result<crate::terminal_manager::ExitStatus, agent_client_protocol::Error> {
-        tracing::debug!("Processing terminal/wait_for_exit request: {:?}", params);
+        tracing::debug!(
+            "Processing terminal/wait_for_exit request: {}",
+            Pretty(&params)
+        );
 
         // Check client terminal capability before allowing operation
         {
@@ -4928,7 +4935,7 @@ impl ClaudeAgent {
         &self,
         params: crate::terminal_manager::TerminalOutputParams,
     ) -> Result<(), agent_client_protocol::Error> {
-        tracing::debug!("Processing terminal/kill request: {:?}", params);
+        tracing::debug!("Processing terminal/kill request: {}", Pretty(&params));
 
         // Check client terminal capability before allowing operation
         {
@@ -4975,7 +4982,7 @@ impl ClaudeAgent {
         &self,
         params: crate::terminal_manager::TerminalCreateParams,
     ) -> Result<crate::terminal_manager::TerminalCreateResponse, agent_client_protocol::Error> {
-        tracing::debug!("Processing terminal/create request: {:?}", params);
+        tracing::debug!("Processing terminal/create request: {}", Pretty(&params));
 
         // Check client terminal capability before allowing operation
         {

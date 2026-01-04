@@ -11,6 +11,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::SystemTime;
+use swissarmyhammer_common::Pretty;
 use tokio::sync::RwLock;
 use tracing::{debug, info, warn};
 // Need access to raw FFI bindings for llama_log_set
@@ -136,7 +137,7 @@ impl ModelManager {
     }
 
     pub async fn load_model(&self) -> Result<(), ModelError> {
-        info!("Loading model with configuration: {:?}", self.config);
+        info!("Loading model with configuration: {}", Pretty(&self.config));
 
         // Validate config before proceeding
         self.config.validate()?;

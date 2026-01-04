@@ -13,4 +13,5 @@ pub mod retry;
 // Re-export main traits for convenience
 pub use config::ValidatedConfig;
 pub use error::{ErrorCategory, LlamaError};
+pub use logging::Pretty;
 pub use retry::{RetryConfig, RetryManager, RetryableError};

@@ -6,6 +6,7 @@
 use crate::{Mode, Result};
 use std::collections::HashMap;
 use swissarmyhammer_common::file_loader::VirtualFileSystem;
+use swissarmyhammer_common::Pretty;
 
 /// Registry for managing and loading modes
 ///
@@ -69,11 +70,11 @@ impl ModeRegistry {
             match Mode::from_markdown(&file.content, &file.name) {
                 Ok(mut mode) => {
                     mode = mode.with_source_path(file.path.clone());
-                    tracing::debug!("Loaded mode: {} from {:?}", mode.id(), file.source);
+                    tracing::debug!("Loaded mode: {} from {}", mode.id(), Pretty(&file.source));
                     self.modes.insert(mode.id().to_string(), mode);
                 }
                 Err(e) => {
-                    tracing::warn!("Failed to parse mode from {:?}: {}", file.path, e);
+                    tracing::warn!("Failed to parse mode from {}: {}", Pretty(&file.path), e);
                 }
             }
         }

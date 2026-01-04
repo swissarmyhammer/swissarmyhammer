@@ -26,6 +26,7 @@ use agent_client_protocol::{
     Agent, ContentBlock, InitializeRequest, PromptRequest, ProtocolVersion, TextContent,
 };
 use agent_client_protocol_extras::recording::RecordedSession;
+use swissarmyhammer_common::Pretty;
 
 /// Statistics from plan fixture verification
 #[derive(Debug, Default)]
@@ -189,7 +190,7 @@ pub fn verify_plan_fixture(
         }
     }
 
-    tracing::info!("{} plan fixture stats: {:?}", agent_type, stats);
+    tracing::info!("{} plan fixture stats: {}", agent_type, Pretty(&stats));
 
     // Agent should produce output
     assert!(

@@ -28,6 +28,7 @@
 
 use agent_client_protocol::{Agent, ContentBlock, NewSessionRequest, PromptRequest, TextContent};
 use serde_json::Value;
+use swissarmyhammer_common::Pretty;
 
 /// Test that command structure is valid when advertised
 ///
@@ -100,12 +101,12 @@ pub async fn test_run_command<A: Agent + ?Sized>(agent: &A) -> crate::Result<()>
 
     match result {
         Ok(response) => {
-            tracing::info!("Agent processed slash command: {:?}", response);
+            tracing::info!("Agent processed slash command: {}", Pretty(&response));
             Ok(())
         }
         Err(e) => {
             // Agent may not support commands or this specific command
-            tracing::info!("Agent returned error for slash command: {:?}", e);
+            tracing::info!("Agent returned error for slash command: {}", Pretty(&e));
             // This is acceptable behavior - commands are optional
             Ok(())
         }
@@ -183,12 +184,15 @@ pub async fn test_command_with_input<A: Agent + ?Sized>(agent: &A) -> crate::Res
 
     match result {
         Ok(response) => {
-            tracing::info!("Agent processed command with input: {:?}", response);
+            tracing::info!("Agent processed command with input: {}", Pretty(&response));
             Ok(())
         }
         Err(e) => {
             // Agent may not support this command
-            tracing::info!("Agent returned error for command with input: {:?}", e);
+            tracing::info!(
+                "Agent returned error for command with input: {}",
+                Pretty(&e)
+            );
             // This is acceptable - commands are optional
             Ok(())
         }
@@ -220,7 +224,10 @@ pub async fn test_command_with_mixed_content<A: Agent + ?Sized>(agent: &A) -> cr
 
     match result {
         Ok(response) => {
-            tracing::info!("Agent processed command with mixed content: {:?}", response);
+            tracing::info!(
+                "Agent processed command with mixed content: {}",
+                Pretty(&response)
+            );
             Ok(())
         }
         Err(e) => {

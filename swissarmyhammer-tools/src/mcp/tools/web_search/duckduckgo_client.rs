@@ -16,7 +16,7 @@ use chromiumoxide::error::CdpError;
 use futures::StreamExt;
 use std::io::Write;
 use std::time::Duration;
-use swissarmyhammer_common::{ErrorSeverity, Severity};
+use swissarmyhammer_common::{ErrorSeverity, Pretty, Severity};
 use tempfile;
 use urlencoding::decode;
 
@@ -282,11 +282,11 @@ impl DuckDuckGoClient {
             .await;
 
             if let Ok(current_url) = page.url().await {
-                tracing::debug!("Current URL after navigation: {:?}", current_url);
+                tracing::debug!("Current URL after navigation: {}", Pretty(&current_url));
             }
 
             if let Ok(title) = page.get_title().await {
-                tracing::debug!("Page title after navigation: {:?}", title);
+                tracing::debug!("Page title after navigation: {}", Pretty(&title));
             }
 
             // Since we're navigating directly to search results, skip form interaction
@@ -374,7 +374,10 @@ impl DuckDuckGoClient {
             match tempfile::NamedTempFile::new() {
                 Ok(mut temp_file) => {
                     if let Ok(()) = temp_file.write_all(html_content.as_bytes()) {
-                        tracing::debug!("HTML response saved to temp file {:?}", temp_file.path());
+                        tracing::debug!(
+                            "HTML response saved to temp file {}",
+                            Pretty(&temp_file.path())
+                        );
                         // temp_file will be automatically cleaned up when it goes out of scope
                     }
                 }

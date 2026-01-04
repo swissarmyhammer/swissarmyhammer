@@ -21,6 +21,9 @@ tokio = { workspace = true }
 # Async traits
 async-trait = { workspace = true }
 
+# Shared common utilities
+swissarmyhammer-common = { path = "../swissarmyhammer-common" }
+
 [dev-dependencies]
 tokio = { workspace = true }
 tokio-test = "0.4"

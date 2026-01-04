@@ -5,6 +5,7 @@ use futures::stream::Stream;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::time::SystemTime;
+use swissarmyhammer_common::Pretty;
 use tokio::sync::Mutex;
 
 use crate::{
@@ -223,7 +224,7 @@ impl ClaudeClient {
                             // Check if this is the result line (end of response)
                             if let Ok(json) = serde_json::from_str::<serde_json::Value>(&line) {
                                 let msg_type = json.get("type").and_then(|t| t.as_str());
-                                tracing::debug!("Init response type: {:?}", msg_type);
+                                tracing::debug!("Init response type: {}", Pretty(&msg_type));
                                 if msg_type == Some("result") {
                                     tracing::info!(
                                         "✅ Consumed complete init response ({} lines)",

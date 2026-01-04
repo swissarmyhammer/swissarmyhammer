@@ -39,6 +39,7 @@ use agent_client_protocol::{
     SessionModeId, SetSessionModeRequest,
 };
 use agent_client_protocol_extras::recording::RecordedSession;
+use swissarmyhammer_common::Pretty;
 
 /// Statistics from session fixture verification
 #[derive(Debug, Default)]
@@ -171,7 +172,7 @@ pub async fn test_set_session_mode<A: Agent + ?Sized>(agent: &A) -> crate::Resul
         if let Some(mode) = mode_state.available_modes.first() {
             let request = SetSessionModeRequest::new(session_id, mode.id.clone());
             let response = agent.set_session_mode(request).await?;
-            tracing::info!("Set session mode response: {:?}", response);
+            tracing::info!("Set session mode response: {}", Pretty(&response));
         } else {
             tracing::warn!("Agent provides modes but available_modes is empty");
         }
@@ -545,7 +546,7 @@ pub fn verify_session_fixture(
         }
     }
 
-    tracing::info!("{} session fixture stats: {:?}", agent_type, stats);
+    tracing::info!("{} session fixture stats: {}", agent_type, Pretty(&stats));
 
     Ok(stats)
 }

@@ -20,6 +20,7 @@
 
 use agent_client_protocol::Agent;
 use std::path::PathBuf;
+use swissarmyhammer_common::Pretty;
 
 pub mod playback;
 pub mod recording;
@@ -92,10 +93,10 @@ pub fn with_fixture<A: AgentWithFixture + 'static>(
     let path = get_fixture_path_for(agent.agent_type(), test_name);
 
     if path.exists() {
-        tracing::info!("Fixture exists, using playback: {:?}", path);
+        tracing::info!("Fixture exists, using playback: {}", Pretty(&path));
         Box::new(PlaybackAgent::new(path, agent.agent_type()))
     } else {
-        tracing::info!("Fixture missing, using recording: {:?}", path);
+        tracing::info!("Fixture missing, using recording: {}", Pretty(&path));
         Box::new(RecordingAgent::new(agent, path))
     }
 }

@@ -49,6 +49,7 @@ use agent_client_protocol::{
     ProtocolVersion, StopReason, TextContent,
 };
 use agent_client_protocol_extras::recording::RecordedSession;
+use swissarmyhammer_common::Pretty;
 
 /// Statistics from prompt turn fixture verification
 #[derive(Debug, Default)]
@@ -91,7 +92,10 @@ pub async fn test_basic_prompt_response<A: Agent + ?Sized>(agent: &A) -> crate::
         | StopReason::MaxTurnRequests
         | StopReason::Refusal
         | StopReason::Cancelled => {
-            tracing::info!("Received valid stop reason: {:?}", response.stop_reason);
+            tracing::info!(
+                "Received valid stop reason: {}",
+                Pretty(&response.stop_reason)
+            );
             Ok(())
         }
         _ => {
@@ -137,7 +141,7 @@ pub async fn test_prompt_completion<A: Agent + ?Sized>(agent: &A) -> crate::Resu
             Ok(())
         }
         other => {
-            tracing::warn!("Unexpected stop reason: {:?}", other);
+            tracing::warn!("Unexpected stop reason: {}", Pretty(other));
             Ok(())
         }
     }
@@ -227,14 +231,20 @@ pub async fn test_multiple_prompts<A: Agent + ?Sized>(agent: &A) -> crate::Resul
     let prompt_request1 = PromptRequest::new(session_id.clone(), prompt1);
     let response1 = agent.prompt(prompt_request1).await?;
 
-    tracing::info!("First prompt completed with: {:?}", response1.stop_reason);
+    tracing::info!(
+        "First prompt completed with: {}",
+        Pretty(&response1.stop_reason)
+    );
 
     // Send second prompt
     let prompt2 = vec![ContentBlock::Text(TextContent::new("How are you?"))];
     let prompt_request2 = PromptRequest::new(session_id.clone(), prompt2);
     let response2 = agent.prompt(prompt_request2).await?;
 
-    tracing::info!("Second prompt completed with: {:?}", response2.stop_reason);
+    tracing::info!(
+        "Second prompt completed with: {}",
+        Pretty(&response2.stop_reason)
+    );
 
     // Both should complete successfully
     match (response1.stop_reason, response2.stop_reason) {
@@ -305,7 +315,11 @@ pub fn verify_prompt_turn_fixture(
         }
     }
 
-    tracing::info!("{} prompt turn fixture stats: {:?}", agent_type, stats);
+    tracing::info!(
+        "{} prompt turn fixture stats: {}",
+        agent_type,
+        Pretty(&stats)
+    );
 
     Ok(stats)
 }
@@ -327,7 +341,10 @@ pub async fn test_streaming_capability<A: Agent + ?Sized>(agent: &A) -> crate::R
     let init_response = agent.initialize(init_request).await?;
 
     // Agent should acknowledge capabilities
-    tracing::info!("Agent capabilities: {:?}", init_response.agent_capabilities);
+    tracing::info!(
+        "Agent capabilities: {}",
+        Pretty(&init_response.agent_capabilities)
+    );
 
     // Create session
     let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("/tmp"));
@@ -376,7 +393,7 @@ pub async fn test_streaming_context_maintained<A: Agent + ?Sized>(agent: &A) -> 
     ))];
     let prompt_request1 = PromptRequest::new(session_id.clone(), prompt1);
     let response1 = agent.prompt(prompt_request1).await?;
-    tracing::info!("First prompt completed: {:?}", response1.stop_reason);
+    tracing::info!("First prompt completed: {}", Pretty(&response1.stop_reason));
 
     // Second prompt - should have context from first
     let prompt2 = vec![ContentBlock::Text(TextContent::new(
@@ -384,7 +401,10 @@ pub async fn test_streaming_context_maintained<A: Agent + ?Sized>(agent: &A) -> 
     ))];
     let prompt_request2 = PromptRequest::new(session_id.clone(), prompt2);
     let response2 = agent.prompt(prompt_request2).await?;
-    tracing::info!("Second prompt completed: {:?}", response2.stop_reason);
+    tracing::info!(
+        "Second prompt completed: {}",
+        Pretty(&response2.stop_reason)
+    );
 
     // Both should complete successfully
     match (response1.stop_reason, response2.stop_reason) {

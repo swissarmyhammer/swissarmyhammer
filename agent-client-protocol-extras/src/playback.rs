@@ -9,6 +9,7 @@ use agent_client_protocol::{
 };
 use std::path::PathBuf;
 use std::sync::Mutex;
+use swissarmyhammer_common::Pretty;
 
 /// PlaybackAgent replays recorded method calls
 pub struct PlaybackAgent {
@@ -21,7 +22,7 @@ pub struct PlaybackAgent {
 
 impl PlaybackAgent {
     pub fn new(path: PathBuf, agent_type: &'static str) -> Self {
-        tracing::info!("PlaybackAgent: Loading from {:?}", path);
+        tracing::info!("PlaybackAgent: Loading from {}", Pretty(&path));
 
         let session = std::fs::read_to_string(&path)
             .and_then(|content| {
@@ -29,7 +30,11 @@ impl PlaybackAgent {
                     .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
             })
             .unwrap_or_else(|e| {
-                tracing::warn!("Failed to load fixture from {:?}: {}, using empty", path, e);
+                tracing::warn!(
+                    "Failed to load fixture from {}: {}, using empty",
+                    Pretty(&path),
+                    e
+                );
                 RecordedSession { calls: vec![] }
             });
 

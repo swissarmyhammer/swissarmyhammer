@@ -30,7 +30,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use swissarmyhammer_common::{Result, Validatable, ValidationIssue, ValidationLevel};
+use swissarmyhammer_common::{Pretty, Result, Validatable, ValidationIssue, ValidationLevel};
 use swissarmyhammer_config::TemplateContext;
 
 // Temporary re-exports until Parameter types are moved to swissarmyhammer-common
@@ -874,7 +874,7 @@ impl PromptLibrary {
 
         // Use liquid context directly for proper template rendering WITH partials support
         let liquid_vars = enhanced_context.to_liquid_context();
-        tracing::debug!("Liquid Context: {:?}", liquid_vars);
+        tracing::debug!("Liquid Context: {}", Pretty(&liquid_vars));
 
         let partial_adapter =
             crate::prompt_partial_adapter::PromptPartialAdapter::new(Arc::new(full_library));

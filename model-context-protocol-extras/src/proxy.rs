@@ -16,6 +16,7 @@ use rmcp::{
     ClientHandler, ErrorData as McpError, RoleClient, RoleServer, ServerHandler, ServiceExt,
 };
 use std::sync::Arc;
+use swissarmyhammer_common::Pretty;
 use tokio::net::TcpListener;
 use tokio::sync::{broadcast, Mutex};
 
@@ -65,7 +66,10 @@ impl ClientHandler for CapturingClientHandler {
         params: LoggingMessageNotificationParam,
         _context: NotificationContext<RoleClient>,
     ) {
-        tracing::debug!("McpProxy: Captured log notification: {:?}", params.level);
+        tracing::debug!(
+            "McpProxy: Captured log notification: {}",
+            Pretty(&params.level)
+        );
         let _ = self.notification_tx.send(McpNotification::Log(params));
     }
 }

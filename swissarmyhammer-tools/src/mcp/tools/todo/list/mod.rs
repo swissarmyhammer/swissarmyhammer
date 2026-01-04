@@ -4,6 +4,7 @@ use async_trait::async_trait;
 use rmcp::model::CallToolResult;
 use rmcp::ErrorData as McpError;
 use serde_json::json;
+use swissarmyhammer_common::Pretty;
 use swissarmyhammer_todo::{ListTodosRequest, TodoStorage};
 
 /// MCP tool for listing todo items
@@ -47,7 +48,7 @@ impl McpTool for ListTodoTool {
         // Parse arguments using base tool implementation
         let request: ListTodosRequest = BaseToolImpl::parse_arguments(arguments)?;
 
-        tracing::debug!("Listing todos with filter: {:?}", request.completed);
+        tracing::debug!("Listing todos with filter: {}", Pretty(&request.completed));
 
         // Create storage instance using working_dir if available, otherwise use default
         let storage = if let Some(ref working_dir) = _context.working_dir {

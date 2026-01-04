@@ -46,7 +46,7 @@ use agent_client_protocol::{
 use llama_agent::types::AgentAPI;
 use std::sync::Arc;
 use std::time::Duration;
-use swissarmyhammer_common::{ErrorSeverity, Severity};
+use swissarmyhammer_common::{ErrorSeverity, Pretty, Severity};
 use swissarmyhammer_config::model::{ModelConfig, ModelExecutorConfig, ModelExecutorType};
 use thiserror::Error;
 use tokio::sync::broadcast;
@@ -455,7 +455,7 @@ async fn execute_prompt_inner(
         .map_err(|e| AcpError::InitializationError(format!("{:?}", e)))?;
 
     if let Some(ref info) = init_response.agent_info {
-        tracing::debug!("Agent initialized: {:?}", info.name);
+        tracing::debug!("Agent initialized: {}", Pretty(&info.name));
     }
 
     // Create a new session

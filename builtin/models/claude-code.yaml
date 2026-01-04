@@ -1,5 +1,5 @@
 ---
-description: "Claude Sonnet 4.5: 1M context, premium"
+description: "Claude Code: must be installed separately"
 ---
 quiet: false
 executor:

@@ -4,6 +4,7 @@ use super::server::McpServer;
 use rmcp::ServerHandler;
 use std::collections::HashMap;
 use std::path::PathBuf;
+use swissarmyhammer_common::Pretty;
 use swissarmyhammer_prompts::{Prompt, PromptLibrary, PromptResolver};
 
 /// RAII guard to ensure working directory is restored when dropped
@@ -33,7 +34,7 @@ async fn test_mcp_server_creation() {
     assert!(!info.server_info.version.is_empty());
 
     // Debug print to see what capabilities are returned
-    tracing::debug!("Server capabilities: {:?}", info.capabilities);
+    tracing::debug!("Server capabilities: {}", Pretty(&info.capabilities));
 }
 
 #[tokio::test]
@@ -200,7 +201,7 @@ async fn test_mcp_server_uses_same_directory_discovery() {
     // This test verifies the API consistency
     tracing::debug!("PromptResolver found {} directories", resolver_dirs.len());
     for dir in resolver_dirs {
-        tracing::debug!("  - {dir:?}");
+        tracing::debug!("  - {}", Pretty(&dir));
     }
 }
 

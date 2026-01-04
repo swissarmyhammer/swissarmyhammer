@@ -107,6 +107,7 @@ use std::mem::ManuallyDrop;
 use std::process::Stdio;
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
+use swissarmyhammer_common::Pretty;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStderr, ChildStdin, ChildStdout, Command};
 use tokio::sync::Mutex;
@@ -418,14 +419,14 @@ impl ClaudeProcess {
             ) {
                 tracing::error!("Failed to write MCP config: {}", e);
             } else {
-                tracing::info!("Wrote MCP config to {:?}", mcp_config_path);
+                tracing::info!("Wrote MCP config to {}", Pretty(&mcp_config_path));
                 command.arg("--mcp-config").arg(&mcp_config_path);
                 command.arg("--strict-mcp-config");
             }
         }
 
         // Log the complete command being executed
-        tracing::info!("🚀 Spawning Claude CLI: {:?}", command.as_std());
+        tracing::info!("🚀 Spawning Claude CLI: {}", Pretty(&command.as_std()));
 
         let mut cmd = command
             .current_dir(cwd)

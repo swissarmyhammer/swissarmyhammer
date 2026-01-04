@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
+use swissarmyhammer_common::Pretty;
 use tokio::io::AsyncReadExt;
 use tokio::process::{Child, Command};
 use tokio::sync::Mutex;
@@ -498,7 +499,10 @@ impl TerminalManager {
 
         match wait_result {
             Ok(Ok(status)) => {
-                tracing::debug!("Process terminated gracefully with status: {:?}", status);
+                tracing::debug!(
+                    "Process terminated gracefully with status: {}",
+                    Pretty(&status)
+                );
                 session.state = TerminalState::Finished(status.code().unwrap_or(0));
                 Ok(())
             }
@@ -517,7 +521,7 @@ impl TerminalManager {
                 // Wait for forceful kill
                 let status = session.process.wait().await?;
 
-                tracing::debug!("Process forcefully killed with status: {:?}", status);
+                tracing::debug!("Process forcefully killed with status: {}", Pretty(&status));
                 session.state = TerminalState::Killed;
                 Ok(())
             }

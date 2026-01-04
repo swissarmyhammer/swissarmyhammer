@@ -7,6 +7,7 @@ use crate::types::ids::SessionId as LlamaSessionId;
 use crate::types::AgentAPI;
 use agent_client_protocol::{ExtResponse, SessionId as AcpSessionId, SessionNotification};
 use futures::StreamExt;
+use swissarmyhammer_common::Pretty;
 use tokio::sync::{broadcast, RwLock};
 
 use super::config::AcpConfig;
@@ -320,7 +321,7 @@ impl AcpServer {
                                 }
                             }
                             Err(e) => {
-                                tracing::warn!("Notification channel error: {:?}", e);
+                                tracing::warn!("Notification channel error: {}", Pretty(&e));
                                 break;
                             }
                         }
@@ -655,7 +656,10 @@ impl AcpServer {
     }
 
     fn broadcast_notification(&self, notification: SessionNotification) {
-        tracing::trace!("Broadcasting notification: {:?}", notification.update);
+        tracing::trace!(
+            "Broadcasting notification: {}",
+            Pretty(&notification.update)
+        );
 
         // Record notification to raw message log for debugging
         if let Some(ref manager) = self.raw_message_manager {
@@ -972,14 +976,17 @@ impl agent_client_protocol::Agent for AcpServer {
         request: agent_client_protocol::InitializeRequest,
     ) -> Result<agent_client_protocol::InitializeResponse, agent_client_protocol::Error> {
         tracing::info!(
-            "Processing initialize request with protocol version {:?}",
-            request.protocol_version
+            "Processing initialize request with protocol version {}",
+            Pretty(&request.protocol_version)
         );
 
         // Negotiate protocol version with client
         let negotiated_version = Self::negotiate_protocol_version(&request.protocol_version);
 
-        tracing::info!("Negotiated protocol version: {:?}", negotiated_version);
+        tracing::info!(
+            "Negotiated protocol version: {}",
+            Pretty(&negotiated_version)
+        );
 
         // Store client capabilities for capability gating
         {
@@ -1442,7 +1449,10 @@ impl agent_client_protocol::Agent for AcpServer {
                     | agent_client_protocol::StopReason::MaxTurnRequests
                     | agent_client_protocol::StopReason::Cancelled
                     | agent_client_protocol::StopReason::Refusal => {
-                        tracing::info!("Stopping agentic loop due to: {:?}", final_stop_reason);
+                        tracing::info!(
+                            "Stopping agentic loop due to: {}",
+                            Pretty(&final_stop_reason)
+                        );
                         break;
                     }
                     _ => {}

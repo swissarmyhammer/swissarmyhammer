@@ -11,6 +11,9 @@ use thiserror::Error;
 use tracing::{debug, error, warn};
 use url::Url;
 
+#[cfg(test)]
+use swissarmyhammer_common::Pretty;
+
 /// Configuration struct for enhanced security settings
 #[derive(Debug)]
 pub struct EnhancedSecurityConfig {
@@ -1328,7 +1331,7 @@ mod tests {
         let content_block = ContentBlock::Resource(embedded_resource);
         let result = processor.process_content_block(&content_block);
         if let Err(ref e) = result {
-            tracing::error!("Error processing blob resource: {:?}", e);
+            tracing::error!("Error processing blob resource: {}", Pretty(e));
         }
         assert!(result.is_ok());
 

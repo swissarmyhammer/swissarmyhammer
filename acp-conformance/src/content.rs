@@ -32,6 +32,7 @@ use agent_client_protocol::{
     TextResourceContents,
 };
 use agent_client_protocol_extras::recording::RecordedSession;
+use swissarmyhammer_common::Pretty;
 
 /// Statistics from content fixture verification
 #[derive(Debug, Default)]
@@ -389,7 +390,7 @@ pub fn verify_content_fixture(
         }
     }
 
-    tracing::info!("{} content fixture stats: {:?}", agent_type, stats);
+    tracing::info!("{} content fixture stats: {}", agent_type, Pretty(&stats));
 
     // Should have at least initialize (new_session is optional if test skipped due to missing capability)
     assert!(

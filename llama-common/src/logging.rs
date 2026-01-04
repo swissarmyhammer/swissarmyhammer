@@ -1,9 +1,26 @@
 //! Standardized logging configuration and utilities
 
+use std::fmt::Debug;
 use tracing::Level;
 use tracing_subscriber::{
     filter::LevelFilter, fmt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter,
 };
+
+/// Wrapper for pretty-printing Debug types in logs
+/// Use this in tracing statements: info!("Config: {}", Pretty(&config));
+pub struct Pretty<T: Debug>(pub T);
+
+impl<T: Debug> std::fmt::Display for Pretty<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{:#?}", self.0)
+    }
+}
+
+impl<T: Debug> std::fmt::Debug for Pretty<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{:#?}", self.0)
+    }
+}
 
 /// Standard log levels used across the workspace
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

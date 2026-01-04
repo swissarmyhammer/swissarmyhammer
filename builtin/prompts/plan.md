@@ -66,8 +66,6 @@ For each implementation step:
   - **Implementation notes** and considerations
 - Each tasks needs a reference to the spec file: "Refer to {{ plan_filename }}"
 - Break work into small, focused tasks that build incrementally
-- Each todo should be completable in a single focused session
-- Todos are ephemeral (auto-deleted after completion)
 
 ## Process
 

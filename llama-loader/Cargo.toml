@@ -10,6 +10,7 @@ repository = "https://github.com/anthropics/llama-agent"
 [dependencies]
 llama-cpp-2 = { workspace = true }
 llama-common = { workspace = true }
+swissarmyhammer-common = { path = "../swissarmyhammer-common" }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["fs"] }
 hf-hub = { workspace = true }

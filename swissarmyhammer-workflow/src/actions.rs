@@ -53,7 +53,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
-use swissarmyhammer_common::{ErrorSeverity, Severity};
+use swissarmyhammer_common::{ErrorSeverity, Pretty, Severity};
 use syntect::easy::HighlightLines;
 use syntect::highlighting::ThemeSet;
 use syntect::parsing::SyntaxSet;
@@ -395,7 +395,7 @@ impl PromptAction {
             args.insert(key.clone(), value.clone());
         }
 
-        tracing::debug!("Args for prompt rendering: {:?}", args);
+        tracing::debug!("Args for prompt rendering: {}", Pretty(&args));
 
         // Load prompts and render directly
         let mut library = PromptLibrary::new();
@@ -536,7 +536,7 @@ impl PromptAction {
         let response = acp::execute_prompt(&mut agent, system_prompt, user_prompt)
             .await
             .map_err(|e| {
-                tracing::error!("Prompt execution failed: {:?}", e);
+                tracing::error!("Prompt execution failed: {}", Pretty(&e));
                 convert_acp_error(e)
             })?;
 
@@ -823,7 +823,11 @@ impl Action for SetVariableAction {
 
         // Set the variable
         context.insert(self.variable_name.clone(), json_value.clone());
-        tracing::debug!("Set variable '{}' = '{:?}'", self.variable_name, json_value);
+        tracing::debug!(
+            "Set variable '{}' = '{}'",
+            self.variable_name,
+            Pretty(&json_value)
+        );
 
         // Mark action as successful
         context.insert(LAST_ACTION_RESULT_KEY.to_string(), Value::Bool(true));
@@ -1362,7 +1366,7 @@ pub fn log_command_execution(
     // Log environment variables (but not their values for security)
     if !env.is_empty() {
         let env_keys: Vec<&String> = env.keys().collect();
-        tracing::debug!("Environment variables set: {:?}", env_keys);
+        tracing::debug!("Environment variables set: {}", Pretty(&env_keys));
     }
 }
 

@@ -30,6 +30,7 @@ use agent_client_protocol::{
     TextContent,
 };
 use agent_client_protocol_extras::recording::RecordedSession;
+use swissarmyhammer_common::Pretty;
 
 /// Statistics from fixture verification
 #[derive(Debug, Default)]
@@ -78,7 +79,10 @@ pub async fn test_tool_call_notifications<A: Agent + ?Sized>(agent: &A) -> crate
     let response = agent.prompt(prompt_request).await?;
 
     // Verify we got a response
-    tracing::info!("Prompt response stop_reason: {:?}", response.stop_reason);
+    tracing::info!(
+        "Prompt response stop_reason: {}",
+        Pretty(&response.stop_reason)
+    );
 
     Ok(())
 }
@@ -161,7 +165,7 @@ pub fn verify_tool_call_fixture(
         }
     }
 
-    tracing::info!("{} fixture stats: {:?}", agent_type, stats);
+    tracing::info!("{} fixture stats: {}", agent_type, Pretty(&stats));
 
     // Core assertions - tool calls must generate notifications
     assert!(
@@ -268,7 +272,7 @@ pub fn verify_commands_update_fixture(
         }
     }
 
-    tracing::info!("{} commands update stats: {:?}", agent_type, stats);
+    tracing::info!("{} commands update stats: {}", agent_type, Pretty(&stats));
 
     // Agents MAY send available_commands_update - this is optional per spec
     // But if they do, they must be properly structured (checked above)

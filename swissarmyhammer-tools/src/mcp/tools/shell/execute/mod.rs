@@ -13,7 +13,7 @@ use serde_json::json;
 use std::fmt;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
-use swissarmyhammer_common::{ErrorSeverity, Severity};
+use swissarmyhammer_common::{ErrorSeverity, Pretty, Severity};
 // Replaced sah_config with local defaults for shell configuration
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::{Child, Command};
@@ -1117,7 +1117,7 @@ async fn process_child_output_with_limits(
     )
     .await?;
 
-    tracing::debug!("Process exited with status: {:?}", exit_status);
+    tracing::debug!("Process exited with status: {}", Pretty(&exit_status));
 
     collect_remaining_output(
         &mut setup.stdout_reader,
@@ -1583,7 +1583,7 @@ impl McpTool for ShellExecuteTool {
         _context: &ToolContext,
     ) -> std::result::Result<CallToolResult, McpError> {
         let request: ShellExecuteRequest = BaseToolImpl::parse_arguments(arguments)?;
-        tracing::debug!("Executing shell command: {:?}", request.command);
+        tracing::debug!("Executing shell command: {}", Pretty(&request.command));
 
         validate_shell_request(&request)?;
         let parsed_environment = parse_environment_variables(request.environment.as_deref())?;

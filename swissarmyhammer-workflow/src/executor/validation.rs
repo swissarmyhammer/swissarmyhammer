@@ -108,6 +108,7 @@ use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
+use swissarmyhammer_common::Pretty;
 
 // Security constants for CEL expression evaluation
 const MAX_EXPRESSION_LENGTH: usize = 500;
@@ -538,7 +539,7 @@ impl WorkflowExecutor {
     ) -> ExecutorResult<()> {
         for (key, value) in context {
             if key == RESULT_VARIABLE_NAME {
-                tracing::debug!("Adding 'result' variable to CEL context: {:?}", value);
+                tracing::debug!("Adding 'result' variable to CEL context: {}", Pretty(value));
             }
 
             Self::add_json_variable_to_cel_context_static(cel_context, key, value).map_err(
@@ -635,7 +636,7 @@ impl WorkflowExecutor {
         let result_text = Self::extract_result_text_static(context);
         let context_keys: Vec<String> = context.keys().cloned().collect();
 
-        tracing::debug!("CEL Debug - Expression: '{}' | Result text: '{}' | CEL result: {:?} | Boolean: {} | Context keys: {:?}", expression, result_text, result, boolean_result, context_keys);
+        tracing::debug!("CEL Debug - Expression: '{}' | Result text: '{}' | CEL result: {} | Boolean: {} | Context keys: {}", expression, result_text, Pretty(&result), boolean_result, Pretty(&context_keys));
     }
 
     /// Convert JSON value to string (helper for extraction)

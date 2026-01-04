@@ -15,7 +15,7 @@ use rmcp::transport::streamable_http_server::{
 };
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex, Once};
-use swissarmyhammer_common::{Result, SwissArmyHammerError};
+use swissarmyhammer_common::{Pretty, Result, SwissArmyHammerError};
 use swissarmyhammer_prompts::PromptLibrary;
 
 use tokio::net::TcpListener;
@@ -584,7 +584,7 @@ fn spawn_stdio_server_task(
                     result = running_service.waiting() => {
                         match result {
                             Ok(quit_reason) => {
-                                tracing::info!("MCP stdio server completed naturally: {:?}", quit_reason);
+                                tracing::info!("MCP stdio server completed naturally: {}", Pretty(&quit_reason));
                             }
                             Err(e) => {
                                 tracing::error!("MCP stdio server task error: {}", e);
@@ -752,7 +752,7 @@ async fn start_http_server(
     model_override: Option<String>,
     working_dir: Option<std::path::PathBuf>,
 ) -> Result<McpServerHandle> {
-    tracing::debug!("start_http_server called with port: {:?}", port);
+    tracing::debug!("start_http_server called with port: {}", Pretty(&port));
 
     let actual_port = if let Some(bind_port) = port {
         tracing::debug!("Using specified port: {}", bind_port);

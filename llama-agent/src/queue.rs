@@ -12,6 +12,7 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
+use swissarmyhammer_common::Pretty;
 use tokio::sync::{mpsc, oneshot, Mutex as TokioMutex};
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
@@ -947,7 +948,7 @@ impl RequestQueue {
                     successful_shutdowns += 1;
                 }
                 Err(join_error) => {
-                    warn!("Worker {} panicked during shutdown: {:?}", i, join_error);
+                    warn!("Worker {} panicked during shutdown: {}", i, join_error);
                 }
             }
         }
@@ -963,7 +964,10 @@ impl RequestQueue {
     /// Shutdown with timeout and return statistics
     pub async fn shutdown_with_timeout(self, timeout: Duration) -> QueueStats {
         let stats_before = self.get_stats();
-        info!("Starting RequestQueue shutdown with {:?} timeout", timeout);
+        info!(
+            "Starting RequestQueue shutdown with {} timeout",
+            Pretty(&timeout)
+        );
 
         let shutdown_future = async {
             self.shutdown().await;

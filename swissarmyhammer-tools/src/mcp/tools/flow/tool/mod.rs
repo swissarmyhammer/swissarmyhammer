@@ -10,7 +10,7 @@ use crate::mcp::tools::flow::types::*;
 use async_trait::async_trait;
 use rmcp::model::CallToolResult;
 use rmcp::ErrorData as McpError;
-use swissarmyhammer_common::generate_monotonic_ulid_string;
+use swissarmyhammer_common::{generate_monotonic_ulid_string, Pretty};
 use swissarmyhammer_config::AgentUseCase;
 use swissarmyhammer_workflow::{MemoryWorkflowStorage, WorkflowResolver, WorkflowStorageBackend};
 
@@ -279,7 +279,7 @@ impl FlowTool {
             Ok(resolved_params) => {
                 tracing::debug!("Resolved {} workflow parameters", resolved_params.len());
                 for (key, value) in resolved_params {
-                    tracing::trace!("Setting workflow var: {} = {:?}", key, value);
+                    tracing::trace!("Setting workflow var: {} = {}", key, Pretty(&value));
                     run.context.set_workflow_var(key, value);
                 }
             }
@@ -702,7 +702,7 @@ impl McpTool for FlowTool {
         } else {
             tracing::info!("🚀 Calling execute_workflow for '{}'", request.flow_name);
             let result = self.execute_workflow(&request, context).await;
-            tracing::info!("✨ execute_workflow returned: {:?}", result.is_ok());
+            tracing::info!("✨ execute_workflow returned: {}", Pretty(&result.is_ok()));
             result
         }
     }

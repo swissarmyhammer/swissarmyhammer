@@ -10,7 +10,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use swissarmyhammer_common::{Result, SwissArmyHammerError};
+use swissarmyhammer_common::{Pretty, Result, SwissArmyHammerError};
 use swissarmyhammer_config::model::{parse_model_config, ModelManager};
 use swissarmyhammer_config::{AgentUseCase, TemplateContext};
 use swissarmyhammer_git::GitOperations;
@@ -896,7 +896,7 @@ impl McpServer {
     ) -> std::result::Result<CallToolResult, McpError> {
         tracing::info!("🔧 Executing tool: {}", name);
         let result = tool.execute(arguments, context).await;
-        tracing::debug!("🔧 Tool execution result for {}: {:?}", name, result);
+        tracing::debug!("🔧 Tool execution result for {}: {}", name, Pretty(&result));
         result
     }
 }

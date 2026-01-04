@@ -11,12 +11,12 @@
 //! without requiring readers to understand the underlying generic helpers.
 
 use git2::Repository;
-use serde_json::Value;
+use serde_yaml::Value;
 use std::process::Command;
 use swissarmyhammer_common::test_utils::IsolatedTestEnvironment;
 
-/// Length of the JSON prefix `"id":"` used when parsing todo IDs from command output
-const JSON_ID_PREFIX_LEN: usize = 6;
+/// Length of the YAML prefix `id: ` used when parsing todo IDs from command output
+const YAML_ID_PREFIX_LEN: usize = 4;
 
 /// Standard test tasks used across multiple test setup functions
 const TEST_TASKS: &[(&str, Option<&str>)] = &[("Task 1", None), ("Task 2", None), ("Task 3", None)];
@@ -71,43 +71,43 @@ fn setup_todo_test() -> (IsolatedTestEnvironment, std::path::PathBuf) {
     (env, temp_path)
 }
 
-/// Helper function to extract todo ID from JSON output
+/// Helper function to extract todo ID from YAML output
 fn extract_todo_id_from_output(output: &str) -> &str {
-    let id_start = output.find("\"id\":\"").expect("Should find id in output") + JSON_ID_PREFIX_LEN;
+    let id_start = output.find("id: ").expect("Should find id in output") + YAML_ID_PREFIX_LEN;
     let id_end = output[id_start..]
-        .find('\"')
-        .expect("Should find end of id")
+        .find('\n')
+        .unwrap_or(output.len() - id_start)
         + id_start;
-    &output[id_start..id_end]
+    output[id_start..id_end].trim()
 }
 
-/// Generic helper function to parse JSON and extract a numeric field value
-fn parse_json_field_u32(output: &str, field: &str) -> Result<u32, String> {
-    let parsed: Value = serde_json::from_str(output)
-        .map_err(|e| format!("Failed to parse JSON output: {}. Error: {}", output, e))?;
+/// Generic helper function to parse YAML and extract a numeric field value
+fn parse_yaml_field_u32(output: &str, field: &str) -> Result<u32, String> {
+    let parsed: Value = serde_yaml::from_str(output)
+        .map_err(|e| format!("Failed to parse YAML output: {}. Error: {}", output, e))?;
 
     parsed[field]
         .as_u64()
-        .ok_or_else(|| format!("Field '{}' not found or not a number in JSON", field))
+        .ok_or_else(|| format!("Field '{}' not found or not a number in YAML", field))
         .map(|v| v as u32)
 }
 
-/// Helper function to parse JSON output and extract a numeric field value (panics on error)
-fn get_json_field_value(output: &str, field: &str) -> u32 {
-    parse_json_field_u32(output, field).unwrap_or_else(|e| panic!("{}", e))
+/// Helper function to parse YAML output and extract a numeric field value (panics on error)
+fn get_yaml_field_value(output: &str, field: &str) -> u32 {
+    parse_yaml_field_u32(output, field).unwrap_or_else(|e| panic!("{}", e))
 }
 
-/// Helper function to assert JSON field contains expected numeric value
-fn assert_json_field_value(output: &str, field: &str, expected: u32) {
-    let actual = get_json_field_value(output, field);
+/// Helper function to assert YAML field contains expected numeric value
+fn assert_yaml_field_value(output: &str, field: &str, expected: u32) {
+    let actual = get_yaml_field_value(output, field);
     assert_eq!(actual, expected, "Field '{}' should be {}", field, expected);
 }
 
-/// Helper function to assert todo counts in JSON output
+/// Helper function to assert todo counts in YAML output
 fn assert_todo_counts(output: &str, total: u32, pending: u32, completed: u32) {
-    assert_json_field_value(output, "total", total);
-    assert_json_field_value(output, "pending", pending);
-    assert_json_field_value(output, "completed", completed);
+    assert_yaml_field_value(output, "total", total);
+    assert_yaml_field_value(output, "pending", pending);
+    assert_yaml_field_value(output, "completed", completed);
 }
 
 /// Helper function to convert process output to stdout string
@@ -310,7 +310,7 @@ fn assert_todo_list_filter(
         expected_tasks,
         unexpected_tasks,
     );
-    assert_json_field_value(&stdout, "total", expected_count);
+    assert_yaml_field_value(&stdout, "total", expected_count);
 }
 
 /// Helper function to assert help text contains all expected commands

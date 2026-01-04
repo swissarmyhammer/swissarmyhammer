@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
+use swissarmyhammer_common::Pretty;
 
 /// Recorded method call
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -45,7 +46,7 @@ pub struct RecordingAgent<A> {
 
 impl<A> RecordingAgent<A> {
     pub fn new(inner: A, path: PathBuf) -> Self {
-        tracing::info!("RecordingAgent: Will record to {:?}", path);
+        tracing::info!("RecordingAgent: Will record to {}", Pretty(&path));
         Self {
             inner,
             path,
@@ -207,10 +208,10 @@ impl<A> RecordingAgent<A> {
         let absolute_path = std::fs::canonicalize(&self.path).unwrap_or_else(|_| self.path.clone());
 
         tracing::info!(
-            "RecordingAgent: Saved {} calls to {:?} (absolute: {:?})",
+            "RecordingAgent: Saved {} calls to {} (absolute: {})",
             calls.len(),
-            self.path,
-            absolute_path
+            Pretty(&self.path),
+            Pretty(&absolute_path)
         );
         Ok(())
     }

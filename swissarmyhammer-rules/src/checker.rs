@@ -14,6 +14,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use swissarmyhammer_agent::{self as acp, McpServerConfig};
 use swissarmyhammer_common::glob_utils::{expand_glob_patterns, GlobExpansionConfig};
+use swissarmyhammer_common::Pretty;
 use swissarmyhammer_config::model::ModelConfig;
 use swissarmyhammer_config::TemplateContext;
 use swissarmyhammer_prompts::{PromptLibrary, PromptResolver};
@@ -725,10 +726,10 @@ impl RuleChecker {
         request: &RuleCheckRequest,
     ) -> Result<Vec<Rule>> {
         if let Some(rule_names) = &request.rule_names {
-            tracing::info!("Filtering by rule_names: {:?}", rule_names);
+            tracing::info!("Filtering by rule_names: {}", Pretty(rule_names));
             tracing::info!(
-                "Available rule names before filter: {:?}",
-                rules.iter().map(|r| &r.name).collect::<Vec<_>>()
+                "Available rule names before filter: {}",
+                Pretty(&rules.iter().map(|r| &r.name).collect::<Vec<_>>())
             );
             rules.retain(|r| rule_names.contains(&r.name));
             tracing::info!("After filtering by rule_names: {} rules", rules.len());

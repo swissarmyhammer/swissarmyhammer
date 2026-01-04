@@ -30,6 +30,7 @@ pub mod frontmatter;
 pub mod fs_utils;
 pub mod glob_utils;
 pub mod interactive_prompts;
+pub mod logging;
 pub mod parameter_conditions;
 pub mod parameters;
 pub mod rate_limiter;
@@ -90,5 +91,8 @@ pub use glob_utils::{
 
 // Re-export test utilities for convenience (when testing)
 pub use test_utils::{acquire_semantic_db_lock, create_temp_dir, ProcessGuard};
+
+// Re-export logging utilities for convenience
+pub use logging::Pretty;
 
 pub use error::*;

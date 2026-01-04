@@ -2,6 +2,7 @@
 
 use async_trait::async_trait;
 use std::time::Duration;
+use swissarmyhammer_common::Pretty;
 use tokio::time::{sleep, timeout};
 
 /// Trait for async operations that can be retried
@@ -93,7 +94,7 @@ where
         Err(_) => match action {
             TimeoutAction::ReturnError(error) => Err(error),
             TimeoutAction::LogWarning => {
-                tracing::warn!("{} timed out after {:?}", context, timeout_duration);
+                tracing::warn!("{} timed out after {}", context, Pretty(&timeout_duration));
                 Ok(None)
             }
         },
