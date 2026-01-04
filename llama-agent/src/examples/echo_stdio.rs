@@ -24,7 +24,16 @@ async fn main() -> Result<()> {
 
     // Create an instance of our echo service and serve with stdio transport
     let service = EchoService::new().serve(stdio()).await.map_err(|e| {
-        tracing::error!("serving error: {}", Pretty(&e));
+        #[derive(serde::Serialize, Debug)]
+        struct InitError {
+            error: String,
+        }
+        tracing::error!(
+            "serving error: {}",
+            Pretty(&InitError {
+                error: e.to_string()
+            })
+        );
         e
     })?;
 

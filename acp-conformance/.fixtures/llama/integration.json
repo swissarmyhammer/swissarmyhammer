@@ -1,0 +1,1362 @@
+{
+  "calls": [
+    {
+      "method": "initialize",
+      "request": {
+        "clientCapabilities": {
+          "fs": {
+            "readTextFile": false,
+            "writeTextFile": false
+          },
+          "terminal": false
+        },
+        "protocolVersion": 1
+      },
+      "response": {
+        "agentCapabilities": {
+          "_meta": {
+            "streaming": true,
+            "supports_modes": true,
+            "supports_plans": true,
+            "supports_slash_commands": true
+          },
+          "loadSession": true,
+          "mcpCapabilities": {
+            "http": true,
+            "sse": false
+          },
+          "promptCapabilities": {
+            "_meta": {
+              "streaming": true
+            },
+            "audio": false,
+            "embeddedContext": false,
+            "image": false
+          },
+          "sessionCapabilities": {}
+        },
+        "agentInfo": {
+          "name": "llama-agent",
+          "title": "LLaMA Agent v0.3.0",
+          "version": "0.3.0"
+        },
+        "authMethods": [],
+        "protocolVersion": 1
+      },
+      "notifications": []
+    },
+    {
+      "method": "new_session",
+      "request": {
+        "cwd": "/Users/wballard/github/swissarmyhammer/acp-conformance",
+        "mcpServers": []
+      },
+      "response": {
+        "sessionId": "01KE4QW1WQ4TYA7VTQGY6WBBGG"
+      },
+      "notifications": []
+    },
+    {
+      "method": "prompt",
+      "request": {
+        "prompt": [
+          {
+            "text": "Create a todo item using the mcp__test-mcp-server__create-plan tool with goal 'Implement user authentication'. This is a multi-step task that requires planning.",
+            "type": "text"
+          }
+        ],
+        "sessionId": "01KE4QW1WQ4TYA7VTQGY6WBBGG"
+      },
+      "response": {
+        "_meta": {
+          "tokens_generated": 2889,
+          "tool_calls_executed": 2
+        },
+        "stopReason": "end_turn"
+      },
+      "notifications": [
+        {
+          "sessionId": "01KE4QW1WQ4TYA7VTQGY6WBBGG",
+          "update": {
+            "content": {
+              "text": "{\n",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KE4QW1WQ4TYA7VTQGY6WBBGG",
+          "update": {
+            "content": {
+              "text": " ",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KE4QW1WQ4TYA7VTQGY6WBBGG",
+          "update": {
+            "content": {
+              "text": " \"",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KE4QW1WQ4TYA7VTQGY6WBBGG",
+          "update": {
+            "content": {
+              "text": "function",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KE4QW1WQ4TYA7VTQGY6WBBGG",
+          "update": {
+            "content": {
+              "text": "_name",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KE4QW1WQ4TYA7VTQGY6WBBGG",
+          "update": {
+            "content": {
+              "text": "\":",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KE4QW1WQ4TYA7VTQGY6WBBGG",
+          "update": {
+            "content": {
+              "text": " \"",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KE4QW1WQ4TYA7VTQGY6WBBGG",
+          "update": {
+            "content": {
+              "text": "create",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KE4QW1WQ4TYA7VTQGY6WBBGG",
+          "update": {
+            "content": {
+              "text": "-plan",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KE4QW1WQ4TYA7VTQGY6WBBGG",
+          "update": {
+            "content": {
+              "text": "\",\n",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KE4QW1WQ4TYA7VTQGY6WBBGG",
+          "update": {
+            "content": {
+              "text": " ",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KE4QW1WQ4TYA7VTQGY6WBBGG",
+          "update": {
+            "content": {
+              "text": " \"",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KE4QW1WQ4TYA7VTQGY6WBBGG",
+          "update": {
+            "content": {
+              "text": "arguments",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KE4QW1WQ4TYA7VTQGY6WBBGG",
+          "update": {
+            "content": {
+              "text": "\":",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KE4QW1WQ4TYA7VTQGY6WBBGG",
+          "update": {
+            "content": {
+              "text": " {\n",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KE4QW1WQ4TYA7VTQGY6WBBGG",
+          "update": {
+            "content": {
+              "text": "   ",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KE4QW1WQ4TYA7VTQGY6WBBGG",
+          "update": {
+            "content": {
+              "text": " \"",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KE4QW1WQ4TYA7VTQGY6WBBGG",
+          "update": {
+            "content": {
+              "text": "goal",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KE4QW1WQ4TYA7VTQGY6WBBGG",
+          "update": {
+            "content": {
+              "text": "\":",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KE4QW1WQ4TYA7VTQGY6WBBGG",
+          "update": {
+            "content": {
+              "text": " \"",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KE4QW1WQ4TYA7VTQGY6WBBGG",
+          "update": {
+            "content": {
+              "text": "Implement",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KE4QW1WQ4TYA7VTQGY6WBBGG",
+          "update": {
+            "content": {
+              "text": " user",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KE4QW1WQ4TYA7VTQGY6WBBGG",
+          "update": {
+            "content": {
+              "text": " authentication",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KE4QW1WQ4TYA7VTQGY6WBBGG",
+          "update": {
+            "content": {
+              "text": "\"\n",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KE4QW1WQ4TYA7VTQGY6WBBGG",
+          "update": {
+            "content": {
+              "text": " ",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KE4QW1WQ4TYA7VTQGY6WBBGG",
+          "update": {
+            "content": {
+              "text": " }\n",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KE4QW1WQ4TYA7VTQGY6WBBGG",
+          "update": {
+            "content": {
+              "text": "}",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KE4QW1WQ4TYA7VTQGY6WBBGG",
+          "update": {
+            "content": {
+              "text": "",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KE4QW1WQ4TYA7VTQGY6WBBGG",
+          "update": {
+            "rawInput": {
+              "goal": "Implement user authentication"
+            },
+            "sessionUpdate": "tool_call",
+            "title": "create-plan",
+            "toolCallId": "01KE4QW4F5JR2ABG6ZVG8GCEJX"
+          }
+        },
+        {
+          "Log": {
+            "data": {
+              "message": "Creating plan for: Implement user authentication"
+            },
+            "level": "info",
+            "logger": "test-mcp-server"
+          }
+        },
+        {
+          "Progress": {
+            "message": "Creating step 1/4",
+            "progress": 1.0,
+            "progressToken": "create-plan-1",
+            "total": 4.0
+          }
+        },
+        {
+          "Progress": {
+            "message": "Creating step 2/4",
+            "progress": 2.0,
+            "progressToken": "create-plan-1",
+            "total": 4.0
+          }
+        },
+        {
+          "Progress": {
+            "message": "Creating step 3/4",
+            "progress": 3.0,
+            "progressToken": "create-plan-1",
+            "total": 4.0
+          }
+        },
+        {
+          "Progress": {
+            "message": "Creating step 4/4",
+            "progress": 4.0,
+            "progressToken": "create-plan-1",
+            "total": 4.0
+          }
+        },
+        {
+          "sessionId": "01KE4QW1WQ4TYA7VTQGY6WBBGG",
+          "update": {
+            "rawOutput": "{\n  \"plan\": {\n    \"goal\": \"Implement user authentication\",\n    \"steps\": [\n      {\n        \"description\": \"Analyze requirements\",\n        \"id\": 1,\n        \"status\": \"pending\"\n      },\n      {\n        \"description\": \"Design solution\",\n        \"id\": 2,\n        \"status\": \"pending\"\n      },\n      {\n        \"description\": \"Implement solution\",\n        \"id\": 3,\n        \"status\": \"pending\"\n      },\n      {\n        \"description\": \"Test and validate\",\n        \"id\": 4,\n        \"status\": \"pending\"\n      }\n    ]\n  }\n}",
+            "sessionUpdate": "tool_call_update",
+            "status": "completed",
+            "toolCallId": "01KE4QW4F5JR2ABG6ZVG8GCEJX"
+          }
+        },
+        {
+          "sessionId": "01KE4QW1WQ4TYA7VTQGY6WBBGG",
+          "update": {
+            "content": {
+              "text": "{\n",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KE4QW1WQ4TYA7VTQGY6WBBGG",
+          "update": {
+            "content": {
+              "text": " ",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KE4QW1WQ4TYA7VTQGY6WBBGG",
+          "update": {
+            "content": {
+              "text": " \"",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KE4QW1WQ4TYA7VTQGY6WBBGG",
+          "update": {
+            "content": {
+              "text": "function",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KE4QW1WQ4TYA7VTQGY6WBBGG",
+          "update": {
+            "content": {
+              "text": "_name",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KE4QW1WQ4TYA7VTQGY6WBBGG",
+          "update": {
+            "content": {
+              "text": "\":",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KE4QW1WQ4TYA7VTQGY6WBBGG",
+          "update": {
+            "content": {
+              "text": " \"",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KE4QW1WQ4TYA7VTQGY6WBBGG",
+          "update": {
+            "content": {
+              "text": "create",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KE4QW1WQ4TYA7VTQGY6WBBGG",
+          "update": {
+            "content": {
+              "text": "-plan",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KE4QW1WQ4TYA7VTQGY6WBBGG",
+          "update": {
+            "content": {
+              "text": "\",\n",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KE4QW1WQ4TYA7VTQGY6WBBGG",
+          "update": {
+            "content": {
+              "text": " ",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KE4QW1WQ4TYA7VTQGY6WBBGG",
+          "update": {
+            "content": {
+              "text": " \"",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KE4QW1WQ4TYA7VTQGY6WBBGG",
+          "update": {
+            "content": {
+              "text": "arguments",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KE4QW1WQ4TYA7VTQGY6WBBGG",
+          "update": {
+            "content": {
+              "text": "\":",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KE4QW1WQ4TYA7VTQGY6WBBGG",
+          "update": {
+            "content": {
+              "text": " {\n",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KE4QW1WQ4TYA7VTQGY6WBBGG",
+          "update": {
+            "content": {
+              "text": "   ",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KE4QW1WQ4TYA7VTQGY6WBBGG",
+          "update": {
+            "content": {
+              "text": " \"",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KE4QW1WQ4TYA7VTQGY6WBBGG",
+          "update": {
+            "content": {
+              "text": "goal",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KE4QW1WQ4TYA7VTQGY6WBBGG",
+          "update": {
+            "content": {
+              "text": "\":",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KE4QW1WQ4TYA7VTQGY6WBBGG",
+          "update": {
+            "content": {
+              "text": " \"",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KE4QW1WQ4TYA7VTQGY6WBBGG",
+          "update": {
+            "content": {
+              "text": "Implement",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KE4QW1WQ4TYA7VTQGY6WBBGG",
+          "update": {
+            "content": {
+              "text": " user",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KE4QW1WQ4TYA7VTQGY6WBBGG",
+          "update": {
+            "content": {
+              "text": " authentication",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KE4QW1WQ4TYA7VTQGY6WBBGG",
+          "update": {
+            "content": {
+              "text": "\"\n",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KE4QW1WQ4TYA7VTQGY6WBBGG",
+          "update": {
+            "content": {
+              "text": " ",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KE4QW1WQ4TYA7VTQGY6WBBGG",
+          "update": {
+            "content": {
+              "text": " }\n",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KE4QW1WQ4TYA7VTQGY6WBBGG",
+          "update": {
+            "content": {
+              "text": "}",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KE4QW1WQ4TYA7VTQGY6WBBGG",
+          "update": {
+            "content": {
+              "text": "",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KE4QW1WQ4TYA7VTQGY6WBBGG",
+          "update": {
+            "rawInput": {
+              "goal": "Implement user authentication"
+            },
+            "sessionUpdate": "tool_call",
+            "title": "create-plan",
+            "toolCallId": "01KE4QW7C7P5MVR3FH1JHYQE5F"
+          }
+        },
+        {
+          "sessionId": "01KE4QW1WQ4TYA7VTQGY6WBBGG",
+          "update": {
+            "rawOutput": "{\n  \"plan\": {\n    \"goal\": \"Implement user authentication\",\n    \"steps\": [\n      {\n        \"description\": \"Analyze requirements\",\n        \"id\": 1,\n        \"status\": \"pending\"\n      },\n      {\n        \"description\": \"Design solution\",\n        \"id\": 2,\n        \"status\": \"pending\"\n      },\n      {\n        \"description\": \"Implement solution\",\n        \"id\": 3,\n        \"status\": \"pending\"\n      },\n      {\n        \"description\": \"Test and validate\",\n        \"id\": 4,\n        \"status\": \"pending\"\n      }\n    ]\n  }\n}",
+            "sessionUpdate": "tool_call_update",
+            "status": "completed",
+            "toolCallId": "01KE4QW7C7P5MVR3FH1JHYQE5F"
+          }
+        },
+        {
+          "sessionId": "01KE4QW1WQ4TYA7VTQGY6WBBGG",
+          "update": {
+            "content": {
+              "text": "The",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KE4QW1WQ4TYA7VTQGY6WBBGG",
+          "update": {
+            "content": {
+              "text": " plan",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KE4QW1WQ4TYA7VTQGY6WBBGG",
+          "update": {
+            "content": {
+              "text": " for",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KE4QW1WQ4TYA7VTQGY6WBBGG",
+          "update": {
+            "content": {
+              "text": " implementing",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KE4QW1WQ4TYA7VTQGY6WBBGG",
+          "update": {
+            "content": {
+              "text": " user",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KE4QW1WQ4TYA7VTQGY6WBBGG",
+          "update": {
+            "content": {
+              "text": " authentication",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KE4QW1WQ4TYA7VTQGY6WBBGG",
+          "update": {
+            "content": {
+              "text": " has",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KE4QW1WQ4TYA7VTQGY6WBBGG",
+          "update": {
+            "content": {
+              "text": " been",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KE4QW1WQ4TYA7VTQGY6WBBGG",
+          "update": {
+            "content": {
+              "text": " successfully",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KE4QW1WQ4TYA7VTQGY6WBBGG",
+          "update": {
+            "content": {
+              "text": " created",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KE4QW1WQ4TYA7VTQGY6WBBGG",
+          "update": {
+            "content": {
+              "text": " with",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KE4QW1WQ4TYA7VTQGY6WBBGG",
+          "update": {
+            "content": {
+              "text": " the",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KE4QW1WQ4TYA7VTQGY6WBBGG",
+          "update": {
+            "content": {
+              "text": " following",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KE4QW1WQ4TYA7VTQGY6WBBGG",
+          "update": {
+            "content": {
+              "text": " steps",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KE4QW1WQ4TYA7VTQGY6WBBGG",
+          "update": {
+            "content": {
+              "text": ":\n\n",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KE4QW1WQ4TYA7VTQGY6WBBGG",
+          "update": {
+            "content": {
+              "text": "1",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KE4QW1WQ4TYA7VTQGY6WBBGG",
+          "update": {
+            "content": {
+              "text": ".",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KE4QW1WQ4TYA7VTQGY6WBBGG",
+          "update": {
+            "content": {
+              "text": " Analy",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KE4QW1WQ4TYA7VTQGY6WBBGG",
+          "update": {
+            "content": {
+              "text": "ze",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KE4QW1WQ4TYA7VTQGY6WBBGG",
+          "update": {
+            "content": {
+              "text": " requirements",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KE4QW1WQ4TYA7VTQGY6WBBGG",
+          "update": {
+            "content": {
+              "text": "  \n",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KE4QW1WQ4TYA7VTQGY6WBBGG",
+          "update": {
+            "content": {
+              "text": "2",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KE4QW1WQ4TYA7VTQGY6WBBGG",
+          "update": {
+            "content": {
+              "text": ".",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KE4QW1WQ4TYA7VTQGY6WBBGG",
+          "update": {
+            "content": {
+              "text": " Design",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KE4QW1WQ4TYA7VTQGY6WBBGG",
+          "update": {
+            "content": {
+              "text": " solution",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KE4QW1WQ4TYA7VTQGY6WBBGG",
+          "update": {
+            "content": {
+              "text": "  \n",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KE4QW1WQ4TYA7VTQGY6WBBGG",
+          "update": {
+            "content": {
+              "text": "3",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KE4QW1WQ4TYA7VTQGY6WBBGG",
+          "update": {
+            "content": {
+              "text": ".",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KE4QW1WQ4TYA7VTQGY6WBBGG",
+          "update": {
+            "content": {
+              "text": " Implement",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KE4QW1WQ4TYA7VTQGY6WBBGG",
+          "update": {
+            "content": {
+              "text": " solution",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KE4QW1WQ4TYA7VTQGY6WBBGG",
+          "update": {
+            "content": {
+              "text": "  \n",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KE4QW1WQ4TYA7VTQGY6WBBGG",
+          "update": {
+            "content": {
+              "text": "4",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KE4QW1WQ4TYA7VTQGY6WBBGG",
+          "update": {
+            "content": {
+              "text": ".",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KE4QW1WQ4TYA7VTQGY6WBBGG",
+          "update": {
+            "content": {
+              "text": " Test",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KE4QW1WQ4TYA7VTQGY6WBBGG",
+          "update": {
+            "content": {
+              "text": " and",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KE4QW1WQ4TYA7VTQGY6WBBGG",
+          "update": {
+            "content": {
+              "text": " validate",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KE4QW1WQ4TYA7VTQGY6WBBGG",
+          "update": {
+            "content": {
+              "text": "  \n\n",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KE4QW1WQ4TYA7VTQGY6WBBGG",
+          "update": {
+            "content": {
+              "text": "All",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KE4QW1WQ4TYA7VTQGY6WBBGG",
+          "update": {
+            "content": {
+              "text": " steps",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KE4QW1WQ4TYA7VTQGY6WBBGG",
+          "update": {
+            "content": {
+              "text": " are",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KE4QW1WQ4TYA7VTQGY6WBBGG",
+          "update": {
+            "content": {
+              "text": " currently",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KE4QW1WQ4TYA7VTQGY6WBBGG",
+          "update": {
+            "content": {
+              "text": " marked",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KE4QW1WQ4TYA7VTQGY6WBBGG",
+          "update": {
+            "content": {
+              "text": " as",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KE4QW1WQ4TYA7VTQGY6WBBGG",
+          "update": {
+            "content": {
+              "text": " \"",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KE4QW1WQ4TYA7VTQGY6WBBGG",
+          "update": {
+            "content": {
+              "text": "pending",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KE4QW1WQ4TYA7VTQGY6WBBGG",
+          "update": {
+            "content": {
+              "text": ".\"",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KE4QW1WQ4TYA7VTQGY6WBBGG",
+          "update": {
+            "content": {
+              "text": " Let",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KE4QW1WQ4TYA7VTQGY6WBBGG",
+          "update": {
+            "content": {
+              "text": " me",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KE4QW1WQ4TYA7VTQGY6WBBGG",
+          "update": {
+            "content": {
+              "text": " know",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KE4QW1WQ4TYA7VTQGY6WBBGG",
+          "update": {
+            "content": {
+              "text": " if",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KE4QW1WQ4TYA7VTQGY6WBBGG",
+          "update": {
+            "content": {
+              "text": " you",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KE4QW1WQ4TYA7VTQGY6WBBGG",
+          "update": {
+            "content": {
+              "text": "'d",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KE4QW1WQ4TYA7VTQGY6WBBGG",
+          "update": {
+            "content": {
+              "text": " like",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KE4QW1WQ4TYA7VTQGY6WBBGG",
+          "update": {
+            "content": {
+              "text": " to",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KE4QW1WQ4TYA7VTQGY6WBBGG",
+          "update": {
+            "content": {
+              "text": " update",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KE4QW1WQ4TYA7VTQGY6WBBGG",
+          "update": {
+            "content": {
+              "text": " or",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KE4QW1WQ4TYA7VTQGY6WBBGG",
+          "update": {
+            "content": {
+              "text": " proceed",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KE4QW1WQ4TYA7VTQGY6WBBGG",
+          "update": {
+            "content": {
+              "text": " with",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KE4QW1WQ4TYA7VTQGY6WBBGG",
+          "update": {
+            "content": {
+              "text": " any",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KE4QW1WQ4TYA7VTQGY6WBBGG",
+          "update": {
+            "content": {
+              "text": " of",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KE4QW1WQ4TYA7VTQGY6WBBGG",
+          "update": {
+            "content": {
+              "text": " these",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KE4QW1WQ4TYA7VTQGY6WBBGG",
+          "update": {
+            "content": {
+              "text": " steps",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KE4QW1WQ4TYA7VTQGY6WBBGG",
+          "update": {
+            "content": {
+              "text": "!",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KE4QW1WQ4TYA7VTQGY6WBBGG",
+          "update": {
+            "content": {
+              "text": "",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        }
+      ]
+    }
+  ]
+}

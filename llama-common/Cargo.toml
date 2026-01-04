@@ -10,6 +10,7 @@ thiserror = { workspace = true }
 
 # Serialization
 serde = { workspace = true }
+serde_yaml = { workspace = true }
 
 # Logging
 tracing = { workspace = true }

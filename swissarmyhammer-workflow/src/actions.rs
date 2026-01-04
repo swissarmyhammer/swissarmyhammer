@@ -536,7 +536,16 @@ impl PromptAction {
         let response = acp::execute_prompt(&mut agent, system_prompt, user_prompt)
             .await
             .map_err(|e| {
-                tracing::error!("Prompt execution failed: {}", Pretty(&e));
+                #[derive(serde::Serialize, Debug)]
+                struct ErrorInfo {
+                    error: String,
+                }
+                tracing::error!(
+                    "Prompt execution failed: {}",
+                    Pretty(&ErrorInfo {
+                        error: e.to_string()
+                    })
+                );
                 convert_acp_error(e)
             })?;
 

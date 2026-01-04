@@ -42,7 +42,7 @@ use agent_client_protocol_extras::recording::RecordedSession;
 use swissarmyhammer_common::Pretty;
 
 /// Statistics from session fixture verification
-#[derive(Debug, Default)]
+#[derive(Debug, Default, serde::Serialize)]
 pub struct SessionStats {
     pub new_session_calls: usize,
     pub load_session_calls: usize,

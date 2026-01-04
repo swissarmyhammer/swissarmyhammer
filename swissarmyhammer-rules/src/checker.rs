@@ -64,6 +64,7 @@ pub enum CheckMode {
 ///     check_mode: CheckMode::FailFast,
 ///     force: false,
 ///     max_errors: None,
+///     skip_glob_expansion: false,
 ///     max_concurrency: None,
 /// };
 /// ```
@@ -77,6 +78,10 @@ pub struct RuleCheckRequest {
     pub category: Option<String>,
     /// File paths or glob patterns to check
     pub patterns: Vec<String>,
+    /// If true, patterns are treated as explicit file paths and glob expansion is skipped
+    /// This is used when patterns come from git changed files or other sources that
+    /// already provide resolved file paths.
+    pub skip_glob_expansion: bool,
     /// Check mode controlling fail-fast behavior
     pub check_mode: CheckMode,
     /// Force re-evaluation, bypassing cache
@@ -646,6 +651,7 @@ impl RuleChecker {
     ///     check_mode: CheckMode::CollectAll,
     ///     force: false,
     ///     max_errors: None,
+    ///     skip_glob_expansion: false,
     ///     max_concurrency: None,
     /// };
     ///
@@ -674,7 +680,8 @@ impl RuleChecker {
             return Ok(stream::iter(vec![]).boxed());
         }
 
-        let target_files = self.expand_target_patterns(&request.patterns)?;
+        let target_files =
+            self.expand_target_patterns(&request.patterns, request.skip_glob_expansion)?;
 
         if target_files.is_empty() {
             tracing::info!("No files matched the patterns");
@@ -746,17 +753,38 @@ impl RuleChecker {
         Ok(rules)
     }
 
-    /// Expand glob patterns to get target files
-    fn expand_target_patterns(&self, patterns: &[String]) -> Result<Vec<PathBuf>> {
-        let config = GlobExpansionConfig::default();
-
-        let mut target_files = expand_glob_patterns(patterns, &config)
-            .map_err(|e| RuleError::CheckError(format!("Failed to expand glob patterns: {}", e)))?;
+    /// Expand glob patterns to get target files, or use patterns as-is if skip_glob_expansion is set
+    fn expand_target_patterns(
+        &self,
+        patterns: &[String],
+        skip_glob_expansion: bool,
+    ) -> Result<Vec<PathBuf>> {
+        let mut target_files = if skip_glob_expansion {
+            // Patterns are already explicit file paths - convert directly to PathBufs
+            tracing::info!(
+                "Using {} explicit file paths (skipping glob expansion)",
+                patterns.len()
+            );
+            patterns
+                .iter()
+                .map(PathBuf::from)
+                .filter(|p| p.is_file())
+                .collect()
+        } else {
+            // Expand glob patterns normally
+            let config = GlobExpansionConfig::default();
+            expand_glob_patterns(patterns, &config).map_err(|e| {
+                RuleError::CheckError(format!("Failed to expand glob patterns: {}", e))
+            })?
+        };
 
         target_files.sort();
 
         if !target_files.is_empty() {
-            tracing::info!("Expanded patterns to {} target files", target_files.len());
+            tracing::info!(
+                "Will check {} target files against rules",
+                target_files.len()
+            );
         }
 
         Ok(target_files)
@@ -1029,6 +1057,7 @@ mod tests {
             check_mode: CheckMode::FailFast,
             force: false,
             max_errors: None,
+            skip_glob_expansion: false,
             max_concurrency: None,
         };
 
@@ -1217,6 +1246,7 @@ mod tests {
             check_mode: CheckMode::FailFast,
             force: false,
             max_errors: None,
+            skip_glob_expansion: false,
             max_concurrency: None,
         };
 
@@ -1242,6 +1272,7 @@ mod tests {
             check_mode: CheckMode::FailFast,
             force: false,
             max_errors: None,
+            skip_glob_expansion: false,
             max_concurrency: None,
         };
 
@@ -1266,6 +1297,7 @@ mod tests {
             check_mode: CheckMode::CollectAll,
             force: false,
             max_errors: None,
+            skip_glob_expansion: false,
             max_concurrency: None,
         };
 
@@ -1294,6 +1326,7 @@ mod tests {
             severity: None,
             category: None,
             patterns: vec!["test.rs".to_string()],
+            skip_glob_expansion: false,
             check_mode: CheckMode::CollectAll,
             force: false,
             max_errors: Some(2),
@@ -1332,6 +1365,7 @@ mod tests {
             check_mode: CheckMode::CollectAll,
             force: false,
             max_errors: None,
+            skip_glob_expansion: false,
             max_concurrency: None,
         };
 

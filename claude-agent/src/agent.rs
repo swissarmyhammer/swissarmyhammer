@@ -855,12 +855,12 @@ impl ClaudeAgent {
     }
 
     /// Log incoming request for debugging purposes
-    fn log_request<T: std::fmt::Debug>(&self, method: &str, request: &T) {
+    fn log_request<T: std::fmt::Debug + serde::Serialize>(&self, method: &str, request: &T) {
         tracing::debug!("Handling {} request: {}", method, Pretty(request));
     }
 
     /// Log outgoing response for debugging purposes
-    fn log_response<T: std::fmt::Debug>(&self, method: &str, response: &T) {
+    fn log_response<T: std::fmt::Debug + serde::Serialize>(&self, method: &str, response: &T) {
         tracing::debug!("Returning {} response: {}", method, Pretty(response));
     }
 

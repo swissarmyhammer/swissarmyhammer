@@ -584,7 +584,9 @@ fn spawn_stdio_server_task(
                     result = running_service.waiting() => {
                         match result {
                             Ok(quit_reason) => {
-                                tracing::info!("MCP stdio server completed naturally: {}", Pretty(&quit_reason));
+                                #[derive(serde::Serialize, Debug)]
+                                struct QuitInfo { reason: String }
+                                tracing::info!("MCP stdio server completed naturally: {}", Pretty(&QuitInfo { reason: format!("{:?}", quit_reason) }));
                             }
                             Err(e) => {
                                 tracing::error!("MCP stdio server task error: {}", e);

@@ -1,0 +1,388 @@
+//! Test configuration and utilities for LlamaAgent testing
+//!
+//! This module provides test configuration infrastructure that adapts to different
+//! environments (CI vs local development) and enables or disables specific executor
+//! types based on availability of dependencies like Claude CLI or model files.
+
+use serial_test::serial;
+use std::env;
+use std::sync::OnceLock;
+use swissarmyhammer_config::{
+    model::{LlamaAgentConfig, LlmModelConfig, McpServerConfig, ModelConfig, ModelSource},
+    DEFAULT_TEST_LLM_MODEL_FILENAME, DEFAULT_TEST_LLM_MODEL_REPO,
+};
+
+/// Test configuration for different environments
+#[derive(Debug, Clone)]
+pub struct TestConfig {
+    /// Enable Claude tests (default: true, requires claude CLI)
+    pub enable_claude_tests: bool,
+    /// LlamaAgent model repository for testing
+    pub llama_model_repo: String,
+    /// LlamaAgent model filename for testing
+    pub llama_model_filename: String,
+    /// Maximum concurrent tests (lower in CI)
+    pub max_concurrent_tests: usize,
+    /// Whether we're running in CI environment
+    pub is_ci: bool,
+}
+
+impl TestConfig {
+    /// Load test configuration from environment variables (cached)
+    pub fn from_environment() -> &'static Self {
+        static CONFIG: OnceLock<TestConfig> = OnceLock::new();
+        CONFIG.get_or_init(Self::from_environment_uncached)
+    }
+
+    /// Parse concurrent test limit from environment variable
+    fn parse_concurrent_limit(default: usize) -> usize {
+        env::var("SAH_TEST_MAX_CONCURRENT")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(default)
+    }
+
+    /// Load test configuration from environment variables (uncached, for testing)
+    fn from_environment_uncached() -> Self {
+        let is_ci = env::var("CI")
+            .map(|v| v.to_lowercase() == "true")
+            .unwrap_or(false)
+            || env::var("GITHUB_ACTIONS")
+                .map(|v| v.to_lowercase() == "true")
+                .unwrap_or(false);
+
+        Self {
+            enable_claude_tests: env::var("SAH_TEST_CLAUDE")
+                .map(|v| v.to_lowercase() == "true" || v == "1")
+                .unwrap_or(true),
+            llama_model_repo: env::var("SAH_TEST_MODEL_REPO")
+                .unwrap_or_else(|_| DEFAULT_TEST_LLM_MODEL_REPO.to_string()),
+            llama_model_filename: env::var("SAH_TEST_MODEL_FILENAME")
+                .unwrap_or_else(|_| DEFAULT_TEST_LLM_MODEL_FILENAME.to_string()),
+            max_concurrent_tests: Self::parse_concurrent_limit(if is_ci { 3 } else { 5 }),
+            is_ci,
+        }
+    }
+
+    /// Create configuration with CI-specific settings
+    fn with_ci_settings(is_ci: bool) -> Self {
+        Self {
+            enable_claude_tests: true,
+            llama_model_repo: DEFAULT_TEST_LLM_MODEL_REPO.to_string(),
+            llama_model_filename: DEFAULT_TEST_LLM_MODEL_FILENAME.to_string(),
+            max_concurrent_tests: if is_ci { 3 } else { 5 },
+            is_ci,
+        }
+    }
+
+    /// Get optimized configuration for development environment
+    pub fn development() -> Self {
+        Self::with_ci_settings(false)
+    }
+
+    /// Get optimized configuration for CI environment
+    pub fn ci() -> Self {
+        Self::with_ci_settings(true)
+    }
+
+    /// Create LlamaAgent configuration for testing
+    pub fn create_llama_config(&self) -> LlamaAgentConfig {
+        LlamaAgentConfig {
+            model: LlmModelConfig {
+                source: ModelSource::HuggingFace {
+                    repo: self.llama_model_repo.clone(),
+                    filename: Some(self.llama_model_filename.clone()),
+                    folder: None,
+                },
+                batch_size: 256, // Smaller batch size for testing
+                use_hf_params: true,
+                debug: true, // Enable debug for testing
+            },
+            mcp_server: McpServerConfig {
+                port: 0,                                           // Random available port for testing
+                timeout_seconds: if self.is_ci { 10 } else { 30 }, // Shorter timeout in CI
+            },
+
+            repetition_detection: Default::default(),
+        }
+    }
+
+    /// Make a configuration quiet for testing
+    fn make_quiet(mut config: ModelConfig) -> ModelConfig {
+        config.quiet = true;
+        config
+    }
+
+    /// Create Claude Code configuration for testing
+    pub fn create_claude_config(&self) -> ModelConfig {
+        Self::make_quiet(ModelConfig::claude_code())
+    }
+
+    /// Create LlamaAgent configuration for testing
+    pub fn create_llama_agent_config(&self) -> ModelConfig {
+        Self::make_quiet(ModelConfig::llama_agent(self.create_llama_config()))
+    }
+}
+
+/// Test environment helper for consistent test setup
+#[derive(Debug)]
+pub struct TestEnvironment {
+    config: TestConfig,
+}
+
+impl TestEnvironment {
+    /// Create a new test environment with configuration from environment
+    pub fn new() -> Self {
+        Self {
+            config: TestConfig::from_environment().clone(),
+        }
+    }
+
+    /// Create a test environment with specific configuration
+    pub fn with_config(config: TestConfig) -> Self {
+        Self { config }
+    }
+
+    /// Check if LlamaAgent tests should run (always enabled)
+    pub fn should_test_llama(&self) -> bool {
+        true
+    }
+
+    /// Check if Claude tests should run
+    pub fn should_test_claude(&self) -> bool {
+        self.config.enable_claude_tests
+    }
+
+    /// Get test timeout duration
+    pub fn test_timeout(&self) -> std::time::Duration {
+        if self.config.is_ci {
+            std::time::Duration::from_secs(60) // Shorter timeout in CI
+        } else {
+            std::time::Duration::from_secs(120) // Longer timeout for local development
+        }
+    }
+
+    /// Get maximum concurrent test count
+    pub fn max_concurrent(&self) -> usize {
+        self.config.max_concurrent_tests
+    }
+
+    /// Get the test configuration
+    pub fn config(&self) -> &TestConfig {
+        &self.config
+    }
+}
+
+impl Default for TestEnvironment {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Macro for executor-specific test setup
+///
+/// This macro generates test functions that only run when the specific
+/// executor type is enabled in the test configuration.
+///
+/// # Example
+///
+/// ```rust
+/// executor_test!(test_claude_only, claude, {
+///     let config = ModelConfig::claude_code();
+///     // Test Claude executor only
+/// });
+///
+/// executor_test!(test_llama_only, llama, {
+///     let config = ModelConfig::llama_agent(LlamaAgentConfig::for_testing());
+///     // Test LlamaAgent executor only
+/// });
+/// ```
+#[macro_export]
+macro_rules! executor_test {
+    ($test_name:ident, claude, $test_body:block) => {
+        #[tokio::test]
+        async fn $test_name() {
+            $crate::llama_test_config::skip_if_claude_disabled();
+            $test_body
+        }
+    };
+    ($test_name:ident, llama, $test_body:block) => {
+        #[tokio::test]
+        async fn $test_name() {
+            $test_body
+        }
+    };
+    ($test_name:ident, both, $test_body:block) => {
+        #[tokio::test]
+        async fn $test_name() {
+            $crate::llama_test_config::skip_if_both_disabled();
+            $test_body
+        }
+    };
+}
+
+/// Macro for cross-executor testing
+///
+/// This macro generates test functions that test both executor types
+/// when they are enabled, providing consistent test structure.
+///
+/// # Example
+///
+/// ```rust
+/// cross_executor_test!(test_both_executors, {
+///     |config: ModelConfig| async move {
+///         // Test logic that works with any ModelConfig
+///         let context = WorkflowTemplateContext::with_vars_for_test(HashMap::new());
+///         // ... test implementation
+///     }
+/// });
+/// ```
+#[macro_export]
+macro_rules! cross_executor_test {
+    ($test_name:ident, $test_fn:expr) => {
+        #[tokio::test]
+        async fn $test_name() {
+            let env = $crate::llama_test_config::TestEnvironment::new();
+            let test_fn = $test_fn;
+
+            if env.should_test_claude() {
+                println!("🔷 Testing with Claude executor");
+                let config = env.config().create_claude_config();
+                test_fn(config).await;
+            }
+
+            println!("🔸 Testing with LlamaAgent executor");
+            let config = env.config().create_llama_agent_config();
+            test_fn(config).await;
+
+            if !env.should_test_claude() {
+                eprintln!("⚠️ Only LlamaAgent executor enabled for cross-executor test");
+                eprintln!("   Enable Claude with SAH_TEST_CLAUDE=true");
+            }
+        }
+    };
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    #[serial]
+    fn test_config_from_environment_defaults() {
+        // Clear environment variables
+        env::remove_var("SAH_TEST_LLAMA");
+        env::remove_var("SAH_TEST_CLAUDE");
+        env::remove_var("CI");
+        env::remove_var("GITHUB_ACTIONS");
+
+        let config = TestConfig::from_environment_uncached();
+
+        // Defaults should be Claude enabled
+        assert!(config.enable_claude_tests);
+        assert!(!config.is_ci);
+    }
+
+    #[test]
+    #[serial]
+    fn test_config_development_preset() {
+        let config = TestConfig::development();
+
+        assert!(config.enable_claude_tests);
+        assert_eq!(config.max_concurrent_tests, 5);
+        assert!(!config.is_ci);
+    }
+
+    #[test]
+    #[serial]
+    fn test_config_ci_preset() {
+        let config = TestConfig::ci();
+
+        assert!(config.enable_claude_tests);
+        assert_eq!(config.max_concurrent_tests, 3); // Lower concurrency in CI
+        assert!(config.is_ci);
+    }
+
+    #[test]
+    #[serial]
+    fn test_llama_config_creation() {
+        let config = TestConfig::development();
+        let llama_config = config.create_llama_config();
+
+        match llama_config.model.source {
+            ModelSource::HuggingFace { repo, filename, .. } => {
+                assert_eq!(repo, DEFAULT_TEST_LLM_MODEL_REPO);
+                assert_eq!(filename, Some(DEFAULT_TEST_LLM_MODEL_FILENAME.to_string()));
+            }
+            ModelSource::Local { .. } => panic!("Should be HuggingFace source"),
+        }
+
+        assert_eq!(llama_config.mcp_server.port, 0); // Random port for testing
+        assert_eq!(llama_config.mcp_server.timeout_seconds, 30); // Development timeout
+    }
+
+    #[test]
+    #[serial]
+    fn test_claude_config_creation() {
+        let config = TestConfig::development();
+        let agent_config = config.create_claude_config();
+
+        assert!(agent_config.quiet);
+        assert!(matches!(
+            agent_config.executor,
+            swissarmyhammer_config::ModelExecutorConfig::ClaudeCode(_)
+        ));
+    }
+
+    #[test]
+    #[serial]
+    fn test_llama_model_config_creation() {
+        let config = TestConfig::development();
+        let agent_config = config.create_llama_agent_config();
+
+        assert!(agent_config.quiet);
+        assert!(matches!(
+            agent_config.executor,
+            swissarmyhammer_config::ModelExecutorConfig::LlamaAgent(_)
+        ));
+    }
+
+    #[test]
+    #[serial]
+    fn test_test_environment_new() {
+        let env = TestEnvironment::new();
+        // Should not panic and should load configuration
+        let _ = env.config();
+    }
+
+    #[test]
+    #[serial]
+    fn test_test_environment_with_config() {
+        let config = TestConfig::ci();
+        let env = TestEnvironment::with_config(config.clone());
+
+        assert!(env.should_test_llama());
+        assert_eq!(env.should_test_claude(), config.enable_claude_tests);
+        assert_eq!(
+            env.test_timeout(),
+            std::time::Duration::from_secs(60) // CI environment uses fixed 60 second timeout
+        );
+        assert_eq!(env.max_concurrent(), config.max_concurrent_tests);
+    }
+
+    #[test]
+    #[serial]
+    fn test_ci_detection() {
+        // Test GitHub Actions detection
+        env::set_var("GITHUB_ACTIONS", "true");
+        let config = TestConfig::from_environment_uncached();
+        assert!(config.is_ci);
+        env::remove_var("GITHUB_ACTIONS");
+
+        // Test generic CI detection
+        env::set_var("CI", "true");
+        let config = TestConfig::from_environment_uncached();
+        assert!(config.is_ci);
+        env::remove_var("CI");
+    }
+}

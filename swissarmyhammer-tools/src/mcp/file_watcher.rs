@@ -146,7 +146,19 @@ impl FileWatcher {
             while let Some(events_result) = event_rx_clone.recv().await {
                 match events_result {
                     Ok(events) => {
-                        tracing::debug!("📁 Debounced file system events: {}", Pretty(&events));
+                        #[derive(serde::Serialize, Debug)]
+                        struct EventsInfo {
+                            count: usize,
+                            events: Vec<String>,
+                        }
+                        let events_info = EventsInfo {
+                            count: events.len(),
+                            events: events.iter().map(|e| format!("{:?}", e)).collect(),
+                        };
+                        tracing::debug!(
+                            "📁 Debounced file system events: {}",
+                            Pretty(&events_info)
+                        );
 
                         // Filter for prompt files and collect all relevant paths
                         let relevant_paths: Vec<std::path::PathBuf> = events

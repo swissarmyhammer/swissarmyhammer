@@ -3462,6 +3462,7 @@ version = "0.3.0"
 dependencies = [
  "async-trait",
  "serde",
+ "serde_yaml",
  "swissarmyhammer-common",
  "thiserror 1.0.69",
  "tokio",

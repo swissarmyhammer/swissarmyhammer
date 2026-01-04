@@ -144,6 +144,19 @@ pub enum McpError {
     ProcessCrashed,
 }
 
+// Custom Serialize implementation that serializes errors as their Display representation
+impl serde::Serialize for McpError {
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut state = serializer.serialize_struct("McpError", 1)?;
+        state.serialize_field("error", &self.to_string())?;
+        state.end()
+    }
+}
+
 impl ToJsonRpcError for McpError {
     fn to_json_rpc_code(&self) -> i32 {
         match self {
@@ -210,6 +223,19 @@ pub enum AgentError {
 
     #[error("Internal error: {0}")]
     Internal(String),
+}
+
+// Custom Serialize implementation that serializes errors as their Display representation
+impl serde::Serialize for AgentError {
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut state = serializer.serialize_struct("AgentError", 1)?;
+        state.serialize_field("error", &self.to_string())?;
+        state.end()
+    }
 }
 
 impl ToJsonRpcError for AgentError {

@@ -1,0 +1,1151 @@
+{
+  "calls": [
+    {
+      "method": "initialize",
+      "request": {
+        "clientCapabilities": {
+          "fs": {
+            "readTextFile": false,
+            "writeTextFile": false
+          },
+          "terminal": false
+        },
+        "protocolVersion": 1
+      },
+      "response": {
+        "agentCapabilities": {
+          "_meta": {
+            "streaming": true,
+            "tools": [
+              "fs_read",
+              "fs_write",
+              "fs_list"
+            ]
+          },
+          "loadSession": true,
+          "mcpCapabilities": {
+            "http": true,
+            "sse": false
+          },
+          "promptCapabilities": {
+            "_meta": {
+              "streaming": true
+            },
+            "audio": true,
+            "embeddedContext": true,
+            "image": true
+          },
+          "sessionCapabilities": {}
+        },
+        "agentInfo": {
+          "name": "claude-agent",
+          "title": "Claude Agent v0.3.0",
+          "version": "0.3.0"
+        },
+        "authMethods": [],
+        "protocolVersion": 1
+      },
+      "notifications": []
+    },
+    {
+      "method": "new_session",
+      "request": {
+        "cwd": "/Users/wballard/github/swissarmyhammer/acp-conformance",
+        "mcpServers": []
+      },
+      "response": {
+        "sessionId": "01KE4QW105MDN3BDT0JBBGSXFR"
+      },
+      "notifications": []
+    },
+    {
+      "method": "prompt",
+      "request": {
+        "prompt": [
+          {
+            "text": "Create a todo item using the mcp__test-mcp-server__create-plan tool with goal 'Implement user authentication'. This is a multi-step task that requires planning.",
+            "type": "text"
+          }
+        ],
+        "sessionId": "01KE4QW105MDN3BDT0JBBGSXFR"
+      },
+      "response": {
+        "_meta": {
+          "claude_response": "I'll create a plan for implementing user authentication using the MCP test server tool.Perfect! I've created an execution plan for implementing user authentication using the MCP test server. The plan includes 4 steps:\n\n1. **Analyze requirements** (pending)\n2. **Design solution** (pending)\n3. **Implement solution** (pending)\n4. **Test and validate** (pending)\n\nThe plan has been created successfully with all steps currently in pending status. This provides a structured approach to implementing the authentication feature.Perfect! I've created an execution plan for implementing user authentication using the MCP test server. The plan includes 4 steps:\n\n1. **Analyze requirements** (pending)\n2. **Design solution** (pending)\n3. **Implement solution** (pending)\n4. **Test and validate** (pending)\n\nThe plan has been created successfully with all steps currently in pending status. This provides a structured approach to implementing the authentication feature.",
+          "processed": true,
+          "session_messages": 3,
+          "streaming": false
+        },
+        "stopReason": "end_turn"
+      },
+      "notifications": [
+        {
+          "_meta": {
+            "available_agents": [
+              [
+                "general-purpose",
+                "General Purpose",
+                null
+              ],
+              [
+                "statusline-setup",
+                "Statusline Setup",
+                null
+              ],
+              [
+                "Explore",
+                "Explore",
+                null
+              ],
+              [
+                "Plan",
+                "Plan",
+                null
+              ]
+            ],
+            "source": "claude_cli_init"
+          },
+          "sessionId": "01KE4QW105MDN3BDT0JBBGSXFR",
+          "update": {
+            "availableCommands": [
+              {
+                "_meta": {
+                  "category": "claude_builtin",
+                  "source": "claude_cli"
+                },
+                "description": "Claude: compact",
+                "input": null,
+                "name": "compact"
+              },
+              {
+                "_meta": {
+                  "category": "claude_builtin",
+                  "source": "claude_cli"
+                },
+                "description": "Claude: context",
+                "input": null,
+                "name": "context"
+              },
+              {
+                "_meta": {
+                  "category": "claude_builtin",
+                  "source": "claude_cli"
+                },
+                "description": "Claude: cost",
+                "input": null,
+                "name": "cost"
+              },
+              {
+                "_meta": {
+                  "category": "claude_builtin",
+                  "source": "claude_cli"
+                },
+                "description": "Claude: init",
+                "input": null,
+                "name": "init"
+              },
+              {
+                "_meta": {
+                  "category": "claude_builtin",
+                  "source": "claude_cli"
+                },
+                "description": "Claude: pr-comments",
+                "input": null,
+                "name": "pr-comments"
+              },
+              {
+                "_meta": {
+                  "category": "claude_builtin",
+                  "source": "claude_cli"
+                },
+                "description": "Claude: release-notes",
+                "input": null,
+                "name": "release-notes"
+              },
+              {
+                "_meta": {
+                  "category": "claude_builtin",
+                  "source": "claude_cli"
+                },
+                "description": "Claude: review",
+                "input": null,
+                "name": "review"
+              },
+              {
+                "_meta": {
+                  "category": "claude_builtin",
+                  "source": "claude_cli"
+                },
+                "description": "Claude: security-review",
+                "input": null,
+                "name": "security-review"
+              }
+            ],
+            "sessionUpdate": "available_commands_update"
+          }
+        },
+        {
+          "_meta": {
+            "session_id": "01KE4QW105MDN3BDT0JBBGSXFR",
+            "timestamp": 1767538308,
+            "update_type": "available_commands"
+          },
+          "sessionId": "01KE4QW105MDN3BDT0JBBGSXFR",
+          "update": {
+            "availableCommands": [
+              {
+                "_meta": {
+                  "category": "planning",
+                  "source": "core"
+                },
+                "description": "Create an execution plan for complex tasks",
+                "input": null,
+                "name": "create_plan"
+              },
+              {
+                "_meta": {
+                  "category": "analysis",
+                  "source": "core"
+                },
+                "description": "Research and analyze the codebase structure",
+                "input": null,
+                "name": "research_codebase"
+              }
+            ],
+            "sessionUpdate": "available_commands_update"
+          }
+        },
+        {
+          "sessionId": "01KE4QW105MDN3BDT0JBBGSXFR",
+          "update": {
+            "content": {
+              "text": "Create a todo item using the mcp__test-mcp-server__create-plan tool with goal 'Implement user authentication'. This is a multi-step task that requires planning.",
+              "type": "text"
+            },
+            "sessionUpdate": "user_message_chunk"
+          }
+        },
+        {
+          "_meta": {
+            "available_agents": [
+              [
+                "general-purpose",
+                "General Purpose",
+                null
+              ],
+              [
+                "statusline-setup",
+                "Statusline Setup",
+                null
+              ],
+              [
+                "Explore",
+                "Explore",
+                null
+              ],
+              [
+                "Plan",
+                "Plan",
+                null
+              ]
+            ],
+            "source": "claude_cli_init"
+          },
+          "sessionId": "01KE4QW105MDN3BDT0JBBGSXFR",
+          "update": {
+            "availableCommands": [
+              {
+                "_meta": {
+                  "category": "claude_builtin",
+                  "source": "claude_cli"
+                },
+                "description": "Claude: compact",
+                "input": null,
+                "name": "compact"
+              },
+              {
+                "_meta": {
+                  "category": "claude_builtin",
+                  "source": "claude_cli"
+                },
+                "description": "Claude: context",
+                "input": null,
+                "name": "context"
+              },
+              {
+                "_meta": {
+                  "category": "claude_builtin",
+                  "source": "claude_cli"
+                },
+                "description": "Claude: cost",
+                "input": null,
+                "name": "cost"
+              },
+              {
+                "_meta": {
+                  "category": "claude_builtin",
+                  "source": "claude_cli"
+                },
+                "description": "Claude: init",
+                "input": null,
+                "name": "init"
+              },
+              {
+                "_meta": {
+                  "category": "claude_builtin",
+                  "source": "claude_cli"
+                },
+                "description": "Claude: pr-comments",
+                "input": null,
+                "name": "pr-comments"
+              },
+              {
+                "_meta": {
+                  "category": "claude_builtin",
+                  "source": "claude_cli"
+                },
+                "description": "Claude: release-notes",
+                "input": null,
+                "name": "release-notes"
+              },
+              {
+                "_meta": {
+                  "category": "claude_builtin",
+                  "source": "claude_cli"
+                },
+                "description": "Claude: review",
+                "input": null,
+                "name": "review"
+              },
+              {
+                "_meta": {
+                  "category": "claude_builtin",
+                  "source": "claude_cli"
+                },
+                "description": "Claude: security-review",
+                "input": null,
+                "name": "security-review"
+              }
+            ],
+            "sessionUpdate": "available_commands_update"
+          }
+        },
+        {
+          "sessionId": "01KE4QW105MDN3BDT0JBBGSXFR",
+          "update": {
+            "content": {
+              "text": "I'll create a plan",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KE4QW105MDN3BDT0JBBGSXFR",
+          "update": {
+            "content": {
+              "text": "I'll create a plan",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KE4QW105MDN3BDT0JBBGSXFR",
+          "update": {
+            "content": {
+              "text": " for implementing user authentication using",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KE4QW105MDN3BDT0JBBGSXFR",
+          "update": {
+            "content": {
+              "text": " for implementing user authentication using",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KE4QW105MDN3BDT0JBBGSXFR",
+          "update": {
+            "content": {
+              "text": " the M",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KE4QW105MDN3BDT0JBBGSXFR",
+          "update": {
+            "content": {
+              "text": " the M",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KE4QW105MDN3BDT0JBBGSXFR",
+          "update": {
+            "content": {
+              "text": "CP test",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KE4QW105MDN3BDT0JBBGSXFR",
+          "update": {
+            "content": {
+              "text": " server",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KE4QW105MDN3BDT0JBBGSXFR",
+          "update": {
+            "content": {
+              "text": "CP test",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KE4QW105MDN3BDT0JBBGSXFR",
+          "update": {
+            "content": {
+              "text": " server",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KE4QW105MDN3BDT0JBBGSXFR",
+          "update": {
+            "content": {
+              "text": " tool",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KE4QW105MDN3BDT0JBBGSXFR",
+          "update": {
+            "content": {
+              "text": " tool",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KE4QW105MDN3BDT0JBBGSXFR",
+          "update": {
+            "content": {
+              "text": ".",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KE4QW105MDN3BDT0JBBGSXFR",
+          "update": {
+            "content": {
+              "text": ".",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KE4QW105MDN3BDT0JBBGSXFR",
+          "update": {
+            "content": {
+              "text": "I'll create a plan for implementing user authentication using the MCP test server tool.",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KE4QW105MDN3BDT0JBBGSXFR",
+          "update": {
+            "_meta": {
+              "permission_options": [
+                {
+                  "kind": "allow_once",
+                  "name": "Allow once",
+                  "option_id": "allow-once"
+                },
+                {
+                  "kind": "allow_always",
+                  "name": "Allow always (mcp__test-mcp-server__create-plan)",
+                  "option_id": "allow-always"
+                },
+                {
+                  "kind": "reject_once",
+                  "name": "Reject",
+                  "option_id": "reject-once"
+                },
+                {
+                  "kind": "reject_always",
+                  "name": "Reject always (mcp__test-mcp-server__create-plan)",
+                  "option_id": "reject-always"
+                }
+              ],
+              "requires_permission": true
+            },
+            "rawInput": {
+              "goal": "Implement user authentication"
+            },
+            "sessionUpdate": "tool_call",
+            "title": "mcp__test-mcp-server__create-plan",
+            "toolCallId": "toolu_01YCvgfN4AiL4xCmAcnFqdYw"
+          }
+        },
+        {
+          "sessionId": "01KE4QW105MDN3BDT0JBBGSXFR",
+          "update": {
+            "rawInput": {
+              "goal": "Implement user authentication"
+            },
+            "sessionUpdate": "tool_call",
+            "title": "mcp__test-mcp-server__create-plan",
+            "toolCallId": "tool_8"
+          }
+        },
+        {
+          "Log": {
+            "data": {
+              "message": "Creating plan for: Implement user authentication"
+            },
+            "level": "info",
+            "logger": "test-mcp-server"
+          }
+        },
+        {
+          "Progress": {
+            "message": "Creating step 1/4",
+            "progress": 1.0,
+            "progressToken": "create-plan-1",
+            "total": 4.0
+          }
+        },
+        {
+          "Progress": {
+            "message": "Creating step 2/4",
+            "progress": 2.0,
+            "progressToken": "create-plan-1",
+            "total": 4.0
+          }
+        },
+        {
+          "Progress": {
+            "message": "Creating step 3/4",
+            "progress": 3.0,
+            "progressToken": "create-plan-1",
+            "total": 4.0
+          }
+        },
+        {
+          "Progress": {
+            "message": "Creating step 4/4",
+            "progress": 4.0,
+            "progressToken": "create-plan-1",
+            "total": 4.0
+          }
+        },
+        {
+          "sessionId": "01KE4QW105MDN3BDT0JBBGSXFR",
+          "update": {
+            "content": [
+              {
+                "content": {
+                  "text": "{\n  \"plan\": {\n    \"goal\": \"Implement user authentication\",\n    \"steps\": [\n      {\n        \"description\": \"Analyze requirements\",\n        \"id\": 1,\n        \"status\": \"pending\"\n      },\n      {\n        \"description\": \"Design solution\",\n        \"id\": 2,\n        \"status\": \"pending\"\n      },\n      {\n        \"description\": \"Implement solution\",\n        \"id\": 3,\n        \"status\": \"pending\"\n      },\n      {\n        \"description\": \"Test and validate\",\n        \"id\": 4,\n        \"status\": \"pending\"\n      }\n    ]\n  }\n}",
+                  "type": "text"
+                },
+                "type": "content"
+              }
+            ],
+            "sessionUpdate": "tool_call_update",
+            "status": "completed",
+            "toolCallId": "toolu_01YCvgfN4AiL4xCmAcnFqdYw"
+          }
+        },
+        {
+          "sessionId": "01KE4QW105MDN3BDT0JBBGSXFR",
+          "update": {
+            "content": {
+              "text": "Perfect",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KE4QW105MDN3BDT0JBBGSXFR",
+          "update": {
+            "content": {
+              "text": "Perfect",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KE4QW105MDN3BDT0JBBGSXFR",
+          "update": {
+            "content": {
+              "text": "! I've create",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KE4QW105MDN3BDT0JBBGSXFR",
+          "update": {
+            "content": {
+              "text": "! I've create",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KE4QW105MDN3BDT0JBBGSXFR",
+          "update": {
+            "content": {
+              "text": "d an",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KE4QW105MDN3BDT0JBBGSXFR",
+          "update": {
+            "content": {
+              "text": " execution",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KE4QW105MDN3BDT0JBBGSXFR",
+          "update": {
+            "content": {
+              "text": "d an",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KE4QW105MDN3BDT0JBBGSXFR",
+          "update": {
+            "content": {
+              "text": " execution",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KE4QW105MDN3BDT0JBBGSXFR",
+          "update": {
+            "content": {
+              "text": " plan for implementing user authentication using",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KE4QW105MDN3BDT0JBBGSXFR",
+          "update": {
+            "content": {
+              "text": " plan for implementing user authentication using",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KE4QW105MDN3BDT0JBBGSXFR",
+          "update": {
+            "content": {
+              "text": " the MCP test server.",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KE4QW105MDN3BDT0JBBGSXFR",
+          "update": {
+            "content": {
+              "text": " the MCP test server.",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KE4QW105MDN3BDT0JBBGSXFR",
+          "update": {
+            "content": {
+              "text": " The plan includes 4 steps:",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KE4QW105MDN3BDT0JBBGSXFR",
+          "update": {
+            "content": {
+              "text": " The plan includes 4 steps:",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KE4QW105MDN3BDT0JBBGSXFR",
+          "update": {
+            "content": {
+              "text": "\n\n1. **Analyze requirements**",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KE4QW105MDN3BDT0JBBGSXFR",
+          "update": {
+            "content": {
+              "text": "\n\n1. **Analyze requirements**",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KE4QW105MDN3BDT0JBBGSXFR",
+          "update": {
+            "content": {
+              "text": " (pending",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KE4QW105MDN3BDT0JBBGSXFR",
+          "update": {
+            "content": {
+              "text": " (pending",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KE4QW105MDN3BDT0JBBGSXFR",
+          "update": {
+            "content": {
+              "text": ")\n2. **Design solution**",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KE4QW105MDN3BDT0JBBGSXFR",
+          "update": {
+            "content": {
+              "text": ")\n2. **Design solution**",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KE4QW105MDN3BDT0JBBGSXFR",
+          "update": {
+            "content": {
+              "text": " (pending)\n3. **",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KE4QW105MDN3BDT0JBBGSXFR",
+          "update": {
+            "content": {
+              "text": " (pending)\n3. **",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KE4QW105MDN3BDT0JBBGSXFR",
+          "update": {
+            "content": {
+              "text": "Implement solution** (pending)\n4",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KE4QW105MDN3BDT0JBBGSXFR",
+          "update": {
+            "content": {
+              "text": "Implement solution** (pending)\n4",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KE4QW105MDN3BDT0JBBGSXFR",
+          "update": {
+            "content": {
+              "text": ". **Test and validate** (pending",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KE4QW105MDN3BDT0JBBGSXFR",
+          "update": {
+            "content": {
+              "text": ". **Test and validate** (pending",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KE4QW105MDN3BDT0JBBGSXFR",
+          "update": {
+            "content": {
+              "text": ")\n\nThe",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KE4QW105MDN3BDT0JBBGSXFR",
+          "update": {
+            "content": {
+              "text": ")\n\nThe",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KE4QW105MDN3BDT0JBBGSXFR",
+          "update": {
+            "content": {
+              "text": " plan has",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KE4QW105MDN3BDT0JBBGSXFR",
+          "update": {
+            "content": {
+              "text": " plan has",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KE4QW105MDN3BDT0JBBGSXFR",
+          "update": {
+            "content": {
+              "text": " been create",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KE4QW105MDN3BDT0JBBGSXFR",
+          "update": {
+            "content": {
+              "text": " been create",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KE4QW105MDN3BDT0JBBGSXFR",
+          "update": {
+            "content": {
+              "text": "d successfully",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KE4QW105MDN3BDT0JBBGSXFR",
+          "update": {
+            "content": {
+              "text": "d successfully",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KE4QW105MDN3BDT0JBBGSXFR",
+          "update": {
+            "content": {
+              "text": " with",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KE4QW105MDN3BDT0JBBGSXFR",
+          "update": {
+            "content": {
+              "text": " with",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KE4QW105MDN3BDT0JBBGSXFR",
+          "update": {
+            "content": {
+              "text": " all",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KE4QW105MDN3BDT0JBBGSXFR",
+          "update": {
+            "content": {
+              "text": " all",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KE4QW105MDN3BDT0JBBGSXFR",
+          "update": {
+            "content": {
+              "text": " steps",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KE4QW105MDN3BDT0JBBGSXFR",
+          "update": {
+            "content": {
+              "text": " steps",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KE4QW105MDN3BDT0JBBGSXFR",
+          "update": {
+            "content": {
+              "text": " currently",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KE4QW105MDN3BDT0JBBGSXFR",
+          "update": {
+            "content": {
+              "text": " currently",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KE4QW105MDN3BDT0JBBGSXFR",
+          "update": {
+            "content": {
+              "text": " in pending",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KE4QW105MDN3BDT0JBBGSXFR",
+          "update": {
+            "content": {
+              "text": " in pending",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KE4QW105MDN3BDT0JBBGSXFR",
+          "update": {
+            "content": {
+              "text": " status. This",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KE4QW105MDN3BDT0JBBGSXFR",
+          "update": {
+            "content": {
+              "text": " status. This",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KE4QW105MDN3BDT0JBBGSXFR",
+          "update": {
+            "content": {
+              "text": " provides",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KE4QW105MDN3BDT0JBBGSXFR",
+          "update": {
+            "content": {
+              "text": " provides",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KE4QW105MDN3BDT0JBBGSXFR",
+          "update": {
+            "content": {
+              "text": " a structure",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KE4QW105MDN3BDT0JBBGSXFR",
+          "update": {
+            "content": {
+              "text": " a structure",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KE4QW105MDN3BDT0JBBGSXFR",
+          "update": {
+            "content": {
+              "text": "d approach to implementing the",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KE4QW105MDN3BDT0JBBGSXFR",
+          "update": {
+            "content": {
+              "text": "d approach to implementing the",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KE4QW105MDN3BDT0JBBGSXFR",
+          "update": {
+            "content": {
+              "text": " authentication feature.",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KE4QW105MDN3BDT0JBBGSXFR",
+          "update": {
+            "content": {
+              "text": " authentication feature.",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KE4QW105MDN3BDT0JBBGSXFR",
+          "update": {
+            "content": {
+              "text": "Perfect! I've created an execution plan for implementing user authentication using the MCP test server. The plan includes 4 steps:\n\n1. **Analyze requirements** (pending)\n2. **Design solution** (pending)\n3. **Implement solution** (pending)\n4. **Test and validate** (pending)\n\nThe plan has been created successfully with all steps currently in pending status. This provides a structured approach to implementing the authentication feature.",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        },
+        {
+          "sessionId": "01KE4QW105MDN3BDT0JBBGSXFR",
+          "update": {
+            "content": {
+              "text": "Perfect! I've created an execution plan for implementing user authentication using the MCP test server. The plan includes 4 steps:\n\n1. **Analyze requirements** (pending)\n2. **Design solution** (pending)\n3. **Implement solution** (pending)\n4. **Test and validate** (pending)\n\nThe plan has been created successfully with all steps currently in pending status. This provides a structured approach to implementing the authentication feature.",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        }
+      ]
+    }
+  ]
+}

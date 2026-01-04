@@ -18,7 +18,7 @@ const STRESS_TEST_REPEAT_SIZE: usize = 10000;
 ///
 /// This enum defines different approaches for parsing tool calls from language model
 /// generated text. Each strategy corresponds to different model formats and capabilities.
-#[derive(Debug, Clone, PartialEq, Hash, Eq)]
+#[derive(Debug, Clone, PartialEq, Hash, Eq, serde::Serialize)]
 pub enum ToolParsingStrategy {
     /// Default strategy using multiple parsers in sequence
     ///

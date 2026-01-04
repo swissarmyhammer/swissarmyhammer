@@ -103,7 +103,7 @@ pub struct TerminalSession {
 ///
 /// This struct defines all the parameters needed to create a new terminal session
 /// following the Anthropic Computer Protocol (ACP) specification.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, serde::Serialize)]
 pub struct TerminalCreateParams {
     /// Session identifier that must exist and be a valid ULID format
     #[serde(rename = "sessionId")]
@@ -125,7 +125,7 @@ pub struct TerminalCreateParams {
 ///
 /// Represents a single environment variable to be set in the terminal session.
 /// Environment variables override system defaults when names conflict.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, serde::Serialize)]
 pub struct EnvVariable {
     /// Environment variable name (cannot be empty)
     pub name: String,
@@ -145,7 +145,7 @@ pub struct TerminalCreateResponse {
 }
 
 /// ACP-compliant request parameters for terminal/output method
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, serde::Serialize)]
 pub struct TerminalOutputParams {
     /// Session identifier
     #[serde(rename = "sessionId")]
@@ -178,7 +178,7 @@ pub struct ExitStatus {
 }
 
 /// ACP-compliant request parameters for terminal/release method
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, serde::Serialize)]
 pub struct TerminalReleaseParams {
     #[serde(rename = "sessionId")]
     pub session_id: String,
@@ -1183,14 +1183,14 @@ impl TerminalSession {
 
         match wait_result {
             Ok(Ok(status)) => {
-                tracing::debug!(
-                    "Process terminated gracefully with status: {}",
-                    Pretty(&status)
-                );
                 let exit_status = ExitStatus {
                     exit_code: status.code(),
                     signal: Self::get_signal_name(&status),
                 };
+                tracing::debug!(
+                    "Process terminated gracefully with status: {}",
+                    Pretty(&exit_status)
+                );
                 self.set_exit_status(exit_status).await;
                 Ok(())
             }

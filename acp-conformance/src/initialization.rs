@@ -34,7 +34,7 @@ use agent_client_protocol_extras::recording::RecordedSession;
 use swissarmyhammer_common::Pretty;
 
 /// Statistics from initialization fixture verification
-#[derive(Debug, Default)]
+#[derive(Debug, Default, serde::Serialize)]
 pub struct InitializationStats {
     pub initialize_calls: usize,
     pub protocol_version: Option<i64>,

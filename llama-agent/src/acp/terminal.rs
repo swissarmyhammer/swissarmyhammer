@@ -499,11 +499,16 @@ impl TerminalManager {
 
         match wait_result {
             Ok(Ok(status)) => {
+                let exit_code = status.code().unwrap_or(0);
+                #[derive(serde::Serialize, Debug)]
+                struct ProcessStatus {
+                    exit_code: i32,
+                }
                 tracing::debug!(
                     "Process terminated gracefully with status: {}",
-                    Pretty(&status)
+                    Pretty(&ProcessStatus { exit_code })
                 );
-                session.state = TerminalState::Finished(status.code().unwrap_or(0));
+                session.state = TerminalState::Finished(exit_code);
                 Ok(())
             }
             Ok(Err(e)) => Err(TerminalError::Io(e)),
@@ -520,8 +525,15 @@ impl TerminalManager {
 
                 // Wait for forceful kill
                 let status = session.process.wait().await?;
-
-                tracing::debug!("Process forcefully killed with status: {}", Pretty(&status));
+                let exit_code = status.code().unwrap_or(-1);
+                #[derive(serde::Serialize, Debug)]
+                struct ProcessStatus {
+                    exit_code: i32,
+                }
+                tracing::debug!(
+                    "Process forcefully killed with status: {}",
+                    Pretty(&ProcessStatus { exit_code })
+                );
                 session.state = TerminalState::Killed;
                 Ok(())
             }

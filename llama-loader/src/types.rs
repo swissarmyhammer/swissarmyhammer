@@ -33,6 +33,23 @@ pub struct ModelMetadata {
     pub context_size: usize,
 }
 
+impl serde::Serialize for ModelMetadata {
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut state = serializer.serialize_struct("ModelMetadata", 6)?;
+        state.serialize_field("source", &self.source)?;
+        state.serialize_field("filename", &self.filename)?;
+        state.serialize_field("size_bytes", &self.size_bytes)?;
+        state.serialize_field("load_time_secs", &self.load_time.as_secs_f64())?;
+        state.serialize_field("cache_hit", &self.cache_hit)?;
+        state.serialize_field("context_size", &self.context_size)?;
+        state.end()
+    }
+}
+
 /// Configuration for model retry logic
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RetryConfig {

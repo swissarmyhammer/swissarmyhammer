@@ -29,7 +29,7 @@ use agent_client_protocol_extras::recording::RecordedSession;
 use swissarmyhammer_common::Pretty;
 
 /// Statistics from plan fixture verification
-#[derive(Debug, Default)]
+#[derive(Debug, Default, serde::Serialize)]
 pub struct PlanStats {
     pub plan_notifications: usize,
     pub total_entries: usize,

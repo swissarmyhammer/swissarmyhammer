@@ -30,7 +30,7 @@ use std::sync::Arc;
 use swissarmyhammer_common::Pretty;
 
 /// Statistics from file system fixture verification
-#[derive(Debug, Default)]
+#[derive(Debug, Default, serde::Serialize)]
 pub struct FileSystemStats {
     pub initialize_calls: usize,
     pub new_session_calls: usize,

@@ -1117,7 +1117,16 @@ async fn process_child_output_with_limits(
     )
     .await?;
 
-    tracing::debug!("Process exited with status: {}", Pretty(&exit_status));
+    #[derive(serde::Serialize, Debug)]
+    struct ProcessExitInfo {
+        exit_code: Option<i32>,
+        success: bool,
+    }
+    let exit_info = ProcessExitInfo {
+        exit_code: exit_status.code(),
+        success: exit_status.success(),
+    };
+    tracing::debug!("Process exited with status: {}", Pretty(&exit_info));
 
     collect_remaining_output(
         &mut setup.stdout_reader,

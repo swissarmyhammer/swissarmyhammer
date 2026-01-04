@@ -67,20 +67,46 @@ pub fn expand_glob_patterns(
         message: format!("Failed to get current directory: {}", e),
     })?;
 
+    tracing::debug!(
+        "expand_glob_patterns: processing {} patterns from cwd={}",
+        patterns.len(),
+        current_dir.display()
+    );
+
+    let mut direct_files = 0;
+    let mut directories = 0;
+    let mut globs = 0;
+
     for pattern in patterns {
         let path = PathBuf::from(pattern);
 
         if path.is_file() {
+            direct_files += 1;
             handle_direct_file_path(&path, &current_dir, &mut target_files);
         } else if path.is_dir() {
+            directories += 1;
             handle_directory_path(&path, config, &mut target_files)?;
         } else {
+            globs += 1;
             handle_glob_pattern(pattern, &path, &current_dir, config, &mut target_files)?;
         }
     }
 
+    tracing::debug!(
+        "expand_glob_patterns: classified {} direct files, {} directories, {} glob patterns",
+        direct_files,
+        directories,
+        globs
+    );
+
     filter_excluded_paths(&mut target_files, config);
     apply_mtime_sorting(&mut target_files, config);
+
+    tracing::debug!(
+        "expand_glob_patterns: expanded {} patterns to {} files",
+        patterns.len(),
+        target_files.len()
+    );
 
     Ok(target_files)
 }

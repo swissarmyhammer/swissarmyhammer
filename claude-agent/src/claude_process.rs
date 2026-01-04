@@ -426,7 +426,20 @@ impl ClaudeProcess {
         }
 
         // Log the complete command being executed
-        tracing::info!("🚀 Spawning Claude CLI: {}", Pretty(&command.as_std()));
+        #[derive(serde::Serialize, Debug)]
+        struct CommandInfo {
+            program: String,
+            args: Vec<String>,
+        }
+        let cmd_info = CommandInfo {
+            program: command.as_std().get_program().to_string_lossy().to_string(),
+            args: command
+                .as_std()
+                .get_args()
+                .map(|s| s.to_string_lossy().to_string())
+                .collect(),
+        };
+        tracing::info!("🚀 Spawning Claude CLI: {}", Pretty(&cmd_info));
 
         let mut cmd = command
             .current_dir(cwd)

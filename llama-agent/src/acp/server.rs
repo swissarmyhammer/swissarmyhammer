@@ -321,7 +321,9 @@ impl AcpServer {
                                 }
                             }
                             Err(e) => {
-                                tracing::warn!("Notification channel error: {}", Pretty(&e));
+                                #[derive(serde::Serialize, Debug)]
+                                struct ChannelError { error: String }
+                                tracing::warn!("Notification channel error: {}", Pretty(&ChannelError { error: e.to_string() }));
                                 break;
                             }
                         }

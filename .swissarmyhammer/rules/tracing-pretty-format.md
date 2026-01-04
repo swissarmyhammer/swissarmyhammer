@@ -11,7 +11,7 @@ All tracing log statements (trace!, debug!, info!, warn!, error!) that log compl
 
 ## Rationale
 
-Using the `Pretty` wrapper provides consistent, readable multi-line formatting for all complex objects in logs. This makes logs easier to read and debug, especially for nested structures and configuration objects.
+Using the `Pretty` wrapper provides consistent, readable YAML-formatted output with a leading newline for all complex objects in logs. This makes logs easier to read and debug, especially for nested structures and configuration objects. The YAML format is more readable than Rust's Debug format and includes proper indentation.
 
 ## Correct Usage
 
@@ -42,6 +42,11 @@ tracing::debug!("Request: {:?}", request);
 tracing::info!("Config loaded: {:#?}", config);
 tracing::debug!("Request: {:#?}", request);
 ```
+
+## Requirements
+
+- Types passed to `Pretty` MUST implement `serde::Serialize`
+- The output will be YAML formatted with a newline before the content
 
 ## Exceptions
 
