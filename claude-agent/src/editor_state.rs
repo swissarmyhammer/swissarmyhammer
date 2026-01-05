@@ -431,17 +431,18 @@ mod tests {
         use agent_client_protocol::ClientCapabilities;
         use serde_json::json;
 
-        let capabilities = ClientCapabilities {
-            fs: agent_client_protocol::FileSystemCapability {
-                read_text_file: true,
-                write_text_file: true,
-                meta: Some(json!({
-                    "editorState": true
-                })),
-            },
-            terminal: false,
-            meta: None,
-        };
+        let capabilities = ClientCapabilities::new()
+            .fs(agent_client_protocol::FileSystemCapability::new()
+                .read_text_file(true)
+                .write_text_file(true)
+                .meta(
+                    json!({
+                        "editorState": true
+                    })
+                    .as_object()
+                    .cloned(),
+                ))
+            .terminal(false);
 
         assert!(supports_editor_state(&capabilities));
     }
@@ -451,17 +452,18 @@ mod tests {
         use agent_client_protocol::ClientCapabilities;
         use serde_json::json;
 
-        let capabilities = ClientCapabilities {
-            fs: agent_client_protocol::FileSystemCapability {
-                read_text_file: true,
-                write_text_file: true,
-                meta: Some(json!({
-                    "editorState": false
-                })),
-            },
-            terminal: false,
-            meta: None,
-        };
+        let capabilities = ClientCapabilities::new()
+            .fs(agent_client_protocol::FileSystemCapability::new()
+                .read_text_file(true)
+                .write_text_file(true)
+                .meta(
+                    json!({
+                        "editorState": false
+                    })
+                    .as_object()
+                    .cloned(),
+                ))
+            .terminal(false);
 
         assert!(!supports_editor_state(&capabilities));
     }
@@ -470,15 +472,11 @@ mod tests {
     fn test_supports_editor_state_missing() {
         use agent_client_protocol::ClientCapabilities;
 
-        let capabilities = ClientCapabilities {
-            fs: agent_client_protocol::FileSystemCapability {
-                read_text_file: true,
-                write_text_file: true,
-                meta: None,
-            },
-            terminal: false,
-            meta: None,
-        };
+        let capabilities = ClientCapabilities::new()
+            .fs(agent_client_protocol::FileSystemCapability::new()
+                .read_text_file(true)
+                .write_text_file(true))
+            .terminal(false);
 
         assert!(!supports_editor_state(&capabilities));
     }

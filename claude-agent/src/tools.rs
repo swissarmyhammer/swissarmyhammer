@@ -2925,15 +2925,11 @@ mod tests {
         let permission_engine = create_permission_engine();
         let mut handler = ToolCallHandler::new(permissions, session_manager, permission_engine);
         let session_id = create_test_session_id();
-        let caps_no_read = agent_client_protocol::ClientCapabilities {
-            fs: agent_client_protocol::FileSystemCapability {
-                read_text_file: false,
-                write_text_file: true,
-                meta: None,
-            },
-            terminal: false,
-            meta: None,
-        };
+        let caps_no_read = agent_client_protocol::ClientCapabilities::new()
+            .fs(agent_client_protocol::FileSystemCapability::new()
+                .read_text_file(false)
+                .write_text_file(true))
+            .terminal(false);
         handler.set_client_capabilities(caps_no_read);
 
         let read_request = InternalToolRequest {
@@ -2967,15 +2963,11 @@ mod tests {
         let permission_engine = create_permission_engine();
         let mut handler = ToolCallHandler::new(permissions, session_manager, permission_engine);
         let session_id = create_test_session_id();
-        let caps_no_terminal = agent_client_protocol::ClientCapabilities {
-            fs: agent_client_protocol::FileSystemCapability {
-                read_text_file: true,
-                write_text_file: true,
-                meta: None,
-            },
-            terminal: false,
-            meta: None,
-        };
+        let caps_no_terminal = agent_client_protocol::ClientCapabilities::new()
+            .fs(agent_client_protocol::FileSystemCapability::new()
+                .read_text_file(true)
+                .write_text_file(true))
+            .terminal(false);
         handler.set_client_capabilities(caps_no_terminal);
 
         let terminal_request = InternalToolRequest {
@@ -3008,15 +3000,11 @@ mod tests {
         let permission_engine = create_permission_engine();
         let mut handler = ToolCallHandler::new(permissions, session_manager, permission_engine);
         let session_id = create_test_session_id();
-        let caps_enabled = agent_client_protocol::ClientCapabilities {
-            fs: agent_client_protocol::FileSystemCapability {
-                read_text_file: true,
-                write_text_file: true,
-                meta: None,
-            },
-            terminal: true,
-            meta: None,
-        };
+        let caps_enabled = agent_client_protocol::ClientCapabilities::new()
+            .fs(agent_client_protocol::FileSystemCapability::new()
+                .read_text_file(true)
+                .write_text_file(true))
+            .terminal(true);
         handler.set_client_capabilities(caps_enabled);
 
         // Test fs_read passes capability validation (will fail later due to file not existing)
@@ -3083,15 +3071,11 @@ mod tests {
             permission_engine.clone(),
         );
 
-        let caps_no_terminal = agent_client_protocol::ClientCapabilities {
-            fs: agent_client_protocol::FileSystemCapability {
-                read_text_file: true,
-                write_text_file: true,
-                meta: None,
-            },
-            terminal: false,
-            meta: None,
-        };
+        let caps_no_terminal = agent_client_protocol::ClientCapabilities::new()
+            .fs(agent_client_protocol::FileSystemCapability::new()
+                .read_text_file(true)
+                .write_text_file(true))
+            .terminal(false);
 
         handler_no_terminal.set_client_capabilities(caps_no_terminal);
 
@@ -4135,15 +4119,11 @@ mod tests {
             ToolCallHandler::new(permissions, session_manager.clone(), permission_engine);
 
         // Set client capabilities for file operations
-        let capabilities = agent_client_protocol::ClientCapabilities {
-            fs: agent_client_protocol::FileSystemCapability {
-                read_text_file: true,
-                write_text_file: true,
-                meta: None,
-            },
-            terminal: false,
-            meta: None,
-        };
+        let capabilities = agent_client_protocol::ClientCapabilities::new()
+            .fs(agent_client_protocol::FileSystemCapability::new()
+                .read_text_file(true)
+                .write_text_file(true))
+            .terminal(false);
         handler.set_client_capabilities(capabilities);
 
         // Create two temporary directories - one for session, one outside
@@ -4220,15 +4200,11 @@ mod tests {
             ToolCallHandler::new(permissions, session_manager.clone(), permission_engine);
 
         // Set client capabilities for file operations
-        let capabilities = agent_client_protocol::ClientCapabilities {
-            fs: agent_client_protocol::FileSystemCapability {
-                read_text_file: true,
-                write_text_file: true,
-                meta: None,
-            },
-            terminal: false,
-            meta: None,
-        };
+        let capabilities = agent_client_protocol::ClientCapabilities::new()
+            .fs(agent_client_protocol::FileSystemCapability::new()
+                .read_text_file(true)
+                .write_text_file(true))
+            .terminal(false);
         handler.set_client_capabilities(capabilities);
 
         // Create temporary directory

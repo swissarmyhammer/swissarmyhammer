@@ -462,37 +462,55 @@ mod tests {
         // Test Protocol error conversion
         let agent_error = AgentError::Protocol("invalid protocol".to_string());
         let acp_error: agent_client_protocol::Error = agent_error.into();
-        assert_eq!(acp_error.code, -32600);
+        assert_eq!(
+            acp_error.code,
+            agent_client_protocol::ErrorCode::InvalidRequest
+        );
         assert_eq!(acp_error.message, "Protocol error: invalid protocol");
 
         // Test ToolExecution error conversion
         let agent_error = AgentError::ToolExecution("command failed".to_string());
         let acp_error: agent_client_protocol::Error = agent_error.into();
-        assert_eq!(acp_error.code, -32000);
+        assert_eq!(
+            acp_error.code,
+            agent_client_protocol::ErrorCode::Other(-32000)
+        );
         assert_eq!(acp_error.message, "Tool execution error: command failed");
 
         // Test Session error conversion
         let agent_error = AgentError::Session("session expired".to_string());
         let acp_error: agent_client_protocol::Error = agent_error.into();
-        assert_eq!(acp_error.code, -32000);
+        assert_eq!(
+            acp_error.code,
+            agent_client_protocol::ErrorCode::Other(-32000)
+        );
         assert_eq!(acp_error.message, "Session error: session expired");
 
         // Test InvalidRequest error conversion
         let agent_error = AgentError::InvalidRequest("bad params".to_string());
         let acp_error: agent_client_protocol::Error = agent_error.into();
-        assert_eq!(acp_error.code, -32602);
+        assert_eq!(
+            acp_error.code,
+            agent_client_protocol::ErrorCode::InvalidParams
+        );
         assert_eq!(acp_error.message, "Invalid request: bad params");
 
         // Test MethodNotFound error conversion
         let agent_error = AgentError::MethodNotFound("unknown_method".to_string());
         let acp_error: agent_client_protocol::Error = agent_error.into();
-        assert_eq!(acp_error.code, -32601);
+        assert_eq!(
+            acp_error.code,
+            agent_client_protocol::ErrorCode::MethodNotFound
+        );
         assert_eq!(acp_error.message, "Method not found: unknown_method");
 
         // Test Internal error conversion
         let agent_error = AgentError::Internal("unexpected error".to_string());
         let acp_error: agent_client_protocol::Error = agent_error.into();
-        assert_eq!(acp_error.code, -32603);
+        assert_eq!(
+            acp_error.code,
+            agent_client_protocol::ErrorCode::InternalError
+        );
         assert_eq!(acp_error.message, "Internal error: unexpected error");
     }
 }
