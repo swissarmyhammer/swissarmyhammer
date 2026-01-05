@@ -353,22 +353,13 @@ mod tests {
         after: chrono::DateTime<chrono::Utc>,
         expect_equal: bool,
     ) {
-        use std::time::SystemTime;
-
-        // Helper to convert SystemTime to DateTime<Utc>
-        let system_to_datetime = |st: SystemTime| -> chrono::DateTime<chrono::Utc> {
-            let duration = st.duration_since(SystemTime::UNIX_EPOCH).unwrap();
-            chrono::DateTime::from_timestamp(duration.as_secs() as i64, duration.subsec_nanos())
-                .unwrap()
-        };
-
         // Verify created_at is set and within reasonable bounds
-        let created_at = system_to_datetime(item.created_at.expect("created_at should be set"));
+        let created_at = item.created_at.expect("created_at should be set");
         assert!(created_at >= before);
         assert!(created_at <= after);
 
         // Verify updated_at is set and within reasonable bounds
-        let updated_at = system_to_datetime(item.updated_at.expect("updated_at should be set"));
+        let updated_at = item.updated_at.expect("updated_at should be set");
         assert!(updated_at >= before);
         assert!(updated_at <= after);
 

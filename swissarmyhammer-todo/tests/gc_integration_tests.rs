@@ -72,23 +72,13 @@ impl TestFixture {
 
 /// Assert that a timestamp is within a given range
 fn assert_timestamp_in_range(
-    timestamp: std::time::SystemTime,
+    timestamp: chrono::DateTime<chrono::Utc>,
     start: chrono::DateTime<chrono::Utc>,
     end: chrono::DateTime<chrono::Utc>,
     context: &str,
 ) {
-    use std::time::SystemTime;
-
-    // Helper to convert SystemTime to DateTime<Utc>
-    let system_to_datetime = |st: SystemTime| -> chrono::DateTime<chrono::Utc> {
-        let duration = st.duration_since(SystemTime::UNIX_EPOCH).unwrap();
-        chrono::DateTime::from_timestamp(duration.as_secs() as i64, duration.subsec_nanos())
-            .unwrap()
-    };
-
-    let timestamp_dt = system_to_datetime(timestamp);
     assert!(
-        timestamp_dt >= start && timestamp_dt <= end,
+        timestamp >= start && timestamp <= end,
         "{} should be in time range",
         context
     );

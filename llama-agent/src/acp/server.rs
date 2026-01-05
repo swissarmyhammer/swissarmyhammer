@@ -1002,7 +1002,7 @@ impl agent_client_protocol::Agent for AcpServer {
             terminal_mgr.set_client_capabilities(request.client_capabilities.clone());
         }
 
-        tracing::info!(
+        tracing::trace!(
             "Stored client capabilities for capability enforcement: {}",
             Pretty(&request.client_capabilities)
         );

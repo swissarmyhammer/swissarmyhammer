@@ -74,29 +74,19 @@ fn todo_to_plan_entry(todo: TodoItem) -> AcpPlanEntry {
         serde_json::json!(plan_entry.status),
     );
 
-    // Timestamps in swissarmyhammer_todo are SystemTime, need to convert
+    // Timestamps are already DateTime<Utc>
     if let Some(created_at) = plan_entry.created_at {
-        if let Ok(duration) = created_at.duration_since(std::time::UNIX_EPOCH) {
-            let datetime = chrono::DateTime::<chrono::Utc>::from_timestamp(
-                duration.as_secs() as i64,
-                duration.subsec_nanos(),
-            );
-            if let Some(dt) = datetime {
-                meta.insert("created_at".to_string(), serde_json::json!(dt.to_rfc3339()));
-            }
-        }
+        meta.insert(
+            "created_at".to_string(),
+            serde_json::json!(created_at.to_rfc3339()),
+        );
     }
 
     if let Some(updated_at) = plan_entry.updated_at {
-        if let Ok(duration) = updated_at.duration_since(std::time::UNIX_EPOCH) {
-            let datetime = chrono::DateTime::<chrono::Utc>::from_timestamp(
-                duration.as_secs() as i64,
-                duration.subsec_nanos(),
-            );
-            if let Some(dt) = datetime {
-                meta.insert("updated_at".to_string(), serde_json::json!(dt.to_rfc3339()));
-            }
-        }
+        meta.insert(
+            "updated_at".to_string(),
+            serde_json::json!(updated_at.to_rfc3339()),
+        );
     }
 
     AcpPlanEntry::new(plan_entry.content.clone(), priority, status).meta(meta)

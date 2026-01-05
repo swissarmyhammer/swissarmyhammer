@@ -1,8 +1,8 @@
 //! Core types for todo management
 
 use crate::error::{Result, TodoError};
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use std::time::SystemTime;
 use swissarmyhammer_common::generate_monotonic_ulid;
 
 /// Plan entry status lifecycle
@@ -57,16 +57,16 @@ pub struct PlanEntry {
     pub notes: Option<String>,
     /// Timestamp when this entry was created
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub created_at: Option<SystemTime>,
+    pub created_at: Option<DateTime<Utc>>,
     /// Timestamp when this entry was last updated
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub updated_at: Option<SystemTime>,
+    pub updated_at: Option<DateTime<Utc>>,
 }
 
 impl PlanEntry {
     /// Create a new plan entry with pending status
     pub fn new(content: String, priority: Priority) -> Self {
-        let now = SystemTime::now();
+        let now = Utc::now();
         Self {
             id: generate_monotonic_ulid().to_string(),
             content,
@@ -82,14 +82,14 @@ impl PlanEntry {
     pub fn update_status(&mut self, new_status: PlanEntryStatus) {
         if self.status != new_status {
             self.status = new_status;
-            self.updated_at = Some(SystemTime::now());
+            self.updated_at = Some(Utc::now());
         }
     }
 
     /// Add or update notes for this plan entry
     pub fn set_notes(&mut self, notes: String) {
         self.notes = Some(notes);
-        self.updated_at = Some(SystemTime::now());
+        self.updated_at = Some(Utc::now());
     }
 
     /// Check if this plan entry is complete (completed, failed, or cancelled)

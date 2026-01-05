@@ -444,9 +444,9 @@ async fn execute_prompt_inner(
         .client_capabilities(
             agent_client_protocol::ClientCapabilities::new()
                 .fs(agent_client_protocol::FileSystemCapability::new()
-                    .read_text_file(true)
-                    .write_text_file(true))
-                .terminal(true),
+                    .read_text_file(false)
+                    .write_text_file(false))
+                .terminal(false),
         );
 
     let init_response = agent
