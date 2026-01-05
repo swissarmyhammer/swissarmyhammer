@@ -1701,7 +1701,6 @@ mod tests {
 
     #[test]
     fn test_session_todos_persist_to_disk() {
-        use std::fs;
         use tempfile::tempdir;
 
         let temp_dir = tempdir().unwrap();

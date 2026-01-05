@@ -2036,15 +2036,11 @@ mod tests {
         let mut handler = ToolCallHandler::new(permissions, session_manager, permission_engine);
 
         // Set up test client capabilities for ACP compliance
-        let test_capabilities = agent_client_protocol::ClientCapabilities {
-            fs: agent_client_protocol::FileSystemCapability {
-                read_text_file: true,
-                write_text_file: true,
-                meta: None,
-            },
-            terminal: true,
-            meta: None,
-        };
+        let test_capabilities = agent_client_protocol::ClientCapabilities::new()
+            .fs(agent_client_protocol::FileSystemCapability::new()
+                .read_text_file(true)
+                .write_text_file(true))
+            .terminal(true);
         handler.set_client_capabilities(test_capabilities);
         handler
     }
@@ -2071,15 +2067,11 @@ mod tests {
         let mut handler = ToolCallHandler::new(permissions, session_manager, permission_engine);
 
         // Set test capabilities
-        let test_capabilities = agent_client_protocol::ClientCapabilities {
-            fs: agent_client_protocol::FileSystemCapability {
-                read_text_file: true,
-                write_text_file: true,
-                meta: None,
-            },
-            terminal: true,
-            meta: None,
-        };
+        let test_capabilities = agent_client_protocol::ClientCapabilities::new()
+            .fs(agent_client_protocol::FileSystemCapability::new()
+                .read_text_file(true)
+                .write_text_file(true))
+            .terminal(true);
         handler.set_client_capabilities(test_capabilities);
 
         (handler, acp_session_id)
@@ -3125,15 +3117,11 @@ mod tests {
             permission_engine.clone(),
         );
 
-        let caps_with_terminal = agent_client_protocol::ClientCapabilities {
-            fs: agent_client_protocol::FileSystemCapability {
-                read_text_file: true,
-                write_text_file: true,
-                meta: None,
-            },
-            terminal: true,
-            meta: None,
-        };
+        let caps_with_terminal = agent_client_protocol::ClientCapabilities::new()
+            .fs(agent_client_protocol::FileSystemCapability::new()
+                .read_text_file(true)
+                .write_text_file(true))
+            .terminal(true);
 
         handler_with_terminal.set_client_capabilities(caps_with_terminal);
 
@@ -3500,15 +3488,11 @@ mod tests {
         let session_id = create_test_session_id();
 
         // Test with terminal capability explicitly disabled
-        let caps_disabled = agent_client_protocol::ClientCapabilities {
-            fs: agent_client_protocol::FileSystemCapability {
-                read_text_file: true,
-                write_text_file: true,
-                meta: None,
-            },
-            terminal: false,
-            meta: None,
-        };
+        let caps_disabled = agent_client_protocol::ClientCapabilities::new()
+            .fs(agent_client_protocol::FileSystemCapability::new()
+                .read_text_file(true)
+                .write_text_file(true))
+            .terminal(false);
 
         handler.set_client_capabilities(caps_disabled);
 
@@ -3919,11 +3903,7 @@ mod tests {
                 r.update_status(ToolCallStatus::InProgress);
                 r.add_content(ToolCallContent::Content {
                     content: agent_client_protocol::ContentBlock::Text(
-                        agent_client_protocol::TextContent {
-                            text: "Reading file...".to_string(),
-                            annotations: None,
-                            meta: None,
-                        },
+                        agent_client_protocol::TextContent::new("Reading file...".to_string()),
                     ),
                 });
             })
@@ -4021,11 +4001,7 @@ mod tests {
         // Add different types of content
         report.add_content(ToolCallContent::Content {
             content: agent_client_protocol::ContentBlock::Text(
-                agent_client_protocol::TextContent {
-                    text: "Operation completed".to_string(),
-                    annotations: None,
-                    meta: None,
-                },
+                agent_client_protocol::TextContent::new("Operation completed".to_string()),
             ),
         });
 
