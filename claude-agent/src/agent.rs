@@ -523,6 +523,11 @@ pub struct ClaudeAgent {
     /// init JSON. Used to provide ACP session modes functionality.
     #[allow(clippy::type_complexity)]
     available_agents: Arc<RwLock<Option<Vec<(String, String, Option<String>)>>>>,
+    /// SwissArmyHammer modes with their system prompts
+    ///
+    /// Maps mode ID to system prompt content. When a SAH mode is set,
+    /// the system prompt is passed to Claude via --system-prompt.
+    sah_modes: Arc<RwLock<std::collections::HashMap<String, String>>>,
     /// Path validator for secure file operations
     ///
     /// Validates file paths to prevent path traversal attacks, enforce allowed/blocked
@@ -757,6 +762,7 @@ impl ClaudeAgent {
             permission_storage: Arc::new(permission_storage::PermissionStorage::new()),
             plan_manager: Arc::new(RwLock::new(crate::plan::PlanManager::new())),
             available_agents: Arc::new(RwLock::new(None)),
+            sah_modes: Arc::new(RwLock::new(std::collections::HashMap::new())),
             path_validator,
             size_validator,
         };
@@ -775,10 +781,77 @@ impl ClaudeAgent {
     /// Set available agents (modes) from Claude CLI init message
     ///
     /// Called after parsing the init JSON from Claude CLI to store the available agents.
+    /// Also loads SwissArmyHammer modes from ModeRegistry and merges them.
     /// These are used to provide ACP session modes functionality.
-    pub async fn set_available_agents(&self, agents: Vec<(String, String, Option<String>)>) {
+    pub async fn set_available_agents(&self, mut agents: Vec<(String, String, Option<String>)>) {
+        // Load SwissArmyHammer modes from ModeRegistry
+        let mut registry = swissarmyhammer_modes::ModeRegistry::new();
+        match registry.load_all() {
+            Ok(sah_mode_list) => {
+                // Create PromptLibrary once to resolve prompt references
+                let prompt_library = swissarmyhammer_prompts::PromptLibrary::new();
+                let template_context = swissarmyhammer_config::TemplateContext::new();
+
+                let mut sah_modes = self.sah_modes.write().await;
+                for mode in sah_mode_list {
+                    // Resolve the system prompt - either from prompt reference or embedded content
+                    let system_prompt = if let Some(prompt_path) = mode.prompt() {
+                        // Mode references a prompt file, render it
+                        match prompt_library.render(prompt_path, &template_context) {
+                            Ok(rendered) => {
+                                tracing::debug!(
+                                    "Rendered prompt '{}' for mode '{}' ({} chars)",
+                                    prompt_path,
+                                    mode.id(),
+                                    rendered.len()
+                                );
+                                rendered
+                            }
+                            Err(e) => {
+                                tracing::warn!(
+                                    "Failed to render prompt '{}' for mode '{}': {}",
+                                    prompt_path,
+                                    mode.id(),
+                                    e
+                                );
+                                // Fall back to embedded system_prompt (may be empty)
+                                mode.system_prompt().to_string()
+                            }
+                        }
+                    } else {
+                        // Mode has embedded system prompt
+                        mode.system_prompt().to_string()
+                    };
+
+                    sah_modes.insert(mode.id().to_string(), system_prompt);
+
+                    // Add to available agents list
+                    agents.push((
+                        mode.id().to_string(),
+                        mode.name().to_string(),
+                        Some(mode.description().to_string()),
+                    ));
+                }
+                tracing::info!(
+                    "Loaded {} SwissArmyHammer modes from ModeRegistry",
+                    sah_modes.len()
+                );
+            }
+            Err(e) => {
+                tracing::warn!("Failed to load SwissArmyHammer modes from registry: {}", e);
+            }
+        }
+
         let mut available_agents = self.available_agents.write().await;
         *available_agents = Some(agents);
+    }
+
+    /// Get the system prompt for a SwissArmyHammer mode
+    ///
+    /// Returns None if the mode is not a SwissArmyHammer mode (i.e., it's a Claude CLI mode).
+    pub async fn get_sah_mode_system_prompt(&self, mode_id: &str) -> Option<String> {
+        let sah_modes = self.sah_modes.read().await;
+        sah_modes.get(mode_id).cloned()
     }
 
     /// Get available agents (modes) as ACP SessionMode structs
@@ -1477,15 +1550,11 @@ impl ClaudeAgent {
 
         let context: crate::claude::SessionContext = session.into();
 
-        // Get current mode for this session to pass --agent flag
-        let agent_mode = self.get_session_mode(session_id).await;
-        if let Some(ref mode) = agent_mode {
-            tracing::debug!("Using agent mode '{}' for session {}", mode, session_id);
-        }
-
+        // Mode handling happens in set_session_mode, not here
+        // Just send the prompt to the existing Claude process
         let mut stream = self
             .claude_client
-            .query_stream_with_context(&prompt_text, &context, agent_mode)
+            .query_stream_with_context(&prompt_text, &context)
             .await
             .map_err(|e| {
                 tracing::error!("Failed to create streaming query: {}", e);
@@ -1973,16 +2042,11 @@ impl ClaudeAgent {
 
         tracing::info!("Calling Claude API for session: {}", session_id);
 
-        // Get current mode for this session to pass --agent flag
-        let agent_mode = self.get_session_mode(session_id).await;
-        if let Some(ref mode) = agent_mode {
-            tracing::debug!("Using agent mode '{}' for session {}", mode, session_id);
-        }
-
-        // Use streaming API internally to get notifications, but accumulate full response
+        // Mode handling happens in set_session_mode, not here
+        // Just send the prompt to the existing Claude process
         let mut stream = self
             .claude_client
-            .query_stream_with_context(&prompt_text, &context, agent_mode)
+            .query_stream_with_context(&prompt_text, &context)
             .await
             .map_err(|e| {
                 tracing::error!("Claude API error: {}", Pretty(&e));
@@ -3180,6 +3244,8 @@ impl Agent for ClaudeAgent {
                 &protocol_session_id,
                 &request.cwd,
                 self.config.mcp_servers.clone(),
+                None, // No agent mode at initial session creation
+                None, // No system prompt at initial session creation
             )
             .await
         {
@@ -3456,11 +3522,20 @@ impl Agent for ClaudeAgent {
 
         tracing::info!("Session mode set to: {}", mode_id_string);
 
-        // Terminate existing Claude process if mode changed
-        // This forces a respawn with the new --agent flag on next prompt
+        // When mode changes, terminate the existing process and spawn a new one
+        // This is effectively a powerful "clear" - the new process starts fresh
         if mode_changed {
+            // Get session cwd for spawning new process
+            let session = self
+                .session_manager
+                .get_session(&parsed_session_id)
+                .map_err(|_| agent_client_protocol::Error::internal_error())?
+                .ok_or_else(|| agent_client_protocol::Error::internal_error())?;
+            let cwd = session.cwd.clone();
+
+            // Terminate the existing Claude process
             tracing::info!(
-                "Mode changed for session {}, terminating Claude process to force respawn with --agent {}",
+                "Mode changed for session {}, terminating process and spawning new one with mode '{}'",
                 parsed_session_id,
                 mode_id_string
             );
@@ -3475,10 +3550,43 @@ impl Agent for ClaudeAgent {
                     parsed_session_id,
                     e
                 );
-            } else {
-                tracing::info!(
-                    "Claude process terminated, will respawn with new mode on next prompt"
+            }
+
+            // Determine spawn flags based on mode type
+            let (agent_mode, system_prompt) =
+                if let Some(prompt) = self.get_sah_mode_system_prompt(&mode_id_string).await {
+                    // SAH mode: use --system-prompt
+                    tracing::info!(
+                    "Spawning new Claude process with --system-prompt ({} chars) for SAH mode '{}'",
+                    prompt.len(),
+                    mode_id_string
                 );
+                    (None, Some(prompt))
+                } else {
+                    // Claude CLI mode: use --agent
+                    tracing::info!(
+                        "Spawning new Claude process with --agent '{}' for Claude CLI mode",
+                        mode_id_string
+                    );
+                    (Some(mode_id_string.clone()), None)
+                };
+
+            // Spawn new process with appropriate flags
+            let protocol_session_id = SessionId::new(parsed_session_id.to_string());
+            if let Err(e) = self
+                .claude_client
+                .spawn_process_and_consume_init(
+                    &parsed_session_id,
+                    &protocol_session_id,
+                    &cwd,
+                    self.config.mcp_servers.clone(),
+                    agent_mode,
+                    system_prompt,
+                )
+                .await
+            {
+                tracing::error!("Failed to spawn new Claude process for mode change: {}", e);
+                return Err(agent_client_protocol::Error::internal_error());
             }
 
             let current_mode_update =
@@ -3511,7 +3619,7 @@ impl Agent for ClaudeAgent {
         if mode_changed {
             meta_map.insert(
                 "process_action".to_string(),
-                serde_json::json!("terminated_for_respawn"),
+                serde_json::json!("process_replaced"),
             );
         }
 

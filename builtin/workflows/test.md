@@ -1,6 +1,7 @@
 ---
 title: Test
 description: Autonomously run a TDD loop until all tests pass
+mode: tester
 tags:
   - auto
 ---

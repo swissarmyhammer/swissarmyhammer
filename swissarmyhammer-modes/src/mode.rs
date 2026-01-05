@@ -17,6 +17,8 @@ use crate::Result;
 ///
 /// # Mode File Format
 ///
+/// Modes can either embed a system prompt directly:
+///
 /// ```markdown
 /// ---
 /// name: general-purpose
@@ -26,6 +28,19 @@ use crate::Result;
 /// You are a general-purpose AI agent capable of researching complex
 /// questions, searching for code, and executing multi-step tasks.
 /// ```
+///
+/// Or reference a prompt from the prompts system:
+///
+/// ```markdown
+/// ---
+/// name: planner
+/// description: Architecture and planning specialist
+/// prompt: .system/planner
+/// ---
+/// ```
+///
+/// When `prompt` is set, the referenced prompt should be loaded and rendered
+/// by the caller to get the system prompt content.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Mode {
     /// Unique identifier for the mode (e.g., "general-purpose", "Explore")
@@ -37,8 +52,12 @@ pub struct Mode {
     /// Description of when this mode should be used
     description: String,
 
-    /// System prompt for this mode
+    /// Embedded system prompt for this mode (used if `prompt` is None)
     system_prompt: String,
+
+    /// Reference to a prompt path to use for system prompt (e.g., ".system/planner")
+    /// When set, the caller should load and render this prompt instead of using `system_prompt`
+    prompt: Option<String>,
 
     /// Path to the source file (if loaded from file)
     #[serde(skip)]
@@ -46,7 +65,7 @@ pub struct Mode {
 }
 
 impl Mode {
-    /// Create a new mode
+    /// Create a new mode with embedded system prompt
     pub fn new(
         id: impl Into<String>,
         name: impl Into<String>,
@@ -58,6 +77,24 @@ impl Mode {
             name: name.into(),
             description: description.into(),
             system_prompt: system_prompt.into(),
+            prompt: None,
+            source_path: None,
+        }
+    }
+
+    /// Create a mode that references a prompt for its system prompt
+    pub fn with_prompt(
+        id: impl Into<String>,
+        name: impl Into<String>,
+        description: impl Into<String>,
+        prompt_path: impl Into<String>,
+    ) -> Self {
+        Self {
+            id: id.into(),
+            name: name.into(),
+            description: description.into(),
+            system_prompt: String::new(),
+            prompt: Some(prompt_path.into()),
             source_path: None,
         }
     }
@@ -65,12 +102,23 @@ impl Mode {
     /// Create a mode from a markdown file with frontmatter
     ///
     /// # Format
+    ///
+    /// With embedded system prompt:
     /// ```markdown
     /// ---
     /// name: mode-name
     /// description: Mode description
     /// ---
     /// System prompt content
+    /// ```
+    ///
+    /// Or with prompt reference:
+    /// ```markdown
+    /// ---
+    /// name: mode-name
+    /// description: Mode description
+    /// prompt: .system/mode-name
+    /// ---
     /// ```
     pub fn from_markdown(content: &str, file_id: impl Into<String>) -> Result<Self> {
         let parsed = parse_frontmatter(content)?;
@@ -95,11 +143,19 @@ impl Mode {
             })?
             .to_string();
 
+        // Check for prompt reference in frontmatter
+        let prompt = metadata
+            .get("prompt")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+
         let system_prompt = parsed.content.trim().to_string();
 
-        if system_prompt.is_empty() {
+        // Must have either a prompt reference or embedded content
+        if prompt.is_none() && system_prompt.is_empty() {
             return Err(SwissArmyHammerError::Other {
-                message: "Mode must have a system prompt (content after frontmatter)".to_string(),
+                message: "Mode must have either a 'prompt' field or system prompt content"
+                    .to_string(),
             });
         }
 
@@ -108,6 +164,7 @@ impl Mode {
             name,
             description,
             system_prompt,
+            prompt,
             source_path: None,
         })
     }
@@ -145,9 +202,25 @@ impl Mode {
         &self.description
     }
 
-    /// Get the system prompt
+    /// Get the embedded system prompt
+    ///
+    /// Note: This may be empty if the mode uses a prompt reference instead.
+    /// Check `prompt()` first to see if a prompt path should be loaded.
     pub fn system_prompt(&self) -> &str {
         &self.system_prompt
+    }
+
+    /// Get the prompt reference path (e.g., ".system/planner")
+    ///
+    /// When this is Some, the caller should load and render the referenced
+    /// prompt to get the system prompt content instead of using `system_prompt()`.
+    pub fn prompt(&self) -> Option<&str> {
+        self.prompt.as_deref()
+    }
+
+    /// Check if this mode uses a prompt reference
+    pub fn uses_prompt_reference(&self) -> bool {
+        self.prompt.is_some()
     }
 
     /// Get the source file path

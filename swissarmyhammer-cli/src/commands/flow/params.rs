@@ -111,6 +111,7 @@ mod tests {
             transitions: Vec::new(),
             parameters: params,
             metadata: HashMap::new(),
+            mode: None,
         }
     }
 

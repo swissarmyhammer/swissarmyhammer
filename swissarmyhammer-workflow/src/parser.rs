@@ -139,6 +139,9 @@ impl MermaidParser {
         // Extract parameters from frontmatter
         let parameters = Self::extract_parameters_from_frontmatter(input)?;
 
+        // Extract mode from frontmatter
+        let mode = Self::extract_mode_from_frontmatter(input)?;
+
         // Attempt to parse the diagram
         match parse_diagram(&mermaid_content) {
             Ok(diagram) => match diagram {
@@ -150,6 +153,7 @@ impl MermaidParser {
                         title,
                         description,
                         parameters,
+                        mode,
                     )
                 }
                 _ => Err(ParseError::WrongDiagramType {
@@ -308,6 +312,31 @@ impl MermaidParser {
         }
 
         Ok(parameters)
+    }
+
+    /// Parse frontmatter and extract workflow mode
+    fn extract_mode_from_frontmatter(input: &str) -> ParseResult<Option<String>> {
+        // Use shared frontmatter parsing
+        let frontmatter =
+            swissarmyhammer_common::frontmatter::parse_frontmatter(input).map_err(|e| {
+                ParseError::InvalidStructure {
+                    message: e.to_string(),
+                }
+            })?;
+
+        // Extract mode from frontmatter if present
+        let frontmatter_value = match frontmatter.metadata {
+            Some(value) => value,
+            None => return Ok(None),
+        };
+
+        // Extract mode field
+        let mode = frontmatter_value
+            .get("mode")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+
+        Ok(mode)
     }
 
     /// Extract actions from markdown content
@@ -531,6 +560,7 @@ impl MermaidParser {
         title: Option<String>,
         description: Option<String>,
         parameters: Vec<swissarmyhammer_common::Parameter>,
+        mode: Option<String>,
     ) -> ParseResult<Workflow> {
         // Use provided description or title, or fall back to default
         let workflow_description = description
@@ -549,6 +579,9 @@ impl MermaidParser {
 
         // Set parameters from frontmatter
         workflow.parameters = parameters;
+
+        // Set mode from frontmatter
+        workflow.mode = mode;
 
         // Convert all states from mermaid to our format
         for (state_id, mermaid_state) in state_diagram.states {
@@ -1448,6 +1481,61 @@ Content here
         let result = MermaidParser::extract_parameters_from_frontmatter(input);
         assert!(result.is_ok());
         assert!(result.unwrap().is_empty());
+    }
+
+    #[test]
+    fn test_parse_workflow_with_mode() {
+        let input = r#"---
+title: Test Workflow with Mode
+description: Tests mode parsing
+mode: planner
+---
+
+```mermaid
+stateDiagram-v2
+    [*] --> Process
+    Process --> [*]
+```
+"#;
+
+        let result = MermaidParser::parse_with_metadata(
+            input,
+            "mode_workflow",
+            Some("Test Workflow with Mode".to_string()),
+            Some("Tests mode parsing".to_string()),
+        );
+        assert!(result.is_ok());
+
+        let workflow = result.unwrap();
+        assert_eq!(workflow.name.as_str(), "mode_workflow");
+        assert_eq!(workflow.mode, Some("planner".to_string()));
+    }
+
+    #[test]
+    fn test_parse_workflow_without_mode() {
+        let input = r#"---
+title: Test Workflow without Mode
+description: Tests that mode is optional
+---
+
+```mermaid
+stateDiagram-v2
+    [*] --> Process
+    Process --> [*]
+```
+"#;
+
+        let result = MermaidParser::parse_with_metadata(
+            input,
+            "no_mode_workflow",
+            Some("Test Workflow without Mode".to_string()),
+            Some("Tests that mode is optional".to_string()),
+        );
+        assert!(result.is_ok());
+
+        let workflow = result.unwrap();
+        assert_eq!(workflow.name.as_str(), "no_mode_workflow");
+        assert_eq!(workflow.mode, None);
     }
 
     #[test]

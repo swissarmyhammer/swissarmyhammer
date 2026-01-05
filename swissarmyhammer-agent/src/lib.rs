@@ -40,8 +40,8 @@
 //! ```
 
 use agent_client_protocol::{
-    Agent, ContentBlock, InitializeRequest, NewSessionRequest, PromptRequest, SessionNotification,
-    SessionUpdate, StopReason, TextContent,
+    Agent, ContentBlock, InitializeRequest, NewSessionRequest, PromptRequest, SessionModeId,
+    SessionNotification, SessionUpdate, SetSessionModeRequest, StopReason, TextContent,
 };
 use llama_agent::types::AgentAPI;
 use std::sync::Arc;
@@ -389,8 +389,8 @@ async fn create_llama_agent(
 
 /// Execute a prompt using an ACP agent
 ///
-/// This creates a new session, sends the prompt, collects streamed content
-/// from notifications, and returns the response.
+/// This creates a new session, optionally sets a mode, sends the prompt,
+/// collects streamed content from notifications, and returns the response.
 ///
 /// Note: This function uses a dedicated current-thread runtime because the ACP
 /// Agent trait methods return non-Send futures.
@@ -398,16 +398,18 @@ async fn create_llama_agent(
 /// # Arguments
 /// * `handle` - The agent handle from `create_agent`
 /// * `system_prompt` - Optional system prompt (passed as session metadata)
+/// * `mode` - Optional mode ID to set on the session (e.g., "planner", "implementer")
 /// * `user_prompt` - The user's prompt text
 ///
 /// # Example
 /// ```ignore
-/// let response = execute_prompt(&mut handle, None, "Explain async/await".to_string()).await?;
+/// let response = execute_prompt(&mut handle, None, Some("planner"), "Design a new feature".to_string()).await?;
 /// println!("{}", response.content);
 /// ```
 pub async fn execute_prompt(
     handle: &mut AcpAgentHandle,
     system_prompt: Option<String>,
+    mode: Option<String>,
     user_prompt: String,
 ) -> AcpResult<AgentResponse> {
     // Clone what we need to move into the blocking task
@@ -425,7 +427,7 @@ pub async fn execute_prompt(
             })?;
 
         rt.block_on(async move {
-            execute_prompt_inner(agent, notification_rx, system_prompt, user_prompt).await
+            execute_prompt_inner(agent, notification_rx, system_prompt, mode, user_prompt).await
         })
     })
     .await
@@ -439,6 +441,7 @@ async fn execute_prompt_inner(
     agent: Arc<dyn Agent + Send + Sync>,
     mut notification_rx: broadcast::Receiver<SessionNotification>,
     system_prompt: Option<String>,
+    mode: Option<String>,
     user_prompt: String,
 ) -> AcpResult<AgentResponse> {
     // Initialize the agent if needed
@@ -480,6 +483,19 @@ async fn execute_prompt_inner(
 
     let session_id = session_response.session_id.clone();
     tracing::debug!("Session created: {}", session_id);
+
+    // Set session mode if provided
+    if let Some(mode_id) = mode {
+        let mode_id = SessionModeId::new(mode_id);
+        let set_mode_request = SetSessionModeRequest::new(session_id.clone(), mode_id.clone());
+        agent
+            .set_session_mode(set_mode_request)
+            .await
+            .map_err(|e| {
+                AcpError::SessionError(format!("Failed to set session mode '{}': {:?}", mode_id, e))
+            })?;
+        tracing::debug!("Session mode set to: {}", mode_id);
+    }
 
     // Build prompt content
     let prompt_content = vec![ContentBlock::Text(TextContent::new(user_prompt))];

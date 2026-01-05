@@ -878,6 +878,7 @@ mod tests {
             states: Default::default(),
             transitions: vec![],
             metadata: Default::default(),
+            mode: None,
         };
 
         let mut provided_params = serde_json::Map::new();
@@ -905,6 +906,7 @@ mod tests {
             states: Default::default(),
             transitions: vec![],
             metadata: Default::default(),
+            mode: None,
         };
 
         let provided_params = serde_json::Map::new();
@@ -928,6 +930,7 @@ mod tests {
             states: Default::default(),
             transitions: vec![],
             metadata: Default::default(),
+            mode: None,
         };
 
         let provided_params = serde_json::Map::new();
@@ -954,6 +957,7 @@ mod tests {
             states: Default::default(),
             transitions: vec![],
             metadata: Default::default(),
+            mode: None,
         };
 
         let mut provided_params = serde_json::Map::new();

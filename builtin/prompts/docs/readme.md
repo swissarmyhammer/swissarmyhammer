@@ -9,8 +9,6 @@ description: Create comprehensive README documentation for a project
 Create a high quality README.md.
 
 
-{% render "documentation" %}
-
 ## README Structure
 
 ### 1. Title and Badges

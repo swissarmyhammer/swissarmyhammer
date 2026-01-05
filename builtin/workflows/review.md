@@ -1,6 +1,7 @@
 ---
 title: Review
 description: Autonomously run code review with rules until all violations are fixed
+mode: reviewer
 tags:
   - auto
 ---

@@ -448,26 +448,25 @@ impl PromptAction {
                 ))
             })?;
 
-        // Render system prompt using the same library instance (optional)
-        let system_prompt = match library_arc.render(".system", &template_context) {
-            Ok(prompt) => Some(prompt),
-            Err(e) => {
-                tracing::warn!(
-                    "Failed to render system prompt: {}. Proceeding without system prompt.",
-                    e
-                );
-                None
+        // System prompt handling:
+        // - Workflows with a mode: system prompt applied via ACP set_session_mode (--append-system-prompt)
+        // - Workflows without a mode: use .system/default as fallback
+        let system_prompt = if context.get_workflow_mode().is_some() {
+            // Mode-based system prompt will be applied via ACP
+            None
+        } else {
+            // No mode set, use .system/default as the default system prompt
+            match library_arc.render(".system/default", &template_context) {
+                Ok(prompt) => Some(prompt),
+                Err(e) => {
+                    tracing::warn!(
+                        "Failed to render .system/default prompt: {}. Proceeding without system prompt.",
+                        e
+                    );
+                    None
+                }
             }
         };
-
-        if let Some(ref sys_prompt) = system_prompt {
-            tracing::debug!(
-                "System prompt rendered successfully ({} chars)",
-                sys_prompt.len()
-            );
-        } else {
-            tracing::debug!("No system prompt will be used");
-        }
 
         Ok((rendered, system_prompt))
     }
@@ -532,8 +531,11 @@ impl PromptAction {
             .await
             .map_err(convert_acp_error)?;
 
+        // Get workflow mode from context if available
+        let mode = context.get_workflow_mode();
+
         // Execute prompt via ACP protocol
-        let response = acp::execute_prompt(&mut agent, system_prompt, user_prompt)
+        let response = acp::execute_prompt(&mut agent, system_prompt, mode, user_prompt)
             .await
             .map_err(|e| {
                 #[derive(serde::Serialize, Debug)]

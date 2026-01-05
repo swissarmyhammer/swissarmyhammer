@@ -33,7 +33,7 @@ fn assert_valid_render(rendered: &str) {
 /// Test cases for builtin prompts that should render successfully
 /// because it requires specific parameters
 #[rstest]
-#[case(".system")]
+#[case(".system/default")]
 #[case("are_todos_done")]
 #[case("do_todo")]
 fn test_builtin_prompt_renders_successfully(#[case] prompt_name: &str) {

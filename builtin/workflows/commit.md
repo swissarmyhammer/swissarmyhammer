@@ -1,6 +1,7 @@
 ---
 title: Commit Changes
 description: Commit code changes to git with a conventional commit message
+mode: committer
 tags:
   - git
   - commit

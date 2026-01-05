@@ -19,7 +19,7 @@ use crate::types::tools::{ToolCall, ToolResult};
 pub struct StreamChunk {
     pub text: String,
     pub is_complete: bool,
-    pub token_count: u32,
+    pub token_count: usize,
     /// Finish reason, only present when is_complete is true
     pub finish_reason: Option<crate::types::generation::FinishReason>,
 }

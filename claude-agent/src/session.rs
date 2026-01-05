@@ -497,6 +497,7 @@ impl SessionManager {
     ///
     /// # Arguments
     /// * `cwd` - Working directory for the session (must be absolute path as per ACP spec)
+    /// * `client_capabilities` - Optional client capabilities
     ///
     /// # Errors
     /// Returns error if:

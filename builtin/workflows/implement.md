@@ -1,6 +1,7 @@
 ---
 title: Implement
 description: Complete todos, review code, and commit changes
+mode: implementer
 tags:
   - auto
 ---

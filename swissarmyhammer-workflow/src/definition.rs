@@ -90,6 +90,10 @@ pub struct Workflow {
     pub initial_state: StateId,
     /// Metadata for debugging and monitoring
     pub metadata: HashMap<String, String>,
+    /// Optional mode ID for this workflow (e.g., "planner", "implementer")
+    /// When set, the workflow will use this mode's system prompt
+    #[serde(default)]
+    pub mode: Option<String>,
 }
 
 impl Workflow {
@@ -103,6 +107,7 @@ impl Workflow {
             transitions: Vec::new(),
             initial_state,
             metadata: Default::default(),
+            mode: None,
         }
     }
 

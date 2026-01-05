@@ -70,6 +70,10 @@ agent-client-protocol = { workspace = true }
 # Todo system integration for ACP (always enabled)
 swissarmyhammer-todo = { path = "../swissarmyhammer-todo" }
 swissarmyhammer-common = { path = "../swissarmyhammer-common" }
+
+# Modes system for ACP session modes
+swissarmyhammer-modes = { path = "../swissarmyhammer-modes" }
+
 chrono = { workspace = true }
 
 # Unix signal handling for graceful shutdown
