@@ -6224,17 +6224,12 @@ mod tests {
         let session_response = agent.new_session(new_session_request).await.unwrap();
 
         // Test empty prompt
-        let prompt_request = PromptRequest {
-            session_id: session_response.session_id,
-            prompt: vec![agent_client_protocol::ContentBlock::Text(
-                agent_client_protocol::TextContent {
-                    text: "   ".to_string(), // Only whitespace
-                    annotations: None,
-                    meta: None,
-                },
+        let prompt_request = PromptRequest::new(
+            session_response.session_id,
+            vec![agent_client_protocol::ContentBlock::Text(
+                agent_client_protocol::TextContent::new("   ".to_string()), // Only whitespace
             )],
-            meta: None,
-        };
+        );
 
         let result = agent.prompt(prompt_request).await;
         assert!(result.is_err());
@@ -6249,19 +6244,16 @@ mod tests {
         let session_response = agent.new_session(new_session_request).await.unwrap();
 
         // Test non-text content block
-        let prompt_request = PromptRequest {
-            session_id: session_response.session_id,
-            prompt: vec![agent_client_protocol::ContentBlock::Image(
-                agent_client_protocol::ImageContent {
-                    data: "base64data".to_string(),
-                    mime_type: "image/png".to_string(),
-                    uri: Some("data:image/png;base64,base64data".to_string()),
-                    annotations: None,
-                    meta: None,
-                },
+        let prompt_request = PromptRequest::new(
+            session_response.session_id,
+            vec![agent_client_protocol::ContentBlock::Image(
+                agent_client_protocol::ImageContent::new(
+                    "base64data".to_string(),
+                    "image/png".to_string(),
+                )
+                .uri("data:image/png;base64,base64data".to_string()),
             )],
-            meta: None,
-        };
+        );
 
         let result = agent.prompt(prompt_request).await;
         assert!(result.is_err());
@@ -6273,17 +6265,12 @@ mod tests {
 
         // Use a valid ULID but for a session that doesn't exist
         let nonexistent_session_id = ulid::Ulid::new();
-        let prompt_request = PromptRequest {
-            session_id: SessionId::new(nonexistent_session_id.to_string()),
-            prompt: vec![agent_client_protocol::ContentBlock::Text(
-                agent_client_protocol::TextContent {
-                    text: "Hello".to_string(),
-                    annotations: None,
-                    meta: None,
-                },
+        let prompt_request = PromptRequest::new(
+            SessionId::new(nonexistent_session_id.to_string()),
+            vec![agent_client_protocol::ContentBlock::Text(
+                agent_client_protocol::TextContent::new("Hello".to_string()),
             )],
-            meta: None,
-        };
+        );
 
         let result = agent.prompt(prompt_request).await;
         assert!(result.is_err());
@@ -6365,15 +6352,10 @@ mod tests {
         let (agent, _) = create_test_agent_with_notifications().await;
 
         // Test invalid session ID
-        let invalid_prompt = PromptRequest {
-            session_id: SessionId::new("invalid-uuid".to_string()),
-            prompt: vec![ContentBlock::Text(TextContent {
-                text: "Hello".to_string(),
-                annotations: None,
-                meta: None,
-            })],
-            meta: None,
-        };
+        let invalid_prompt = PromptRequest::new(
+            SessionId::new("invalid-uuid".to_string()),
+            vec![ContentBlock::Text(TextContent::new("Hello".to_string()))],
+        );
 
         let result = agent.prompt(invalid_prompt).await;
         assert!(result.is_err());
@@ -6435,21 +6417,19 @@ mod tests {
 
         // Test with unknown capability in meta
         // Unknown capabilities should be accepted (lenient validation for forward compatibility)
-        let request = InitializeRequest {
-            client_capabilities: agent_client_protocol::ClientCapabilities::new()
-                .fs(agent_client_protocol::FileSystemCapability::new()
-                    .read_text_file(true)
-                    .write_text_file(true)
-                    .meta(Some(serde_json::json!({"unknown_feature": "test"}))))
-                .terminal(true)
-                .meta(Some(serde_json::json!({
-                    "customExtension": true,
-                    "streaming": true
-                }))),
-            protocol_version: Default::default(),
-            client_info: None,
-            meta: None,
-        };
+        let request = InitializeRequest::new(agent_client_protocol::ProtocolVersion::V1)
+            .client_capabilities(
+                agent_client_protocol::ClientCapabilities::new()
+                    .fs(agent_client_protocol::FileSystemCapability::new()
+                        .read_text_file(true)
+                        .write_text_file(true)
+                        .meta(serde_json::json!({"unknown_feature": "test"}).as_object().cloned()))
+                    .terminal(true)
+                    .meta(serde_json::json!({
+                        "customExtension": true,
+                        "streaming": true
+                    }).as_object().cloned())
+            );
 
         let result = agent.initialize(request).await;
         assert!(
@@ -6463,28 +6443,27 @@ mod tests {
         let agent = create_test_agent().await;
 
         // Test with invalid capability structure
-        let request = InitializeRequest {
-            protocol_version: Default::default(),
-            client_capabilities: agent_client_protocol::ClientCapabilities::new()
-                .fs(agent_client_protocol::FileSystemCapability::new()
-                    .read_text_file(true)
-                    .write_text_file(true))
-                .terminal(true)
-                .meta(Some(serde_json::json!({
-                    "malformed": "data",
-                    "nested": {
-                        "invalid": []
-                    }
-                }))),
-            client_info: None,
-            meta: Some(serde_json::json!("invalid_meta_format")), // Should be object, not string
-        };
+        let request = InitializeRequest::new(agent_client_protocol::ProtocolVersion::V1)
+            .client_capabilities(
+                agent_client_protocol::ClientCapabilities::new()
+                    .fs(agent_client_protocol::FileSystemCapability::new()
+                        .read_text_file(true)
+                        .write_text_file(true))
+                    .terminal(true)
+                    .meta(serde_json::json!({
+                        "malformed": "data",
+                        "nested": {
+                            "invalid": []
+                        }
+                    }).as_object().cloned())
+            )
+            .meta(serde_json::json!("invalid_meta_format").as_object().cloned()); // Should be object, not string
 
         let result = agent.initialize(request).await;
         assert!(result.is_err(), "Malformed request should be rejected");
 
         let error = result.unwrap_err();
-        assert_eq!(error.code, -32600);
+        assert_eq!(error.code, agent_client_protocol::ErrorCode::Other(-32600));
         assert!(error.message.contains("Invalid initialize request"));
 
         // Verify error data structure
@@ -6507,9 +6486,9 @@ mod tests {
                         .read_text_file(true)
                         .write_text_file(true))
                     .terminal(true)
-                    .meta(Some(serde_json::json!({
+                    .meta(serde_json::json!({
                         "streaming": "invalid_string_value"  // streaming must be boolean
-                    }))),
+                    }).as_object().cloned()),
             );
 
         let result = agent.initialize(request).await;
@@ -6519,7 +6498,7 @@ mod tests {
         );
 
         let error = result.unwrap_err();
-        assert_eq!(error.code, -32602, "Should be Invalid params error");
+        assert_eq!(error.code, agent_client_protocol::ErrorCode::Other(-32602), "Should be Invalid params error");
         assert!(error.message.contains("streaming"));
         assert!(error.message.contains("boolean"));
 
@@ -6542,9 +6521,9 @@ mod tests {
                     .fs(agent_client_protocol::FileSystemCapability::new()
                         .read_text_file(true)
                         .write_text_file(true)
-                        .meta(Some(serde_json::json!({
+                        .meta(serde_json::json!({
                             "unknown_feature": true
-                        }))))
+                        }).as_object().cloned()))
                     .terminal(true),
             );
 
@@ -6572,22 +6551,21 @@ mod tests {
         let v0_result = agent.initialize(v0_request).await;
         assert!(v0_result.is_ok(), "V0 should be supported");
 
-        let v1_request = InitializeRequest {
-            client_capabilities: agent_client_protocol::ClientCapabilities::new()
-                .fs(agent_client_protocol::FileSystemCapability::new()
-                    .read_text_file(true)
-                    .write_text_file(true))
-                .terminal(true),
-            protocol_version: agent_client_protocol::ProtocolVersion::V1,
-            client_info: None,
-            meta: None,
-        };
+        let v1_request = InitializeRequest::new(agent_client_protocol::ProtocolVersion::V1)
+            .client_capabilities(
+                agent_client_protocol::ClientCapabilities::new()
+                    .fs(agent_client_protocol::FileSystemCapability::new()
+                        .read_text_file(true)
+                        .write_text_file(true))
+                    .terminal(true)
+            );
 
         let v1_result = agent.initialize(v1_request).await;
         assert!(v1_result.is_ok(), "V1 should be supported");
 
         // Test the version validation logic directly
-        let _unsupported_version = agent_client_protocol::ProtocolVersion::default();
+        // Note: ProtocolVersion doesn't have a default() method, so we use V1 for testing
+        let _supported_version = agent_client_protocol::ProtocolVersion::V1;
 
         // Temporarily modify SUPPORTED_PROTOCOL_VERSIONS to exclude default version
         // This tests the error handling path by calling validate_protocol_version
@@ -6607,16 +6585,14 @@ mod tests {
         let agent = create_test_agent().await;
 
         // Test client requests V1 -> agent should respond with V1
-        let v1_request = InitializeRequest {
-            client_capabilities: agent_client_protocol::ClientCapabilities::new()
-                .fs(agent_client_protocol::FileSystemCapability::new()
-                    .read_text_file(true)
-                    .write_text_file(true))
-                .terminal(true),
-            protocol_version: agent_client_protocol::ProtocolVersion::V1,
-            client_info: None,
-            meta: None,
-        };
+        let v1_request = InitializeRequest::new(agent_client_protocol::ProtocolVersion::V1)
+            .client_capabilities(
+                agent_client_protocol::ClientCapabilities::new()
+                    .fs(agent_client_protocol::FileSystemCapability::new()
+                        .read_text_file(true)
+                        .write_text_file(true))
+                    .terminal(true)
+            );
 
         let v1_response = agent.initialize(v1_request).await.unwrap();
         assert_eq!(
@@ -6699,11 +6675,7 @@ mod tests {
         agent.set_client(test_client);
 
         // First create a session
-        let new_session_request = NewSessionRequest {
-            cwd: std::path::PathBuf::from("/tmp"),
-            meta: None,
-            mcp_servers: vec![],
-        };
+        let new_session_request = NewSessionRequest::new(std::path::PathBuf::from("/tmp"));
         let session_response = agent.new_session(new_session_request).await.unwrap();
 
         // Create a permission request using the new structures
@@ -6763,11 +6735,7 @@ mod tests {
         agent.set_client(test_client);
 
         // Create a session
-        let new_session_request = NewSessionRequest {
-            cwd: std::path::PathBuf::from("/tmp"),
-            meta: None,
-            mcp_servers: vec![],
-        };
+        let new_session_request = NewSessionRequest::new(std::path::PathBuf::from("/tmp"));
         let session_response = agent.new_session(new_session_request).await.unwrap();
 
         // Test permission request with empty options (should generate defaults)
@@ -6800,11 +6768,7 @@ mod tests {
         let agent = create_test_agent().await;
 
         // Create a session
-        let new_session_request = NewSessionRequest {
-            cwd: std::path::PathBuf::from("/tmp"),
-            meta: None,
-            mcp_servers: vec![],
-        };
+        let new_session_request = NewSessionRequest::new(std::path::PathBuf::from("/tmp"));
         let session_response = agent.new_session(new_session_request).await.unwrap();
         let session_id_str = session_response.session_id.0.as_ref();
 
@@ -6914,11 +6878,7 @@ mod tests {
         let agent = create_test_agent().await;
 
         // Create a session
-        let new_session_request = NewSessionRequest {
-            cwd: std::path::PathBuf::from("/tmp"),
-            meta: None,
-            mcp_servers: vec![],
-        };
+        let new_session_request = NewSessionRequest::new(std::path::PathBuf::from("/tmp"));
         let session_response = agent.new_session(new_session_request).await.unwrap();
         let session_id = session_response.session_id;
 
@@ -7010,11 +6970,7 @@ mod tests {
         let agent = create_test_agent().await;
 
         // Create a session without a plan
-        let new_session_request = NewSessionRequest {
-            cwd: std::path::PathBuf::from("/tmp"),
-            meta: None,
-            mcp_servers: vec![],
-        };
+        let new_session_request = NewSessionRequest::new(std::path::PathBuf::from("/tmp"));
         let session_response = agent.new_session(new_session_request).await.unwrap();
         let session_id = session_response.session_id;
 
@@ -7150,11 +7106,7 @@ mod tests {
 
         // Create a session
         let cwd = std::env::current_dir().unwrap();
-        let new_session_request = NewSessionRequest {
-            cwd,
-            mcp_servers: vec![],
-            meta: None,
-        };
+        let new_session_request = NewSessionRequest::new(cwd);
 
         let session_response = agent.new_session(new_session_request).await.unwrap();
         let session_id = session_response.session_id;

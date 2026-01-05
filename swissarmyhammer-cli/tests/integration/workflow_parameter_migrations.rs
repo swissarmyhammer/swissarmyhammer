@@ -10,8 +10,6 @@ use swissarmyhammer_cli::{
     context::CliContext,
 };
 
-use crate::in_process_test_utils::run_sah_command_in_process;
-
 /// Get the repository root directory (parent of the CLI crate directory)
 fn get_repo_root() -> PathBuf {
     // Use CARGO_MANIFEST_DIR which is set at compile time to the crate directory
@@ -230,20 +228,24 @@ async fn test_workflow_edge_cases() -> Result<()> {
 // Keep a few slow CLI integration tests for end-to-end verification
 #[tokio::test]
 async fn test_cli_integration_hello_world_workflow() -> Result<()> {
+    use crate::in_process_test_utils::run_sah_command_in_process_with_dir;
+
     // Run from repo root where builtin workflows are located
     let repo_root = get_repo_root();
     let _env = IsolatedTestEnvironment::new()?;
-    std::env::set_current_dir(&repo_root)?;
 
-    let result = run_sah_command_in_process(&[
-        "flow",
-        "hello-world",
-        "--var",
-        "person_name=Integration Test",
-        "--var",
-        "language=English",
-        "--dry-run",
-    ])
+    let result = run_sah_command_in_process_with_dir(
+        &[
+            "flow",
+            "hello-world",
+            "--var",
+            "person_name=Integration Test",
+            "--var",
+            "language=English",
+            "--dry-run",
+        ],
+        &repo_root,
+    )
     .await?;
 
     assert_eq!(result.exit_code, 0);
@@ -254,18 +256,22 @@ async fn test_cli_integration_hello_world_workflow() -> Result<()> {
 
 #[tokio::test]
 async fn test_cli_integration_plan_workflow() -> Result<()> {
+    use crate::in_process_test_utils::run_sah_command_in_process_with_dir;
+
     // Run from repo root where builtin workflows are located
     let repo_root = get_repo_root();
     let _env = IsolatedTestEnvironment::new()?;
-    std::env::set_current_dir(&repo_root)?;
 
-    let result = run_sah_command_in_process(&[
-        "flow",
-        "plan",
-        "--var",
-        "plan_filename=./test.md",
-        "--dry-run",
-    ])
+    let result = run_sah_command_in_process_with_dir(
+        &[
+            "flow",
+            "plan",
+            "--var",
+            "plan_filename=./test.md",
+            "--dry-run",
+        ],
+        &repo_root,
+    )
     .await?;
 
     assert_eq!(result.exit_code, 0);

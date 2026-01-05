@@ -17,7 +17,6 @@ Generate:
 1. **Rules** - Permanent criteria defining what correct code looks like
 2. **Todos** - Implementation steps with rich markdown context
 
-Use the rule_create tool for acceptance criteria and the todo_create tool for implementation steps.
 
 
 ## Guidelines
@@ -39,11 +38,6 @@ Use the rule_create tool for acceptance criteria and the todo_create tool for im
 
 Look for rules that need to be created from the specification.
 It is best to think of these rules in a similar way to linting or static analysis rules that can be checked automatically. 
-- Use the `rule_create` tool with parameters:
-  - `name`: Path like "project-name/requirement-name" (will create `.swissarmyhammer/rules/project-name/requirement-name.md`)
-  - `content`: The acceptance criteria in markdown - what must be true for this to be considered complete
-  - `severity`: One of "error", "warning", "info", or "hint" (use "error" for must-have requirements)
-  - `tags`: Optional array of tags for organization (e.g., ["api", "database"])
 - Rules define WHAT success looks like, not HOW to implement it
 - Rules are permanent and will be checked with `rules_check` tool
 - Examples of good rules:
@@ -55,16 +49,12 @@ It is best to think of these rules in a similar way to linting or static analysi
 ### Creating Todos
 
 For each implementation step:
-- Use the `todo_create` tool with parameters:
-  - `task`: Brief description of what needs to be done (e.g., "Implement user authentication endpoint")
-  - `context`: Rich markdown content with implementation guidance
-- The `context` field supports full markdown including:
+- Create context
   - **Mermaid diagrams** for architecture and flow
   - **Code examples** showing implementation patterns
   - **Multi-paragraph explanations** of the approach
   - **References** to the spec file and relevant rules
   - **Implementation notes** and considerations
-- Each tasks needs a reference to the spec file: "Refer to {{ plan_filename }}"
 - Break work into small, focused tasks that build incrementally
 
 ## Process

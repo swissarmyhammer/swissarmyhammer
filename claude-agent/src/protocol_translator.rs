@@ -328,11 +328,11 @@ impl ProtocolTranslator {
                                 == Some("tool_result")
                             {
                                 // This is a tool completion!
-                                tracing::info!("🎯 TOOL_RESULT detected!");
+                                tracing::trace!("🎯 TOOL_RESULT detected!");
                                 if let Some(tool_use_id) =
                                     content_item.get("tool_use_id").and_then(|id| id.as_str())
                                 {
-                                    tracing::info!("🎯 TOOL_RESULT for tool_id: {}", tool_use_id);
+                                    tracing::trace!("🎯 TOOL_RESULT for tool_id: {}", tool_use_id);
 
                                     // Extract content from tool_result
                                     // The content field can be either a string or an array of content blocks
