@@ -366,6 +366,7 @@ impl RequestQueue {
         self.metrics.get_stats()
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn worker_loop(
         worker_id: usize,
         receiver: Arc<tokio::sync::Mutex<mpsc::Receiver<QueuedRequest>>>,
