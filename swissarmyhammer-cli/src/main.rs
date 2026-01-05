@@ -33,22 +33,11 @@ static SHUTDOWN_PERFORMED: AtomicBool = AtomicBool::new(false);
 /// This function safely handles both cases: when called from within a tokio runtime
 /// (e.g., during tests) and when called from outside a runtime (e.g., normal execution).
 fn shutdown_before_exit() {
-    // Only shutdown once
-    if SHUTDOWN_PERFORMED.swap(true, Ordering::SeqCst) {
-        return;
-    }
+    // Mark shutdown as performed (idempotent via atomic swap)
+    let _ = SHUTDOWN_PERFORMED.swap(true, Ordering::SeqCst);
 
-    // Check if we're already inside a tokio runtime
-    if tokio::runtime::Handle::try_current().is_ok() {
-        // We're inside a runtime (e.g., during tests). Skip explicit shutdown
-        // as the runtime will handle cleanup when it shuts down naturally.
-        // Attempting to block_on from within a runtime causes a panic.
-        return;
-    }
-
-    // Not in a runtime, create one for shutdown
-    // Note: Agent shutdown is now handled automatically by the agent lifecycle
-    // The swissarmyhammer-agent crate manages cleanup internally
+    // Shutdown is now handled automatically by the agent lifecycle.
+    // The swissarmyhammer-agent crate manages cleanup internally.
 }
 
 /// Global flags extracted from command-line arguments
