@@ -88,7 +88,7 @@ impl McpTool for CreateTodoTool {
                         json!({
                             "action": "todo_created",
                             "todo_id": item.id.as_str(),
-                            "task": &item.content,
+                            "task": item.task,
                             "gc_count": gc_count
                         }),
                     ) {
@@ -101,10 +101,11 @@ impl McpTool for CreateTodoTool {
                         "message": "Created todo item",
                         "todo_item": {
                             "id": item.id.as_str(),
-                            "content": &item.content,
-                            "notes": &item.notes,
-                            "status": format!("{:?}", item.status).to_lowercase(),
-                            "priority": format!("{:?}", item.priority).to_lowercase()
+                            "task": item.task,
+                            "context": item.context,
+                            "done": item.done,
+                            "created_at": item.created_at.to_rfc3339(),
+                            "updated_at": item.updated_at.to_rfc3339()
                         },
                         "gc_count": gc_count
                     })

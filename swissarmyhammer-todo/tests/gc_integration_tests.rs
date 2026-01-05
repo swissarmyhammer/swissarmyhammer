@@ -11,7 +11,7 @@ use std::fs;
 use std::path::PathBuf;
 use std::time::Duration;
 use swissarmyhammer_common::test_utils::IsolatedTestEnvironment;
-use swissarmyhammer_todo::{TodoId, TodoItem, TodoItemExt, TodoList, TodoStorage};
+use swissarmyhammer_todo::{TodoId, TodoItem, TodoList, TodoStorage};
 
 /// Test fixture that encapsulates TodoStorage and temporary directory
 struct TestFixture {
@@ -61,10 +61,9 @@ impl TestFixture {
     }
 
     /// Mark a todo item as complete
-    async fn complete_item(&self, id: &str) {
-        let todo_id = TodoId::from_string(id.to_string()).expect("Invalid ID");
+    async fn complete_item(&self, id: &TodoId) {
         self.storage
-            .mark_todo_complete(&todo_id)
+            .mark_todo_complete(id)
             .await
             .expect("Failed to complete todo item")
     }
@@ -145,7 +144,7 @@ async fn test_gc_on_create_removes_completed() {
     let tasks: Vec<String> = list_after_gc
         .todo
         .iter()
-        .map(|item| item.task().to_string())
+        .map(|item| item.task.clone())
         .collect();
     assert!(
         tasks.contains(&"Task 3".to_string()),
@@ -207,18 +206,8 @@ async fn test_gc_with_time_passage_simulation() {
     let t0_end = Utc::now();
 
     // Verify timestamps are within T0 range
-    assert_timestamp_in_range(
-        item1.created_at.expect("created_at should be set"),
-        t0_start,
-        t0_end,
-        "Item 1 created_at",
-    );
-    assert_timestamp_in_range(
-        item2.created_at.expect("created_at should be set"),
-        t0_start,
-        t0_end,
-        "Item 2 created_at",
-    );
+    assert_timestamp_in_range(item1.created_at, t0_start, t0_end, "Item 1 created_at");
+    assert_timestamp_in_range(item2.created_at, t0_start, t0_end, "Item 2 created_at");
 
     // Phase 2: Wait and create more todos at T1
     tokio::time::sleep(Duration::from_millis(100)).await;
@@ -229,16 +218,10 @@ async fn test_gc_with_time_passage_simulation() {
 
     // Verify T1 timestamp is after T0
     assert!(
-        item3.created_at.expect("created_at should be set")
-            > item1.created_at.expect("created_at should be set"),
+        item3.created_at > item1.created_at,
         "Item 3 should be created after item 1"
     );
-    assert_timestamp_in_range(
-        item3.created_at.expect("created_at should be set"),
-        t1_start,
-        t1_end,
-        "Item 3 created_at",
-    );
+    assert_timestamp_in_range(item3.created_at, t1_start, t1_end, "Item 3 created_at");
 
     // Phase 3: Complete some items at T2
     tokio::time::sleep(Duration::from_millis(100)).await;
@@ -257,11 +240,11 @@ async fn test_gc_with_time_passage_simulation() {
     let completed_items: Vec<&TodoItem> = list_before_gc
         .todo
         .iter()
-        .filter(|item| item.done())
+        .filter(|item| item.done)
         .collect();
     for item in completed_items {
         assert_timestamp_in_range(
-            item.updated_at.expect("updated_at should be set"),
+            item.updated_at,
             t2_start,
             t2_end,
             "Completed item updated_at",
@@ -276,12 +259,7 @@ async fn test_gc_with_time_passage_simulation() {
     let t3_end = Utc::now();
 
     // Verify T3 timestamp
-    assert_timestamp_in_range(
-        item4.created_at.expect("created_at should be set"),
-        t3_start,
-        t3_end,
-        "Item 4 created_at",
-    );
+    assert_timestamp_in_range(item4.created_at, t3_start, t3_end, "Item 4 created_at");
 
     // Verify GC removed completed items
     let list_after_gc = fixture.get_list().await;
@@ -417,9 +395,9 @@ async fn test_gc_with_single_incomplete_item() {
         "Should have 2 incomplete after GC"
     );
 
-    // Verify the correct item remained
-    let ids: Vec<String> = list_after.todo.iter().map(|item| item.id.clone()).collect();
-    assert!(ids.contains(&item1.id), "First item should remain");
+    // Verify the correct item remained (compare TodoIds directly)
+    let ids: Vec<_> = list_after.todo.iter().map(|item| &item.id).collect();
+    assert!(ids.contains(&&item1.id), "First item should remain");
 
     // Verify file exists
     let todo_file = fixture.todo_file_path();

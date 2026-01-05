@@ -49,7 +49,7 @@ mod utils;
 pub use error::{Result, TodoError};
 pub use storage::TodoStorage;
 pub use types::{
-    CreateTodoRequest, ListTodosRequest, MarkCompleteTodoRequest, PlanEntry, PlanEntryStatus,
-    Priority, ShowTodoRequest, TodoId, TodoItem, TodoItemExt, TodoList,
+    CreateTodoRequest, ListTodosRequest, MarkCompleteTodoRequest, ShowTodoRequest, TodoId,
+    TodoItem, TodoList,
 };
 pub use utils::{get_todo_directory, get_todo_list_path, validate_todo_list_name};

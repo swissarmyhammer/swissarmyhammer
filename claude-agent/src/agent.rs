@@ -1494,6 +1494,7 @@ impl ClaudeAgent {
 
         let session_id_str = session_id.to_string();
         let mut claude_stop_reason: Option<String> = None;
+        let mut accumulated_content = String::new();
 
         while let Some(chunk) = stream.next().await {
             // Check for cancellation
@@ -1779,6 +1780,9 @@ impl ClaudeAgent {
                     }
                 }
             } else if !chunk.content.is_empty() {
+                // Accumulate content for logging
+                accumulated_content.push_str(&chunk.content);
+
                 // Create SessionUpdate for this chunk
                 let update =
                     SessionUpdate::AgentMessageChunk(agent_client_protocol::ContentChunk::new(
@@ -1806,6 +1810,11 @@ impl ClaudeAgent {
                     );
                 }
             }
+        }
+
+        // Log the generated content at info level for visibility
+        if !accumulated_content.is_empty() {
+            tracing::info!("Generated content: {}", accumulated_content);
         }
 
         // Check cancellation one final time
@@ -2126,6 +2135,9 @@ impl ClaudeAgent {
             chunk_count,
             session_id
         );
+
+        // Log the generated content at info level for visibility
+        tracing::info!("Generated content: {}", response_content);
 
         // ACP requires specific stop reasons for all prompt turn completions:
         // Check for refusal patterns in Claude's response content
@@ -5609,12 +5621,12 @@ impl ClaudeAgent {
             crate::error::AgentError::Internal(format!("Failed to get todo list: {}", e))
         })?;
 
-        // Extract incomplete todo IDs
+        // Extract incomplete todo IDs (id is TodoId type, use as_str().to_string())
         let todo_ids: Vec<String> = if let Some(list) = todo_list {
             list.todo
                 .iter()
-                .filter(|item| !item.is_complete())
-                .map(|item| item.id.clone())
+                .filter(|item| !item.done)
+                .map(|item| item.id.as_str().to_string())
                 .collect()
         } else {
             Vec::new()

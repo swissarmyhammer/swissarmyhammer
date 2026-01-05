@@ -211,7 +211,7 @@ fn complete_todo_and_verify(todo_id: &str, temp_path: &std::path::Path) {
         &["todo", "complete", "--id", todo_id],
         temp_path,
         true,
-        &["OK"],
+        &["marked_complete"],
         &[],
     );
 }

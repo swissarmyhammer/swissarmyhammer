@@ -71,21 +71,19 @@ impl McpTool for ShowTodoTool {
                     json!({
                         "todo_item": {
                             "id": item.id.as_str(),
-                            "content": &item.content,
-                            "notes": &item.notes,
-                            "status": format!("{:?}", item.status).to_lowercase(),
-                            "priority": format!("{:?}", item.priority).to_lowercase()
+                            "task": item.task,
+                            "context": item.context,
+                            "done": item.done
                         },
                         "yaml": format!(
-                            "id: {}\ncontent: \"{}\"\nnotes: {}\nstatus: {}\npriority: {}",
+                            "id: {}\ntask: \"{}\"\ncontext: {}\ndone: {}",
                             item.id.as_str(),
-                            item.content,
-                            match &item.notes {
+                            item.task,
+                            match &item.context {
                                 Some(ctx) => format!("\"{ctx}\""),
                                 None => "null".to_string(),
                             },
-                            format!("{:?}", item.status).to_lowercase(),
-                            format!("{:?}", item.priority).to_lowercase()
+                            item.done
                         )
                     })
                     .to_string(),
@@ -101,12 +99,9 @@ impl McpTool for ShowTodoTool {
                         .to_string(),
                     ))
                 } else {
-                    Ok(BaseToolImpl::create_success_response(
-                        json!({
-                            "message": format!("Todo item '{}' not found", request.item),
-                            "todo_item": null
-                        })
-                        .to_string(),
+                    Err(McpError::invalid_request(
+                        format!("Todo item '{}' not found", request.item),
+                        None,
                     ))
                 }
             }

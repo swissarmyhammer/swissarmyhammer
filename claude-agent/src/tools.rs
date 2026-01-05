@@ -1103,8 +1103,6 @@ impl ToolCallHandler {
     /// - The todo storage cannot be accessed
     /// - The session cannot be updated
     async fn sync_session_todos(&self, session_id: &str) -> crate::Result<()> {
-        use swissarmyhammer_todo::TodoItemExt;
-
         // Get the session to access its working directory
         let session_id_parsed = crate::session::SessionId::parse(session_id)
             .map_err(|e| crate::error::AgentError::Session(format!("Invalid session ID: {}", e)))?;
@@ -1130,12 +1128,12 @@ impl ToolCallHandler {
             crate::error::AgentError::Internal(format!("Failed to get todo list: {}", e))
         })?;
 
-        // Extract incomplete todo IDs
+        // Extract incomplete todo IDs (done is a field, id is TodoId type)
         let todo_ids: Vec<String> = if let Some(list) = todo_list {
             list.todo
                 .iter()
-                .filter(|item| !item.done())
-                .map(|item| item.id.clone())
+                .filter(|item| !item.done)
+                .map(|item| item.id.as_str().to_string())
                 .collect()
         } else {
             Vec::new()

@@ -7,7 +7,7 @@ mod acp_tests {
     use llama_agent::types::SessionConfig;
     use llama_agent::SessionManager;
     use serial_test::serial;
-    use swissarmyhammer_todo::{Priority, TodoItemExt, TodoStorage};
+    use swissarmyhammer_todo::{TodoItem, TodoStorage};
     use tempfile::TempDir;
 
     /// Helper to create a test session manager with temporary directory
@@ -65,8 +65,7 @@ mod acp_tests {
         let mut session = manager.get_session(&session_id).await.unwrap().unwrap();
 
         // Create a test todo item
-        let test_todo =
-            swissarmyhammer_todo::PlanEntry::new("Test task".to_string(), Priority::Medium);
+        let test_todo = TodoItem::new("Test task".to_string(), None);
 
         session.todos.push(test_todo.clone());
 
@@ -150,17 +149,18 @@ mod acp_tests {
         let session = manager.get_session(&session_id).await.unwrap().unwrap();
         assert_eq!(session.todos.len(), 3, "Session should have 3 todos");
 
-        let todo_ids: Vec<String> = session.todos.iter().map(|t| t.id.clone()).collect();
+        // Compare TodoIds directly
+        let session_todo_ids: Vec<_> = session.todos.iter().map(|t| &t.id).collect();
         assert!(
-            todo_ids.contains(&todo1.id),
+            session_todo_ids.contains(&&todo1.id),
             "Session should contain todo 1"
         );
         assert!(
-            todo_ids.contains(&todo2.id),
+            session_todo_ids.contains(&&todo2.id),
             "Session should contain todo 2"
         );
         assert!(
-            todo_ids.contains(&todo3.id),
+            session_todo_ids.contains(&&todo3.id),
             "Session should contain todo 3"
         );
     }
@@ -194,10 +194,9 @@ mod acp_tests {
 
         manager.update_session(session).await.unwrap();
 
-        // Mark first todo complete
-        let todo_id = swissarmyhammer_todo::TodoId::from_string(todo1.id.clone()).unwrap();
+        // Mark first todo complete (todo1.id is already a TodoId)
         storage
-            .mark_todo_complete(&todo_id)
+            .mark_todo_complete(&todo1.id)
             .await
             .expect("Failed to mark todo complete");
 
@@ -219,7 +218,7 @@ mod acp_tests {
             "Session should have 2 todos (complete and incomplete)"
         );
 
-        let incomplete_todos: Vec<_> = session.todos.iter().filter(|t| !t.done()).collect();
+        let incomplete_todos: Vec<_> = session.todos.iter().filter(|t| !t.done).collect();
         assert_eq!(
             incomplete_todos.len(),
             1,
@@ -230,7 +229,7 @@ mod acp_tests {
             "Incomplete todo should be task 2"
         );
 
-        let completed_todos: Vec<_> = session.todos.iter().filter(|t| t.done()).collect();
+        let completed_todos: Vec<_> = session.todos.iter().filter(|t| t.done).collect();
         assert_eq!(
             completed_todos.len(),
             1,
@@ -342,8 +341,7 @@ mod acp_tests {
         // Manually add a todo to session (simulating stale state)
         let mut session = manager.get_session(&session_id).await.unwrap().unwrap();
 
-        let test_todo =
-            swissarmyhammer_todo::PlanEntry::new("Stale task".to_string(), Priority::Medium);
+        let test_todo = TodoItem::new("Stale task".to_string(), None);
 
         session.todos.push(test_todo);
         manager.update_session(session).await.unwrap();

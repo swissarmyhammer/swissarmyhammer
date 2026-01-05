@@ -5,107 +5,6 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use swissarmyhammer_common::generate_monotonic_ulid;
 
-/// Plan entry status lifecycle
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "lowercase")]
-pub enum PlanEntryStatus {
-    /// Entry is pending execution
-    #[serde(rename = "pending")]
-    Pending,
-    /// Entry is currently being executed
-    #[serde(rename = "in_progress")]
-    InProgress,
-    /// Entry has been completed successfully
-    #[serde(rename = "completed")]
-    Completed,
-    /// Entry execution failed
-    #[serde(rename = "failed")]
-    Failed,
-    /// Entry was cancelled before completion
-    #[serde(rename = "cancelled")]
-    Cancelled,
-}
-
-/// Priority levels for plan entries
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
-#[serde(rename_all = "lowercase")]
-pub enum Priority {
-    /// High priority - critical for task completion
-    #[serde(rename = "high")]
-    High,
-    /// Medium priority - important but not critical
-    #[serde(rename = "medium")]
-    Medium,
-    /// Low priority - nice to have or cleanup tasks
-    #[serde(rename = "low")]
-    Low,
-}
-
-/// Individual plan entry representing a specific action or step
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct PlanEntry {
-    /// Unique identifier for this plan entry
-    pub id: String,
-    /// Human-readable description of what this entry will accomplish
-    pub content: String,
-    /// Priority level for execution order and importance
-    pub priority: Priority,
-    /// Current execution status
-    pub status: PlanEntryStatus,
-    /// Optional additional context or notes
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub notes: Option<String>,
-    /// Timestamp when this entry was created
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub created_at: Option<DateTime<Utc>>,
-    /// Timestamp when this entry was last updated
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub updated_at: Option<DateTime<Utc>>,
-}
-
-impl PlanEntry {
-    /// Create a new plan entry with pending status
-    pub fn new(content: String, priority: Priority) -> Self {
-        let now = Utc::now();
-        Self {
-            id: generate_monotonic_ulid().to_string(),
-            content,
-            priority,
-            status: PlanEntryStatus::Pending,
-            notes: None,
-            created_at: Some(now),
-            updated_at: Some(now),
-        }
-    }
-
-    /// Update the status of this plan entry
-    pub fn update_status(&mut self, new_status: PlanEntryStatus) {
-        if self.status != new_status {
-            self.status = new_status;
-            self.updated_at = Some(Utc::now());
-        }
-    }
-
-    /// Add or update notes for this plan entry
-    pub fn set_notes(&mut self, notes: String) {
-        self.notes = Some(notes);
-        self.updated_at = Some(Utc::now());
-    }
-
-    /// Check if this plan entry is complete (completed, failed, or cancelled)
-    pub fn is_complete(&self) -> bool {
-        matches!(
-            self.status,
-            PlanEntryStatus::Completed | PlanEntryStatus::Failed | PlanEntryStatus::Cancelled
-        )
-    }
-
-    /// Check if this plan entry is currently being executed
-    pub fn is_in_progress(&self) -> bool {
-        matches!(self.status, PlanEntryStatus::InProgress)
-    }
-}
-
 /// A unique identifier for todo items using ULID
 ///
 /// ULIDs provide both uniqueness and natural ordering for todo items,
@@ -161,50 +60,53 @@ impl AsRef<str> for TodoId {
     }
 }
 
-/// Type alias for TodoItem - now using PlanEntry from claude-agent
-pub type TodoItem = PlanEntry;
-
-/// Extension trait for PlanEntry to provide TodoItem-compatible methods
-pub trait TodoItemExt {
-    /// Create a new todo item with default priority
-    fn new_todo(task: String, context: Option<String>) -> Self;
-
-    /// Get the task description (content)
-    fn task(&self) -> &str;
-
-    /// Get the context (notes)
-    fn context(&self) -> Option<&String>;
-
-    /// Check if done (status is Completed, Failed, or Cancelled)
-    fn done(&self) -> bool;
-
-    /// Mark this todo item as complete
-    fn mark_complete(&mut self);
+/// A single todo item with task description and optional context
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TodoItem {
+    /// Unique identifier for this todo item
+    pub id: TodoId,
+    /// Brief description of the task to be completed
+    pub task: String,
+    /// Optional additional context, notes, or implementation details
+    pub context: Option<String>,
+    /// Boolean flag indicating completion status
+    pub done: bool,
+    /// UTC timestamp when this todo was created
+    #[serde(default = "default_timestamp")]
+    pub created_at: DateTime<Utc>,
+    /// UTC timestamp when this todo was last updated
+    #[serde(default = "default_timestamp")]
+    pub updated_at: DateTime<Utc>,
 }
 
-impl TodoItemExt for PlanEntry {
-    fn new_todo(task: String, context: Option<String>) -> Self {
-        let mut entry = PlanEntry::new(task, Priority::Medium);
-        if let Some(ctx) = context {
-            entry.set_notes(ctx);
+/// Default timestamp for backward compatibility with old YAML files
+fn default_timestamp() -> DateTime<Utc> {
+    Utc::now()
+}
+
+impl TodoItem {
+    /// Create a new todo item
+    pub fn new(task: String, context: Option<String>) -> Self {
+        let now = Utc::now();
+        Self {
+            id: TodoId::new(),
+            task,
+            context,
+            done: false,
+            created_at: now,
+            updated_at: now,
         }
-        entry
     }
 
-    fn task(&self) -> &str {
-        &self.content
+    /// Mark this todo item as complete
+    pub fn mark_complete(&mut self) {
+        self.done = true;
+        self.updated_at = Utc::now();
     }
 
-    fn context(&self) -> Option<&String> {
-        self.notes.as_ref()
-    }
-
-    fn done(&self) -> bool {
-        self.is_complete()
-    }
-
-    fn mark_complete(&mut self) {
-        self.update_status(PlanEntryStatus::Completed);
+    /// Check if this todo item is complete
+    pub fn is_complete(&self) -> bool {
+        self.done
     }
 }
 
@@ -223,39 +125,39 @@ impl TodoList {
 
     /// Add a new todo item to the list
     pub fn add_item(&mut self, task: String, context: Option<String>) -> &TodoItem {
-        let item = TodoItem::new_todo(task, context);
+        let item = TodoItem::new(task, context);
         self.todo.push(item);
         self.todo.last().unwrap()
     }
 
     /// Find a todo item by ID
     pub fn find_item(&self, id: &TodoId) -> Option<&TodoItem> {
-        self.todo.iter().find(|item| item.id == id.as_str())
+        self.todo.iter().find(|item| &item.id == id)
     }
 
     /// Find a mutable todo item by ID
     pub fn find_item_mut(&mut self, id: &TodoId) -> Option<&mut TodoItem> {
-        self.todo.iter_mut().find(|item| item.id == id.as_str())
+        self.todo.iter_mut().find(|item| &item.id == id)
     }
 
     /// Get the next incomplete todo item (FIFO order)
     pub fn get_next_incomplete(&self) -> Option<&TodoItem> {
-        self.todo.iter().find(|item| !item.done())
+        self.todo.iter().find(|item| !item.done)
     }
 
     /// Check if all todo items are complete
     pub fn all_complete(&self) -> bool {
-        self.todo.iter().all(|item| item.done())
+        self.todo.iter().all(|item| item.done)
     }
 
     /// Count incomplete items
     pub fn incomplete_count(&self) -> usize {
-        self.todo.iter().filter(|item| !item.done()).count()
+        self.todo.iter().filter(|item| !item.done).count()
     }
 
     /// Count completed items
     pub fn complete_count(&self) -> usize {
-        self.todo.iter().filter(|item| item.done()).count()
+        self.todo.iter().filter(|item| item.done).count()
     }
 }
 
@@ -308,7 +210,7 @@ mod tests {
     #[test]
     fn test_mark_complete_updates_timestamp() {
         // Create a new todo item
-        let mut item = TodoItem::new_todo("Test task".to_string(), None);
+        let mut item = TodoItem::new("Test task".to_string(), None);
 
         // Store the original timestamps
         let original_created_at = item.created_at;
@@ -332,7 +234,7 @@ mod tests {
         // Verify updated_at has been updated
         assert!(
             item.updated_at > original_updated_at,
-            "updated_at should be updated when marking complete. Original: {:?}, Updated: {:?}",
+            "updated_at should be updated when marking complete. Original: {}, Updated: {}",
             original_updated_at,
             item.updated_at
         );
