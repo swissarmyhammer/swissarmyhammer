@@ -407,6 +407,10 @@ async fn test_flow_test_special_chars_in_set_backward_compatibility() -> Result<
 
 async fn test_concurrent_flow_test() -> Result<()> {
     use tokio::task::JoinSet;
+    use swissarmyhammer::test_utils::IsolatedTestEnvironment;
+
+    // Create isolated environment to prevent race conditions with other tests
+    let _env = IsolatedTestEnvironment::new()?;
 
     let mut tasks = JoinSet::new();
 

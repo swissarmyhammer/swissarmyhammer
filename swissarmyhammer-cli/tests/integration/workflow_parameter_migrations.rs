@@ -10,8 +10,6 @@ use swissarmyhammer_cli::{
     context::CliContext,
 };
 
-use crate::in_process_test_utils::run_sah_command_in_process;
-
 /// Get the repository root directory (parent of the CLI crate directory)
 fn get_repo_root() -> PathBuf {
     // Use CARGO_MANIFEST_DIR which is set at compile time to the crate directory
