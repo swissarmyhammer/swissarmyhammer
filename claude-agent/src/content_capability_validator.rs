@@ -236,16 +236,14 @@ mod tests {
     use agent_client_protocol::EmbeddedResource;
 
     fn create_test_capabilities(
-        image: bool,
-        audio: bool,
-        embedded_context: bool,
+        image_enabled: bool,
+        audio_enabled: bool,
+        embedded_context_enabled: bool,
     ) -> PromptCapabilities {
-        PromptCapabilities {
-            image,
-            audio,
-            embedded_context,
-            meta: None,
-        }
+        PromptCapabilities::new()
+            .image(image_enabled)
+            .audio(audio_enabled)
+            .embedded_context(embedded_context_enabled)
     }
 
     // Helper functions to create test content blocks
@@ -255,21 +253,11 @@ mod tests {
         };
 
         pub fn text(content: &str) -> ContentBlock {
-            ContentBlock::Text(TextContent {
-                text: content.to_string(),
-                annotations: None,
-                meta: None,
-            })
+            ContentBlock::Text(TextContent::new(content))
         }
 
         pub fn image(mime_type: &str, data: &str) -> ContentBlock {
-            ContentBlock::Image(ImageContent {
-                data: data.to_string(),
-                mime_type: mime_type.to_string(),
-                uri: None,
-                annotations: None,
-                meta: None,
-            })
+            ContentBlock::Image(ImageContent::new(data, mime_type))
         }
 
         pub fn image_png() -> ContentBlock {
@@ -278,12 +266,7 @@ mod tests {
         }
 
         pub fn audio(mime_type: &str, data: &str) -> ContentBlock {
-            ContentBlock::Audio(AudioContent {
-                data: data.to_string(),
-                mime_type: mime_type.to_string(),
-                annotations: None,
-                meta: None,
-            })
+            ContentBlock::Audio(AudioContent::new(data, mime_type))
         }
 
         pub fn audio_wav() -> ContentBlock {
@@ -300,16 +283,13 @@ mod tests {
             title: &str,
             size_bytes: u64,
         ) -> ContentBlock {
-            ContentBlock::ResourceLink(ResourceLink {
-                uri: uri.to_string(),
-                name: name.to_string(),
-                description: Some(description.to_string()),
-                mime_type: Some(mime_type.to_string()),
-                title: Some(title.to_string()),
-                size: Some(size_bytes.try_into().unwrap()),
-                annotations: None,
-                meta: None,
-            })
+            ContentBlock::ResourceLink(
+                ResourceLink::new(uri, name)
+                    .description(description)
+                    .mime_type(mime_type)
+                    .title(title)
+                    .size(size_bytes as i64),
+            )
         }
     }
 
@@ -406,11 +386,8 @@ mod tests {
             "mimeType": "text/plain",
             "text": "Resource content"
         });
-        let embedded_resource = EmbeddedResource {
-            resource: serde_json::from_value(resource_data).unwrap(),
-            annotations: None,
-            meta: None,
-        };
+        let embedded_resource =
+            EmbeddedResource::new(serde_json::from_value(resource_data).unwrap());
         let content = ContentBlock::Resource(embedded_resource);
 
         assert!(validator.validate_content_block(&content).is_ok());
@@ -425,11 +402,8 @@ mod tests {
             "mimeType": "text/plain",
             "text": "Resource content"
         });
-        let embedded_resource = EmbeddedResource {
-            resource: serde_json::from_value(resource_data).unwrap(),
-            annotations: None,
-            meta: None,
-        };
+        let embedded_resource =
+            EmbeddedResource::new(serde_json::from_value(resource_data).unwrap());
         let content = ContentBlock::Resource(embedded_resource);
 
         let result = validator.validate_content_block(&content);
@@ -452,11 +426,8 @@ mod tests {
             "mimeType": "text/plain",
             "text": "Resource content"
         });
-        let embedded_resource = EmbeddedResource {
-            resource: serde_json::from_value(resource_data).unwrap(),
-            annotations: None,
-            meta: None,
-        };
+        let embedded_resource =
+            EmbeddedResource::new(serde_json::from_value(resource_data).unwrap());
         let content_blocks = vec![
             content_blocks::text("Test text content"),
             content_blocks::resource_link_full(

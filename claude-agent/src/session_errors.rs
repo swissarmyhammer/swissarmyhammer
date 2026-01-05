@@ -653,7 +653,10 @@ mod tests {
         };
 
         let protocol_error = error.to_protocol_error();
-        assert_eq!(protocol_error.code, -32602);
+        assert_eq!(
+            protocol_error.code,
+            agent_client_protocol::ErrorCode::Other(-32602)
+        );
         assert!(protocol_error.message.contains("Invalid session ID format"));
         assert!(protocol_error.data.is_some());
     }

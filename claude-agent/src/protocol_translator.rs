@@ -924,11 +924,7 @@ mod tests {
     fn test_acp_to_stream_json_simple_text() {
         // Test: Convert simple text message from ACP to stream-json
         let translator = create_test_translator();
-        let content = vec![ContentBlock::Text(TextContent {
-            text: "Hello, world!".to_string(),
-            annotations: None,
-            meta: None,
-        })];
+        let content = vec![ContentBlock::Text(TextContent::new("Hello, world!"))];
 
         let result = translator.acp_to_stream_json(content);
         assert!(result.is_ok());
@@ -947,12 +943,10 @@ mod tests {
 
         // Test: Convert image message from ACP to stream-json
         let translator = create_test_translator();
-        let content = vec![ContentBlock::Image(ImageContent {
-            data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==".to_string(),
-            mime_type: "image/png".to_string(),
-            annotations: None,
-            meta: None,
-        })];
+        let content = vec![ContentBlock::Image(ImageContent::new(
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==",
+            "image/png",
+        ))];
 
         let result = translator.acp_to_stream_json(content);
         assert!(result.is_ok());
@@ -980,17 +974,8 @@ mod tests {
         // Test: Convert mixed content (text + image) from ACP to stream-json
         let translator = create_test_translator();
         let content = vec![
-            ContentBlock::Text(TextContent {
-                text: "Here's an image:".to_string(),
-                annotations: None,
-                meta: None,
-            }),
-            ContentBlock::Image(ImageContent {
-                data: "base64data".to_string(),
-                mime_type: "image/jpeg".to_string(),
-                annotations: None,
-                meta: None,
-            }),
+            ContentBlock::Text(TextContent::new("Here's an image:")),
+            ContentBlock::Image(ImageContent::new("base64data", "image/jpeg")),
         ];
 
         let result = translator.acp_to_stream_json(content);
@@ -1023,12 +1008,10 @@ mod tests {
 
         // Test: Audio content should return an error
         let translator = create_test_translator();
-        let content = vec![ContentBlock::Audio(AudioContent {
-            data: "audiodata".to_string(),
-            mime_type: "audio/wav".to_string(),
-            annotations: None,
-            meta: None,
-        })];
+        let content = vec![ContentBlock::Audio(AudioContent::new(
+            "audiodata".to_string(),
+            "audio/wav".to_string(),
+        ))];
 
         let result = translator.acp_to_stream_json(content);
         assert!(result.is_err());
@@ -1239,7 +1222,7 @@ mod tests {
         match notification.update {
             SessionUpdate::ToolCall(tool_call) => {
                 // Verify ToolCall structure per ACP spec
-                assert_eq!(tool_call.id.0.as_ref(), "toolu_123");
+                assert_eq!(tool_call.tool_call_id.0.as_ref(), "toolu_123");
                 assert_eq!(tool_call.title, "mcp__sah__files_read");
                 assert_eq!(tool_call.kind, agent_client_protocol::ToolKind::Read);
                 assert_eq!(
@@ -1339,7 +1322,7 @@ mod tests {
         match notification.update {
             SessionUpdate::ToolCall(tool_call) => {
                 // Verify tool call is properly structured
-                assert_eq!(tool_call.id.0.as_ref(), "toolu_456");
+                assert_eq!(tool_call.tool_call_id.0.as_ref(), "toolu_456");
                 assert_eq!(tool_call.title, "bash");
                 assert_eq!(tool_call.kind, agent_client_protocol::ToolKind::Execute);
                 assert_eq!(
@@ -1403,17 +1386,11 @@ mod tests {
         // Test: ResourceLink should be converted to resource_link format
         let translator = create_test_translator();
         let content = vec![
-            ContentBlock::Text(TextContent {
-                text: "Here's a document:".to_string(),
-                annotations: None,
-                meta: None,
-            }),
-            ContentBlock::ResourceLink(ResourceLink {
-                uri: "https://example.com/document.pdf".to_string(),
-                name: "Example Document".to_string(),
-                annotations: None,
-                meta: None,
-            }),
+            ContentBlock::Text(TextContent::new("Here's a document:")),
+            ContentBlock::ResourceLink(ResourceLink::new(
+                "https://example.com/document.pdf",
+                "Example Document",
+            )),
         ];
 
         let result = translator.acp_to_stream_json(content);
@@ -1448,18 +1425,12 @@ mod tests {
 
         // Test: EmbeddedResource with text content should be converted to text format
         let translator = create_test_translator();
-        let text_resource = TextResourceContents {
-            uri: "file:///test.txt".to_string(),
-            text: "Test content".to_string(),
-            mime_type: Some("text/plain".to_string()),
-            meta: None,
-        };
+        let text_resource =
+            TextResourceContents::new("file:///test.txt", "Test content").mime_type("text/plain");
 
-        let content = vec![ContentBlock::Resource(EmbeddedResource {
-            resource: EmbeddedResourceResource::TextResourceContents(text_resource),
-            annotations: None,
-            meta: None,
-        })];
+        let content = vec![ContentBlock::Resource(EmbeddedResource::new(
+            EmbeddedResourceResource::TextResourceContents(text_resource),
+        ))];
 
         let result = translator.acp_to_stream_json(content);
         assert!(result.is_ok());
@@ -1490,18 +1461,12 @@ mod tests {
 
         // Test: EmbeddedResource with blob content should be converted to text format with size info
         let translator = create_test_translator();
-        let blob_resource = BlobResourceContents {
-            uri: "file:///test.bin".to_string(),
-            data: "base64encodeddata".to_string(),
-            mime_type: Some("application/octet-stream".to_string()),
-            meta: None,
-        };
+        let blob_resource = BlobResourceContents::new("base64encodeddata", "file:///test.bin")
+            .mime_type("application/octet-stream");
 
-        let content = vec![ContentBlock::Resource(EmbeddedResource {
-            resource: EmbeddedResourceResource::BlobResourceContents(blob_resource),
-            annotations: None,
-            meta: None,
-        })];
+        let content = vec![ContentBlock::Resource(EmbeddedResource::new(
+            EmbeddedResourceResource::BlobResourceContents(blob_resource),
+        ))];
 
         let result = translator.acp_to_stream_json(content);
         assert!(result.is_ok());
@@ -1589,7 +1554,7 @@ mod tests {
 
         match notification.unwrap().update {
             SessionUpdate::ToolCall(tool_call) => {
-                assert_eq!(tool_call.id.0.as_ref(), "toolu_123");
+                assert_eq!(tool_call.tool_call_id.0.as_ref(), "toolu_123");
                 assert_eq!(tool_call.title, "read_file");
                 assert!(tool_call.raw_input.is_some());
                 let input = tool_call.raw_input.unwrap();
@@ -1617,7 +1582,7 @@ mod tests {
 
         match notification.unwrap().update {
             SessionUpdate::ToolCallUpdate(update) => {
-                assert_eq!(update.id.0.as_ref(), "toolu_123");
+                assert_eq!(update.tool_call_id.0.as_ref(), "toolu_123");
                 assert_eq!(
                     update.fields.status,
                     Some(agent_client_protocol::ToolCallStatus::Completed)
@@ -1663,7 +1628,7 @@ mod tests {
 
         match notification.unwrap().update {
             SessionUpdate::ToolCallUpdate(update) => {
-                assert_eq!(update.id.0.as_ref(), "toolu_456");
+                assert_eq!(update.tool_call_id.0.as_ref(), "toolu_456");
                 assert_eq!(
                     update.fields.status,
                     Some(agent_client_protocol::ToolCallStatus::Completed)
@@ -1724,7 +1689,7 @@ mod tests {
 
         match notification.unwrap().update {
             SessionUpdate::ToolCallUpdate(update) => {
-                assert_eq!(update.id.0.as_ref(), "toolu_789");
+                assert_eq!(update.tool_call_id.0.as_ref(), "toolu_789");
                 assert_eq!(
                     update.fields.status,
                     Some(agent_client_protocol::ToolCallStatus::Completed)

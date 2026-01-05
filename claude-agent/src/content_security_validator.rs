@@ -931,17 +931,9 @@ mod tests {
     fn test_text_security_validation() {
         let validator = create_test_validator();
 
-        let safe_text = TextContent {
-            text: "This is safe text content".to_string(),
-            annotations: None,
-            meta: None,
-        };
+        let safe_text = TextContent::new("This is safe text content");
 
-        let dangerous_text = TextContent {
-            text: "<script>alert('xss')</script>".to_string(),
-            annotations: None,
-            meta: None,
-        };
+        let dangerous_text = TextContent::new("<script>alert('xss')</script>");
 
         assert!(validator.validate_text_security(&safe_text).is_ok());
         assert!(validator.validate_text_security(&dangerous_text).is_err());
@@ -951,20 +943,9 @@ mod tests {
     fn test_content_blocks_security_validation() {
         let validator = create_test_validator();
 
-        let safe_content = vec![ContentBlock::Text(TextContent {
-            text: "Hello".to_string(),
-            annotations: None,
-            meta: None,
-        })];
+        let safe_content = vec![ContentBlock::Text(TextContent::new("Hello"))];
 
-        let too_many_content = vec![
-            ContentBlock::Text(TextContent {
-                text: "test".to_string(),
-                annotations: None,
-                meta: None,
-            });
-            100
-        ]; // Exceeds moderate policy limit
+        let too_many_content = vec![ContentBlock::Text(TextContent::new("test")); 100]; // Exceeds moderate policy limit
 
         assert!(validator
             .validate_content_blocks_security(&safe_content)
@@ -1105,17 +1086,11 @@ mod tests {
 
         let validator = create_test_validator();
 
-        let text_resource = TextResourceContents {
-            uri: "https://example.com/data.json".to_string(),
-            text: "Sample text content".to_string(),
-            mime_type: None,
-            meta: None,
-        };
-        let embedded = agent_client_protocol::EmbeddedResource {
-            resource: EmbeddedResourceResource::TextResourceContents(text_resource),
-            annotations: None,
-            meta: None,
-        };
+        let text_resource =
+            TextResourceContents::new("Sample text content", "https://example.com/data.json");
+        let embedded = agent_client_protocol::EmbeddedResource::new(
+            EmbeddedResourceResource::TextResourceContents(text_resource),
+        );
         let content = ContentBlock::Resource(embedded);
 
         let result = validator.validate_content_security(&content);
@@ -1128,17 +1103,11 @@ mod tests {
 
         let validator = create_test_validator();
 
-        let text_resource = TextResourceContents {
-            uri: "http://localhost/secret".to_string(),
-            text: "Sample text content".to_string(),
-            mime_type: None,
-            meta: None,
-        };
-        let embedded = agent_client_protocol::EmbeddedResource {
-            resource: EmbeddedResourceResource::TextResourceContents(text_resource),
-            annotations: None,
-            meta: None,
-        };
+        let text_resource =
+            TextResourceContents::new("Sample text content", "http://localhost/secret");
+        let embedded = agent_client_protocol::EmbeddedResource::new(
+            EmbeddedResourceResource::TextResourceContents(text_resource),
+        );
         let content = ContentBlock::Resource(embedded);
 
         let result = validator.validate_content_security(&content);
@@ -1152,17 +1121,11 @@ mod tests {
 
         let validator = create_test_validator();
 
-        let blob_resource = BlobResourceContents {
-            uri: "".to_string(),
-            blob: "SGVsbG8gV29ybGQ=".to_string(),
-            mime_type: Some("text/plain".to_string()),
-            meta: None,
-        };
-        let embedded = agent_client_protocol::EmbeddedResource {
-            resource: EmbeddedResourceResource::BlobResourceContents(blob_resource),
-            annotations: None,
-            meta: None,
-        };
+        let blob_resource =
+            BlobResourceContents::new("SGVsbG8gV29ybGQ=", "").mime_type("text/plain");
+        let embedded = agent_client_protocol::EmbeddedResource::new(
+            EmbeddedResourceResource::BlobResourceContents(blob_resource),
+        );
         let content = ContentBlock::Resource(embedded);
 
         let result = validator.validate_content_security(&content);

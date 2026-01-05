@@ -1178,17 +1178,11 @@ mod tests {
 
         let processor = create_test_processor();
 
-        let text_resource = TextResourceContents {
-            uri: "file:///test.txt".to_string(),
-            text: "Test content".to_string(),
-            mime_type: Some("text/plain".to_string()),
-            meta: None,
-        };
-        let embedded_resource = EmbeddedResource {
-            resource: EmbeddedResourceResource::TextResourceContents(text_resource),
-            annotations: None,
-            meta: None,
-        };
+        let text_resource =
+            TextResourceContents::new("Test content", "file:///test.txt").mime_type("text/plain");
+        let embedded_resource = EmbeddedResource::new(
+            EmbeddedResourceResource::TextResourceContents(text_resource),
+        );
 
         let content_block = ContentBlock::Resource(embedded_resource);
         let result = processor.process_content_block(&content_block);
@@ -1225,17 +1219,11 @@ mod tests {
 
         let processor = create_test_processor();
 
-        let text_resource = TextResourceContents {
-            uri: "".to_string(),
-            text: "Embedded text content".to_string(),
-            mime_type: Some("text/plain".to_string()),
-            meta: None,
-        };
-        let embedded_resource = EmbeddedResource {
-            resource: EmbeddedResourceResource::TextResourceContents(text_resource),
-            annotations: None,
-            meta: None,
-        };
+        let text_resource =
+            TextResourceContents::new("Embedded text content", "").mime_type("text/plain");
+        let embedded_resource = EmbeddedResource::new(
+            EmbeddedResourceResource::TextResourceContents(text_resource),
+        );
 
         let content_block = ContentBlock::Resource(embedded_resource);
         let result = processor.process_content_block(&content_block);
@@ -1260,17 +1248,10 @@ mod tests {
 
         let processor = create_test_processor();
 
-        let text_resource = TextResourceContents {
-            uri: "file:///test.txt".to_string(),
-            text: "Test".to_string(),
-            mime_type: None,
-            meta: None,
-        };
-        let embedded_resource = EmbeddedResource {
-            resource: EmbeddedResourceResource::TextResourceContents(text_resource),
-            annotations: None,
-            meta: None,
-        };
+        let text_resource = TextResourceContents::new("Test", "file:///test.txt");
+        let embedded_resource = EmbeddedResource::new(
+            EmbeddedResourceResource::TextResourceContents(text_resource),
+        );
 
         let content_block = ContentBlock::Resource(embedded_resource);
         let result = processor.process_content_block(&content_block);
@@ -1296,22 +1277,16 @@ mod tests {
         let blob_data = "SGVsbG8gV29ybGQ="; // "Hello World" in base64
 
         // Use text/plain which is an allowed blob mime type in Base64Processor
-        let blob_resource = BlobResourceContents {
-            uri: "https://example.com/data.txt".to_string(),
-            blob: blob_data.to_string(),
-            mime_type: Some("text/plain".to_string()),
-            meta: None,
-        };
-        let embedded_resource = EmbeddedResource {
-            resource: EmbeddedResourceResource::BlobResourceContents(blob_resource),
-            annotations: None,
-            meta: None,
-        };
+        let blob_resource = BlobResourceContents::new(blob_data, "https://example.com/data.txt")
+            .mime_type("text/plain");
+        let embedded_resource = EmbeddedResource::new(
+            EmbeddedResourceResource::BlobResourceContents(blob_resource),
+        );
 
         let content_block = ContentBlock::Resource(embedded_resource);
         let result = processor.process_content_block(&content_block);
         if let Err(ref e) = result {
-            tracing::error!("Error processing blob resource: {}", Pretty(e));
+            tracing::error!("Error processing blob resource: {:?}", e);
         }
         assert!(result.is_ok());
 
@@ -1343,17 +1318,10 @@ mod tests {
 
         let blob_data = "SGVsbG8gV29ybGQ="; // "Hello World" in base64
 
-        let blob_resource = BlobResourceContents {
-            uri: "".to_string(),
-            blob: blob_data.to_string(),
-            mime_type: None,
-            meta: None,
-        };
-        let embedded_resource = EmbeddedResource {
-            resource: EmbeddedResourceResource::BlobResourceContents(blob_resource),
-            annotations: None,
-            meta: None,
-        };
+        let blob_resource = BlobResourceContents::new(blob_data, "");
+        let embedded_resource = EmbeddedResource::new(
+            EmbeddedResourceResource::BlobResourceContents(blob_resource),
+        );
 
         let content_block = ContentBlock::Resource(embedded_resource);
         let result = processor.process_content_block(&content_block);
@@ -1372,17 +1340,10 @@ mod tests {
 
         let processor = create_test_processor();
 
-        let blob_resource = BlobResourceContents {
-            uri: "".to_string(),
-            blob: "invalid-base64!@#$".to_string(),
-            mime_type: None,
-            meta: None,
-        };
-        let embedded_resource = EmbeddedResource {
-            resource: EmbeddedResourceResource::BlobResourceContents(blob_resource),
-            annotations: None,
-            meta: None,
-        };
+        let blob_resource = BlobResourceContents::new("invalid-base64!@#$", "");
+        let embedded_resource = EmbeddedResource::new(
+            EmbeddedResourceResource::BlobResourceContents(blob_resource),
+        );
 
         let content_block = ContentBlock::Resource(embedded_resource);
         let result = processor.process_content_block(&content_block);
@@ -1399,17 +1360,8 @@ mod tests {
     fn test_process_resource_link_content() {
         let processor = create_test_processor();
 
-        // Create a proper ResourceLink with the actual structure
-        let resource_link = ResourceLink {
-            uri: "https://example.com/document.pdf".to_string(),
-            name: "document.pdf".to_string(),
-            description: None,
-            mime_type: None,
-            title: None,
-            size: None,
-            annotations: None,
-            meta: None,
-        };
+        // Create a proper ResourceLink with the builder pattern
+        let resource_link = ResourceLink::new("https://example.com/document.pdf", "document.pdf");
 
         let content_block = ContentBlock::ResourceLink(resource_link);
         let result = processor.process_content_block(&content_block);
@@ -1449,18 +1401,8 @@ mod tests {
         let png_data = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8/5+hHgAHggJ/PchI7wAAAABJRU5ErkJggg==";
 
         let content_blocks = vec![
-            ContentBlock::Text(TextContent {
-                text: "Hello".to_string(),
-                annotations: None,
-                meta: None,
-            }),
-            ContentBlock::Image(ImageContent {
-                data: png_data.to_string(),
-                mime_type: "image/png".to_string(),
-                uri: None,
-                annotations: None,
-                meta: None,
-            }),
+            ContentBlock::Text(TextContent::new("Hello")),
+            ContentBlock::Image(ImageContent::new(png_data, "image/png")),
         ];
 
         let result = processor.process_content_blocks(&content_blocks);
@@ -1482,13 +1424,7 @@ mod tests {
         // Invalid base64 data
         let invalid_data = "invalid-base64-data!@#$";
 
-        let image_content = ImageContent {
-            data: invalid_data.to_string(),
-            mime_type: "image/png".to_string(),
-            uri: None,
-            annotations: None,
-            meta: None,
-        };
+        let image_content = ImageContent::new(invalid_data, "image/png");
 
         let content_block = ContentBlock::Image(image_content);
         let result = processor.process_content_block(&content_block);
@@ -1507,13 +1443,7 @@ mod tests {
         let png_data = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8/5+hHgAHggJ/PchI7wAAAABJRU5ErkJggg==";
 
         // Unsupported MIME type
-        let image_content = ImageContent {
-            data: png_data.to_string(),
-            mime_type: "image/bmp".to_string(), // Not in allowed list
-            uri: None,
-            annotations: None,
-            meta: None,
-        };
+        let image_content = ImageContent::new(png_data, "image/bmp"); // Not in allowed list
 
         let content_block = ContentBlock::Image(image_content);
         let result = processor.process_content_block(&content_block);
@@ -1534,16 +1464,7 @@ mod tests {
             false,
         );
 
-        let resource_link = ResourceLink {
-            uri: "invalid-scheme://test".to_string(),
-            name: "test".to_string(),
-            description: None,
-            mime_type: None,
-            title: None,
-            size: None,
-            annotations: None,
-            meta: None,
-        };
+        let resource_link = ResourceLink::new("invalid-scheme://test", "test");
 
         let content_block = ContentBlock::ResourceLink(resource_link);
         let result = processor.process_content_block(&content_block);
@@ -1572,17 +1493,11 @@ mod tests {
 
         let processor = create_test_processor();
 
-        let text_resource = TextResourceContents {
-            uri: "https://example.com/data.json".to_string(),
-            text: "Sample text content".to_string(),
-            mime_type: None,
-            meta: None,
-        };
-        let embedded = EmbeddedResource {
-            resource: EmbeddedResourceResource::TextResourceContents(text_resource),
-            annotations: None,
-            meta: None,
-        };
+        let text_resource =
+            TextResourceContents::new("Sample text content", "https://example.com/data.json");
+        let embedded = EmbeddedResource::new(EmbeddedResourceResource::TextResourceContents(
+            text_resource,
+        ));
         let content_block = ContentBlock::Resource(embedded);
 
         let result = processor.validate_content_block_structure(&content_block);
@@ -1595,17 +1510,11 @@ mod tests {
 
         let processor = create_test_processor();
 
-        let blob_resource = BlobResourceContents {
-            uri: "".to_string(),
-            blob: "SGVsbG8gV29ybGQ=".to_string(),
-            mime_type: Some("text/plain".to_string()),
-            meta: None,
-        };
-        let embedded = EmbeddedResource {
-            resource: EmbeddedResourceResource::BlobResourceContents(blob_resource),
-            annotations: None,
-            meta: None,
-        };
+        let blob_resource =
+            BlobResourceContents::new("SGVsbG8gV29ybGQ=", "").mime_type("text/plain");
+        let embedded = EmbeddedResource::new(EmbeddedResourceResource::BlobResourceContents(
+            blob_resource,
+        ));
         let content_block = ContentBlock::Resource(embedded);
 
         let result = processor.validate_content_block_structure(&content_block);
@@ -1618,17 +1527,11 @@ mod tests {
 
         let processor = create_test_processor();
 
-        let text_resource = TextResourceContents {
-            uri: "".to_string(),
-            text: "".to_string(), // Empty text should fail validation
-            mime_type: None,
-            meta: None,
-        };
-        let embedded = EmbeddedResource {
-            resource: EmbeddedResourceResource::TextResourceContents(text_resource),
-            annotations: None,
-            meta: None,
-        };
+        // Empty text should fail validation
+        let text_resource = TextResourceContents::new("", "");
+        let embedded = EmbeddedResource::new(EmbeddedResourceResource::TextResourceContents(
+            text_resource,
+        ));
         let content_block = ContentBlock::Resource(embedded);
 
         let result = processor.validate_content_block_structure(&content_block);

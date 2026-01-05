@@ -648,18 +648,15 @@ mod tests {
         };
 
         // First, let's see how the protocol crate serializes SessionNotification
-        let notification = SessionNotification {
-            session_id: SessionId::new("test123".to_string()),
-            update: SessionUpdate::AgentThoughtChunk(agent_client_protocol::ContentChunk {
-                content: ContentBlock::Text(TextContent {
-                    text: "test thought".to_string(),
-                    annotations: None,
-                    meta: None,
-                }),
-                meta: None,
-            }),
-            meta: Some(serde_json::json!({"test": true})),
-        };
+        let mut meta_map = serde_json::Map::new();
+        meta_map.insert("test".to_string(), serde_json::json!(true));
+        let notification = SessionNotification::new(
+            SessionId::new("test123".to_string()),
+            SessionUpdate::AgentThoughtChunk(agent_client_protocol::ContentChunk::new(
+                ContentBlock::Text(TextContent::new("test thought")),
+            )),
+        )
+        .meta(meta_map);
 
         // Serialize the notification directly using the protocol crate's serde implementation
         let json_str = serde_json::to_string(&notification).expect("Should serialize");
@@ -683,18 +680,15 @@ mod tests {
         };
 
         // Create a test notification
-        let notification = SessionNotification {
-            session_id: SessionId::new("test123".to_string()),
-            update: SessionUpdate::AgentThoughtChunk(agent_client_protocol::ContentChunk {
-                content: ContentBlock::Text(TextContent {
-                    text: "test thought".to_string(),
-                    annotations: None,
-                    meta: None,
-                }),
-                meta: None,
-            }),
-            meta: Some(serde_json::json!({"test": true})),
-        };
+        let mut meta_map = serde_json::Map::new();
+        meta_map.insert("test".to_string(), serde_json::json!(true));
+        let notification = SessionNotification::new(
+            SessionId::new("test123".to_string()),
+            SessionUpdate::AgentThoughtChunk(agent_client_protocol::ContentChunk::new(
+                ContentBlock::Text(TextContent::new("test thought")),
+            )),
+        )
+        .meta(meta_map);
 
         // Create a mock writer
         let writer = Arc::new(tokio::sync::Mutex::new(Vec::new()));
