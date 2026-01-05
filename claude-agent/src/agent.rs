@@ -6423,12 +6423,20 @@ mod tests {
                     .fs(agent_client_protocol::FileSystemCapability::new()
                         .read_text_file(true)
                         .write_text_file(true)
-                        .meta(serde_json::json!({"unknown_feature": "test"}).as_object().cloned()))
+                        .meta(
+                            serde_json::json!({"unknown_feature": "test"})
+                                .as_object()
+                                .cloned(),
+                        ))
                     .terminal(true)
-                    .meta(serde_json::json!({
-                        "customExtension": true,
-                        "streaming": true
-                    }).as_object().cloned())
+                    .meta(
+                        serde_json::json!({
+                            "customExtension": true,
+                            "streaming": true
+                        })
+                        .as_object()
+                        .cloned(),
+                    ),
             );
 
         let result = agent.initialize(request).await;
@@ -6450,14 +6458,22 @@ mod tests {
                         .read_text_file(true)
                         .write_text_file(true))
                     .terminal(true)
-                    .meta(serde_json::json!({
-                        "malformed": "data",
-                        "nested": {
-                            "invalid": []
-                        }
-                    }).as_object().cloned())
+                    .meta(
+                        serde_json::json!({
+                            "malformed": "data",
+                            "nested": {
+                                "invalid": []
+                            }
+                        })
+                        .as_object()
+                        .cloned(),
+                    ),
             )
-            .meta(serde_json::json!("invalid_meta_format").as_object().cloned()); // Should be object, not string
+            .meta(
+                serde_json::json!("invalid_meta_format")
+                    .as_object()
+                    .cloned(),
+            ); // Should be object, not string
 
         let result = agent.initialize(request).await;
         assert!(result.is_err(), "Malformed request should be rejected");
@@ -6486,9 +6502,13 @@ mod tests {
                         .read_text_file(true)
                         .write_text_file(true))
                     .terminal(true)
-                    .meta(serde_json::json!({
-                        "streaming": "invalid_string_value"  // streaming must be boolean
-                    }).as_object().cloned()),
+                    .meta(
+                        serde_json::json!({
+                            "streaming": "invalid_string_value"  // streaming must be boolean
+                        })
+                        .as_object()
+                        .cloned(),
+                    ),
             );
 
         let result = agent.initialize(request).await;
@@ -6498,7 +6518,11 @@ mod tests {
         );
 
         let error = result.unwrap_err();
-        assert_eq!(error.code, agent_client_protocol::ErrorCode::Other(-32602), "Should be Invalid params error");
+        assert_eq!(
+            error.code,
+            agent_client_protocol::ErrorCode::Other(-32602),
+            "Should be Invalid params error"
+        );
         assert!(error.message.contains("streaming"));
         assert!(error.message.contains("boolean"));
 
@@ -6521,9 +6545,13 @@ mod tests {
                     .fs(agent_client_protocol::FileSystemCapability::new()
                         .read_text_file(true)
                         .write_text_file(true)
-                        .meta(serde_json::json!({
-                            "unknown_feature": true
-                        }).as_object().cloned()))
+                        .meta(
+                            serde_json::json!({
+                                "unknown_feature": true
+                            })
+                            .as_object()
+                            .cloned(),
+                        ))
                     .terminal(true),
             );
 
@@ -6557,7 +6585,7 @@ mod tests {
                     .fs(agent_client_protocol::FileSystemCapability::new()
                         .read_text_file(true)
                         .write_text_file(true))
-                    .terminal(true)
+                    .terminal(true),
             );
 
         let v1_result = agent.initialize(v1_request).await;
@@ -6591,7 +6619,7 @@ mod tests {
                     .fs(agent_client_protocol::FileSystemCapability::new()
                         .read_text_file(true)
                         .write_text_file(true))
-                    .terminal(true)
+                    .terminal(true),
             );
 
         let v1_response = agent.initialize(v1_request).await.unwrap();
@@ -7165,15 +7193,18 @@ mod tests {
         }
 
         // Test updating commands for the session
-        let updated_commands = vec![agent_client_protocol::AvailableCommand {
-            name: "new_command".to_string(),
-            description: "A newly available command".to_string(),
-            input: None,
-            meta: Some(serde_json::json!({
+        let updated_commands = vec![agent_client_protocol::AvailableCommand::new(
+            "new_command".to_string(),
+            "A newly available command".to_string(),
+        )
+        .meta(
+            serde_json::json!({
                 "category": "testing",
                 "source": "test"
-            })),
-        }];
+            })
+            .as_object()
+            .cloned(),
+        )];
 
         let update_sent = agent
             .update_session_available_commands(&session_id, updated_commands.clone())
@@ -7393,8 +7424,8 @@ mod tests {
             meta["session_id"],
             serde_json::Value::String(session_id.to_string())
         );
-        assert!(!meta.as_object().unwrap().contains_key("streaming"));
-        assert!(!meta.as_object().unwrap().contains_key("chunks_processed"));
+        assert!(!meta.contains_key("streaming"));
+        assert!(!meta.contains_key("chunks_processed"));
     }
 
     #[tokio::test]
@@ -7414,7 +7445,7 @@ mod tests {
             serde_json::Value::String(session_id.to_string())
         );
         assert_eq!(meta["streaming"], serde_json::Value::Bool(true));
-        assert!(!meta.as_object().unwrap().contains_key("chunks_processed"));
+        assert!(!meta.contains_key("chunks_processed"));
     }
 
     #[tokio::test]
@@ -7929,10 +7960,10 @@ mod tests {
                 panic!("RawValue creation failed");
             }
         };
-        let ext_request = agent_client_protocol::ExtRequest {
-            method: "fs/read_text_file".into(),
-            params: Arc::from(params_raw),
-        };
+        let ext_request = agent_client_protocol::ExtRequest::new(
+            "fs/read_text_file".to_string(),
+            Arc::from(params_raw),
+        );
 
         let result = match agent.ext_method(ext_request).await {
             Ok(result) => result,
@@ -7943,7 +7974,7 @@ mod tests {
         };
 
         // Parse the response
-        let response: serde_json::Value = serde_json::from_str(result.get()).unwrap();
+        let response: serde_json::Value = serde_json::from_str(result.0.get()).unwrap();
         assert_eq!(response["content"], "Test content for ext method");
     }
 
@@ -7964,7 +7995,7 @@ mod tests {
         let result = agent.handle_write_text_file(params).await;
         match result {
             Ok(value) => {
-                assert_eq!(value, serde_json::Value::Null);
+                assert_eq!(value, WriteTextFileResponse::default());
                 println!("Write test successful!");
             }
             Err(e) => {
@@ -8144,15 +8175,15 @@ mod tests {
         });
 
         let params_raw = agent_client_protocol::RawValue::from_string(params.to_string()).unwrap();
-        let ext_request = agent_client_protocol::ExtRequest {
-            method: "fs/write_text_file".into(),
-            params: Arc::from(params_raw),
-        };
+        let ext_request = agent_client_protocol::ExtRequest::new(
+            "fs/write_text_file".to_string(),
+            Arc::from(params_raw),
+        );
 
         let result = agent.ext_method(ext_request).await.unwrap();
 
         // Parse the response - should be null for successful write
-        let response: serde_json::Value = serde_json::from_str(result.get()).unwrap();
+        let response: serde_json::Value = serde_json::from_str(result.0.get()).unwrap();
         assert_eq!(response, serde_json::Value::Null);
 
         // Verify the file was actually written
@@ -8168,11 +8199,7 @@ mod tests {
 
         let agent = create_test_agent().await;
 
-        let request = NewSessionRequest {
-            cwd: std::path::PathBuf::from("/tmp"),
-            mcp_servers: vec![], // Empty for now
-            meta: None,
-        };
+        let request = NewSessionRequest::new(std::path::PathBuf::from("/tmp"));
 
         let result = agent.new_session(request).await;
         // Should succeed with empty MCP servers
@@ -8187,12 +8214,10 @@ mod tests {
 
         let agent = create_test_agent().await;
 
-        let request = LoadSessionRequest {
-            session_id: SessionId::new("01ARZ3NDEKTSV4RRFFQ69G5FAV".to_string()),
-            cwd: std::path::PathBuf::from("/tmp"),
-            mcp_servers: vec![], // Empty for now
-            meta: None,
-        };
+        let request = LoadSessionRequest::new(
+            SessionId::new("01ARZ3NDEKTSV4RRFFQ69G5FAV".to_string()),
+            std::path::PathBuf::from("/tmp"),
+        );
 
         let result = agent.load_session(request).await;
         // Should succeed now - transport validation passes with empty MCP servers
@@ -8201,7 +8226,10 @@ mod tests {
         let error = result.unwrap_err();
         // Could be transport validation error (-32602) or session not found (-32603)
         // Both are acceptable since validation runs before session lookup
-        assert!(error.code == -32602 || error.code == -32603);
+        assert!(
+            error.code == agent_client_protocol::ErrorCode::Other(-32602)
+                || error.code == agent_client_protocol::ErrorCode::Other(-32603)
+        );
     }
 
     #[tokio::test]
@@ -8417,15 +8445,15 @@ mod tests {
         });
 
         let params_raw = agent_client_protocol::RawValue::from_string(params.to_string()).unwrap();
-        let ext_request = agent_client_protocol::ExtRequest {
-            method: "terminal/output".into(),
-            params: Arc::from(params_raw),
-        };
+        let ext_request = agent_client_protocol::ExtRequest::new(
+            "terminal/output".to_string(),
+            Arc::from(params_raw),
+        );
 
         let result = agent.ext_method(ext_request).await.unwrap();
 
         // Parse the response
-        let response: serde_json::Value = serde_json::from_str(result.get()).unwrap();
+        let response: serde_json::Value = serde_json::from_str(result.0.get()).unwrap();
         assert!(response.get("output").is_some());
         assert!(response.get("truncated").is_some());
     }
@@ -8466,17 +8494,16 @@ mod tests {
         #[allow(clippy::arc_with_non_send_sync)]
         let agent = Arc::new(agent);
 
-        let init_request = InitializeRequest {
-            protocol_version: agent_client_protocol::ProtocolVersion::V1,
-            client_capabilities: agent_client_protocol::ClientCapabilities::new()
-                .fs(agent_client_protocol::FileSystemCapability::new()
-                    .read_text_file(true)
-                    .write_text_file(true))
-                .terminal(true)
-                .meta(Some(serde_json::json!({"streaming": false}))),
-            client_info: None,
-            meta: Some(serde_json::json!({"test": true})),
-        };
+        let init_request = InitializeRequest::new(agent_client_protocol::ProtocolVersion::V1)
+            .client_capabilities(
+                agent_client_protocol::ClientCapabilities::new()
+                    .fs(agent_client_protocol::FileSystemCapability::new()
+                        .read_text_file(true)
+                        .write_text_file(true))
+                    .terminal(true)
+                    .meta(serde_json::json!({"streaming": false}).as_object().cloned()),
+            )
+            .meta(serde_json::json!({"test": true}).as_object().cloned());
         agent.initialize(init_request).await.unwrap();
 
         let mut notification_receiver = agent.notification_sender.sender.subscribe();
@@ -8489,22 +8516,14 @@ mod tests {
         );
         let new_response = agent.new_session(new_request).await.unwrap();
 
-        let prompt_request = PromptRequest {
-            session_id: new_response.session_id.clone(),
-            prompt: vec![
-                ContentBlock::Text(TextContent {
-                    text: "test".to_string(),
-                    annotations: None,
-                    meta: None,
-                }),
-                ContentBlock::Text(TextContent {
-                    text: "test2".to_string(),
-                    annotations: None,
-                    meta: None,
-                }),
+        let prompt_request = PromptRequest::new(
+            new_response.session_id.clone(),
+            vec![
+                ContentBlock::Text(TextContent::new("test".to_string())),
+                ContentBlock::Text(TextContent::new("test2".to_string())),
             ],
-            meta: Some(serde_json::json!({"test": true})),
-        };
+        )
+        .meta(serde_json::json!({"test": true}).as_object().cloned());
 
         // Start collecting notifications
         let collect_task = async {
@@ -8985,10 +9004,7 @@ mod tests {
         let params_json = serde_json::to_string(&response).unwrap();
         let params = RawValue::from_string(params_json).unwrap();
 
-        let request = ExtRequest {
-            method: "editor/update_buffers".to_string().into(),
-            params: Arc::from(params),
-        };
+        let request = ExtRequest::new("editor/update_buffers".to_string(), Arc::from(params));
 
         // Call the extension method
         let result = agent.ext_method(request).await;
@@ -9050,10 +9066,7 @@ mod tests {
         let params_json = serde_json::to_string(&response).unwrap();
         let params = RawValue::from_string(params_json).unwrap();
 
-        let request = ExtRequest {
-            method: "editor/update_buffers".to_string().into(),
-            params: Arc::from(params),
-        };
+        let request = ExtRequest::new("editor/update_buffers".to_string(), Arc::from(params));
 
         let result = agent.ext_method(request).await;
         assert!(result.is_ok(), "Extension method should succeed");
@@ -9137,15 +9150,12 @@ mod tests {
 
         // Prompt should be blocked immediately by streaming path check
         // Counter resets to 0, increments to 1, and 1 > 0 triggers limit
-        let prompt_request = PromptRequest {
-            session_id: session_response.session_id.clone(),
-            prompt: vec![ContentBlock::Text(TextContent {
-                text: "This should be blocked by turn request limit".to_string(),
-                annotations: None,
-                meta: None,
-            })],
-            meta: None,
-        };
+        let prompt_request = PromptRequest::new(
+            session_response.session_id.clone(),
+            vec![ContentBlock::Text(TextContent::new(
+                "This should be blocked by turn request limit".to_string(),
+            ))],
+        );
 
         let response = agent.prompt(prompt_request).await.unwrap();
         assert_eq!(

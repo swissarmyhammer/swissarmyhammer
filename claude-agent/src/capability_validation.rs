@@ -470,21 +470,19 @@ mod tests {
     // Test imports are above in the test function
 
     fn create_test_agent_capabilities() -> AgentCapabilities {
-        AgentCapabilities {
-            load_session: true,
-            prompt_capabilities: agent_client_protocol::PromptCapabilities {
-                image: false,
-                audio: false,
-                embedded_context: false,
-                meta: None,
-            },
-            mcp_capabilities: agent_client_protocol::McpCapabilities {
-                http: true,
-                sse: false,
-                meta: None,
-            },
-            meta: None,
-        }
+        AgentCapabilities::new()
+            .load_session(true)
+            .prompt_capabilities(
+                agent_client_protocol::PromptCapabilities::new()
+                    .image(false)
+                    .audio(false)
+                    .embedded_context(false),
+            )
+            .mcp_capabilities(
+                agent_client_protocol::McpCapabilities::new()
+                    .http(true)
+                    .sse(false),
+            )
     }
 
     #[test]
@@ -677,15 +675,11 @@ mod tests {
     fn create_test_client_capabilities_with_terminal(terminal_enabled: bool) -> ClientCapabilities {
         use agent_client_protocol::{ClientCapabilities, FileSystemCapability};
 
-        ClientCapabilities {
-            fs: FileSystemCapability {
-                read_text_file: true,
-                write_text_file: true,
-                meta: None,
-            },
-            terminal: terminal_enabled,
-            meta: None,
-        }
+        ClientCapabilities::new()
+            .fs(FileSystemCapability::new()
+                .read_text_file(true)
+                .write_text_file(true))
+            .terminal(terminal_enabled)
     }
 
     #[test]
@@ -796,19 +790,20 @@ mod tests {
         use agent_client_protocol::{ClientCapabilities, FileSystemCapability};
 
         let validator = CapabilityValidator::new();
-        let capabilities = ClientCapabilities {
-            fs: FileSystemCapability {
-                read_text_file: true,
-                write_text_file: false,
-                meta: None,
-            },
-            terminal: true,
-            meta: Some(serde_json::json!({
-                "streaming": true,
-                "notifications": false,
-                "progress": true
-            })),
-        };
+        let capabilities = ClientCapabilities::new()
+            .fs(FileSystemCapability::new()
+                .read_text_file(true)
+                .write_text_file(false))
+            .terminal(true)
+            .meta(
+                serde_json::json!({
+                    "streaming": true,
+                    "notifications": false,
+                    "progress": true
+                })
+                .as_object()
+                .cloned(),
+            );
 
         let result = validator.validate_client_capabilities(Some(&capabilities));
         assert!(result.is_ok());
@@ -819,15 +814,12 @@ mod tests {
         use agent_client_protocol::{ClientCapabilities, FileSystemCapability};
 
         let validator = CapabilityValidator::new();
-        let capabilities = ClientCapabilities {
-            fs: FileSystemCapability {
-                read_text_file: true,
-                write_text_file: true,
-                meta: None,
-            },
-            terminal: true,
-            meta: Some(serde_json::json!("not_an_object")),
-        };
+        let capabilities = ClientCapabilities::new()
+            .fs(FileSystemCapability::new()
+                .read_text_file(true)
+                .write_text_file(true))
+            .terminal(true)
+            .meta(serde_json::json!("not_an_object").as_object().cloned());
 
         let result = validator.validate_client_capabilities(Some(&capabilities));
         assert!(result.is_err());
@@ -850,17 +842,18 @@ mod tests {
         use agent_client_protocol::{ClientCapabilities, FileSystemCapability};
 
         let validator = CapabilityValidator::new();
-        let capabilities = ClientCapabilities {
-            fs: FileSystemCapability {
-                read_text_file: true,
-                write_text_file: true,
-                meta: None,
-            },
-            terminal: false,
-            meta: Some(serde_json::json!({
-                "streaming": "not_a_boolean"
-            })),
-        };
+        let capabilities = ClientCapabilities::new()
+            .fs(FileSystemCapability::new()
+                .read_text_file(true)
+                .write_text_file(true))
+            .terminal(false)
+            .meta(
+                serde_json::json!({
+                    "streaming": "not_a_boolean"
+                })
+                .as_object()
+                .cloned(),
+            );
 
         let result = validator.validate_client_capabilities(Some(&capabilities));
         assert!(result.is_err());
@@ -883,17 +876,18 @@ mod tests {
         use agent_client_protocol::{ClientCapabilities, FileSystemCapability};
 
         let validator = CapabilityValidator::new();
-        let capabilities = ClientCapabilities {
-            fs: FileSystemCapability {
-                read_text_file: true,
-                write_text_file: true,
-                meta: None,
-            },
-            terminal: true,
-            meta: Some(serde_json::json!({
-                "unknown_capability": true
-            })),
-        };
+        let capabilities = ClientCapabilities::new()
+            .fs(FileSystemCapability::new()
+                .read_text_file(true)
+                .write_text_file(true))
+            .terminal(true)
+            .meta(
+                serde_json::json!({
+                    "unknown_capability": true
+                })
+                .as_object()
+                .cloned(),
+            );
 
         // Unknown meta capabilities should not fail validation, just log debug
         let result = validator.validate_client_capabilities(Some(&capabilities));
@@ -905,17 +899,18 @@ mod tests {
         use agent_client_protocol::{ClientCapabilities, FileSystemCapability};
 
         let validator = CapabilityValidator::new();
-        let capabilities = ClientCapabilities {
-            fs: FileSystemCapability {
-                read_text_file: true,
-                write_text_file: true,
-                meta: Some(serde_json::json!({
-                    "encoding": "utf-8"
-                })),
-            },
-            terminal: true,
-            meta: None,
-        };
+        let capabilities = ClientCapabilities::new()
+            .fs(FileSystemCapability::new()
+                .read_text_file(true)
+                .write_text_file(true)
+                .meta(
+                    serde_json::json!({
+                        "encoding": "utf-8"
+                    })
+                    .as_object()
+                    .cloned(),
+                ))
+            .terminal(true);
 
         let result = validator.validate_client_capabilities(Some(&capabilities));
         assert!(result.is_ok());
@@ -926,15 +921,12 @@ mod tests {
         use agent_client_protocol::{ClientCapabilities, FileSystemCapability};
 
         let validator = CapabilityValidator::new();
-        let capabilities = ClientCapabilities {
-            fs: FileSystemCapability {
-                read_text_file: true,
-                write_text_file: false,
-                meta: Some(serde_json::json!("not_an_object")),
-            },
-            terminal: false,
-            meta: None,
-        };
+        let capabilities = ClientCapabilities::new()
+            .fs(FileSystemCapability::new()
+                .read_text_file(true)
+                .write_text_file(false)
+                .meta(serde_json::json!("not_an_object").as_object().cloned()))
+            .terminal(false);
 
         let result = validator.validate_client_capabilities(Some(&capabilities));
         assert!(result.is_err());
@@ -957,22 +949,28 @@ mod tests {
         use agent_client_protocol::{ClientCapabilities, FileSystemCapability};
 
         let validator = CapabilityValidator::new();
-        let capabilities = ClientCapabilities {
-            fs: FileSystemCapability {
-                read_text_file: true,
-                write_text_file: false,
-                meta: Some(serde_json::json!({
-                    "encoding": "utf-8",
-                    "permissions": true
-                })),
-            },
-            terminal: true,
-            meta: Some(serde_json::json!({
-                "streaming": false,
-                "notifications": true,
-                "progress": false
-            })),
-        };
+        let capabilities = ClientCapabilities::new()
+            .fs(FileSystemCapability::new()
+                .read_text_file(true)
+                .write_text_file(false)
+                .meta(
+                    serde_json::json!({
+                        "encoding": "utf-8",
+                        "permissions": true
+                    })
+                    .as_object()
+                    .cloned(),
+                ))
+            .terminal(true)
+            .meta(
+                serde_json::json!({
+                    "streaming": false,
+                    "notifications": true,
+                    "progress": false
+                })
+                .as_object()
+                .cloned(),
+            );
 
         let result = validator.validate_client_capabilities(Some(&capabilities));
         assert!(result.is_ok());
@@ -984,15 +982,12 @@ mod tests {
 
         let validator = CapabilityValidator::new();
 
-        let capabilities = ClientCapabilities {
-            fs: FileSystemCapability {
-                read_text_file: true,
-                write_text_file: true,
-                meta: None,
-            },
-            terminal: true,
-            meta: Some(serde_json::json!({})),
-        };
+        let capabilities = ClientCapabilities::new()
+            .fs(FileSystemCapability::new()
+                .read_text_file(true)
+                .write_text_file(true))
+            .terminal(true)
+            .meta(serde_json::json!({}).as_object().cloned());
 
         let result = validator.validate_client_capabilities(Some(&capabilities));
         assert!(result.is_ok());
@@ -1004,15 +999,12 @@ mod tests {
 
         let validator = CapabilityValidator::new();
 
-        let capabilities = ClientCapabilities {
-            fs: FileSystemCapability {
-                read_text_file: true,
-                write_text_file: true,
-                meta: Some(serde_json::json!({})),
-            },
-            terminal: true,
-            meta: None,
-        };
+        let capabilities = ClientCapabilities::new()
+            .fs(FileSystemCapability::new()
+                .read_text_file(true)
+                .write_text_file(true)
+                .meta(serde_json::json!({}).as_object().cloned()))
+            .terminal(true);
 
         let result = validator.validate_client_capabilities(Some(&capabilities));
         assert!(result.is_ok());
@@ -1024,18 +1016,19 @@ mod tests {
 
         let validator = CapabilityValidator::new();
 
-        let capabilities = ClientCapabilities {
-            fs: FileSystemCapability {
-                read_text_file: true,
-                write_text_file: true,
-                meta: None,
-            },
-            terminal: true,
-            meta: Some(serde_json::json!({
-                "streaming": true,
-                "notifications": "invalid_string_value"
-            })),
-        };
+        let capabilities = ClientCapabilities::new()
+            .fs(FileSystemCapability::new()
+                .read_text_file(true)
+                .write_text_file(true))
+            .terminal(true)
+            .meta(
+                serde_json::json!({
+                    "streaming": true,
+                    "notifications": "invalid_string_value"
+                })
+                .as_object()
+                .cloned(),
+            );
 
         let result = validator.validate_client_capabilities(Some(&capabilities));
         assert!(result.is_err());

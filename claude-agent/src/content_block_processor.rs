@@ -1047,11 +1047,7 @@ mod tests {
     #[test]
     fn test_process_text_content() {
         let processor = create_test_processor();
-        let text_content = TextContent {
-            text: "Hello, world!".to_string(),
-            annotations: None,
-            meta: None,
-        };
+        let text_content = TextContent::new("Hello, world!".to_string());
 
         let result = processor.process_text_content(&text_content);
         assert!(result.is_ok());
@@ -1068,13 +1064,7 @@ mod tests {
         // 1x1 PNG in base64
         let png_data = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8/5+hHgAHggJ/PchI7wAAAABJRU5ErkJggg==";
 
-        let image_content = ImageContent {
-            data: png_data.to_string(),
-            mime_type: "image/png".to_string(),
-            uri: None,
-            annotations: None,
-            meta: None,
-        };
+        let image_content = ImageContent::new(png_data.to_string(), "image/png".to_string());
 
         let content_block = ContentBlock::Image(image_content);
         let result = processor.process_content_block(&content_block);
@@ -1099,13 +1089,8 @@ mod tests {
         let processor = create_test_processor();
         let png_data = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8/5+hHgAHggJ/PchI7wAAAABJRU5ErkJggg==";
 
-        let image_content = ImageContent {
-            data: png_data.to_string(),
-            mime_type: "image/png".to_string(),
-            uri: Some("https://example.com/image.png".to_string()),
-            annotations: None,
-            meta: None,
-        };
+        let image_content = ImageContent::new(png_data.to_string(), "image/png".to_string())
+            .uri(Some("https://example.com/image.png".to_string()));
 
         let content_block = ContentBlock::Image(image_content);
         let result = processor.process_content_block(&content_block);
@@ -1139,12 +1124,7 @@ mod tests {
         // Simple WAV header in base64 (RIFF header + WAVE format)
         let wav_data = "UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQAAAAAA";
 
-        let audio_content = AudioContent {
-            data: wav_data.to_string(),
-            mime_type: "audio/wav".to_string(),
-            annotations: None,
-            meta: None,
-        };
+        let audio_content = AudioContent::new(wav_data.to_string(), "audio/wav".to_string());
 
         let content_block = ContentBlock::Audio(audio_content);
 
