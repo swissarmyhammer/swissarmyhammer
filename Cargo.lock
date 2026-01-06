@@ -6578,6 +6578,7 @@ dependencies = [
  "serde_yaml",
  "serial_test",
  "swissarmyhammer-agent",
+ "swissarmyhammer-cel",
  "swissarmyhammer-common",
  "swissarmyhammer-config",
  "swissarmyhammer-git",

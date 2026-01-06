@@ -33,6 +33,7 @@ swissarmyhammer-common = { path = "../swissarmyhammer-common" }
 swissarmyhammer-prompts = { path = "../swissarmyhammer-prompts" }
 swissarmyhammer-shell = { path = "../swissarmyhammer-shell" }
 swissarmyhammer-templating = { path = "../swissarmyhammer-templating" }
+swissarmyhammer-cel = { path = "../swissarmyhammer-cel" }
 # ACP agent creation and execution (unified interface)
 swissarmyhammer-agent = { path = "../swissarmyhammer-agent" }
 

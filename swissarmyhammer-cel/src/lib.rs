@@ -27,11 +27,27 @@
 
 use cel_interpreter::{Context, Program, Value as CelValue};
 use once_cell::sync::Lazy;
-use std::sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard};
+use std::collections::HashMap;
+use std::sync::{Arc, RwLock};
 
-/// Process-global CEL context shared across all components
-static GLOBAL_CEL_CONTEXT: Lazy<RwLock<Context<'static>>> =
-    Lazy::new(|| RwLock::new(Context::default()));
+/// Global CEL state containing both the context and variable tracking
+struct GlobalCelState {
+    context: Context<'static>,
+    variables: HashMap<String, CelValue>,
+}
+
+impl GlobalCelState {
+    fn new() -> Self {
+        Self {
+            context: Context::default(),
+            variables: HashMap::new(),
+        }
+    }
+}
+
+/// Process-global CEL state shared across all components
+static GLOBAL_CEL_STATE: Lazy<RwLock<GlobalCelState>> =
+    Lazy::new(|| RwLock::new(GlobalCelState::new()));
 
 /// CEL state manager providing thread-safe access to a process-global CEL context
 #[derive(Clone)]
@@ -54,17 +70,20 @@ impl CelState {
     ///
     /// Returns the computed CEL value, or a CEL String containing an error message
     pub fn set(&self, name: &str, expression: &str) -> Result<CelValue, String> {
-        let mut context = self
-            .write_context()
+        let mut state = GLOBAL_CEL_STATE
+            .write()
             .map_err(|e| format!("Lock error: {}", e))?;
 
         // Evaluate the expression in the current context
-        let value = Self::evaluate_expression_internal(expression, &context);
+        let value = Self::evaluate_expression_internal(expression, &state.context);
 
-        // Store the result as a variable
-        context
+        // Store the result as a variable in both context and tracking map
+        state
+            .context
             .add_variable(name, value.clone())
             .map_err(|e| format!("Failed to add variable: {}", e))?;
+
+        state.variables.insert(name.to_string(), value.clone());
 
         Ok(value)
     }
@@ -79,24 +98,40 @@ impl CelState {
     ///
     /// Returns the computed CEL value, or a CEL String containing an error message
     pub fn get(&self, expression: &str) -> Result<CelValue, String> {
-        let context = self
-            .read_context()
-            .map_err(|e| format!("Lock error: {}", e))?;
-        Ok(Self::evaluate_expression_internal(expression, &context))
-    }
-
-    /// Get a read lock on the CEL context
-    fn read_context(&self) -> Result<RwLockReadGuard<'static, Context<'static>>, String> {
-        GLOBAL_CEL_CONTEXT
+        let state = GLOBAL_CEL_STATE
             .read()
-            .map_err(|e| format!("Failed to acquire read lock: {}", e))
+            .map_err(|e| format!("Lock error: {}", e))?;
+        Ok(Self::evaluate_expression_internal(
+            expression,
+            &state.context,
+        ))
     }
 
-    /// Get a write lock on the CEL context
-    fn write_context(&self) -> Result<RwLockWriteGuard<'static, Context<'static>>, String> {
-        GLOBAL_CEL_CONTEXT
-            .write()
-            .map_err(|e| format!("Failed to acquire write lock: {}", e))
+    /// Copy all global variables to a target CEL context
+    ///
+    /// This enables context stacking where workflow-specific variables are layered
+    /// on top of global variables, allowing expressions to access both.
+    ///
+    /// # Arguments
+    ///
+    /// * `target` - The CEL context to copy variables into
+    ///
+    /// # Returns
+    ///
+    /// Returns Ok(()) on success, or an error message if copying fails
+    pub fn copy_to_context(&self, target: &mut Context) -> Result<(), String> {
+        let state = GLOBAL_CEL_STATE
+            .read()
+            .map_err(|e| format!("Lock error: {}", e))?;
+
+        // Copy all tracked variables to the target context
+        for (name, value) in &state.variables {
+            target
+                .add_variable(name, value.clone())
+                .map_err(|e| format!("Failed to copy variable '{}': {}", name, e))?;
+        }
+
+        Ok(())
     }
 
     /// Internal method to compile and execute a CEL expression
@@ -267,5 +302,198 @@ mod tests {
         let json = cel_value_to_json(&cel_map);
         assert_eq!(json["name"], "test");
         assert_eq!(json["value"], 42);
+    }
+
+    #[test]
+    fn test_copy_to_context() {
+        let state = CelState::global();
+
+        // Set some global variables
+        state.set("global_var", "100").unwrap();
+        state.set("abort", "true").unwrap();
+
+        // Create a new context and copy globals to it
+        let mut new_context = cel_interpreter::Context::default();
+        state.copy_to_context(&mut new_context).unwrap();
+
+        // Verify global variables are accessible in new context
+        let program = cel_interpreter::Program::compile("global_var").unwrap();
+        let result = program.execute(&new_context).unwrap();
+        assert_eq!(cel_value_to_json(&result), serde_json::json!(100));
+
+        let program = cel_interpreter::Program::compile("abort").unwrap();
+        let result = program.execute(&new_context).unwrap();
+        assert_eq!(cel_value_to_json(&result), serde_json::json!(true));
+    }
+
+    #[test]
+    fn test_context_stacking_with_local_variables() {
+        let state = CelState::global();
+
+        // Set global variable
+        state.set("global_count", "5").unwrap();
+
+        // Create new context with global variables
+        let mut stacked_context = cel_interpreter::Context::default();
+        state.copy_to_context(&mut stacked_context).unwrap();
+
+        // Add local variables on top
+        stacked_context
+            .add_variable("local_count", CelValue::Int(10))
+            .unwrap();
+
+        // Verify both global and local variables are accessible
+        let program = cel_interpreter::Program::compile("global_count + local_count").unwrap();
+        let result = program.execute(&stacked_context).unwrap();
+        assert_eq!(cel_value_to_json(&result), serde_json::json!(15));
+    }
+
+    #[test]
+    fn test_context_stacking_local_overrides_global() {
+        let state = CelState::global();
+
+        // Set global variable
+        state.set("shared_var", "\"global\"").unwrap();
+
+        // Create new context with global variables
+        let mut stacked_context = cel_interpreter::Context::default();
+        state.copy_to_context(&mut stacked_context).unwrap();
+
+        // Override with local variable (same name)
+        stacked_context
+            .add_variable(
+                "shared_var",
+                CelValue::String(Arc::new("local".to_string())),
+            )
+            .unwrap();
+
+        // Verify local value takes precedence
+        let program = cel_interpreter::Program::compile("shared_var").unwrap();
+        let result = program.execute(&stacked_context).unwrap();
+        assert_eq!(cel_value_to_json(&result), serde_json::json!("local"));
+    }
+
+    #[test]
+    fn test_set_boolean_true() {
+        let state = CelState::global();
+
+        // Set a boolean true value
+        let result = state.set("flag_enabled", "true");
+        assert!(result.is_ok());
+        let value = result.unwrap();
+        assert_eq!(cel_value_to_json(&value), serde_json::json!(true));
+
+        // Verify we can read it back
+        let result = state.get("flag_enabled");
+        assert!(result.is_ok());
+        let value = result.unwrap();
+        assert_eq!(cel_value_to_json(&value), serde_json::json!(true));
+
+        // Verify we can use it in a boolean expression
+        let result = state.get("flag_enabled == true");
+        assert!(result.is_ok());
+        let value = result.unwrap();
+        assert_eq!(cel_value_to_json(&value), serde_json::json!(true));
+    }
+
+    #[test]
+    fn test_set_boolean_false() {
+        let state = CelState::global();
+
+        // Set a boolean false value
+        let result = state.set("flag_disabled", "false");
+        assert!(result.is_ok());
+        let value = result.unwrap();
+        assert_eq!(cel_value_to_json(&value), serde_json::json!(false));
+
+        // Verify we can read it back
+        let result = state.get("flag_disabled");
+        assert!(result.is_ok());
+        let value = result.unwrap();
+        assert_eq!(cel_value_to_json(&value), serde_json::json!(false));
+
+        // Verify we can use it in a boolean expression
+        let result = state.get("flag_disabled == false");
+        assert!(result.is_ok());
+        let value = result.unwrap();
+        assert_eq!(cel_value_to_json(&value), serde_json::json!(true));
+    }
+
+    #[test]
+    fn test_boolean_expressions() {
+        let state = CelState::global();
+
+        // Set boolean variables
+        state.set("is_ready", "true").unwrap();
+        state.set("is_error", "false").unwrap();
+        state.set("has_permission", "true").unwrap();
+
+        // Test direct boolean evaluation
+        let result = state.get("is_ready").unwrap();
+        assert_eq!(cel_value_to_json(&result), serde_json::json!(true));
+
+        // Test equality comparisons
+        let result = state.get("is_ready == true").unwrap();
+        assert_eq!(cel_value_to_json(&result), serde_json::json!(true));
+
+        let result = state.get("is_error == false").unwrap();
+        assert_eq!(cel_value_to_json(&result), serde_json::json!(true));
+
+        // Test boolean AND
+        let result = state.get("is_ready && has_permission").unwrap();
+        assert_eq!(cel_value_to_json(&result), serde_json::json!(true));
+
+        // Test boolean OR
+        let result = state.get("is_error || has_permission").unwrap();
+        assert_eq!(cel_value_to_json(&result), serde_json::json!(true));
+
+        // Test boolean NOT
+        let result = state.get("!is_error").unwrap();
+        assert_eq!(cel_value_to_json(&result), serde_json::json!(true));
+
+        // Test complex boolean expression
+        let result = state
+            .get("is_ready && !is_error && has_permission")
+            .unwrap();
+        assert_eq!(cel_value_to_json(&result), serde_json::json!(true));
+    }
+
+    #[test]
+    fn test_boolean_in_stacked_context() {
+        let state = CelState::global();
+
+        // Set global boolean variables
+        state.set("global_enabled", "true").unwrap();
+        state.set("global_disabled", "false").unwrap();
+
+        // Create new context with global variables
+        let mut stacked_context = cel_interpreter::Context::default();
+        state.copy_to_context(&mut stacked_context).unwrap();
+
+        // Add local boolean variable
+        stacked_context
+            .add_variable("local_flag", CelValue::Bool(true))
+            .unwrap();
+
+        // Verify global booleans are accessible
+        let program = cel_interpreter::Program::compile("global_enabled == true").unwrap();
+        let result = program.execute(&stacked_context).unwrap();
+        assert_eq!(cel_value_to_json(&result), serde_json::json!(true));
+
+        let program = cel_interpreter::Program::compile("global_disabled == false").unwrap();
+        let result = program.execute(&stacked_context).unwrap();
+        assert_eq!(cel_value_to_json(&result), serde_json::json!(true));
+
+        // Verify local boolean is accessible
+        let program = cel_interpreter::Program::compile("local_flag").unwrap();
+        let result = program.execute(&stacked_context).unwrap();
+        assert_eq!(cel_value_to_json(&result), serde_json::json!(true));
+
+        // Verify mixed boolean expression
+        let program =
+            cel_interpreter::Program::compile("global_enabled && local_flag && !global_disabled")
+                .unwrap();
+        let result = program.execute(&stacked_context).unwrap();
+        assert_eq!(cel_value_to_json(&result), serde_json::json!(true));
     }
 }

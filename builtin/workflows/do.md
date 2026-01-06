@@ -13,7 +13,7 @@ stateDiagram-v2
     [*] --> start
     start --> are_todos_done
     are_todos_done --> loop
-    loop --> done: result.content.contains("YES")
+    loop --> done: are_todos_done
     loop --> do_todo: default
     do_todo --> are_todos_done
     done --> [*]

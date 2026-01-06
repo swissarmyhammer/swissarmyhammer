@@ -9,8 +9,8 @@ We want to know if unit tests are passing AND if language-specific type checking
 
 ## Rules
 
-If you run tests or type checks, on any failure, respond only with NO
-If you run tests and type checks, and they all pass, respond only with YES
+If you run tests or type checks, on any failure, `cel_set` `are_tests_passing` to `false`
+If you run tests and type checks, and they all pass, `cel_set` `are_tests_passing` to `true`
 
 Create todos for any failures found using the `todo_create` tool.
 

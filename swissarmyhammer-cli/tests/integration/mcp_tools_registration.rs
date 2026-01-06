@@ -4,7 +4,7 @@
 
 use swissarmyhammer_tools::mcp::tool_registry::ToolRegistry;
 use swissarmyhammer_tools::mcp::tool_registry::{
-    register_abort_tools, register_file_tools, register_shell_tools, register_todo_tools,
+    register_cel_tools, register_file_tools, register_shell_tools, register_todo_tools,
     register_web_fetch_tools, register_web_search_tools,
 };
 
@@ -14,7 +14,7 @@ async fn test_mcp_tools_are_registered() {
     let mut registry = ToolRegistry::new();
 
     // This mirrors exactly what McpServer does in its constructor
-    register_abort_tools(&mut registry);
+    register_cel_tools(&mut registry);
     register_file_tools(&mut registry).await;
     register_shell_tools(&mut registry);
     register_todo_tools(&mut registry);
@@ -35,7 +35,8 @@ async fn test_mcp_tools_are_registered() {
 
     // Check for specific tools we know should be there (internal names, not MCP prefixed)
     let expected_tools = [
-        "abort_create",
+        "cel_set",
+        "cel_get",
         "files_read",
         "files_write",
         "files_edit",
@@ -122,7 +123,7 @@ async fn test_cli_categories_are_available() {
     let mut registry = ToolRegistry::new();
 
     // Register all tools
-    register_abort_tools(&mut registry);
+    register_cel_tools(&mut registry);
     register_file_tools(&mut registry).await;
     register_shell_tools(&mut registry);
     register_todo_tools(&mut registry);
@@ -132,7 +133,7 @@ async fn test_cli_categories_are_available() {
     let categories = registry.get_cli_categories();
     println!("📋 CLI Categories: {:?}", categories);
 
-    // These categories should be available (excluding hidden tools like abort and notify)
+    // These categories should be available (excluding hidden tools like CEL and notify)
     let expected_categories = ["file", "shell", "todo", "web-search"];
 
     for &expected_cat in &expected_categories {

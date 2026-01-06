@@ -1,7 +1,7 @@
 //! Integration test modules for swissarmyhammer-cli
 
-mod abort_comprehensives;
-mod abort_final_integrations;
+// Note: abort_comprehensives and abort_final_integrations tests were removed
+// as they tested the old file-based abort system which has been migrated to CEL state.
 mod agent_command;
 mod binary_aliases;
 mod builtin_validation;
