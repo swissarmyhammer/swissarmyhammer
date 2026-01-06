@@ -6182,6 +6182,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "swissarmyhammer-cel"
+version = "0.3.0"
+dependencies = [
+ "anyhow",
+ "base64 0.22.1",
+ "cel-interpreter",
+ "once_cell",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
+ "tokio-test",
+ "tracing",
+]
+
+[[package]]
 name = "swissarmyhammer-cli"
 version = "0.3.0"
 dependencies = [
@@ -6464,6 +6479,7 @@ dependencies = [
  "async-trait",
  "async-watcher",
  "axum",
+ "base64 0.22.1",
  "byte-unit",
  "chromiumoxide",
  "chrono",
@@ -6485,6 +6501,7 @@ dependencies = [
  "llama-agent",
  "markdowndown",
  "notify 6.1.1",
+ "once_cell",
  "owo-colors",
  "proptest",
  "rand 0.8.5",
@@ -6497,6 +6514,7 @@ dependencies = [
  "serde_json",
  "serde_yaml",
  "serial_test",
+ "swissarmyhammer-cel",
  "swissarmyhammer-common",
  "swissarmyhammer-config",
  "swissarmyhammer-git",
