@@ -19,9 +19,9 @@ async fn test_rule_check_uses_configured_model() {
     let sah_dir = temp_path.join(".swissarmyhammer");
     fs::create_dir_all(&sah_dir).unwrap();
 
-    // Write config with rules model set to qwen-coder-flash
+    // Write config with rules model set to qwen-next
     let config_path = sah_dir.join("sah.yaml");
-    fs::write(&config_path, "agents:\n  rules: qwen-coder-flash\n").unwrap();
+    fs::write(&config_path, "agents:\n  rules: qwen-next\n").unwrap();
 
     // Change to temp directory so config is found
     let original_dir = std::env::current_dir().unwrap();
@@ -33,8 +33,8 @@ async fn test_rule_check_uses_configured_model() {
     eprintln!("Model name from config: {:?}", model_name);
     assert_eq!(
         model_name,
-        Some("qwen-coder-flash".to_string()),
-        "Config should specify qwen-coder-flash for rules"
+        Some("qwen-next".to_string()),
+        "Config should specify qwen-next for rules"
     );
 
     // Resolve the full model config
@@ -69,54 +69,6 @@ async fn test_rule_check_uses_configured_model() {
     std::env::set_current_dir(&original_dir).unwrap();
 }
 
-/// Test that demonstrates the caching bug
-#[tokio::test]
-async fn test_demonstrates_caching_bug() {
-    // This test shows that if we create a RuleCheckTool,
-    // call get_checker() once, then change the config,
-    // calling get_checker() again will still use the cached checker
-
-    eprintln!("\n=== Demonstrating the OnceCell caching bug ===\n");
-
-    // Create temp directory
-    let _env = IsolatedTestEnvironment::new().expect("Failed to create test environment");
-    let temp_dir = _env.temp_dir();
-    let temp_path = temp_dir;
-    let sah_dir = temp_path.join(".swissarmyhammer");
-    fs::create_dir_all(&sah_dir).unwrap();
-
-    let original_dir = std::env::current_dir().unwrap();
-    std::env::set_current_dir(&temp_path).unwrap();
-
-    // Step 1: Config specifies claude-code (or no config, defaults to claude-code)
-    let config_path = sah_dir.join("sah.yaml");
-    fs::write(&config_path, "# No model config yet\n").unwrap();
-
-    let model1 = ModelManager::resolve_agent_config_for_use_case(AgentUseCase::Rules)
-        .expect("Should resolve");
-    eprintln!("Step 1 - Initial model: {:?}", model1.executor_type());
-
-    // Step 2: Change config to qwen-coder-flash
-    fs::write(&config_path, "agents:\n  rules: qwen-coder-flash\n").unwrap();
-
-    let model2 = ModelManager::resolve_agent_config_for_use_case(AgentUseCase::Rules)
-        .expect("Should resolve");
-    eprintln!("Step 2 - After config change: {:?}", model2.executor_type());
-
-    // Verify the config reader picks up the change
-    assert_ne!(
-        format!("{:?}", model1.executor_type()),
-        format!("{:?}", model2.executor_type()),
-        "ModelManager should pick up config changes"
-    );
-
-    eprintln!("\n✓ ModelManager correctly picks up config changes");
-    eprintln!("✗ But RuleCheckTool with OnceCell would cache the first model");
-    eprintln!("  and never pick up the change!");
-
-    std::env::set_current_dir(&original_dir).unwrap();
-}
-
 /// Test the fix: without OnceCell, model config is read fresh each time
 #[tokio::test]
 async fn test_fresh_checker_picks_up_config_changes() {
@@ -133,7 +85,7 @@ async fn test_fresh_checker_picks_up_config_changes() {
 
     // Write initial config
     let config_path = sah_dir.join("sah.yaml");
-    fs::write(&config_path, "agents:\n  rules: qwen-coder-flash\n").unwrap();
+    fs::write(&config_path, "agents:\n  rules: qwen-next\n").unwrap();
 
     // Read config multiple times - should always reflect current file content
     for i in 1..=3 {

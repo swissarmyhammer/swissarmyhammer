@@ -11,7 +11,7 @@ parameters:
 
 Read the draft plan and extract acceptance criteria to create permanent rules that define what correct code looks like.
 
-Use the draft plan from: `.swissarmyhammer/tmp/DRAFT_PLAN.md`
+Use the draft plan from: {{ plan_filename }}
 
 Generate rules using the `rules_create` tool for each acceptance criterion.
 

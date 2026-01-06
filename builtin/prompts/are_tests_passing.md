@@ -16,13 +16,13 @@ Create todos for any failures found using the `todo_create` tool.
 
 ### Rust
 
-- Run tests with `cargo nextest run --fail-fast`
+- Run tests with `cargo nextest run --fail-fast` from the root of the workspace to capture all tests
   -- do not try to pass --timeout
 - Type checking is done by the compiler during build/test, no separate step needed
 
 ### TypeScript/React
 
-- Run tests with the project's test command (e.g., `npm test` or `yarn test`)
+- Run tests with the root project's test command (e.g., `npm test` or `yarn test`)
 - Run type checking with `npx tsc --noEmit`
 - Both tests AND type checking must pass to respond YES
 

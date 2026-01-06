@@ -14,7 +14,7 @@ The configuration schema must support mapping use cases to agent names using an 
    ```yaml
    agents:
      root: "claude-code"
-     rules: "qwen-coder-flash"
+     rules: "qwen-next"
      workflows: "claude-code"
    ```
 2. Config keys must match AgentUseCase enum variants (lowercase)

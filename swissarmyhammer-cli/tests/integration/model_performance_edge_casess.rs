@@ -742,7 +742,7 @@ async fn test_rapid_sequential_operations() -> Result<()> {
         "claude-code",
         "qwen-coder",
         "claude-code",
-        "qwen-coder-flash",
+        "qwen-next",
         "claude-code",
     ];
     let config_path = project_root.join(".swissarmyhammer").join("sah.yaml");

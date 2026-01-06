@@ -32,6 +32,7 @@ pub mod glob_utils;
 pub mod interactive_prompts;
 pub mod parameter_conditions;
 pub mod parameters;
+pub mod prompt_visibility;
 pub mod rate_limiter;
 pub mod test_organization;
 pub mod test_utils;
@@ -87,6 +88,9 @@ pub use glob_utils::{
     expand_glob_patterns, matches_glob_pattern, parse_glob_pattern, validate_glob_pattern,
     GlobExpansionConfig, MAX_FILES,
 };
+
+// Re-export prompt visibility utilities for convenience
+pub use prompt_visibility::{is_prompt_partial, is_prompt_visible};
 
 // Re-export test utilities for convenience (when testing)
 pub use test_utils::{acquire_semantic_db_lock, create_temp_dir, ProcessGuard};

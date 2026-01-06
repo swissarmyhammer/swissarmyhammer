@@ -6,6 +6,12 @@ use crate::types::MCPError;
 use agent_client_protocol::McpServer;
 use std::sync::Arc;
 
+/// Default timeout for MCP tool calls (10 minutes).
+///
+/// This needs to be long enough for shell commands that may run for extended periods
+/// (e.g., `cargo build`, `cargo test`, long-running scripts).
+const DEFAULT_MCP_TIMEOUT_SECS: u64 = 600;
+
 /// Create a UnifiedMCPClient from an ACP McpServer configuration
 ///
 /// This factory method handles the conversion from ACP protocol types to
@@ -38,7 +44,7 @@ pub async fn create_mcp_client_from_acp(
             let client = UnifiedMCPClient::with_spawned_process(
                 &stdio_config.command.to_string_lossy(),
                 &stdio_config.args,
-                None, // Default timeout
+                Some(DEFAULT_MCP_TIMEOUT_SECS),
             )
             .await?;
 
@@ -53,7 +59,7 @@ pub async fn create_mcp_client_from_acp(
 
             let client = UnifiedMCPClient::with_streamable_http_and_handler(
                 &http_config.url,
-                None, // Default timeout
+                Some(DEFAULT_MCP_TIMEOUT_SECS),
                 handler.clone(),
             )
             .await?;
@@ -70,7 +76,7 @@ pub async fn create_mcp_client_from_acp(
             // SSE uses same transport as HTTP in rmcp
             let client = UnifiedMCPClient::with_streamable_http_and_handler(
                 &sse_config.url,
-                None, // Default timeout
+                Some(DEFAULT_MCP_TIMEOUT_SECS),
                 handler,
             )
             .await?;

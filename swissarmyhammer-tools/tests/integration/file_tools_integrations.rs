@@ -634,26 +634,52 @@ async fn test_path_security_for_tool(
     let tool = registry.get_tool(tool_name).unwrap();
 
     for dangerous_path in dangerous_paths {
+        // Skip Windows-style paths on Unix - backslashes are literal characters, not path separators
+        // These paths don't represent actual path traversal attacks on Unix systems
+        #[cfg(unix)]
+        if dangerous_path.contains('\\') {
+            continue;
+        }
+
         let arguments = build_security_test_arguments(tool_name, dangerous_path);
         let result = tool.execute(arguments, context).await;
 
-        if let Err(error) = result {
-            let error_msg = format!("{:?}", error);
-            let expected_messages = &[
-                "blocked pattern",
-                "not found",
-                "absolute",
-                "No such file",
-                "does not exist",
-                "invalid",
-                "dangerous",
-                "traversal",
-            ];
-            let context_msg = format!(
-                "{} tool should block or safely handle path traversal: {}",
-                tool_name, dangerous_path
-            );
-            assert_error_contains_any(&error_msg, expected_messages, &context_msg);
+        match result {
+            Err(error) => {
+                let error_msg = format!("{:?}", error);
+                let expected_messages = &[
+                    "blocked pattern",
+                    "not found",
+                    "absolute",
+                    "No such file",
+                    "does not exist",
+                    "invalid",
+                    "dangerous",
+                    "traversal",
+                ];
+                let context_msg = format!(
+                    "{} tool should block or safely handle path traversal: {}",
+                    tool_name, dangerous_path
+                );
+                assert_error_contains_any(&error_msg, expected_messages, &context_msg);
+            }
+            Ok(call_result) => {
+                // For write operations, success is a security failure - we shouldn't be able
+                // to write to dangerous paths
+                if tool_name == "files_write" {
+                    panic!(
+                        "{} tool allowed write to dangerous path '{}': {:?}",
+                        tool_name, dangerous_path, call_result
+                    );
+                }
+                // For read operations, success with is_error=true is acceptable (tool handled it)
+                if call_result.is_error == Some(true) {
+                    // Tool returned an error response, which is expected
+                    continue;
+                }
+                // Read/glob/grep succeeding on non-existent dangerous paths is also fine
+                // (they just won't find anything)
+            }
         }
     }
 }

@@ -7,7 +7,7 @@ use crate::action_parser::ActionParser;
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use swissarmyhammer_config::{
-    model::{LlamaAgentConfig, ModelConfig, ModelExecutorType, ModelSource},
+    model::{LlamaAgentConfig, ModelConfig, ModelExecutorType},
     ConfigurationResult, TemplateContext,
 };
 
@@ -75,17 +75,9 @@ impl WorkflowTemplateContext {
 
     /// Load workflow template context with agent configuration from sah.yaml
     pub fn load_with_agent_config() -> ConfigurationResult<Self> {
-        let context = Self::load_for_cli()?;
-
-        // Agent configuration is already loaded from sah.yaml via TemplateContext::load_for_cli()
-        // No need to set it again - get_agent_config() will read from the loaded template context
-
-        // Set model name for prompt rendering
-        let model_name = context.get_model_name();
-        let mut context = context;
-        context.set_model_name(model_name);
-
-        Ok(context)
+        // Agent configuration and model variable are loaded from sah.yaml
+        // via TemplateContext::load_for_cli() which calls set_default_variables()
+        Self::load_for_cli()
     }
 
     /// Initialize a workflow context HashMap with template variables
@@ -447,17 +439,14 @@ impl WorkflowTemplateContext {
     }
 
     /// Get model name for prompt rendering
+    ///
+    /// Returns the model name from context if set, otherwise defaults to "claude".
+    /// The model should be set via --model flag or sah config.
     pub fn get_model_name(&self) -> String {
-        match self.get_executor_type() {
-            ModelExecutorType::ClaudeCode => "claude".to_string(),
-            ModelExecutorType::LlamaAgent => self
-                .get_llama_config()
-                .map(|config| match &config.model.source {
-                    ModelSource::HuggingFace { repo, .. } => repo.clone(),
-                    ModelSource::Local { filename, .. } => filename.to_string_lossy().to_string(),
-                })
-                .unwrap_or_else(|| "unknown".to_string()),
-        }
+        self.get("model")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| "claude".to_string())
     }
 
     /// Update the MCP server port in the agent configuration
@@ -767,8 +756,8 @@ mod tests {
         assert!(context.get_llama_config().is_some());
         assert!(!context.is_quiet());
 
-        // Model name should be the HuggingFace repo
-        assert!(context.get_model_name().contains("Qwen3"));
+        // Model name defaults to "claude" unless explicitly set
+        assert_eq!(context.get_model_name(), "claude");
     }
 
     #[test]
@@ -812,18 +801,17 @@ mod tests {
     }
 
     #[test]
-    fn test_model_name_with_local_file() {
+    fn test_model_name_explicit_set() {
         let mut context = create_empty_test_context();
-        let mut llama_config = LlamaAgentConfig::for_testing();
-        llama_config.model.source = ModelSource::Local {
-            filename: std::path::PathBuf::from("/path/to/model.gguf"),
-            folder: None,
-        };
-        let config = ModelConfig::llama_agent(llama_config);
 
+        // Model name should be set explicitly, not derived from agent config
+        context.set_model_name("qwen-coder".to_string());
+        assert_eq!(context.get_model_name(), "qwen-coder");
+
+        // Setting agent config doesn't change the model name
+        let config = ModelConfig::claude_code();
         context.set_agent_config(config);
-        let model_name = context.get_model_name();
-        assert_eq!(model_name, "/path/to/model.gguf");
+        assert_eq!(context.get_model_name(), "qwen-coder");
     }
 
     // ==================== Workflow Mode Tests ====================
