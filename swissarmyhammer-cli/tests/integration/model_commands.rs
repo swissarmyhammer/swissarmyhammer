@@ -86,7 +86,7 @@ quiet: true"#;
     Ok(())
 }
 
-/// Create project model files in a directory  
+/// Create project model files in a directory
 fn create_project_model_files(dir: &Path) -> Result<()> {
     fs::create_dir_all(dir)?;
 
@@ -140,10 +140,6 @@ async fn test_model_list_basic_functionality() -> Result<()> {
     assert!(
         stdout.contains("qwen-coder"),
         "Should list qwen-coder model"
-    );
-    assert!(
-        stdout.contains("qwen-coder-flash"),
-        "Should list qwen-coder-flash model"
     );
 
     // Should show summary information
@@ -749,7 +745,7 @@ async fn test_all_builtin_models_usable() -> Result<()> {
     let temp_dir = TempDir::new()?;
     let project_root = temp_dir.path();
 
-    let builtin_agents = ["claude-code", "qwen-coder", "qwen-coder-flash"];
+    let builtin_agents = ["claude-code", "qwen-coder"];
 
     for model_name in &builtin_agents {
         let output = run_model_command_in_dir(&["model", "use", model_name], project_root).await?;

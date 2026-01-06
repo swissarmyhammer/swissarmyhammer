@@ -1,6 +1,7 @@
 use crate::mcp::MCPClient;
 use agent_client_protocol::{AvailableCommand, AvailableCommandInput, UnstructuredCommandInput};
 use std::sync::Arc;
+use swissarmyhammer_common::is_prompt_visible;
 
 /// Registry for managing available slash commands
 ///
@@ -30,8 +31,18 @@ impl CommandRegistry {
         // Query MCP servers for prompts
         match self.mcp_client.list_prompts().await {
             Ok(prompts) => {
-                // Convert each MCP prompt to an ACP slash command
+                // Convert each MCP prompt to an ACP slash command, filtering out partials
                 for prompt in prompts {
+                    // Filter out partial templates and hidden prompts
+                    let description_str = prompt.description.as_deref();
+                    let meta_value = prompt
+                        .meta
+                        .as_ref()
+                        .and_then(|m| serde_json::to_value(m).ok());
+                    if !is_prompt_visible(&prompt.name, description_str, meta_value.as_ref()) {
+                        continue;
+                    }
+
                     let command_name = format!("/{}", prompt.name);
 
                     // Use the prompt's description, or fall back to a generic description

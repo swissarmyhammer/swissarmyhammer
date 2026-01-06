@@ -17,7 +17,7 @@ fn test_resolve_rules_model_from_config() {
 
     // Write config with rules agent
     let config_path = sah_dir.join("sah.yaml");
-    fs::write(&config_path, "agents:\n  rules: qwen-coder-flash\n").unwrap();
+    fs::write(&config_path, "agents:\n  rules: qwen-next\n").unwrap();
 
     // Change to temp directory
     let original_dir = std::env::current_dir().unwrap();
@@ -30,10 +30,7 @@ fn test_resolve_rules_model_from_config() {
     match result {
         Ok(Some(agent_name)) => {
             eprintln!("Found agent: {}", agent_name);
-            assert_eq!(
-                agent_name, "qwen-coder-flash",
-                "Should resolve to qwen-coder-flash"
-            );
+            assert_eq!(agent_name, "qwen-next", "Should resolve to qwen-next");
         }
         Ok(None) => {
             panic!(
@@ -60,7 +57,7 @@ fn test_resolve_rules_model_from_config() {
     match config_result {
         Ok(config) => {
             eprintln!("Resolved agent config: {:?}", config.executor_type());
-            // The config should be for qwen-coder-flash
+            // The config should be for qwen-next
         }
         Err(e) => {
             eprintln!("Error resolving agent config: {}", e);

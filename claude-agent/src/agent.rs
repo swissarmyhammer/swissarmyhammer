@@ -3875,11 +3875,6 @@ impl Agent for ClaudeAgent {
             .reset_for_new_turn(&session_id.to_string())
             .await;
 
-        tracing::info!(
-            "🎯 MAIN AGENT DONE: Claude agent prompt completed with {:?} (middleware may still be running)",
-            response.stop_reason
-        );
-
         self.log_response("prompt", &response);
         Ok(response)
     }

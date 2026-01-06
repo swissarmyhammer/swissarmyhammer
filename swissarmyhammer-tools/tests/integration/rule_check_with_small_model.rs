@@ -15,15 +15,15 @@ async fn test_config_specifies_rules_model() {
 
     let config_path = sah_dir.join("sah.yaml");
 
-    // Test 1: qwen-coder-flash
-    fs::write(&config_path, "agents:\n  rules: qwen-coder-flash\n").unwrap();
+    // Test 1: qwen-next
+    fs::write(&config_path, "agents:\n  rules: qwen-next\n").unwrap();
 
     let original_dir = std::env::current_dir().unwrap();
     std::env::set_current_dir(&temp_path).unwrap();
 
     let agent1 = ModelManager::get_agent_for_use_case(AgentUseCase::Rules).expect("Should read");
     eprintln!("Test 1 - Agent: {:?}", agent1);
-    assert_eq!(agent1, Some("qwen-coder-flash".to_string()));
+    assert_eq!(agent1, Some("qwen-next".to_string()));
 
     // Test 2: claude-code
     fs::write(&config_path, "agents:\n  rules: claude-code\n").unwrap();

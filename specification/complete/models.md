@@ -457,5 +457,5 @@ project/
 └── builtin/models/                 # Built-in models (compiled in, lowest precedence)
     ├── claude-code.yaml
     ├── qwen-coder.yaml
-    └── qwen-coder-flash.yaml
+    └── qwen-next.yaml
 ```

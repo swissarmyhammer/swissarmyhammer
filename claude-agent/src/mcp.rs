@@ -9,6 +9,7 @@ use reqwest::Client;
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::sync::Arc;
+use swissarmyhammer_common::is_prompt_visible;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, BufWriter};
 use tokio::process::{Child, Command};
 use tokio::sync::{mpsc, RwLock};
@@ -1542,13 +1543,19 @@ impl McpServerManager {
     }
 
     /// List all available prompts from all connected MCP servers
+    ///
+    /// Filters out partial templates and hidden prompts using the shared
+    /// visibility logic from `swissarmyhammer_common::is_prompt_visible`.
     pub async fn list_available_prompts(&self) -> Vec<McpPrompt> {
         let connections = self.connections.read().await;
         let mut all_prompts = Vec::new();
 
         for connection in connections.values() {
             for prompt in &connection.prompts {
-                all_prompts.push(prompt.clone());
+                // Filter out partial templates and hidden prompts
+                if is_prompt_visible(&prompt.name, prompt.description.as_deref(), None) {
+                    all_prompts.push(prompt.clone());
+                }
             }
         }
 

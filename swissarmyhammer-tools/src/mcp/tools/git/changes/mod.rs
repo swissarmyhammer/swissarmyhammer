@@ -21,8 +21,8 @@ use crate::mcp::tool_registry::{McpTool, ToolContext};
 /// Request structure for git changes operation
 #[derive(Debug, Deserialize, Serialize)]
 pub struct GitChangesRequest {
-    /// Branch name to analyze
-    pub branch: String,
+    /// Branch name to analyze (optional, defaults to current branch)
+    pub branch: Option<String>,
 }
 
 /// Response structure containing changed files
@@ -94,10 +94,9 @@ impl McpTool for GitChangesTool {
             "properties": {
                 "branch": {
                     "type": "string",
-                    "description": "Branch name to analyze"
+                    "description": "Branch name to analyze (optional, defaults to current branch)"
                 }
-            },
-            "required": ["branch"]
+            }
         })
     }
 

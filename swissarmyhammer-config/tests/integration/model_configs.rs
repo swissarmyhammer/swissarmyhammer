@@ -412,7 +412,7 @@ fn test_agent_precedence_verification() {
 
     let agents = ModelManager::list_agents().expect("Should list all agents with precedence");
 
-    assert_agent_has_source(&agents, "qwen-coder-flash", ModelConfigSource::Builtin);
+    assert_agent_has_source(&agents, "qwen-next", ModelConfigSource::Builtin);
 }
 
 #[test]
@@ -539,7 +539,7 @@ fn test_use_case_to_agent_name_mapping() {
     ModelManager::use_agent_for_use_case("qwen-coder", swissarmyhammer_config::AgentUseCase::Rules)
         .expect("Should configure rules agent");
     ModelManager::use_agent_for_use_case(
-        "qwen-coder-flash",
+        "qwen-next",
         swissarmyhammer_config::AgentUseCase::Workflows,
     )
     .expect("Should configure workflows agent");
@@ -558,7 +558,7 @@ fn test_use_case_to_agent_name_mapping() {
     let workflows_agent =
         ModelManager::get_agent_for_use_case(swissarmyhammer_config::AgentUseCase::Workflows)
             .expect("Should get workflows agent");
-    assert_eq!(workflows_agent, Some("qwen-coder-flash".to_string()));
+    assert_eq!(workflows_agent, Some("qwen-next".to_string()));
 }
 
 #[test]
@@ -725,7 +725,7 @@ fn test_agents_map_in_config_file_operations() {
 
     // Add workflows agent
     ModelManager::use_agent_for_use_case(
-        "qwen-coder-flash",
+        "qwen-next",
         swissarmyhammer_config::AgentUseCase::Workflows,
     )
     .expect("Should add workflows agent");
@@ -734,7 +734,7 @@ fn test_agents_map_in_config_file_operations() {
     assert!(final_config.contains("agents:"));
     assert!(final_config.contains("root: claude-code"));
     assert!(final_config.contains("rules: qwen-coder"));
-    assert!(final_config.contains("workflows: qwen-coder-flash"));
+    assert!(final_config.contains("workflows: qwen-next"));
 }
 
 #[test]
@@ -889,11 +889,11 @@ fn test_config_file_sections_preserved() {
         r#"# Existing configuration with comments
 prompt:
   default_template: "greeting"
-  
+
 workflows:
   - name: "test-workflow"
     description: "Test workflow"
-    
+
 other_section:
   preserved_value: "should not be lost"
   nested:
@@ -1305,7 +1305,7 @@ fn test_global_agent_flag_override_concept() {
     ModelManager::use_agent_for_use_case("qwen-coder", swissarmyhammer_config::AgentUseCase::Rules)
         .expect("Should configure rules agent");
     ModelManager::use_agent_for_use_case(
-        "qwen-coder-flash",
+        "qwen-next",
         swissarmyhammer_config::AgentUseCase::Workflows,
     )
     .expect("Should configure workflows agent");
@@ -1324,7 +1324,7 @@ fn test_global_agent_flag_override_concept() {
     let workflows_agent =
         ModelManager::get_agent_for_use_case(swissarmyhammer_config::AgentUseCase::Workflows)
             .expect("Should get workflows agent");
-    assert_eq!(workflows_agent, Some("qwen-coder-flash".to_string()));
+    assert_eq!(workflows_agent, Some("qwen-next".to_string()));
 
     // The runtime override would happen in the CLI layer by:
     // 1. Reading the --agent flag value
@@ -1388,7 +1388,7 @@ fn test_global_agent_override_preserves_config_file() {
     // Simulate what the CLI would do for --agent override:
     // 1. Load the override agent's config
     let override_agent_info =
-        ModelManager::find_agent_by_name("qwen-coder-flash").expect("Should find override agent");
+        ModelManager::find_agent_by_name("qwen-next").expect("Should find override agent");
     let _override_config =
         parse_model_config(&override_agent_info.content).expect("Should parse override config");
 

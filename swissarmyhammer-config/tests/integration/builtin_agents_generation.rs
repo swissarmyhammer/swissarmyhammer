@@ -10,7 +10,7 @@ fn test_builtin_models_generation() {
     // Should contain all expected agents
     assert!(names.contains(&"claude-code"));
     assert!(names.contains(&"qwen-coder"));
-    assert!(names.contains(&"qwen-coder-flash"));
+    assert!(names.contains(&"qwen-next"));
 
     // Verify each agent has valid YAML content
     for (name, content) in agents {
@@ -45,13 +45,13 @@ fn test_builtin_models_specific_content() {
         "Expected Qwen3 model in qwen-coder"
     );
 
-    // Test qwen-coder-flash agent
+    // Test qwen-next agent
     let qwen_flash_content = agents_map
-        .get("qwen-coder-flash")
-        .expect("qwen-coder-flash agent should exist");
+        .get("qwen-next")
+        .expect("qwen-next agent should exist");
     assert!(qwen_flash_content.contains("type: llama-agent"));
     assert!(
         qwen_flash_content.contains("unsloth/Qwen3"),
-        "Expected Qwen3 model in qwen-coder-flash"
+        "Expected Qwen3 model in qwen-next"
     );
 }

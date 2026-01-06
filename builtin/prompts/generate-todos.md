@@ -11,7 +11,7 @@ parameters:
 
 Read the draft plan and create detailed, incremental todos for implementation.
 
-Use the draft plan from: `.swissarmyhammer/tmp/DRAFT_PLAN.md`
+Use the draft plan from: {{ plan_filename }}
 
 Generate todos using the `todo_create` tool for each implementation step.
 

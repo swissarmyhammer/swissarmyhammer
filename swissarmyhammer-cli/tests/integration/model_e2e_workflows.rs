@@ -395,8 +395,8 @@ async fn test_basic_list_use_workflow() -> Result<()> {
         "Should list qwen-coder model"
     );
     assert!(
-        find_model_in_json(&models_json, "qwen-coder-flash").is_some(),
-        "Should list qwen-coder-flash model"
+        find_model_in_json(&models_json, "qwen-next").is_some(),
+        "Should list qwen-next model"
     );
 
     // Step 2: Use claude-code model
@@ -417,7 +417,7 @@ async fn test_all_builtin_models_workflow() -> Result<()> {
     let temp_dir = _env.temp_dir();
     let project_root = &temp_dir;
 
-    let builtin_agents = ["claude-code", "qwen-coder", "qwen-coder-flash"];
+    let builtin_agents = ["claude-code", "qwen-coder", "qwen-next"];
     let config_path = project_root.join(".swissarmyhammer").join("sah.yaml");
 
     for model_name in &builtin_agents {
@@ -559,11 +559,11 @@ fn create_initial_test_config(project_root: &Path) -> Result<std::path::PathBuf>
 prompt:
   default_template: "greeting"
   library_path: "./prompts"
-  
+
 workflow:
   default_timeout: 300
   max_retries: 3
-  
+
 other_settings:
   log_level: "info"
   cache_enabled: true
@@ -572,8 +572,8 @@ other_settings:
     key2: 42
     nested:
       deep_setting: "preserved"
-  
-# Existing model config (will be replaced)  
+
+# Existing model config (will be replaced)
 agent:
   old_executor: "will-be-replaced"
 "#;
@@ -685,12 +685,7 @@ async fn test_config_file_format_consistency() -> Result<()> {
         parsed
     );
 
-    let models = [
-        "qwen-coder",
-        "claude-code",
-        "qwen-coder-flash",
-        "claude-code",
-    ];
+    let models = ["qwen-coder", "claude-code", "qwen-next", "claude-code"];
 
     for model in &models {
         verify_model_switch_maintains_yaml_validity(model, project_root, &config_path).await?;
@@ -877,7 +872,7 @@ async fn test_concurrent_workflow_safety() -> Result<()> {
     let temp_dir = _env.temp_dir();
     let project_root = &temp_dir;
 
-    let models = ["claude-code", "qwen-coder", "qwen-coder-flash"];
+    let models = ["claude-code", "qwen-coder", "qwen-coder-next"];
     let config_path = project_root.join(".swissarmyhammer").join("sah.yaml");
 
     for (i, model) in models.iter().enumerate() {
