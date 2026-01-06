@@ -16,25 +16,8 @@
 //!
 //! # Stream-JSON Protocol
 //!
-//! The claude CLI is spawned with the following flags to enable stream-json communication:
+//! The claude CLI is spawned with the flags to enable stream-json communication.
 //!
-//! ```bash
-//! claude -p \
-//!   --input-format stream-json \
-//!   --output-format stream-json \
-//!   --verbose \
-//!   --dangerously-skip-permissions \
-//!   --replay-user-messages \
-//!   --session-id <uuid>
-//! ```
-//!
-//! - `-p`: Print mode (non-interactive)
-//! - `--input-format stream-json`: Accept newline-delimited JSON on stdin
-//! - `--output-format stream-json`: Emit newline-delimited JSON on stdout
-//! - `--verbose`: Required for stream-json output format
-//! - `--dangerously-skip-permissions`: ACP server handles permission checks
-//! - `--replay-user-messages`: Re-emit user messages for immediate acknowledgment
-//! - `--session-id <uuid>`: Use our ULID as Claude's session ID for consistency
 //!
 //! Messages are exchanged as newline-delimited JSON objects conforming to the
 //! JSON-RPC 2.0 specification for Agent Communication Protocol (ACP).
@@ -125,6 +108,9 @@ const CLAUDE_CLI_ARGS: &[&str] = &[
     // NOTE: This causes Claude to send a duplicate final combined message and empty terminator
     // We filter these out in the streaming loop (skip large chunks and empty chunks)
     "--replay-user-messages", // Re-emit user messages for transcript recording
+    // We only use our own MCP tools for consistency -- no built-in tools
+    "--tools",
+    "",
 ];
 
 /// Manages multiple persistent claude CLI processes, one per session

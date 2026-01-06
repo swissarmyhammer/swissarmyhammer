@@ -495,25 +495,15 @@ impl PromptAction {
         let (user_prompt, system_prompt) = self.render_prompts_directly(context)?;
         tracing::debug!("Piping prompt:\n{}", user_prompt);
 
-        let quiet = self.is_quiet_mode(context);
         let response = self
             .execute_prompt_with_agent(context, user_prompt, system_prompt)
             .await?;
 
-        self.log_response_if_not_quiet(&response.content, quiet);
+        tracing::info!("Prompt response: {:?}", Pretty(&response));
         self.store_response_in_context(context, &response)?;
 
         Ok(serde_json::to_value(&response)
             .unwrap_or_else(|_| Value::String(response.content.clone())))
-    }
-
-    /// Check if quiet mode is enabled
-    fn is_quiet_mode(&self, context: &WorkflowTemplateContext) -> bool {
-        self.quiet
-            || context
-                .get("_quiet")
-                .and_then(|v| v.as_bool())
-                .unwrap_or(false)
     }
 
     /// Execute prompt with ACP agent
@@ -552,27 +542,6 @@ impl PromptAction {
             })?;
 
         Ok(response)
-    }
-
-    /// Log response if not in quiet mode
-    fn log_response_if_not_quiet(&self, response_text: &str, quiet: bool) {
-        if !quiet && !response_text.is_empty() {
-            tracing::debug!(
-                "Agent response received: {} characters",
-                response_text.len()
-            );
-
-            let mut yaml_output = String::new();
-            yaml_output.push_str("---\n");
-            yaml_output.push_str(&format!("prompt: {}\n", self.prompt_name));
-            yaml_output.push_str("agent_response: |\n");
-            for line in response_text.lines() {
-                yaml_output.push_str(&format!("  {line}\n"));
-            }
-            yaml_output.push_str("---");
-
-            tracing::info!("{}", yaml_output);
-        }
     }
 
     /// Store response in context

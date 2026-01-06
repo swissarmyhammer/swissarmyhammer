@@ -213,11 +213,6 @@ impl ClaudeClient {
                     match remaining {
                         Ok(Ok(Some(line))) => {
                             lines_consumed += 1;
-                            tracing::debug!(
-                                "Init response line {}: {} bytes",
-                                lines_consumed,
-                                line.len()
-                            );
 
                             // Record to raw transcript but don't forward as notification
                             if let Some(ref manager) = self.raw_message_manager {
@@ -227,7 +222,7 @@ impl ClaudeClient {
                             // Check if this is the result line (end of response)
                             if let Ok(json) = serde_json::from_str::<serde_json::Value>(&line) {
                                 let msg_type = json.get("type").and_then(|t| t.as_str());
-                                tracing::debug!("Init response type: {}", Pretty(&msg_type));
+                                tracing::trace!("Init response type: {}", Pretty(&msg_type));
                                 if msg_type == Some("result") {
                                     tracing::info!(
                                         "✅ Consumed complete init response ({} lines)",
