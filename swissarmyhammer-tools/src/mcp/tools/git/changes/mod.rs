@@ -116,16 +116,27 @@ impl McpTool for GitChangesTool {
             .as_ref()
             .ok_or_else(|| rmcp::ErrorData::internal_error("Git operations not available", None))?;
 
+        // Resolve branch name: use provided value or default to current branch
+        let branch = match request.branch {
+            Some(b) => b,
+            None => git_ops.current_branch().map_err(|e| {
+                rmcp::ErrorData::internal_error(
+                    format!("Failed to get current branch: {}", e),
+                    None,
+                )
+            })?,
+        };
+
         // Try to find parent branch for any branch
         let parent_branch = {
             use swissarmyhammer_git::BranchName;
-            let branch_name = BranchName::new(&request.branch).map_err(|e| {
+            let branch_name = BranchName::new(&branch).map_err(|e| {
                 rmcp::ErrorData::invalid_params(format!("Invalid branch name: {}", e), None)
             })?;
 
             // Try to find merge target, but if it returns the branch itself or fails, treat as no parent
             match git_ops.find_merge_target_for_issue(&branch_name) {
-                Ok(target) if target != request.branch => Some(target),
+                Ok(target) if target != branch => Some(target),
                 _ => None,
             }
         };
@@ -134,7 +145,7 @@ impl McpTool for GitChangesTool {
         let mut files = if let Some(ref parent) = parent_branch {
             // Feature/issue branch: get files changed from parent
             git_ops
-                .get_changed_files_from_parent(&request.branch, parent)
+                .get_changed_files_from_parent(&branch, parent)
                 .map_err(|e| {
                     rmcp::ErrorData::internal_error(
                         format!("Failed to get changed files: {}", e),
@@ -166,7 +177,7 @@ impl McpTool for GitChangesTool {
 
         // Build response
         let response = GitChangesResponse {
-            branch: request.branch,
+            branch,
             parent_branch,
             files,
         };
@@ -308,13 +319,8 @@ mod tests {
             .expect("schema should have properties");
         assert!(properties.get("branch").is_some());
 
-        let required = schema
-            .get("required")
-            .expect("schema should have required fields");
-        assert!(required.is_array());
-        let required_array = required.as_array().expect("required should be an array");
-        assert_eq!(required_array.len(), 1);
-        assert_eq!(required_array[0], "branch");
+        // branch is optional, so there should be no required fields
+        assert!(schema.get("required").is_none());
     }
 
     #[tokio::test]
@@ -353,6 +359,41 @@ mod tests {
         assert_eq!(parsed.parent_branch, None);
         // Main branch with no uncommitted changes should return empty list
         assert_eq!(parsed.files.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_git_changes_tool_execute_default_branch() {
+        let repo = TestGitRepo::new();
+
+        // Create and commit files on main
+        repo.create_file("file1.txt", "content1");
+        repo.add_all();
+        repo.commit("Initial commit");
+
+        // Create test context with git ops
+        let git_ops = GitOperations::with_work_dir(repo.path()).unwrap();
+        let context = crate::test_utils::create_test_context().await;
+        *context.git_ops.lock().await = Some(git_ops);
+
+        // Execute tool with no branch specified - should use current branch
+        let tool = GitChangesTool::new();
+        let arguments = serde_json::Map::new(); // Empty arguments
+
+        let result = tool.execute(arguments, &context).await;
+        assert!(result.is_ok());
+
+        let response = result.unwrap();
+        assert_eq!(response.is_error, Some(false));
+
+        // Parse response to verify structure
+        let response_text = match &response.content[0].raw {
+            rmcp::model::RawContent::Text(text) => &text.text,
+            _ => panic!("Expected text content"),
+        };
+        let parsed: GitChangesResponse = serde_json::from_str(response_text).unwrap();
+        // Should use current branch (main)
+        assert_eq!(parsed.branch, "main");
+        assert_eq!(parsed.parent_branch, None);
     }
 
     #[tokio::test]
@@ -420,14 +461,18 @@ mod tests {
     #[test]
     fn test_git_changes_request_serialization() {
         let request = GitChangesRequest {
-            branch: "main".to_string(),
+            branch: Some("main".to_string()),
         };
 
         let json = serde_json::to_string(&request).unwrap();
         assert!(json.contains("main"));
 
         let deserialized: GitChangesRequest = serde_json::from_str(&json).unwrap();
-        assert_eq!(deserialized.branch, "main");
+        assert_eq!(deserialized.branch, Some("main".to_string()));
+
+        // Test with no branch specified
+        let empty_request: GitChangesRequest = serde_json::from_str("{}").unwrap();
+        assert_eq!(empty_request.branch, None);
     }
 
     #[test]

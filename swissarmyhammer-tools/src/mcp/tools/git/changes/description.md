@@ -3,6 +3,10 @@ List files that have changed on a branch relative to its parent branch, includin
 ## Examples
 
 ```json
+{}
+```
+
+```json
 {
   "branch": "issue/feature-123"
 }

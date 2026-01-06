@@ -583,11 +583,12 @@ async fn execute_prompt_inner(
     // Convert metadata from Map<String, Value> to Value
     let metadata = prompt_result.meta.map(serde_json::Value::Object);
 
-    // If response_text is empty, fall back to claude_response from metadata
+    // If response_text is empty, fall back to response from metadata
+    // Try claude_response first (claude-agent), then llama_response (llama-agent)
     let content = if response_text.is_empty() {
         metadata
             .as_ref()
-            .and_then(|m| m.get("claude_response"))
+            .and_then(|m| m.get("claude_response").or_else(|| m.get("llama_response")))
             .and_then(|v| v.as_str())
             .map(|s| s.to_string())
             .unwrap_or_default()

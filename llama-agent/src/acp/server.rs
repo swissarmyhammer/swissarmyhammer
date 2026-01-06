@@ -1599,6 +1599,12 @@ impl agent_client_protocol::Agent for AcpServer {
                 serde_json::json!(total_tool_calls),
             );
         }
+        // Include the response text in metadata for workflow CEL expression evaluation
+        // This mirrors claude-agent's behavior with "claude_response"
+        meta.insert(
+            "llama_response".to_string(),
+            serde_json::json!(all_generated_text),
+        );
 
         // Clear session context on MCP clients
         self.clear_mcp_session_context(&acp_session.llama_session_id)

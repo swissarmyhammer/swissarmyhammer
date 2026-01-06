@@ -16,6 +16,12 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::time::timeout;
 
+/// Default timeout for MCP tool calls (10 minutes).
+///
+/// This needs to be long enough for shell commands that may run for extended periods
+/// (e.g., `cargo build`, `cargo test`, long-running scripts).
+const DEFAULT_MCP_TIMEOUT_SECS: u64 = 600;
+
 /// Simple client handler for rmcp operations
 #[derive(Clone, Debug)]
 pub struct SimpleClientHandler;
@@ -83,7 +89,7 @@ impl UnifiedMCPClient {
             MCPError::Protocol(format!("Failed to create child process client: {:?}", e))
         })?;
 
-        let default_timeout = Duration::from_secs(timeout_secs.unwrap_or(30));
+        let default_timeout = Duration::from_secs(timeout_secs.unwrap_or(DEFAULT_MCP_TIMEOUT_SECS));
 
         Ok(Self {
             service,
@@ -108,7 +114,7 @@ impl UnifiedMCPClient {
             .await
             .map_err(|e| MCPError::Protocol(format!("Failed to create MCP client: {:?}", e)))?;
 
-        let default_timeout = Duration::from_secs(timeout_secs.unwrap_or(30));
+        let default_timeout = Duration::from_secs(timeout_secs.unwrap_or(DEFAULT_MCP_TIMEOUT_SECS));
 
         Ok(Self {
             service,
@@ -153,7 +159,7 @@ impl UnifiedMCPClient {
             MCPError::Protocol(format!("Failed to create HTTP MCP client: {:?}", e))
         })?;
 
-        let default_timeout = Duration::from_secs(timeout_secs.unwrap_or(30));
+        let default_timeout = Duration::from_secs(timeout_secs.unwrap_or(DEFAULT_MCP_TIMEOUT_SECS));
 
         Ok(Self {
             service,
