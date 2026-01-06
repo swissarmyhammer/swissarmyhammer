@@ -654,20 +654,16 @@ impl TemplateContext {
         configs
     }
 
-    /// Resolve model name from agent configuration
+    /// Provide a simple default model name for template rendering
+    ///
+    /// Returns "claude" as the default. The model name should be set via:
+    /// - The --model CLI flag
+    /// - The sah config file
+    /// - The flow context
+    ///
+    /// This function only provides a fallback when no model is specified.
     fn resolve_model_name(&self) -> String {
-        let agent_config = self.get_agent_config(None);
-        match &agent_config.executor {
-            crate::model::ModelExecutorConfig::ClaudeCode(_) => "Claude Code".to_string(),
-            crate::model::ModelExecutorConfig::LlamaAgent(llama_config) => {
-                match &llama_config.model.source {
-                    crate::model::ModelSource::HuggingFace { repo, .. } => repo.clone(),
-                    crate::model::ModelSource::Local { filename, .. } => {
-                        filename.to_string_lossy().to_string()
-                    }
-                }
-            }
-        }
+        "claude".to_string()
     }
 
     /// Set model variable if not already provided by user
@@ -722,10 +718,10 @@ impl TemplateContext {
     /// - "cwd": Alias for the current working directory
     ///
     /// Model names are determined as follows:
-    /// - ClaudeCode: "Claude Code"
+    /// - ClaudeCode: "claude"
     /// - LlamaAgent with HuggingFace model: the repository name
     /// - LlamaAgent with Local model: the filename
-    /// - Unknown/Default: "Claude Code"
+    /// - Unknown/Default: "claude"
     pub fn set_default_variables(&mut self) {
         self.set_model_variable();
         self.set_working_directory_variables();
@@ -1230,8 +1226,8 @@ Generated for {{app.name}} by liquid templating engine.
         // Set default variables
         context.set_default_variables();
 
-        // Should set model to "Claude Code"
-        assert_eq!(context.get("model"), Some(&json!("Claude Code")));
+        // Should set model to "claude"
+        assert_eq!(context.get("model"), Some(&json!("claude")));
 
         // Should set working directory variables
         assert!(context.get("working_directory").is_some());
@@ -1242,48 +1238,17 @@ Generated for {{app.name}} by liquid templating engine.
     }
 
     #[test]
-    fn test_set_default_variables_llama_agent_huggingface() {
-        use crate::model::{
-            LlamaAgentConfig, LlmModelConfig, McpServerConfig, ModelConfig, ModelExecutorConfig,
-            ModelSource,
-        };
-
+    fn test_set_default_variables_model_defaults_to_claude() {
+        // Model variable should default to "claude" when not explicitly set.
+        // The model name should be set via --model flag or sah config,
+        // not derived from agent configuration.
         let mut context = TemplateContext::new();
 
-        // Set LlamaAgent config with HuggingFace model
-        let llama_config = LlamaAgentConfig {
-            model: LlmModelConfig {
-                source: ModelSource::HuggingFace {
-                    repo: "microsoft/CodeT5-base".to_string(),
-                    filename: Some("pytorch_model.bin".to_string()),
-                    folder: None,
-                },
-                batch_size: 256,
-                use_hf_params: true,
-                debug: false,
-            },
-            mcp_server: McpServerConfig {
-                port: 0,
-                timeout_seconds: 30,
-            },
-            repetition_detection: Default::default(),
-        };
-
-        let agent_config = ModelConfig {
-            quiet: false,
-            executor: ModelExecutorConfig::LlamaAgent(llama_config),
-        };
-
-        context.set(
-            "agent".to_string(),
-            serde_json::to_value(agent_config).unwrap(),
-        );
-
-        // Set default variables
+        // Set default variables without any model pre-set
         context.set_default_variables();
 
-        // Should set model to the HuggingFace repo name
-        assert_eq!(context.get("model"), Some(&json!("microsoft/CodeT5-base")));
+        // Should default to "claude"
+        assert_eq!(context.get("model"), Some(&json!("claude")));
 
         // Should set working directory variables
         assert!(context.get("working_directory").is_some());
@@ -1291,50 +1256,21 @@ Generated for {{app.name}} by liquid templating engine.
     }
 
     #[test]
-    fn test_set_default_variables_llama_agent_local() {
-        use crate::model::{
-            LlamaAgentConfig, LlmModelConfig, McpServerConfig, ModelConfig, ModelExecutorConfig,
-            ModelSource,
-        };
-        use std::path::PathBuf;
-
+    fn test_set_default_variables_respects_preset_model() {
+        // When model is set before set_default_variables(),
+        // it should not be overwritten
         let mut context = TemplateContext::new();
 
-        // Set LlamaAgent config with Local model
-        let llama_config = LlamaAgentConfig {
-            model: LlmModelConfig {
-                source: ModelSource::Local {
-                    filename: PathBuf::from("/path/to/model.gguf"),
-                    folder: None,
-                },
-                batch_size: 256,
-                use_hf_params: true,
-                debug: false,
-            },
-            mcp_server: McpServerConfig {
-                port: 0,
-                timeout_seconds: 30,
-            },
-            repetition_detection: Default::default(),
-        };
-
-        let agent_config = ModelConfig {
-            quiet: false,
-            executor: ModelExecutorConfig::LlamaAgent(llama_config),
-        };
-
-        context.set(
-            "agent".to_string(),
-            serde_json::to_value(agent_config).unwrap(),
-        );
+        // Pre-set model to a custom value (as would happen with --model flag)
+        context.set("model".to_string(), json!("qwen-coder"));
 
         // Set default variables
         context.set_default_variables();
 
-        // Should set model to the local filename
-        assert_eq!(context.get("model"), Some(&json!("/path/to/model.gguf")));
+        // Should keep the pre-set model value
+        assert_eq!(context.get("model"), Some(&json!("qwen-coder")));
 
-        // Should set working directory variables
+        // Should still set working directory variables
         assert!(context.get("working_directory").is_some());
         assert!(context.get("cwd").is_some());
     }
@@ -1343,11 +1279,11 @@ Generated for {{app.name}} by liquid templating engine.
     fn test_set_default_variables_no_agent_config() {
         let mut context = TemplateContext::new();
 
-        // No agent config set - should default to Claude Code
+        // No agent config set - should default to claude
         context.set_default_variables();
 
-        // Should set model to "Claude Code" (default)
-        assert_eq!(context.get("model"), Some(&json!("Claude Code")));
+        // Should set model to "claude" (default)
+        assert_eq!(context.get("model"), Some(&json!("claude")));
 
         // Should set working directory variables
         assert!(context.get("working_directory").is_some());
@@ -1462,7 +1398,7 @@ Generated for {{app.name}} by liquid templating engine.
         assert_eq!(context.get("cwd"), Some(&json!("/custom/path")));
 
         // Should still set model variable
-        assert_eq!(context.get("model"), Some(&json!("Claude Code")));
+        assert_eq!(context.get("model"), Some(&json!("claude")));
     }
 
     #[test]
