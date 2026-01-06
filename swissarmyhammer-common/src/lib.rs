@@ -30,7 +30,6 @@ pub mod frontmatter;
 pub mod fs_utils;
 pub mod glob_utils;
 pub mod interactive_prompts;
-pub mod logging;
 pub mod parameter_conditions;
 pub mod parameters;
 pub mod rate_limiter;
@@ -92,7 +91,30 @@ pub use glob_utils::{
 // Re-export test utilities for convenience (when testing)
 pub use test_utils::{acquire_semantic_db_lock, create_temp_dir, ProcessGuard};
 
-// Re-export logging utilities for convenience
-pub use logging::{log_generated_content, log_prompt, log_response, Pretty};
+// Pretty wrapper for formatting types as YAML in logs
+use serde::Serialize;
+use std::fmt::Debug;
+
+/// Wrapper for pretty-printing types in logs as YAML
+/// Use in tracing statements: info!("Config: {}", Pretty(&config));
+pub struct Pretty<T>(pub T);
+
+impl<T: Serialize + Debug> std::fmt::Display for Pretty<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match serde_yaml::to_string(&self.0) {
+            Ok(yaml) => write!(f, "\n{}", yaml),
+            Err(_) => write!(f, "\n{:#?}", self.0),
+        }
+    }
+}
+
+impl<T: Serialize + Debug> std::fmt::Debug for Pretty<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match serde_yaml::to_string(&self.0) {
+            Ok(yaml) => write!(f, "\n{}", yaml),
+            Err(_) => write!(f, "\n{:#?}", self.0),
+        }
+    }
+}
 
 pub use error::*;

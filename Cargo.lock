@@ -6168,6 +6168,7 @@ name = "swissarmyhammer-agent"
 version = "0.3.0"
 dependencies = [
  "agent-client-protocol",
+ "agent-client-protocol-extras",
  "claude-agent",
  "llama-agent",
  "serde",

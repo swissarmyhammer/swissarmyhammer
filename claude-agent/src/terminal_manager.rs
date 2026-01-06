@@ -2815,7 +2815,7 @@ mod tests {
             session.add_output(b"test output").await;
         }
 
-        let mut cleanup_handle = None;
+        let cleanup_handle;
         let mut query_handles = Vec::new();
 
         // Spawn cleanup task
@@ -2830,7 +2830,7 @@ mod tests {
                     .await
             });
 
-            cleanup_handle = Some(handle);
+            cleanup_handle = handle;
         }
 
         // Spawn concurrent query tasks (some may fail after cleanup)
@@ -2853,7 +2853,7 @@ mod tests {
         }
 
         // Wait for cleanup to complete
-        let cleanup_result = cleanup_handle.unwrap().await.unwrap();
+        let cleanup_result = cleanup_handle.await.unwrap();
         assert!(cleanup_result.is_ok());
 
         // Wait for query tasks (some may succeed, some may fail depending on timing)

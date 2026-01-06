@@ -25,10 +25,12 @@ use swissarmyhammer_common::Pretty;
 pub mod playback;
 pub mod recording;
 pub mod test_mcp_server;
+pub mod tracing_agent;
 
 pub use playback::PlaybackAgent;
 pub use recording::RecordingAgent;
 pub use test_mcp_server::{start_test_mcp_server, TestMcpServer};
+pub use tracing_agent::{trace_notifications, TracingAgent};
 
 // Re-export MCP notification types for convenience
 pub use model_context_protocol_extras::{

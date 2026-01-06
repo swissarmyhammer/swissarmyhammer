@@ -43,6 +43,7 @@ use agent_client_protocol::{
     Agent, ContentBlock, InitializeRequest, NewSessionRequest, PromptRequest, SessionModeId,
     SessionNotification, SessionUpdate, SetSessionModeRequest, StopReason, TextContent,
 };
+use agent_client_protocol_extras::{trace_notifications, TracingAgent};
 use llama_agent::types::AgentAPI;
 use std::sync::Arc;
 use std::time::Duration;
@@ -197,6 +198,8 @@ pub struct AcpAgentHandle {
 /// Create an ACP agent based on model configuration
 ///
 /// Returns an AcpAgentHandle containing the agent and notification receiver.
+/// The agent is wrapped with TracingAgent for unified logging, and notifications
+/// are traced through trace_notifications.
 ///
 /// # Arguments
 /// * `config` - Model configuration specifying which agent type to create
@@ -211,8 +214,11 @@ pub async fn create_agent(
     config: &ModelConfig,
     mcp_config: Option<McpServerConfig>,
 ) -> AcpResult<AcpAgentHandle> {
-    match config.executor_type() {
-        ModelExecutorType::ClaudeCode => create_claude_agent(mcp_config).await,
+    let (agent_name, handle) = match config.executor_type() {
+        ModelExecutorType::ClaudeCode => {
+            let handle = create_claude_agent(mcp_config).await?;
+            ("Claude", handle)
+        }
         ModelExecutorType::LlamaAgent => {
             let llama_config = match &config.executor {
                 ModelExecutorConfig::LlamaAgent(cfg) => cfg.clone(),
@@ -222,9 +228,21 @@ pub async fn create_agent(
                     ))
                 }
             };
-            create_llama_agent(llama_config, mcp_config).await
+            let handle = create_llama_agent(llama_config, mcp_config).await?;
+            ("Llama", handle)
         }
-    }
+    };
+
+    // Wrap agent with TracingAgent for unified logging
+    let traced_agent = TracingAgent::new(handle.agent, agent_name);
+
+    // Wrap notification receiver with tracing
+    let traced_rx = trace_notifications(agent_name.to_string(), handle.notification_rx);
+
+    Ok(AcpAgentHandle {
+        agent: Arc::new(traced_agent),
+        notification_rx: traced_rx,
+    })
 }
 
 /// Create a Claude ACP agent

@@ -1881,11 +1881,6 @@ impl ClaudeAgent {
             }
         }
 
-        // Log the generated content at info level for visibility
-        if !accumulated_content.is_empty() {
-            swissarmyhammer_common::log_generated_content("Claude", &accumulated_content);
-        }
-
         // Check cancellation one final time
         if self
             .cancellation_manager
@@ -2199,9 +2194,6 @@ impl ClaudeAgent {
             chunk_count,
             session_id
         );
-
-        // Log the generated content at info level for visibility
-        swissarmyhammer_common::log_generated_content("Claude", &response_content);
 
         // ACP requires specific stop reasons for all prompt turn completions:
         // Check for refusal patterns in Claude's response content
@@ -5795,6 +5787,7 @@ mod tests {
 
     /// Create test setup with proper ACP connections
     /// Returns ClientSideConnection that tests should use (implements Agent trait)
+    #[allow(dead_code)]
     async fn create_test_connection() -> agent_client_protocol::ClientSideConnection {
         let config = AgentConfig::default();
         let (agent, _notification_receiver) = ClaudeAgent::new(config).await.unwrap();

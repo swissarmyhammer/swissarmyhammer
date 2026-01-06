@@ -407,9 +407,6 @@ impl ClaudeClient {
         let content = vec![ContentBlock::Text(text_content)];
         let stream_json = self.protocol_translator.acp_to_stream_json(content)?;
 
-        // Log the prompt being sent to Claude
-        swissarmyhammer_common::log_prompt("Claude", prompt);
-
         let mut proc = process.lock().await;
         proc.write_line(&stream_json).await?;
         Ok(())
@@ -498,9 +495,6 @@ impl ClaudeClient {
             }
         }
 
-        // Log the complete response
-        swissarmyhammer_common::log_response("Claude", &response_text);
-
         Ok(response_text)
     }
 
@@ -588,9 +582,6 @@ impl ClaudeClient {
 
                 // Check if this is a result message (indicates end)
                 if Self::is_end_of_stream(&line) {
-                    // Log the complete response
-                    swissarmyhammer_common::log_response("Claude", &accumulated_text);
-
                     // Parse the result message to extract stop_reason
                     if let Ok(Some(result)) = protocol_translator.parse_result_message(&line) {
                         // Send a final chunk with the stop_reason

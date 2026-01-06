@@ -11,9 +11,6 @@ use thiserror::Error;
 use tracing::{debug, error, warn};
 use url::Url;
 
-#[cfg(test)]
-use swissarmyhammer_common::Pretty;
-
 /// Configuration struct for enhanced security settings
 #[derive(Debug)]
 pub struct EnhancedSecurityConfig {
