@@ -1362,17 +1362,55 @@ impl agent_client_protocol::Agent for AcpServer {
         let mut all_generated_text = String::new();
 
         loop {
-            // Get model's actual context size for max_tokens
+            // Calculate max_tokens based on available context space
             let model_context_size = self
                 .agent_server
                 .get_model_metadata()
                 .await
-                .map(|metadata| metadata.context_size as u32);
+                .map(|metadata| metadata.context_size)
+                .unwrap_or(4096); // Default fallback
+
+            // Get current token usage from session
+            let current_tokens = self
+                .agent_server
+                .get_session(&acp_session.llama_session_id)
+                .await
+                .ok()
+                .flatten()
+                .map(|session| session.token_usage().total)
+                .unwrap_or(0);
+
+            // Calculate available space in context window
+            let available_tokens = model_context_size.saturating_sub(current_tokens);
+
+            // Cap max_tokens to min(16k, available_space) to prevent hanging
+            // and ensure reasonable generation limits
+            const MAX_GENERATION_TOKENS: usize = 16384; // 16k tokens
+            const MIN_GENERATION_TOKENS: usize = 512; // Minimum reasonable generation
+
+            let max_tokens = if available_tokens < MIN_GENERATION_TOKENS {
+                tracing::warn!(
+                    "Very limited context space available: {} tokens (used: {}/{})",
+                    available_tokens,
+                    current_tokens,
+                    model_context_size
+                );
+                MIN_GENERATION_TOKENS.min(available_tokens)
+            } else {
+                available_tokens.min(MAX_GENERATION_TOKENS)
+            };
+
+            tracing::debug!(
+                "Context usage: {}/{} tokens, max_tokens set to {}",
+                current_tokens,
+                model_context_size,
+                max_tokens
+            );
 
             // Use AgentServer's streaming generate method
             let generation_request = crate::types::GenerationRequest {
                 session_id: acp_session.llama_session_id,
-                max_tokens: model_context_size, // Use model's actual context size
+                max_tokens: Some(max_tokens as u32),
                 temperature: None,
                 top_p: None,
                 stop_tokens: vec![],
