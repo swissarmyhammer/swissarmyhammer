@@ -345,7 +345,7 @@ mod tests {
             "zero": 0,
             "max_u64": u64::MAX,
             "negative": -1,
-            "float": 3.14
+            "float": 1.23
         });
 
         assert_eq!(require_number_field(&value, "zero").unwrap(), 0);

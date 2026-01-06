@@ -517,9 +517,15 @@ impl RuleChecker {
 
         // Execute prompt via ACP protocol
         // For rule checking, no system prompt is needed - the check prompt contains everything
-        let response = acp::execute_prompt(&mut session_handle, None, check_prompt_text)
-            .await
-            .map_err(|e| RuleError::AgentError(format!("Agent execution failed: {}", e)))?;
+        // Use the "rule-checker" mode for rule checking operations
+        let response = acp::execute_prompt(
+            &mut session_handle,
+            None,
+            Some("rule-checker".to_string()),
+            check_prompt_text,
+        )
+        .await
+        .map_err(|e| RuleError::AgentError(format!("Agent execution failed: {}", e)))?;
 
         tracing::debug!("LLM execution complete");
 

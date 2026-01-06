@@ -40,9 +40,10 @@
 //! ```
 
 use agent_client_protocol::{
-    Agent, ContentBlock, InitializeRequest, NewSessionRequest, PromptRequest, SessionNotification,
-    SessionUpdate, StopReason, TextContent,
+    Agent, ContentBlock, InitializeRequest, NewSessionRequest, PromptRequest, SessionModeId,
+    SessionNotification, SessionUpdate, SetSessionModeRequest, StopReason, TextContent,
 };
+use agent_client_protocol_extras::{trace_notifications, TracingAgent};
 use llama_agent::types::AgentAPI;
 use std::sync::Arc;
 use std::time::Duration;
@@ -197,6 +198,8 @@ pub struct AcpAgentHandle {
 /// Create an ACP agent based on model configuration
 ///
 /// Returns an AcpAgentHandle containing the agent and notification receiver.
+/// The agent is wrapped with TracingAgent for unified logging, and notifications
+/// are traced through trace_notifications.
 ///
 /// # Arguments
 /// * `config` - Model configuration specifying which agent type to create
@@ -211,8 +214,11 @@ pub async fn create_agent(
     config: &ModelConfig,
     mcp_config: Option<McpServerConfig>,
 ) -> AcpResult<AcpAgentHandle> {
-    match config.executor_type() {
-        ModelExecutorType::ClaudeCode => create_claude_agent(mcp_config).await,
+    let (agent_name, handle) = match config.executor_type() {
+        ModelExecutorType::ClaudeCode => {
+            let handle = create_claude_agent(mcp_config).await?;
+            ("Claude", handle)
+        }
         ModelExecutorType::LlamaAgent => {
             let llama_config = match &config.executor {
                 ModelExecutorConfig::LlamaAgent(cfg) => cfg.clone(),
@@ -222,9 +228,21 @@ pub async fn create_agent(
                     ))
                 }
             };
-            create_llama_agent(llama_config, mcp_config).await
+            let handle = create_llama_agent(llama_config, mcp_config).await?;
+            ("Llama", handle)
         }
-    }
+    };
+
+    // Wrap agent with TracingAgent for unified logging
+    let traced_agent = TracingAgent::new(handle.agent, agent_name);
+
+    // Wrap notification receiver with tracing
+    let traced_rx = trace_notifications(agent_name.to_string(), handle.notification_rx);
+
+    Ok(AcpAgentHandle {
+        agent: Arc::new(traced_agent),
+        notification_rx: traced_rx,
+    })
 }
 
 /// Create a Claude ACP agent
@@ -389,8 +407,8 @@ async fn create_llama_agent(
 
 /// Execute a prompt using an ACP agent
 ///
-/// This creates a new session, sends the prompt, collects streamed content
-/// from notifications, and returns the response.
+/// This creates a new session, optionally sets a mode, sends the prompt,
+/// collects streamed content from notifications, and returns the response.
 ///
 /// Note: This function uses a dedicated current-thread runtime because the ACP
 /// Agent trait methods return non-Send futures.
@@ -398,16 +416,18 @@ async fn create_llama_agent(
 /// # Arguments
 /// * `handle` - The agent handle from `create_agent`
 /// * `system_prompt` - Optional system prompt (passed as session metadata)
+/// * `mode` - Optional mode ID to set on the session (e.g., "planner", "implementer")
 /// * `user_prompt` - The user's prompt text
 ///
 /// # Example
 /// ```ignore
-/// let response = execute_prompt(&mut handle, None, "Explain async/await".to_string()).await?;
+/// let response = execute_prompt(&mut handle, None, Some("planner"), "Design a new feature".to_string()).await?;
 /// println!("{}", response.content);
 /// ```
 pub async fn execute_prompt(
     handle: &mut AcpAgentHandle,
     system_prompt: Option<String>,
+    mode: Option<String>,
     user_prompt: String,
 ) -> AcpResult<AgentResponse> {
     // Clone what we need to move into the blocking task
@@ -425,7 +445,7 @@ pub async fn execute_prompt(
             })?;
 
         rt.block_on(async move {
-            execute_prompt_inner(agent, notification_rx, system_prompt, user_prompt).await
+            execute_prompt_inner(agent, notification_rx, system_prompt, mode, user_prompt).await
         })
     })
     .await
@@ -439,6 +459,7 @@ async fn execute_prompt_inner(
     agent: Arc<dyn Agent + Send + Sync>,
     mut notification_rx: broadcast::Receiver<SessionNotification>,
     system_prompt: Option<String>,
+    mode: Option<String>,
     user_prompt: String,
 ) -> AcpResult<AgentResponse> {
     // Initialize the agent if needed
@@ -480,6 +501,19 @@ async fn execute_prompt_inner(
 
     let session_id = session_response.session_id.clone();
     tracing::debug!("Session created: {}", session_id);
+
+    // Set session mode if provided
+    if let Some(mode_id) = mode {
+        let mode_id = SessionModeId::new(mode_id);
+        let set_mode_request = SetSessionModeRequest::new(session_id.clone(), mode_id.clone());
+        agent
+            .set_session_mode(set_mode_request)
+            .await
+            .map_err(|e| {
+                AcpError::SessionError(format!("Failed to set session mode '{}': {:?}", mode_id, e))
+            })?;
+        tracing::debug!("Session mode set to: {}", mode_id);
+    }
 
     // Build prompt content
     let prompt_content = vec![ContentBlock::Text(TextContent::new(user_prompt))];
@@ -549,8 +583,20 @@ async fn execute_prompt_inner(
     // Convert metadata from Map<String, Value> to Value
     let metadata = prompt_result.meta.map(serde_json::Value::Object);
 
+    // If response_text is empty, fall back to claude_response from metadata
+    let content = if response_text.is_empty() {
+        metadata
+            .as_ref()
+            .and_then(|m| m.get("claude_response"))
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
+            .unwrap_or_default()
+    } else {
+        response_text
+    };
+
     Ok(AgentResponse {
-        content: response_text,
+        content,
         metadata,
         response_type,
     })

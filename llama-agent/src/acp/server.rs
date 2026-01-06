@@ -1356,7 +1356,7 @@ impl agent_client_protocol::Agent for AcpServer {
         }
 
         // Agentic loop: Continue generating until no more tool calls are produced
-        let mut total_tokens = 0u32;
+        let mut total_tokens = 0usize;
         let mut total_tool_calls = 0usize;
         let mut final_stop_reason = agent_client_protocol::StopReason::EndTurn;
         let mut all_generated_text = String::new();
@@ -1429,7 +1429,7 @@ impl agent_client_protocol::Agent for AcpServer {
             // Stream chunks and convert each to ACP notification
             let mut generated_text = String::new();
             let mut llama_finish_reason: Option<crate::types::FinishReason> = None;
-            let mut turn_tokens = 0u32;
+            let mut turn_tokens = 0;
             while let Some(chunk_result) = stream.next().await {
                 match chunk_result {
                     Ok(chunk) => {
@@ -1465,9 +1465,6 @@ impl agent_client_protocol::Agent for AcpServer {
                 turn_tokens,
                 total_tokens
             );
-
-            // Log the generated content at info level
-            tracing::info!("Generated content: {}", generated_text);
 
             // Extract and execute tool calls from the generated text
             let tool_calls = self

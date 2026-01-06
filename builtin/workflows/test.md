@@ -1,6 +1,7 @@
 ---
 title: Test
 description: Autonomously run a TDD loop until all tests pass
+mode: tester
 tags:
   - auto
 ---
@@ -22,7 +23,7 @@ stateDiagram-v2
 
 - start: log "Making tests pass"
 - are_tests_passing: execute prompt "are_tests_passing"
-- test: execute prompt "test"
+- do_todos: run workflow "do"
 - done: log "All tests passing!"
 
 ## Description

@@ -42,7 +42,8 @@ impl RequestValidator {
 
         // Validate meta parameter format if provided
         if let Some(meta) = &request.meta {
-            self.validate_meta_parameter(meta, "session/new")?;
+            let meta_value = serde_json::Value::Object(meta.clone());
+            self.validate_meta_parameter(&meta_value, "session/new")?;
         }
 
         Ok(())
@@ -65,7 +66,8 @@ impl RequestValidator {
 
         // Validate meta parameter format if provided
         if let Some(meta) = &request.meta {
-            self.validate_meta_parameter(meta, "session/load")?;
+            let meta_value = serde_json::Value::Object(meta.clone());
+            self.validate_meta_parameter(&meta_value, "session/load")?;
         }
 
         Ok(())
@@ -551,12 +553,10 @@ mod tests {
     }
 
     fn create_test_load_session_request() -> LoadSessionRequest {
-        LoadSessionRequest {
-            session_id: SessionId::new("01ARZ3NDEKTSV4RRFFQ69G5FAV".to_string()),
-            cwd: std::env::current_dir().unwrap(),
-            mcp_servers: vec![],
-            meta: None,
-        }
+        LoadSessionRequest::new(
+            SessionId::new("01ARZ3NDEKTSV4RRFFQ69G5FAV".to_string()),
+            std::env::current_dir().unwrap(),
+        )
     }
 
     #[test]

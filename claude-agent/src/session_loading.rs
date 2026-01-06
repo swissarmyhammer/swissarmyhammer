@@ -746,15 +746,13 @@ mod tests {
         let session_manager = SessionManager::new();
         let loader = EnhancedSessionLoader::new(session_manager);
 
-        let request = LoadSessionRequest {
-            session_id: SessionId::new("01ARZ3NDEKTSV4RRFFQ69G5FAV"),
-            cwd: std::env::current_dir().unwrap(),
-            mcp_servers: vec![McpServer::Http(agent_client_protocol::McpServerHttp::new(
-                "test-http-server",
-                "not-a-valid-url",
-            ))],
-            meta: None,
-        };
+        let request = LoadSessionRequest::new(
+            SessionId::new("01ARZ3NDEKTSV4RRFFQ69G5FAV"),
+            std::env::current_dir().unwrap(),
+        )
+        .mcp_servers(vec![McpServer::Http(
+            agent_client_protocol::McpServerHttp::new("test-http-server", "not-a-valid-url"),
+        )]);
 
         let result = loader.validate_load_request(&request);
         assert!(result.is_err());

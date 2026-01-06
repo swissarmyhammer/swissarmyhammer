@@ -385,13 +385,10 @@ impl ConversationManager {
         // Create session context
         let context: SessionContext = session.into();
 
-        // Get current mode for --agent flag
-        let agent_mode = session.current_mode.clone();
-
-        // Get streaming response
+        // Get streaming response - process was spawned at session creation
         let mut stream = self
             .claude_client
-            .query_stream_with_context(&prompt_text, &context, agent_mode)
+            .query_stream_with_context(&prompt_text, &context)
             .await?;
 
         let mut text_content = String::new();
@@ -481,13 +478,10 @@ impl ConversationManager {
         // Create session context
         let context: SessionContext = session.into();
 
-        // Get current mode for --agent flag
-        let agent_mode = session.current_mode.clone();
-
         // Get non-streaming response
         let response = self
             .claude_client
-            .query_with_context(&prompt_text, &context, agent_mode)
+            .query_with_context(&prompt_text, &context)
             .await?;
 
         // Non-streaming mode cannot extract tool calls from text response

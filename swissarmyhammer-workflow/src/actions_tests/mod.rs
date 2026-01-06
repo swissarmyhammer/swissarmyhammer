@@ -103,3 +103,6 @@ mod error_handling_consolidated_tests;
 
 #[cfg(test)]
 mod shell_background_hang_test;
+
+#[cfg(test)]
+mod workflow_mode_integration_tests;

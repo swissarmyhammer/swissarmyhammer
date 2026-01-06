@@ -10,9 +10,10 @@ fn test_builtin_modes_load() {
     let mut registry = ModeRegistry::new();
     let modes = registry.load_all().unwrap();
 
-    assert_eq!(modes.len(), 3, "Should load 3 builtin modes");
+    // 3 original embedded modes + 7 prompt-referencing modes
+    assert_eq!(modes.len(), 10, "Should load 10 builtin modes");
 
-    // Verify all builtin modes are present
+    // Verify original embedded modes are present
     assert!(
         registry.get("general-purpose").is_some(),
         "Should have general-purpose"
@@ -20,11 +21,32 @@ fn test_builtin_modes_load() {
     assert!(registry.get("Explore").is_some(), "Should have Explore");
     assert!(registry.get("Plan").is_some(), "Should have Plan");
 
-    // Verify mode content
+    // Verify new prompt-referencing modes are present
+    assert!(registry.get("default").is_some(), "Should have default");
+    assert!(registry.get("planner").is_some(), "Should have planner");
+    assert!(
+        registry.get("implementer").is_some(),
+        "Should have implementer"
+    );
+    assert!(registry.get("reviewer").is_some(), "Should have reviewer");
+    assert!(registry.get("tester").is_some(), "Should have tester");
+    assert!(registry.get("committer").is_some(), "Should have committer");
+    assert!(
+        registry.get("rule-checker").is_some(),
+        "Should have rule-checker"
+    );
+
+    // Verify mode content for embedded mode
     let explore_mode = registry.get("Explore").unwrap();
     assert_eq!(explore_mode.name(), "Explore");
     assert!(explore_mode.description().contains("codebase"));
     assert!(explore_mode.system_prompt().contains("exploration"));
+
+    // Verify prompt-referencing mode
+    let planner_mode = registry.get("planner").unwrap();
+    assert_eq!(planner_mode.name(), "Planner");
+    assert!(planner_mode.uses_prompt_reference());
+    assert_eq!(planner_mode.prompt(), Some(".system/planner"));
 }
 
 #[test]

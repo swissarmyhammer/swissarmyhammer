@@ -1122,6 +1122,9 @@ dependencies = [
  "serde_json",
  "serial_test",
  "swissarmyhammer-common",
+ "swissarmyhammer-config",
+ "swissarmyhammer-modes",
+ "swissarmyhammer-prompts",
  "swissarmyhammer-todo",
  "tempfile",
  "thiserror 1.0.69",
@@ -3444,6 +3447,7 @@ dependencies = [
  "serde_yaml",
  "serial_test",
  "swissarmyhammer-common",
+ "swissarmyhammer-modes",
  "swissarmyhammer-todo",
  "tempfile",
  "thiserror 1.0.69",
@@ -6164,6 +6168,7 @@ name = "swissarmyhammer-agent"
 version = "0.3.0"
 dependencies = [
  "agent-client-protocol",
+ "agent-client-protocol-extras",
  "claude-agent",
  "llama-agent",
  "serde",

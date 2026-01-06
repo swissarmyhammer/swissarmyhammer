@@ -542,12 +542,12 @@ impl<'a> TextGenerator for LlamaCppGenerator<'a> {
         // Generation state
         let mut generated_text = String::new();
         let mut finish_reason = FinishReason::Stopped("Maximum tokens reached".to_string());
-        let mut tokens_generated = 0u32;
+        let mut tokens_generated = 0usize;
         let mut n_cur = n_tokens;
         let mut generated_token_ids = Vec::new(); // Track generated tokens for KV cache
 
         // Main generation loop (matches queue.rs:605-676)
-        while tokens_generated < config.max_tokens {
+        while tokens_generated < config.max_tokens as usize {
             // Check for cancellation before each token
             if cancellation_token.is_cancelled() {
                 finish_reason = FinishReason::Stopped("Error: Request cancelled".to_string());
@@ -675,7 +675,7 @@ impl<'a> TextGenerator for LlamaCppGenerator<'a> {
 
         Ok(GenerationResponse {
             generated_text,
-            tokens_generated,
+            tokens_generated: tokens_generated as u32,
             generation_time,
             finish_reason,
             complete_token_sequence: Some(complete_tokens),
@@ -743,11 +743,11 @@ impl<'a> TextGenerator for LlamaCppGenerator<'a> {
 
         // Generation state
         let mut generated_text = String::new();
-        let mut tokens_generated = 0u32;
+        let mut tokens_generated = 0usize;
         let mut n_cur = n_tokens;
 
         // Main streaming generation loop (matches queue.rs:881-979)
-        while tokens_generated < config.max_tokens {
+        while tokens_generated < config.max_tokens as usize {
             // Check for cancellation before each token
             if cancellation_token.is_cancelled() {
                 debug!("Streaming request cancelled during token generation");
@@ -928,11 +928,11 @@ impl<'a> TextGenerator for LlamaCppGenerator<'a> {
         // Generation state
         let mut generated_text = String::new();
         let mut finish_reason = FinishReason::Stopped("Maximum tokens reached".to_string());
-        let mut tokens_generated = 0u32;
+        let mut tokens_generated = 0usize;
         let mut n_cur = n_tokens;
 
         // Main generation loop (same as generate_text)
-        while tokens_generated < config.max_tokens {
+        while tokens_generated < config.max_tokens as usize {
             // Check for cancellation before each token
             if cancellation_token.is_cancelled() {
                 finish_reason = FinishReason::Stopped("Error: Request cancelled".to_string());
@@ -1044,7 +1044,7 @@ impl<'a> TextGenerator for LlamaCppGenerator<'a> {
 
         Ok(GenerationResponse {
             generated_text,
-            tokens_generated,
+            tokens_generated: tokens_generated as u32,
             generation_time,
             finish_reason,
             complete_token_sequence: None, // Generator doesn't track tokens for caching
@@ -1094,11 +1094,11 @@ impl<'a> TextGenerator for LlamaCppGenerator<'a> {
 
         // Generation state
         let mut generated_text = String::new();
-        let mut tokens_generated = 0u32;
+        let mut tokens_generated = 0usize;
         let mut n_cur = n_tokens;
 
         // Main streaming generation loop (same as generate_stream_with_context)
-        while tokens_generated < config.max_tokens {
+        while tokens_generated < config.max_tokens as usize {
             // Check for cancellation before each token
             if cancellation_token.is_cancelled() {
                 debug!("Streaming request cancelled during token generation");
@@ -1243,7 +1243,7 @@ impl<'a> LlamaCppGenerator<'a> {
     fn handle_streaming_completion(
         &self,
         _generated_text: &str,
-        tokens_generated: u32,
+        tokens_generated: usize,
         start_time: Instant,
         stream_sender: &mpsc::UnboundedSender<Result<StreamChunk, crate::types::QueueError>>,
         finish_reason: &str,

@@ -498,6 +498,26 @@ impl WorkflowTemplateContext {
             tracing::debug!("Updated LlamaAgent MCP server port to {}", port);
         }
     }
+
+    /// Set the workflow mode in context
+    ///
+    /// This stores the mode ID that should be used for ACP sessions during workflow execution.
+    /// The mode corresponds to a registered ACP mode (e.g., "planner", "implementer", "reviewer").
+    pub fn set_workflow_mode(&mut self, mode: Option<String>) {
+        if let Some(mode_id) = mode {
+            tracing::debug!("Setting workflow mode to: {}", mode_id);
+            self.set_workflow_var("_workflow_mode".to_string(), json!(mode_id));
+        }
+    }
+
+    /// Get the workflow mode from context
+    ///
+    /// Returns the mode ID if set, or None if no mode is configured for this workflow.
+    pub fn get_workflow_mode(&self) -> Option<String> {
+        self.get("_workflow_mode")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
+    }
 }
 
 #[cfg(test)]
@@ -804,5 +824,125 @@ mod tests {
         context.set_agent_config(config);
         let model_name = context.get_model_name();
         assert_eq!(model_name, "/path/to/model.gguf");
+    }
+
+    // ==================== Workflow Mode Tests ====================
+
+    #[test]
+    fn test_set_and_get_workflow_mode() {
+        let mut context = create_empty_test_context();
+
+        // Initially no mode
+        assert_eq!(context.get_workflow_mode(), None);
+
+        // Set a mode
+        context.set_workflow_mode(Some("planner".to_string()));
+        assert_eq!(context.get_workflow_mode(), Some("planner".to_string()));
+
+        // Change to different mode
+        context.set_workflow_mode(Some("implementer".to_string()));
+        assert_eq!(context.get_workflow_mode(), Some("implementer".to_string()));
+    }
+
+    #[test]
+    fn test_set_workflow_mode_with_none() {
+        let mut context = create_empty_test_context();
+
+        // Set a mode first
+        context.set_workflow_mode(Some("reviewer".to_string()));
+        assert_eq!(context.get_workflow_mode(), Some("reviewer".to_string()));
+
+        // Setting None should not change existing mode (by design - None means "don't set")
+        context.set_workflow_mode(None);
+        // Mode should still be set from before
+        assert_eq!(context.get_workflow_mode(), Some("reviewer".to_string()));
+    }
+
+    #[test]
+    fn test_workflow_mode_stored_as_internal_variable() {
+        let mut context = create_empty_test_context();
+
+        context.set_workflow_mode(Some("tester".to_string()));
+
+        // Verify it's stored in workflow vars with underscore prefix (internal)
+        let mode_value = context.get("_workflow_mode");
+        assert!(mode_value.is_some());
+        assert_eq!(mode_value.unwrap().as_str(), Some("tester"));
+    }
+
+    #[test]
+    fn test_workflow_mode_not_exposed_in_liquid_context() {
+        let mut context = create_empty_test_context();
+
+        context.set_workflow_mode(Some("committer".to_string()));
+
+        // Internal variables (starting with _) should not be in liquid context
+        let liquid_ctx = context.to_liquid_context();
+
+        // Try to get the internal variable - it should not be present
+        let mode_in_liquid = liquid_ctx.get("_workflow_mode");
+        assert!(
+            mode_in_liquid.is_none(),
+            "Internal _workflow_mode should not be exposed in liquid context"
+        );
+    }
+
+    #[test]
+    fn test_workflow_mode_various_values() {
+        let mut context = create_empty_test_context();
+
+        let test_modes = vec![
+            "planner",
+            "implementer",
+            "reviewer",
+            "tester",
+            "committer",
+            "rule-checker",
+            "custom-mode",
+            "mode-with-numbers-123",
+        ];
+
+        for mode in test_modes {
+            context.set_workflow_mode(Some(mode.to_string()));
+            assert_eq!(
+                context.get_workflow_mode(),
+                Some(mode.to_string()),
+                "Mode '{}' should be retrievable",
+                mode
+            );
+        }
+    }
+
+    #[test]
+    fn test_workflow_mode_persists_through_template_rendering() {
+        let mut context = create_empty_test_context();
+
+        // Set mode and some other variables
+        context.set_workflow_mode(Some("planner".to_string()));
+        context.set_workflow_var("test_var".to_string(), json!("test_value"));
+
+        // Render a template (which exercises the context)
+        let rendered = context.render_template("Hello {{test_var}}");
+        assert_eq!(rendered, "Hello test_value");
+
+        // Mode should still be accessible
+        assert_eq!(context.get_workflow_mode(), Some("planner".to_string()));
+    }
+
+    #[test]
+    fn test_workflow_mode_in_workflow_hashmap() {
+        let mut context = create_empty_test_context();
+
+        context.set_workflow_mode(Some("reviewer".to_string()));
+
+        // Get the workflow hashmap (used for action execution)
+        let hashmap = context.to_workflow_hashmap();
+
+        // Internal variable should be present
+        assert!(hashmap.contains_key("_workflow_mode"));
+        assert_eq!(
+            hashmap.get("_workflow_mode").and_then(|v| v.as_str()),
+            Some("reviewer")
+        );
     }
 }

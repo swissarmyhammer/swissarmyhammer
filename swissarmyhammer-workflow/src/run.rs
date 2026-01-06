@@ -121,6 +121,9 @@ impl WorkflowRun {
             context.set_agent_config((*agent_config).clone());
         }
 
+        // Set the workflow mode in context if specified
+        context.set_workflow_mode(workflow.mode.clone());
+
         Self {
             id: WorkflowRunId::new(),
             workflow,
@@ -237,6 +240,60 @@ mod tests {
         assert_eq!(run.status, WorkflowRunStatus::Running);
         assert_eq!(run.history.len(), 1);
         assert_eq!(run.history[0].0.as_str(), "start");
+    }
+
+    #[test]
+    fn test_workflow_run_with_mode_sets_context() {
+        let mut workflow = create_workflow("Test Workflow", "A test workflow", "start");
+        workflow.add_state(create_state("start", "Start state", false));
+        workflow.mode = Some("planner".to_string());
+
+        let run = WorkflowRun::new(workflow);
+
+        // Verify mode is set in context
+        assert_eq!(run.context.get_workflow_mode(), Some("planner".to_string()));
+        // Verify workflow still has the mode
+        assert_eq!(run.workflow.mode, Some("planner".to_string()));
+    }
+
+    #[test]
+    fn test_workflow_run_without_mode_has_none_in_context() {
+        let mut workflow = create_workflow("Test Workflow", "A test workflow", "start");
+        workflow.add_state(create_state("start", "Start state", false));
+        // No mode set (default is None)
+
+        let run = WorkflowRun::new(workflow);
+
+        // Verify mode is None in context
+        assert_eq!(run.context.get_workflow_mode(), None);
+        assert_eq!(run.workflow.mode, None);
+    }
+
+    #[test]
+    fn test_workflow_run_mode_variations() {
+        // Test various mode values
+        let modes = vec![
+            "implementer",
+            "reviewer",
+            "tester",
+            "committer",
+            "rule-checker",
+        ];
+
+        for mode_name in modes {
+            let mut workflow = create_workflow("Test Workflow", "A test workflow", "start");
+            workflow.add_state(create_state("start", "Start state", false));
+            workflow.mode = Some(mode_name.to_string());
+
+            let run = WorkflowRun::new(workflow);
+
+            assert_eq!(
+                run.context.get_workflow_mode(),
+                Some(mode_name.to_string()),
+                "Mode '{}' should be set in context",
+                mode_name
+            );
+        }
     }
 
     #[test]

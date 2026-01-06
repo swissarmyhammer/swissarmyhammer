@@ -11,7 +11,8 @@ We want to know if unit tests are passing AND if language-specific type checking
 
 If you run tests or type checks, on any failure, respond only with NO
 If you run tests and type checks, and they all pass, respond only with YES
-Write failing tests by name to TEST_FAILURES.md
+
+Create todos for any failures found using the `todo_create` tool.
 
 ### Rust
 

@@ -1,6 +1,7 @@
 ---
 title: Do Todos
 description: Autonomously work through all pending todo items
+mode: implementer
 tags:
   - auto
 ---

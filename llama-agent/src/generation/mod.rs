@@ -228,7 +228,7 @@ impl GenerationHelper {
             cancellation_token,
             batch_size,
             |token_str: &str,
-             tokens_generated: u32,
+             tokens_generated: usize,
              should_stop_or_end: bool|
              -> Result<Option<()>, GenerationError> {
                 // Accumulate text for batch generation (only if not empty)
@@ -368,9 +368,9 @@ impl GenerationHelper {
             LlamaSampler::greedy(),
         ]);
 
-        let max_tokens = request.max_tokens.unwrap_or(512);
+        let max_tokens = request.max_tokens.unwrap_or(512) as usize - tokens_list.len();
         let mut generated_text = String::new();
-        let mut tokens_generated = 0u32;
+        let mut tokens_generated = 0;
         let mut n_cur = tokens_list.len();
 
         // Generation loop with streaming
@@ -409,6 +409,16 @@ impl GenerationHelper {
             }
             generated_text.push_str(&token_str);
             tokens_generated += 1;
+
+            // Log progress every batch_size tokens
+            if tokens_generated % batch_size == 0 {
+                debug!(
+                    "Generation progress: {} tokens generated ({} batches)\n{}",
+                    tokens_generated,
+                    tokens_generated / batch_size,
+                    generated_text
+                );
+            }
 
             // Try to convert token to string and send if successful
             if let Ok(token_str) = model.token_to_str(token, Special::Tokenize) {
@@ -481,7 +491,7 @@ impl GenerationHelper {
     /// Handle completion of streaming request
     fn handle_streaming_completion(
         _generated_text: &str,
-        tokens_generated: u32,
+        tokens_generated: usize,
         start_time: std::time::Instant,
         stream_sender: &mpsc::Sender<Result<StreamChunk, crate::types::QueueError>>,
         reason: &str,
@@ -666,9 +676,9 @@ impl GenerationHelper {
             LlamaSampler::greedy(),
         ]);
 
-        let max_tokens = request.max_tokens.unwrap_or(512);
+        let max_tokens = request.max_tokens.unwrap_or(512) as usize;
         let mut generated_text = String::new();
-        let mut tokens_generated = 0u32;
+        let mut tokens_generated = 0usize;
         let mut n_cur = total_token_count;
         let mut finish_reason =
             crate::types::FinishReason::Stopped("Maximum tokens reached".to_string());
@@ -747,7 +757,7 @@ impl GenerationHelper {
 
         Ok(GenerationResponse {
             generated_text,
-            tokens_generated,
+            tokens_generated: tokens_generated as u32,
             generation_time,
             finish_reason,
             complete_token_sequence,
@@ -935,9 +945,9 @@ impl GenerationHelper {
             LlamaSampler::greedy(),
         ]);
 
-        let max_tokens = request.max_tokens.unwrap_or(512);
+        let max_tokens = request.max_tokens.unwrap_or(512) as usize;
         let mut generated_text = String::new();
-        let mut tokens_generated = 0u32;
+        let mut tokens_generated = 0usize;
         let mut n_cur = total_token_count;
 
         // Generation loop with streaming
@@ -1046,7 +1056,7 @@ impl GenerationHelper {
         mut token_handler: F,
     ) -> Result<R, GenerationError>
     where
-        F: FnMut(&str, u32, bool) -> Result<Option<R>, GenerationError>,
+        F: FnMut(&str, usize, bool) -> Result<Option<R>, GenerationError>,
     {
         use llama_cpp_2::{
             llama_batch::LlamaBatch,
@@ -1092,19 +1102,36 @@ impl GenerationHelper {
             LlamaSampler::greedy(),
         ]);
 
-        let max_tokens = request.max_tokens.unwrap_or(512);
-        tracing::trace!("generate_common: max_tokens set to {}", max_tokens);
+        let max_tokens = request.max_tokens.unwrap_or(512) as usize;
+        tracing::debug!("generate_common: max_tokens set to {}", max_tokens);
         let mut generated_text = String::new();
-        let mut tokens_generated = 0u32;
+        let mut tokens_generated = 0usize;
         let mut n_cur = tokens_list.len();
-        tracing::trace!("generate_common: Starting generation with n_cur={}", n_cur);
+        tracing::debug!("generate_common: Starting generation with n_cur={}", n_cur);
 
         // Main generation loop
-        tracing::trace!(
+        tracing::debug!(
             "generate_common: Starting generation loop, max_tokens={}",
             max_tokens
         );
+        let context_size = context.n_ctx() as usize;
+        let prompt_tokens = tokens_list.len();
+
         while tokens_generated < max_tokens {
+            // Stop if we've reached context window limit
+            if prompt_tokens + tokens_generated >= context_size - 1 {
+                tracing::debug!(
+                    "generate_common: Reached context window limit (prompt={} + generated={} >= context_size={} - 1)",
+                    prompt_tokens,
+                    tokens_generated,
+                    context_size
+                );
+                if let Some(result) = token_handler("", tokens_generated, true)? {
+                    return Ok(result);
+                }
+                break;
+            }
+
             tracing::trace!(
                 "generate_common: Loop iteration, tokens_generated={}",
                 tokens_generated

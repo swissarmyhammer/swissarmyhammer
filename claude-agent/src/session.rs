@@ -497,6 +497,7 @@ impl SessionManager {
     ///
     /// # Arguments
     /// * `cwd` - Working directory for the session (must be absolute path as per ACP spec)
+    /// * `client_capabilities` - Optional client capabilities
     ///
     /// # Errors
     /// Returns error if:
@@ -1452,18 +1453,14 @@ mod tests {
         let mut session = Session::new(session_id, cwd);
 
         let commands = vec![
-            agent_client_protocol::AvailableCommand {
-                name: "create_plan".to_string(),
-                description: "Create an execution plan for complex tasks".to_string(),
-                input: None,
-                meta: None,
-            },
-            agent_client_protocol::AvailableCommand {
-                name: "research_codebase".to_string(),
-                description: "Research and analyze the codebase structure".to_string(),
-                input: None,
-                meta: None,
-            },
+            agent_client_protocol::AvailableCommand::new(
+                "create_plan",
+                "Create an execution plan for complex tasks",
+            ),
+            agent_client_protocol::AvailableCommand::new(
+                "research_codebase",
+                "Research and analyze the codebase structure",
+            ),
         ];
 
         session.update_available_commands(commands.clone());
@@ -1478,24 +1475,20 @@ mod tests {
         let cwd = std::env::current_dir().unwrap();
         let mut session = Session::new(session_id, cwd);
 
-        let initial_commands = vec![agent_client_protocol::AvailableCommand {
-            name: "create_plan".to_string(),
-            description: "Create an execution plan for complex tasks".to_string(),
-            input: None,
-            meta: None,
-        }];
+        let initial_commands = vec![agent_client_protocol::AvailableCommand::new(
+            "create_plan",
+            "Create an execution plan for complex tasks",
+        )];
 
         // Set initial commands
         session.update_available_commands(initial_commands.clone());
         assert!(!session.has_available_commands_changed(&initial_commands));
 
         // Change commands - should detect difference
-        let updated_commands = vec![agent_client_protocol::AvailableCommand {
-            name: "research_codebase".to_string(),
-            description: "Research and analyze the codebase structure".to_string(),
-            input: None,
-            meta: None,
-        }];
+        let updated_commands = vec![agent_client_protocol::AvailableCommand::new(
+            "research_codebase",
+            "Research and analyze the codebase structure",
+        )];
 
         assert!(session.has_available_commands_changed(&updated_commands));
     }
@@ -1506,12 +1499,10 @@ mod tests {
         let cwd = std::env::current_dir().unwrap();
         let session_id = manager.create_session(cwd, None).unwrap();
 
-        let commands = vec![agent_client_protocol::AvailableCommand {
-            name: "create_plan".to_string(),
-            description: "Create an execution plan for complex tasks".to_string(),
-            input: None,
-            meta: None,
-        }];
+        let commands = vec![agent_client_protocol::AvailableCommand::new(
+            "create_plan",
+            "Create an execution plan for complex tasks",
+        )];
 
         // This should update session and return whether an update was sent
         let update_sent = manager
@@ -1520,12 +1511,10 @@ mod tests {
         assert!(update_sent);
 
         // Same commands again - should not send update
-        let commands = vec![agent_client_protocol::AvailableCommand {
-            name: "create_plan".to_string(),
-            description: "Create an execution plan for complex tasks".to_string(),
-            input: None,
-            meta: None,
-        }];
+        let commands = vec![agent_client_protocol::AvailableCommand::new(
+            "create_plan",
+            "Create an execution plan for complex tasks",
+        )];
         let update_sent = manager
             .update_available_commands(&session_id, commands)
             .unwrap();
@@ -1538,23 +1527,25 @@ mod tests {
         let cwd = std::env::current_dir().unwrap();
         let mut session = Session::new(session_id, cwd);
 
-        let initial_commands = vec![agent_client_protocol::AvailableCommand {
-            name: "create_plan".to_string(),
-            description: "Create an execution plan".to_string(),
-            input: None,
-            meta: Some(serde_json::json!({"version": "1.0"})),
-        }];
+        let mut initial_meta = serde_json::Map::new();
+        initial_meta.insert("version".to_string(), serde_json::json!("1.0"));
+        let initial_commands = vec![agent_client_protocol::AvailableCommand::new(
+            "create_plan",
+            "Create an execution plan",
+        )
+        .meta(initial_meta)];
 
         session.update_available_commands(initial_commands.clone());
         assert!(!session.has_available_commands_changed(&initial_commands));
 
         // Change meta field - should detect difference
-        let updated_commands = vec![agent_client_protocol::AvailableCommand {
-            name: "create_plan".to_string(),
-            description: "Create an execution plan".to_string(),
-            input: None,
-            meta: Some(serde_json::json!({"version": "2.0"})),
-        }];
+        let mut updated_meta = serde_json::Map::new();
+        updated_meta.insert("version".to_string(), serde_json::json!("2.0"));
+        let updated_commands = vec![agent_client_protocol::AvailableCommand::new(
+            "create_plan",
+            "Create an execution plan",
+        )
+        .meta(updated_meta)];
 
         assert!(session.has_available_commands_changed(&updated_commands));
     }
@@ -1571,12 +1562,11 @@ mod tests {
             ),
         );
 
-        let initial_commands = vec![agent_client_protocol::AvailableCommand {
-            name: "create_plan".to_string(),
-            description: "Create an execution plan".to_string(),
-            input: Some(input_schema.clone()),
-            meta: None,
-        }];
+        let initial_commands = vec![agent_client_protocol::AvailableCommand::new(
+            "create_plan",
+            "Create an execution plan",
+        )
+        .input(input_schema.clone())];
 
         session.update_available_commands(initial_commands.clone());
         assert!(!session.has_available_commands_changed(&initial_commands));
@@ -1588,12 +1578,11 @@ mod tests {
             ),
         );
 
-        let updated_commands = vec![agent_client_protocol::AvailableCommand {
-            name: "create_plan".to_string(),
-            description: "Create an execution plan".to_string(),
-            input: Some(updated_input_schema),
-            meta: None,
-        }];
+        let updated_commands = vec![agent_client_protocol::AvailableCommand::new(
+            "create_plan",
+            "Create an execution plan",
+        )
+        .input(updated_input_schema)];
 
         assert!(session.has_available_commands_changed(&updated_commands));
     }
@@ -1604,23 +1593,22 @@ mod tests {
         let cwd = std::env::current_dir().unwrap();
         let mut session = Session::new(session_id, cwd);
 
-        let initial_commands = vec![agent_client_protocol::AvailableCommand {
-            name: "create_plan".to_string(),
-            description: "Create an execution plan".to_string(),
-            input: None,
-            meta: None,
-        }];
+        let initial_commands = vec![agent_client_protocol::AvailableCommand::new(
+            "create_plan",
+            "Create an execution plan",
+        )];
 
         session.update_available_commands(initial_commands.clone());
         assert!(!session.has_available_commands_changed(&initial_commands));
 
         // Add meta field - should detect difference
-        let updated_commands = vec![agent_client_protocol::AvailableCommand {
-            name: "create_plan".to_string(),
-            description: "Create an execution plan".to_string(),
-            input: None,
-            meta: Some(serde_json::json!({"new": "field"})),
-        }];
+        let mut meta_map = serde_json::Map::new();
+        meta_map.insert("new".to_string(), serde_json::json!("field"));
+        let updated_commands = vec![agent_client_protocol::AvailableCommand::new(
+            "create_plan",
+            "Create an execution plan",
+        )
+        .meta(meta_map)];
 
         assert!(session.has_available_commands_changed(&updated_commands));
     }

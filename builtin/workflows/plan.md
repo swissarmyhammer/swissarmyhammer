@@ -1,6 +1,7 @@
 ---
 title: Planning Workflow
 description: Turn specifications into multiple step plans
+mode: planner
 tags:
   - auto
 parameters:

@@ -61,22 +61,25 @@ impl ClaudeClient {
         acp_session_id: &agent_client_protocol::SessionId,
         cwd: &std::path::Path,
         mcp_servers: Vec<crate::config::McpServerConfig>,
+        agent_mode: Option<String>,
+        system_prompt: Option<String>,
     ) -> Result<(
         Option<Vec<(String, String, Option<String>)>>,
         Option<String>,
     )> {
         tracing::debug!(
-            "Spawning Claude process for session: {} in {} with {} MCP servers",
+            "Spawning Claude process for session: {} in {} with {} MCP servers, agent_mode={:?}, system_prompt={}",
             session_id,
             cwd.display(),
-            mcp_servers.len()
+            mcp_servers.len(),
+            agent_mode,
+            system_prompt.as_ref().map(|s| format!("{} chars", s.len())).unwrap_or_else(|| "None".to_string())
         );
 
-        // Spawn the process (or get existing) with working directory
-        // Note: During init, we don't have a mode yet, so pass None
+        // Spawn the process with optional mode flags
         let process = self
             .process_manager
-            .get_process(session_id, cwd, None, mcp_servers)
+            .spawn_process(*session_id, cwd, agent_mode, system_prompt, mcp_servers)
             .await?;
 
         // The Claude CLI emits a system/init message AFTER receiving the first input
@@ -210,11 +213,6 @@ impl ClaudeClient {
                     match remaining {
                         Ok(Ok(Some(line))) => {
                             lines_consumed += 1;
-                            tracing::debug!(
-                                "Init response line {}: {} bytes",
-                                lines_consumed,
-                                line.len()
-                            );
 
                             // Record to raw transcript but don't forward as notification
                             if let Some(ref manager) = self.raw_message_manager {
@@ -224,7 +222,7 @@ impl ClaudeClient {
                             // Check if this is the result line (end of response)
                             if let Ok(json) = serde_json::from_str::<serde_json::Value>(&line) {
                                 let msg_type = json.get("type").and_then(|t| t.as_str());
-                                tracing::debug!("Init response type: {}", Pretty(&msg_type));
+                                tracing::trace!("Init response type: {}", Pretty(&msg_type));
                                 if msg_type == Some("result") {
                                     tracing::info!(
                                         "✅ Consumed complete init response ({} lines)",
@@ -404,19 +402,6 @@ impl ClaudeClient {
         let content = vec![ContentBlock::Text(text_content)];
         let stream_json = self.protocol_translator.acp_to_stream_json(content)?;
 
-        // Debug logging to trace what's actually sent to Claude CLI
-        tracing::debug!("📤 Sending to Claude CLI stdin:");
-        tracing::debug!("  Prompt: {} chars", prompt.len());
-        tracing::debug!("  Stream-JSON: {} chars", stream_json.len());
-        tracing::debug!(
-            "  Preview: {}",
-            if stream_json.len() > 300 {
-                format!("{}...", &stream_json[..300])
-            } else {
-                stream_json.clone()
-            }
-        );
-
         let mut proc = process.lock().await;
         proc.write_line(&stream_json).await?;
         Ok(())
@@ -434,25 +419,15 @@ impl ClaudeClient {
     }
 
     /// Execute a simple query without session context
-    pub async fn query(
-        &self,
-        prompt: &str,
-        session_id: &SessionId,
-        cwd: &std::path::Path,
-        agent_mode: Option<String>,
-    ) -> Result<String> {
+    pub async fn query(&self, prompt: &str, session_id: &SessionId) -> Result<String> {
         if prompt.is_empty() {
             return Err(crate::error::AgentError::Process(
                 "Empty prompt".to_string(),
             ));
         }
 
-        // Get the process for this session (will spawn with --agent flag if mode specified)
-        // MCP servers are only configured during session creation, not on subsequent prompts
-        let process = self
-            .process_manager
-            .get_process(session_id, cwd, agent_mode, vec![])
-            .await?;
+        // Get the existing process for this session
+        let process = self.process_manager.get_process(session_id)?;
 
         // Send prompt to process
         self.send_prompt_to_process(process.clone(), prompt).await?;
@@ -523,8 +498,6 @@ impl ClaudeClient {
         &self,
         prompt: &str,
         session_id: &SessionId,
-        cwd: &std::path::Path,
-        agent_mode: Option<String>,
     ) -> Result<Pin<Box<dyn Stream<Item = MessageChunk> + Send>>> {
         if prompt.is_empty() {
             return Err(crate::error::AgentError::Process(
@@ -532,12 +505,8 @@ impl ClaudeClient {
             ));
         }
 
-        // Get the process for this session (will spawn with --agent flag if mode specified)
-        // MCP servers are only configured during session creation, not on subsequent prompts
-        let process = self
-            .process_manager
-            .get_process(session_id, cwd, agent_mode, vec![])
-            .await?;
+        // Get the existing process for this session
+        let process = self.process_manager.get_process(session_id)?;
 
         // Send prompt to process
         self.send_prompt_to_process(process.clone(), prompt).await?;
@@ -560,15 +529,33 @@ impl ClaudeClient {
             // When an assistant message text matches this accumulated text, it's a duplicate.
             let mut accumulated_text = String::new();
 
+            let mut lines_read = 0u32;
+            let mut chunks_sent = 0u32;
+
             loop {
                 let line = {
                     let mut proc = process_clone.lock().await;
                     match proc.read_line().await {
                         Ok(Some(line)) => line,
-                        Ok(None) => break,
-                        Err(_) => break,
+                        Ok(None) => {
+                            tracing::debug!(
+                                "Stream reading loop: EOF after {} lines, {} chunks sent",
+                                lines_read,
+                                chunks_sent
+                            );
+                            break;
+                        }
+                        Err(e) => {
+                            tracing::warn!(
+                                "Stream reading loop: Error after {} lines: {}",
+                                lines_read,
+                                e
+                            );
+                            break;
+                        }
                     }
                 };
+                lines_read += 1;
 
                 // Record raw JSON-RPC message
                 if let Some(ref manager) = raw_message_manager_clone {
@@ -598,8 +585,12 @@ impl ClaudeClient {
                             chunk_type: ChunkType::Text,
                             tool_call: None,
                             token_usage: None,
-                            stop_reason: result.stop_reason,
+                            stop_reason: result.stop_reason.clone(),
                         };
+                        tracing::debug!(
+                            "Stream reading loop: Sending final chunk with stop_reason={:?}",
+                            result.stop_reason
+                        );
                         let _ = tx.send(final_chunk);
                     }
                     break;
@@ -617,10 +608,37 @@ impl ClaudeClient {
                 }
 
                 // Translate to ACP notification
-                if let Ok(Some(notification)) = protocol_translator
+                let translation_result = protocol_translator
                     .stream_json_to_acp(&line, &acp_session_id)
-                    .await
-                {
+                    .await;
+
+                match &translation_result {
+                    Ok(Some(_)) => {
+                        tracing::debug!("stream_json_to_acp returned Some notification");
+                    }
+                    Ok(None) => {
+                        // Log the message type that returned None
+                        if let Ok(json) = serde_json::from_str::<serde_json::Value>(&line) {
+                            let msg_type = json
+                                .get("type")
+                                .and_then(|t| t.as_str())
+                                .unwrap_or("unknown");
+                            tracing::debug!(
+                                "stream_json_to_acp returned None for type={}",
+                                msg_type
+                            );
+                        }
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            "stream_json_to_acp error: {}. Line: {}",
+                            e,
+                            &line.chars().take(200).collect::<String>()
+                        );
+                    }
+                }
+
+                if let Ok(Some(notification)) = translation_result {
                     // Forward notification first (if sender configured)
                     // This must clone to avoid moving from borrowed content
                     if let Some(ref sender) = notification_sender_clone {
@@ -633,7 +651,7 @@ impl ClaudeClient {
                             let chunk =
                                 Self::content_block_to_message_chunk(content_chunk.content.clone());
 
-                            // Track accumulated text to detect duplicate assistant messages
+                            // Track accumulated text for logging and duplicate detection
                             if let ContentBlock::Text(text) = &content_chunk.content {
                                 // If we've seen stream_events and this chunk's text equals
                                 // the accumulated text, it's the duplicate assistant message - skip it
@@ -645,15 +663,15 @@ impl ClaudeClient {
                                     continue;
                                 }
 
-                                // Accumulate text from stream_event chunks
-                                if saw_stream_events {
-                                    accumulated_text.push_str(&text.text);
-                                }
+                                // Always accumulate text for response logging
+                                accumulated_text.push_str(&text.text);
                             }
 
                             if tx.send(chunk).is_err() {
+                                tracing::debug!("Stream reading loop: Channel closed, breaking");
                                 break;
                             }
+                            chunks_sent += 1;
                         }
                         SessionUpdate::ToolCall(tool_call) => {
                             // Send ToolCall as a special MessageChunk with tool_call info
@@ -671,8 +689,10 @@ impl ClaudeClient {
                                 stop_reason: None,
                             };
                             if tx.send(tool_chunk).is_err() {
+                                tracing::debug!("Stream reading loop: Channel closed, breaking");
                                 break;
                             }
+                            chunks_sent += 1;
                         }
                         SessionUpdate::ToolCallUpdate(_update) => {
                             // ToolCallUpdate notifications were already forwarded above
@@ -696,7 +716,6 @@ impl ClaudeClient {
         &self,
         prompt: &str,
         context: &SessionContext,
-        agent_mode: Option<String>,
     ) -> Result<String> {
         if prompt.is_empty() {
             return Err(crate::error::AgentError::Process(
@@ -723,14 +742,7 @@ impl ClaudeClient {
             full_conversation.len()
         );
 
-        let response = self
-            .query(
-                &full_conversation,
-                &context.session_id,
-                &context.cwd,
-                agent_mode,
-            )
-            .await?;
+        let response = self.query(&full_conversation, &context.session_id).await?;
 
         tracing::info!(
             "Received response from Claude process (content length: {} chars)",
@@ -745,20 +757,10 @@ impl ClaudeClient {
         &self,
         prompt: &str,
         context: &SessionContext,
-        agent_mode: Option<String>,
     ) -> Result<Pin<Box<dyn Stream<Item = MessageChunk> + Send>>> {
-        if prompt.is_empty() {
-            return Err(crate::error::AgentError::Process(
-                "Empty prompt".to_string(),
-            ));
-        }
-
         // Claude CLI maintains conversation state internally, so we just send
         // the new prompt without rebuilding the full conversation history.
-        // The process manager ensures we're using the same CLI process for this
-        // session, which maintains context across calls.
-        self.query_stream(prompt, &context.session_id, &context.cwd, agent_mode)
-            .await
+        self.query_stream(prompt, &context.session_id).await
     }
 }
 
@@ -927,10 +929,21 @@ impl From<&crate::session::Message> for ClaudeMessage {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tempfile::tempdir;
+
+    fn create_test_translator() -> Arc<ProtocolTranslator> {
+        let temp_dir = tempdir().unwrap();
+        let storage = crate::permissions::FilePermissionStorage::new(temp_dir.path().to_path_buf());
+        let permission_engine = Arc::new(crate::permissions::PermissionPolicyEngine::new(
+            Box::new(storage),
+        ));
+        Arc::new(ProtocolTranslator::new(permission_engine))
+    }
 
     #[tokio::test]
     async fn test_client_creation() {
-        let client = ClaudeClient::new().unwrap();
+        let protocol_translator = create_test_translator();
+        let client = ClaudeClient::new(protocol_translator).unwrap();
         assert!(client.supports_streaming());
     }
 

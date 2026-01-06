@@ -16,25 +16,8 @@
 //!
 //! # Stream-JSON Protocol
 //!
-//! The claude CLI is spawned with the following flags to enable stream-json communication:
+//! The claude CLI is spawned with the flags to enable stream-json communication.
 //!
-//! ```bash
-//! claude -p \
-//!   --input-format stream-json \
-//!   --output-format stream-json \
-//!   --verbose \
-//!   --dangerously-skip-permissions \
-//!   --replay-user-messages \
-//!   --session-id <uuid>
-//! ```
-//!
-//! - `-p`: Print mode (non-interactive)
-//! - `--input-format stream-json`: Accept newline-delimited JSON on stdin
-//! - `--output-format stream-json`: Emit newline-delimited JSON on stdout
-//! - `--verbose`: Required for stream-json output format
-//! - `--dangerously-skip-permissions`: ACP server handles permission checks
-//! - `--replay-user-messages`: Re-emit user messages for immediate acknowledgment
-//! - `--session-id <uuid>`: Use our ULID as Claude's session ID for consistency
 //!
 //! Messages are exchanged as newline-delimited JSON objects conforming to the
 //! JSON-RPC 2.0 specification for Agent Communication Protocol (ACP).
@@ -125,6 +108,9 @@ const CLAUDE_CLI_ARGS: &[&str] = &[
     // NOTE: This causes Claude to send a duplicate final combined message and empty terminator
     // We filter these out in the streaming loop (skip large chunks and empty chunks)
     "--replay-user-messages", // Re-emit user messages for transcript recording
+    // We only use our own MCP tools for consistency -- no built-in tools
+    "--tools",
+    "",
 ];
 
 /// Manages multiple persistent claude CLI processes, one per session
@@ -162,6 +148,7 @@ impl ClaudeProcessManager {
     /// * `session_id` - Session identifier
     /// * `cwd` - Working directory for the Claude process
     /// * `agent_mode` - Optional agent mode to use (passed as --agent flag)
+    /// * `system_prompt` - Optional system prompt to append (for SwissArmyHammer modes)
     ///
     /// # Errors
     /// Returns error if:
@@ -173,6 +160,7 @@ impl ClaudeProcessManager {
         session_id: SessionId,
         cwd: &std::path::Path,
         agent_mode: Option<String>,
+        system_prompt: Option<String>,
         mcp_servers: Vec<crate::config::McpServerConfig>,
     ) -> Result<()> {
         // Check if session already exists - use write lock to prevent race
@@ -187,8 +175,8 @@ impl ClaudeProcessManager {
         }
 
         // Spawn new process with working directory and optional agent mode
-        let process =
-            ClaudeProcess::spawn(session_id, cwd, agent_mode, mcp_servers).map_err(|e| {
+        let process = ClaudeProcess::spawn(session_id, cwd, agent_mode, system_prompt, mcp_servers)
+            .map_err(|e| {
                 tracing::error!(
                     "Failed to spawn claude process for session {}: {}",
                     session_id,
@@ -209,48 +197,52 @@ impl ClaudeProcessManager {
     /// # Arguments
     /// * `session_id` - Session identifier
     /// * `cwd` - Working directory for the Claude process if spawning is needed
-    /// * `agent_mode` - Optional agent mode to use (passed as --agent flag)
+    /// # Errors
+    /// Returns error if no process exists for this session
+    pub fn get_process(&self, session_id: &SessionId) -> Result<Arc<Mutex<ClaudeProcess>>> {
+        let processes = self.processes.read().map_err(|_| {
+            AgentError::Internal("Failed to acquire read lock on processes".to_string())
+        })?;
+
+        processes.get(session_id).cloned().ok_or_else(|| {
+            AgentError::Internal(format!(
+                "No Claude process exists for session {}. Process must be spawned first.",
+                session_id
+            ))
+        })
+    }
+
+    /// Spawn a new Claude process for a session
+    ///
+    /// # Arguments
+    /// * `session_id` - Session to spawn process for
+    /// * `cwd` - Working directory
+    /// * `agent_mode` - Optional agent mode (--agent flag)
+    /// * `system_prompt` - Optional system prompt (--system-prompt flag)
+    /// * `mcp_servers` - MCP servers to configure
     ///
     /// # Errors
     /// Returns error if spawning fails
-    pub async fn get_process(
+    pub async fn spawn_process(
         &self,
-        session_id: &SessionId,
+        session_id: SessionId,
         cwd: &std::path::Path,
         agent_mode: Option<String>,
+        system_prompt: Option<String>,
         mcp_servers: Vec<crate::config::McpServerConfig>,
     ) -> Result<Arc<Mutex<ClaudeProcess>>> {
-        // First try to get existing process
-        {
-            let processes = self.processes.read().map_err(|_| {
-                AgentError::Internal("Failed to acquire read lock on processes".to_string())
-            })?;
-            if let Some(process) = processes.get(session_id) {
-                tracing::debug!(
-                    "Reusing existing Claude process for session {} (total active: {})",
-                    session_id,
-                    processes.len()
-                );
-                return Ok(process.clone());
-            }
-        }
+        tracing::info!(
+            "Spawning Claude process for session {} in {}, agent_mode={:?}, system_prompt={}",
+            session_id,
+            cwd.display(),
+            agent_mode,
+            system_prompt
+                .as_ref()
+                .map(|s| format!("{} chars", s.len()))
+                .unwrap_or_else(|| "None".to_string())
+        );
 
-        // Process doesn't exist, spawn one with working directory and optional agent mode
-        if let Some(ref mode) = agent_mode {
-            tracing::info!(
-                "No process found for session {}, spawning new one in {} with agent mode '{}'",
-                session_id,
-                cwd.display(),
-                mode
-            );
-        } else {
-            tracing::info!(
-                "No process found for session {}, spawning new one in {}",
-                session_id,
-                cwd.display()
-            );
-        }
-        self.spawn_for_session(*session_id, cwd, agent_mode, mcp_servers)
+        self.spawn_for_session(session_id, cwd, agent_mode, system_prompt, mcp_servers)
             .await?;
 
         // Get the newly spawned process
@@ -264,7 +256,7 @@ impl ClaudeProcessManager {
             processes.len()
         );
 
-        processes.get(session_id).cloned().ok_or_else(|| {
+        processes.get(&session_id).cloned().ok_or_else(|| {
             AgentError::Internal("Process spawn succeeded but not found in map".to_string())
         })
     }
@@ -334,6 +326,8 @@ impl ClaudeProcess {
     /// # Arguments
     /// * `session_id` - Session identifier for logging
     /// * `cwd` - Working directory for the Claude process
+    /// * `agent_mode` - Optional agent mode (Claude CLI mode, passed as --agent flag)
+    /// * `system_prompt` - Optional system prompt (SwissArmyHammer mode, passed as --append-system-prompt)
     ///
     /// # Errors
     /// Returns error if:
@@ -344,15 +338,20 @@ impl ClaudeProcess {
         session_id: SessionId,
         cwd: &std::path::Path,
         agent_mode: Option<String>,
+        system_prompt: Option<String>,
         mcp_servers: Vec<crate::config::McpServerConfig>,
     ) -> Result<Self> {
         // Get test name from thread name or backtrace if in test context
         let test_context = std::thread::current().name().map(|n| n.to_string());
 
-        let session_uuid_str = session_id.to_uuid_string();
+        // Generate a fresh UUID for Claude's session - don't tie to our internal session_id
+        // This avoids session state conflicts when respawning after mode changes
+        let claude_session_uuid = uuid::Uuid::new_v4().to_string();
 
         tracing::info!(
-            "ClaudeProcess::spawn received {} MCP servers",
+            "ClaudeProcess::spawn for session {} with Claude UUID {}, {} MCP servers",
+            session_id,
+            claude_session_uuid,
             mcp_servers.len()
         );
 
@@ -361,12 +360,22 @@ impl ClaudeProcess {
         command
             .args(CLAUDE_CLI_ARGS)
             .arg("--session-id")
-            .arg(&session_uuid_str);
+            .arg(&claude_session_uuid);
 
-        // Add --agent flag if mode is specified
+        // Add --agent flag if mode is specified (Claude CLI built-in mode)
         if let Some(mode) = agent_mode {
             tracing::info!("Spawning Claude with agent mode: {}", mode);
             command.arg("--agent").arg(&mode);
+        }
+
+        // Add --system-prompt if system prompt is provided (SwissArmyHammer mode)
+        // This REPLACES the default Claude system prompt with our mode's prompt
+        if let Some(ref prompt) = system_prompt {
+            tracing::info!(
+                "Spawning Claude with SwissArmyHammer system prompt ({} chars)",
+                prompt.len()
+            );
+            command.arg("--system-prompt").arg(prompt);
         }
 
         // Build MCP config if servers are specified

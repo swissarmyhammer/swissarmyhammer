@@ -64,7 +64,7 @@ mod tests {
             .expect("Should receive initial notification");
         match notification.update {
             SessionUpdate::ToolCall(tool_call) => {
-                assert_eq!(tool_call.id.0.as_ref(), tool_call_id.as_str());
+                assert_eq!(tool_call.tool_call_id.0.as_ref(), tool_call_id.as_str());
                 assert_eq!(
                     tool_call.status,
                     agent_client_protocol::ToolCallStatus::Pending
@@ -90,7 +90,7 @@ mod tests {
             .expect("Should receive progress notification");
         match notification.update {
             SessionUpdate::ToolCallUpdate(update) => {
-                assert_eq!(update.id.0.as_ref(), tool_call_id.as_str());
+                assert_eq!(update.tool_call_id.0.as_ref(), tool_call_id.as_str());
                 assert_eq!(
                     update.fields.status,
                     Some(agent_client_protocol::ToolCallStatus::InProgress)
@@ -113,7 +113,7 @@ mod tests {
             .expect("Should receive completion notification");
         match notification.update {
             SessionUpdate::ToolCallUpdate(update) => {
-                assert_eq!(update.id.0.as_ref(), tool_call_id.as_str());
+                assert_eq!(update.tool_call_id.0.as_ref(), tool_call_id.as_str());
                 assert_eq!(
                     update.fields.status,
                     Some(agent_client_protocol::ToolCallStatus::Completed)
@@ -179,7 +179,7 @@ mod tests {
             .expect("Should receive failure notification");
         match notification.update {
             SessionUpdate::ToolCallUpdate(update) => {
-                assert_eq!(update.id.0.as_ref(), tool_call_id.as_str());
+                assert_eq!(update.tool_call_id.0.as_ref(), tool_call_id.as_str());
                 assert_eq!(
                     update.fields.status,
                     Some(agent_client_protocol::ToolCallStatus::Failed)
@@ -235,7 +235,7 @@ mod tests {
             .expect("Should receive cancellation notification");
         match notification.update {
             SessionUpdate::ToolCallUpdate(update) => {
-                assert_eq!(update.id.0.as_ref(), tool_call_id.as_str());
+                assert_eq!(update.tool_call_id.0.as_ref(), tool_call_id.as_str());
                 assert_eq!(
                     update.fields.status,
                     Some(agent_client_protocol::ToolCallStatus::Failed)
@@ -325,11 +325,7 @@ mod tests {
                 report.update_status(ToolCallStatus::InProgress);
                 report.add_content(crate::tool_types::ToolCallContent::Content {
                     content: agent_client_protocol::ContentBlock::Text(
-                        agent_client_protocol::TextContent {
-                            text: "Processing file...".to_string(),
-                            annotations: None,
-                            meta: None,
-                        },
+                        agent_client_protocol::TextContent::new("Processing file..."),
                     ),
                 });
                 report.add_location(crate::tool_types::ToolCallLocation {
@@ -346,7 +342,7 @@ mod tests {
             .expect("Should receive update notification");
         match notification.update {
             SessionUpdate::ToolCallUpdate(update) => {
-                assert_eq!(update.id.0.as_ref(), tool_call_id.as_str());
+                assert_eq!(update.tool_call_id.0.as_ref(), tool_call_id.as_str());
                 assert!(update.fields.content.is_some(), "Should include content");
                 assert!(
                     update.fields.locations.is_some(),
@@ -445,7 +441,7 @@ mod tests {
             .expect("Should receive terminal embedding notification");
         match notification.update {
             SessionUpdate::ToolCallUpdate(update) => {
-                assert_eq!(update.id.0.as_ref(), tool_call_id.as_str());
+                assert_eq!(update.tool_call_id.0.as_ref(), tool_call_id.as_str());
                 assert!(update.fields.content.is_some(), "Should include content");
 
                 let content = update.fields.content.unwrap();
@@ -540,7 +536,7 @@ mod tests {
             .expect("Should receive second terminal notification");
         match notification.update {
             SessionUpdate::ToolCallUpdate(update) => {
-                assert_eq!(update.id.0.as_ref(), tool_call_id.as_str());
+                assert_eq!(update.tool_call_id.0.as_ref(), tool_call_id.as_str());
                 let content = update.fields.content.expect("Should include content");
                 assert_eq!(content.len(), 2, "Should have two terminal content items");
 
@@ -548,9 +544,8 @@ mod tests {
                 let terminal_ids: Vec<String> = content
                     .iter()
                     .filter_map(|c| {
-                        if let agent_client_protocol::ToolCallContent::Terminal { terminal_id } = c
-                        {
-                            Some(terminal_id.0.as_ref().to_string())
+                        if let agent_client_protocol::ToolCallContent::Terminal(terminal) = c {
+                            Some(terminal.terminal_id.0.as_ref().to_string())
                         } else {
                             None
                         }
@@ -625,7 +620,7 @@ mod tests {
             .expect("Should receive terminal embedding notification");
         match notification.update {
             SessionUpdate::ToolCallUpdate(update) => {
-                assert_eq!(update.id.0.as_ref(), tool_call_id.as_str());
+                assert_eq!(update.tool_call_id.0.as_ref(), tool_call_id.as_str());
                 let content = update.fields.content.expect("Should include content");
                 assert_eq!(content.len(), 1, "Should have one terminal content item");
 
@@ -691,7 +686,7 @@ mod tests {
             .expect("Should receive completion notification");
         match notification.update {
             SessionUpdate::ToolCallUpdate(update) => {
-                assert_eq!(update.id.0.as_ref(), tool_call_id.as_str());
+                assert_eq!(update.tool_call_id.0.as_ref(), tool_call_id.as_str());
                 assert_eq!(
                     update.fields.status,
                     Some(agent_client_protocol::ToolCallStatus::Completed)

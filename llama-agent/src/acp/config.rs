@@ -84,6 +84,70 @@ impl Default for AcpConfig {
 }
 
 impl AcpConfig {
+    /// Load available modes from ModeRegistry
+    ///
+    /// Loads all modes from the ModeRegistry (builtin → user → local) and converts
+    /// them to ACP SessionMode format.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use llama_agent::acp::AcpConfig;
+    ///
+    /// let mut config = AcpConfig::default();
+    /// config.load_modes_from_registry();
+    /// ```
+    pub fn load_modes_from_registry(&mut self) {
+        let mut registry = swissarmyhammer_modes::ModeRegistry::new();
+
+        match registry.load_all() {
+            Ok(modes) => {
+                self.available_modes = modes
+                    .into_iter()
+                    .map(|mode| {
+                        // Convert to owned strings
+                        let id = mode.id().to_string();
+                        let name = mode.name().to_string();
+                        let desc = mode.description().to_string();
+                        // Create SessionModeId first, then pass it (owned) to SessionMode::new
+                        let mode_id = agent_client_protocol::SessionModeId::new(id);
+                        agent_client_protocol::SessionMode::new(mode_id, name).description(desc)
+                    })
+                    .collect();
+
+                tracing::info!(
+                    "Loaded {} modes from registry: {:?}",
+                    self.available_modes.len(),
+                    self.available_modes
+                        .iter()
+                        .map(|m| m.id.0.as_ref())
+                        .collect::<Vec<_>>()
+                );
+            }
+            Err(e) => {
+                tracing::warn!("Failed to load modes from registry: {}", e);
+                // Keep default empty modes
+            }
+        }
+    }
+
+    /// Create a new config with modes loaded from registry
+    ///
+    /// Convenience method that creates a default config and loads modes.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use llama_agent::acp::AcpConfig;
+    ///
+    /// let config = AcpConfig::with_registry_modes();
+    /// ```
+    pub fn with_registry_modes() -> Self {
+        let mut config = Self::default();
+        config.load_modes_from_registry();
+        config
+    }
+
     /// Load configuration from a YAML file
     ///
     /// # Arguments

@@ -784,11 +784,7 @@ mod tests {
     fn test_tool_call_content_serialization_content_variant() {
         let content = ToolCallContent::Content {
             content: agent_client_protocol::ContentBlock::Text(
-                agent_client_protocol::TextContent {
-                    text: "Test content".to_string(),
-                    annotations: None,
-                    meta: None,
-                },
+                agent_client_protocol::TextContent::new("Test content"),
             ),
         };
 
@@ -905,18 +901,14 @@ mod tests {
     fn test_tool_call_content_to_acp_content_variant() {
         let content = ToolCallContent::Content {
             content: agent_client_protocol::ContentBlock::Text(
-                agent_client_protocol::TextContent {
-                    text: "ACP test".to_string(),
-                    annotations: None,
-                    meta: None,
-                },
+                agent_client_protocol::TextContent::new("ACP test"),
             ),
         };
 
         let acp_content = content.to_acp_content();
         match acp_content {
-            agent_client_protocol::ToolCallContent::Content { content } => {
-                if let agent_client_protocol::ContentBlock::Text(text) = content {
+            agent_client_protocol::ToolCallContent::Content(acp_content) => {
+                if let agent_client_protocol::ContentBlock::Text(text) = acp_content.content {
                     assert_eq!(text.text, "ACP test");
                 } else {
                     panic!("Expected text content");
@@ -936,7 +928,7 @@ mod tests {
 
         let acp_content = content.to_acp_content();
         match acp_content {
-            agent_client_protocol::ToolCallContent::Diff { diff } => {
+            agent_client_protocol::ToolCallContent::Diff(diff) => {
                 assert_eq!(diff.path.to_string_lossy(), "/workspace/config.json");
                 assert_eq!(diff.old_text.unwrap(), r#"{"debug": false}"#);
                 assert_eq!(diff.new_text, r#"{"debug": true}"#);
@@ -954,8 +946,8 @@ mod tests {
 
         let acp_content = content.to_acp_content();
         match acp_content {
-            agent_client_protocol::ToolCallContent::Terminal { terminal_id } => {
-                assert_eq!(terminal_id.0.as_ref(), "term_unique_id_123");
+            agent_client_protocol::ToolCallContent::Terminal(terminal) => {
+                assert_eq!(terminal.terminal_id.0.as_ref(), "term_unique_id_123");
             }
             _ => panic!("Expected Terminal variant"),
         }
@@ -972,11 +964,7 @@ mod tests {
 
         report.add_content(ToolCallContent::Content {
             content: agent_client_protocol::ContentBlock::Text(
-                agent_client_protocol::TextContent {
-                    text: "Starting operation".to_string(),
-                    annotations: None,
-                    meta: None,
-                },
+                agent_client_protocol::TextContent::new("Starting operation"),
             ),
         });
 
@@ -996,17 +984,17 @@ mod tests {
         assert_eq!(acp_call.content.len(), 3);
 
         match &acp_call.content[0] {
-            agent_client_protocol::ToolCallContent::Content { .. } => {}
+            agent_client_protocol::ToolCallContent::Content(..) => {}
             _ => panic!("First content should be Content variant"),
         }
 
         match &acp_call.content[1] {
-            agent_client_protocol::ToolCallContent::Diff { .. } => {}
+            agent_client_protocol::ToolCallContent::Diff(..) => {}
             _ => panic!("Second content should be Diff variant"),
         }
 
         match &acp_call.content[2] {
-            agent_client_protocol::ToolCallContent::Terminal { .. } => {}
+            agent_client_protocol::ToolCallContent::Terminal(..) => {}
             _ => panic!("Third content should be Terminal variant"),
         }
     }
@@ -1028,7 +1016,7 @@ mod tests {
 
         let acp_content = content.to_acp_content();
         match acp_content {
-            agent_client_protocol::ToolCallContent::Diff { diff } => {
+            agent_client_protocol::ToolCallContent::Diff(diff) => {
                 assert!(diff.old_text.unwrap().contains('\n'));
                 assert!(diff.new_text.contains('\n'));
             }
@@ -1146,11 +1134,7 @@ mod tests {
         // Now add content
         report.add_content(ToolCallContent::Content {
             content: agent_client_protocol::ContentBlock::Text(
-                agent_client_protocol::TextContent {
-                    text: "Progress update".to_string(),
-                    annotations: None,
-                    meta: None,
-                },
+                agent_client_protocol::TextContent::new("Progress update"),
             ),
         });
 
@@ -1186,11 +1170,7 @@ mod tests {
         report.update_status(ToolCallStatus::Completed);
         report.add_content(ToolCallContent::Content {
             content: agent_client_protocol::ContentBlock::Text(
-                agent_client_protocol::TextContent {
-                    text: "Done".to_string(),
-                    annotations: None,
-                    meta: None,
-                },
+                agent_client_protocol::TextContent::new("Done"),
             ),
         });
         report.set_raw_output(serde_json::json!({"result": "success"}));

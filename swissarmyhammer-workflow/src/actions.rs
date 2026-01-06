@@ -448,26 +448,25 @@ impl PromptAction {
                 ))
             })?;
 
-        // Render system prompt using the same library instance (optional)
-        let system_prompt = match library_arc.render(".system", &template_context) {
-            Ok(prompt) => Some(prompt),
-            Err(e) => {
-                tracing::warn!(
-                    "Failed to render system prompt: {}. Proceeding without system prompt.",
-                    e
-                );
-                None
+        // System prompt handling:
+        // - Workflows with a mode: system prompt applied via ACP set_session_mode (--append-system-prompt)
+        // - Workflows without a mode: use .system/default as fallback
+        let system_prompt = if context.get_workflow_mode().is_some() {
+            // Mode-based system prompt will be applied via ACP
+            None
+        } else {
+            // No mode set, use .system/default as the default system prompt
+            match library_arc.render(".system/default", &template_context) {
+                Ok(prompt) => Some(prompt),
+                Err(e) => {
+                    tracing::warn!(
+                        "Failed to render .system/default prompt: {}. Proceeding without system prompt.",
+                        e
+                    );
+                    None
+                }
             }
         };
-
-        if let Some(ref sys_prompt) = system_prompt {
-            tracing::debug!(
-                "System prompt rendered successfully ({} chars)",
-                sys_prompt.len()
-            );
-        } else {
-            tracing::debug!("No system prompt will be used");
-        }
 
         Ok((rendered, system_prompt))
     }
@@ -496,25 +495,15 @@ impl PromptAction {
         let (user_prompt, system_prompt) = self.render_prompts_directly(context)?;
         tracing::debug!("Piping prompt:\n{}", user_prompt);
 
-        let quiet = self.is_quiet_mode(context);
         let response = self
             .execute_prompt_with_agent(context, user_prompt, system_prompt)
             .await?;
 
-        self.log_response_if_not_quiet(&response.content, quiet);
+        tracing::info!("Prompt response: {:?}", Pretty(&response));
         self.store_response_in_context(context, &response)?;
 
         Ok(serde_json::to_value(&response)
             .unwrap_or_else(|_| Value::String(response.content.clone())))
-    }
-
-    /// Check if quiet mode is enabled
-    fn is_quiet_mode(&self, context: &WorkflowTemplateContext) -> bool {
-        self.quiet
-            || context
-                .get("_quiet")
-                .and_then(|v| v.as_bool())
-                .unwrap_or(false)
     }
 
     /// Execute prompt with ACP agent
@@ -532,8 +521,11 @@ impl PromptAction {
             .await
             .map_err(convert_acp_error)?;
 
+        // Get workflow mode from context if available
+        let mode = context.get_workflow_mode();
+
         // Execute prompt via ACP protocol
-        let response = acp::execute_prompt(&mut agent, system_prompt, user_prompt)
+        let response = acp::execute_prompt(&mut agent, system_prompt, mode, user_prompt)
             .await
             .map_err(|e| {
                 #[derive(serde::Serialize, Debug)]
@@ -550,27 +542,6 @@ impl PromptAction {
             })?;
 
         Ok(response)
-    }
-
-    /// Log response if not in quiet mode
-    fn log_response_if_not_quiet(&self, response_text: &str, quiet: bool) {
-        if !quiet && !response_text.is_empty() {
-            tracing::debug!(
-                "Agent response received: {} characters",
-                response_text.len()
-            );
-
-            let mut yaml_output = String::new();
-            yaml_output.push_str("---\n");
-            yaml_output.push_str(&format!("prompt: {}\n", self.prompt_name));
-            yaml_output.push_str("agent_response: |\n");
-            for line in response_text.lines() {
-                yaml_output.push_str(&format!("  {line}\n"));
-            }
-            yaml_output.push_str("---");
-
-            tracing::info!("{}", yaml_output);
-        }
     }
 
     /// Store response in context
