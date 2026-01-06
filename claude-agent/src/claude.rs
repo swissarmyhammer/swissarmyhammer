@@ -407,18 +407,8 @@ impl ClaudeClient {
         let content = vec![ContentBlock::Text(text_content)];
         let stream_json = self.protocol_translator.acp_to_stream_json(content)?;
 
-        // Debug logging to trace what's actually sent to Claude CLI
-        tracing::debug!("📤 Sending to Claude CLI stdin:");
-        tracing::debug!("  Prompt: {} chars", prompt.len());
-        tracing::debug!("  Stream-JSON: {} chars", stream_json.len());
-        tracing::debug!(
-            "  Preview: {}",
-            if stream_json.len() > 300 {
-                format!("{}...", &stream_json[..300])
-            } else {
-                stream_json.clone()
-            }
-        );
+        // Log the prompt being sent to Claude
+        swissarmyhammer_common::log_prompt("Claude", prompt);
 
         let mut proc = process.lock().await;
         proc.write_line(&stream_json).await?;
@@ -508,6 +498,9 @@ impl ClaudeClient {
             }
         }
 
+        // Log the complete response
+        swissarmyhammer_common::log_response("Claude", &response_text);
+
         Ok(response_text)
     }
 
@@ -595,11 +588,9 @@ impl ClaudeClient {
 
                 // Check if this is a result message (indicates end)
                 if Self::is_end_of_stream(&line) {
-                    tracing::debug!(
-                        "Stream reading loop: Result message after {} lines, {} chunks sent",
-                        lines_read,
-                        chunks_sent
-                    );
+                    // Log the complete response
+                    swissarmyhammer_common::log_response("Claude", &accumulated_text);
+
                     // Parse the result message to extract stop_reason
                     if let Ok(Some(result)) = protocol_translator.parse_result_message(&line) {
                         // Send a final chunk with the stop_reason
@@ -674,7 +665,7 @@ impl ClaudeClient {
                             let chunk =
                                 Self::content_block_to_message_chunk(content_chunk.content.clone());
 
-                            // Track accumulated text to detect duplicate assistant messages
+                            // Track accumulated text for logging and duplicate detection
                             if let ContentBlock::Text(text) = &content_chunk.content {
                                 // If we've seen stream_events and this chunk's text equals
                                 // the accumulated text, it's the duplicate assistant message - skip it
@@ -686,10 +677,8 @@ impl ClaudeClient {
                                     continue;
                                 }
 
-                                // Accumulate text from stream_event chunks
-                                if saw_stream_events {
-                                    accumulated_text.push_str(&text.text);
-                                }
+                                // Always accumulate text for response logging
+                                accumulated_text.push_str(&text.text);
                             }
 
                             if tx.send(chunk).is_err() {

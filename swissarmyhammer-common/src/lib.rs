@@ -93,6 +93,6 @@ pub use glob_utils::{
 pub use test_utils::{acquire_semantic_db_lock, create_temp_dir, ProcessGuard};
 
 // Re-export logging utilities for convenience
-pub use logging::Pretty;
+pub use logging::{log_generated_content, log_prompt, log_response, Pretty};
 
 pub use error::*;

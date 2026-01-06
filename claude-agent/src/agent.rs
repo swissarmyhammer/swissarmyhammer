@@ -1883,7 +1883,7 @@ impl ClaudeAgent {
 
         // Log the generated content at info level for visibility
         if !accumulated_content.is_empty() {
-            tracing::info!("Generated content: {}", accumulated_content);
+            swissarmyhammer_common::log_generated_content("Claude", &accumulated_content);
         }
 
         // Check cancellation one final time
@@ -2201,7 +2201,7 @@ impl ClaudeAgent {
         );
 
         // Log the generated content at info level for visibility
-        tracing::info!("Generated content: {}", response_content);
+        swissarmyhammer_common::log_generated_content("Claude", &response_content);
 
         // ACP requires specific stop reasons for all prompt turn completions:
         // Check for refusal patterns in Claude's response content

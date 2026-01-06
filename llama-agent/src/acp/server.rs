@@ -1321,6 +1321,21 @@ impl agent_client_protocol::Agent for AcpServer {
             agent_client_protocol::Error::invalid_params()
         })?;
 
+        // Extract prompt text for logging
+        let prompt_text: String = request
+            .prompt
+            .iter()
+            .filter_map(|block| {
+                if let agent_client_protocol::ContentBlock::Text(text) = block {
+                    Some(text.text.as_str())
+                } else {
+                    None
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        swissarmyhammer_common::log_prompt("Llama", &prompt_text);
+
         // Translate ACP content to llama messages
         let messages = super::translation::acp_to_llama_messages(request.prompt).map_err(|e| {
             tracing::error!("Failed to translate ACP content to llama messages: {}", e);
@@ -1429,7 +1444,7 @@ impl agent_client_protocol::Agent for AcpServer {
             );
 
             // Log the generated content at info level
-            tracing::info!("Generated content: {}", generated_text);
+            swissarmyhammer_common::log_generated_content("Llama", &generated_text);
 
             // Extract and execute tool calls from the generated text
             let tool_calls = self
