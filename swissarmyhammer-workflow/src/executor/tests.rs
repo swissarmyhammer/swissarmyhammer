@@ -6,6 +6,7 @@ use crate::{
     ConditionType, ErrorContext, StateId, StateType, Transition, TransitionCondition, Workflow,
     WorkflowName, WorkflowRun, WorkflowRunStatus,
 };
+use serde_json::json;
 use std::collections::HashMap;
 
 #[cfg(test)]
@@ -1921,5 +1922,208 @@ stateDiagram-v2
         0,
         "Expected no ERROR logs, but found {}",
         error_logs.len()
+    );
+}
+
+#[test]
+fn test_global_cel_variables_accessible_in_workflow() {
+    // Set a global CEL variable
+    let cel_state = swissarmyhammer_cel::CelState::global();
+    cel_state.set("global_flag", "true").unwrap();
+    cel_state.set("global_count", "42").unwrap();
+
+    let mut executor = WorkflowExecutor::new();
+    let mut context = HashMap::new();
+
+    // Add workflow-specific variable
+    context.insert("local_value".to_string(), json!(10));
+
+    // Test 1: Can access global variable in CEL expression
+    let result = executor.evaluate_condition(
+        &TransitionCondition {
+            condition_type: ConditionType::Custom,
+            expression: Some("global_flag == true".to_string()),
+        },
+        &context,
+    );
+    assert!(
+        result.is_ok(),
+        "Failed to evaluate global_flag: {:?}",
+        result.err()
+    );
+    assert!(result.unwrap(), "global_flag should be true");
+
+    // Test 2: Can use both global and local variables together
+    let result = executor.evaluate_condition(
+        &TransitionCondition {
+            condition_type: ConditionType::Custom,
+            expression: Some("global_count > local_value".to_string()),
+        },
+        &context,
+    );
+    assert!(
+        result.is_ok(),
+        "Failed to evaluate combined expression: {:?}",
+        result.err()
+    );
+    assert!(
+        result.unwrap(),
+        "global_count (42) should be > local_value (10)"
+    );
+
+    // Test 3: Can use global abort flag
+    cel_state.set("abort", "false").unwrap();
+    let result = executor.evaluate_condition(
+        &TransitionCondition {
+            condition_type: ConditionType::Custom,
+            expression: Some("abort == false".to_string()),
+        },
+        &context,
+    );
+    assert!(
+        result.is_ok(),
+        "Failed to evaluate abort flag: {:?}",
+        result.err()
+    );
+    assert!(result.unwrap(), "abort should be false");
+}
+
+#[test]
+fn test_local_workflow_variables_override_global() {
+    // Set a global CEL variable
+    let cel_state = swissarmyhammer_cel::CelState::global();
+    cel_state.set("shared_var", "100").unwrap();
+
+    let mut executor = WorkflowExecutor::new();
+    let mut context = HashMap::new();
+
+    // Add local variable with same name - should override
+    context.insert("shared_var".to_string(), json!(200));
+
+    // Local value should take precedence
+    let result = executor.evaluate_condition(
+        &TransitionCondition {
+            condition_type: ConditionType::Custom,
+            expression: Some("shared_var == 200".to_string()),
+        },
+        &context,
+    );
+    assert!(result.is_ok(), "Failed to evaluate: {:?}", result.err());
+    assert!(
+        result.unwrap(),
+        "Local shared_var (200) should override global (100)"
+    );
+}
+
+#[test]
+fn test_global_boolean_true_and_false_in_workflows() {
+    // This test explicitly verifies that cel_set("name", true) and cel_set("name", false)
+    // work correctly in workflow CEL expressions
+    let cel_state = swissarmyhammer_cel::CelState::global();
+
+    // Set boolean true
+    cel_state.set("feature_enabled", "true").unwrap();
+
+    // Set boolean false
+    cel_state.set("feature_disabled", "false").unwrap();
+
+    let mut executor = WorkflowExecutor::new();
+    let context = HashMap::new();
+
+    // Test 1: Boolean true evaluates correctly
+    let result = executor.evaluate_condition(
+        &TransitionCondition {
+            condition_type: ConditionType::Custom,
+            expression: Some("feature_enabled == true".to_string()),
+        },
+        &context,
+    );
+    assert!(
+        result.is_ok(),
+        "Failed to evaluate feature_enabled == true: {:?}",
+        result.err()
+    );
+    assert!(result.unwrap(), "feature_enabled should equal true");
+
+    // Test 2: Boolean false evaluates correctly
+    let result = executor.evaluate_condition(
+        &TransitionCondition {
+            condition_type: ConditionType::Custom,
+            expression: Some("feature_disabled == false".to_string()),
+        },
+        &context,
+    );
+    assert!(
+        result.is_ok(),
+        "Failed to evaluate feature_disabled == false: {:?}",
+        result.err()
+    );
+    assert!(result.unwrap(), "feature_disabled should equal false");
+
+    // Test 3: Direct boolean evaluation (no == operator)
+    let result = executor.evaluate_condition(
+        &TransitionCondition {
+            condition_type: ConditionType::Custom,
+            expression: Some("feature_enabled".to_string()),
+        },
+        &context,
+    );
+    assert!(
+        result.is_ok(),
+        "Failed to evaluate feature_enabled directly: {:?}",
+        result.err()
+    );
+    assert!(result.unwrap(), "feature_enabled should be truthy");
+
+    // Test 4: Negated boolean
+    let result = executor.evaluate_condition(
+        &TransitionCondition {
+            condition_type: ConditionType::Custom,
+            expression: Some("!feature_disabled".to_string()),
+        },
+        &context,
+    );
+    assert!(
+        result.is_ok(),
+        "Failed to evaluate !feature_disabled: {:?}",
+        result.err()
+    );
+    assert!(result.unwrap(), "!feature_disabled should be true");
+
+    // Test 5: Boolean AND expression
+    let result = executor.evaluate_condition(
+        &TransitionCondition {
+            condition_type: ConditionType::Custom,
+            expression: Some("feature_enabled && !feature_disabled".to_string()),
+        },
+        &context,
+    );
+    assert!(
+        result.is_ok(),
+        "Failed to evaluate AND expression: {:?}",
+        result.err()
+    );
+    assert!(
+        result.unwrap(),
+        "feature_enabled && !feature_disabled should be true"
+    );
+
+    // Test 6: Set a flag to false and verify it blocks a condition
+    cel_state.set("workflow_should_continue", "false").unwrap();
+    let result = executor.evaluate_condition(
+        &TransitionCondition {
+            condition_type: ConditionType::Custom,
+            expression: Some("workflow_should_continue".to_string()),
+        },
+        &context,
+    );
+    assert!(
+        result.is_ok(),
+        "Failed to evaluate workflow_should_continue: {:?}",
+        result.err()
+    );
+    assert!(
+        !result.unwrap(),
+        "workflow_should_continue should be false and block transition"
     );
 }

@@ -577,26 +577,8 @@ fn handle_completion_command(shell: clap_complete::Shell) -> (String, String, i3
     (completion_output, String::new(), EXIT_SUCCESS)
 }
 
-/// Check for workflow abort file
-fn check_workflow_abort() -> Result<Option<(String, String, i32)>> {
-    let current_dir = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
-    match swissarmyhammer_common::read_abort_file(&current_dir) {
-        Ok(Some(abort_reason)) => {
-            let _ = swissarmyhammer_common::remove_abort_file(&current_dir);
-            Ok(Some((
-                format!("DEBUG: Found abort file with reason: {}", abort_reason),
-                "Workflow execution aborted".to_string(),
-                2,
-            )))
-        }
-        Ok(None) => Ok(None),
-        Err(e) => Ok(Some((
-            String::new(),
-            format!("Error checking abort file: {}", e),
-            2,
-        ))),
-    }
-}
+// Note: Abort functionality has been migrated to CEL global state.
+// Workflow abort is now handled via CEL variables, not abort files.
 
 /// Validate flow variables format
 fn validate_flow_variables(vars: Vec<String>) -> Result<(), (String, String, i32)> {
@@ -669,10 +651,6 @@ fn handle_flow_execute(
     vars: Vec<String>,
     dry_run: bool,
 ) -> Result<(String, String, i32)> {
-    if let Some(abort_result) = check_workflow_abort()? {
-        return Ok(abort_result);
-    }
-
     if let Err(validation_error) = validate_flow_variables(vars) {
         return Ok(validation_error);
     }
@@ -786,10 +764,8 @@ mod tests {
 
     /// Helper function to set up test environment
     fn setup_test() {
-        // Clean up any stale abort files from previous tests
-        use std::env;
-        let current_dir = env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
-        let _ = swissarmyhammer_common::remove_abort_file(&current_dir);
+        // Note: Abort functionality has been migrated to CEL global state.
+        // No cleanup needed for abort files.
     }
 
     #[tokio::test]

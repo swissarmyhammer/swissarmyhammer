@@ -739,7 +739,6 @@ pub trait McpTool: Send + Sync {
             "todo" => Some("todo"),
             "outline" => Some("outline"),
             "notify" => Some("notify"),
-            "abort" => Some("abort"),
             "rules" => Some("rule"),
             _ => None,
         }
@@ -1639,9 +1638,9 @@ macro_rules! register_tool_category {
 }
 
 register_tool_category!(
-    register_abort_tools,
-    abort,
-    "Register all abort-related tools with the registry"
+    register_cel_tools,
+    cel,
+    "Register all CEL-related tools with the registry"
 );
 
 /// Register all file-related tools with the registry
@@ -1704,7 +1703,7 @@ pub async fn create_fully_registered_tool_registry() -> ToolRegistry {
     let mut registry = ToolRegistry::new();
 
     // Register all tools exactly like McpServer does
-    register_abort_tools(&mut registry);
+    register_cel_tools(&mut registry);
     register_file_tools(&mut registry).await;
     register_flow_tools(&mut registry);
     register_git_tools(&mut registry);
@@ -2005,11 +2004,6 @@ mod tests {
         "Generate structured code overviews using Tree-sitter parsing"
     );
     test_tool!(
-        AbortCreateTool,
-        "abort_create",
-        "Create an abort file to signal workflow termination"
-    );
-    test_tool!(
         UnknownCategoryTool,
         "unknown_something",
         "A tool with an unknown category prefix"
@@ -2030,7 +2024,6 @@ mod tests {
         assert_eq!(TodoListTool.cli_category(), Some("todo"));
         assert_eq!(TodoCreateTool.cli_category(), Some("todo"));
         assert_eq!(OutlineGenerateTool.cli_category(), Some("outline"));
-        assert_eq!(AbortCreateTool.cli_category(), Some("abort"));
 
         // Test unknown category
         assert_eq!(UnknownCategoryTool.cli_category(), None);
@@ -2047,7 +2040,6 @@ mod tests {
         assert_eq!(ShellExecuteTool.cli_name(), "execute");
         assert_eq!(TodoCreateTool.cli_name(), "create");
         assert_eq!(OutlineGenerateTool.cli_name(), "generate");
-        assert_eq!(AbortCreateTool.cli_name(), "create");
 
         // Test unknown category still extracts action
         assert_eq!(UnknownCategoryTool.cli_name(), "something");

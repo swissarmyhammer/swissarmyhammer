@@ -511,9 +511,23 @@ impl WorkflowExecutor {
     }
 
     /// Prepare CEL context with workflow variables
+    ///
+    /// This creates a stacked context where global CEL variables (like abort)
+    /// are accessible alongside workflow-specific variables.
     fn prepare_cel_context(&self, context: &HashMap<String, Value>) -> ExecutorResult<Context<'_>> {
         let mut cel_context = Context::default();
 
+        // Copy global CEL variables to the context (context stacking)
+        let global_state = swissarmyhammer_cel::CelState::global();
+        global_state
+            .copy_to_context(&mut cel_context)
+            .map_err(|e| {
+                ExecutorError::ExpressionError(format!(
+                    "CEL context error: Failed to copy global variables ({e})"
+                ))
+            })?;
+
+        // Add workflow-specific variables on top
         Self::add_default_variable(&mut cel_context)?;
         Self::add_context_variables(&mut cel_context, context)?;
         Self::add_result_variable_fallback(&mut cel_context, context)?;

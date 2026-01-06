@@ -19,6 +19,7 @@ members = [
     "swissarmyhammer-workflow",
     "swissarmyhammer-agent",
     "swissarmyhammer-mcp-proxy",
+    "swissarmyhammer-cel",
     "markdowndown",
     "llama-agent",
     "llama-common",

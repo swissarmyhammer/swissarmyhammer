@@ -13,9 +13,9 @@ stateDiagram-v2
     [*] --> start
     start --> are_tests_passing
     are_tests_passing --> loop
-    loop --> done: result.content.contains("YES")
-    loop --> test: default
-    test --> are_tests_passing
+    loop --> done: are_tests_passing
+    loop --> do_todos: default
+    do_todos --> are_tests_passing
     done --> [*]
 ```
 
