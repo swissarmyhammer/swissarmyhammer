@@ -13,10 +13,36 @@ use serde::Deserialize;
 /// Request structure for cel_set
 #[derive(Debug, Deserialize)]
 pub struct CelSetRequest {
-    /// Name of the variable to store the result
-    pub name: String,
-    /// CEL expression to evaluate
-    pub expression: String,
+    /// Name of the variable to store the result (alias: key)
+    #[serde(alias = "key")]
+    pub name: Option<String>,
+    /// Key name (alias for name)
+    #[serde(skip)]
+    pub key: Option<String>,
+    /// CEL expression to evaluate (alias: value)
+    #[serde(alias = "value")]
+    pub expression: Option<String>,
+    /// Value expression (alias for expression)
+    #[serde(skip)]
+    pub value: Option<String>,
+}
+
+impl CelSetRequest {
+    /// Get the variable name, checking both name and key fields
+    pub fn get_name(&self) -> Result<String, String> {
+        self.name
+            .clone()
+            .or_else(|| self.key.clone())
+            .ok_or_else(|| "Either 'name' or 'key' parameter is required".to_string())
+    }
+
+    /// Get the expression, checking both expression and value fields
+    pub fn get_expression(&self) -> Result<String, String> {
+        self.expression
+            .clone()
+            .or_else(|| self.value.clone())
+            .ok_or_else(|| "Either 'expression' or 'value' parameter is required".to_string())
+    }
 }
 
 /// Tool for evaluating CEL expressions and storing results as variables
@@ -46,14 +72,35 @@ impl McpTool for CelSetTool {
             "properties": {
                 "name": {
                     "type": "string",
-                    "description": "Name of the variable to store the result"
+                    "description": "Name of the variable to store the result (alias: key)"
+                },
+                "key": {
+                    "type": "string",
+                    "description": "Alias for 'name' - name of the variable to store the result"
                 },
                 "expression": {
                     "type": "string",
-                    "description": "CEL expression to evaluate"
+                    "description": "CEL expression to evaluate (alias: value)"
+                },
+                "value": {
+                    "type": "string",
+                    "description": "Alias for 'expression' - CEL expression to evaluate"
                 }
             },
-            "required": ["name", "expression"]
+            "oneOf": [
+                {
+                    "required": ["name", "expression"]
+                },
+                {
+                    "required": ["key", "value"]
+                },
+                {
+                    "required": ["name", "value"]
+                },
+                {
+                    "required": ["key", "expression"]
+                }
+            ]
         })
     }
 
@@ -68,28 +115,32 @@ impl McpTool for CelSetTool {
     ) -> std::result::Result<CallToolResult, McpError> {
         let request: CelSetRequest = BaseToolImpl::parse_arguments(arguments)?;
 
-        tracing::debug!(
-            "CEL set: name='{}', expression='{}'",
-            request.name,
-            request.expression
-        );
+        // Get name and expression using alias support
+        let name = request
+            .get_name()
+            .map_err(|e| McpError::invalid_params(e, None))?;
+        let expression = request
+            .get_expression()
+            .map_err(|e| McpError::invalid_params(e, None))?;
+
+        tracing::debug!("CEL set: name='{}', expression='{}'", name, expression);
 
         // Validate inputs
-        McpValidation::validate_not_empty(&request.name, "variable name")
+        McpValidation::validate_not_empty(&name, "variable name")
             .map_err(|e| McpErrorHandler::handle_error(e, "validate variable name"))?;
-        McpValidation::validate_not_empty(&request.expression, "expression")
+        McpValidation::validate_not_empty(&expression, "expression")
             .map_err(|e| McpErrorHandler::handle_error(e, "validate expression"))?;
 
         // Use the global CEL state to set the variable
         let state = super::CelState::global();
         let result = state
-            .set(&request.name, &request.expression)
+            .set(&name, &expression)
             .map_err(|e| McpError::internal_error(e, None))?;
 
         // Convert CEL value to JSON for response
         let json_result = super::cel_value_to_json(&result);
 
-        tracing::info!("CEL set '{}' = {:?}", request.name, json_result);
+        tracing::info!("CEL set '{}' = {:?}", name, json_result);
 
         Ok(BaseToolImpl::create_success_response(
             serde_json::json!({
@@ -130,11 +181,14 @@ mod tests {
 
         let properties = obj["properties"].as_object().unwrap();
         assert!(properties.contains_key("name"));
+        assert!(properties.contains_key("key"));
         assert!(properties.contains_key("expression"));
+        assert!(properties.contains_key("value"));
 
-        let required = obj["required"].as_array().unwrap();
-        assert!(required.contains(&serde_json::Value::String("name".to_string())));
-        assert!(required.contains(&serde_json::Value::String("expression".to_string())));
+        // Check oneOf structure
+        assert!(obj.contains_key("oneOf"));
+        let one_of = obj["oneOf"].as_array().unwrap();
+        assert_eq!(one_of.len(), 4);
     }
 
     #[test]
@@ -150,8 +204,59 @@ mod tests {
         );
 
         let request: CelSetRequest = BaseToolImpl::parse_arguments(args).unwrap();
-        assert_eq!(request.name, "x");
-        assert_eq!(request.expression, "10 + 5");
+        assert_eq!(request.get_name().unwrap(), "x");
+        assert_eq!(request.get_expression().unwrap(), "10 + 5");
+    }
+
+    #[test]
+    fn test_parse_with_key_alias() {
+        let mut args = serde_json::Map::new();
+        args.insert(
+            "key".to_string(),
+            serde_json::Value::String("y".to_string()),
+        );
+        args.insert(
+            "expression".to_string(),
+            serde_json::Value::String("20 + 10".to_string()),
+        );
+
+        let request: CelSetRequest = BaseToolImpl::parse_arguments(args).unwrap();
+        assert_eq!(request.get_name().unwrap(), "y");
+        assert_eq!(request.get_expression().unwrap(), "20 + 10");
+    }
+
+    #[test]
+    fn test_parse_with_value_alias() {
+        let mut args = serde_json::Map::new();
+        args.insert(
+            "name".to_string(),
+            serde_json::Value::String("z".to_string()),
+        );
+        args.insert(
+            "value".to_string(),
+            serde_json::Value::String("30 + 15".to_string()),
+        );
+
+        let request: CelSetRequest = BaseToolImpl::parse_arguments(args).unwrap();
+        assert_eq!(request.get_name().unwrap(), "z");
+        assert_eq!(request.get_expression().unwrap(), "30 + 15");
+    }
+
+    #[test]
+    fn test_parse_with_both_aliases() {
+        let mut args = serde_json::Map::new();
+        args.insert(
+            "key".to_string(),
+            serde_json::Value::String("w".to_string()),
+        );
+        args.insert(
+            "value".to_string(),
+            serde_json::Value::String("40 + 20".to_string()),
+        );
+
+        let request: CelSetRequest = BaseToolImpl::parse_arguments(args).unwrap();
+        assert_eq!(request.get_name().unwrap(), "w");
+        assert_eq!(request.get_expression().unwrap(), "40 + 20");
     }
 
     #[test]
@@ -162,8 +267,8 @@ mod tests {
             serde_json::Value::String("10 + 5".to_string()),
         );
 
-        let result: Result<CelSetRequest, rmcp::ErrorData> = BaseToolImpl::parse_arguments(args);
-        assert!(result.is_err());
+        let request: CelSetRequest = BaseToolImpl::parse_arguments(args).unwrap();
+        assert!(request.get_name().is_err());
     }
 
     #[test]
@@ -174,7 +279,7 @@ mod tests {
             serde_json::Value::String("x".to_string()),
         );
 
-        let result: Result<CelSetRequest, rmcp::ErrorData> = BaseToolImpl::parse_arguments(args);
-        assert!(result.is_err());
+        let request: CelSetRequest = BaseToolImpl::parse_arguments(args).unwrap();
+        assert!(request.get_expression().is_err());
     }
 }

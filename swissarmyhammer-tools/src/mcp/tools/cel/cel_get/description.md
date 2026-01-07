@@ -1,10 +1,10 @@
 # cel_get
 
-Evaluate a CEL (Common Expression Language) expression in the process-global CEL context and return the result.
+Retrieve the value of a stored variable from the process-global CEL context.
 
 ## Description
 
-This tool evaluates a CEL expression using the current global CEL context, which includes all variables previously stored via `cel_set`. The result is returned but not stored.
+This tool retrieves a variable that was previously stored via `cel_set` by looking up its name in the global CEL context. The variable's value is evaluated as a CEL expression and returned.
 
 The CEL context is:
 - **Process-global**: Shared across all MCP server instances in the same process
@@ -13,88 +13,126 @@ The CEL context is:
 
 ## Parameters
 
-- `expression` (string, required): CEL expression to evaluate
+- `name` (string, required): Name of the variable to retrieve
+  - **Alias**: `key` - Can be used interchangeably with `name`
 
 ## Returns
 
 Returns a JSON object containing:
-- `result`: The computed value from the expression (type depends on expression result)
+- `result`: The value of the stored variable (type depends on the variable's value)
 
-If the expression fails to compile or execute, returns an error string.
+If the variable is not found or evaluation fails, returns an error string.
 
 ## Examples
 
-### Basic arithmetic
+### Retrieve a simple value
+After setting with `cel_set`:
 ```json
 {
-  "expression": "10 * 2"
+  "name": "x",
+  "expression": "10"
 }
 ```
-Returns: `{"result": 20}`
 
-### Referencing stored variables
+Retrieve with `cel_get`:
 ```json
 {
-  "expression": "x + 5"
+  "name": "x"
 }
 ```
-Returns: `{"result": 15}` (assuming x was set to 10)
+Returns: `{"result": 10}`
 
-### List operations
+### Using key alias
 ```json
 {
-  "expression": "[1, 2, 3].size()"
+  "key": "x"
 }
 ```
-Returns: `{"result": 3}`
+Returns: `{"result": 10}`
 
-### Map/object access
+### Retrieve a computed value
+After setting:
 ```json
 {
-  "expression": "config.retries"
+  "name": "total",
+  "expression": "price * quantity"
 }
 ```
-Returns: `{"result": 3}` (assuming config was set with retries field)
 
-### Boolean operations
+Retrieve:
 ```json
 {
-  "expression": "x > 5 && y < 10"
+  "name": "total"
 }
 ```
-Returns: `{"result": true}` (depending on x and y values)
+Returns: `{"result": 100}` (if price=10 and quantity=10)
 
-### String operations
+### Retrieve a boolean
+After setting:
 ```json
 {
-  "expression": "'hello'.size()"
+  "name": "is_ready",
+  "expression": "true"
 }
 ```
-Returns: `{"result": 5}`
 
-### Complex expressions
+Retrieve:
 ```json
 {
-  "expression": "items.filter(x, x > 5).map(x, x * 2)"
+  "name": "is_ready"
 }
 ```
-Returns: `{"result": [12, 14, 16]}` (if items is [4, 5, 6, 7, 8])
+Returns: `{"result": true}`
+
+### Retrieve a list
+After setting:
+```json
+{
+  "name": "items",
+  "expression": "[1, 2, 3]"
+}
+```
+
+Retrieve:
+```json
+{
+  "name": "items"
+}
+```
+Returns: `{"result": [1, 2, 3]}`
+
+### Retrieve a map/object
+After setting:
+```json
+{
+  "name": "config",
+  "expression": "{'retries': 3, 'timeout': 30}"
+}
+```
+
+Retrieve:
+```json
+{
+  "name": "config"
+}
+```
+Returns: `{"result": {"retries": 3, "timeout": 30}}`
 
 ## Error Handling
 
-Errors are returned as string values in the result:
+If the variable doesn't exist:
 
 ```json
 {
-  "expression": "undefined_variable"
+  "name": "nonexistent"
 }
 ```
-Returns: `{"result": "CEL execution error: undeclared reference to 'undefined_variable'..."}`
+Returns: `{"result": "CEL execution error: undeclared reference to 'nonexistent'..."}`
 
 ## Use Cases
 
-- Query computed values without modifying state
-- Test expressions before storing them
-- Access properties of stored complex objects
-- Perform calculations using multiple stored variables
-- Check conditions using boolean expressions
+- Retrieve values stored by `cel_set`
+- Access computed values for use in workflows
+- Check the current value of flags or configuration
+- Retrieve intermediate calculation results
+- Read state set by previous workflow steps
