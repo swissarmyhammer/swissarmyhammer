@@ -156,10 +156,7 @@ impl McpTool for CelSetTool {
         tracing::info!("CEL set '{}' = {:?}", name, json_result);
 
         Ok(BaseToolImpl::create_success_response(
-            serde_json::json!({
-                "result": json_result
-            })
-            .to_string(),
+            json_result.to_string(),
         ))
     }
 }

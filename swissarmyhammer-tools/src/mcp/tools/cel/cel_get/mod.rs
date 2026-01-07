@@ -110,10 +110,7 @@ impl McpTool for CelGetTool {
         tracing::info!("CEL get '{}' = {:?}", name, json_result);
 
         Ok(BaseToolImpl::create_success_response(
-            serde_json::json!({
-                "result": json_result
-            })
-            .to_string(),
+            json_result.to_string(),
         ))
     }
 }
