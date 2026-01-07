@@ -368,25 +368,96 @@ impl McpTool for EditFileTool {
         serde_json::json!({
             "type": "object",
             "properties": {
+                "path": {
+                    "type": "string",
+                    "description": "Absolute path to the file to modify (alias: file_path, filePath)"
+                },
                 "file_path": {
                     "type": "string",
-                    "description": "Absolute path to the file to modify"
+                    "description": "Absolute path to the file to modify (alias: path, filePath)"
+                },
+                "filePath": {
+                    "type": "string",
+                    "description": "Absolute path to the file to modify (alias: path, file_path)"
                 },
                 "old_string": {
                     "type": "string",
-                    "description": "Exact text to replace"
+                    "description": "Exact text to replace (single edit mode, alias: oldText, old_text)"
+                },
+                "oldText": {
+                    "type": "string",
+                    "description": "Exact text to replace (single edit mode, alias: old_string, old_text)"
+                },
+                "old_text": {
+                    "type": "string",
+                    "description": "Exact text to replace (single edit mode, alias: old_string, oldText)"
                 },
                 "new_string": {
                     "type": "string",
-                    "description": "Replacement text"
+                    "description": "Replacement text (single edit mode, alias: newText, new_text)"
+                },
+                "newText": {
+                    "type": "string",
+                    "description": "Replacement text (single edit mode, alias: new_string, new_text)"
+                },
+                "new_text": {
+                    "type": "string",
+                    "description": "Replacement text (single edit mode, alias: new_string, newText)"
                 },
                 "replace_all": {
                     "type": "boolean",
-                    "description": "Replace all occurrences (default: false)",
+                    "description": "Replace all occurrences in single edit mode (default: false)",
                     "default": false
+                },
+                "edits": {
+                    "type": "array",
+                    "description": "Array of edit operations to apply sequentially (multiple edit mode)",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "oldText": {
+                                "type": "string",
+                                "description": "Exact text to replace (alias: old_string, old_text)"
+                            },
+                            "old_string": {
+                                "type": "string",
+                                "description": "Exact text to replace (alias: oldText, old_text)"
+                            },
+                            "old_text": {
+                                "type": "string",
+                                "description": "Exact text to replace (alias: oldText, old_string)"
+                            },
+                            "newText": {
+                                "type": "string",
+                                "description": "Replacement text (alias: new_string, new_text)"
+                            },
+                            "new_string": {
+                                "type": "string",
+                                "description": "Replacement text (alias: newText, new_text)"
+                            },
+                            "new_text": {
+                                "type": "string",
+                                "description": "Replacement text (alias: newText, new_string)"
+                            },
+                            "replace_all": {
+                                "type": "boolean",
+                                "description": "Replace all occurrences (default: false)",
+                                "default": false
+                            }
+                        }
+                    }
                 }
             },
-            "required": ["file_path", "old_string", "new_string"]
+            "oneOf": [
+                {
+                    "description": "Single edit mode",
+                    "required": ["old_string", "new_string"]
+                },
+                {
+                    "description": "Multiple edits mode",
+                    "required": ["edits"]
+                }
+            ]
         })
     }
 
@@ -397,23 +468,84 @@ impl McpTool for EditFileTool {
     ) -> std::result::Result<CallToolResult, McpError> {
         use serde::Deserialize;
 
-        #[derive(Deserialize)]
+        /// Single edit operation with flexible parameter names
+        #[derive(Deserialize, Debug)]
+        struct EditOperation {
+            #[serde(alias = "old_string", alias = "old_text")]
+            #[serde(rename = "oldText")]
+            old_text: String,
+            #[serde(alias = "new_string", alias = "new_text")]
+            #[serde(rename = "newText")]
+            new_text: String,
+            #[serde(default)]
+            replace_all: bool,
+        }
+
+        /// Request supporting both single edit and multiple edits modes
+        #[derive(Deserialize, Debug)]
         struct EditRequest {
-            #[serde(alias = "path", alias = "absolute_path")]
-            file_path: String,
-            old_string: String,
-            new_string: String,
+            #[serde(alias = "file_path", alias = "filePath", alias = "absolute_path")]
+            path: Option<String>,
+            // Legacy single edit mode fields
+            #[serde(alias = "oldText", alias = "old_text")]
+            old_string: Option<String>,
+            #[serde(alias = "newText", alias = "new_text")]
+            new_string: Option<String>,
             replace_all: Option<bool>,
+            // Multiple edits mode
+            edits: Option<Vec<EditOperation>>,
         }
 
         // Parse arguments
         let request: EditRequest = BaseToolImpl::parse_arguments(arguments)?;
 
+        // Extract file path
+        let file_path = request.path.ok_or_else(|| {
+            McpError::invalid_request("path/file_path/filePath is required".to_string(), None)
+        })?;
+
+        // Validate file path
+        if file_path.trim().is_empty() {
+            return Err(McpError::invalid_request(
+                "path cannot be empty".to_string(),
+                None,
+            ));
+        }
+
         // Check rate limit using tokio task ID as client identifier
         use swissarmyhammer_common::rate_limiter::get_rate_limiter;
         let rate_limiter = get_rate_limiter();
         let client_id = format!("task_{:?}", tokio::task::try_id());
-        if let Err(e) = rate_limiter.check_rate_limit(&client_id, "file_edit", 1) {
+
+        // Determine mode and prepare edit operations
+        let edit_operations: Vec<EditOperation> = if let Some(edits) = request.edits {
+            // Multiple edits mode
+            if edits.is_empty() {
+                return Err(McpError::invalid_request(
+                    "edits array cannot be empty".to_string(),
+                    None,
+                ));
+            }
+            edits
+        } else if let (Some(old_string), Some(new_string)) =
+            (request.old_string, request.new_string)
+        {
+            // Single edit mode (legacy)
+            vec![EditOperation {
+                old_text: old_string,
+                new_text: new_string,
+                replace_all: request.replace_all.unwrap_or(false),
+            }]
+        } else {
+            return Err(McpError::invalid_request(
+                "Either provide old_string/new_string for single edit, or edits array for multiple edits".to_string(),
+                None,
+            ));
+        };
+
+        // Check rate limit based on number of operations
+        let cost = edit_operations.len() as u32;
+        if let Err(e) = rate_limiter.check_rate_limit(&client_id, "file_edit", cost) {
             tracing::warn!("Rate limit exceeded for file_edit: {}", e);
             return Err(McpError::invalid_request(
                 format!("Rate limit exceeded: {}", e),
@@ -421,58 +553,77 @@ impl McpTool for EditFileTool {
             ));
         }
 
-        // Validate parameters before operation
-        if request.file_path.trim().is_empty() {
-            return Err(McpError::invalid_request(
-                "file_path cannot be empty".to_string(),
-                None,
-            ));
-        }
+        // Validate all edit operations
+        for (idx, edit_op) in edit_operations.iter().enumerate() {
+            if edit_op.old_text.is_empty() {
+                return Err(McpError::invalid_request(
+                    format!("Edit operation {}: old_text cannot be empty", idx),
+                    None,
+                ));
+            }
 
-        if request.old_string.is_empty() {
-            return Err(McpError::invalid_request(
-                "old_string cannot be empty".to_string(),
-                None,
-            ));
-        }
-
-        // Validate replacement strings are different
-        if request.old_string == request.new_string {
-            return Err(McpError::invalid_request(
-                "old_string and new_string must be different".to_string(),
-                None,
-            ));
+            if edit_op.old_text == edit_op.new_text {
+                return Err(McpError::invalid_request(
+                    format!(
+                        "Edit operation {}: old_text and new_text must be different",
+                        idx
+                    ),
+                    None,
+                ));
+            }
         }
 
         // Log edit attempt for security auditing
         info!(
-            path = %request.file_path,
-            old_string_len = request.old_string.len(),
-            new_string_len = request.new_string.len(),
-            replace_all = request.replace_all.unwrap_or(false),
-            "Attempting atomic edit operation"
+            path = %file_path,
+            num_operations = edit_operations.len(),
+            "Attempting atomic edit operation(s)"
         );
 
-        // Perform atomic edit operation
-        let replace_all = request.replace_all.unwrap_or(false);
-        let edit_result = self.edit_file_atomic(
-            &request.file_path,
-            &request.old_string,
-            &request.new_string,
-            replace_all,
-        )?;
+        // Apply edits sequentially
+        let mut total_replacements = 0;
+        let mut final_result: Option<EditResult> = None;
 
-        // Create simple success response
-        let success_message = "OK".to_string();
+        for (idx, edit_op) in edit_operations.iter().enumerate() {
+            debug!(
+                path = %file_path,
+                operation = idx + 1,
+                total_operations = edit_operations.len(),
+                old_text_len = edit_op.old_text.len(),
+                new_text_len = edit_op.new_text.len(),
+                replace_all = edit_op.replace_all,
+                "Applying edit operation"
+            );
+
+            let edit_result = self.edit_file_atomic(
+                &file_path,
+                &edit_op.old_text,
+                &edit_op.new_text,
+                edit_op.replace_all,
+            )?;
+
+            total_replacements += edit_result.replacements_made;
+            final_result = Some(edit_result);
+        }
+
+        // Create success response
+        let final_result =
+            final_result.expect("At least one edit operation should have been performed");
+        let success_message = if edit_operations.len() == 1 {
+            "OK".to_string()
+        } else {
+            format!("OK: Applied {} edit operations", edit_operations.len())
+        };
 
         debug!(
-            path = %request.file_path,
-            bytes_written = edit_result.bytes_written,
-            replacements_made = edit_result.replacements_made,
-            encoding = %edit_result.encoding_detected,
-            line_endings = %edit_result.line_endings_preserved,
-            metadata_preserved = edit_result.metadata_preserved,
-            "Edit operation completed successfully"
+            path = %file_path,
+            num_operations = edit_operations.len(),
+            bytes_written = final_result.bytes_written,
+            total_replacements = total_replacements,
+            encoding = %final_result.encoding_detected,
+            line_endings = %final_result.line_endings_preserved,
+            metadata_preserved = final_result.metadata_preserved,
+            "Edit operation(s) completed successfully"
         );
 
         Ok(BaseToolImpl::create_success_response(success_message))
@@ -561,20 +712,25 @@ mod tests {
 
         assert_eq!(schema_obj.get("type").unwrap().as_str().unwrap(), "object");
         assert!(schema_obj.contains_key("properties"));
-        assert!(schema_obj.contains_key("required"));
+        assert!(schema_obj.contains_key("oneOf")); // Changed from "required" to "oneOf"
 
-        // Verify required fields
-        let required = schema_obj.get("required").unwrap().as_array().unwrap();
-        assert!(required.contains(&serde_json::Value::String("file_path".to_string())));
-        assert!(required.contains(&serde_json::Value::String("old_string".to_string())));
-        assert!(required.contains(&serde_json::Value::String("new_string".to_string())));
+        // Verify oneOf alternatives
+        let one_of = schema_obj.get("oneOf").unwrap().as_array().unwrap();
+        assert_eq!(one_of.len(), 2); // Single edit mode and multiple edits mode
 
-        // Verify properties
+        // Verify properties exist
         let properties = schema_obj.get("properties").unwrap().as_object().unwrap();
+        assert!(properties.contains_key("path"));
         assert!(properties.contains_key("file_path"));
+        assert!(properties.contains_key("filePath"));
         assert!(properties.contains_key("old_string"));
+        assert!(properties.contains_key("oldText"));
+        assert!(properties.contains_key("old_text"));
         assert!(properties.contains_key("new_string"));
+        assert!(properties.contains_key("newText"));
+        assert!(properties.contains_key("new_text"));
         assert!(properties.contains_key("replace_all"));
+        assert!(properties.contains_key("edits"));
     }
 
     #[tokio::test]
@@ -705,13 +861,13 @@ mod tests {
         let args = create_edit_arguments("", "old", "new", None);
         let result = tool.execute(args, &context).await;
         assert!(result.is_err());
-        assert!(format!("{:?}", result).contains("file_path cannot be empty"));
+        assert!(format!("{:?}", result).contains("path cannot be empty"));
 
         // Test empty old_string
         let args = create_edit_arguments(&test_file.to_string_lossy(), "", "new", None);
         let result = tool.execute(args, &context).await;
         assert!(result.is_err());
-        assert!(format!("{:?}", result).contains("old_string cannot be empty"));
+        assert!(format!("{:?}", result).contains("old_text cannot be empty"));
 
         // Test identical old_string and new_string
         let args = create_edit_arguments(&test_file.to_string_lossy(), "same", "same", None);
@@ -927,23 +1083,29 @@ mod tests {
         let tool = EditFileTool::new();
         let context = crate::test_utils::create_test_context().await;
 
-        // Create invalid arguments (missing required field)
+        // Create invalid arguments (missing both single edit and multiple edits modes)
         let mut args = serde_json::Map::new();
         args.insert(
-            "file_path".to_string(),
+            "path".to_string(),
             serde_json::Value::String("/test/path".to_string()),
         );
         args.insert(
             "old_string".to_string(),
             serde_json::Value::String("old".to_string()),
         );
-        // Missing "new_string" field
+        // Missing "new_string" field and no "edits" array
 
         let result = tool.execute(args, &context).await;
         assert!(result.is_err());
 
         let error = result.unwrap_err();
-        assert!(format!("{:?}", error).contains("Invalid arguments"));
+        let error_str = format!("{:?}", error);
+        // Should error because it's missing new_string for single edit mode
+        assert!(
+            error_str.contains("Invalid arguments")
+                || error_str.contains("provide old_string/new_string")
+                || error_str.contains("edits")
+        );
     }
 
     #[tokio::test]
@@ -998,5 +1160,192 @@ mod tests {
 
         let error = result.unwrap_err();
         assert!(format!("{:?}", error).contains("not found in file"));
+    }
+
+    #[tokio::test]
+    async fn test_edit_multiple_edits_sequential() {
+        let temp_dir = TempDir::new().unwrap();
+        let test_file = temp_dir.path().join("multiple_edits.txt");
+        let initial_content = "Hello world! This is a test.";
+        fs::write(&test_file, initial_content).unwrap();
+
+        let tool = EditFileTool::new();
+        let context = crate::test_utils::create_test_context().await;
+
+        // Create arguments with multiple edits
+        let mut args = serde_json::Map::new();
+        args.insert(
+            "path".to_string(),
+            serde_json::Value::String(test_file.to_string_lossy().to_string()),
+        );
+        args.insert(
+            "edits".to_string(),
+            serde_json::json!([
+                {
+                    "oldText": "world",
+                    "newText": "universe"
+                },
+                {
+                    "oldText": "test",
+                    "newText": "example"
+                }
+            ]),
+        );
+
+        let result = tool.execute(args, &context).await;
+        assert!(result.is_ok());
+
+        // Verify all edits were applied sequentially
+        let edited_content = fs::read_to_string(&test_file).unwrap();
+        assert_eq!(edited_content, "Hello universe! This is a example.");
+    }
+
+    #[tokio::test]
+    async fn test_edit_multiple_edits_with_aliases() {
+        let temp_dir = TempDir::new().unwrap();
+        let test_file = temp_dir.path().join("alias_test.txt");
+        let initial_content = "foo bar baz";
+        fs::write(&test_file, initial_content).unwrap();
+
+        let tool = EditFileTool::new();
+        let context = crate::test_utils::create_test_context().await;
+
+        // Test different parameter aliases
+        let mut args = serde_json::Map::new();
+        args.insert(
+            "filePath".to_string(), // Using filePath alias
+            serde_json::Value::String(test_file.to_string_lossy().to_string()),
+        );
+        args.insert(
+            "edits".to_string(),
+            serde_json::json!([
+                {
+                    "old_string": "foo",  // Using old_string alias
+                    "new_text": "FOO"     // Using new_text alias
+                },
+                {
+                    "old_text": "bar",    // Using old_text alias
+                    "new_string": "BAR"   // Using new_string alias
+                }
+            ]),
+        );
+
+        let result = tool.execute(args, &context).await;
+        assert!(result.is_ok());
+
+        let edited_content = fs::read_to_string(&test_file).unwrap();
+        assert_eq!(edited_content, "FOO BAR baz");
+    }
+
+    #[tokio::test]
+    async fn test_edit_single_mode_with_path_alias() {
+        let temp_dir = TempDir::new().unwrap();
+        let test_file = temp_dir.path().join("single_alias.txt");
+        let initial_content = "test content";
+        fs::write(&test_file, initial_content).unwrap();
+
+        let tool = EditFileTool::new();
+        let context = crate::test_utils::create_test_context().await;
+
+        // Test single edit mode with different parameter aliases
+        let mut args = serde_json::Map::new();
+        args.insert(
+            "file_path".to_string(), // Using file_path alias
+            serde_json::Value::String(test_file.to_string_lossy().to_string()),
+        );
+        args.insert(
+            "oldText".to_string(), // Using oldText alias
+            serde_json::Value::String("test".to_string()),
+        );
+        args.insert(
+            "newText".to_string(), // Using newText alias
+            serde_json::Value::String("demo".to_string()),
+        );
+
+        let result = tool.execute(args, &context).await;
+        assert!(result.is_ok());
+
+        let edited_content = fs::read_to_string(&test_file).unwrap();
+        assert_eq!(edited_content, "demo content");
+    }
+
+    #[tokio::test]
+    async fn test_edit_multiple_edits_with_replace_all() {
+        let temp_dir = TempDir::new().unwrap();
+        let test_file = temp_dir.path().join("replace_all_multi.txt");
+        let initial_content = "test test test, example example";
+        fs::write(&test_file, initial_content).unwrap();
+
+        let tool = EditFileTool::new();
+        let context = crate::test_utils::create_test_context().await;
+
+        let mut args = serde_json::Map::new();
+        args.insert(
+            "path".to_string(),
+            serde_json::Value::String(test_file.to_string_lossy().to_string()),
+        );
+        args.insert(
+            "edits".to_string(),
+            serde_json::json!([
+                {
+                    "oldText": "test",
+                    "newText": "exam",
+                    "replace_all": true
+                },
+                {
+                    "oldText": "example",
+                    "newText": "sample",
+                    "replace_all": true
+                }
+            ]),
+        );
+
+        let result = tool.execute(args, &context).await;
+        assert!(result.is_ok());
+
+        let edited_content = fs::read_to_string(&test_file).unwrap();
+        assert_eq!(edited_content, "exam exam exam, sample sample");
+    }
+
+    #[tokio::test]
+    async fn test_edit_empty_edits_array() {
+        let temp_dir = TempDir::new().unwrap();
+        let test_file = temp_dir.path().join("empty_edits.txt");
+        fs::write(&test_file, "content").unwrap();
+
+        let tool = EditFileTool::new();
+        let context = crate::test_utils::create_test_context().await;
+
+        let mut args = serde_json::Map::new();
+        args.insert(
+            "path".to_string(),
+            serde_json::Value::String(test_file.to_string_lossy().to_string()),
+        );
+        args.insert("edits".to_string(), serde_json::json!([]));
+
+        let result = tool.execute(args, &context).await;
+        assert!(result.is_err());
+        assert!(format!("{:?}", result).contains("edits array cannot be empty"));
+    }
+
+    #[tokio::test]
+    async fn test_edit_missing_path() {
+        let tool = EditFileTool::new();
+        let context = crate::test_utils::create_test_context().await;
+
+        // Missing path parameter
+        let mut args = serde_json::Map::new();
+        args.insert(
+            "old_string".to_string(),
+            serde_json::Value::String("old".to_string()),
+        );
+        args.insert(
+            "new_string".to_string(),
+            serde_json::Value::String("new".to_string()),
+        );
+
+        let result = tool.execute(args, &context).await;
+        assert!(result.is_err());
+        assert!(format!("{:?}", result).contains("path"));
     }
 }
