@@ -18,8 +18,7 @@ The CEL context is:
 
 ## Returns
 
-Returns a JSON object containing:
-- `result`: The value of the stored variable (type depends on the variable's value)
+Returns the value of the stored variable directly as a JSON value (string, number, boolean, array, or object).
 
 If the variable is not found or evaluation fails, returns an error string.
 
@@ -40,7 +39,7 @@ Retrieve with `cel_get`:
   "name": "x"
 }
 ```
-Returns: `{"result": 10}`
+Returns: `10`
 
 ### Using key alias
 ```json
@@ -48,7 +47,7 @@ Returns: `{"result": 10}`
   "key": "x"
 }
 ```
-Returns: `{"result": 10}`
+Returns: `10`
 
 ### Retrieve a computed value
 After setting:
@@ -65,7 +64,7 @@ Retrieve:
   "name": "total"
 }
 ```
-Returns: `{"result": 100}` (if price=10 and quantity=10)
+Returns: `100` (if price=10 and quantity=10)
 
 ### Retrieve a boolean
 After setting:
@@ -82,7 +81,7 @@ Retrieve:
   "name": "is_ready"
 }
 ```
-Returns: `{"result": true}`
+Returns: `true`
 
 ### Retrieve a list
 After setting:
@@ -99,7 +98,7 @@ Retrieve:
   "name": "items"
 }
 ```
-Returns: `{"result": [1, 2, 3]}`
+Returns: `[1, 2, 3]`
 
 ### Retrieve a map/object
 After setting:
@@ -116,7 +115,7 @@ Retrieve:
   "name": "config"
 }
 ```
-Returns: `{"result": {"retries": 3, "timeout": 30}}`
+Returns: `{"retries": 3, "timeout": 30}`
 
 ## Error Handling
 
@@ -127,7 +126,7 @@ If the variable doesn't exist:
   "name": "nonexistent"
 }
 ```
-Returns: `{"result": "CEL execution error: undeclared reference to 'nonexistent'..."}`
+Returns: `"CEL execution error: undeclared reference to 'nonexistent'..."`
 
 ## Use Cases
 
