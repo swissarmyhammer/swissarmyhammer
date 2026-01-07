@@ -9,6 +9,7 @@ use agent_client_protocol::{
     PromptResponse, SessionNotification, SessionUpdate, SetSessionModeRequest,
     SetSessionModeResponse,
 };
+use std::collections::HashMap;
 use tokio::sync::broadcast;
 
 /// Extract text content from ACP ContentBlocks for logging
@@ -26,84 +27,151 @@ fn extract_prompt_text(content: &[ContentBlock]) -> String {
         .join("\n")
 }
 
-/// Log a single notification
-fn log_notification(agent_name: &str, notification: &SessionNotification) {
+/// Buffers for accumulating message chunks per session
+struct ChunkBuffer {
+    text: String,
+    session_id: String,
+}
+
+impl ChunkBuffer {
+    fn new(session_id: String) -> Self {
+        Self {
+            text: String::new(),
+            session_id,
+        }
+    }
+
+    fn append(&mut self, text: &str) {
+        self.text.push_str(text);
+    }
+
+    fn flush(&mut self, agent_name: &str) {
+        if !self.text.is_empty() {
+            tracing::info!(
+                "[{}] session={}, AgentMessage ({} chars): {}",
+                agent_name,
+                self.session_id,
+                self.text.len(),
+                self.text
+            );
+            self.text.clear();
+        }
+    }
+}
+
+/// Log a single notification, with chunk buffering support
+/// Returns true if this was a chunk (buffered), false otherwise (logged immediately)
+fn log_notification(
+    agent_name: &str,
+    notification: &SessionNotification,
+    buffers: &mut HashMap<String, ChunkBuffer>,
+) -> bool {
     let session_id = &notification.session_id;
+    let session_key = session_id.to_string();
+
     match &notification.update {
         SessionUpdate::AgentMessageChunk(chunk) => {
             if let ContentBlock::Text(text) = &chunk.content {
-                tracing::info!(
-                    "[{}] notification: session={}, AgentMessageChunk ({} chars): {}",
+                tracing::debug!(
+                    "[{}] session={}, AgentMessageChunk ({} chars)",
                     agent_name,
                     session_id,
-                    text.text.len(),
-                    text.text
+                    text.text.len()
                 );
+                // Buffer the chunk
+                buffers
+                    .entry(session_key)
+                    .or_insert_with(|| ChunkBuffer::new(session_id.to_string()))
+                    .append(&text.text);
             } else {
-                tracing::info!(
-                    "[{}] notification: session={}, AgentMessageChunk (non-text)",
+                tracing::debug!(
+                    "[{}] session={}, AgentMessageChunk (non-text)",
                     agent_name,
                     session_id
                 );
             }
+            true // was a chunk
         }
         SessionUpdate::AgentThoughtChunk(chunk) => {
+            // Flush any pending message chunks first
+            if let Some(buffer) = buffers.get_mut(&session_key) {
+                buffer.flush(agent_name);
+            }
             if let ContentBlock::Text(text) = &chunk.content {
                 tracing::info!(
-                    "[{}] notification: session={}, AgentThoughtChunk ({} chars): {}",
+                    "[{}] session={}, AgentThoughtChunk ({} chars): {}",
                     agent_name,
                     session_id,
                     text.text.len(),
                     text.text
                 );
             }
+            false
         }
         SessionUpdate::ToolCall(tool_call) => {
+            // Flush any pending message chunks first
+            if let Some(buffer) = buffers.get_mut(&session_key) {
+                buffer.flush(agent_name);
+            }
             tracing::info!(
-                "[{}] notification: session={}, ToolCall: {}",
+                "[{}] session={}, ToolCall: {}",
                 agent_name,
                 session_id,
                 tool_call.title
             );
+            false
         }
         SessionUpdate::ToolCallUpdate(update) => {
             tracing::debug!(
-                "[{}] notification: session={}, ToolCallUpdate: {}",
+                "[{}] session={}, ToolCallUpdate: {}",
                 agent_name,
                 session_id,
                 update.tool_call_id
             );
+            false
         }
         SessionUpdate::CurrentModeUpdate(mode) => {
+            // Flush any pending message chunks first
+            if let Some(buffer) = buffers.get_mut(&session_key) {
+                buffer.flush(agent_name);
+            }
             tracing::info!(
-                "[{}] notification: session={}, CurrentModeUpdate: {}",
+                "[{}] session={}, CurrentModeUpdate: {}",
                 agent_name,
                 session_id,
                 mode.current_mode_id
             );
+            false
         }
         SessionUpdate::AvailableCommandsUpdate(update) => {
+            // Flush any pending message chunks first
+            if let Some(buffer) = buffers.get_mut(&session_key) {
+                buffer.flush(agent_name);
+            }
             tracing::info!(
-                "[{}] notification: session={}, AvailableCommandsUpdate: {} commands",
+                "[{}] session={}, AvailableCommandsUpdate: {} commands",
                 agent_name,
                 session_id,
                 update.available_commands.len()
             );
+            false
         }
         SessionUpdate::Plan(plan) => {
+            // Flush any pending message chunks first
+            if let Some(buffer) = buffers.get_mut(&session_key) {
+                buffer.flush(agent_name);
+            }
             tracing::info!(
-                "[{}] notification: session={}, Plan: {} entries",
+                "[{}] session={}, Plan: {} entries",
                 agent_name,
                 session_id,
                 plan.entries.len()
             );
+            false
         }
         _ => {
-            tracing::debug!(
-                "[{}] notification: session={}, other update type",
-                agent_name,
-                session_id
-            );
+            tracing::debug!("[{}] session={}, other update type", agent_name, session_id);
+            false
         }
     }
 }
@@ -111,6 +179,8 @@ fn log_notification(agent_name: &str, notification: &SessionNotification) {
 /// Spawn a task that logs all notifications from the receiver
 ///
 /// Returns a new receiver that can be used by consumers (the original is consumed by the logger).
+/// Message chunks are buffered and logged as a single INFO message when a non-chunk notification
+/// arrives or when the channel closes.
 pub fn trace_notifications(
     agent_name: String,
     receiver: broadcast::Receiver<SessionNotification>,
@@ -120,10 +190,12 @@ pub fn trace_notifications(
 
     let mut recv = receiver;
     tokio::spawn(async move {
+        let mut buffers: HashMap<String, ChunkBuffer> = HashMap::new();
+
         loop {
             match recv.recv().await {
                 Ok(notification) => {
-                    log_notification(&agent_name, &notification);
+                    log_notification(&agent_name, &notification, &mut buffers);
                     // Forward to consumers (ignore send errors if no receivers)
                     let _ = tx.send(notification);
                 }
@@ -131,6 +203,10 @@ pub fn trace_notifications(
                     tracing::warn!("[{}] notification receiver lagged by {}", agent_name, n);
                 }
                 Err(broadcast::error::RecvError::Closed) => {
+                    // Flush any remaining buffered chunks before closing
+                    for (_, mut buffer) in buffers.drain() {
+                        buffer.flush(&agent_name);
+                    }
                     tracing::debug!("[{}] notification channel closed", agent_name);
                     break;
                 }
