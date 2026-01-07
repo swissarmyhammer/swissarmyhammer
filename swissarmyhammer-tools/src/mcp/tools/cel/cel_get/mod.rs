@@ -64,15 +64,7 @@ impl McpTool for CelGetTool {
                     "type": "string",
                     "description": "Alias for 'name' - name of the variable to retrieve"
                 }
-            },
-            "oneOf": [
-                {
-                    "required": ["name"]
-                },
-                {
-                    "required": ["key"]
-                }
-            ]
+            }
         })
     }
 
@@ -110,10 +102,7 @@ impl McpTool for CelGetTool {
         tracing::info!("CEL get '{}' = {:?}", name, json_result);
 
         Ok(BaseToolImpl::create_success_response(
-            serde_json::json!({
-                "result": json_result
-            })
-            .to_string(),
+            json_result.to_string(),
         ))
     }
 }
@@ -150,10 +139,8 @@ mod tests {
         assert!(properties.contains_key("name"));
         assert!(properties.contains_key("key"));
 
-        // Check oneOf structure
-        assert!(obj.contains_key("oneOf"));
-        let one_of = obj["oneOf"].as_array().unwrap();
-        assert_eq!(one_of.len(), 2);
+        // Schema should NOT contain oneOf (not supported by Claude API)
+        assert!(!obj.contains_key("oneOf"));
     }
 
     #[test]

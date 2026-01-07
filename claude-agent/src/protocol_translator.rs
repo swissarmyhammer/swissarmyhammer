@@ -594,8 +594,13 @@ impl ProtocolTranslator {
                                     .and_then(|d| d.get("text"))
                                     .and_then(|t| t.as_str())
                                 {
+                                    // Extract content block index for positional buffering
+                                    let content_block_index =
+                                        event.get("index").and_then(|i| i.as_u64());
+
                                     tracing::trace!(
-                                        "📨 STREAM_EVENT chunk: {} chars: '{}'",
+                                        "📨 STREAM_EVENT chunk: index={:?}, {} chars: '{}'",
+                                        content_block_index,
                                         text.len(),
                                         text.chars().take(50).collect::<String>()
                                     );
@@ -603,10 +608,26 @@ impl ProtocolTranslator {
                                     let content_block = ContentBlock::Text(text_content);
                                     let content_chunk =
                                         agent_client_protocol::ContentChunk::new(content_block);
-                                    return Ok(Some(SessionNotification::new(
+
+                                    // Include content block index in notification meta
+                                    // for positional buffer handling in tracing/display
+                                    let mut notification = SessionNotification::new(
                                         session_id.clone(),
                                         SessionUpdate::AgentMessageChunk(content_chunk),
-                                    )));
+                                    );
+                                    if let Some(idx) = content_block_index {
+                                        let mut meta = serde_json::Map::new();
+                                        meta.insert(
+                                            "content_block_index".to_string(),
+                                            serde_json::json!(idx),
+                                        );
+                                        meta.insert(
+                                            "source".to_string(),
+                                            serde_json::json!("stream_event"),
+                                        );
+                                        notification = notification.meta(meta);
+                                    }
+                                    return Ok(Some(notification));
                                 }
 
                                 // Check for input_json_delta (tool call input chunks)

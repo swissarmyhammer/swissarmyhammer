@@ -18,8 +18,7 @@ The CEL context is:
 
 ## Returns
 
-Returns a JSON object containing:
-- `result`: The computed value from the expression (type depends on expression result)
+Returns the computed value from the expression directly as a JSON value (string, number, boolean, array, or object).
 
 If the expression fails to compile or execute, returns an error string.
 
@@ -32,7 +31,7 @@ If the expression fails to compile or execute, returns an error string.
   "expression": "10 + 5"
 }
 ```
-Returns: `{"result": 15}`
+Returns: `15`
 
 ### Using existing variables
 ```json
@@ -41,7 +40,7 @@ Returns: `{"result": 15}`
   "expression": "counter + 1"
 }
 ```
-Returns: `{"result": 2}` (assuming counter was 1)
+Returns: `2` (assuming counter was 1)
 
 ### Creating complex structures
 ```json
@@ -50,7 +49,7 @@ Returns: `{"result": 2}` (assuming counter was 1)
   "expression": "{name: 'test', retries: 3, enabled: true}"
 }
 ```
-Returns: `{"result": {"name": "test", "retries": 3, "enabled": true}}`
+Returns: `{"name": "test", "retries": 3, "enabled": true}`
 
 ### List operations
 ```json
@@ -59,7 +58,7 @@ Returns: `{"result": {"name": "test", "retries": 3, "enabled": true}}`
   "expression": "[1, 2, 3]"
 }
 ```
-Returns: `{"result": [1, 2, 3]}`
+Returns: `[1, 2, 3]`
 
 ### String operations
 ```json
@@ -68,11 +67,11 @@ Returns: `{"result": [1, 2, 3]}`
   "expression": "'Hello' + ' ' + 'World'"
 }
 ```
-Returns: `{"result": "Hello World"}`
+Returns: `"Hello World"`
 
 ## Error Handling
 
-Errors are returned as string values in the result:
+Errors are returned as string values:
 
 ```json
 {
@@ -80,4 +79,4 @@ Errors are returned as string values in the result:
   "expression": "undefined_variable"
 }
 ```
-Returns: `{"result": "CEL execution error: ..."}`
+Returns: `"CEL execution error: ..."`

@@ -99,21 +99,7 @@ impl McpTool for CelSetTool {
                 "value": {
                     "description": "Alias for 'expression' - CEL expression to evaluate or literal value (string, boolean, number, null, array, object)"
                 }
-            },
-            "oneOf": [
-                {
-                    "required": ["name", "expression"]
-                },
-                {
-                    "required": ["key", "value"]
-                },
-                {
-                    "required": ["name", "value"]
-                },
-                {
-                    "required": ["key", "expression"]
-                }
-            ]
+            }
         })
     }
 
@@ -156,10 +142,7 @@ impl McpTool for CelSetTool {
         tracing::info!("CEL set '{}' = {:?}", name, json_result);
 
         Ok(BaseToolImpl::create_success_response(
-            serde_json::json!({
-                "result": json_result
-            })
-            .to_string(),
+            json_result.to_string(),
         ))
     }
 }
@@ -198,10 +181,8 @@ mod tests {
         assert!(properties.contains_key("expression"));
         assert!(properties.contains_key("value"));
 
-        // Check oneOf structure
-        assert!(obj.contains_key("oneOf"));
-        let one_of = obj["oneOf"].as_array().unwrap();
-        assert_eq!(one_of.len(), 4);
+        // Schema should NOT contain oneOf (not supported by Claude API)
+        assert!(!obj.contains_key("oneOf"));
     }
 
     #[test]
