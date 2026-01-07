@@ -138,11 +138,3 @@ impl WorkflowRun {
         self.completed_at = Some(chrono::Utc::now());
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    use crate::test_helpers::*;
-    use tempfile::TempDir;
-}

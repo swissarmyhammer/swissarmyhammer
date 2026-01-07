@@ -447,17 +447,7 @@ impl McpTool for EditFileTool {
                         }
                     }
                 }
-            },
-            "oneOf": [
-                {
-                    "description": "Single edit mode",
-                    "required": ["old_string", "new_string"]
-                },
-                {
-                    "description": "Multiple edits mode",
-                    "required": ["edits"]
-                }
-            ]
+            }
         })
     }
 
