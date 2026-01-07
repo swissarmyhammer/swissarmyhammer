@@ -1,13 +1,13 @@
 ---
 title: are_todos_done
-description: "Check if all todo items are complete."
+description: "Check if all todo items have been completed."
 ---
 
 ## Goal
 
-We want to know if there are any pending todo items.
+We want to know if all todo items are complete.
 
-Use the todo_show MCP tool with `item: "next"` to check for pending todos
+Use the todo_list MCP tool with `completed: false` to check for incomplete todos.
 
-If there are any pending todos, use the `cel_set` tool to set are_todos_done to `false`
-If there are no pending todos, use the `cel_set` tool to set are_todos_done to `true`
+If there are any incomplete todos, `cel_set` are_todos_done to `false`
+If all todos are complete (no incomplete todos returned), `cel_set` are_todos_done to `true`

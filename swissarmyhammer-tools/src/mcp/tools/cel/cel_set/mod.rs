@@ -86,21 +86,7 @@ impl McpTool for CelSetTool {
                     "type": "string",
                     "description": "Alias for 'expression' - CEL expression to evaluate"
                 }
-            },
-            "oneOf": [
-                {
-                    "required": ["name", "expression"]
-                },
-                {
-                    "required": ["key", "value"]
-                },
-                {
-                    "required": ["name", "value"]
-                },
-                {
-                    "required": ["key", "expression"]
-                }
-            ]
+            }
         })
     }
 
@@ -185,10 +171,8 @@ mod tests {
         assert!(properties.contains_key("expression"));
         assert!(properties.contains_key("value"));
 
-        // Check oneOf structure
-        assert!(obj.contains_key("oneOf"));
-        let one_of = obj["oneOf"].as_array().unwrap();
-        assert_eq!(one_of.len(), 4);
+        // Schema should NOT contain oneOf (not supported by Claude API)
+        assert!(!obj.contains_key("oneOf"));
     }
 
     #[test]

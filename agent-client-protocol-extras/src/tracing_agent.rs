@@ -27,35 +27,95 @@ fn extract_prompt_text(content: &[ContentBlock]) -> String {
         .join("\n")
 }
 
-/// Buffers for accumulating message chunks per session
+/// Buffers for accumulating message chunks per session.
+/// Chunks are stored with their content block index and source for proper assembly.
 struct ChunkBuffer {
-    text: String,
+    /// List of (content_block_index, is_stream_event, text) tuples in arrival order
+    /// is_stream_event=true means this came from Claude's stream_event (real-time chunks)
+    /// is_stream_event=false means this came from assistant message (duplicate full text)
+    chunks: Vec<(u64, bool, String)>,
     session_id: String,
 }
 
 impl ChunkBuffer {
     fn new(session_id: String) -> Self {
         Self {
-            text: String::new(),
+            chunks: Vec::new(),
             session_id,
         }
     }
 
-    fn append(&mut self, text: &str) {
-        self.text.push_str(text);
+    /// Append a chunk with its content block index and source
+    fn append(&mut self, index: u64, is_stream_event: bool, text: &str) {
+        self.chunks.push((index, is_stream_event, text.to_string()));
     }
 
     fn flush(&mut self, agent_name: &str) {
-        if !self.text.is_empty() {
+        if self.chunks.is_empty() {
+            return;
+        }
+
+        // Separate stream_event chunks from non-stream_event chunks
+        // stream_event chunks are the real-time incremental pieces
+        // non-stream_event chunks are typically duplicate full messages
+        let mut stream_chunks: HashMap<u64, String> = HashMap::new();
+        let mut other_chunks: HashMap<u64, String> = HashMap::new();
+
+        for (index, is_stream_event, text) in &self.chunks {
+            if text.is_empty() {
+                continue;
+            }
+
+            if *is_stream_event {
+                stream_chunks.entry(*index).or_default().push_str(text);
+            } else {
+                // For non-stream chunks, only keep if we don't have stream chunks for this index
+                other_chunks.entry(*index).or_default().push_str(text);
+            }
+        }
+
+        // Prefer stream_event chunks when available (they're the real-time source)
+        // Fall back to other chunks only if no stream_event chunks exist for an index
+        let mut final_chunks: HashMap<u64, String> = HashMap::new();
+
+        // Collect all indices
+        let all_indices: std::collections::HashSet<u64> = stream_chunks
+            .keys()
+            .chain(other_chunks.keys())
+            .copied()
+            .collect();
+
+        for index in all_indices {
+            if let Some(stream_text) = stream_chunks.get(&index) {
+                // Prefer stream_event content
+                final_chunks.insert(index, stream_text.clone());
+            } else if let Some(other_text) = other_chunks.get(&index) {
+                // Fall back to other content only if no stream content exists
+                final_chunks.insert(index, other_text.clone());
+            }
+        }
+
+        // Assemble final text by concatenating content blocks in index order
+        let mut indices: Vec<u64> = final_chunks.keys().copied().collect();
+        indices.sort();
+
+        let text: String = indices
+            .iter()
+            .filter_map(|idx| final_chunks.get(idx))
+            .cloned()
+            .collect();
+
+        if !text.is_empty() {
             tracing::info!(
                 "[{}] session={}, AgentMessage ({} chars): {}",
                 agent_name,
                 self.session_id,
-                self.text.len(),
-                self.text
+                text.len(),
+                text
             );
-            self.text.clear();
         }
+
+        self.chunks.clear();
     }
 }
 
@@ -72,17 +132,28 @@ fn log_notification(
     match &notification.update {
         SessionUpdate::AgentMessageChunk(chunk) => {
             if let ContentBlock::Text(text) = &chunk.content {
+                // Extract content block index and source from notification meta
+                let meta = notification.meta.as_ref();
+                let content_block_index = meta
+                    .and_then(|m| m.get("content_block_index"))
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0);
+                let is_stream_event = meta.and_then(|m| m.get("source")).and_then(|v| v.as_str())
+                    == Some("stream_event");
+
                 tracing::debug!(
-                    "[{}] session={}, AgentMessageChunk ({} chars)",
+                    "[{}] session={}, AgentMessageChunk (index={}, stream={}, {} chars)",
                     agent_name,
                     session_id,
+                    content_block_index,
+                    is_stream_event,
                     text.text.len()
                 );
-                // Buffer the chunk
+                // Buffer the chunk with its content block index and source
                 buffers
                     .entry(session_key)
                     .or_insert_with(|| ChunkBuffer::new(session_id.to_string()))
-                    .append(&text.text);
+                    .append(content_block_index, is_stream_event, &text.text);
             } else {
                 tracing::debug!(
                     "[{}] session={}, AgentMessageChunk (non-text)",

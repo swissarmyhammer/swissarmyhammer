@@ -1868,6 +1868,8 @@ impl ClaudeAgent {
                     .map_err(|_| agent_client_protocol::Error::internal_error())?;
 
                 // Send chunk notification
+                // Note: This may send redundantly with claude.rs notification_sender,
+                // but the tracing layer handles deduplication for display purposes.
                 let notification =
                     SessionNotification::new(SessionId::new(session_id_str.clone()), update);
 
