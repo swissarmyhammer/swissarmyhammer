@@ -13,8 +13,22 @@ use serde::Deserialize;
 /// Request structure for cel_get
 #[derive(Debug, Deserialize)]
 pub struct CelGetRequest {
-    /// CEL expression to evaluate
-    pub expression: String,
+    /// Name of the variable to retrieve (alias: key)
+    #[serde(alias = "key")]
+    pub name: Option<String>,
+    /// Key name (alias for name)
+    #[serde(skip)]
+    pub key: Option<String>,
+}
+
+impl CelGetRequest {
+    /// Get the variable name, checking both name and key fields
+    pub fn get_name(&self) -> Result<String, String> {
+        self.name
+            .clone()
+            .or_else(|| self.key.clone())
+            .ok_or_else(|| "Either 'name' or 'key' parameter is required".to_string())
+    }
 }
 
 /// Tool for evaluating CEL expressions and returning results
@@ -42,12 +56,23 @@ impl McpTool for CelGetTool {
         serde_json::json!({
             "type": "object",
             "properties": {
-                "expression": {
+                "name": {
                     "type": "string",
-                    "description": "CEL expression to evaluate"
+                    "description": "Name of the variable to retrieve (alias: key)"
+                },
+                "key": {
+                    "type": "string",
+                    "description": "Alias for 'name' - name of the variable to retrieve"
                 }
             },
-            "required": ["expression"]
+            "oneOf": [
+                {
+                    "required": ["name"]
+                },
+                {
+                    "required": ["key"]
+                }
+            ]
         })
     }
 
@@ -62,22 +87,27 @@ impl McpTool for CelGetTool {
     ) -> std::result::Result<CallToolResult, McpError> {
         let request: CelGetRequest = BaseToolImpl::parse_arguments(arguments)?;
 
-        tracing::debug!("CEL get: expression='{}'", request.expression);
+        // Get variable name using alias support
+        let name = request
+            .get_name()
+            .map_err(|e| McpError::invalid_params(e, None))?;
+
+        tracing::debug!("CEL get: name='{}'", name);
 
         // Validate input
-        McpValidation::validate_not_empty(&request.expression, "expression")
-            .map_err(|e| McpErrorHandler::handle_error(e, "validate expression"))?;
+        McpValidation::validate_not_empty(&name, "variable name")
+            .map_err(|e| McpErrorHandler::handle_error(e, "validate variable name"))?;
 
-        // Use the global CEL state to evaluate the expression
+        // Use the global CEL state to retrieve the variable value
         let state = super::CelState::global();
         let result = state
-            .get(&request.expression)
+            .get(&name)
             .map_err(|e| McpError::internal_error(e, None))?;
 
         // Convert CEL value to JSON for response
         let json_result = super::cel_value_to_json(&result);
 
-        tracing::info!("CEL get '{}' = {:?}", request.expression, json_result);
+        tracing::info!("CEL get '{}' = {:?}", name, json_result);
 
         Ok(BaseToolImpl::create_success_response(
             serde_json::json!({
@@ -117,40 +147,55 @@ mod tests {
         assert!(obj.contains_key("properties"));
 
         let properties = obj["properties"].as_object().unwrap();
-        assert!(properties.contains_key("expression"));
+        assert!(properties.contains_key("name"));
+        assert!(properties.contains_key("key"));
 
-        let required = obj["required"].as_array().unwrap();
-        assert!(required.contains(&serde_json::Value::String("expression".to_string())));
+        // Check oneOf structure
+        assert!(obj.contains_key("oneOf"));
+        let one_of = obj["oneOf"].as_array().unwrap();
+        assert_eq!(one_of.len(), 2);
     }
 
     #[test]
     fn test_parse_valid_arguments() {
         let mut args = serde_json::Map::new();
         args.insert(
-            "expression".to_string(),
-            serde_json::Value::String("2 + 2".to_string()),
+            "name".to_string(),
+            serde_json::Value::String("my_var".to_string()),
         );
 
         let request: CelGetRequest = BaseToolImpl::parse_arguments(args).unwrap();
-        assert_eq!(request.expression, "2 + 2");
+        assert_eq!(request.get_name().unwrap(), "my_var");
     }
 
     #[test]
-    fn test_parse_missing_expression() {
-        let args = serde_json::Map::new();
-        let result: Result<CelGetRequest, rmcp::ErrorData> = BaseToolImpl::parse_arguments(args);
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_parse_empty_expression() {
+    fn test_parse_with_key_alias() {
         let mut args = serde_json::Map::new();
         args.insert(
-            "expression".to_string(),
+            "key".to_string(),
+            serde_json::Value::String("another_var".to_string()),
+        );
+
+        let request: CelGetRequest = BaseToolImpl::parse_arguments(args).unwrap();
+        assert_eq!(request.get_name().unwrap(), "another_var");
+    }
+
+    #[test]
+    fn test_parse_missing_name() {
+        let args = serde_json::Map::new();
+        let request: CelGetRequest = BaseToolImpl::parse_arguments(args).unwrap();
+        assert!(request.get_name().is_err());
+    }
+
+    #[test]
+    fn test_parse_empty_name() {
+        let mut args = serde_json::Map::new();
+        args.insert(
+            "name".to_string(),
             serde_json::Value::String("".to_string()),
         );
 
         let request: CelGetRequest = BaseToolImpl::parse_arguments(args).unwrap();
-        assert_eq!(request.expression, "");
+        assert_eq!(request.get_name().unwrap(), "");
     }
 }
