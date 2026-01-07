@@ -19,12 +19,12 @@ pub struct CelSetRequest {
     /// Key name (alias for name)
     #[serde(skip)]
     pub key: Option<String>,
-    /// CEL expression to evaluate (alias: value)
+    /// CEL expression to evaluate (alias: value) - can be a string expression or any JSON value
     #[serde(alias = "value")]
-    pub expression: Option<String>,
+    pub expression: Option<serde_json::Value>,
     /// Value expression (alias for expression)
     #[serde(skip)]
-    pub value: Option<String>,
+    pub value: Option<serde_json::Value>,
 }
 
 impl CelSetRequest {
@@ -37,11 +37,26 @@ impl CelSetRequest {
     }
 
     /// Get the expression, checking both expression and value fields
+    /// Converts JSON values to CEL literal expressions
     pub fn get_expression(&self) -> Result<String, String> {
-        self.expression
+        let value = self
+            .expression
             .clone()
             .or_else(|| self.value.clone())
-            .ok_or_else(|| "Either 'expression' or 'value' parameter is required".to_string())
+            .ok_or_else(|| "Either 'expression' or 'value' parameter is required".to_string())?;
+
+        // Convert JSON value to CEL expression
+        Ok(match value {
+            serde_json::Value::String(s) => s,
+            serde_json::Value::Bool(b) => b.to_string(),
+            serde_json::Value::Number(n) => n.to_string(),
+            serde_json::Value::Null => "null".to_string(),
+            serde_json::Value::Array(_) | serde_json::Value::Object(_) => {
+                // For arrays and objects, serialize to JSON string and treat as a CEL expression
+                serde_json::to_string(&value)
+                    .map_err(|e| format!("Failed to serialize value to JSON: {}", e))?
+            }
+        })
     }
 }
 
@@ -79,12 +94,10 @@ impl McpTool for CelSetTool {
                     "description": "Alias for 'name' - name of the variable to store the result"
                 },
                 "expression": {
-                    "type": "string",
-                    "description": "CEL expression to evaluate (alias: value)"
+                    "description": "CEL expression to evaluate or literal value (string, boolean, number, null, array, object) (alias: value)"
                 },
                 "value": {
-                    "type": "string",
-                    "description": "Alias for 'expression' - CEL expression to evaluate"
+                    "description": "Alias for 'expression' - CEL expression to evaluate or literal value (string, boolean, number, null, array, object)"
                 }
             },
             "oneOf": [
@@ -206,6 +219,199 @@ mod tests {
         let request: CelSetRequest = BaseToolImpl::parse_arguments(args).unwrap();
         assert_eq!(request.get_name().unwrap(), "x");
         assert_eq!(request.get_expression().unwrap(), "10 + 5");
+    }
+
+    #[test]
+    fn test_parse_boolean_value() {
+        let mut args = serde_json::Map::new();
+        args.insert(
+            "key".to_string(),
+            serde_json::Value::String("flag".to_string()),
+        );
+        args.insert("value".to_string(), serde_json::Value::Bool(false));
+
+        let request: CelSetRequest = BaseToolImpl::parse_arguments(args).unwrap();
+        assert_eq!(request.get_name().unwrap(), "flag");
+        assert_eq!(request.get_expression().unwrap(), "false");
+    }
+
+    #[test]
+    fn test_parse_number_value() {
+        let mut args = serde_json::Map::new();
+        args.insert(
+            "name".to_string(),
+            serde_json::Value::String("count".to_string()),
+        );
+        args.insert("value".to_string(), serde_json::json!(42));
+
+        let request: CelSetRequest = BaseToolImpl::parse_arguments(args).unwrap();
+        assert_eq!(request.get_name().unwrap(), "count");
+        assert_eq!(request.get_expression().unwrap(), "42");
+    }
+
+    #[test]
+    fn test_parse_boolean_true_value() {
+        let mut args = serde_json::Map::new();
+        args.insert(
+            "name".to_string(),
+            serde_json::Value::String("is_enabled".to_string()),
+        );
+        args.insert("expression".to_string(), serde_json::Value::Bool(true));
+
+        let request: CelSetRequest = BaseToolImpl::parse_arguments(args).unwrap();
+        assert_eq!(request.get_name().unwrap(), "is_enabled");
+        assert_eq!(request.get_expression().unwrap(), "true");
+    }
+
+    #[test]
+    fn test_parse_float_value() {
+        let mut args = serde_json::Map::new();
+        args.insert(
+            "key".to_string(),
+            serde_json::Value::String("pi".to_string()),
+        );
+        args.insert("value".to_string(), serde_json::json!(3.14159));
+
+        let request: CelSetRequest = BaseToolImpl::parse_arguments(args).unwrap();
+        assert_eq!(request.get_name().unwrap(), "pi");
+        assert_eq!(request.get_expression().unwrap(), "3.14159");
+    }
+
+    #[test]
+    fn test_parse_null_string() {
+        // Test that passing the string "null" works as a CEL expression
+        let mut args = serde_json::Map::new();
+        args.insert(
+            "name".to_string(),
+            serde_json::Value::String("empty".to_string()),
+        );
+        args.insert(
+            "value".to_string(),
+            serde_json::Value::String("null".to_string()),
+        );
+
+        let request: CelSetRequest = BaseToolImpl::parse_arguments(args).unwrap();
+        assert_eq!(request.get_name().unwrap(), "empty");
+        assert_eq!(request.get_expression().unwrap(), "null");
+    }
+
+    #[test]
+    fn test_parse_array_value() {
+        let mut args = serde_json::Map::new();
+        args.insert(
+            "name".to_string(),
+            serde_json::Value::String("items".to_string()),
+        );
+        args.insert("value".to_string(), serde_json::json!([1, 2, 3, 4, 5]));
+
+        let request: CelSetRequest = BaseToolImpl::parse_arguments(args).unwrap();
+        assert_eq!(request.get_name().unwrap(), "items");
+        assert_eq!(request.get_expression().unwrap(), "[1,2,3,4,5]");
+    }
+
+    #[test]
+    fn test_parse_object_value() {
+        let mut args = serde_json::Map::new();
+        args.insert(
+            "key".to_string(),
+            serde_json::Value::String("config".to_string()),
+        );
+        args.insert(
+            "value".to_string(),
+            serde_json::json!({"name": "test", "enabled": true, "count": 42}),
+        );
+
+        let request: CelSetRequest = BaseToolImpl::parse_arguments(args).unwrap();
+        assert_eq!(request.get_name().unwrap(), "config");
+        let expr = request.get_expression().unwrap();
+        // JSON serialization may vary in order, so just check it's valid JSON
+        let parsed: serde_json::Value = serde_json::from_str(&expr).unwrap();
+        assert_eq!(parsed["name"], "test");
+        assert_eq!(parsed["enabled"], true);
+        assert_eq!(parsed["count"], 42);
+    }
+
+    #[test]
+    fn test_parse_negative_number() {
+        let mut args = serde_json::Map::new();
+        args.insert(
+            "name".to_string(),
+            serde_json::Value::String("temperature".to_string()),
+        );
+        args.insert("value".to_string(), serde_json::json!(-10));
+
+        let request: CelSetRequest = BaseToolImpl::parse_arguments(args).unwrap();
+        assert_eq!(request.get_name().unwrap(), "temperature");
+        assert_eq!(request.get_expression().unwrap(), "-10");
+    }
+
+    #[test]
+    fn test_parse_zero() {
+        let mut args = serde_json::Map::new();
+        args.insert(
+            "name".to_string(),
+            serde_json::Value::String("zero".to_string()),
+        );
+        args.insert("value".to_string(), serde_json::json!(0));
+
+        let request: CelSetRequest = BaseToolImpl::parse_arguments(args).unwrap();
+        assert_eq!(request.get_name().unwrap(), "zero");
+        assert_eq!(request.get_expression().unwrap(), "0");
+    }
+
+    #[test]
+    fn test_string_expression_still_works() {
+        // Ensure string values are still treated as CEL expressions
+        let mut args = serde_json::Map::new();
+        args.insert(
+            "name".to_string(),
+            serde_json::Value::String("sum".to_string()),
+        );
+        args.insert(
+            "expression".to_string(),
+            serde_json::Value::String("10 + 20 * 2".to_string()),
+        );
+
+        let request: CelSetRequest = BaseToolImpl::parse_arguments(args).unwrap();
+        assert_eq!(request.get_name().unwrap(), "sum");
+        assert_eq!(request.get_expression().unwrap(), "10 + 20 * 2");
+    }
+
+    #[test]
+    fn test_nested_array_value() {
+        let mut args = serde_json::Map::new();
+        args.insert(
+            "name".to_string(),
+            serde_json::Value::String("matrix".to_string()),
+        );
+        args.insert(
+            "value".to_string(),
+            serde_json::json!([[1, 2], [3, 4], [5, 6]]),
+        );
+
+        let request: CelSetRequest = BaseToolImpl::parse_arguments(args).unwrap();
+        assert_eq!(request.get_name().unwrap(), "matrix");
+        assert_eq!(request.get_expression().unwrap(), "[[1,2],[3,4],[5,6]]");
+    }
+
+    #[test]
+    fn test_mixed_type_array() {
+        let mut args = serde_json::Map::new();
+        args.insert(
+            "name".to_string(),
+            serde_json::Value::String("mixed".to_string()),
+        );
+        args.insert(
+            "value".to_string(),
+            serde_json::json!([1, "text", true, null, 3.14]),
+        );
+
+        let request: CelSetRequest = BaseToolImpl::parse_arguments(args).unwrap();
+        assert_eq!(request.get_name().unwrap(), "mixed");
+        assert_eq!(
+            request.get_expression().unwrap(),
+            "[1,\"text\",true,null,3.14]"
+        );
     }
 
     #[test]
