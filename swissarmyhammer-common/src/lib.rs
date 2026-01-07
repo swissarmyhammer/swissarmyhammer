@@ -19,7 +19,6 @@
 //! - Serialization support for all public types
 //! - Documentation-driven development with clear API contracts
 
-pub mod abort_utils;
 pub mod constants;
 pub mod directory;
 pub mod env_loader;
@@ -75,12 +74,6 @@ pub use rate_limiter::{
     get_rate_limiter, init_rate_limiter, RateLimitChecker, RateLimitStatus, RateLimiter,
     RateLimiterConfig, DEFAULT_EXPENSIVE_OPERATION_LIMIT, DEFAULT_GLOBAL_RATE_LIMIT,
     DEFAULT_PER_CLIENT_RATE_LIMIT,
-};
-
-// Re-export abort utilities for convenience
-pub use abort_utils::{
-    abort_file_exists, create_abort_file, create_abort_file_current_dir, read_abort_file,
-    remove_abort_file,
 };
 
 // Re-export glob utilities for convenience

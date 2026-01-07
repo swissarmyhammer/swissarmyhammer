@@ -842,7 +842,13 @@ impl Action for AbortAction {
         let message = self.substitute_string(&self.message, context);
         tracing::error!("***Workflow Aborted***: {}", message);
 
-        // Set a special context variable to signal abort request
+        // Set abort flag using CEL state
+        let cel_state = swissarmyhammer_cel::CelState::global();
+        if let Err(e) = cel_state.set("abort", "true") {
+            tracing::warn!("Failed to set CEL abort flag: {}", e);
+        }
+
+        // Set a special context variable to signal abort request (for backward compatibility)
         context.insert(
             "__ABORT_REQUESTED__".to_string(),
             Value::String(message.clone()),

@@ -20,7 +20,7 @@ use tokio::sync::{Mutex, RwLock};
 
 use super::tool_handlers::ToolHandlers;
 use super::tool_registry::{
-    register_abort_tools, register_file_tools, register_flow_tools, register_git_tools,
+    register_cel_tools, register_file_tools, register_flow_tools, register_git_tools,
     register_questions_tools, register_rules_tools, register_shell_tools, register_todo_tools,
     register_web_fetch_tools, register_web_search_tools, ToolContext, ToolRegistry,
 };
@@ -406,7 +406,7 @@ impl McpServer {
     ///
     /// * `tool_registry` - Registry to register tools into
     async fn register_all_tools(tool_registry: &mut ToolRegistry) {
-        register_abort_tools(tool_registry);
+        register_cel_tools(tool_registry);
         register_file_tools(tool_registry).await;
         register_flow_tools(tool_registry);
         register_git_tools(tool_registry);
