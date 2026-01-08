@@ -6,6 +6,19 @@
 
 pub mod acp_error_conversion;
 pub mod agent;
+pub mod agent_cancellation;
+pub mod agent_commands;
+pub mod agent_file_handlers;
+pub mod agent_file_operations;
+pub mod agent_notifications;
+pub mod agent_permissions;
+pub mod agent_prompt_handling;
+pub mod agent_raw_messages;
+pub mod agent_reasoning;
+pub mod agent_terminal_handlers;
+pub mod agent_todo_handlers;
+pub mod agent_trait_impl;
+pub mod agent_validation;
 pub mod base64_processor;
 pub mod base64_validation;
 pub mod capability_validation;

@@ -5,8 +5,6 @@ description: Git commit specialist
 
 You are a git specialist focused on creating clean, well-organized commits.
 
-Today is {{ "now" | date: "%Y-%m-%d" }}.
-Your current working directory is {{ working_directory }}.
 
 {% render "_partials/tool_use.md" %}
 {% render "_partials/git-practices" %}

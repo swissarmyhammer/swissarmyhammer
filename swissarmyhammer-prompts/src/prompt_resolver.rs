@@ -44,8 +44,15 @@ impl PromptResolver {
         // Process all loaded files into prompts and partials
         let loader = PromptLoader::new();
         for file in self.vfs.list() {
-            // Check if this is a partial template first
-            let is_partial = file.content.trim_start().starts_with("{% partial %}");
+            // Check if this is a partial template - either by tag or frontmatter
+            let has_partial_tag = file.content.trim_start().starts_with("{% partial %}");
+            let has_partial_frontmatter = crate::frontmatter::parse_frontmatter(&file.content)
+                .ok()
+                .and_then(|fm| fm.metadata)
+                .and_then(|m| m.get("partial").cloned())
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            let is_partial = has_partial_tag || has_partial_frontmatter;
 
             if is_partial {
                 // For partials, create a minimal prompt object to store in the library
@@ -284,5 +291,126 @@ This is a user-defined debug/error prompt that should override the builtin one.
                 "Builtin debug/error should have been overridden by user prompt"
             );
         }
+    }
+
+    #[test]
+    fn test_partial_frontmatter_registers_all_name_variants() {
+        // Create a partial with frontmatter `partial: true`
+        let mut library = PromptLibrary::new();
+        let partial_content = r#"---
+partial: true
+---
+This is partial content"#;
+
+        // Simulate what the resolver does for partials
+        let has_partial_frontmatter = crate::frontmatter::parse_frontmatter(partial_content)
+            .ok()
+            .and_then(|fm| fm.metadata)
+            .and_then(|m| m.get("partial").cloned())
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+
+        assert!(
+            has_partial_frontmatter,
+            "Should detect partial: true in frontmatter"
+        );
+
+        // Register with all variants like the resolver does
+        let base_name = "test_partial";
+        library
+            .add(crate::prompts::Prompt::new(base_name, partial_content))
+            .unwrap();
+        library
+            .add(crate::prompts::Prompt::new(
+                &format!("{}.md", base_name),
+                partial_content,
+            ))
+            .unwrap();
+        library
+            .add(crate::prompts::Prompt::new(
+                &format!("{}.liquid", base_name),
+                partial_content,
+            ))
+            .unwrap();
+
+        // All three variants should be retrievable
+        assert!(
+            library.get("test_partial").is_ok(),
+            "Should find partial without extension"
+        );
+        assert!(
+            library.get("test_partial.md").is_ok(),
+            "Should find partial with .md extension"
+        );
+        assert!(
+            library.get("test_partial.liquid").is_ok(),
+            "Should find partial with .liquid extension"
+        );
+    }
+
+    #[test]
+    fn test_render_partial_with_and_without_extension() {
+        use swissarmyhammer_config::TemplateContext;
+
+        // Create a library with a partial that uses frontmatter
+        let mut library = PromptLibrary::new();
+
+        // Add the partial with all name variants
+        let partial_content = "PARTIAL_CONTENT_HERE";
+        library
+            .add(crate::prompts::Prompt::new(
+                "_test/my_partial",
+                partial_content,
+            ))
+            .unwrap();
+        library
+            .add(crate::prompts::Prompt::new(
+                "_test/my_partial.md",
+                partial_content,
+            ))
+            .unwrap();
+
+        // Add a template that references the partial WITHOUT extension
+        let template_without_ext = r#"Before {% render "_test/my_partial" %} After"#;
+        library
+            .add(crate::prompts::Prompt::new(
+                "test_without_ext",
+                template_without_ext,
+            ))
+            .unwrap();
+
+        // Add a template that references the partial WITH extension
+        let template_with_ext = r#"Before {% render "_test/my_partial.md" %} After"#;
+        library
+            .add(crate::prompts::Prompt::new(
+                "test_with_ext",
+                template_with_ext,
+            ))
+            .unwrap();
+
+        let ctx = TemplateContext::new();
+
+        // Both should render successfully
+        let result_without = library.render("test_without_ext", &ctx);
+        assert!(
+            result_without.is_ok(),
+            "Should render partial without extension: {:?}",
+            result_without.err()
+        );
+        assert!(
+            result_without.unwrap().contains("PARTIAL_CONTENT_HERE"),
+            "Rendered content should include partial"
+        );
+
+        let result_with = library.render("test_with_ext", &ctx);
+        assert!(
+            result_with.is_ok(),
+            "Should render partial with .md extension: {:?}",
+            result_with.err()
+        );
+        assert!(
+            result_with.unwrap().contains("PARTIAL_CONTENT_HERE"),
+            "Rendered content should include partial"
+        );
     }
 }

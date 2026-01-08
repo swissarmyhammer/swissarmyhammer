@@ -702,11 +702,8 @@ mod tests {
 
         assert_eq!(schema_obj.get("type").unwrap().as_str().unwrap(), "object");
         assert!(schema_obj.contains_key("properties"));
-        assert!(schema_obj.contains_key("oneOf")); // Changed from "required" to "oneOf"
-
-        // Verify oneOf alternatives
-        let one_of = schema_obj.get("oneOf").unwrap().as_array().unwrap();
-        assert_eq!(one_of.len(), 2); // Single edit mode and multiple edits mode
+        // Note: No required fields at schema level - validation happens at runtime
+        // to support both single edit mode (old_string/new_string) and multiple edits mode (edits array)
 
         // Verify properties exist
         let properties = schema_obj.get("properties").unwrap().as_object().unwrap();

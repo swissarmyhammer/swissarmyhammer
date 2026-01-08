@@ -18,6 +18,7 @@ swissarmyhammer-common = { path = "../swissarmyhammer-common" }
 swissarmyhammer-config = { path = "../swissarmyhammer-config" }
 thiserror.workspace = true
 tokio = { workspace = true, features = ["sync", "rt", "time"] }
+tokio-util.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tracing.workspace = true
