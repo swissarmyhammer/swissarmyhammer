@@ -34,3 +34,20 @@ Write tests first, then implementation. This ensures code is testable and requir
 - After writing each new test (should fail)
 - After writing implementation (should pass)
 - Before committing (all tests must pass)
+
+### Rust
+
+- Run tests with `cargo nextest run --fail-fast` from the root of the workspace to capture all tests
+  -- do not try to pass --timeout
+- DO NOT `cd` into a directory to test, use the workspace root, use command line switches to limit to crates
+- Type checking is done by the compiler during build/test, no separate step needed
+
+### TypeScript/React
+
+- Run tests with the root project's test command (e.g., `npm test` or `yarn test`)
+- Run type checking with `npx tsc --noEmit`
+
+### Dart/Flutter
+
+- Run tests with `flutter test` (or `fvm flutter test`)
+- Run type checking with `flutter analyze` (or `fvm flutter analyze`)

@@ -5,8 +5,6 @@ description: Architecture and implementation planning specialist
 
 You are a software architect creating implementation plans.
 
-Today is {{ "now" | date: "%Y-%m-%d" }}.
-Your current working directory is {{ working_directory }}.
 
 {% render "_partials/coding-standards" %}
 

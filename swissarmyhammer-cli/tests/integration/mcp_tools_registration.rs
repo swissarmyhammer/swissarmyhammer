@@ -166,3 +166,55 @@ async fn test_cli_categories_are_available() {
     println!("🎯 VALIDATION: CLI categories and tool mapping work correctly");
     println!("   This explains why 'sah --help' shows tool categories - they come from MCP tools!");
 }
+
+/// Test that all tool schemas are compatible with Claude API
+///
+/// The Claude API does NOT support `oneOf`, `allOf`, or `anyOf` at the top level
+/// of tool input schemas. This test ensures no tool accidentally uses these
+/// unsupported constructs.
+#[tokio::test]
+async fn test_tool_schemas_are_claude_api_compatible() {
+    let mut registry = ToolRegistry::new();
+
+    // Register all tools
+    register_cel_tools(&mut registry);
+    register_file_tools(&mut registry).await;
+    register_shell_tools(&mut registry);
+    register_todo_tools(&mut registry);
+    register_web_fetch_tools(&mut registry);
+    register_web_search_tools(&mut registry);
+
+    let unsupported_constructs = ["oneOf", "allOf", "anyOf"];
+    let mut violations = Vec::new();
+
+    for tool in registry.list_tools() {
+        // input_schema is already Arc<Map<String, Value>>
+        for construct in &unsupported_constructs {
+            if tool.input_schema.contains_key(*construct) {
+                violations.push(format!(
+                    "Tool '{}' has unsupported '{}' at top level of input_schema",
+                    tool.name, construct
+                ));
+            }
+        }
+    }
+
+    if !violations.is_empty() {
+        for violation in &violations {
+            eprintln!("❌ SCHEMA VIOLATION: {}", violation);
+        }
+        panic!(
+            "Claude API compatibility check failed!\n\
+            The Claude API does NOT support oneOf/allOf/anyOf at the top level of tool schemas.\n\
+            Found {} violation(s). Use runtime validation instead of schema-level oneOf/allOf/anyOf.\n\
+            See: https://docs.anthropic.com/en/docs/build-with-claude/tool-use",
+            violations.len()
+        );
+    }
+
+    println!(
+        "✅ All {} tool schemas are Claude API compatible",
+        registry.len()
+    );
+    println!("   No oneOf/allOf/anyOf constructs found at top level");
+}

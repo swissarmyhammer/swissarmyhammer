@@ -15,6 +15,9 @@ use tracing_test::traced_test;
 /// Small embedding model for testing cache behavior - using one with known GGUF files
 const TINY_MODEL_REPO: &str = "Qwen/Qwen3-Embedding-0.6B-GGUF";
 
+/// Explicit filename to avoid auto-detection issues with transient HuggingFace API failures
+const TINY_MODEL_FILENAME: &str = "Qwen3-Embedding-0.6B-Q8_0.gguf";
+
 /// Create a test retry config with shorter timeouts for testing
 fn create_test_retry_config() -> RetryConfig {
     RetryConfig {
@@ -48,12 +51,9 @@ async fn test_model_cache_hit_behavior() {
     tracing::info!("Starting first model load (should download)");
     let start_time = Instant::now();
 
+    // Use explicit filename to avoid auto-detection issues with transient HF API failures
     let model1 = loader
-        .load_huggingface_model(
-            TINY_MODEL_REPO,
-            None, // Use auto-detection
-            &retry_config,
-        )
+        .load_huggingface_model(TINY_MODEL_REPO, Some(TINY_MODEL_FILENAME), &retry_config)
         .await;
 
     let first_load_time = start_time.elapsed();
@@ -76,11 +76,7 @@ async fn test_model_cache_hit_behavior() {
     let start_time = Instant::now();
 
     let model2 = loader
-        .load_huggingface_model(
-            TINY_MODEL_REPO,
-            None, // Use auto-detection
-            &retry_config,
-        )
+        .load_huggingface_model(TINY_MODEL_REPO, Some(TINY_MODEL_FILENAME), &retry_config)
         .await;
 
     let second_load_time = start_time.elapsed();
@@ -149,8 +145,9 @@ async fn test_model_loader_cache_reuse() {
     tracing::info!("Loading model with first loader instance");
     let start_time = Instant::now();
 
+    // Use explicit filename to avoid auto-detection issues with transient HF API failures
     let model1 = loader1
-        .load_huggingface_model(TINY_MODEL_REPO, None, &retry_config)
+        .load_huggingface_model(TINY_MODEL_REPO, Some(TINY_MODEL_FILENAME), &retry_config)
         .await;
 
     let first_load_time = start_time.elapsed();
@@ -170,7 +167,7 @@ async fn test_model_loader_cache_reuse() {
     let start_time = Instant::now();
 
     let model2 = loader2
-        .load_huggingface_model(TINY_MODEL_REPO, None, &retry_config)
+        .load_huggingface_model(TINY_MODEL_REPO, Some(TINY_MODEL_FILENAME), &retry_config)
         .await;
 
     let second_load_time = start_time.elapsed();
@@ -219,8 +216,9 @@ async fn test_cache_hit_metadata_field() {
     let loader = ModelLoader::new(backend);
 
     // First load - should be a cache miss
+    // Use explicit filename to avoid auto-detection issues with transient HF API failures
     let model1 = loader
-        .load_huggingface_model(TINY_MODEL_REPO, None, &retry_config)
+        .load_huggingface_model(TINY_MODEL_REPO, Some(TINY_MODEL_FILENAME), &retry_config)
         .await
         .expect("First load should succeed");
 
@@ -231,7 +229,7 @@ async fn test_cache_hit_metadata_field() {
 
     // Second load - should be a cache hit since first load established the cache
     let model2 = loader
-        .load_huggingface_model(TINY_MODEL_REPO, None, &retry_config)
+        .load_huggingface_model(TINY_MODEL_REPO, Some(TINY_MODEL_FILENAME), &retry_config)
         .await
         .expect("Second load should succeed");
 

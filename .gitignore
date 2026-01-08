@@ -10,6 +10,9 @@ rust_out
 *.swo
 *~
 *.bak
+*.backup
+*.new
+*.orig
 
 # OS
 .DS_Store

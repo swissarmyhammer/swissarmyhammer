@@ -312,6 +312,12 @@ impl RuleLoader {
         let mut rule = self.load_from_string(&name, &content)?;
         rule.source = Some(path.to_path_buf());
 
+        // Only use Liquid templating if the filename contains ".liquid"
+        // This allows rules with code examples containing {{ }} to work without escaping
+        if let Some(filename) = path.file_name().and_then(|s| s.to_str()) {
+            rule.use_liquid = filename.contains(".liquid");
+        }
+
         Ok(rule)
     }
 

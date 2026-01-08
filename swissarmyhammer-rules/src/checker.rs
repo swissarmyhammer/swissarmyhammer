@@ -19,15 +19,22 @@ use swissarmyhammer_config::model::ModelConfig;
 use swissarmyhammer_config::TemplateContext;
 use swissarmyhammer_prompts::{PromptLibrary, PromptResolver};
 
+/// Default maximum number of concurrent rule checks.
+///
+/// This value balances throughput with resource usage for parallel rule checking.
+/// Higher values may improve performance on machines with more cores but increase
+/// memory and CPU usage.
+const DEFAULT_MAX_CONCURRENCY: usize = 4;
+
 /// Configuration for creating ACP agents
 ///
 /// This holds the model configuration and optional MCP server config
 /// needed to create ACP agents for rule checking.
 #[derive(Clone)]
 pub struct AgentConfig {
-    /// Model configuration
+    /// Model configuration for the ACP agent (e.g., Claude or Llama)
     pub model_config: ModelConfig,
-    /// Optional MCP server configuration
+    /// Optional MCP (Model Context Protocol) server configuration for extended capabilities
     pub mcp_config: Option<McpServerConfig>,
 }
 
@@ -37,9 +44,15 @@ pub struct AgentConfig {
 /// to check all files and collect all violations.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CheckMode {
-    /// Stop checking files after first ERROR violation is found
+    /// Stop checking files after the first ERROR violation is found.
+    ///
+    /// This mode is useful for CI/CD pipelines where you want to fail fast
+    /// and not waste time checking remaining files once a violation is detected.
     FailFast,
-    /// Check all files and collect all ERROR violations
+    /// Check all files and collect all ERROR violations.
+    ///
+    /// This mode continues checking all files even after violations are found,
+    /// providing a complete report of all issues in the codebase.
     CollectAll,
 }
 
@@ -70,25 +83,46 @@ pub enum CheckMode {
 /// ```
 #[derive(Debug, Clone)]
 pub struct RuleCheckRequest {
-    /// Optional list of rule names to check (None = all rules)
+    /// Optional list of specific rule names to check.
+    ///
+    /// When `None`, all available rules are checked. When `Some`, only rules
+    /// with names matching those in the list are applied.
     pub rule_names: Option<Vec<String>>,
-    /// Optional severity filter
+    /// Optional severity level filter.
+    ///
+    /// When set, only rules with the specified severity level are checked.
     pub severity: Option<Severity>,
-    /// Optional category filter
+    /// Optional category filter.
+    ///
+    /// When set, only rules belonging to the specified category are checked.
     pub category: Option<String>,
-    /// File paths or glob patterns to check
+    /// File paths or glob patterns specifying which files to check.
+    ///
+    /// Supports glob patterns like `**/*.rs` for recursive matching.
+    /// See `skip_glob_expansion` for controlling pattern interpretation.
     pub patterns: Vec<String>,
-    /// If true, patterns are treated as explicit file paths and glob expansion is skipped
-    /// This is used when patterns come from git changed files or other sources that
-    /// already provide resolved file paths.
+    /// If true, patterns are treated as explicit file paths and glob expansion is skipped.
+    ///
+    /// This is used when patterns come from git changed files or other sources
+    /// that already provide resolved file paths rather than glob patterns.
     pub skip_glob_expansion: bool,
-    /// Check mode controlling fail-fast behavior
+    /// Check mode controlling fail-fast behavior.
+    ///
+    /// See [`CheckMode`] for available options.
     pub check_mode: CheckMode,
-    /// Force re-evaluation, bypassing cache
+    /// Force re-evaluation, bypassing the cache.
+    ///
+    /// When true, all checks are performed even if cached results exist.
     pub force: bool,
-    /// Maximum number of ERROR violations to return (None = unlimited)
+    /// Maximum number of ERROR violations to return.
+    ///
+    /// When `None`, all violations are returned (unlimited).
+    /// When `Some(n)`, checking stops after `n` ERROR violations are found.
     pub max_errors: Option<usize>,
-    /// Maximum number of concurrent rule checks (None = default of 4)
+    /// Maximum number of concurrent rule checks.
+    ///
+    /// When `None`, defaults to 4 concurrent checks.
+    /// Higher values may improve throughput but increase resource usage.
     pub max_concurrency: Option<usize>,
 }
 
@@ -306,6 +340,30 @@ impl RuleChecker {
             None => return Ok(None),
         };
 
+        // Check line count limit (2048 lines) - files exceeding this automatically fail
+        const MAX_LINES_FOR_RULE_CHECK: usize = 2048;
+        let line_count = target_content.lines().count();
+        if line_count > MAX_LINES_FOR_RULE_CHECK {
+            tracing::warn!(
+                "File {} is too long ({} lines) for rule checking (max: {} lines) - reporting as violation",
+                target_path.display(),
+                line_count,
+                MAX_LINES_FOR_RULE_CHECK
+            );
+            // Return a synthetic violation indicating the file is too large
+            return Ok(Some(RuleViolation::new(
+                "file-too-large".to_string(),
+                target_path.to_path_buf(),
+                Severity::Error,
+                format!(
+                    "VIOLATION\nRule: file-too-large\nFile: {}\nLine: N/A\nSeverity: error\nMessage: File is too large for rule checking ({} lines, max: {} lines). Files this large are difficult to maintain and should be split into smaller modules.\nSuggestion: Refactor this file by splitting it into multiple smaller files, each focused on a single responsibility. Consider grouping related functionality into separate modules.",
+                    target_path.display(),
+                    line_count,
+                    MAX_LINES_FOR_RULE_CHECK
+                ),
+            )));
+        }
+
         if let Some(result) = self.check_cache_for_result(&cache_key, target_path, &rule.name)? {
             return Ok(result);
         }
@@ -395,6 +453,30 @@ impl RuleChecker {
         Ok(None)
     }
 
+    /// Build a base template context with common fields for rule checking
+    ///
+    /// This helper consolidates the duplicated context-building logic used in
+    /// both rule template rendering and check prompt rendering.
+    fn build_base_context(
+        target_path: &Path,
+        target_content: &str,
+        language: &str,
+        rule_name: &str,
+    ) -> TemplateContext {
+        let mut context = TemplateContext::new();
+        context.set(
+            "target_content".to_string(),
+            target_content.to_string().into(),
+        );
+        context.set(
+            "target_path".to_string(),
+            target_path.display().to_string().into(),
+        );
+        context.set("language".to_string(), language.to_string().into());
+        context.set("rule_name".to_string(), rule_name.to_string().into());
+        context
+    }
+
     /// Render the check prompt using two-stage rendering
     fn render_check_prompt(
         &self,
@@ -405,51 +487,48 @@ impl RuleChecker {
         let language = detect_language(target_path, target_content)?;
         tracing::debug!("Detected language: {}", language);
 
-        let mut rule_context = TemplateContext::new();
-        rule_context.set(
-            "target_content".to_string(),
-            target_content.to_string().into(),
-        );
-        rule_context.set(
-            "target_path".to_string(),
-            target_path.display().to_string().into(),
-        );
-        rule_context.set("language".to_string(), language.clone().into());
+        // Stage 1: Render rule template with base context
+        let rule_context =
+            Self::build_base_context(target_path, target_content, &language, &rule.name);
 
-        let partial_adapter = crate::RulePartialAdapter::new(Arc::clone(&self.rule_library));
+        // Only use Liquid templating if the rule explicitly enables it (e.g., filename contains .liquid)
+        // This allows rules to contain code examples with {{ }} without needing {% raw %} blocks
+        let rendered_rule = if rule.use_liquid {
+            let partial_adapter = crate::RulePartialAdapter::new(Arc::clone(&self.rule_library));
 
-        let template_with_partials =
-            swissarmyhammer_templating::Template::with_partials(&rule.template, partial_adapter)
-                .map_err(|e| {
-                    RuleError::CheckError(format!(
-                        "Failed to create template with partials for {}: {}",
-                        rule.name, e
-                    ))
-                })?;
-
-        let rendered_rule = template_with_partials
-            .render_with_context(&rule_context)
+            let template_with_partials = swissarmyhammer_templating::Template::with_partials(
+                &rule.template,
+                partial_adapter,
+            )
             .map_err(|e| {
                 RuleError::CheckError(format!(
-                    "Failed to render rule template for {}: {}",
+                    "Failed to create template with partials for {}: {}",
                     rule.name, e
                 ))
             })?;
 
-        tracing::debug!("Stage 1 complete: rule template rendered");
+            template_with_partials
+                .render_with_context(&rule_context)
+                .map_err(|e| {
+                    RuleError::CheckError(format!(
+                        "Failed to render rule template for {}: {}",
+                        rule.name, e
+                    ))
+                })?
+        } else {
+            // No Liquid parsing - use template as-is
+            rule.template.clone()
+        };
 
-        let mut check_context = TemplateContext::new();
+        tracing::debug!(
+            "Stage 1 complete: rule template rendered (liquid={})",
+            rule.use_liquid
+        );
+
+        // Stage 2: Render check prompt with base context plus rendered rule
+        let mut check_context =
+            Self::build_base_context(target_path, target_content, &language, &rule.name);
         check_context.set("rule_content".to_string(), rendered_rule.into());
-        check_context.set(
-            "target_content".to_string(),
-            target_content.to_string().into(),
-        );
-        check_context.set(
-            "target_path".to_string(),
-            target_path.display().to_string().into(),
-        );
-        check_context.set("language".to_string(), language.into());
-        check_context.set("rule_name".to_string(), rule.name.clone().into());
 
         let check_prompt_text = self
             .prompt_library
@@ -482,6 +561,57 @@ impl RuleChecker {
         Ok(())
     }
 
+    /// Determine if an LLM response indicates a PASS verdict
+    ///
+    /// The LLM may provide analysis before the verdict, so we need to check:
+    /// - Starts with PASS (original behavior)
+    /// - Contains PASS on its own line (handles analysis before verdict)
+    /// - Contains emphasized PASS (**PASS** or *PASS*)
+    fn is_pass_response(response_text: &str) -> bool {
+        let normalized_text = response_text.trim().trim_start_matches('*').trim_start();
+
+        let starts_with_pass = normalized_text.starts_with("PASS");
+        let contains_emphasized_pass =
+            response_text.contains("**PASS**") || response_text.contains("*PASS*");
+        let has_pass_line = response_text.lines().any(|line| {
+            let trimmed = line.trim();
+            trimmed == "PASS" || trimmed.starts_with("PASS")
+        });
+
+        let is_pass = starts_with_pass || contains_emphasized_pass || has_pass_line;
+
+        tracing::debug!(
+            "Response parsing - length: {}, first 100 chars: {:?}",
+            response_text.len(),
+            response_text.chars().take(100).collect::<String>()
+        );
+        tracing::debug!(
+            "Response parsing - starts_with_pass: {}, contains_emphasized: {}, has_pass_line: {}, is_pass: {}",
+            starts_with_pass,
+            contains_emphasized_pass,
+            has_pass_line,
+            is_pass
+        );
+
+        is_pass
+    }
+
+    /// Create a session-scoped agent handle for concurrent checks
+    ///
+    /// This clones the agent Arc and creates a new notification receiver,
+    /// allowing concurrent checks without blocking on the main mutex.
+    async fn create_session_handle(&self) -> Result<acp::AcpAgentHandle> {
+        let guard = self.agent_handle.lock().await;
+        let main_handle = guard
+            .as_ref()
+            .ok_or_else(|| RuleError::AgentError("Agent not initialized".to_string()))?;
+
+        Ok(acp::AcpAgentHandle {
+            agent: std::sync::Arc::clone(&main_handle.agent),
+            notification_rx: main_handle.notification_rx.resubscribe(),
+        })
+    }
+
     /// Execute the check via ACP agent and parse the response
     async fn execute_and_parse_check(
         &self,
@@ -499,21 +629,7 @@ impl RuleChecker {
         // Ensure agent is created (lazy initialization)
         self.get_or_create_agent().await?;
 
-        // Create a session-scoped handle for this check
-        // This clones the agent Arc and creates a new notification receiver,
-        // allowing concurrent checks without blocking on the main mutex
-        let mut session_handle = {
-            let guard = self.agent_handle.lock().await;
-            let main_handle = guard
-                .as_ref()
-                .ok_or_else(|| RuleError::AgentError("Agent not initialized".to_string()))?;
-            // Clone the agent Arc and get a new notification receiver
-            acp::AcpAgentHandle {
-                agent: std::sync::Arc::clone(&main_handle.agent),
-                notification_rx: main_handle.notification_rx.resubscribe(),
-            }
-            // Lock is released here when guard goes out of scope
-        };
+        let mut session_handle = self.create_session_handle().await?;
 
         // Execute prompt via ACP protocol
         // For rule checking, no system prompt is needed - the check prompt contains everything
@@ -529,49 +645,20 @@ impl RuleChecker {
 
         tracing::debug!("LLM execution complete");
 
-        let result_text = response.content.trim();
-        let normalized_text = result_text.trim_start_matches('*').trim_start();
+        self.build_check_result(&response.content, rule, target_path, check_start)
+    }
 
-        // Check if response indicates a pass
-        // The LLM may provide analysis before the verdict, so we need to check:
-        // - Starts with PASS (original behavior)
-        // - Contains PASS on its own line (handles analysis before verdict)
-        // - Contains emphasized PASS (**PASS** or *PASS*)
-        let is_pass = normalized_text.starts_with("PASS")
-            || result_text.contains("**PASS**")
-            || result_text.contains("*PASS*")
-            || result_text.lines().any(|line| {
-                let trimmed = line.trim();
-                trimmed == "PASS" || trimmed.starts_with("PASS")
-            });
+    /// Build the check result from the LLM response
+    fn build_check_result(
+        &self,
+        response_content: &str,
+        rule: &Rule,
+        target_path: &Path,
+        check_start: std::time::Instant,
+    ) -> Result<Option<RuleViolation>> {
+        let duration = check_start.elapsed();
 
-        tracing::debug!(
-            "Response parsing - result_text length: {}, first 100 chars: {:?}",
-            result_text.len(),
-            result_text.chars().take(100).collect::<String>()
-        );
-        tracing::debug!(
-            "Response parsing - starts with PASS: {}",
-            normalized_text.starts_with("PASS")
-        );
-        tracing::debug!(
-            "Response parsing - contains **PASS**: {}",
-            result_text.contains("**PASS**")
-        );
-        tracing::debug!(
-            "Response parsing - contains *PASS*: {}",
-            result_text.contains("*PASS*")
-        );
-
-        let pass_line_found = result_text.lines().any(|line| {
-            let trimmed = line.trim();
-            trimmed == "PASS" || trimmed.starts_with("PASS")
-        });
-        tracing::debug!("Response parsing - PASS line found: {}", pass_line_found);
-        tracing::debug!("Response parsing - is_pass: {}", is_pass);
-
-        if is_pass {
-            let duration = check_start.elapsed();
+        if Self::is_pass_response(response_content) {
             tracing::info!(
                 "✓ PASS DETECTED ✓ Check passed for {} against rule {} in {:.2}s",
                 target_path.display(),
@@ -580,16 +667,15 @@ impl RuleChecker {
             );
             Ok(None)
         } else {
-            let duration = check_start.elapsed();
             let violation = RuleViolation::new(
                 rule.name.clone(),
                 target_path.to_path_buf(),
                 rule.severity,
-                response.content,
+                response_content.to_string(),
             );
 
             tracing::warn!(
-                "Violation found in {} against rule {} ({:?}) in {:.2}s",
+                "Violation found in {} against rule {} ({}) in {:.2}s",
                 target_path.display(),
                 rule.name,
                 rule.severity,
@@ -716,11 +802,11 @@ impl RuleChecker {
 
         let rule_names: Vec<&str> = rules.iter().map(|r| r.name.as_str()).collect();
         tracing::info!(
-            "Loaded {} files ({} rules, {} partials). Rules: {:?}",
+            "Loaded {} files ({} rules, {} partials). Rules: {}",
             total_files,
             rules.len(),
             partials_count,
-            rule_names
+            Pretty(&rule_names)
         );
 
         for rule in &rules {
@@ -796,6 +882,32 @@ impl RuleChecker {
         Ok(target_files)
     }
 
+    /// Check if a rule should be applied to a specific file based on applies_to pattern
+    ///
+    /// Returns true if:
+    /// - The rule has no applies_to pattern (applies to all files)
+    /// - The file matches the rule's applies_to glob pattern
+    ///
+    /// Returns false if:
+    /// - The pattern is invalid (with a warning logged)
+    /// - The file doesn't match the pattern
+    fn should_apply_rule_to_file(rule: &Rule, file: &Path) -> bool {
+        match &rule.applies_to {
+            None => true,
+            Some(pattern) => match glob::Pattern::new(pattern) {
+                Ok(glob_pattern) => glob_pattern.matches_path(file),
+                Err(_) => {
+                    tracing::warn!(
+                        "Invalid applies_to pattern '{}' in rule '{}', skipping",
+                        pattern,
+                        rule.name
+                    );
+                    false
+                }
+            },
+        }
+    }
+
     /// Build work queue of (rule, file) pairs
     fn build_work_queue(
         &self,
@@ -807,29 +919,66 @@ impl RuleChecker {
             .flat_map(|rule| {
                 target_files
                     .iter()
-                    .filter(move |file| {
-                        if let Some(ref pattern) = rule.applies_to {
-                            if let Ok(glob_pattern) = glob::Pattern::new(pattern) {
-                                glob_pattern.matches_path(file)
-                            } else {
-                                tracing::warn!(
-                                    "Invalid applies_to pattern '{}' in rule '{}', skipping",
-                                    pattern,
-                                    rule.name
-                                );
-                                false
-                            }
-                        } else {
-                            true
-                        }
-                    })
-                    .map(move |file| (rule.clone(), file.clone()))
+                    .filter(|file| Self::should_apply_rule_to_file(rule, file))
+                    .map(|file| (rule.clone(), file.clone()))
             })
             .collect();
 
         tracing::info!("Created work queue with {} check items", work_items.len());
 
         work_items
+    }
+
+    /// Calculate progress information for a work item
+    ///
+    /// Returns (completed_so_far, remaining_items, estimated_remaining_seconds)
+    fn calculate_progress(
+        completed_count: &std::sync::atomic::AtomicUsize,
+        total_items: usize,
+        start_time: std::time::Instant,
+    ) -> (usize, usize, f64) {
+        let completed_so_far = completed_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let remaining = total_items.saturating_sub(completed_so_far + 1);
+
+        let elapsed = start_time.elapsed().as_secs_f64();
+        let avg_time_per_check = if completed_so_far > 0 {
+            elapsed / (completed_so_far as f64)
+        } else {
+            0.0
+        };
+        let estimated_remaining_secs = (remaining as f64) * avg_time_per_check;
+
+        (completed_so_far, remaining, estimated_remaining_secs)
+    }
+
+    /// Filter check results to only include ERROR severity violations
+    fn filter_error_violations(
+        result: Result<Option<RuleViolation>>,
+    ) -> Option<Result<RuleViolation>> {
+        match result {
+            Ok(Some(violation)) if violation.severity == Severity::Error => Some(Ok(violation)),
+            Ok(Some(_)) => None, // Non-error violations are filtered out
+            Ok(None) => None,    // Passes are filtered out
+            Err(e) => Some(Err(e)),
+        }
+    }
+
+    /// Apply termination strategy to the stream based on check mode and limits
+    fn apply_termination_strategy<S>(
+        stream: S,
+        check_mode: CheckMode,
+        max_errors: Option<usize>,
+    ) -> std::pin::Pin<Box<dyn Stream<Item = Result<RuleViolation>> + Send>>
+    where
+        S: Stream<Item = Result<RuleViolation>> + Send + 'static,
+    {
+        if let Some(limit) = max_errors {
+            stream.take(limit).boxed()
+        } else if check_mode == CheckMode::FailFast {
+            stream.take(1).boxed()
+        } else {
+            stream.boxed()
+        }
     }
 
     /// Process work queue as a stream with concurrency control
@@ -841,7 +990,7 @@ impl RuleChecker {
         let checker = Arc::new(self.clone_for_streaming());
         let check_mode = request.check_mode;
         let max_errors = request.max_errors;
-        let concurrency = request.max_concurrency.unwrap_or(4);
+        let concurrency = request.max_concurrency.unwrap_or(DEFAULT_MAX_CONCURRENCY);
         let total_items = work_items.len();
         let start_time = std::time::Instant::now();
 
@@ -857,18 +1006,8 @@ impl RuleChecker {
                 let completed = Arc::clone(&completed_count);
                 let start = start_time;
                 async move {
-                    let completed_so_far =
-                        completed.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                    let remaining = total_items.saturating_sub(completed_so_far + 1);
-
-                    // Calculate time estimate
-                    let elapsed = start.elapsed().as_secs_f64();
-                    let avg_time_per_check = if completed_so_far > 0 {
-                        elapsed / (completed_so_far as f64)
-                    } else {
-                        0.0
-                    };
-                    let estimated_remaining_secs = (remaining as f64) * avg_time_per_check;
+                    let (completed_so_far, remaining, eta) =
+                        Self::calculate_progress(&completed, total_items, start);
 
                     tracing::info!(
                         "Checking {} against {} [{}/{}] - {} remaining, ETA: {:.1}s",
@@ -877,31 +1016,16 @@ impl RuleChecker {
                         completed_so_far + 1,
                         total_items,
                         remaining,
-                        estimated_remaining_secs
+                        eta
                     );
 
                     checker.check_file(&rule, &target).await
                 }
             })
             .buffer_unordered(concurrency)
-            .filter_map(|result| async move {
-                match result {
-                    Ok(Some(violation)) if violation.severity == Severity::Error => {
-                        Some(Ok(violation))
-                    }
-                    Ok(Some(_)) => None,
-                    Ok(None) => None,
-                    Err(e) => Some(Err(e)),
-                }
-            });
+            .filter_map(|result| async move { Self::filter_error_violations(result) });
 
-        if let Some(limit) = max_errors {
-            stream.take(limit).boxed()
-        } else if check_mode == CheckMode::FailFast {
-            stream.take(1).boxed()
-        } else {
-            stream.boxed()
-        }
+        Self::apply_termination_strategy(stream, check_mode, max_errors)
     }
 
     /// Create a cloneable version of RuleChecker for streaming
@@ -980,8 +1104,44 @@ mod tests {
         RuleChecker::new(agent_config).expect("Failed to create test checker")
     }
 
+    /// Create a default RuleCheckRequest with common test settings
+    ///
+    /// This helper reduces duplication across test functions by providing
+    /// a base request that tests can override specific fields on.
+    fn default_test_request() -> RuleCheckRequest {
+        RuleCheckRequest {
+            rule_names: None,
+            severity: None,
+            category: None,
+            patterns: vec!["test.rs".to_string()],
+            skip_glob_expansion: false,
+            check_mode: CheckMode::CollectAll,
+            force: false,
+            max_errors: None,
+            max_concurrency: None,
+        }
+    }
+
+    /// Helper to test streaming check with a specific CheckMode
+    ///
+    /// This consolidates the nearly identical test logic for fail-fast and collect-all modes.
+    async fn test_check_streaming_with_mode(mode: CheckMode) {
+        use futures_util::stream::StreamExt;
+
+        let checker = create_test_checker();
+
+        let mut request = default_test_request();
+        request.check_mode = mode;
+
+        let mut stream = checker.check(request).await.expect("Should create stream");
+
+        // Verify stream was created and can be polled
+        // In both modes, we just verify the stream is created successfully
+        let _ = stream.next().await;
+    }
+
     #[test]
-    fn test_rule_checker_creation() {
+    fn test_rule_checker_creation_with_valid_prompt() {
         let checker = create_test_checker();
         assert!(checker.prompt_library.get(".check").is_ok());
     }
@@ -1020,7 +1180,7 @@ mod tests {
     }
 
     #[test]
-    fn test_detect_language_integration() {
+    fn test_detect_language_identifies_rust_and_python() {
         let path = Path::new("test.rs");
         let content = "fn main() {}";
         let language = detect_language(path, content).unwrap();
@@ -1055,17 +1215,9 @@ mod tests {
 
         let checker = create_test_checker();
 
-        let request = RuleCheckRequest {
-            rule_names: None,
-            severity: None,
-            category: None,
-            patterns: vec!["/nonexistent/**/*.rs".to_string()],
-            check_mode: CheckMode::FailFast,
-            force: false,
-            max_errors: None,
-            skip_glob_expansion: false,
-            max_concurrency: None,
-        };
+        let mut request = default_test_request();
+        request.patterns = vec!["/nonexistent/**/*.rs".to_string()];
+        request.check_mode = CheckMode::FailFast;
 
         let mut stream = checker
             .check(request)
@@ -1212,7 +1364,7 @@ mod tests {
     }
 
     #[test]
-    fn test_violation_preserves_severity() {
+    fn test_rule_violation_preserves_severity_levels() {
         use crate::RuleViolation;
 
         // Test that RuleViolation preserves severity levels
@@ -1244,17 +1396,9 @@ mod tests {
 
         let checker = create_test_checker();
 
-        let request = RuleCheckRequest {
-            rule_names: Some(vec!["nonexistent-rule".to_string()]),
-            severity: None,
-            category: None,
-            patterns: vec!["test.rs".to_string()],
-            check_mode: CheckMode::FailFast,
-            force: false,
-            max_errors: None,
-            skip_glob_expansion: false,
-            max_concurrency: None,
-        };
+        let mut request = default_test_request();
+        request.rule_names = Some(vec!["nonexistent-rule".to_string()]);
+        request.check_mode = CheckMode::FailFast;
 
         let mut stream = checker.check(request).await.expect("Should create stream");
         let violation = stream.next().await;
@@ -1266,58 +1410,12 @@ mod tests {
 
     #[tokio::test]
     async fn test_check_streaming_fail_fast_mode() {
-        use futures_util::stream::StreamExt;
-
-        let checker = create_test_checker();
-
-        let request = RuleCheckRequest {
-            rule_names: None,
-            severity: Some(Severity::Error),
-            category: None,
-            patterns: vec!["test.rs".to_string()],
-            check_mode: CheckMode::FailFast,
-            force: false,
-            max_errors: None,
-            skip_glob_expansion: false,
-            max_concurrency: None,
-        };
-
-        let mut stream = checker.check(request).await.expect("Should create stream");
-
-        // In fail-fast mode, stream should stop after first violation
-        // For this test, we just verify the stream is created successfully
-        let _ = stream.next().await;
+        test_check_streaming_with_mode(CheckMode::FailFast).await;
     }
 
     #[tokio::test]
     async fn test_check_streaming_collect_all_mode() {
-        use futures_util::stream::StreamExt;
-
-        let checker = create_test_checker();
-
-        let request = RuleCheckRequest {
-            rule_names: None,
-            severity: None,
-            category: None,
-            patterns: vec!["test.rs".to_string()],
-            check_mode: CheckMode::CollectAll,
-            force: false,
-            max_errors: None,
-            skip_glob_expansion: false,
-            max_concurrency: None,
-        };
-
-        let mut stream = checker.check(request).await.expect("Should create stream");
-
-        // In collect-all mode, stream continues until all files are checked
-        let mut count = 0;
-        while (stream.next().await).is_some() {
-            count += 1;
-            // Prevent infinite loop in case of test issues
-            if count > 100 {
-                break;
-            }
-        }
+        test_check_streaming_with_mode(CheckMode::CollectAll).await;
     }
 
     #[tokio::test]
@@ -1327,17 +1425,8 @@ mod tests {
         let checker = create_test_checker();
 
         // Create request with max_errors = 2
-        let request = RuleCheckRequest {
-            rule_names: None,
-            severity: None,
-            category: None,
-            patterns: vec!["test.rs".to_string()],
-            skip_glob_expansion: false,
-            check_mode: CheckMode::CollectAll,
-            force: false,
-            max_errors: Some(2),
-            max_concurrency: None,
-        };
+        let mut request = default_test_request();
+        request.max_errors = Some(2);
 
         let mut stream = checker.check(request).await.expect("Should create stream");
 
@@ -1362,18 +1451,8 @@ mod tests {
     async fn test_check_without_max_errors_unlimited() {
         let checker = create_test_checker();
 
-        // Create request without max_errors (unlimited)
-        let request = RuleCheckRequest {
-            rule_names: None,
-            severity: None,
-            category: None,
-            patterns: vec!["test.rs".to_string()],
-            check_mode: CheckMode::CollectAll,
-            force: false,
-            max_errors: None,
-            skip_glob_expansion: false,
-            max_concurrency: None,
-        };
+        // Create request without max_errors (unlimited) - uses default
+        let request = default_test_request();
 
         let stream_result = checker.check(request).await;
         assert!(
@@ -1398,17 +1477,9 @@ mod tests {
         let checker = create_test_checker();
 
         // Test with skip_glob_expansion = true (should use file paths directly)
-        let request_with_skip = RuleCheckRequest {
-            rule_names: None,
-            severity: None,
-            category: None,
-            patterns: vec!["test_file.rs".to_string()],
-            skip_glob_expansion: true, // Key: skip globbing
-            check_mode: CheckMode::CollectAll,
-            force: false,
-            max_errors: None,
-            max_concurrency: None,
-        };
+        let mut request_with_skip = default_test_request();
+        request_with_skip.patterns = vec!["test_file.rs".to_string()];
+        request_with_skip.skip_glob_expansion = true;
 
         let result_with_skip = checker.check(request_with_skip).await;
         assert!(
@@ -1417,17 +1488,9 @@ mod tests {
         );
 
         // Test with skip_glob_expansion = false (should use glob expansion)
-        let request_without_skip = RuleCheckRequest {
-            rule_names: None,
-            severity: None,
-            category: None,
-            patterns: vec!["test_file.rs".to_string()],
-            skip_glob_expansion: false, // Will use glob expansion
-            check_mode: CheckMode::CollectAll,
-            force: false,
-            max_errors: None,
-            max_concurrency: None,
-        };
+        let mut request_without_skip = default_test_request();
+        request_without_skip.patterns = vec!["test_file.rs".to_string()];
+        request_without_skip.skip_glob_expansion = false;
 
         let result_without_skip = checker.check(request_without_skip).await;
         assert!(

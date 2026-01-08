@@ -94,9 +94,11 @@ impl McpTool for CelSetTool {
                     "description": "Alias for 'name' - name of the variable to store the result"
                 },
                 "expression": {
+                    "type": ["string", "boolean", "number", "object", "array", "null"],
                     "description": "CEL expression to evaluate or literal value (string, boolean, number, null, array, object) (alias: value)"
                 },
                 "value": {
+                    "type": ["string", "boolean", "number", "object", "array", "null"],
                     "description": "Alias for 'expression' - CEL expression to evaluate or literal value (string, boolean, number, null, array, object)"
                 }
             }

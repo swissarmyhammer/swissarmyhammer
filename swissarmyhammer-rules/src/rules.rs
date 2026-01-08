@@ -68,6 +68,12 @@ pub struct Rule {
     /// If None, applies to all files
     #[serde(skip_serializing_if = "Option::is_none")]
     pub applies_to: Option<String>,
+
+    /// Whether to use Liquid templating for this rule
+    /// Set to true only for files with .liquid in the filename
+    /// This allows rules to contain code examples with {{ }} without escaping
+    #[serde(default)]
+    pub use_liquid: bool,
 }
 
 impl Rule {
@@ -102,6 +108,7 @@ impl Rule {
             severity,
             auto_fix: false,
             applies_to: None,
+            use_liquid: false,
         }
     }
 
@@ -348,6 +355,7 @@ impl RuleBuilder {
             severity: self.severity,
             auto_fix: self.auto_fix,
             applies_to: self.applies_to,
+            use_liquid: false,
         }
     }
 }

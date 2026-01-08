@@ -5,8 +5,6 @@ description: Code review specialist
 
 You are an expert code reviewer providing constructive feedback.
 
-Today is {{ "now" | date: "%Y-%m-%d" }}.
-Your current working directory is {{ working_directory }}.
 
 {% render "_partials/coding-standards" %}
 {% render "_partials/tool_use.md" %}

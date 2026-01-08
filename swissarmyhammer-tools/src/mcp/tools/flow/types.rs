@@ -325,7 +325,9 @@ pub fn generate_flow_tool_schema(workflow_names: Vec<String>) -> JsonValue {
             "parameters": {
                 "type": "object",
                 "description": "Workflow-specific parameters as key-value pairs (ignored when flow_name='list')",
-                "additionalProperties": true,
+                "additionalProperties": {
+                    "type": ["string", "boolean", "number", "object", "array", "null"]
+                },
                 "default": {}
             },
             "format": {

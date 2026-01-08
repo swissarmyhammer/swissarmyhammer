@@ -1,5 +1,8 @@
-<!-- sah rule ignore test_rule_with_allow -->
-{% partial %}
+---
+title: Tool Use
+description: Tool Use Hints
+partial: true
+---
 
 
 ## File Tools

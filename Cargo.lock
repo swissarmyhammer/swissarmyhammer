@@ -6177,6 +6177,7 @@ dependencies = [
  "swissarmyhammer-config",
  "thiserror 1.0.69",
  "tokio",
+ "tokio-util",
  "tracing",
  "which 7.0.3",
 ]

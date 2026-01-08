@@ -15,19 +15,3 @@ If you run tests and type checks, and they all pass, `cel_set` name `are_tests_p
 Create todos for any failures found using the `todo_create` tool.
 
 Each failed test of type check should result in a separate todo.
-
-### Rust
-
-- Run tests with `cargo nextest run --fail-fast` from the root of the workspace to capture all tests
-  -- do not try to pass --timeout
-- Type checking is done by the compiler during build/test, no separate step needed
-
-### TypeScript/React
-
-- Run tests with the root project's test command (e.g., `npm test` or `yarn test`)
-- Run type checking with `npx tsc --noEmit`
-
-### Dart/Flutter
-
-- Run tests with `flutter test` (or `fvm flutter test`)
-- Run type checking with `flutter analyze` (or `fvm flutter analyze`)
