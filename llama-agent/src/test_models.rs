@@ -29,25 +29,25 @@
 
 /// Standard test model repository for chat/generation tasks
 ///
-/// **Model**: Qwen3-4B-Instruct (4 billion parameters)
-/// **Size**: ~2.4GB
+/// **Model**: Qwen3-0.6B (0.6 billion parameters)
+/// **Size**: ~600MB
 /// **Quantization**: IQ4_NL (4-bit)
 /// **Capabilities**: Tool calling, instruction following
 ///
 /// This is the canonical model for all llama-agent generation tests.
 /// Use this instead of hardcoding model names in tests.
 ///
-/// Note: This is intentionally a smaller model than production to enable fast tests.
+/// Note: This small model is chosen for fast CI runs and low memory usage.
 /// For production use cases, consider using the larger 30B model.
-pub const TEST_MODEL_REPO: &str = "unsloth/Qwen3-4B-Instruct-2507-GGUF";
+pub const TEST_MODEL_REPO: &str = "unsloth/Qwen3-0.6B-GGUF";
 
 /// Standard test model filename for chat/generation tasks
 ///
-/// **File**: Qwen3-4B-Instruct-2507-IQ4_NL.gguf
+/// **File**: Qwen3-0.6B-IQ4_NL.gguf
 /// **Quantization**: IQ4_NL (improved 4-bit quantization with normal distribution)
 ///
 /// This model supports tool calling which is required for MCP notification testing.
-pub const TEST_MODEL_FILE: &str = "Qwen3-4B-Instruct-2507-IQ4_NL.gguf";
+pub const TEST_MODEL_FILE: &str = "Qwen3-0.6B-IQ4_NL.gguf";
 
 /// Standard test model repository for embedding tasks
 ///
