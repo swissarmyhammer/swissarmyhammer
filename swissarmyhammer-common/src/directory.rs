@@ -371,6 +371,7 @@ impl SwissarmyhammerDirectory {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_utils::CurrentDirGuard;
     use std::fs;
     use tempfile::TempDir;
 
@@ -392,11 +393,9 @@ mod tests {
     #[test]
     fn test_from_git_root_not_in_repo() {
         let temp = TempDir::new().unwrap();
-        let original_dir = std::env::current_dir().unwrap();
+        let _guard = CurrentDirGuard::new(temp.path()).unwrap();
 
-        std::env::set_current_dir(temp.path()).unwrap();
         let result = SwissarmyhammerDirectory::from_git_root();
-        std::env::set_current_dir(original_dir).unwrap();
 
         assert!(result.is_err());
         match result {
@@ -410,12 +409,9 @@ mod tests {
         let temp = TempDir::new().unwrap();
         fs::create_dir_all(temp.path().join(".git")).unwrap();
 
-        let original_dir = std::env::current_dir().unwrap();
-        std::env::set_current_dir(temp.path()).unwrap();
+        let _guard = CurrentDirGuard::new(temp.path()).unwrap();
 
         let sah_dir = SwissarmyhammerDirectory::from_git_root().unwrap();
-
-        std::env::set_current_dir(original_dir).unwrap();
 
         assert!(sah_dir.root().exists());
         assert_eq!(*sah_dir.root_type(), DirectoryRootType::GitRoot);
@@ -549,15 +545,13 @@ mod tests {
         let temp = TempDir::new().unwrap();
         fs::create_dir_all(temp.path().join(".git")).unwrap();
 
-        let original_dir = std::env::current_dir().unwrap();
-        std::env::set_current_dir(temp.path()).unwrap();
+        let sah_dir = {
+            let _guard = CurrentDirGuard::new(temp.path()).unwrap();
+            SwissarmyhammerDirectory::from_git_root().unwrap()
+        };
+        // Guard dropped here, original directory restored
 
-        let sah_dir = SwissarmyhammerDirectory::from_git_root().unwrap();
         let gitignore_path = sah_dir.root().join(".gitignore");
-
-        // Change back to original directory before assertions
-        // to ensure we can read the file
-        std::env::set_current_dir(&original_dir).unwrap();
 
         assert!(
             gitignore_path.exists(),

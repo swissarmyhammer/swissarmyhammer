@@ -5,9 +5,129 @@
 /// focus on creating isolated test environments and managing test processes.
 ///
 /// ```
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use tempfile::TempDir;
+
+/// Global mutex to serialize access to current directory manipulation
+/// This prevents race conditions when multiple tests run in parallel
+static CURRENT_DIR_LOCK: Mutex<()> = Mutex::new(());
+
+/// RAII guard for temporarily changing the current directory
+///
+/// This structure changes to a new directory and automatically restores
+/// the original directory when dropped, even on panic. Uses a global mutex
+/// to serialize all current directory changes across tests.
+///
+/// # Example
+///
+/// ```
+/// use swissarmyhammer_common::test_utils::CurrentDirGuard;
+/// use tempfile::TempDir;
+///
+/// let temp = TempDir::new().unwrap();
+/// {
+///     let _guard = CurrentDirGuard::new(temp.path()).unwrap();
+///     // Current directory is now temp.path()
+///     // Original directory restored when _guard is dropped
+/// }
+/// ```
+pub struct CurrentDirGuard {
+    original_dir: PathBuf,
+    _lock_guard: std::sync::MutexGuard<'static, ()>,
+}
+
+impl CurrentDirGuard {
+    /// Create a new CurrentDirGuard that changes to the specified directory
+    ///
+    /// # Arguments
+    /// * `new_dir` - The directory to change to
+    ///
+    /// # Returns
+    /// * `Ok(CurrentDirGuard)` - Successfully changed directory
+    /// * `Err` - If current directory cannot be saved or new directory cannot be entered
+    ///
+    /// # Errors
+    /// Returns an error if:
+    /// - The current directory cannot be determined
+    /// - The target directory does not exist or cannot be entered
+    pub fn new<P: AsRef<Path>>(new_dir: P) -> std::io::Result<Self> {
+        let new_dir_path = new_dir.as_ref();
+
+        // Verify the new directory exists BEFORE trying to acquire the mutex
+        // This catches the case where a TempDir was created but deleted before we get here
+        if !new_dir_path.exists() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                format!(
+                    "Target directory does not exist: {}",
+                    new_dir_path.display()
+                ),
+            ));
+        }
+
+        let lock_guard = CURRENT_DIR_LOCK.lock().unwrap_or_else(|poisoned| {
+            // When a test panics, the mutex is poisoned. We need to clear the poisoning.
+            eprintln!(
+                "WARNING: Current directory lock was poisoned, recovering"
+            );
+            poisoned.into_inner()
+        });
+
+        // After acquiring the mutex, check if the current directory is valid.
+        // If not, reset to a known good directory (the cargo manifest dir).
+        let original_dir = match std::env::current_dir() {
+            Ok(dir) => dir,
+            Err(e) => {
+                // Current directory is invalid - try to recover
+                let fallback_dir = std::env::var("CARGO_MANIFEST_DIR")
+                    .map(PathBuf::from)
+                    .unwrap_or_else(|_| PathBuf::from("/"));
+                eprintln!(
+                    "WARNING: Current directory invalid ({}), resetting to: {}",
+                    e,
+                    fallback_dir.display()
+                );
+                std::env::set_current_dir(&fallback_dir)?;
+                fallback_dir
+            }
+        };
+
+        // Double-check the new directory still exists after acquiring the mutex
+        if !new_dir_path.exists() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                format!(
+                    "Target directory was deleted while waiting for lock: {}",
+                    new_dir_path.display()
+                ),
+            ));
+        }
+
+        std::env::set_current_dir(new_dir_path)?;
+
+        Ok(Self {
+            original_dir,
+            _lock_guard: lock_guard,
+        })
+    }
+}
+
+impl Drop for CurrentDirGuard {
+    fn drop(&mut self) {
+        if let Err(e) = std::env::set_current_dir(&self.original_dir) {
+            // Try to recover to a known good directory
+            if let Ok(cargo_manifest_dir) = std::env::var("CARGO_MANIFEST_DIR") {
+                let _ = std::env::set_current_dir(&cargo_manifest_dir);
+            }
+            tracing::error!(
+                "Failed to restore current directory to {}: {}",
+                self.original_dir.display(),
+                e
+            );
+        }
+    }
+}
 
 /// Helper struct to ensure process cleanup in tests
 ///
@@ -126,15 +246,11 @@ pub fn acquire_semantic_db_lock() -> std::sync::MutexGuard<'static, ()> {
 ///
 /// # Example
 ///
-/// ```no_run
-/// use swissarmyhammer_common::test_utils::create_isolated_test_home;
-///
-/// #[test]
-/// fn test_with_isolation() {
-///     let (temp_dir, home_path) = create_isolated_test_home();
-///     // Use home_path for testing instead of reading from HOME env var
-///     // temp_dir is automatically cleaned up when dropped
-/// }
+/// ```ignore
+/// // This function is private - use IsolatedTestEnvironment instead
+/// let (temp_dir, home_path) = create_isolated_test_home();
+/// // Use home_path for testing instead of reading from HOME env var
+/// // temp_dir is automatically cleaned up when dropped
 /// ```
 fn create_isolated_test_home() -> (TempDir, PathBuf) {
     let temp_dir = create_temp_dir();

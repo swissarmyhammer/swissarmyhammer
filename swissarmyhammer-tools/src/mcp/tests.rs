@@ -79,6 +79,64 @@ async fn test_mcp_server_list_prompts() {
 }
 
 #[tokio::test]
+async fn test_mcp_server_excludes_partials_and_system_prompts_from_list() {
+    let test_dir = tempfile::tempdir().unwrap();
+    let original_dir = std::env::current_dir().expect("Failed to get current dir");
+    std::env::set_current_dir(test_dir.path()).expect("Failed to change dir");
+    let _guard = DirGuard(original_dir);
+
+    let mut library = PromptLibrary::new();
+
+    // Add a regular prompt
+    let regular_prompt = Prompt::new("regular", "Regular prompt: {{ content }}")
+        .with_description("A regular prompt".to_string());
+    library.add(regular_prompt).unwrap();
+
+    // Add a partial with partial: true in metadata
+    let mut partial_metadata = HashMap::new();
+    partial_metadata.insert("partial".to_string(), serde_json::Value::Bool(true));
+    let mut partial_prompt = Prompt::new("_partials/header", "Partial template content")
+        .with_description("Partial template for reuse in other prompts".to_string());
+    partial_prompt.metadata = partial_metadata;
+    library.add(partial_prompt).unwrap();
+
+    // Add another partial with _partials in name
+    let partial_by_name = Prompt::new("_partials/footer", "Footer partial")
+        .with_description("Footer partial template".to_string());
+    library.add(partial_by_name).unwrap();
+
+    // Add a system prompt with system: true in metadata
+    let mut system_metadata = HashMap::new();
+    system_metadata.insert("system".to_string(), serde_json::Value::Bool(true));
+    let mut system_prompt = Prompt::new(".system/tester", "System prompt for testing")
+        .with_description("System prompt for test mode".to_string());
+    system_prompt.metadata = system_metadata;
+    library.add(system_prompt).unwrap();
+
+    // Add another system prompt with .system in name
+    let system_by_name = Prompt::new(".system/implementer", "System prompt for implementation")
+        .with_description("System prompt for implementer mode".to_string());
+    library.add(system_by_name).unwrap();
+
+    let server = McpServer::new_with_work_dir(library, test_dir.path().to_path_buf(), None)
+        .await
+        .unwrap();
+    let prompts = server.list_prompts().await.unwrap();
+
+    // Only the regular prompt should be in the list
+    assert_eq!(prompts.len(), 1, "Only non-partial and non-system prompts should be listed");
+    assert_eq!(prompts[0], "regular");
+
+    // Verify partials are not in the list
+    assert!(!prompts.contains(&"_partials/header".to_string()));
+    assert!(!prompts.contains(&"_partials/footer".to_string()));
+
+    // Verify system prompts are not in the list
+    assert!(!prompts.contains(&".system/tester".to_string()));
+    assert!(!prompts.contains(&".system/implementer".to_string()));
+}
+
+#[tokio::test]
 async fn test_mcp_server_get_prompt() {
     let test_dir = tempfile::tempdir().unwrap();
     let original_dir = std::env::current_dir().expect("Failed to get current dir");

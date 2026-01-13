@@ -92,8 +92,8 @@ impl McpTool for GlobFileTool {
             ));
         }
 
-        // Validate pattern
-        validate_glob_pattern(&request.pattern)?;
+        // Validate pattern - pass the path to allow broader patterns when search is scoped
+        validate_glob_pattern(&request.pattern, request.path.as_deref())?;
 
         // Use FilePathValidator for comprehensive security validation
         let validator = FilePathValidator::new();
@@ -180,6 +180,14 @@ impl McpTool for GlobFileTool {
         let duration_ms = start_time.elapsed().as_millis() as u64;
         let file_count = matched_files.len();
 
+        // Log the match results at INFO level for visibility
+        tracing::info!(
+            "📁 Glob matched {} files for pattern '{}' in {}ms",
+            file_count,
+            request.pattern,
+            duration_ms
+        );
+
         // Send completion notification (100% progress) with results summary.
         // Non-blocking: notification failures don't affect tool response (uses .ok()).
         // Metadata includes file count and duration for client feedback and performance monitoring.
@@ -260,6 +268,9 @@ fn find_files_with_gitignore(
     match_options.require_literal_separator = false;
     match_options.require_literal_leading_dot = false;
 
+    // Get current working directory for relative path conversion
+    let cwd = std::env::current_dir().unwrap_or_else(|_| search_dir.to_path_buf());
+
     for entry in walker {
         // Performance optimization: stop if we have enough results
         if matched_files.len() >= MAX_RESULTS {
@@ -307,7 +318,12 @@ fn find_files_with_gitignore(
                     }
 
                     if matched {
-                        matched_files.push(path.to_string_lossy().to_string());
+                        // Convert to relative path from cwd to reduce context size
+                        let display_path = path.strip_prefix(&cwd)
+                            .unwrap_or(path)
+                            .to_string_lossy()
+                            .to_string();
+                        matched_files.push(display_path);
                     }
                 }
             }
@@ -319,7 +335,7 @@ fn find_files_with_gitignore(
     }
 
     // Sort by modification time (most recent first)
-    sort_files_by_modification_time(&mut matched_files);
+    sort_files_by_modification_time(&mut matched_files, &cwd);
 
     Ok(matched_files)
 }
@@ -351,6 +367,9 @@ fn find_files_with_glob(
 
     let mut matched_files = Vec::new();
 
+    // Get current working directory for relative path conversion
+    let cwd = std::env::current_dir().unwrap_or_else(|_| search_dir.to_path_buf());
+
     for entry in entries {
         // Performance optimization: stop if we have enough results
         if matched_files.len() >= MAX_RESULTS {
@@ -365,7 +384,12 @@ fn find_files_with_glob(
             Ok(path) => {
                 // Only include files, not directories
                 if path.is_file() {
-                    matched_files.push(path.to_string_lossy().to_string());
+                    // Convert to relative path from cwd to reduce context size
+                    let display_path = path.strip_prefix(&cwd)
+                        .unwrap_or(&path)
+                        .to_string_lossy()
+                        .to_string();
+                    matched_files.push(display_path);
                 }
             }
             Err(err) => {
@@ -375,16 +399,30 @@ fn find_files_with_glob(
     }
 
     // Sort by modification time (most recent first)
-    sort_files_by_modification_time(&mut matched_files);
+    sort_files_by_modification_time(&mut matched_files, &cwd);
 
     Ok(matched_files)
 }
 
 /// Sort files by modification time (most recent first)
-fn sort_files_by_modification_time(files: &mut [String]) {
+/// 
+/// Takes relative paths and resolves them against cwd to get metadata
+fn sort_files_by_modification_time(files: &mut [String], cwd: &Path) {
     files.sort_by(|a, b| {
-        let a_metadata = std::fs::metadata(a).ok();
-        let b_metadata = std::fs::metadata(b).ok();
+        // Resolve relative paths to absolute for metadata lookup
+        let a_path = if Path::new(a).is_relative() {
+            cwd.join(a)
+        } else {
+            Path::new(a).to_path_buf()
+        };
+        let b_path = if Path::new(b).is_relative() {
+            cwd.join(b)
+        } else {
+            Path::new(b).to_path_buf()
+        };
+
+        let a_metadata = std::fs::metadata(&a_path).ok();
+        let b_metadata = std::fs::metadata(&b_path).ok();
 
         match (a_metadata, b_metadata) {
             (Some(a_meta), Some(b_meta)) => {
@@ -400,13 +438,80 @@ fn sort_files_by_modification_time(files: &mut [String]) {
 }
 
 /// Validate glob pattern for common issues
-fn validate_glob_pattern(pattern: &str) -> Result<(), McpError> {
+/// 
+/// When `path` is provided, broader patterns are allowed since the search is already scoped
+/// to a specific directory.
+fn validate_glob_pattern(pattern: &str, path: Option<&str>) -> Result<(), McpError> {
     // Check for empty pattern
     if pattern.trim().is_empty() {
         return Err(rmcp::ErrorData::invalid_request(
             "Pattern cannot be empty".to_string(),
             None,
         ));
+    }
+
+    // Only apply strict pattern restrictions when no path is specified
+    // When a path is provided, the search is already scoped to that directory
+    let has_scoped_path = path.is_some();
+    
+    if !has_scoped_path {
+        // CRITICAL: Reject overly broad patterns that will match thousands of files
+        // These patterns cause performance issues, rate limiting, and context overflow
+        let forbidden_patterns = [
+            ("*", "matches all files in directory"),
+            ("**/*", "matches all files recursively"),
+            ("*.*", "matches all files with extensions"),
+        ];
+
+        for (forbidden, reason) in &forbidden_patterns {
+            if pattern == *forbidden {
+                tracing::warn!(
+                    "🚫 Rejected excessive glob pattern '{}': {}",
+                    forbidden,
+                    reason
+                );
+                return Err(rmcp::ErrorData::invalid_request(
+                    format!(
+                        "Pattern '{}' is not allowed: {}.\n\n\
+                        Instead, use targeted patterns:\n\
+                        - For root configs: '*.toml', '*.json', 'package.json'\n\
+                        - For specific dirs: 'src/**/*.rs', 'tests/**/*.py'\n\
+                        - Or use shell commands: 'ls', 'find src -name \"*.rs\"'",
+                        forbidden, reason
+                    ),
+                    None,
+                ));
+            }
+        }
+
+        // Reject patterns that glob entire project for a single extension
+        // Pattern like **/*.ext without a directory prefix
+        if pattern.starts_with("**/") && pattern.matches('/').count() == 1 {
+            // This is a pattern like **/*.rs or **/*.py
+            let extension = pattern.strip_prefix("**/").unwrap_or("");
+            if extension.starts_with("*.") {
+                tracing::warn!(
+                    "🚫 Rejected overly broad glob pattern '{}': matches ALL {} files recursively",
+                    pattern,
+                    extension
+                );
+                return Err(rmcp::ErrorData::invalid_request(
+                    format!(
+                        "Pattern '{}' is too broad: matches ALL {} files recursively.\n\n\
+                        Instead, scope to specific directories:\n\
+                        - 'src/**/*.rs' for Rust files in src/\n\
+                        - 'tests/**/*.py' for Python files in tests/\n\
+                        - 'lib/**/*.js' for JavaScript files in lib/\n\n\
+                        Or use project-specific commands:\n\
+                        - Rust: 'cargo build', 'cargo test'\n\
+                        - Python: 'pytest', 'mypy'\n\
+                        - JS/TS: 'npm test', 'npx tsc'",
+                        pattern, extension
+                    ),
+                    None,
+                ));
+            }
+        }
     }
 
     // Check for extremely long patterns that might cause performance issues
@@ -471,22 +576,27 @@ mod tests {
         let mut context = create_test_context().await;
         context.progress_sender = Some(progress_sender);
 
-        // Create a temporary directory with test files
+        // Create a temporary directory with test files in subdirectory
         let temp_dir = tempfile::TempDir::new().expect("Failed to create temp dir");
         let test_dir = temp_dir.path();
+        
+        // Create src subdirectory
+        let src_dir = test_dir.join("src");
+        std::fs::create_dir(&src_dir).expect("Failed to create src dir");
 
-        // Create test files
+        // Create test files in src/
         for i in 0..5 {
-            let test_file = test_dir.join(format!("test_{}.rs", i));
+            let test_file = src_dir.join(format!("test_{}.rs", i));
             std::fs::write(&test_file, format!("// Test file {}\n", i))
                 .expect("Failed to write test file");
         }
 
         let tool = GlobFileTool::new();
         let mut arguments = serde_json::Map::new();
+        // Use scoped pattern instead of **/*.rs
         arguments.insert(
             "pattern".to_string(),
-            serde_json::Value::String("**/*.rs".to_string()),
+            serde_json::Value::String("src/**/*.rs".to_string()),
         );
         arguments.insert(
             "path".to_string(),
@@ -517,7 +627,7 @@ mod tests {
         assert!(start.message.contains("Matching pattern"));
         assert!(start.metadata.is_some());
         let start_meta = start.metadata.as_ref().unwrap();
-        assert_eq!(start_meta["pattern"], "**/*.rs");
+        assert_eq!(start_meta["pattern"], "src/**/*.rs");
         assert_eq!(start_meta["case_sensitive"], false);
         assert_eq!(start_meta["respect_git_ignore"], true);
 
@@ -576,5 +686,107 @@ mod tests {
 
         let result = tool.execute(arguments, &context).await;
         assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_glob_rejects_wildcard_star() {
+        let context = create_test_context().await;
+        let tool = GlobFileTool::new();
+
+        let mut arguments = serde_json::Map::new();
+        arguments.insert(
+            "pattern".to_string(),
+            serde_json::Value::String("*".to_string()),
+        );
+
+        let result = tool.execute(arguments, &context).await;
+        assert!(result.is_err());
+        let err_msg = format!("{:?}", result.unwrap_err());
+        assert!(err_msg.contains("not allowed"));
+        assert!(err_msg.contains("matches all files"));
+    }
+
+    #[tokio::test]
+    async fn test_glob_rejects_double_star_slash_star() {
+        let context = create_test_context().await;
+        let tool = GlobFileTool::new();
+
+        let mut arguments = serde_json::Map::new();
+        arguments.insert(
+            "pattern".to_string(),
+            serde_json::Value::String("**/*".to_string()),
+        );
+
+        let result = tool.execute(arguments, &context).await;
+        assert!(result.is_err());
+        let err_msg = format!("{:?}", result.unwrap_err());
+        assert!(err_msg.contains("not allowed"));
+        assert!(err_msg.contains("matches all files recursively"));
+    }
+
+    #[tokio::test]
+    async fn test_glob_rejects_star_dot_star() {
+        let context = create_test_context().await;
+        let tool = GlobFileTool::new();
+
+        let mut arguments = serde_json::Map::new();
+        arguments.insert(
+            "pattern".to_string(),
+            serde_json::Value::String("*.*".to_string()),
+        );
+
+        let result = tool.execute(arguments, &context).await;
+        assert!(result.is_err());
+        let err_msg = format!("{:?}", result.unwrap_err());
+        assert!(err_msg.contains("not allowed"));
+        assert!(err_msg.contains("matches all files with extensions"));
+    }
+
+    #[tokio::test]
+    async fn test_glob_rejects_double_star_ext() {
+        let context = create_test_context().await;
+        let tool = GlobFileTool::new();
+
+        // Test **/*.rs pattern (too broad)
+        let mut arguments = serde_json::Map::new();
+        arguments.insert(
+            "pattern".to_string(),
+            serde_json::Value::String("**/*.rs".to_string()),
+        );
+
+        let result = tool.execute(arguments, &context).await;
+        assert!(result.is_err());
+        let err_msg = format!("{:?}", result.unwrap_err());
+        assert!(err_msg.contains("too broad"));
+        assert!(err_msg.contains("ALL"));
+    }
+
+    #[tokio::test]
+    async fn test_glob_accepts_scoped_patterns() {
+        let context = create_test_context().await;
+        let tool = GlobFileTool::new();
+
+        // Create a temporary directory
+        let temp_dir = tempfile::TempDir::new().expect("Failed to create temp dir");
+        let test_dir = temp_dir.path();
+        
+        // Create src directory with a test file
+        let src_dir = test_dir.join("src");
+        std::fs::create_dir(&src_dir).expect("Failed to create src dir");
+        std::fs::write(src_dir.join("test.rs"), "// test").expect("Failed to write file");
+
+        // Test src/**/*.rs pattern (scoped, should work)
+        let mut arguments = serde_json::Map::new();
+        arguments.insert(
+            "pattern".to_string(),
+            serde_json::Value::String("src/**/*.rs".to_string()),
+        );
+        arguments.insert(
+            "path".to_string(),
+            serde_json::Value::String(test_dir.display().to_string()),
+        );
+
+        let result = tool.execute(arguments, &context).await;
+        assert!(result.is_ok());
     }
 }

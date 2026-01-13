@@ -2983,11 +2983,12 @@ mod tests {
     #[tokio::test]
     async fn test_async_process_guard_prevents_zombie_processes() {
         // This test verifies that the Drop implementation properly reaps processes
-        // to prevent zombie processes
+        // to prevent zombie processes. We check the SPECIFIC process we create,
+        // not all zombies, to avoid flakiness from concurrent tests.
 
-        // Get initial zombie count on Unix systems
+        // Track the PID we create
         #[cfg(unix)]
-        let initial_zombies = count_zombie_processes();
+        let spawned_pid: u32;
 
         // Create a scope to ensure guard is dropped
         {
@@ -2998,6 +2999,11 @@ mod tests {
 
             let child = cmd.spawn().expect("Failed to spawn sleep process");
             let pid = child.id().expect("Failed to get process ID");
+
+            #[cfg(unix)]
+            {
+                spawned_pid = pid;
+            }
 
             let guard = AsyncProcessGuard::new(child, "sleep 10".to_string());
 
@@ -3012,50 +3018,64 @@ mod tests {
         // Give the Drop implementation time to complete
         tokio::time::sleep(Duration::from_millis(200)).await;
 
-        // Check that we didn't create any NEW zombie processes
-        // The final count should be less than or equal to initial (our Drop cleaned up)
-        // or equal to initial (no zombies created)
+        // Check that our specific process is not a zombie
+        // We check the specific PID to avoid flakiness from other concurrent processes
         #[cfg(unix)]
         {
-            let final_zombies = count_zombie_processes();
+            let is_zombie = is_process_zombie(spawned_pid);
             assert!(
-                final_zombies <= initial_zombies,
-                "Drop should not create zombie processes: initial={}, final={}. \
-                 Final should be <= initial (our process was reaped).",
-                initial_zombies,
-                final_zombies
+                !is_zombie,
+                "Process {} should not be a zombie after Drop. \
+                 The AsyncProcessGuard should have reaped it.",
+                spawned_pid
             );
         }
     }
 
     #[cfg(unix)]
-    fn count_zombie_processes() -> usize {
-        // Count zombie processes owned by current user
+    fn is_process_zombie(pid: u32) -> bool {
+        // Check if a specific process is a zombie
         use std::process::Command as StdCommand;
 
-        let output = StdCommand::new("ps")
-            .arg("-eo")
-            .arg("stat,uid")
-            .output()
-            .expect("Failed to run ps command");
-
-        let output_str = String::from_utf8_lossy(&output.stdout);
-        let current_uid = unsafe { libc::getuid() };
-
-        output_str
-            .lines()
-            .filter(|line| {
-                let parts: Vec<&str> = line.split_whitespace().collect();
-                if parts.len() >= 2 {
-                    // Check if status contains 'Z' (zombie) and UID matches
-                    let stat = parts[0];
-                    let uid = parts[1].parse::<u32>().unwrap_or(0);
-                    stat.contains('Z') && uid == current_uid
-                } else {
-                    false
+        // Try to get process status via /proc on Linux or ps on macOS
+        #[cfg(target_os = "linux")]
+        {
+            let stat_path = format!("/proc/{}/stat", pid);
+            if let Ok(content) = std::fs::read_to_string(&stat_path) {
+                // Format: pid (comm) state ...
+                // State is the third field, 'Z' means zombie
+                if let Some(state_start) = content.rfind(')') {
+                    let after_comm = &content[state_start + 1..];
+                    let state = after_comm.trim().chars().next();
+                    return state == Some('Z');
                 }
-            })
-            .count()
+            }
+            false
+        }
+
+        #[cfg(target_os = "macos")]
+        {
+            let output = StdCommand::new("ps")
+                .arg("-p")
+                .arg(pid.to_string())
+                .arg("-o")
+                .arg("stat=")
+                .output();
+
+            match output {
+                Ok(out) => {
+                    let stat = String::from_utf8_lossy(&out.stdout);
+                    stat.trim().contains('Z')
+                }
+                Err(_) => false, // Process doesn't exist, not a zombie
+            }
+        }
+
+        #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+        {
+            let _ = pid;
+            false // Can't check on other platforms
+        }
     }
 
     #[cfg(unix)]

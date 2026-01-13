@@ -759,6 +759,15 @@ pub struct SetVariableAction {
     pub value: String,
 }
 
+/// Action that sets a variable in the global CEL context (shared between tools and flows)
+#[derive(Debug, Clone)]
+pub struct CelSetAction {
+    /// Variable name to set in global CEL context
+    pub variable_name: String,
+    /// Value to set (supports boolean literals: "true", "false")
+    pub value: String,
+}
+
 /// Action that immediately fails with an abort error
 #[derive(Debug, Clone)]
 pub struct AbortAction {
@@ -821,6 +830,58 @@ impl Action for SetVariableAction {
 
     fn action_type(&self) -> &'static str {
         "set_variable"
+    }
+
+    impl_as_any!();
+}
+
+impl CelSetAction {
+    /// Create a new CEL set action
+    pub fn new(variable_name: String, value: String) -> Self {
+        Self {
+            variable_name,
+            value,
+        }
+    }
+}
+
+impl VariableSubstitution for CelSetAction {}
+
+#[async_trait::async_trait]
+impl Action for CelSetAction {
+    async fn execute(&self, context: &mut WorkflowTemplateContext) -> ActionResult<Value> {
+        // Substitute variables in the value
+        let substituted_value = self.substitute_string(&self.value, context);
+
+        // Set the variable in global CEL context (shared process-wide)
+        let cel_state = swissarmyhammer_cel::CelState::global();
+        cel_state
+            .set(&self.variable_name, &substituted_value)
+            .map_err(|e| {
+                ActionError::ExecutionError(format!(
+                    "Failed to set CEL variable '{}': {}",
+                    self.variable_name, e
+                ))
+            })?;
+
+        tracing::info!(
+            "Set global CEL variable '{}' = '{}'",
+            self.variable_name,
+            substituted_value
+        );
+
+        // Mark action as successful
+        context.insert(LAST_ACTION_RESULT_KEY.to_string(), Value::Bool(true));
+
+        Ok(Value::String(substituted_value))
+    }
+
+    fn description(&self) -> String {
+        format!("Set CEL variable '{}' to '{}'", self.variable_name, self.value)
+    }
+
+    fn action_type(&self) -> &'static str {
+        "cel_set"
     }
 
     impl_as_any!();
@@ -1944,6 +2005,10 @@ pub fn parse_action_from_description(description: &str) -> ActionResult<Option<B
 
     if let Some(set_action) = parser.parse_set_variable_action(description)? {
         return Ok(Some(Box::new(set_action)));
+    }
+
+    if let Some(cel_set_action) = parser.parse_cel_set_action(description)? {
+        return Ok(Some(Box::new(cel_set_action)));
     }
 
     if let Some(sub_workflow_action) = parser.parse_sub_workflow_action(description)? {

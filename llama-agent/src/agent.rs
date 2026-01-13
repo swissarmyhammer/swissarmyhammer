@@ -947,122 +947,119 @@ impl AgentAPI for AgentServer {
                 working_session.id, working_session.cached_message_count
             );
 
-            // Check if response contains tool calls
-            match &response.finish_reason {
-                crate::types::FinishReason::Stopped(reason) if reason == "Tool call detected" => {
-                    debug!("Tool call detected, processing tool calls...");
+            // ALWAYS check if response contains tool calls, regardless of finish_reason
+            // The finish_reason is just a hint - we must parse the actual output
+            debug!("Checking generated text for tool calls...");
+            debug!(
+                "Generated text for tool call processing: {}",
+                response.generated_text
+            );
+
+            // Try to extract tool calls from the generated text
+            let tool_results = self
+                .process_tool_calls(&response.generated_text, &working_session)
+                .await?;
+
+            debug!(
+                "Tool call extraction completed with {} results",
+                tool_results.len()
+            );
+
+            // If we found tool calls, process them and continue the loop
+            if !tool_results.is_empty() {
+                debug!("Processing {} tool calls...", tool_results.len());
+
+                // Add the assistant's response (with tool calls) to the session
+                debug!("Adding assistant message with tool calls to session");
+                trace!("Assistant message content: {}", response.generated_text);
+                debug!(
+                    "Session message count before adding assistant message: {}",
+                    working_session.messages.len()
+                );
+                working_session.messages.push(crate::types::Message {
+                    role: crate::types::MessageRole::Assistant,
+                    content: response.generated_text.clone(),
+                    tool_call_id: None,
+                    tool_name: None,
+                    timestamp: std::time::SystemTime::now(),
+                });
+                debug!(
+                    "Session message count after adding assistant message: {}",
+                    working_session.messages.len()
+                );
+
+                // Add tool results as Tool messages to the session
+                debug!(
+                    "Adding {} tool results as messages to session",
+                    tool_results.len()
+                );
+                debug!(
+                    "Session message count before adding tool results: {}",
+                    working_session.messages.len()
+                );
+
+                for (i, tool_result) in tool_results.iter().enumerate() {
+                    let tool_content = if let Some(error) = &tool_result.error {
+                        debug!("Tool result {}: ERROR - {}", i + 1, error);
+                        format!("Error: {}", error)
+                    } else {
+                        let content = serde_json::to_string(&tool_result.result)
+                            .unwrap_or_else(|_| "Invalid tool result".to_string());
+                        debug!("Tool result {}: SUCCESS - {}", i + 1, content);
+                        content
+                    };
+
                     debug!(
-                        "Generated text for tool call processing: {}",
-                        response.generated_text
+                        "Adding tool message {}/{} for call_id: {}",
+                        i + 1,
+                        tool_results.len(),
+                        tool_result.call_id
                     );
-
-                    // Process tool calls
-                    debug!("Beginning tool call processing workflow...");
-                    let tool_results = self
-                        .process_tool_calls(&response.generated_text, &working_session)
-                        .await?;
                     debug!(
-                        "Tool call processing completed with {} results",
-                        tool_results.len()
-                    );
-
-                    if tool_results.is_empty() {
-                        debug!("No tool results returned, ending tool call workflow");
-                        break;
-                    }
-
-                    // Add the assistant's response (with tool calls) to the session
-                    debug!("Adding assistant message with tool calls to session");
-                    trace!("Assistant message content: {}", response.generated_text);
-                    debug!(
-                        "Session message count before adding assistant message: {}",
-                        working_session.messages.len()
+                        "Tool message content length: {} characters",
+                        tool_content.len()
                     );
                     working_session.messages.push(crate::types::Message {
-                        role: crate::types::MessageRole::Assistant,
-                        content: response.generated_text.clone(),
-                        tool_call_id: None,
+                        role: crate::types::MessageRole::Tool,
+                        content: tool_content,
+                        tool_call_id: Some(tool_result.call_id),
                         tool_name: None,
                         timestamp: std::time::SystemTime::now(),
                     });
                     debug!(
-                        "Session message count after adding assistant message: {}",
+                        "Session message count after adding tool result {}: {}",
+                        i + 1,
                         working_session.messages.len()
                     );
-
-                    // Add tool results as Tool messages to the session
-                    debug!(
-                        "Adding {} tool results as messages to session",
-                        tool_results.len()
-                    );
-                    debug!(
-                        "Session message count before adding tool results: {}",
-                        working_session.messages.len()
-                    );
-
-                    for (i, tool_result) in tool_results.iter().enumerate() {
-                        let tool_content = if let Some(error) = &tool_result.error {
-                            debug!("Tool result {}: ERROR - {}", i + 1, error);
-                            format!("Error: {}", error)
-                        } else {
-                            let content = serde_json::to_string(&tool_result.result)
-                                .unwrap_or_else(|_| "Invalid tool result".to_string());
-                            debug!("Tool result {}: SUCCESS - {}", i + 1, content);
-                            content
-                        };
-
-                        debug!(
-                            "Adding tool message {}/{} for call_id: {}",
-                            i + 1,
-                            tool_results.len(),
-                            tool_result.call_id
-                        );
-                        debug!(
-                            "Tool message content length: {} characters",
-                            tool_content.len()
-                        );
-                        working_session.messages.push(crate::types::Message {
-                            role: crate::types::MessageRole::Tool,
-                            content: tool_content,
-                            tool_call_id: Some(tool_result.call_id),
-                            tool_name: None,
-                            timestamp: std::time::SystemTime::now(),
-                        });
-                        debug!(
-                            "Session message count after adding tool result {}: {}",
-                            i + 1,
-                            working_session.messages.len()
-                        );
-                    }
-
-                    working_session.updated_at = std::time::SystemTime::now();
-
-                    debug!(
-                        "Tool call processing completed with {} results, continuing generation",
-                        tool_results.len()
-                    );
-                    debug!(
-                        "Final session message count after tool workflow: {}",
-                        working_session.messages.len()
-                    );
-                    debug!("Continuing to next iteration to generate response incorporating tool results");
-
-                    // Continue the loop to generate response incorporating tool results
-                    continue;
                 }
-                crate::types::FinishReason::Stopped(reason) => {
-                    // No more tool calls, we're done
-                    debug!(
-                        "Generation completed without tool calls (reason: {})",
-                        reason
-                    );
-                    debug!("Final generated text: {}", response.generated_text);
-                    debug!(
-                        "Final accumulated response length: {} characters",
-                        accumulated_response.len()
-                    );
-                    break;
-                }
+
+                working_session.updated_at = std::time::SystemTime::now();
+
+                debug!(
+                    "Tool call processing completed with {} results, continuing generation",
+                    tool_results.len()
+                );
+                debug!(
+                    "Final session message count after tool workflow: {}",
+                    working_session.messages.len()
+                );
+                debug!("Continuing to next iteration to generate response incorporating tool results");
+
+                // Continue the loop to generate response incorporating tool results
+                continue;
+            } else {
+                // No tool calls found, generation is complete
+                debug!("No tool calls found in generated text");
+                debug!(
+                    "Generation completed (reason: {:?})",
+                    response.finish_reason
+                );
+                debug!("Final generated text: {}", response.generated_text);
+                debug!(
+                    "Final accumulated response length: {} characters",
+                    accumulated_response.len()
+                );
+                break;
             }
         }
 

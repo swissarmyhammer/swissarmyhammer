@@ -93,8 +93,14 @@ mod tests {
         manager.record(r#"{"type":"init","session":"test1"}"#.to_string());
         manager.record(r#"{"type":"prompt","content":"hello"}"#.to_string());
 
+        // Drop the manager to ensure all messages are flushed
+        drop(manager);
+
         // Give the writer task time to complete
         tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+
+        // Verify the file exists before reading
+        assert!(test_file.exists(), "Test file was not created");
 
         // Read the file and verify contents
         let contents = fs::read_to_string(&test_file).unwrap();

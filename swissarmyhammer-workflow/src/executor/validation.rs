@@ -590,17 +590,29 @@ impl WorkflowExecutor {
         Ok(())
     }
 
-    /// Execute CEL program with context
+    /// Execute CEL program with context (returns false if variables are undeclared, allowing lazy evaluation)
     fn execute_cel_program(
         &self,
         program: &cel_interpreter::Program,
         cel_context: &Context,
         expression: &str,
     ) -> ExecutorResult<CelValue> {
-        program.execute(cel_context).map_err(|e| {
-            ExecutorError::ExpressionError(format!(
-                "CEL execution failed: Unable to execute expression '{expression}' ({e})"
-            ))
+        program.execute(cel_context).or_else(|e| {
+            let err_msg = e.to_string();
+            // If the error is about undeclared references, treat as false (variable doesn't exist yet)
+            // This allows workflows to reference variables that will be set during execution
+            if err_msg.contains("undeclared") || err_msg.contains("Undeclared") {
+                tracing::debug!(
+                    "CEL expression '{}' references undeclared variable, treating as false: {}",
+                    expression,
+                    err_msg
+                );
+                Ok(CelValue::Bool(false))
+            } else {
+                Err(ExecutorError::ExpressionError(format!(
+                    "CEL execution failed: Unable to execute expression '{expression}' ({e})"
+                )))
+            }
         })
     }
 

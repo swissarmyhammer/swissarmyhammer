@@ -1362,17 +1362,55 @@ impl agent_client_protocol::Agent for AcpServer {
         let mut all_generated_text = String::new();
 
         loop {
-            // Get model's actual context size for max_tokens
+            // Calculate max_tokens based on available context space
             let model_context_size = self
                 .agent_server
                 .get_model_metadata()
                 .await
-                .map(|metadata| metadata.context_size as u32);
+                .map(|metadata| metadata.context_size)
+                .unwrap_or(4096); // Default fallback
+
+            // Get current token usage from session
+            let current_tokens = self
+                .agent_server
+                .get_session(&acp_session.llama_session_id)
+                .await
+                .ok()
+                .flatten()
+                .map(|session| session.token_usage().total)
+                .unwrap_or(0);
+
+            // Calculate available space in context window
+            let available_tokens = model_context_size.saturating_sub(current_tokens);
+
+            // Cap max_tokens to min(16k, available_space) to prevent hanging
+            // and ensure reasonable generation limits
+            const MAX_GENERATION_TOKENS: usize = 16384; // 16k tokens
+            const MIN_GENERATION_TOKENS: usize = 512; // Minimum reasonable generation
+
+            let max_tokens = if available_tokens < MIN_GENERATION_TOKENS {
+                tracing::warn!(
+                    "Very limited context space available: {} tokens (used: {}/{})",
+                    available_tokens,
+                    current_tokens,
+                    model_context_size
+                );
+                MIN_GENERATION_TOKENS.min(available_tokens)
+            } else {
+                available_tokens.min(MAX_GENERATION_TOKENS)
+            };
+
+            tracing::debug!(
+                "Context usage: {}/{} tokens, max_tokens set to {}",
+                current_tokens,
+                model_context_size,
+                max_tokens
+            );
 
             // Use AgentServer's streaming generate method
             let generation_request = crate::types::GenerationRequest {
                 session_id: acp_session.llama_session_id,
-                max_tokens: model_context_size, // Use model's actual context size
+                max_tokens: Some(max_tokens as u32),
                 temperature: None,
                 top_p: None,
                 stop_tokens: vec![],
@@ -1441,21 +1479,6 @@ impl agent_client_protocol::Agent for AcpServer {
             // Update stop reason from this turn's finish reason
             if let Some(ref reason) = llama_finish_reason {
                 final_stop_reason = Self::map_finish_reason_to_stop_reason(reason);
-
-                // If we hit a hard limit (MaxTokens, Cancelled, etc.), break immediately
-                match final_stop_reason {
-                    agent_client_protocol::StopReason::MaxTokens
-                    | agent_client_protocol::StopReason::MaxTurnRequests
-                    | agent_client_protocol::StopReason::Cancelled
-                    | agent_client_protocol::StopReason::Refusal => {
-                        tracing::info!(
-                            "Stopping agentic loop due to: {}",
-                            Pretty(&final_stop_reason)
-                        );
-                        break;
-                    }
-                    _ => {}
-                }
             }
 
             if tool_calls.is_empty() {
@@ -1574,9 +1597,20 @@ impl agent_client_protocol::Agent for AcpServer {
                 }
             }
 
-            // Continue loop to generate agent's response to the tool results
+            // After executing tool calls, check if model signaled it's done
+            // If we have a finish_reason, it means the model stopped - honor that and exit
+            if llama_finish_reason.is_some() {
+                tracing::info!(
+                    "Stopping agentic loop after executing {} tool calls (reason: {})",
+                    tool_calls_count,
+                    Pretty(&final_stop_reason)
+                );
+                break;
+            }
+
+            // If no finish_reason, continue to generate agent's response to tool results
             tracing::info!(
-                "Continuing agentic loop after executing {} tool calls",
+                "Continuing agentic loop after executing {} tool calls (no finish reason yet)",
                 tool_calls_count
             );
         }

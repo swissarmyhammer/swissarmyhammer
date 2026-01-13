@@ -21,10 +21,15 @@ stateDiagram-v2
 
 ## Actions
 
-- start: log "Making tests pass"
+- start: shell "echo 'Initializing test workflow'"
 - test: execute prompt "test"
 - do_todos: run workflow "do"
+- loop: log "Checking test results"
 - done: log "All tests passing!"
+
+## Initialization
+
+Before running the workflow, ensure `are_tests_passing` is initialized in CEL context
 
 ## Description
 

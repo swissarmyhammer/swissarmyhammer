@@ -32,7 +32,9 @@ fn create_test_environment() -> (
     let storage = FilePermissionStorage::new(temp_dir.path().to_path_buf());
     let permission_engine = Arc::new(PermissionPolicyEngine::new(Box::new(storage)));
 
-    let session_manager = Arc::new(SessionManager::new());
+    // Use temp directory for session storage to avoid issues with current working directory
+    let session_storage_path = temp_dir.path().join("sessions");
+    let session_manager = Arc::new(SessionManager::new().with_storage_path(Some(session_storage_path)));
 
     // Create permissions with no auto-approved tools to force permission checks
     let permissions = ToolPermissions {
@@ -87,7 +89,9 @@ fn create_test_environment_with_capabilities(
     let storage = FilePermissionStorage::new(temp_dir.path().to_path_buf());
     let permission_engine = Arc::new(PermissionPolicyEngine::new(Box::new(storage)));
 
-    let session_manager = Arc::new(SessionManager::new());
+    // Use temp directory for session storage to avoid issues with current working directory
+    let session_storage_path = temp_dir.path().join("sessions");
+    let session_manager = Arc::new(SessionManager::new().with_storage_path(Some(session_storage_path)));
 
     // Create permissions with no auto-approved tools to force permission checks
     let permissions = ToolPermissions {

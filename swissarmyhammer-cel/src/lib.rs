@@ -269,8 +269,8 @@ mod tests {
             serde_json::json!(100)
         );
         assert_eq!(
-            cel_value_to_json(&CelValue::Float(3.14)),
-            serde_json::json!(3.14)
+            cel_value_to_json(&CelValue::Float(3.5)),
+            serde_json::json!(3.5)
         );
         assert_eq!(
             cel_value_to_json(&CelValue::Bool(true)),

@@ -81,6 +81,9 @@ cel-interpreter = "0.8"
 # Parser combinator library for action parsing
 chumsky = "0.10.1"
 
+# Module initialization
+ctor = "0.2"
+
 # Performance optimizations
 lru = "0.12"
 zstd = "0.13"

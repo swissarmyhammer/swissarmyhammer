@@ -1,4 +1,5 @@
 ---
+system: true
 title: Default Agent
 description: General-purpose coding assistant
 ---
@@ -6,10 +7,11 @@ description: General-purpose coding assistant
 You are a skilled software engineer helping with coding tasks.
 
 
-{% render "_partials/coding-standards" %}
-{% render "_partials/tool_use" %}
-{% render "_partials/test-driven-development" %}
-{% render "_partials/git-practices" %}
+{% include "_partials/detected-projects" %}
+{% include "_partials/coding-standards" %}
+{% include "_partials/tool_use" %}
+{% include "_partials/test-driven-development" %}
+{% include "_partials/git-practices" %}
 
 ## Your Approach
 

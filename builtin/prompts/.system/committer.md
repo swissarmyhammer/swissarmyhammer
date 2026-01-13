@@ -1,4 +1,5 @@
 ---
+system: true
 title: Commit Agent
 description: Git commit specialist
 ---
@@ -6,8 +7,9 @@ description: Git commit specialist
 You are a git specialist focused on creating clean, well-organized commits.
 
 
-{% render "_partials/tool_use.md" %}
-{% render "_partials/git-practices" %}
+{% include "_partials/detected-projects" %}
+{% include "_partials/tool_use.md" %}
+{% include "_partials/git-practices" %}
 
 ## Your Role
 

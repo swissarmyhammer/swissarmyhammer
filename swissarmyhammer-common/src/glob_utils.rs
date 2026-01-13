@@ -51,12 +51,12 @@ impl Default for GlobExpansionConfig {
 /// * `Err` - If patterns are invalid or filesystem operations fail
 ///
 /// # Examples
-/// ```
+/// ```no_run
 /// use swissarmyhammer_common::glob_utils::{expand_glob_patterns, GlobExpansionConfig};
 ///
 /// let patterns = vec!["**/*.rs".to_string()];
 /// let config = GlobExpansionConfig::default();
-/// let files = expand_glob_patterns(&patterns, &config)?;
+/// let files = expand_glob_patterns(&patterns, &config).unwrap();
 /// ```
 pub fn expand_glob_patterns(
     patterns: &[String],
@@ -473,14 +473,19 @@ pub fn parse_glob_pattern(pattern: &str) -> (PathBuf, String) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_utils::CurrentDirGuard;
     use std::fs;
     use tempfile::TempDir;
 
     #[test]
+    #[serial_test::serial(cwd)]
     fn test_expand_glob_patterns_single_file() {
         let temp_dir = TempDir::new().unwrap();
         let file_path = temp_dir.path().join("test.rs");
         fs::write(&file_path, "fn main() {}").unwrap();
+
+        // Use CurrentDirGuard to safely change directory
+        let _guard = CurrentDirGuard::new(temp_dir.path()).unwrap();
 
         let patterns = vec![file_path.to_string_lossy().to_string()];
         let config = GlobExpansionConfig::default();
@@ -491,10 +496,14 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial(cwd)]
     fn test_expand_glob_patterns_directory() {
         let temp_dir = TempDir::new().unwrap();
         fs::write(temp_dir.path().join("file1.rs"), "fn main() {}").unwrap();
         fs::write(temp_dir.path().join("file2.rs"), "fn test() {}").unwrap();
+
+        // Use CurrentDirGuard to safely change directory
+        let _guard = CurrentDirGuard::new(temp_dir.path()).unwrap();
 
         let patterns = vec![temp_dir.path().to_string_lossy().to_string()];
         let config = GlobExpansionConfig::default();
@@ -504,27 +513,26 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial(cwd)]
     fn test_expand_glob_patterns_wildcard() {
         let temp_dir = TempDir::new().unwrap();
         fs::write(temp_dir.path().join("file1.rs"), "fn main() {}").unwrap();
         fs::write(temp_dir.path().join("file2.rs"), "fn test() {}").unwrap();
         fs::write(temp_dir.path().join("file3.txt"), "text").unwrap();
 
-        // Change to temp directory and use relative pattern
-        let orig_dir = std::env::current_dir().unwrap();
-        std::env::set_current_dir(temp_dir.path()).unwrap();
+        // Use CurrentDirGuard to safely change directory
+        let _guard = CurrentDirGuard::new(temp_dir.path()).unwrap();
 
         let patterns = vec!["*.rs".to_string()];
         let config = GlobExpansionConfig::default();
         let result = expand_glob_patterns(&patterns, &config).unwrap();
-
-        std::env::set_current_dir(orig_dir).unwrap();
 
         assert_eq!(result.len(), 2);
         assert!(result.iter().all(|p| p.extension().unwrap() == "rs"));
     }
 
     #[test]
+    #[serial_test::serial(cwd)]
     fn test_expand_glob_patterns_recursive() {
         let temp_dir = TempDir::new().unwrap();
         let subdir = temp_dir.path().join("src");
@@ -532,39 +540,35 @@ mod tests {
         fs::write(temp_dir.path().join("root.rs"), "fn main() {}").unwrap();
         fs::write(subdir.join("lib.rs"), "fn test() {}").unwrap();
 
-        // Change to temp directory and use relative pattern
-        let orig_dir = std::env::current_dir().unwrap();
-        std::env::set_current_dir(temp_dir.path()).unwrap();
+        // Use CurrentDirGuard to safely change directory
+        let _guard = CurrentDirGuard::new(temp_dir.path()).unwrap();
 
         let patterns = vec!["**/*.rs".to_string()];
         let config = GlobExpansionConfig::default();
         let result = expand_glob_patterns(&patterns, &config).unwrap();
 
-        std::env::set_current_dir(orig_dir).unwrap();
-
         assert_eq!(result.len(), 2);
     }
 
     #[test]
+    #[serial_test::serial(cwd)]
     fn test_expand_glob_patterns_multiple_patterns() {
         let temp_dir = TempDir::new().unwrap();
         fs::write(temp_dir.path().join("file1.rs"), "fn main() {}").unwrap();
         fs::write(temp_dir.path().join("file2.txt"), "text").unwrap();
 
-        // Change to temp directory and use relative patterns
-        let orig_dir = std::env::current_dir().unwrap();
-        std::env::set_current_dir(temp_dir.path()).unwrap();
+        // Use CurrentDirGuard to safely change directory
+        let _guard = CurrentDirGuard::new(temp_dir.path()).unwrap();
 
         let patterns = vec!["*.rs".to_string(), "*.txt".to_string()];
         let config = GlobExpansionConfig::default();
         let result = expand_glob_patterns(&patterns, &config).unwrap();
 
-        std::env::set_current_dir(orig_dir).unwrap();
-
         assert_eq!(result.len(), 2);
     }
 
     #[test]
+    #[serial_test::serial(cwd)]
     fn test_expand_glob_patterns_with_exclusions() {
         let temp_dir = TempDir::new().unwrap();
 
@@ -576,9 +580,8 @@ mod tests {
         fs::create_dir(&excluded_dir).unwrap();
         fs::write(excluded_dir.join("skip.rs"), "fn skip() {}").unwrap();
 
-        // Change to temp directory
-        let orig_dir = std::env::current_dir().unwrap();
-        std::env::set_current_dir(temp_dir.path()).unwrap();
+        // Use CurrentDirGuard to safely change directory
+        let _guard = CurrentDirGuard::new(temp_dir.path()).unwrap();
 
         // Configure to exclude the "excluded" directory
         let config = GlobExpansionConfig {
@@ -589,14 +592,13 @@ mod tests {
         let patterns = vec!["**/*.rs".to_string()];
         let result = expand_glob_patterns(&patterns, &config).unwrap();
 
-        std::env::set_current_dir(orig_dir).unwrap();
-
         // Should only find include.rs, not skip.rs
         assert_eq!(result.len(), 1);
         assert!(result[0].ends_with("include.rs"));
     }
 
     #[test]
+    #[serial_test::serial(cwd)]
     fn test_expand_glob_patterns_respects_gitignore() {
         let temp_dir = TempDir::new().unwrap();
 
@@ -609,6 +611,9 @@ mod tests {
         fs::write(temp_dir.path().join("included.rs"), "fn main() {}").unwrap();
         fs::write(temp_dir.path().join("ignored.rs"), "fn test() {}").unwrap();
 
+        // Use CurrentDirGuard to safely change directory
+        let _guard = CurrentDirGuard::new(temp_dir.path()).unwrap();
+
         // Use directory pattern which triggers WalkBuilder with gitignore support
         let patterns = vec![temp_dir.path().to_string_lossy().to_string()];
         let config = GlobExpansionConfig::default();
@@ -620,6 +625,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial(cwd)]
     fn test_expand_glob_patterns_filters_all_hidden_directories() {
         let temp_dir = TempDir::new().unwrap();
 
@@ -634,7 +640,7 @@ mod tests {
             fs::write(hidden_dir.join("hidden.rs"), "fn hidden() {}").unwrap();
         }
 
-        // Use absolute path pattern instead of changing directory
+        // Use absolute path pattern - no need to change current directory
         let pattern = format!("{}/**/*.rs", temp_dir.path().display());
         let patterns = vec![pattern];
         let config = GlobExpansionConfig::default();
@@ -662,19 +668,17 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial(cwd)]
     fn test_expand_glob_patterns_empty_on_no_match() {
         let temp_dir = TempDir::new().unwrap();
         fs::write(temp_dir.path().join("file.txt"), "text").unwrap();
 
-        // Change to temp directory and use relative pattern
-        let orig_dir = std::env::current_dir().unwrap();
-        std::env::set_current_dir(temp_dir.path()).unwrap();
+        // Use CurrentDirGuard to safely change directory
+        let _guard = CurrentDirGuard::new(temp_dir.path()).unwrap();
 
         let patterns = vec!["*.rs".to_string()];
         let config = GlobExpansionConfig::default();
         let result = expand_glob_patterns(&patterns, &config).unwrap();
-
-        std::env::set_current_dir(orig_dir).unwrap();
 
         assert_eq!(result.len(), 0);
     }

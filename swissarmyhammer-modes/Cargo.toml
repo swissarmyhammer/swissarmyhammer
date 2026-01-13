@@ -35,6 +35,9 @@ include_dir = "0.7"
 
 [dev-dependencies]
 tempfile = { workspace = true }
+tokio = { workspace = true }
+swissarmyhammer-config = { path = "../swissarmyhammer-config" }
+swissarmyhammer-prompts = { path = "../swissarmyhammer-prompts" }
 
 # NEVER add features or feature flags to this Cargo.toml!
 # SwissArmyHammer provides ALL functionality ALL the time.

@@ -1,8 +1,8 @@
 //! Action parsing utilities for workflow state descriptions
 
 use crate::actions::{
-    AbortAction, ActionError, ActionResult, LogAction, LogLevel, PromptAction, SetVariableAction,
-    ShellAction, SubWorkflowAction, WaitAction,
+    AbortAction, ActionError, ActionResult, CelSetAction, LogAction, LogLevel, PromptAction,
+    SetVariableAction, ShellAction, SubWorkflowAction, WaitAction,
 };
 use chumsky::prelude::*;
 use regex::Regex;
@@ -289,6 +289,38 @@ impl ActionParser {
                 }
 
                 Ok(Some(SetVariableAction::new(var_name, value)))
+            }
+            Err(_) => Ok(None),
+        }
+    }
+
+    /// Parse a cel_set action from description
+    /// Format: cel_set variable_name value
+    pub fn parse_cel_set_action(
+        &self,
+        description: &str,
+    ) -> ActionResult<Option<CelSetAction>> {
+        let value_parser = choice((
+            Self::quoted_string(),
+            none_of('"').repeated().at_least(1).collect::<String>(),
+        ));
+
+        let parser = Self::case_insensitive("cel_set")
+            .then_ignore(Self::whitespace())
+            .ignore_then(Self::identifier())
+            .then_ignore(Self::whitespace())
+            .then(value_parser);
+
+        match parser.parse(description.trim()).into_result() {
+            Ok((var_name, value)) => {
+                // Validate variable name
+                if !self.is_valid_variable_name(&var_name) {
+                    return Err(ActionError::ParseError(
+                        format!("Invalid variable name '{var_name}': must start with letter or underscore and contain only alphanumeric characters and underscores")
+                    ));
+                }
+
+                Ok(Some(CelSetAction::new(var_name, value)))
             }
             Err(_) => Ok(None),
         }

@@ -1447,6 +1447,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "ctor"
+version = "0.2.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "32a2785755761f3ddc1492979ce1e48d2c00d09311c39e4466429188f3dd6501"
+dependencies = [
+ "quote",
+ "syn 2.0.112",
+]
+
+[[package]]
 name = "darling"
 version = "0.20.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6233,6 +6243,7 @@ dependencies = [
  "serial_test",
  "sha2",
  "swissarmyhammer",
+ "swissarmyhammer-cel",
  "swissarmyhammer-common",
  "swissarmyhammer-config",
  "swissarmyhammer-git",
@@ -6289,6 +6300,8 @@ dependencies = [
  "serde_yaml",
  "serial_test",
  "swissarmyhammer-common",
+ "swissarmyhammer-project-detection",
+ "swissarmyhammer-prompts",
  "tempfile",
  "thiserror 1.0.69",
  "tracing",
@@ -6348,10 +6361,22 @@ dependencies = [
  "serde_json",
  "serde_yaml",
  "swissarmyhammer-common",
+ "swissarmyhammer-config",
+ "swissarmyhammer-prompts",
  "tempfile",
  "thiserror 1.0.69",
+ "tokio",
  "tracing",
  "walkdir",
+]
+
+[[package]]
+name = "swissarmyhammer-project-detection"
+version = "0.3.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "tempfile",
 ]
 
 [[package]]
@@ -6552,6 +6577,7 @@ dependencies = [
  "chrono",
  "chumsky",
  "clap",
+ "ctor",
  "dashmap",
  "dialoguer",
  "dirs 5.0.1",
