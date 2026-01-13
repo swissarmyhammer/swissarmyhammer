@@ -68,9 +68,7 @@ impl CurrentDirGuard {
 
         let lock_guard = CURRENT_DIR_LOCK.lock().unwrap_or_else(|poisoned| {
             // When a test panics, the mutex is poisoned. We need to clear the poisoning.
-            eprintln!(
-                "WARNING: Current directory lock was poisoned, recovering"
-            );
+            eprintln!("WARNING: Current directory lock was poisoned, recovering");
             poisoned.into_inner()
         });
 

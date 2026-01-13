@@ -727,40 +727,46 @@ impl TemplateContext {
     /// Scans the current directory for project marker files and populates
     /// the "project_types" variable with detected projects.
     fn set_project_types_variable(&mut self) {
-        use swissarmyhammer_project_detection::detect_projects;
         use std::env;
-        
+        use swissarmyhammer_project_detection::detect_projects;
+
         // Skip if already set
         if self.get("project_types").is_some() {
             debug!("project_types already set, not overriding");
             return;
         }
-        
+
         // Get current directory
         let cwd = match env::current_dir() {
             Ok(dir) => dir,
             Err(e) => {
-                debug!("Failed to get current directory for project detection: {}", e);
+                debug!(
+                    "Failed to get current directory for project detection: {}",
+                    e
+                );
                 return;
             }
         };
-        
+
         // Detect projects (max depth 3 to avoid deep traversal)
         match detect_projects(&cwd, Some(3)) {
             Ok(projects) => {
                 // Convert to JSON array
-                let projects_json: Vec<Value> = projects.iter().map(|p| {
-                    serde_json::json!({
-                        "type": p.project_type,
-                        "path": p.path.display().to_string(),
-                        "markers": p.marker_files,
-                        "workspace": p.workspace_info.as_ref().map(|w| serde_json::json!({
-                            "is_root": w.is_root,
-                            "members": w.members,
-                        })),
+                let projects_json: Vec<Value> = projects
+                    .iter()
+                    .map(|p| {
+                        serde_json::json!({
+                            "type": p.project_type,
+                            "path": p.path.display().to_string(),
+                            "markers": p.marker_files,
+                            "workspace": p.workspace_info.as_ref().map(|w| serde_json::json!({
+                                "is_root": w.is_root,
+                                "members": w.members,
+                            })),
+                        })
                     })
-                }).collect();
-                
+                    .collect();
+
                 // Calculate unique project types
                 let mut seen_types = std::collections::HashSet::new();
                 let unique_types: Vec<Value> = projects
@@ -774,10 +780,17 @@ impl TemplateContext {
                         }
                     })
                     .collect();
-                
+
                 self.set("project_types".to_string(), Value::Array(projects_json));
-                self.set("unique_project_types".to_string(), Value::Array(unique_types));
-                debug!("Detected {} project(s) in {}", projects.len(), cwd.display());
+                self.set(
+                    "unique_project_types".to_string(),
+                    Value::Array(unique_types),
+                );
+                debug!(
+                    "Detected {} project(s) in {}",
+                    projects.len(),
+                    cwd.display()
+                );
             }
             Err(e) => {
                 debug!("Failed to detect projects: {}", e);

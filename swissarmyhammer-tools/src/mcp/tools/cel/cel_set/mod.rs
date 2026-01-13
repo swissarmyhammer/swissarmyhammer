@@ -253,11 +253,11 @@ mod tests {
             "key".to_string(),
             serde_json::Value::String("pi".to_string()),
         );
-        args.insert("value".to_string(), serde_json::json!(3.14159));
+        args.insert("value".to_string(), serde_json::json!(1.23456));
 
         let request: CelSetRequest = BaseToolImpl::parse_arguments(args).unwrap();
         assert_eq!(request.get_name().unwrap(), "pi");
-        assert_eq!(request.get_expression().unwrap(), "3.14159");
+        assert_eq!(request.get_expression().unwrap(), "1.23456");
     }
 
     #[test]
@@ -386,14 +386,14 @@ mod tests {
         );
         args.insert(
             "value".to_string(),
-            serde_json::json!([1, "text", true, null, 3.14]),
+            serde_json::json!([1, "text", true, null, 2.72]),
         );
 
         let request: CelSetRequest = BaseToolImpl::parse_arguments(args).unwrap();
         assert_eq!(request.get_name().unwrap(), "mixed");
         assert_eq!(
             request.get_expression().unwrap(),
-            "[1,\"text\",true,null,3.14]"
+            "[1,\"text\",true,null,2.72]"
         );
     }
 

@@ -1,6 +1,6 @@
+use std::env;
 use swissarmyhammer_config::TemplateContext;
 use swissarmyhammer_project_detection::detect_projects;
-use std::env;
 
 #[test]
 fn test_project_detection_in_swissarmyhammer_repo() {
@@ -8,27 +8,34 @@ fn test_project_detection_in_swissarmyhammer_repo() {
     let cwd = env::current_dir().expect("Failed to get current directory");
 
     // Find the workspace root (where the root Cargo.toml is)
-    let workspace_root = cwd.ancestors()
+    let workspace_root = cwd
+        .ancestors()
         .find(|p| p.join("Cargo.toml").exists() && p.join("swissarmyhammer-config").exists())
         .expect("Could not find workspace root");
 
     println!("Testing project detection in: {:?}", workspace_root);
 
     // Test direct project detection
-    let projects = detect_projects(workspace_root, Some(3))
-        .expect("Project detection failed");
+    let projects = detect_projects(workspace_root, Some(3)).expect("Project detection failed");
 
     assert!(!projects.is_empty(), "Should detect at least one project");
 
     // Should detect the root Rust workspace
     let has_rust = projects.iter().any(|p| {
-        matches!(p.project_type, swissarmyhammer_project_detection::ProjectType::Rust)
+        matches!(
+            p.project_type,
+            swissarmyhammer_project_detection::ProjectType::Rust
+        )
     });
     assert!(has_rust, "Should detect Rust project in workspace root");
 
     println!("✅ Found {} projects", projects.len());
     for project in &projects {
-        println!("  - {:?} at {}", project.project_type, project.path.display());
+        println!(
+            "  - {:?} at {}",
+            project.project_type,
+            project.path.display()
+        );
     }
 }
 
@@ -38,7 +45,8 @@ fn test_template_context_has_project_types() {
     let mut ctx = TemplateContext::new();
     ctx.set_default_variables();
 
-    let project_types = ctx.get("project_types")
+    let project_types = ctx
+        .get("project_types")
         .expect("project_types variable should be set in CEL context");
 
     println!("✅ project_types variable is set");
@@ -57,27 +65,49 @@ fn test_project_types_structure() {
     let mut ctx = TemplateContext::new();
     ctx.set_default_variables();
 
-    let project_types = ctx.get("project_types")
+    let project_types = ctx
+        .get("project_types")
         .expect("project_types should be set")
         .as_array()
         .expect("project_types should be an array")
         .clone();
 
     for (i, project) in project_types.iter().enumerate() {
-        let obj = project.as_object()
+        let obj = project
+            .as_object()
             .expect(&format!("Project {} should be an object", i));
 
         // Check required fields
-        assert!(obj.contains_key("type"), "Project {} should have 'type' field", i);
-        assert!(obj.contains_key("path"), "Project {} should have 'path' field", i);
-        assert!(obj.contains_key("markers"), "Project {} should have 'markers' field", i);
+        assert!(
+            obj.contains_key("type"),
+            "Project {} should have 'type' field",
+            i
+        );
+        assert!(
+            obj.contains_key("path"),
+            "Project {} should have 'path' field",
+            i
+        );
+        assert!(
+            obj.contains_key("markers"),
+            "Project {} should have 'markers' field",
+            i
+        );
 
         // Markers should be an array of strings
-        let markers = obj.get("markers").unwrap().as_array()
+        let markers = obj
+            .get("markers")
+            .unwrap()
+            .as_array()
             .expect("markers should be an array");
-        assert!(!markers.is_empty(), "Project {} should have at least one marker", i);
+        assert!(
+            !markers.is_empty(),
+            "Project {} should have at least one marker",
+            i
+        );
 
-        println!("✅ Project {}: type={}, path={}, markers={}",
+        println!(
+            "✅ Project {}: type={}, path={}, markers={}",
             i,
             obj.get("type").unwrap(),
             obj.get("path").unwrap(),

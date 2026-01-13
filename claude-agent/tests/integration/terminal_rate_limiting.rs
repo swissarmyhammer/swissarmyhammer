@@ -140,7 +140,9 @@ async fn test_rate_limiting_terminal_execute() {
     }
 
     // 3rd execution should fail (would need 2 more tokens, only 1 remaining)
-    let result = manager.execute_command(&terminal_id, "/bin/echo test3").await;
+    let result = manager
+        .execute_command(&terminal_id, "/bin/echo test3")
+        .await;
     assert!(
         result.is_err(),
         "3rd terminal execution should be rate limited"
@@ -446,7 +448,9 @@ async fn test_capability_enforcement_on_execute() {
     let terminal_id = format!("term_{}", ulid::Ulid::new());
 
     // Attempt to execute command - should fail due to missing capability
-    let result = manager.execute_command(&terminal_id, "/bin/echo test").await;
+    let result = manager
+        .execute_command(&terminal_id, "/bin/echo test")
+        .await;
     assert!(
         result.is_err(),
         "Execute should fail without terminal capability"

@@ -1,9 +1,9 @@
-use swissarmyhammer_prompts::{PromptLibrary, PromptPartialAdapter};
-use swissarmyhammer_config::TemplateContext;
-use swissarmyhammer_templating::Template;
 use serde_json::json;
 use std::path::PathBuf;
 use std::sync::Arc;
+use swissarmyhammer_config::TemplateContext;
+use swissarmyhammer_prompts::{PromptLibrary, PromptPartialAdapter};
+use swissarmyhammer_templating::Template;
 
 fn get_builtin_prompts_path() -> PathBuf {
     // Tests run from the workspace root
@@ -24,13 +24,10 @@ fn test_detected_projects_includes_rust_instructions() {
             "path": "/test/project",
             "markers": ["Cargo.toml"],
             "workspace": null
-        }])
+        }]),
     );
     // Also set unique_project_types which is required by the template
-    context.set(
-        "unique_project_types".to_string(),
-        json!(["Rust"])
-    );
+    context.set("unique_project_types".to_string(), json!(["Rust"]));
 
     // Load the prompt library with builtin prompts
     let mut library = PromptLibrary::new();
@@ -39,15 +36,16 @@ fn test_detected_projects_includes_rust_instructions() {
         .expect("Failed to load builtin prompts");
 
     // Get the prompt directly
-    let prompt = library.get("_partials/detected-projects")
+    let prompt = library
+        .get("_partials/detected-projects")
         .expect("Failed to get detected-projects prompt");
 
     // Create partial adapter for rendering
     let adapter = PromptPartialAdapter::new(Arc::new(library));
 
     // Create template with partial support
-    let template = Template::with_partials(&prompt.template, adapter)
-        .expect("Failed to create template");
+    let template =
+        Template::with_partials(&prompt.template, adapter).expect("Failed to create template");
 
     let rendered = template
         .render_with_context(&context)
@@ -83,13 +81,10 @@ fn test_detected_projects_includes_nodejs_instructions() {
             "path": "/test/project",
             "markers": ["package.json"],
             "workspace": null
-        }])
+        }]),
     );
     // Also set unique_project_types which is required by the template
-    context.set(
-        "unique_project_types".to_string(),
-        json!(["NodeJs"])
-    );
+    context.set("unique_project_types".to_string(), json!(["NodeJs"]));
 
     // Load the prompt library with builtin prompts
     let mut library = PromptLibrary::new();
@@ -98,15 +93,16 @@ fn test_detected_projects_includes_nodejs_instructions() {
         .expect("Failed to load builtin prompts");
 
     // Get the prompt directly
-    let prompt = library.get("_partials/detected-projects")
+    let prompt = library
+        .get("_partials/detected-projects")
         .expect("Failed to get detected-projects prompt");
 
     // Create partial adapter for rendering
     let adapter = PromptPartialAdapter::new(Arc::new(library));
 
     // Create template with partial support
-    let template = Template::with_partials(&prompt.template, adapter)
-        .expect("Failed to create template");
+    let template =
+        Template::with_partials(&prompt.template, adapter).expect("Failed to create template");
 
     let rendered = template
         .render_with_context(&context)
@@ -118,9 +114,12 @@ fn test_detected_projects_includes_nodejs_instructions() {
 
     // Verify the output contains Node.js-specific content
     eprintln!("Looking for NodeJs in output...");
-    eprintln!("Contains 'NodeJs Project': {}", rendered.contains("NodeJs Project"));
+    eprintln!(
+        "Contains 'NodeJs Project': {}",
+        rendered.contains("NodeJs Project")
+    );
     eprintln!("Contains 'Node.js': {}", rendered.contains("Node.js"));
-    
+
     assert!(
         rendered.contains("NodeJs Project") || rendered.contains("Node.js"),
         "Should contain Node.js project header. Rendered output:\n{}",
@@ -147,13 +146,10 @@ fn test_detected_projects_includes_flutter_instructions() {
             "path": "/test/flutter-project",
             "markers": ["pubspec.yaml"],
             "workspace": null
-        }])
+        }]),
     );
     // Also set unique_project_types which is required by the template
-    context.set(
-        "unique_project_types".to_string(),
-        json!(["Flutter"])
-    );
+    context.set("unique_project_types".to_string(), json!(["Flutter"]));
 
     // Load the prompt library with builtin prompts
     let mut library = PromptLibrary::new();
@@ -162,15 +158,16 @@ fn test_detected_projects_includes_flutter_instructions() {
         .expect("Failed to load builtin prompts");
 
     // Get the prompt directly
-    let prompt = library.get("_partials/detected-projects")
+    let prompt = library
+        .get("_partials/detected-projects")
         .expect("Failed to get detected-projects prompt");
 
     // Create partial adapter for rendering
     let adapter = PromptPartialAdapter::new(Arc::new(library));
 
     // Create template with partial support
-    let template = Template::with_partials(&prompt.template, adapter)
-        .expect("Failed to create template");
+    let template =
+        Template::with_partials(&prompt.template, adapter).expect("Failed to create template");
 
     let rendered = template
         .render_with_context(&context)
@@ -220,12 +217,12 @@ fn test_detected_projects_deduplicates_instructions() {
                 "markers": ["package.json"],
                 "workspace": null
             }
-        ])
+        ]),
     );
     // Also set unique_project_types which is required by the template (deduplicated)
     context.set(
         "unique_project_types".to_string(),
-        json!(["Rust", "NodeJs"])
+        json!(["Rust", "NodeJs"]),
     );
 
     // Load the prompt library with builtin prompts
@@ -235,15 +232,16 @@ fn test_detected_projects_deduplicates_instructions() {
         .expect("Failed to load builtin prompts");
 
     // Get the prompt directly
-    let prompt = library.get("_partials/detected-projects")
+    let prompt = library
+        .get("_partials/detected-projects")
         .expect("Failed to get detected-projects prompt");
 
     // Create partial adapter for rendering
     let adapter = PromptPartialAdapter::new(Arc::new(library));
 
     // Create template with partial support
-    let template = Template::with_partials(&prompt.template, adapter)
-        .expect("Failed to create template");
+    let template =
+        Template::with_partials(&prompt.template, adapter).expect("Failed to create template");
 
     let rendered = template
         .render_with_context(&context)

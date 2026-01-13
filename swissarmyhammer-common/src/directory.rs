@@ -124,6 +124,9 @@ impl SwissarmyhammerDirectory {
         // Ensure .gitignore exists in the .swissarmyhammer directory
         instance.write_gitignore_if_needed()?;
 
+        // Ensure tmp/ subdirectory exists for temporary file operations
+        instance.ensure_subdir("tmp")?;
+
         Ok(instance)
     }
 
@@ -515,6 +518,17 @@ mod tests {
             content.contains(".abort"),
             ".gitignore should contain .abort"
         );
+    }
+
+    #[test]
+    fn test_tmp_dir_created_on_init() {
+        let temp = TempDir::new().unwrap();
+        let sah_dir =
+            SwissarmyhammerDirectory::from_custom_root(temp.path().to_path_buf()).unwrap();
+
+        let tmp_path = sah_dir.subdir("tmp");
+        assert!(tmp_path.exists(), "tmp/ should be created on init");
+        assert!(tmp_path.is_dir(), "tmp/ should be a directory");
     }
 
     #[test]

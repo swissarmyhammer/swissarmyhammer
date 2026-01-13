@@ -12,6 +12,5 @@ mod types;
 
 pub use detect::detect_projects;
 pub use types::{
-    DetectedProject, ProjectType, WorkspaceInfo,
-    should_skip_directory, SKIP_DIRECTORIES,
+    should_skip_directory, DetectedProject, ProjectType, WorkspaceInfo, SKIP_DIRECTORIES,
 };

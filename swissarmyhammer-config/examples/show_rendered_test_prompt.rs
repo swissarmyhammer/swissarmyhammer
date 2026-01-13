@@ -10,8 +10,13 @@ fn main() {
 
     // Show what variables are available
     if let Some(project_types) = ctx.get("project_types") {
-        let projects = project_types.as_array().expect("project_types should be array");
-        println!("✅ Found {} detected projects in CEL context\n", projects.len());
+        let projects = project_types
+            .as_array()
+            .expect("project_types should be array");
+        println!(
+            "✅ Found {} detected projects in CEL context\n",
+            projects.len()
+        );
 
         // Show first few projects
         for (i, project) in projects.iter().take(3).enumerate() {

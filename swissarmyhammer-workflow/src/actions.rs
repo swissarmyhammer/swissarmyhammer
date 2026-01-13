@@ -877,7 +877,10 @@ impl Action for CelSetAction {
     }
 
     fn description(&self) -> String {
-        format!("Set CEL variable '{}' to '{}'", self.variable_name, self.value)
+        format!(
+            "Set CEL variable '{}' to '{}'",
+            self.variable_name, self.value
+        )
     }
 
     fn action_type(&self) -> &'static str {

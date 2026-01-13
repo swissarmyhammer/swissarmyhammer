@@ -1597,22 +1597,28 @@ impl agent_client_protocol::Agent for AcpServer {
                 }
             }
 
-            // After executing tool calls, check if model signaled it's done
-            // If we have a finish_reason, it means the model stopped - honor that and exit
-            if llama_finish_reason.is_some() {
-                tracing::info!(
-                    "Stopping agentic loop after executing {} tool calls (reason: {})",
-                    tool_calls_count,
-                    Pretty(&final_stop_reason)
-                );
-                break;
+            // Only stop on hard limits - otherwise continue to let model respond to tool results
+            // Note: EOS/EndTurn with no tool calls is already handled above (tool_calls.is_empty() check)
+            // If we reach here, tool calls existed, so we need to continue unless hitting a hard limit
+            match final_stop_reason {
+                agent_client_protocol::StopReason::MaxTokens
+                | agent_client_protocol::StopReason::Cancelled
+                | agent_client_protocol::StopReason::Refusal => {
+                    tracing::info!(
+                        "Stopping agentic loop after executing {} tool calls (hard limit: {})",
+                        tool_calls_count,
+                        Pretty(&final_stop_reason)
+                    );
+                    break;
+                }
+                _ => {
+                    // Continue loop to let model respond to tool results
+                    tracing::info!(
+                        "Continuing agentic loop after executing {} tool calls",
+                        tool_calls_count
+                    );
+                }
             }
-
-            // If no finish_reason, continue to generate agent's response to tool results
-            tracing::info!(
-                "Continuing agentic loop after executing {} tool calls (no finish reason yet)",
-                tool_calls_count
-            );
         }
 
         // Agentic loop completed

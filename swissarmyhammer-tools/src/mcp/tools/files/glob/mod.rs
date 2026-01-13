@@ -319,7 +319,8 @@ fn find_files_with_gitignore(
 
                     if matched {
                         // Convert to relative path from cwd to reduce context size
-                        let display_path = path.strip_prefix(&cwd)
+                        let display_path = path
+                            .strip_prefix(&cwd)
                             .unwrap_or(path)
                             .to_string_lossy()
                             .to_string();
@@ -385,7 +386,8 @@ fn find_files_with_glob(
                 // Only include files, not directories
                 if path.is_file() {
                     // Convert to relative path from cwd to reduce context size
-                    let display_path = path.strip_prefix(&cwd)
+                    let display_path = path
+                        .strip_prefix(&cwd)
                         .unwrap_or(&path)
                         .to_string_lossy()
                         .to_string();
@@ -405,7 +407,7 @@ fn find_files_with_glob(
 }
 
 /// Sort files by modification time (most recent first)
-/// 
+///
 /// Takes relative paths and resolves them against cwd to get metadata
 fn sort_files_by_modification_time(files: &mut [String], cwd: &Path) {
     files.sort_by(|a, b| {
@@ -438,7 +440,7 @@ fn sort_files_by_modification_time(files: &mut [String], cwd: &Path) {
 }
 
 /// Validate glob pattern for common issues
-/// 
+///
 /// When `path` is provided, broader patterns are allowed since the search is already scoped
 /// to a specific directory.
 fn validate_glob_pattern(pattern: &str, path: Option<&str>) -> Result<(), McpError> {
@@ -453,7 +455,7 @@ fn validate_glob_pattern(pattern: &str, path: Option<&str>) -> Result<(), McpErr
     // Only apply strict pattern restrictions when no path is specified
     // When a path is provided, the search is already scoped to that directory
     let has_scoped_path = path.is_some();
-    
+
     if !has_scoped_path {
         // CRITICAL: Reject overly broad patterns that will match thousands of files
         // These patterns cause performance issues, rate limiting, and context overflow
@@ -579,7 +581,7 @@ mod tests {
         // Create a temporary directory with test files in subdirectory
         let temp_dir = tempfile::TempDir::new().expect("Failed to create temp dir");
         let test_dir = temp_dir.path();
-        
+
         // Create src subdirectory
         let src_dir = test_dir.join("src");
         std::fs::create_dir(&src_dir).expect("Failed to create src dir");
@@ -769,7 +771,7 @@ mod tests {
         // Create a temporary directory
         let temp_dir = tempfile::TempDir::new().expect("Failed to create temp dir");
         let test_dir = temp_dir.path();
-        
+
         // Create src directory with a test file
         let src_dir = test_dir.join("src");
         std::fs::create_dir(&src_dir).expect("Failed to create src dir");

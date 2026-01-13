@@ -1385,7 +1385,10 @@ async fn test_glob_tool_advanced_gitignore_integration() {
     assert!(response_text.contains("main.rs"), "Should find main.rs");
     assert!(response_text.contains("lib.rs"), "Should find lib.rs");
     // Should NOT find log files even in src/ (gitignore applies)
-    assert!(!response_text.contains("debug.log"), "Should not find src/debug.log");
+    assert!(
+        !response_text.contains("debug.log"),
+        "Should not find src/debug.log"
+    );
 
     // Test 2: Root-level txt files pattern to verify temp_* is ignored
     let mut arguments = glob_args("*.txt");
@@ -1399,9 +1402,15 @@ async fn test_glob_tool_advanced_gitignore_integration() {
     let response_text = extract_response_text(&call_result);
 
     // Should find normal.txt
-    assert!(response_text.contains("normal.txt"), "Should find normal.txt");
+    assert!(
+        response_text.contains("normal.txt"),
+        "Should find normal.txt"
+    );
     // Should NOT find temp_file.txt (ignored by temp_*)
-    assert!(!response_text.contains("temp_file.txt"), "Should not find temp_file.txt");
+    assert!(
+        !response_text.contains("temp_file.txt"),
+        "Should not find temp_file.txt"
+    );
 
     // Test 3: Log files pattern to verify !important.log negation
     let mut arguments = glob_args("*.log");
@@ -1415,9 +1424,15 @@ async fn test_glob_tool_advanced_gitignore_integration() {
     let response_text = extract_response_text(&call_result);
 
     // Should find important.log (negated in .gitignore with !important.log)
-    assert!(response_text.contains("important.log"), "Should find important.log (negated ignore)");
+    assert!(
+        response_text.contains("important.log"),
+        "Should find important.log (negated ignore)"
+    );
     // Should NOT find debug.log (ignored by *.log)
-    assert!(!response_text.contains("debug.log"), "Should not find debug.log");
+    assert!(
+        !response_text.contains("debug.log"),
+        "Should not find debug.log"
+    );
 }
 
 #[tokio::test]

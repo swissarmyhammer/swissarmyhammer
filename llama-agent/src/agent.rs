@@ -1043,7 +1043,9 @@ impl AgentAPI for AgentServer {
                     "Final session message count after tool workflow: {}",
                     working_session.messages.len()
                 );
-                debug!("Continuing to next iteration to generate response incorporating tool results");
+                debug!(
+                    "Continuing to next iteration to generate response incorporating tool results"
+                );
 
                 // Continue the loop to generate response incorporating tool results
                 continue;

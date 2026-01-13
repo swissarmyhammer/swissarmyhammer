@@ -124,7 +124,11 @@ async fn test_mcp_server_excludes_partials_and_system_prompts_from_list() {
     let prompts = server.list_prompts().await.unwrap();
 
     // Only the regular prompt should be in the list
-    assert_eq!(prompts.len(), 1, "Only non-partial and non-system prompts should be listed");
+    assert_eq!(
+        prompts.len(),
+        1,
+        "Only non-partial and non-system prompts should be listed"
+    );
     assert_eq!(prompts[0], "regular");
 
     // Verify partials are not in the list

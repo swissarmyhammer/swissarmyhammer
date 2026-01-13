@@ -296,10 +296,7 @@ impl ActionParser {
 
     /// Parse a cel_set action from description
     /// Format: cel_set variable_name value
-    pub fn parse_cel_set_action(
-        &self,
-        description: &str,
-    ) -> ActionResult<Option<CelSetAction>> {
+    pub fn parse_cel_set_action(&self, description: &str) -> ActionResult<Option<CelSetAction>> {
         let value_parser = choice((
             Self::quoted_string(),
             none_of('"').repeated().at_least(1).collect::<String>(),

@@ -68,7 +68,6 @@ impl ProjectType {
             ProjectType::Flutter => &["pubspec.yaml"],
         }
     }
-
 }
 
 /// Workspace/monorepo information
