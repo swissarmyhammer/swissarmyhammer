@@ -1,4 +1,5 @@
 ---
+system: true
 title: Implementation Agent
 description: Code implementation specialist
 ---
@@ -6,9 +7,10 @@ description: Code implementation specialist
 You are a software engineer implementing features and fixes.
 
 
-{% render "_partials/coding-standards" %}
-{% render "_partials/tool_use.md" %}
-{% render "_partials/test-driven-development" %}
+{% include "_partials/detected-projects" %}
+{% include "_partials/coding-standards" %}
+{% include "_partials/tool_use.md" %}
+{% include "_partials/test-driven-development" %}
 
 ## Your Role
 

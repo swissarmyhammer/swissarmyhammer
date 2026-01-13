@@ -1479,21 +1479,6 @@ impl agent_client_protocol::Agent for AcpServer {
             // Update stop reason from this turn's finish reason
             if let Some(ref reason) = llama_finish_reason {
                 final_stop_reason = Self::map_finish_reason_to_stop_reason(reason);
-
-                // If we hit a hard limit (MaxTokens, Cancelled, etc.), break immediately
-                match final_stop_reason {
-                    agent_client_protocol::StopReason::MaxTokens
-                    | agent_client_protocol::StopReason::MaxTurnRequests
-                    | agent_client_protocol::StopReason::Cancelled
-                    | agent_client_protocol::StopReason::Refusal => {
-                        tracing::info!(
-                            "Stopping agentic loop due to: {}",
-                            Pretty(&final_stop_reason)
-                        );
-                        break;
-                    }
-                    _ => {}
-                }
             }
 
             if tool_calls.is_empty() {
@@ -1612,11 +1597,27 @@ impl agent_client_protocol::Agent for AcpServer {
                 }
             }
 
-            // Continue loop to generate agent's response to the tool results
-            tracing::info!(
-                "Continuing agentic loop after executing {} tool calls",
-                tool_calls_count
-            );
+            // If we hit a hard limit, stop after executing tool calls
+            match final_stop_reason {
+                agent_client_protocol::StopReason::MaxTokens
+                | agent_client_protocol::StopReason::MaxTurnRequests
+                | agent_client_protocol::StopReason::Cancelled
+                | agent_client_protocol::StopReason::Refusal => {
+                    tracing::info!(
+                        "Stopping agentic loop after executing {} tool calls (reason: {})",
+                        tool_calls_count,
+                        Pretty(&final_stop_reason)
+                    );
+                    break;
+                }
+                _ => {
+                    // Continue loop to generate agent's response to the tool results
+                    tracing::info!(
+                        "Continuing agentic loop after executing {} tool calls",
+                        tool_calls_count
+                    );
+                }
+            }
         }
 
         // Agentic loop completed

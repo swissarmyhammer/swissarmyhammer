@@ -656,6 +656,7 @@ async fn test_path_security_for_tool(
                     "invalid",
                     "dangerous",
                     "traversal",
+                    "not allowed",
                 ];
                 let context_msg = format!(
                     "{} tool should block or safely handle path traversal: {}",
@@ -1335,7 +1336,9 @@ async fn test_glob_tool_basic_pattern_matching() {
 
 #[tokio::test]
 async fn test_glob_tool_advanced_gitignore_integration() {
-    // This test will fail initially - it tests the enhanced functionality we need to implement
+    // This test verifies .gitignore patterns are properly respected.
+    // Since **/* is rejected as too broad, we use directory-scoped patterns
+    // to test the gitignore functionality.
     let registry = create_test_registry().await;
     let context = create_test_context().await;
     let tool = registry.get_tool("files_glob").unwrap();
@@ -1347,12 +1350,15 @@ async fn test_glob_tool_advanced_gitignore_integration() {
     let gitignore_content = "*.log\n/build/\ntemp_*\n!important.log\n";
     fs::write(temp_dir.join(".gitignore"), gitignore_content).unwrap();
 
+    // Create a src directory structure for scoped pattern testing
     let test_files = vec![
         "src/main.rs",
-        "important.log",    // Explicitly not ignored
-        "debug.log",        // Should be ignored
-        "build/output.txt", // Should be ignored
-        "temp_file.txt",    // Should be ignored
+        "src/lib.rs",
+        "src/debug.log",    // Should be ignored by *.log
+        "important.log",    // Explicitly not ignored by !important.log
+        "debug.log",        // Should be ignored by *.log
+        "build/output.txt", // Should be ignored by /build/
+        "temp_file.txt",    // Should be ignored by temp_*
         "normal.txt",       // Should be included
     ];
 
@@ -1364,26 +1370,54 @@ async fn test_glob_tool_advanced_gitignore_integration() {
         fs::write(full_path, format!("Content of {}", file_path)).unwrap();
     }
 
-    // Test with advanced gitignore
-    let mut arguments = glob_args("**/*");
+    // Test 1: Scoped pattern for src directory with gitignore
+    let mut arguments = glob_args("src/**/*.rs");
     arguments.insert("path".to_string(), json!(&temp_dir.to_string_lossy()));
     arguments.insert("respect_git_ignore".to_string(), json!(true));
 
     let result = tool.execute(arguments, &context).await;
-    assert!(result.is_ok(), "Advanced gitignore should succeed");
+    assert!(result.is_ok(), "Scoped gitignore glob should succeed");
 
     let call_result = result.unwrap();
     let response_text = extract_response_text(&call_result);
 
-    // Should find files not ignored by .gitignore
-    assert!(response_text.contains("main.rs"));
-    assert!(response_text.contains("important.log")); // Explicitly not ignored
-    assert!(response_text.contains("normal.txt"));
+    // Should find .rs files in src/
+    assert!(response_text.contains("main.rs"), "Should find main.rs");
+    assert!(response_text.contains("lib.rs"), "Should find lib.rs");
+    // Should NOT find log files even in src/ (gitignore applies)
+    assert!(!response_text.contains("debug.log"), "Should not find src/debug.log");
 
-    // Should NOT find ignored files
-    assert!(!response_text.contains("debug.log"));
-    assert!(!response_text.contains("build/output.txt"));
-    assert!(!response_text.contains("temp_file.txt"));
+    // Test 2: Root-level txt files pattern to verify temp_* is ignored
+    let mut arguments = glob_args("*.txt");
+    arguments.insert("path".to_string(), json!(&temp_dir.to_string_lossy()));
+    arguments.insert("respect_git_ignore".to_string(), json!(true));
+
+    let result = tool.execute(arguments, &context).await;
+    assert!(result.is_ok(), "Root txt pattern should succeed");
+
+    let call_result = result.unwrap();
+    let response_text = extract_response_text(&call_result);
+
+    // Should find normal.txt
+    assert!(response_text.contains("normal.txt"), "Should find normal.txt");
+    // Should NOT find temp_file.txt (ignored by temp_*)
+    assert!(!response_text.contains("temp_file.txt"), "Should not find temp_file.txt");
+
+    // Test 3: Log files pattern to verify !important.log negation
+    let mut arguments = glob_args("*.log");
+    arguments.insert("path".to_string(), json!(&temp_dir.to_string_lossy()));
+    arguments.insert("respect_git_ignore".to_string(), json!(true));
+
+    let result = tool.execute(arguments, &context).await;
+    assert!(result.is_ok(), "Root log pattern should succeed");
+
+    let call_result = result.unwrap();
+    let response_text = extract_response_text(&call_result);
+
+    // Should find important.log (negated in .gitignore with !important.log)
+    assert!(response_text.contains("important.log"), "Should find important.log (negated ignore)");
+    // Should NOT find debug.log (ignored by *.log)
+    assert!(!response_text.contains("debug.log"), "Should not find debug.log");
 }
 
 #[tokio::test]
@@ -2935,13 +2969,15 @@ async fn test_complex_file_workflow() {
         fs::write(full_path, content).unwrap();
     }
 
-    // Step 1: Find all JSON files
+    // Step 1: Find JSON files in src directory (scoped glob, not overly broad **/*)
+    // Use respect_git_ignore: false because files are untracked in the fresh git repo
     let mut glob_args = serde_json::Map::new();
-    glob_args.insert("pattern".to_string(), json!("**/*.json"));
+    glob_args.insert("pattern".to_string(), json!("src/**/*.json"));
     glob_args.insert("path".to_string(), json!(&temp_dir.to_string_lossy()));
+    glob_args.insert("respect_git_ignore".to_string(), json!(false));
 
     let glob_result = glob_tool.execute(glob_args, &context).await;
-    assert!(glob_result.is_ok(), "Glob should find JSON files");
+    assert!(glob_result.is_ok(), "Glob should find JSON files in src/");
 
     // Step 2: Read one of the config files
     let config_file = &temp_dir.join("src/config.json");

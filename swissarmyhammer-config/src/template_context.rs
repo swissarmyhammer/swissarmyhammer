@@ -722,9 +722,76 @@ impl TemplateContext {
     /// - LlamaAgent with HuggingFace model: the repository name
     /// - LlamaAgent with Local model: the filename
     /// - Unknown/Default: "claude"
+    /// Detect and set project types from current working directory
+    ///
+    /// Scans the current directory for project marker files and populates
+    /// the "project_types" variable with detected projects.
+    fn set_project_types_variable(&mut self) {
+        use swissarmyhammer_project_detection::detect_projects;
+        use std::env;
+        
+        // Skip if already set
+        if self.get("project_types").is_some() {
+            debug!("project_types already set, not overriding");
+            return;
+        }
+        
+        // Get current directory
+        let cwd = match env::current_dir() {
+            Ok(dir) => dir,
+            Err(e) => {
+                debug!("Failed to get current directory for project detection: {}", e);
+                return;
+            }
+        };
+        
+        // Detect projects (max depth 3 to avoid deep traversal)
+        match detect_projects(&cwd, Some(3)) {
+            Ok(projects) => {
+                // Convert to JSON array
+                let projects_json: Vec<Value> = projects.iter().map(|p| {
+                    serde_json::json!({
+                        "type": p.project_type,
+                        "path": p.path.display().to_string(),
+                        "markers": p.marker_files,
+                        "workspace": p.workspace_info.as_ref().map(|w| serde_json::json!({
+                            "is_root": w.is_root,
+                            "members": w.members,
+                        })),
+                    })
+                }).collect();
+                
+                // Calculate unique project types
+                let mut seen_types = std::collections::HashSet::new();
+                let unique_types: Vec<Value> = projects
+                    .iter()
+                    .filter_map(|p| {
+                        let type_str = format!("{:?}", p.project_type);
+                        if seen_types.insert(type_str.clone()) {
+                            Some(Value::String(type_str))
+                        } else {
+                            None
+                        }
+                    })
+                    .collect();
+                
+                self.set("project_types".to_string(), Value::Array(projects_json));
+                self.set("unique_project_types".to_string(), Value::Array(unique_types));
+                debug!("Detected {} project(s) in {}", projects.len(), cwd.display());
+            }
+            Err(e) => {
+                debug!("Failed to detect projects: {}", e);
+                // Set empty array on failure
+                self.set("project_types".to_string(), Value::Array(vec![]));
+                self.set("unique_project_types".to_string(), Value::Array(vec![]));
+            }
+        }
+    }
+
     pub fn set_default_variables(&mut self) {
         self.set_model_variable();
         self.set_working_directory_variables();
+        self.set_project_types_variable();
     }
 }
 

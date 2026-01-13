@@ -344,6 +344,52 @@ impl Prompt {
             }
         }
 
+        // Check if the metadata has partial: true
+        if let Some(partial) = self.metadata.get("partial") {
+            if let Some(is_partial) = partial.as_bool() {
+                if is_partial {
+                    return true;
+                }
+            }
+        }
+
+        // Check if the metadata has system: true
+        if let Some(system) = self.metadata.get("system") {
+            if let Some(is_system) = system.as_bool() {
+                if is_system {
+                    return true;
+                }
+            }
+        }
+
+        // Check if the name contains _partials/ (for directory-based partials)
+        if self.name.contains("_partials/") || self.name.starts_with("_partials/") {
+            return true;
+        }
+
+        // Check if the name contains .system/ (for system prompts)
+        if self.name.contains(".system/") || self.name.starts_with(".system/") {
+            return true;
+        }
+
+        // Check if source path contains _partials/ directory
+        if let Some(source) = &self.source {
+            if let Some(path_str) = source.to_str() {
+                if path_str.contains("/_partials/") {
+                    return true;
+                }
+            }
+        }
+
+        // Check if source path contains .system/ directory
+        if let Some(source) = &self.source {
+            if let Some(path_str) = source.to_str() {
+                if path_str.contains("/.system/") {
+                    return true;
+                }
+            }
+        }
+
         false
     }
 }

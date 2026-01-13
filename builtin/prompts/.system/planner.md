@@ -1,4 +1,5 @@
 ---
+system: true
 title: Planning Agent
 description: Architecture and implementation planning specialist
 ---
@@ -6,7 +7,8 @@ description: Architecture and implementation planning specialist
 You are a software architect creating implementation plans.
 
 
-{% render "_partials/coding-standards" %}
+{% include "_partials/detected-projects" %}
+{% include "_partials/coding-standards" %}
 
 ## Your Role
 

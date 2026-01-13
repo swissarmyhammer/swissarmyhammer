@@ -1,0 +1,55 @@
+[package]
+name = "swissarmyhammer-treesitter"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+
+description = "Tree-sitter based code parsing and navigation for SwissArmyHammer"
+
+[dependencies]
+# Core tree-sitter library
+tree-sitter = { workspace = true }
+
+# Language parsers - all compiled in for simplicity
+# Core languages already in workspace
+tree-sitter-rust = { workspace = true }
+tree-sitter-python = { workspace = true }
+tree-sitter-typescript = { workspace = true }
+tree-sitter-javascript = { workspace = true }
+tree-sitter-dart = { workspace = true }
+
+# Additional language parsers
+tree-sitter-go = "0.23.4"
+tree-sitter-java = "0.23.6"
+tree-sitter-c = "0.23.3"
+tree-sitter-cpp = "0.24.2"
+tree-sitter-c-sharp = "0.23.1"
+tree-sitter-ruby = "0.23.1"
+tree-sitter-php = "0.23.13"
+tree-sitter-swift = "0.8.0"
+tree-sitter-kotlin = "0.4.0"
+tree-sitter-scala = "0.23.4"
+tree-sitter-lua = "0.2.0"
+tree-sitter-elixir = "0.3.0"
+tree-sitter-haskell = "0.23.0"
+tree-sitter-ocaml = "0.23.0"
+tree-sitter-zig = "0.2.0"
+tree-sitter-bash = "0.23.3"
+tree-sitter-html = "0.23.2"
+tree-sitter-css = "0.23.2"
+tree-sitter-json = "0.24.8"
+tree-sitter-yaml = "0.7.0"
+tree-sitter-toml = "0.24.3"
+tree-sitter-markdown = "0.3.4"
+tree-sitter-sql = "0.4.0"
+
+# Internal dependencies
+swissarmyhammer-rules = { path = "../swissarmyhammer-rules" }
+
+# Standard dependencies
+thiserror = { workspace = true }
+anyhow = { workspace = true }

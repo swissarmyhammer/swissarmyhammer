@@ -2,10 +2,14 @@
 //!
 //! This test module verifies that rate limiting is properly enforced
 //! for terminal operations to prevent denial of service attacks.
+//!
+//! These tests spawn real processes and must run serially to avoid
+//! flaky behavior from parallel process spawning.
 
 use claude_agent::terminal_manager::{
     TerminalCreateParams, TerminalManager, TerminalOutputParams, TerminalReleaseParams,
 };
+use serial_test::serial;
 use std::time::Duration;
 use swissarmyhammer_common::rate_limiter::{RateLimiter, RateLimiterConfig};
 
@@ -30,6 +34,7 @@ fn create_client_capabilities_without_terminal() -> agent_client_protocol::Clien
 }
 
 #[tokio::test]
+#[serial]
 async fn test_rate_limiting_terminal_create() {
     // Create terminal manager with strict rate limits
     let rate_limiter = RateLimiter::with_config(RateLimiterConfig {
@@ -58,7 +63,7 @@ async fn test_rate_limiting_terminal_create() {
     for i in 0..3 {
         let params = TerminalCreateParams {
             session_id: session_id_str.clone(),
-            command: "echo".to_string(),
+            command: "/bin/echo".to_string(),
             args: Some(vec![format!("test{}", i)]),
             env: None,
             cwd: None,
@@ -79,7 +84,7 @@ async fn test_rate_limiting_terminal_create() {
     // 4th create should fail due to rate limit
     let params = TerminalCreateParams {
         session_id: session_id_str.clone(),
-        command: "echo".to_string(),
+        command: "/bin/echo".to_string(),
         args: Some(vec!["test4".to_string()]),
         env: None,
         cwd: None,
@@ -102,6 +107,7 @@ async fn test_rate_limiting_terminal_create() {
 }
 
 #[tokio::test]
+#[serial]
 async fn test_rate_limiting_terminal_execute() {
     // Create terminal manager with strict rate limits for execute
     let rate_limiter = RateLimiter::with_config(RateLimiterConfig {
@@ -123,7 +129,7 @@ async fn test_rate_limiting_terminal_execute() {
     // First 2 executions should succeed (cost 2 each = 4 tokens)
     for i in 0..2 {
         let result = manager
-            .execute_command(&terminal_id, &format!("echo test{}", i))
+            .execute_command(&terminal_id, &format!("/bin/echo test{}", i))
             .await;
         assert!(
             result.is_ok(),
@@ -134,7 +140,7 @@ async fn test_rate_limiting_terminal_execute() {
     }
 
     // 3rd execution should fail (would need 2 more tokens, only 1 remaining)
-    let result = manager.execute_command(&terminal_id, "echo test3").await;
+    let result = manager.execute_command(&terminal_id, "/bin/echo test3").await;
     assert!(
         result.is_err(),
         "3rd terminal execution should be rate limited"
@@ -148,6 +154,7 @@ async fn test_rate_limiting_terminal_execute() {
 }
 
 #[tokio::test]
+#[serial]
 async fn test_rate_limiting_different_sessions() {
     // Create terminal manager with per-client rate limits
     let rate_limiter = RateLimiter::with_config(RateLimiterConfig {
@@ -180,7 +187,7 @@ async fn test_rate_limiting_different_sessions() {
     for i in 0..2 {
         let params = TerminalCreateParams {
             session_id: session_id1_str.clone(),
-            command: "echo".to_string(),
+            command: "/bin/echo".to_string(),
             args: Some(vec![format!("session1-{}", i)]),
             env: None,
             cwd: None,
@@ -196,7 +203,7 @@ async fn test_rate_limiting_different_sessions() {
     // Session 1: 3rd create should fail
     let params = TerminalCreateParams {
         session_id: session_id1_str.clone(),
-        command: "echo".to_string(),
+        command: "/bin/echo".to_string(),
         args: Some(vec!["session1-3".to_string()]),
         env: None,
         cwd: None,
@@ -214,7 +221,7 @@ async fn test_rate_limiting_different_sessions() {
     // Session 2: should still be able to create terminals
     let params = TerminalCreateParams {
         session_id: session_id2_str.clone(),
-        command: "echo".to_string(),
+        command: "/bin/echo".to_string(),
         args: Some(vec!["session2-1".to_string()]),
         env: None,
         cwd: None,
@@ -232,6 +239,7 @@ async fn test_rate_limiting_different_sessions() {
 }
 
 #[tokio::test]
+#[serial]
 async fn test_rate_limiting_get_output_allowed() {
     // Create terminal manager with reasonable rate limits
     let rate_limiter = RateLimiter::with_config(RateLimiterConfig {
@@ -259,7 +267,7 @@ async fn test_rate_limiting_get_output_allowed() {
     // Create a terminal
     let params = TerminalCreateParams {
         session_id: session_id_str.clone(),
-        command: "echo".to_string(),
+        command: "/bin/echo".to_string(),
         args: Some(vec!["test".to_string()]),
         env: None,
         cwd: None,
@@ -284,6 +292,7 @@ async fn test_rate_limiting_get_output_allowed() {
 }
 
 #[tokio::test]
+#[serial]
 async fn test_rate_limiting_kill_terminal() {
     // Create terminal manager with strict rate limits
     let rate_limiter = RateLimiter::with_config(RateLimiterConfig {
@@ -313,7 +322,7 @@ async fn test_rate_limiting_kill_terminal() {
     for i in 0..2 {
         let params = TerminalCreateParams {
             session_id: session_id_str.clone(),
-            command: "sleep".to_string(),
+            command: "/bin/sleep".to_string(),
             args: Some(vec!["30".to_string()]),
             env: None,
             cwd: None,
@@ -330,7 +339,7 @@ async fn test_rate_limiting_kill_terminal() {
         let mut terminals = manager.terminals.write().await;
         let session = terminals.get_mut(&terminal_ids[i]).unwrap();
 
-        let mut cmd = tokio::process::Command::new("sleep");
+        let mut cmd = tokio::process::Command::new("/bin/sleep");
         cmd.arg("30")
             .current_dir(&session.working_dir)
             .envs(&session.environment)
@@ -358,6 +367,7 @@ async fn test_rate_limiting_kill_terminal() {
 }
 
 #[tokio::test]
+#[serial]
 async fn test_rate_limiting_release_terminal() {
     // Create terminal manager with strict rate limits
     let rate_limiter = RateLimiter::with_config(RateLimiterConfig {
@@ -387,7 +397,7 @@ async fn test_rate_limiting_release_terminal() {
     for i in 0..2 {
         let params = TerminalCreateParams {
             session_id: session_id_str.clone(),
-            command: "echo".to_string(),
+            command: "/bin/echo".to_string(),
             args: Some(vec![format!("test{}", i)]),
             env: None,
             cwd: None,
@@ -417,6 +427,7 @@ async fn test_rate_limiting_release_terminal() {
 }
 
 #[tokio::test]
+#[serial]
 async fn test_capability_enforcement_on_execute() {
     let rate_limiter = RateLimiter::with_config(RateLimiterConfig {
         per_client_limit: 100,
@@ -435,7 +446,7 @@ async fn test_capability_enforcement_on_execute() {
     let terminal_id = format!("term_{}", ulid::Ulid::new());
 
     // Attempt to execute command - should fail due to missing capability
-    let result = manager.execute_command(&terminal_id, "echo test").await;
+    let result = manager.execute_command(&terminal_id, "/bin/echo test").await;
     assert!(
         result.is_err(),
         "Execute should fail without terminal capability"
