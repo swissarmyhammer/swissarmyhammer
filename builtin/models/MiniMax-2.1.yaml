@@ -7,5 +7,5 @@ executor:
   config:
     model:
       source: !HuggingFace
-        repo: "unsloth/GLM-4.7-GGUF"
+        repo: "unsloth/MiniMax-M2.1-GGUF"
         folder: "IQ4_NL"

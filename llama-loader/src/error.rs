@@ -110,10 +110,10 @@ impl LlamaError for ModelError {
 }
 
 // Convert from llama-cpp-2 errors
-impl From<llama_cpp_2::LlamaCppError> for ModelError {
-    fn from(err: llama_cpp_2::LlamaCppError) -> Self {
+impl From<llama_cpp_2::LLamaCppError> for ModelError {
+    fn from(err: llama_cpp_2::LLamaCppError) -> Self {
         match err {
-            llama_cpp_2::LlamaCppError::BackendAlreadyInitialized => {
+            llama_cpp_2::LLamaCppError::BackendAlreadyInitialized => {
                 ModelError::LoadingFailed("Backend already initialized".to_string())
             }
             other => ModelError::LoadingFailed(format!("llama-cpp-2 error: {}", other)),
@@ -161,7 +161,7 @@ mod tests {
 
     #[test]
     fn test_llama_cpp_error_conversion() {
-        let llama_err = llama_cpp_2::LlamaCppError::BackendAlreadyInitialized;
+        let llama_err = llama_cpp_2::LLamaCppError::BackendAlreadyInitialized;
         let model_err = ModelError::from(llama_err);
         assert!(matches!(model_err, ModelError::LoadingFailed(_)));
     }

@@ -35,11 +35,19 @@ impl McpTool for CreateTodoTool {
             "properties": {
                 "task": {
                     "type": "string",
-                    "description": "Brief description of the task to be completed"
+                    "description": "Brief description of the task to be completed (alias: title)"
+                },
+                "title": {
+                    "type": "string",
+                    "description": "Brief description of the task to be completed (alias: task)"
                 },
                 "context": {
                     "type": ["string", "null"],
-                    "description": "Optional additional context, notes, or implementation details"
+                    "description": "Optional additional context, notes, or implementation details (alias: description)"
+                },
+                "description": {
+                    "type": ["string", "null"],
+                    "description": "Optional additional context, notes, or implementation details (alias: context)"
                 }
             },
             "required": ["task"]

@@ -170,9 +170,11 @@ impl Default for TodoList {
 /// Request to create a new todo item
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CreateTodoRequest {
-    /// Brief description of the task
+    /// Brief description of the task (alias: title)
+    #[serde(alias = "title")]
     pub task: String,
-    /// Optional additional context or implementation notes
+    /// Optional additional context or implementation notes (alias: description)
+    #[serde(alias = "description")]
     pub context: Option<String>,
 }
 
@@ -238,5 +240,26 @@ mod tests {
             original_updated_at,
             item.updated_at
         );
+    }
+
+    #[test]
+    fn test_create_todo_request_aliases() {
+        // Test that 'title' alias works for 'task'
+        let json_with_title = r#"{"title": "My task", "description": "Some details"}"#;
+        let request: CreateTodoRequest = serde_json::from_str(json_with_title).unwrap();
+        assert_eq!(request.task, "My task");
+        assert_eq!(request.context, Some("Some details".to_string()));
+
+        // Test that original field names still work
+        let json_with_task = r#"{"task": "Another task", "context": "More details"}"#;
+        let request2: CreateTodoRequest = serde_json::from_str(json_with_task).unwrap();
+        assert_eq!(request2.task, "Another task");
+        assert_eq!(request2.context, Some("More details".to_string()));
+
+        // Test title only (no description)
+        let json_title_only = r#"{"title": "Just a title"}"#;
+        let request3: CreateTodoRequest = serde_json::from_str(json_title_only).unwrap();
+        assert_eq!(request3.task, "Just a title");
+        assert_eq!(request3.context, None);
     }
 }

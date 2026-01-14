@@ -3464,8 +3464,8 @@ dependencies = [
 
 [[package]]
 name = "llama-cpp-2"
-version = "0.1.130"
-source = "git+https://github.com/swissarmyhammer/llama-cpp-rs#c14c4f5e244d8620c9fcbdf80a07ae7b8376beda"
+version = "0.1.123"
+source = "git+https://github.com/swissarmyhammer/llama-cpp-rs#8146949d92e49b22bb9fcd19d9d57f36d5a7dd69"
 dependencies = [
  "enumflags2",
  "llama-cpp-sys-2",
@@ -3476,8 +3476,8 @@ dependencies = [
 
 [[package]]
 name = "llama-cpp-sys-2"
-version = "0.1.130"
-source = "git+https://github.com/swissarmyhammer/llama-cpp-rs#c14c4f5e244d8620c9fcbdf80a07ae7b8376beda"
+version = "0.1.123"
+source = "git+https://github.com/swissarmyhammer/llama-cpp-rs#8146949d92e49b22bb9fcd19d9d57f36d5a7dd69"
 dependencies = [
  "bindgen",
  "cc",
@@ -5390,9 +5390,9 @@ dependencies = [
 
 [[package]]
 name = "rust_decimal"
-version = "1.39.0"
+version = "1.40.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "35affe401787a9bd846712274d97654355d21b2a2c092a3139aabe31e9022282"
+checksum = "61f703d19852dbf87cbc513643fa81428361eb6940f1ac14fd58155d295a3eb0"
 dependencies = [
  "arrayvec",
  "borsh",
@@ -6464,6 +6464,7 @@ dependencies = [
  "chrono",
  "fs2",
  "serde",
+ "serde_json",
  "serde_yaml",
  "swissarmyhammer-common",
  "tempfile",
