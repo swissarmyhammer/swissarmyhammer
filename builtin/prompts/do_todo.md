@@ -35,4 +35,4 @@ If there are no pending todos
 - Verify the work is complete and correct
 - Use `todo_mark_complete` with the todo's id to mark it as done
   - DO NOT set `are_todos_done` -- there might be more todos remaining that have been created dynamically 
-- Report what was accomplished
+- Report your progress

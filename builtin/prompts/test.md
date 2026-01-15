@@ -17,4 +17,4 @@ Determine if unit tests AND language-specific type checking are passing.
 4. Call `cel_set` to record the overall result
 - If ALL tests pass: `cel_set(name="are_tests_passing", value=true)`
 - If ANY test or type check fails: `cel_set(name="are_tests_passing", value=false)`
-5. You are done! STOP
+5. Summarize the failing tests and type checks in the final output.

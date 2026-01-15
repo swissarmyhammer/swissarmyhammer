@@ -3,6 +3,7 @@ use llama_cpp_2::model::{LlamaChatMessage, LlamaModel};
 use regex::Regex;
 use serde_json::{json, Value};
 use std::collections::HashMap;
+use std::panic::{catch_unwind, AssertUnwindSafe};
 use swissarmyhammer_common::Pretty;
 
 use tracing::{debug, warn};
@@ -495,11 +496,36 @@ impl ChatTemplateEngine {
         }
 
         // Apply chat template with only system messages and tools
-        let template_str = model
-            .apply_chat_template(&template, &chat_messages, false)
-            .map_err(|e| {
-                TemplateError::RenderingFailed(format!("Failed to apply chat template: {}", e))
-            })?;
+        // Note: We use catch_unwind because llama-cpp-rs panics on negative return
+        // values from llama_chat_apply_template instead of returning an error.
+        let template_ref = &template;
+        let chat_messages_ref = &chat_messages;
+        let result = catch_unwind(AssertUnwindSafe(|| {
+            model.apply_chat_template(template_ref, chat_messages_ref, false)
+        }));
+
+        let template_str = match result {
+            Ok(Ok(s)) => s,
+            Ok(Err(e)) => {
+                return Err(TemplateError::RenderingFailed(format!(
+                    "Failed to apply chat template: {}",
+                    e
+                )));
+            }
+            Err(panic_info) => {
+                let panic_msg = if let Some(s) = panic_info.downcast_ref::<&str>() {
+                    s.to_string()
+                } else if let Some(s) = panic_info.downcast_ref::<String>() {
+                    s.clone()
+                } else {
+                    "unknown panic".to_string()
+                };
+                return Err(TemplateError::RenderingFailed(format!(
+                    "Chat template panicked (likely unsupported format): {}",
+                    panic_msg
+                )));
+            }
+        };
 
         debug!(
             "Rendered template-only: {} chars, {} tools",
@@ -855,8 +881,17 @@ impl ChatTemplateEngine {
                 }
 
                 // Apply the native chat template
-                match model.apply_chat_template(&template, &chat_messages, add_generation_prompt) {
-                    Ok(formatted) => {
+                // Note: We use catch_unwind because llama-cpp-rs panics on negative return
+                // values from llama_chat_apply_template instead of returning an error.
+                // This can happen with certain model templates that don't support tools.
+                let template_ref = &template;
+                let chat_messages_ref = &chat_messages;
+                let result = catch_unwind(AssertUnwindSafe(|| {
+                    model.apply_chat_template(template_ref, chat_messages_ref, add_generation_prompt)
+                }));
+
+                match result {
+                    Ok(Ok(formatted)) => {
                         debug!(
                             "Successfully applied native chat template, {} characters (add_generation_prompt={})",
                             formatted.len(),
@@ -864,8 +899,21 @@ impl ChatTemplateEngine {
                         );
                         return Ok(formatted);
                     }
-                    Err(e) => {
+                    Ok(Err(e)) => {
                         warn!("Failed to apply native chat template: {}, falling back to legacy implementation", e);
+                    }
+                    Err(panic_info) => {
+                        let panic_msg = if let Some(s) = panic_info.downcast_ref::<&str>() {
+                            s.to_string()
+                        } else if let Some(s) = panic_info.downcast_ref::<String>() {
+                            s.clone()
+                        } else {
+                            "unknown panic".to_string()
+                        };
+                        warn!(
+                            "Native chat template panicked (likely unsupported template format): {}, falling back to legacy implementation",
+                            panic_msg
+                        );
                     }
                 }
             }
