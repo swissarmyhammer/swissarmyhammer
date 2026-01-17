@@ -12,9 +12,7 @@ tags:
 stateDiagram-v2
     [*] --> start
     start --> are_rules_passing
-    are_rules_passing --> loop
-    loop --> done: result.content.contains("YES")
-    loop --> fix: default
+    are_rules_passing --> fix
     fix --> test
     test --> are_rules_passing
     done --> [*]
@@ -26,7 +24,7 @@ stateDiagram-v2
 - are_rules_passing: execute prompt "are_rules_passing"
 - fix: run workflow "do"
 - test: run workflow "test"
-- done: log "All rules passing!"
+- done: log "Code review complete"
 
 ## Description
 
