@@ -497,7 +497,7 @@ impl Agent for ClaudeAgent {
                 .session_manager
                 .get_session(&parsed_session_id)
                 .map_err(|_| agent_client_protocol::Error::internal_error())?
-                .ok_or_else(|| agent_client_protocol::Error::internal_error())?;
+                .ok_or_else(agent_client_protocol::Error::internal_error)?;
             let cwd = session.cwd.clone();
 
             // Terminate the existing Claude process

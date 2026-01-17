@@ -710,19 +710,7 @@ impl TemplateContext {
         }
     }
 
-    /// Set default variables if not already set
-    ///
-    /// This method sets default template variables including:
-    /// - "model": The model name based on the configured agent
-    /// - "working_directory": The fully qualified current working directory
-    /// - "cwd": Alias for the current working directory
-    ///
-    /// Model names are determined as follows:
-    /// - ClaudeCode: "claude"
-    /// - LlamaAgent with HuggingFace model: the repository name
-    /// - LlamaAgent with Local model: the filename
-    /// - Unknown/Default: "claude"
-    /// Detect and set project types from current working directory
+    /// Detect and set project types from current working directory.
     ///
     /// Scans the current directory for project marker files and populates
     /// the "project_types" variable with detected projects.
@@ -801,6 +789,22 @@ impl TemplateContext {
         }
     }
 
+    /// Set default variables if not already set.
+    ///
+    /// This method sets default template variables including:
+    ///
+    /// - `model`: The model name based on the configured agent
+    /// - `working_directory`: The fully qualified current working directory
+    /// - `cwd`: Alias for the current working directory
+    /// - `project_types`: Detected project types from the current directory
+    /// - `unique_project_types`: Deduplicated list of project type names
+    ///
+    /// Model names are determined as follows:
+    ///
+    /// - ClaudeCode: "claude"
+    /// - LlamaAgent with HuggingFace model: the repository name
+    /// - LlamaAgent with Local model: the filename
+    /// - Unknown/Default: "claude"
     pub fn set_default_variables(&mut self) {
         self.set_model_variable();
         self.set_working_directory_variables();

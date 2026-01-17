@@ -650,10 +650,12 @@ impl ChatTemplateEngine {
 
         // Fallback to model-specific template implementations
         let model_name = self.detect_model_type(model, model_config);
+        debug!("Using model-specific template for detected model type: {}", model_name);
 
         match model_name.as_str() {
             "phi3" => self.format_phi3_template(messages, tools_context),
             "qwen" => self.format_qwen_template(messages, tools_context),
+            "minimax" => self.format_minimax_template(messages, tools_context),
             _ => self.format_chat_template(messages, tools_context),
         }
     }
@@ -674,6 +676,13 @@ impl ChatTemplateEngine {
             };
 
             let model_identifier_lower = model_identifier.to_lowercase();
+            if model_identifier_lower.contains("minimax") {
+                debug!(
+                    "Detected MiniMax model from model config: {}",
+                    model_identifier
+                );
+                return "minimax".to_string();
+            }
             if model_identifier_lower.contains("qwen") {
                 debug!(
                     "Detected Qwen model from model config: {}",
@@ -689,23 +698,32 @@ impl ChatTemplateEngine {
 
         // Fallback to environment variable (for explicit override)
         let model_repo = std::env::var("MODEL_REPO").unwrap_or_default();
-        if model_repo.contains("Qwen") || model_repo.contains("qwen") {
+        let model_repo_lower = model_repo.to_lowercase();
+        if model_repo_lower.contains("minimax") {
+            debug!("Detected MiniMax model from MODEL_REPO env var");
+            return "minimax".to_string();
+        }
+        if model_repo_lower.contains("qwen") {
             debug!("Detected Qwen model from MODEL_REPO env var");
             return "qwen".to_string();
         }
-        if model_repo.contains("Phi") || model_repo.contains("phi") {
+        if model_repo_lower.contains("phi") {
             debug!("Detected Phi model from MODEL_REPO env var");
             return "phi3".to_string();
         }
 
         // Check process arguments for model path/name (common when running examples)
         let args: Vec<String> = std::env::args().collect();
-        let args_string = args.join(" ");
-        if args_string.contains("Qwen") || args_string.contains("qwen") {
+        let args_string = args.join(" ").to_lowercase();
+        if args_string.contains("minimax") {
+            debug!("Detected MiniMax model from process arguments");
+            return "minimax".to_string();
+        }
+        if args_string.contains("qwen") {
             debug!("Detected Qwen model from process arguments");
             return "qwen".to_string();
         }
-        if args_string.contains("Phi") || args_string.contains("phi") {
+        if args_string.contains("phi") {
             debug!("Detected Phi model from process arguments");
             return "phi3".to_string();
         }
@@ -713,6 +731,10 @@ impl ChatTemplateEngine {
         // Check current working directory for clues (model files often contain model name)
         if let Ok(cwd) = std::env::current_dir() {
             let cwd_string = cwd.to_string_lossy().to_lowercase();
+            if cwd_string.contains("minimax") {
+                debug!("Detected MiniMax model from current directory path");
+                return "minimax".to_string();
+            }
             if cwd_string.contains("qwen") {
                 debug!("Detected Qwen model from current directory path");
                 return "qwen".to_string();
@@ -836,6 +858,98 @@ impl ChatTemplateEngine {
         Ok(prompt)
     }
 
+    /// Format chat template specifically for MiniMax models (M2, M2.1)
+    ///
+    /// MiniMax uses a custom format with special delimiters and XML-based tool calling.
+    /// See: https://huggingface.co/MiniMaxAI/MiniMax-M2/blob/main/chat_template.jinja
+    fn format_minimax_template(
+        &self,
+        messages: &[(String, String)],
+        tools_context: Option<&str>,
+    ) -> Result<String, TemplateError> {
+        debug!("Using MiniMax-specific chat template with {} messages, tools: {}",
+              messages.len(),
+              tools_context.is_some());
+        let mut prompt = String::new();
+
+        // MiniMax special tokens
+        const MSG_BEGIN: &str = "]~b]";
+        const MSG_END: &str = "[e~[";
+
+        // Build the system message with tools if provided
+        let mut system_content = String::new();
+
+        // Find and include any system messages from the conversation
+        for (role, content) in messages {
+            if role == "system" {
+                if !system_content.is_empty() {
+                    system_content.push('\n');
+                }
+                system_content.push_str(content);
+            }
+        }
+
+        // Add tools section for MiniMax - use JSON format for tool calls
+        // (this works better with existing parsers than XML format)
+        if let Some(tools) = tools_context {
+            if !system_content.is_empty() {
+                system_content.push_str("\n\n");
+            }
+            system_content.push_str("# Tools\n");
+            system_content.push_str(
+                "You may call one or more tools to assist with the user query.\n",
+            );
+            system_content.push_str("Here are the available tools:\n\n");
+            system_content.push_str(tools);
+            system_content.push_str("\n\nTo call a tool, output a JSON object with this format:\n");
+            system_content.push_str("```json\n{\n  \"function_name\": \"tool_name\",\n  \"arguments\": { ... }\n}\n```\n");
+        }
+
+        // Add system message if we have content
+        if !system_content.is_empty() {
+            prompt.push_str(MSG_BEGIN);
+            prompt.push_str("system\n");
+            prompt.push_str(&system_content);
+            prompt.push_str(MSG_END);
+        }
+
+        // Add conversation messages (excluding system messages which we already handled)
+        for (role, content) in messages {
+            if role == "system" {
+                continue; // Already handled above
+            }
+
+            prompt.push_str(MSG_BEGIN);
+            match role.as_str() {
+                "user" => prompt.push_str("user\n"),
+                "assistant" => prompt.push_str("assistant\n"),
+                "tool" => {
+                    // Tool responses in MiniMax format
+                    prompt.push_str("tool\n<response>");
+                    prompt.push_str(content);
+                    prompt.push_str("</response>");
+                    prompt.push_str(MSG_END);
+                    continue;
+                }
+                _ => prompt.push_str(&format!("{}\n", role)),
+            }
+            prompt.push_str(content);
+            prompt.push_str(MSG_END);
+        }
+
+        // Add assistant prompt for generation
+        prompt.push_str(MSG_BEGIN);
+        prompt.push_str("assistant\n");
+
+        debug!(
+            "Final MiniMax prompt ({} chars):\n{}",
+            prompt.len(),
+            &prompt[..prompt.len().min(500)]
+        );
+
+        Ok(prompt)
+    }
+
     /// Attempt to use the model's native chat template functionality
     ///
     /// This method tries to use llama-cpp-2's built-in template functionality
@@ -897,10 +1011,15 @@ impl ChatTemplateEngine {
                             formatted.len(),
                             add_generation_prompt
                         );
-                        return Ok(formatted);
+                        Ok(formatted)
                     }
                     Ok(Err(e)) => {
-                        warn!("Failed to apply native chat template: {}, falling back to legacy implementation", e);
+                        warn!("Failed to apply native chat template: {}, returning error for model-specific fallback", e);
+                        // Return error so caller can use model-specific template
+                        Err(TemplateError::RenderingFailed(format!(
+                            "Native template failed: {}",
+                            e
+                        )))
                     }
                     Err(panic_info) => {
                         let panic_msg = if let Some(s) = panic_info.downcast_ref::<&str>() {
@@ -911,23 +1030,29 @@ impl ChatTemplateEngine {
                             "unknown panic".to_string()
                         };
                         warn!(
-                            "Native chat template panicked (likely unsupported template format): {}, falling back to legacy implementation",
+                            "Native chat template panicked (likely unsupported template format): {}, returning error for model-specific fallback",
                             panic_msg
                         );
+                        // Return error so caller can use model-specific template
+                        Err(TemplateError::RenderingFailed(format!(
+                            "Native template panicked: {}",
+                            panic_msg
+                        )))
                     }
                 }
             }
             Err(e) => {
                 debug!(
-                    "Model does not have native chat template: {}, using legacy implementation",
+                    "Model does not have native chat template: {}, returning error for model-specific fallback",
                     e
                 );
+                // Return error so caller can use model-specific template
+                Err(TemplateError::RenderingFailed(format!(
+                    "No native chat template: {}",
+                    e
+                )))
             }
         }
-
-        // Fallback to legacy implementation
-        debug!("Using legacy chat template implementation");
-        self.format_chat_template(messages, tools_context)
     }
 
     /// Internal method to format chat template (useful for testing)

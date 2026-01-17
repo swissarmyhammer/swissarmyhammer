@@ -303,22 +303,26 @@ async fn create_claude_agent(mcp_config: Option<McpServerConfig>) -> AcpResult<A
     }
 
     // Create Claude agent configuration with MCP servers
-    let mut agent_config = claude_agent::config::AgentConfig::default();
-
     // Increase max prompt length for rule checking which may include very large files
-    agent_config.max_prompt_length = MAX_PROMPT_LENGTH_BYTES;
-
-    // Configure MCP server if provided (using HTTP transport)
-    if let Some(mcp) = mcp_config {
-        agent_config.mcp_servers = vec![claude_agent::config::McpServerConfig::Http(
-            claude_agent::config::HttpTransport {
-                transport_type: "http".to_string(),
-                name: "swissarmyhammer".to_string(),
-                url: mcp.url,
-                headers: vec![],
-            },
-        )];
-    }
+    let agent_config = if let Some(mcp) = mcp_config {
+        claude_agent::AgentConfig {
+            max_prompt_length: MAX_PROMPT_LENGTH_BYTES,
+            mcp_servers: vec![claude_agent::config::McpServerConfig::Http(
+                claude_agent::config::HttpTransport {
+                    transport_type: "http".to_string(),
+                    name: "swissarmyhammer".to_string(),
+                    url: mcp.url,
+                    headers: vec![],
+                },
+            )],
+            ..Default::default()
+        }
+    } else {
+        claude_agent::AgentConfig {
+            max_prompt_length: MAX_PROMPT_LENGTH_BYTES,
+            ..Default::default()
+        }
+    };
 
     // Create the Claude agent
     let (agent, notification_rx) =
