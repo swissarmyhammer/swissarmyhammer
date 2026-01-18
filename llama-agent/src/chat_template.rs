@@ -650,7 +650,10 @@ impl ChatTemplateEngine {
 
         // Fallback to model-specific template implementations
         let model_name = self.detect_model_type(model, model_config);
-        debug!("Using model-specific template for detected model type: {}", model_name);
+        debug!(
+            "Using model-specific template for detected model type: {}",
+            model_name
+        );
 
         match model_name.as_str() {
             "phi3" => self.format_phi3_template(messages, tools_context),
@@ -867,9 +870,11 @@ impl ChatTemplateEngine {
         messages: &[(String, String)],
         tools_context: Option<&str>,
     ) -> Result<String, TemplateError> {
-        debug!("Using MiniMax-specific chat template with {} messages, tools: {}",
-              messages.len(),
-              tools_context.is_some());
+        debug!(
+            "Using MiniMax-specific chat template with {} messages, tools: {}",
+            messages.len(),
+            tools_context.is_some()
+        );
         let mut prompt = String::new();
 
         // MiniMax special tokens
@@ -896,9 +901,8 @@ impl ChatTemplateEngine {
                 system_content.push_str("\n\n");
             }
             system_content.push_str("# Tools\n");
-            system_content.push_str(
-                "You may call one or more tools to assist with the user query.\n",
-            );
+            system_content
+                .push_str("You may call one or more tools to assist with the user query.\n");
             system_content.push_str("Here are the available tools:\n\n");
             system_content.push_str(tools);
             system_content.push_str("\n\nTo call a tool, output a JSON object with this format:\n");
@@ -1001,7 +1005,11 @@ impl ChatTemplateEngine {
                 let template_ref = &template;
                 let chat_messages_ref = &chat_messages;
                 let result = catch_unwind(AssertUnwindSafe(|| {
-                    model.apply_chat_template(template_ref, chat_messages_ref, add_generation_prompt)
+                    model.apply_chat_template(
+                        template_ref,
+                        chat_messages_ref,
+                        add_generation_prompt,
+                    )
                 }));
 
                 match result {

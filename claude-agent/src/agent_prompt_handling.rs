@@ -515,9 +515,13 @@ impl crate::agent::ClaudeAgent {
 
                 // Store in session context for history replay
                 let plan_message = crate::session::Message::from_update(plan_update.clone());
-                if self.session_manager.update_session(session_id, |session| {
-                    session.add_message(plan_message);
-                }).is_err() {
+                if self
+                    .session_manager
+                    .update_session(session_id, |session| {
+                        session.add_message(plan_message);
+                    })
+                    .is_err()
+                {
                     tracing::error!(
                         "Failed to store plan message in session {} context",
                         session_id
