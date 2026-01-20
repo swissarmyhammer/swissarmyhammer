@@ -2,5 +2,5 @@
 
 mod basic;
 mod batch_processors;
-mod integration;
+mod embedding_model_tests;
 mod real_model_integration;

@@ -43,10 +43,7 @@ pub(crate) fn claude_agent_factory(
 fn to_send_sync_error(
     e: impl std::error::Error + 'static,
 ) -> Box<dyn std::error::Error + Send + Sync> {
-    Box::new(std::io::Error::new(
-        std::io::ErrorKind::Other,
-        e.to_string(),
-    ))
+    Box::new(std::io::Error::other(e.to_string()))
 }
 
 /// Agent type identifier for claude
@@ -105,7 +102,7 @@ async fn create_claude_agent() -> Result<Box<dyn AgentWithFixture>> {
 
     let (agent, receiver) = claude_agent::agent::ClaudeAgent::new(config)
         .await
-        .map_err(|e| to_send_sync_error(e))?;
+        .map_err(to_send_sync_error)?;
 
     // Wrap with notification capture
     let recording_agent = RecordingAgent::with_notifications(agent, fixture_path, receiver);
@@ -158,13 +155,15 @@ async fn create_llama_agent() -> Result<Box<dyn AgentWithFixture>> {
     };
 
     // Create ACP config with TestMcpServer (via proxy) as default and permissive policy
-    let mut acp_config = llama_agent::acp::AcpConfig::default();
-    // Use rule-based policy that allows all MCP tool calls
-    acp_config.permission_policy =
-        llama_agent::acp::PermissionPolicy::RuleBased(vec![llama_agent::acp::PermissionRule {
-            pattern: llama_agent::acp::ToolPattern::All, // Match all tools
-            action: llama_agent::acp::PermissionAction::Allow,
-        }]);
+    let mut acp_config = llama_agent::acp::AcpConfig {
+        permission_policy: llama_agent::acp::PermissionPolicy::RuleBased(vec![
+            llama_agent::acp::PermissionRule {
+                pattern: llama_agent::acp::ToolPattern::All, // Match all tools
+                action: llama_agent::acp::PermissionAction::Allow,
+            },
+        ]),
+        ..Default::default()
+    };
     acp_config
         .default_mcp_servers
         .push(agent_client_protocol::McpServer::Http(
@@ -175,10 +174,7 @@ async fn create_llama_agent() -> Result<Box<dyn AgentWithFixture>> {
         llama_agent::acp::test_utils::create_acp_server_with_config(config, acp_config)
             .await
             .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> {
-                Box::new(std::io::Error::new(
-                    std::io::ErrorKind::Other,
-                    e.to_string(),
-                ))
+                Box::new(std::io::Error::other(e.to_string()))
             })?;
 
     // Wrap with notification capture

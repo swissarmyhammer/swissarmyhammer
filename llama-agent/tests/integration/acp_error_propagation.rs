@@ -61,7 +61,7 @@ mod acp_error_propagation_tests {
         );
 
         // IO error should map to internal error (-32603)
-        let io_error = std::io::Error::new(std::io::ErrorKind::Other, "io failed");
+        let io_error = std::io::Error::other("io failed");
         assert_eq!(TerminalError::Io(io_error).to_json_rpc_code(), -32603);
 
         // AlreadyExited should map to invalid params (-32602)

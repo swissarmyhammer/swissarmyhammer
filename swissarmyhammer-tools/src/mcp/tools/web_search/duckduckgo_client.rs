@@ -171,9 +171,28 @@ impl DuckDuckGoClient {
             request.query
         );
 
+        // Create a unique temporary directory for this browser instance
+        // This prevents SingletonLock conflicts when multiple searches run
+        let temp_dir = tempfile::Builder::new()
+            .prefix("chromium-profile-")
+            .tempdir()
+            .map_err(|e| {
+                DuckDuckGoError::InvalidRequest(format!(
+                    "Failed to create temporary profile directory: {e}"
+                ))
+            })?;
+
+        let temp_path = temp_dir.path().to_path_buf(); // Clone path to ensure it stays valid
+
+        tracing::debug!(
+            "Using temporary browser profile directory: {}",
+            temp_path.display()
+        );
+
         // Launch browser with stealth configuration to avoid detection
         let (mut browser, mut handler) = Browser::launch(
             BrowserConfig::builder()
+                .user_data_dir(&temp_path)  // Use unique temp directory to avoid lock conflicts
                 .window_size(1366, 768)  // Common resolution to blend in
                 .args([
                     "--no-sandbox",

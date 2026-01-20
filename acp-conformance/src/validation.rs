@@ -282,7 +282,7 @@ mod tests {
     fn test_require_bool_field() {
         let value = json!({"enabled": true, "name": "test"});
 
-        assert_eq!(require_bool_field(&value, "enabled").unwrap(), true);
+        assert!(require_bool_field(&value, "enabled").unwrap());
         assert!(require_bool_field(&value, "name").is_err());
         assert!(require_bool_field(&value, "missing").is_err());
     }
@@ -409,7 +409,7 @@ mod tests {
         // Numbers should not be treated as booleans
         assert!(require_bool_field(&value, "zero").is_err());
         assert!(require_bool_field(&value, "one").is_err());
-        assert_eq!(require_bool_field(&value, "bool").unwrap(), true);
+        assert!(require_bool_field(&value, "bool").unwrap());
     }
 
     #[test]

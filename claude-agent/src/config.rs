@@ -1185,8 +1185,10 @@ mod tests {
 
     #[test]
     fn test_config_validation_max_prompt_length_zero() {
-        let mut config = AgentConfig::default();
-        config.max_prompt_length = 0;
+        let config = AgentConfig {
+            max_prompt_length: 0,
+            ..Default::default()
+        };
 
         let result = config.validate();
         assert!(result.is_err());
@@ -1198,8 +1200,10 @@ mod tests {
 
     #[test]
     fn test_config_validation_max_prompt_length_too_large() {
-        let mut config = AgentConfig::default();
-        config.max_prompt_length = 10_000_001;
+        let config = AgentConfig {
+            max_prompt_length: 10_000_001,
+            ..Default::default()
+        };
 
         let result = config.validate();
         assert!(result.is_err());
@@ -1211,8 +1215,10 @@ mod tests {
 
     #[test]
     fn test_config_validation_max_prompt_length_valid() {
-        let mut config = AgentConfig::default();
-        config.max_prompt_length = 100_000;
+        let config = AgentConfig {
+            max_prompt_length: 100_000,
+            ..Default::default()
+        };
 
         let result = config.validate();
         assert!(result.is_ok());
@@ -1220,8 +1226,10 @@ mod tests {
 
     #[test]
     fn test_config_validation_notification_buffer_size_zero() {
-        let mut config = AgentConfig::default();
-        config.notification_buffer_size = 0;
+        let config = AgentConfig {
+            notification_buffer_size: 0,
+            ..Default::default()
+        };
 
         let result = config.validate();
         assert!(result.is_err());
@@ -1233,8 +1241,10 @@ mod tests {
 
     #[test]
     fn test_config_validation_notification_buffer_size_too_large() {
-        let mut config = AgentConfig::default();
-        config.notification_buffer_size = 1_000_001;
+        let config = AgentConfig {
+            notification_buffer_size: 1_000_001,
+            ..Default::default()
+        };
 
         let result = config.validate();
         assert!(result.is_err());
@@ -1246,8 +1256,10 @@ mod tests {
 
     #[test]
     fn test_config_validation_notification_buffer_size_valid() {
-        let mut config = AgentConfig::default();
-        config.notification_buffer_size = 1_000;
+        let config = AgentConfig {
+            notification_buffer_size: 1_000,
+            ..Default::default()
+        };
 
         let result = config.validate();
         assert!(result.is_ok());
@@ -1255,8 +1267,10 @@ mod tests {
 
     #[test]
     fn test_config_validation_cancellation_buffer_size_zero() {
-        let mut config = AgentConfig::default();
-        config.cancellation_buffer_size = 0;
+        let config = AgentConfig {
+            cancellation_buffer_size: 0,
+            ..Default::default()
+        };
 
         let result = config.validate();
         assert!(result.is_err());
@@ -1268,8 +1282,10 @@ mod tests {
 
     #[test]
     fn test_config_validation_cancellation_buffer_size_too_large() {
-        let mut config = AgentConfig::default();
-        config.cancellation_buffer_size = 1_000_001;
+        let config = AgentConfig {
+            cancellation_buffer_size: 1_000_001,
+            ..Default::default()
+        };
 
         let result = config.validate();
         assert!(result.is_err());
@@ -1281,8 +1297,10 @@ mod tests {
 
     #[test]
     fn test_config_validation_cancellation_buffer_size_valid() {
-        let mut config = AgentConfig::default();
-        config.cancellation_buffer_size = 100;
+        let config = AgentConfig {
+            cancellation_buffer_size: 100,
+            ..Default::default()
+        };
 
         let result = config.validate();
         assert!(result.is_ok());
@@ -1290,8 +1308,10 @@ mod tests {
 
     #[test]
     fn test_config_validation_max_tokens_per_turn_zero() {
-        let mut config = AgentConfig::default();
-        config.max_tokens_per_turn = 0;
+        let config = AgentConfig {
+            max_tokens_per_turn: 0,
+            ..Default::default()
+        };
 
         let result = config.validate();
         assert!(result.is_err());
@@ -1303,8 +1323,10 @@ mod tests {
 
     #[test]
     fn test_config_validation_max_tokens_per_turn_valid() {
-        let mut config = AgentConfig::default();
-        config.max_tokens_per_turn = 100_000;
+        let config = AgentConfig {
+            max_tokens_per_turn: 100_000,
+            ..Default::default()
+        };
 
         let result = config.validate();
         assert!(result.is_ok());
@@ -1312,8 +1334,10 @@ mod tests {
 
     #[test]
     fn test_config_validation_max_turn_requests_zero() {
-        let mut config = AgentConfig::default();
-        config.max_turn_requests = 0;
+        let config = AgentConfig {
+            max_turn_requests: 0,
+            ..Default::default()
+        };
 
         let result = config.validate();
         assert!(result.is_err());
@@ -1325,8 +1349,10 @@ mod tests {
 
     #[test]
     fn test_config_validation_max_turn_requests_valid() {
-        let mut config = AgentConfig::default();
-        config.max_turn_requests = 50;
+        let config = AgentConfig {
+            max_turn_requests: 50,
+            ..Default::default()
+        };
 
         let result = config.validate();
         assert!(result.is_ok());
@@ -1334,12 +1360,14 @@ mod tests {
 
     #[test]
     fn test_config_validation_all_numeric_fields_valid() {
-        let mut config = AgentConfig::default();
-        config.max_prompt_length = 500_000;
-        config.notification_buffer_size = 2_000;
-        config.cancellation_buffer_size = 200;
-        config.max_tokens_per_turn = 200_000;
-        config.max_turn_requests = 100;
+        let config = AgentConfig {
+            max_prompt_length: 500_000,
+            notification_buffer_size: 2_000,
+            cancellation_buffer_size: 200,
+            max_tokens_per_turn: 200_000,
+            max_turn_requests: 100,
+            ..Default::default()
+        };
 
         let result = config.validate();
         assert!(result.is_ok());

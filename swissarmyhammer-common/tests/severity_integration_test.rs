@@ -218,7 +218,7 @@ fn test_all_error_variants_have_severity() {
         ),
         // Error
         (
-            SwissArmyHammerError::Io(io::Error::new(io::ErrorKind::Other, "test")),
+            SwissArmyHammerError::Io(io::Error::other("test")),
             ErrorSeverity::Error,
         ),
         (

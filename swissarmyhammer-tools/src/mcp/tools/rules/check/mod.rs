@@ -1164,48 +1164,38 @@ mod tests {
     impl GitTestHelper {
         /// Configures git user for a repository
         fn configure_user(repo: &git2::Repository) -> std::io::Result<()> {
-            let mut config = repo
-                .config()
-                .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+            let mut config = repo.config().map_err(std::io::Error::other)?;
             config
                 .set_str("user.email", "test@example.com")
-                .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+                .map_err(std::io::Error::other)?;
             config
                 .set_str("user.name", "Test User")
-                .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+                .map_err(std::io::Error::other)?;
             Ok(())
         }
 
         /// Adds and commits files to the repository
         fn add_and_commit(repo: &git2::Repository, message: &str) -> std::io::Result<()> {
-            let mut index = repo
-                .index()
-                .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+            let mut index = repo.index().map_err(std::io::Error::other)?;
             index
                 .add_all(["."].iter(), git2::IndexAddOption::DEFAULT, None)
-                .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
-            index
-                .write()
-                .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+                .map_err(std::io::Error::other)?;
+            index.write().map_err(std::io::Error::other)?;
 
-            let tree_id = index
-                .write_tree()
-                .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
-            let tree = repo
-                .find_tree(tree_id)
-                .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+            let tree_id = index.write_tree().map_err(std::io::Error::other)?;
+            let tree = repo.find_tree(tree_id).map_err(std::io::Error::other)?;
 
             let signature = git2::Signature::now("Test User", "test@example.com")
-                .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+                .map_err(std::io::Error::other)?;
 
             let parent_commit = match repo.head() {
                 Ok(head) => {
-                    let parent_oid = head.target().ok_or_else(|| {
-                        std::io::Error::new(std::io::ErrorKind::Other, "Failed to get head target")
-                    })?;
+                    let parent_oid = head
+                        .target()
+                        .ok_or_else(|| std::io::Error::other("Failed to get head target"))?;
                     Some(
                         repo.find_commit(parent_oid)
-                            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?,
+                            .map_err(std::io::Error::other)?,
                     )
                 }
                 Err(_) => None,
@@ -1222,7 +1212,7 @@ mod tests {
                 &tree,
                 &parents,
             )
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+            .map_err(std::io::Error::other)?;
 
             Ok(())
         }
@@ -1233,8 +1223,7 @@ mod tests {
             filename: &str,
             content: &str,
         ) -> std::io::Result<()> {
-            let repo = git2::Repository::init(repo_path)
-                .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+            let repo = git2::Repository::init(repo_path).map_err(std::io::Error::other)?;
             Self::configure_user(&repo)?;
 
             let file_path = repo_path.join(filename);

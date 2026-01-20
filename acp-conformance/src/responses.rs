@@ -252,11 +252,11 @@ mod tests {
     fn test_file_write_response() {
         let json = json!({"success": true});
         let response = FileWriteResponse::from_json(&json).unwrap();
-        assert_eq!(response.success, true);
+        assert!(response.success);
 
         let json_false = json!({"success": false});
         let response = FileWriteResponse::from_json(&json_false).unwrap();
-        assert_eq!(response.success, false);
+        assert!(!response.success);
 
         let json_missing = json!({"wrong_field": true});
         assert!(FileWriteResponse::from_json(&json_missing).is_err());
@@ -281,12 +281,12 @@ mod tests {
         let json = json!({"output": "hello world", "truncated": true});
         let response = TerminalOutputResponse::from_json(&json).unwrap();
         assert_eq!(response.output, "hello world");
-        assert_eq!(response.truncated, true);
+        assert!(response.truncated);
 
         let json_no_truncate = json!({"output": "test"});
         let response = TerminalOutputResponse::from_json(&json_no_truncate).unwrap();
         assert_eq!(response.output, "test");
-        assert_eq!(response.truncated, false);
+        assert!(!response.truncated);
 
         let json_missing = json!({"truncated": false});
         assert!(TerminalOutputResponse::from_json(&json_missing).is_err());
@@ -297,17 +297,17 @@ mod tests {
         let json = json!({"exit_code": 0, "signaled": false});
         let response = TerminalExitResponse::from_json(&json).unwrap();
         assert_eq!(response.exit_code, 0);
-        assert_eq!(response.signaled, false);
+        assert!(!response.signaled);
 
         let json_non_zero = json!({"exit_code": 1});
         let response = TerminalExitResponse::from_json(&json_non_zero).unwrap();
         assert_eq!(response.exit_code, 1);
-        assert_eq!(response.signaled, false);
+        assert!(!response.signaled);
 
         let json_negative = json!({"exit_code": -1, "signaled": true});
         let response = TerminalExitResponse::from_json(&json_negative).unwrap();
         assert_eq!(response.exit_code, -1);
-        assert_eq!(response.signaled, true);
+        assert!(response.signaled);
 
         let json_missing = json!({"signaled": true});
         assert!(TerminalExitResponse::from_json(&json_missing).is_err());
@@ -317,22 +317,22 @@ mod tests {
     fn test_terminal_kill_response() {
         let json = json!({"success": true});
         let response = TerminalKillResponse::from_json(&json).unwrap();
-        assert_eq!(response.success, true);
+        assert!(response.success);
 
         let json_false = json!({"success": false});
         let response = TerminalKillResponse::from_json(&json_false).unwrap();
-        assert_eq!(response.success, false);
+        assert!(!response.success);
     }
 
     #[test]
     fn test_terminal_release_response() {
         let json = json!({"success": true});
         let response = TerminalReleaseResponse::from_json(&json).unwrap();
-        assert_eq!(response.success, true);
+        assert!(response.success);
 
         let json_false = json!({"success": false});
         let response = TerminalReleaseResponse::from_json(&json_false).unwrap();
-        assert_eq!(response.success, false);
+        assert!(!response.success);
     }
 
     #[test]
@@ -390,7 +390,7 @@ mod tests {
         });
         let response = TerminalOutputResponse::from_json(&json).unwrap();
         assert!(response.output.contains("\x1b[31m"));
-        assert_eq!(response.truncated, false);
+        assert!(!response.truncated);
     }
 
     #[test]
@@ -398,7 +398,7 @@ mod tests {
         let json = json!({"output": ""});
         let response = TerminalOutputResponse::from_json(&json).unwrap();
         assert_eq!(response.output, "");
-        assert_eq!(response.truncated, false);
+        assert!(!response.truncated);
     }
 
     #[test]
@@ -407,7 +407,7 @@ mod tests {
         let json = json!({"exit_code": 0});
         let response = TerminalExitResponse::from_json(&json).unwrap();
         assert_eq!(response.exit_code, 0);
-        assert_eq!(response.signaled, false);
+        assert!(!response.signaled);
 
         // Common error codes
         let json = json!({"exit_code": 1, "signaled": false});
@@ -422,7 +422,7 @@ mod tests {
         let json = json!({"exit_code": 143, "signaled": true});
         let response = TerminalExitResponse::from_json(&json).unwrap();
         assert_eq!(response.exit_code, 143);
-        assert_eq!(response.signaled, true);
+        assert!(response.signaled);
     }
 
     #[test]
@@ -453,7 +453,7 @@ mod tests {
             "timestamp": 123456
         });
         let response = FileWriteResponse::from_json(&json).unwrap();
-        assert_eq!(response.success, true);
+        assert!(response.success);
     }
 
     #[test]

@@ -760,7 +760,7 @@ mod tests {
             .contains("File already exists"));
 
         // Test IO errors - Other (should be internal error)
-        let io_error = std::io::Error::new(std::io::ErrorKind::Other, "unknown error");
+        let io_error = std::io::Error::other("unknown error");
         let error: agent_client_protocol::Error = FilesystemError::Io(io_error).into();
         assert_eq!(error.code, agent_client_protocol::ErrorCode::InternalError);
         assert!(error

@@ -627,10 +627,7 @@ mod tests {
 
         let error = PlanCommandError::WorkflowExecutionFailed {
             plan_filename: "test.md".to_string(),
-            source: swissarmyhammer_common::SwissArmyHammerError::Io(std::io::Error::new(
-                std::io::ErrorKind::Other,
-                "test",
-            )),
+            source: swissarmyhammer_common::SwissArmyHammerError::Io(std::io::Error::other("test")),
         };
         assert_eq!(error.severity(), ErrorSeverity::Critical);
 
@@ -664,7 +661,7 @@ mod tests {
 
         let error = PlanCommandError::IssueCreationFailed {
             plan_filename: "test.md".to_string(),
-            source: Box::new(std::io::Error::new(std::io::ErrorKind::Other, "test")),
+            source: Box::new(std::io::Error::other("test")),
         };
         assert_eq!(error.severity(), ErrorSeverity::Error);
     }

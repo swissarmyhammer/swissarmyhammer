@@ -322,13 +322,13 @@ This is partial content"#;
             .unwrap();
         library
             .add(crate::prompts::Prompt::new(
-                &format!("{}.md", base_name),
+                format!("{}.md", base_name),
                 partial_content,
             ))
             .unwrap();
         library
             .add(crate::prompts::Prompt::new(
-                &format!("{}.liquid", base_name),
+                format!("{}.liquid", base_name),
                 partial_content,
             ))
             .unwrap();

@@ -153,7 +153,7 @@ mod tests {
         let protocol = Error::Protocol("msg".to_string());
         let validation = Error::Validation("msg".to_string());
         let timeout = Error::Timeout("msg".to_string());
-        let io = Error::Io(std::io::Error::new(std::io::ErrorKind::Other, "msg"));
+        let io = Error::Io(std::io::Error::other("msg"));
         let json = Error::Json(serde_json::from_str::<()>("invalid").unwrap_err());
 
         // Verify distinct display outputs
@@ -227,7 +227,7 @@ mod tests {
     fn test_error_source_chain() {
         use std::error::Error as StdError;
 
-        let io_error = std::io::Error::new(std::io::ErrorKind::Other, "root cause");
+        let io_error = std::io::Error::other("root cause");
         let error = Error::Io(io_error);
 
         // Verify the error has a source

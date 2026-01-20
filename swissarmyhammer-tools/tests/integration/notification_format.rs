@@ -422,7 +422,7 @@ fn test_progress_notification_minimal_deserialization() {
     // Metadata may be empty object due to flatten, which is fine
     if let Some(metadata) = &notification.metadata {
         // If present, should be an empty object
-        assert!(metadata.as_object().map_or(true, |o| o.is_empty()));
+        assert!(metadata.as_object().is_none_or(|o| o.is_empty()));
     }
 }
 
@@ -470,8 +470,8 @@ fn test_progress_notification_format_consistency() {
         assert!(json.get("message").is_some());
 
         // Progress field should match
-        if progress.is_some() {
-            assert_eq!(json["progress"], progress.unwrap());
+        if let Some(progress_value) = progress {
+            assert_eq!(json["progress"], progress_value);
         } else {
             assert!(json.get("progress").is_none());
         }

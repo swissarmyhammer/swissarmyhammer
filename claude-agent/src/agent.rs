@@ -24,8 +24,6 @@ use crate::{
     size_validator::{SizeLimits, SizeValidator},
     tools::ToolCallHandler,
 };
-#[cfg(test)]
-use agent_client_protocol::SessionModeId;
 use agent_client_protocol::{
     AgentCapabilities, ContentBlock, PromptRequest, PromptResponse, SessionId, SessionNotification,
     SessionUpdate, StopReason, TextContent,

@@ -668,6 +668,6 @@ pub fn verify_terminals_fixture(
 mod tests {
     #[test]
     fn test_module_compiles() {
-        assert!(true);
+        // Module compiles successfully
     }
 }

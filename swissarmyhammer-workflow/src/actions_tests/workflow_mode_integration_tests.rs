@@ -112,7 +112,7 @@ stateDiagram-v2
             Some(format!("{} Workflow", mode_id)),
             Some(description.to_string()),
         )
-        .expect(&format!("Should parse {} workflow", mode_id));
+        .unwrap_or_else(|_| panic!("Should parse {} workflow", mode_id));
 
         assert_eq!(
             workflow.mode,

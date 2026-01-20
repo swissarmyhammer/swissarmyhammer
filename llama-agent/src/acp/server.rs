@@ -2147,6 +2147,14 @@ fn filesystem_error_to_protocol_error(
     }
 }
 
+use agent_client_protocol_extras::AgentWithFixture;
+
+impl AgentWithFixture for AcpServer {
+    fn agent_type(&self) -> &'static str {
+        "llama"
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2476,20 +2484,22 @@ mod tests {
         ));
 
         // Create custom ACP config with specific capabilities disabled
-        let mut custom_acp_config = AcpConfig::default();
-        custom_acp_config.protocol_version = "0.1.0".to_string();
-        custom_acp_config.capabilities = crate::acp::config::AcpCapabilities {
-            supports_session_loading: false,
-            supports_modes: false,
-            supports_plans: false,
-            supports_slash_commands: false,
-            filesystem: crate::acp::config::FilesystemCapabilities {
-                read_text_file: true,
-                write_text_file: false,
+        let custom_acp_config = AcpConfig {
+            protocol_version: "0.1.0".to_string(),
+            capabilities: crate::acp::config::AcpCapabilities {
+                supports_session_loading: false,
+                supports_modes: false,
+                supports_plans: false,
+                supports_slash_commands: false,
+                filesystem: crate::acp::config::FilesystemCapabilities {
+                    read_text_file: true,
+                    write_text_file: false,
+                },
+                terminal: false,
             },
-            terminal: false,
+            permission_policy: crate::acp::permissions::PermissionPolicy::AlwaysAsk,
+            ..Default::default()
         };
-        custom_acp_config.permission_policy = crate::acp::permissions::PermissionPolicy::AlwaysAsk;
 
         let (acp_server, _notification_rx) = AcpServer::new(agent_server, custom_acp_config);
         let server = Arc::new(acp_server);
@@ -2683,10 +2693,7 @@ mod tests {
         assert!(proto_error.data.is_some());
 
         // Test generic IO error maps to internal_error
-        let error = FilesystemError::Io(std::io::Error::new(
-            std::io::ErrorKind::Other,
-            "other error",
-        ));
+        let error = FilesystemError::Io(std::io::Error::other("other error"));
         let proto_error = filesystem_error_to_protocol_error(error);
         assert_eq!(
             proto_error.code,
@@ -2935,18 +2942,20 @@ mod tests {
         ));
 
         // Create config with modes
-        let mut config = AcpConfig::default();
-        config.available_modes = vec![
-            agent_client_protocol::SessionMode::new("general-purpose", "General Purpose")
-                .description("General-purpose agent"),
-            agent_client_protocol::SessionMode::new("statusline-setup", "Statusline Setup")
-                .description("Configure status line"),
-            agent_client_protocol::SessionMode::new("Explore", "Explore")
-                .description("Explore codebases"),
-            agent_client_protocol::SessionMode::new("Plan", "Plan")
-                .description("Plan implementations"),
-        ];
-        config.default_mode_id = "general-purpose".to_string();
+        let config = AcpConfig {
+            available_modes: vec![
+                agent_client_protocol::SessionMode::new("general-purpose", "General Purpose")
+                    .description("General-purpose agent"),
+                agent_client_protocol::SessionMode::new("statusline-setup", "Statusline Setup")
+                    .description("Configure status line"),
+                agent_client_protocol::SessionMode::new("Explore", "Explore")
+                    .description("Explore codebases"),
+                agent_client_protocol::SessionMode::new("Plan", "Plan")
+                    .description("Plan implementations"),
+            ],
+            default_mode_id: "general-purpose".to_string(),
+            ..Default::default()
+        };
 
         let (server, _notification_rx) = AcpServer::new(agent_server, config);
         server
@@ -3634,13 +3643,5 @@ mod tests {
             // Per JSON-RPC 2.0 spec, parse error responses should have null id
             // (this is validated by the agent_client_protocol library)
         }
-    }
-}
-
-use agent_client_protocol_extras::AgentWithFixture;
-
-impl AgentWithFixture for AcpServer {
-    fn agent_type(&self) -> &'static str {
-        "llama"
     }
 }

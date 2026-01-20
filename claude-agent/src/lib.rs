@@ -36,7 +36,6 @@ pub mod json_rpc_codes;
 pub mod mime_type_validator;
 
 #[cfg(test)]
-#[cfg(test)]
 mod content_security_integration_tests;
 pub mod error;
 pub mod mcp;

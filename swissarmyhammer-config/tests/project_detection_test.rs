@@ -75,7 +75,7 @@ fn test_project_types_structure() {
     for (i, project) in project_types.iter().enumerate() {
         let obj = project
             .as_object()
-            .expect(&format!("Project {} should be an object", i));
+            .unwrap_or_else(|| panic!("Project {} should be an object", i));
 
         // Check required fields
         assert!(

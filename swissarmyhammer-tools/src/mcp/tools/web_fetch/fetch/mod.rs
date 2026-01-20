@@ -467,7 +467,7 @@ mod tests {
             std::io::Error::new(std::io::ErrorKind::ConnectionRefused, "Connection refused");
         assert_eq!(tool.categorize_error(&network_error), "network_error");
 
-        let ssl_error = std::io::Error::new(std::io::ErrorKind::Other, "SSL certificate error");
+        let ssl_error = std::io::Error::other("SSL certificate error");
         assert_eq!(tool.categorize_error(&ssl_error), "ssl_error");
 
         let parse_error = std::io::Error::new(std::io::ErrorKind::InvalidData, "Invalid encoding");

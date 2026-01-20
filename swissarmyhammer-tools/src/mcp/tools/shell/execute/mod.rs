@@ -3800,7 +3800,7 @@ mod tests {
         let errors = vec![
             ShellError::CommandSpawnError {
                 command: "test".to_string(),
-                source: std::io::Error::new(std::io::ErrorKind::Other, "test"),
+                source: std::io::Error::other("test"),
             },
             ShellError::ExecutionError {
                 command: "test".to_string(),

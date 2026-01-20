@@ -81,7 +81,7 @@ async fn test_all_builtin_modes_can_render() {
         // Read the mode file to get the prompt reference
         let mode_path = mode_file.path();
         let mode_content = std::fs::read_to_string(&mode_path)
-            .expect(&format!("Failed to read mode file: {:?}", mode_path));
+            .unwrap_or_else(|_| panic!("Failed to read mode file: {:?}", mode_path));
 
         // Parse frontmatter to get the prompt name
         if let Some(prompt_name) = extract_prompt_from_mode(&mode_content) {
