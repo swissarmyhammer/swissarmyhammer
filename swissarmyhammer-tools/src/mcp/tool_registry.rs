@@ -228,6 +228,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use swissarmyhammer_common::health::Doctorable;
 use swissarmyhammer_common::{ErrorSeverity, Severity};
 use swissarmyhammer_config::model::ModelConfig;
 use swissarmyhammer_config::AgentUseCase;
@@ -645,7 +646,7 @@ impl ToolContext {
 /// The trait includes optional CLI integration methods that enable dynamic CLI command
 /// generation without requiring modifications to existing tool implementations.
 #[async_trait::async_trait]
-pub trait McpTool: Send + Sync {
+pub trait McpTool: Doctorable + Send + Sync {
     /// Get the tool's unique identifier name
     ///
     /// The name must be unique within the registry and should follow the
@@ -729,7 +730,7 @@ pub trait McpTool: Send + Sync {
     /// * `files_read` → Some("file")
     fn cli_category(&self) -> Option<&'static str> {
         // Extract category from tool name by taking prefix before first underscore
-        let name = self.name();
+        let name = <Self as McpTool>::name(self);
         let prefix = name.split('_').next()?;
         match prefix {
             "memo" => Some("memo"),
@@ -757,7 +758,7 @@ pub trait McpTool: Send + Sync {
     /// * `files_read` → "read"
     fn cli_name(&self) -> &'static str {
         // Extract action from tool name by taking suffix after first underscore
-        let name = self.name();
+        let name = <Self as McpTool>::name(self);
         if let Some(underscore_pos) = name.find('_') {
             &name[underscore_pos + 1..]
         } else {
@@ -799,6 +800,39 @@ pub trait McpTool: Send + Sync {
     fn hidden_from_cli(&self) -> bool {
         false
     }
+}
+
+/// Macro to implement Doctorable for tools that don't have health checks
+///
+/// This provides a default implementation that returns no health checks.
+/// Tools that need custom health diagnostics should implement Doctorable manually.
+///
+/// # Example
+///
+/// ```ignore
+/// impl_empty_doctorable!(MyTool);
+/// ```
+#[macro_export]
+macro_rules! impl_empty_doctorable {
+    ($tool_type:ty) => {
+        impl swissarmyhammer_common::health::Doctorable for $tool_type {
+            fn name(&self) -> &str {
+                <Self as $crate::mcp::tool_registry::McpTool>::name(self)
+            }
+
+            fn category(&self) -> &str {
+                "tools"
+            }
+
+            fn run_health_checks(&self) -> Vec<swissarmyhammer_common::health::HealthCheck> {
+                Vec::new()
+            }
+
+            fn is_applicable(&self) -> bool {
+                true
+            }
+        }
+    };
 }
 
 /// Registry for managing MCP tools
@@ -861,7 +895,7 @@ impl ToolRegistry {
 
     /// Register a tool in the registry
     pub fn register<T: McpTool + 'static>(&mut self, tool: T) {
-        let name = tool.name().to_string();
+        let name = McpTool::name(&tool).to_string();
         self.tools.insert(name, Box::new(tool));
     }
 
@@ -930,13 +964,13 @@ impl ToolRegistry {
                 };
 
                 Tool {
-                    name: tool.name().into(),
+                    name: McpTool::name(tool.as_ref()).into(),
                     description: Some(tool.description().into()),
                     input_schema: std::sync::Arc::new(schema_map),
                     annotations: None,
                     output_schema: None,
                     icons: None,
-                    title: Some(tool.name().into()),
+                    title: Some(McpTool::name(tool.as_ref()).into()),
                     meta: None,
                 }
             })
@@ -951,6 +985,19 @@ impl ToolRegistry {
     /// Check if the registry is empty
     pub fn is_empty(&self) -> bool {
         self.tools.is_empty()
+    }
+
+    /// Iterate over all registered tools
+    ///
+    /// Returns an iterator over references to all registered tools.
+    /// This is useful for operations that need to process all tools,
+    /// such as health checking.
+    ///
+    /// # Returns
+    ///
+    /// * Iterator yielding `&dyn McpTool` for each registered tool
+    pub fn iter_tools(&self) -> impl Iterator<Item = &dyn McpTool> {
+        self.tools.values().map(|tool| tool.as_ref())
     }
 
     /// Get unique CLI categories from all registered tools
@@ -1135,7 +1182,7 @@ impl ToolRegistry {
     ///
     /// * `Vec<ToolValidationError>` - List of schema validation errors found (empty if valid)
     fn validate_schema(&self, tool: &dyn McpTool) -> Vec<ToolValidationError> {
-        let tool_name = tool.name();
+        let tool_name = <dyn McpTool as McpTool>::name(tool);
         let schema = tool.schema();
 
         match SchemaValidator::validate_schema(&schema) {
@@ -1164,7 +1211,7 @@ impl ToolRegistry {
         }
 
         let mut errors = Vec::new();
-        let tool_name = tool.name();
+        let tool_name = <dyn McpTool as McpTool>::name(tool);
 
         if tool.cli_category().is_none() {
             errors.push(ToolValidationError::MissingCliCategory {
@@ -1196,7 +1243,7 @@ impl ToolRegistry {
         let mut report = ToolValidationReport::new();
 
         for tool in self.tools.values() {
-            let _tool_name = tool.name();
+            let _tool_name = <dyn McpTool as McpTool>::name(tool.as_ref());
             report.total_tools += 1;
 
             match self.validate_tool(tool.as_ref()) {
@@ -1231,7 +1278,7 @@ impl ToolRegistry {
             if let Err(errors) = self.validate_tool(tool.as_ref()) {
                 for error in errors {
                     warnings.push(ToolValidationWarning {
-                        tool_name: tool.name().to_string(),
+                        tool_name: <dyn McpTool as McpTool>::name(tool.as_ref()).to_string(),
                         error,
                         severity: ToolValidationSeverity::Warning,
                     });
@@ -1728,6 +1775,24 @@ mod tests {
         description: &'static str,
     }
 
+    impl swissarmyhammer_common::health::Doctorable for MockTool {
+        fn name(&self) -> &str {
+            self.name
+        }
+
+        fn category(&self) -> &str {
+            "tools"
+        }
+
+        fn run_health_checks(&self) -> Vec<swissarmyhammer_common::health::HealthCheck> {
+            Vec::new()
+        }
+
+        fn is_applicable(&self) -> bool {
+            true
+        }
+    }
+
     #[async_trait::async_trait]
     impl McpTool for MockTool {
         fn name(&self) -> &'static str {
@@ -1800,7 +1865,7 @@ mod tests {
         registry.register(tool);
 
         let retrieved_tool = registry.get_tool("lookup_test").unwrap();
-        assert_eq!(retrieved_tool.name(), "lookup_test");
+        assert_eq!(<dyn McpTool as McpTool>::name(retrieved_tool), "lookup_test");
         assert_eq!(retrieved_tool.description(), "A lookup test tool");
     }
 
@@ -1950,6 +2015,25 @@ mod tests {
         ($name:ident, $tool_name:literal, $description:literal) => {
             struct $name;
 
+            // Implement Doctorable for test tools (empty health checks)
+            impl swissarmyhammer_common::health::Doctorable for $name {
+                fn name(&self) -> &str {
+                    $tool_name
+                }
+
+                fn category(&self) -> &str {
+                    "tools"
+                }
+
+                fn run_health_checks(&self) -> Vec<swissarmyhammer_common::health::HealthCheck> {
+                    Vec::new()
+                }
+
+                fn is_applicable(&self) -> bool {
+                    true
+                }
+            }
+
             #[async_trait::async_trait]
             impl McpTool for $name {
                 fn name(&self) -> &'static str {
@@ -2091,6 +2175,10 @@ mod tests {
     struct ValidTool;
     struct InvalidSchemaTool;
     struct MissingCategoryTool;
+
+    impl_empty_doctorable!(ValidTool);
+    impl_empty_doctorable!(InvalidSchemaTool);
+    impl_empty_doctorable!(MissingCategoryTool);
 
     #[async_trait::async_trait]
     impl McpTool for ValidTool {

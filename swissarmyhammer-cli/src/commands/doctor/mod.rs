@@ -44,7 +44,7 @@ impl Doctor {
     }
 
     /// Run diagnostic checks without printing results (for CliContext integration)
-    pub fn run_diagnostics_without_output(&mut self) -> Result<i32> {
+    pub async fn run_diagnostics_without_output(&mut self) -> Result<i32> {
         // First, ensure we're in a Git repository
         use swissarmyhammer_common::utils::find_git_repository_root;
 
@@ -74,6 +74,7 @@ impl Doctor {
 
         // Run all checks
         self.run_system_checks()?;
+        self.run_tool_health_checks().await?;
         self.run_configuration_checks()?;
         self.run_prompt_checks()?;
         self.run_workflow_checks()?;
@@ -87,6 +88,32 @@ impl Doctor {
         checks::check_installation(&mut self.checks)?;
         checks::check_in_path(&mut self.checks)?;
         checks::check_file_permissions(&mut self.checks)?;
+        Ok(())
+    }
+
+    /// Run tool health checks using the Doctorable trait
+    async fn run_tool_health_checks(&mut self) -> Result<()> {
+        use swissarmyhammer_common::health::HealthStatus;
+
+        // Collect all health checks from registered MCP tools
+        let health_checks = swissarmyhammer_tools::collect_all_health_checks().await;
+
+        // Convert HealthCheck to Check format
+        for health_check in health_checks {
+            let status = match health_check.status {
+                HealthStatus::Ok => CheckStatus::Ok,
+                HealthStatus::Warning => CheckStatus::Warning,
+                HealthStatus::Error => CheckStatus::Error,
+            };
+
+            self.checks.push(Check {
+                name: health_check.name,
+                status,
+                message: health_check.message,
+                fix: health_check.fix,
+            });
+        }
+
         Ok(())
     }
 
@@ -295,7 +322,7 @@ async fn run_doctor_diagnostics(
     cli_context: &crate::context::CliContext,
 ) -> Result<i32> {
     // Run all diagnostics without output
-    let exit_code = doctor.run_diagnostics_without_output()?;
+    let exit_code = doctor.run_diagnostics_without_output().await?;
 
     // Format and display results using comfy-table for better emoji handling
     use comfy_table::{presets::UTF8_FULL, Cell, Color, Table};
@@ -385,10 +412,10 @@ mod tests {
         assert_eq!(doctor.get_exit_code(), 2);
     }
 
-    #[test]
-    fn test_run_diagnostics() {
+    #[tokio::test]
+    async fn test_run_diagnostics() {
         let mut doctor = Doctor::new();
-        let result = doctor.run_diagnostics_without_output();
+        let result = doctor.run_diagnostics_without_output().await;
         assert!(result.is_ok());
 
         // Should have at least some checks
@@ -399,10 +426,10 @@ mod tests {
         assert!(exit_code <= 2);
     }
 
-    #[test]
-    fn test_workflow_diagnostics_in_run_diagnostics_without_output() {
+    #[tokio::test]
+    async fn test_workflow_diagnostics_in_run_diagnostics_without_output() {
         let mut doctor = Doctor::new();
-        let result = doctor.run_diagnostics_without_output();
+        let result = doctor.run_diagnostics_without_output().await;
         assert!(result.is_ok());
 
         // Should have workflow-related checks in the full diagnostics

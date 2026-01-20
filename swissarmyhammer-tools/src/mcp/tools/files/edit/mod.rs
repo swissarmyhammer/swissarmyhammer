@@ -354,6 +354,9 @@ impl EditFileTool {
     }
 }
 
+// No health checks needed
+crate::impl_empty_doctorable!(EditFileTool);
+
 #[async_trait]
 impl McpTool for EditFileTool {
     fn name(&self) -> &'static str {

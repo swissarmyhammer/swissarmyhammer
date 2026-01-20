@@ -78,6 +78,9 @@ impl GitChangesTool {
     }
 }
 
+// No health checks needed
+crate::impl_empty_doctorable!(GitChangesTool);
+
 #[async_trait]
 impl McpTool for GitChangesTool {
     fn name(&self) -> &'static str {

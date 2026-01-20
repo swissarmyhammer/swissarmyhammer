@@ -1552,6 +1552,9 @@ impl ShellExecuteTool {
     }
 }
 
+// No health checks needed
+crate::impl_empty_doctorable!(ShellExecuteTool);
+
 #[async_trait]
 impl McpTool for ShellExecuteTool {
     fn name(&self) -> &'static str {

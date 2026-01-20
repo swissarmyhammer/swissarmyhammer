@@ -25,6 +25,9 @@ impl QuestionAskTool {
     }
 }
 
+// No health checks needed
+crate::impl_empty_doctorable!(QuestionAskTool);
+
 #[async_trait]
 impl McpTool for QuestionAskTool {
     fn name(&self) -> &'static str {

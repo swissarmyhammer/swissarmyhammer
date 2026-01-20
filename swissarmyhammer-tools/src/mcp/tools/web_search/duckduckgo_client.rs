@@ -10,6 +10,7 @@
 //! - CAPTCHA avoidance through realistic browsing patterns
 //! - Configurable scoring for search result ranking
 
+use crate::mcp::tools::web_search::chrome_detection;
 use crate::mcp::tools::web_search::types::{DuckDuckGoConfig, ScoringConfig, *};
 use chromiumoxide::browser::{Browser, BrowserConfig};
 use chromiumoxide::error::CdpError;
@@ -189,9 +190,31 @@ impl DuckDuckGoClient {
             temp_path.display()
         );
 
+        // Detect Chrome before attempting to launch
+        let chrome_result = chrome_detection::detect_chrome();
+        if !chrome_result.found {
+            let error_message = format!(
+                "{}\n\n{}",
+                chrome_result.message,
+                chrome_result.installation_instructions()
+            );
+            tracing::error!("Chrome detection failed: {}", error_message);
+            return Err(DuckDuckGoError::Browser(Box::new(CdpError::Io(
+                std::io::Error::new(std::io::ErrorKind::NotFound, error_message),
+            ))));
+        }
+
+        let chrome_path = chrome_result.path.unwrap();
+        tracing::info!(
+            "Found Chrome at: {} (via {})",
+            chrome_path.display(),
+            chrome_result.detection_method.as_ref().unwrap()
+        );
+
         // Launch browser with stealth configuration to avoid detection
         let (mut browser, mut handler) = Browser::launch(
             BrowserConfig::builder()
+                .chrome_executable(&chrome_path)  // Explicitly set Chrome path
                 .user_data_dir(&temp_path)  // Use unique temp directory to avoid lock conflicts
                 .window_size(1366, 768)  // Common resolution to blend in
                 .args([
@@ -216,23 +239,7 @@ impl DuckDuckGoClient {
                 })?,
         )
         .await
-        .map_err(|e| {
-            let error_msg = e.to_string();
-            // Provide helpful error message when Chrome/Chromium is not installed
-            if error_msg.contains("No such file or directory")
-                || error_msg.contains("cannot find")
-                || error_msg.contains("not found")
-            {
-                DuckDuckGoError::Browser(Box::new(CdpError::Io(std::io::Error::new(
-                    std::io::ErrorKind::NotFound,
-                    "Chrome/Chromium browser not found. Web search requires Chrome or Chromium to be installed. \
-                     Install via: 'brew install chromium' (macOS), 'apt install chromium-browser' (Ubuntu), \
-                     or download from https://www.chromium.org/getting-involved/download-chromium/",
-                ))))
-            } else {
-                DuckDuckGoError::Browser(Box::new(e))
-            }
-        })?;
+        .map_err(|e| DuckDuckGoError::Browser(Box::new(e)))?;
 
         // Spawn handler task with better error handling for CDP message deserialization
         let handler_task = tokio::spawn(async move {

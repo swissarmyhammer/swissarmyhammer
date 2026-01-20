@@ -656,6 +656,9 @@ fn format_table(response: &WorkflowListResponse) -> String {
     output
 }
 
+// No health checks needed
+crate::impl_empty_doctorable!(FlowTool);
+
 #[async_trait]
 impl McpTool for FlowTool {
     fn name(&self) -> &'static str {

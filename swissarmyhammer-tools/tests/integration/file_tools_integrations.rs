@@ -815,7 +815,7 @@ fn verify_tool_registration(
     verify_tool_exists(registry, tool_name);
 
     let tool = registry.get_tool(tool_name).unwrap();
-    assert_eq!(tool.name(), tool_name);
+    assert_eq!(<dyn swissarmyhammer_tools::mcp::tool_registry::McpTool as swissarmyhammer_tools::mcp::tool_registry::McpTool>::name(tool), tool_name);
 
     verify_tool_description(tool, description_keywords);
     verify_tool_schema(tool, required_properties, optional_properties);

@@ -28,6 +28,7 @@ pub mod file_loader;
 pub mod frontmatter;
 pub mod fs_utils;
 pub mod glob_utils;
+pub mod health;
 pub mod interactive_prompts;
 pub mod parameter_conditions;
 pub mod parameters;

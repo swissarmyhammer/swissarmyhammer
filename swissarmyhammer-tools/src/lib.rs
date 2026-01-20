@@ -58,6 +58,9 @@
 //! # }
 //! ```
 
+/// Health check registry for tools
+pub mod health_registry;
+
 /// Model Context Protocol (MCP) server and tools
 pub mod mcp;
 
@@ -66,6 +69,7 @@ pub mod mcp;
 pub mod test_utils;
 
 // Re-export key types for convenience
+pub use health_registry::collect_all_health_checks;
 pub use mcp::McpServer;
 pub use mcp::{
     register_file_tools, register_flow_tools, register_git_tools, register_rules_tools,

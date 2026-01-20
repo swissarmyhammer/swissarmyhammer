@@ -125,6 +125,9 @@ impl Default for CreateRuleTool {
     }
 }
 
+// No health checks needed
+crate::impl_empty_doctorable!(CreateRuleTool);
+
 #[async_trait]
 impl McpTool for CreateRuleTool {
     fn name(&self) -> &'static str {

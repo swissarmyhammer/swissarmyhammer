@@ -18,3 +18,4 @@ mod rule_check_uses_configured_agent;
 mod rule_check_with_small_model;
 mod todo_lists;
 mod web_fetch_specification_compliance;
+mod web_search_integration;

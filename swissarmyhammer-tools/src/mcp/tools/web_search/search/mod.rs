@@ -6,6 +6,7 @@
 
 use crate::mcp::progress_notifications::generate_progress_token;
 use crate::mcp::tool_registry::{BaseToolImpl, McpTool, ToolContext};
+use crate::mcp::tools::web_search::chrome_detection;
 use crate::mcp::tools::web_search::content_fetcher::{ContentFetchConfig, ContentFetcher};
 use crate::mcp::tools::web_search::duckduckgo_client::{DuckDuckGoClient, DuckDuckGoError};
 use crate::mcp::tools::web_search::types::ScoringConfig;
@@ -15,6 +16,7 @@ use rmcp::model::CallToolResult;
 use rmcp::ErrorData as McpError;
 use serde_json::json;
 use std::time::{Duration, Instant};
+use swissarmyhammer_common::health::{Doctorable, HealthCheck};
 
 /// Tool for performing web searches using DuckDuckGo web scraping
 #[derive(Default)]
@@ -495,6 +497,53 @@ impl McpTool for WebSearchTool {
     }
 }
 
+impl Doctorable for WebSearchTool {
+    fn name(&self) -> &str {
+        "Web Search"
+    }
+
+    fn category(&self) -> &str {
+        "tools"
+    }
+
+    fn run_health_checks(&self) -> Vec<HealthCheck> {
+        let mut checks = Vec::new();
+
+        // Check Chrome/Chromium availability
+        let chrome_result = chrome_detection::detect_chrome();
+
+        if chrome_result.found {
+            let path = chrome_result.path.as_ref().unwrap();
+            let method = chrome_result.detection_method.as_ref().unwrap();
+
+            checks.push(HealthCheck::ok(
+                "Chrome/Chromium Browser",
+                format!("Found at {} (via {})", path.display(), method),
+                self.category(),
+            ));
+        } else {
+            let instructions = chrome_result.installation_instructions();
+
+            checks.push(HealthCheck::warning(
+                "Chrome/Chromium Browser",
+                format!(
+                    "Not found (required for web_search)\nChecked {} locations",
+                    chrome_result.paths_checked.len()
+                ),
+                Some(format!("Install Chrome/Chromium:\n{}", instructions)),
+                self.category(),
+            ));
+        }
+
+        checks
+    }
+
+    fn is_applicable(&self) -> bool {
+        // Web search is always applicable - it's a core feature
+        true
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -503,7 +552,7 @@ mod tests {
     #[test]
     fn test_web_search_tool_new() {
         let tool = WebSearchTool::new();
-        assert_eq!(tool.name(), "web_search");
+        assert_eq!(<WebSearchTool as crate::mcp::tool_registry::McpTool>::name(&tool), "web_search");
         assert!(!tool.description().is_empty());
     }
 

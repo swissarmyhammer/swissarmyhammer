@@ -509,7 +509,7 @@ impl<'a> ToolValidator<'a> {
         match self.tool.cli_category() {
             Some(_) => Ok(()),
             None => Err(ValidationError::MissingSchemaField {
-                field: format!("CLI category for tool {}", self.tool.name()),
+                field: format!("CLI category for tool {}", <dyn McpTool as McpTool>::name(self.tool)),
             }),
         }
     }
@@ -519,7 +519,7 @@ impl<'a> ToolValidator<'a> {
         let cli_name = self.tool.cli_name();
         if cli_name.is_empty() {
             Err(ValidationError::InvalidParameterName {
-                parameter: self.tool.name().to_string(),
+                parameter: <dyn McpTool as McpTool>::name(self.tool).to_string(),
                 reason: "CLI name cannot be empty".to_string(),
             })
         } else {
@@ -1315,7 +1315,7 @@ impl CliBuilder {
         if let Err(validation_error) = SchemaValidator::validate_schema(schema) {
             tracing::warn!(
                 "Skipping tool '{}' from CLI due to schema validation error: {}",
-                tool.name(),
+                <dyn McpTool as McpTool>::name(tool),
                 validation_error
             );
             return false;

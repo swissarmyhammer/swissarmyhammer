@@ -508,7 +508,7 @@ async fn display_validation_report(
                     let tools = registry_guard.get_tools_for_category(&category);
                     println!("   {} - {} tools", category, tools.len());
                     for tool in tools {
-                        println!("     ├── {} ({})", tool.cli_name(), tool.name());
+                        println!("     ├── {} ({})", tool.cli_name(), <dyn swissarmyhammer_tools::mcp::tool_registry::McpTool as swissarmyhammer_tools::mcp::tool_registry::McpTool>::name(tool));
                     }
                 }
             }
@@ -794,12 +794,12 @@ async fn lookup_tool_by_cli_name(
     let registry = registry_arc.read().await;
 
     match registry.get_tool_by_cli_name(category, tool_name) {
-        Some(tool) => Ok(tool.name().to_string()),
+        Some(tool) => Ok(<dyn swissarmyhammer_tools::mcp::tool_registry::McpTool as swissarmyhammer_tools::mcp::tool_registry::McpTool>::name(tool).to_string()),
         None => {
             let available_tools: Vec<String> = registry
                 .get_tools_for_category(category)
                 .iter()
-                .map(|t| format!("{} -> {}", t.cli_name(), t.name()))
+                .map(|t| format!("{} -> {}", t.cli_name(), <dyn swissarmyhammer_tools::mcp::tool_registry::McpTool as swissarmyhammer_tools::mcp::tool_registry::McpTool>::name(*t)))
                 .collect();
             Err(format_tool_not_found_error(
                 tool_name,

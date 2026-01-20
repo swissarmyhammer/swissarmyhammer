@@ -236,6 +236,9 @@ impl WebFetchTool {
     }
 }
 
+// No health checks needed
+crate::impl_empty_doctorable!(WebFetchTool);
+
 #[async_trait]
 impl McpTool for WebFetchTool {
     fn name(&self) -> &'static str {

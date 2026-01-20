@@ -96,6 +96,9 @@ impl WriteFileTool {
     }
 }
 
+// No health checks needed
+crate::impl_empty_doctorable!(WriteFileTool);
+
 #[async_trait]
 impl McpTool for WriteFileTool {
     fn name(&self) -> &'static str {

@@ -71,6 +71,9 @@ impl CelSetTool {
     }
 }
 
+// No health checks needed for CEL tools
+crate::impl_empty_doctorable!(CelSetTool);
+
 #[async_trait]
 impl McpTool for CelSetTool {
     fn name(&self) -> &'static str {

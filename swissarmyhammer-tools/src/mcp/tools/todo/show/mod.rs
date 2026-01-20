@@ -18,6 +18,9 @@ impl ShowTodoTool {
     }
 }
 
+// No health checks needed
+crate::impl_empty_doctorable!(ShowTodoTool);
+
 #[async_trait]
 impl McpTool for ShowTodoTool {
     fn name(&self) -> &'static str {

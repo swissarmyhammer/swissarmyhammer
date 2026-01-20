@@ -100,7 +100,7 @@ pub async fn handle_dynamic_command(
 
     tracing::debug!(
         "Executing tool {} with arguments: {:?}",
-        tool.name(),
+        <dyn swissarmyhammer_tools::mcp::tool_registry::McpTool as swissarmyhammer_tools::mcp::tool_registry::McpTool>::name(tool),
         arguments
     );
 
@@ -119,7 +119,7 @@ pub async fn handle_dynamic_command(
         .with_context(|| {
             format!(
                 "Executing MCP tool '{}' (CLI: {} {}) with {} argument(s)",
-                tool.name(),
+                <dyn swissarmyhammer_tools::mcp::tool_registry::McpTool as swissarmyhammer_tools::mcp::tool_registry::McpTool>::name(tool),
                 category,
                 tool_name,
                 arg_count

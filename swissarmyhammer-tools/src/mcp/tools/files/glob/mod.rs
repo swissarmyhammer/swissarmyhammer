@@ -24,6 +24,9 @@ impl GlobFileTool {
     }
 }
 
+// No health checks needed
+crate::impl_empty_doctorable!(GlobFileTool);
+
 #[async_trait]
 impl McpTool for GlobFileTool {
     fn name(&self) -> &'static str {

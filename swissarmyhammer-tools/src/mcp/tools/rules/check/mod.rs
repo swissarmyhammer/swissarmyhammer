@@ -933,6 +933,9 @@ impl Default for RuleCheckTool {
     }
 }
 
+// No health checks needed
+crate::impl_empty_doctorable!(RuleCheckTool);
+
 #[async_trait]
 impl McpTool for RuleCheckTool {
     fn name(&self) -> &'static str {

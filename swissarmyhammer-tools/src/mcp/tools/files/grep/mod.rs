@@ -514,6 +514,9 @@ struct GrepRequest {
     output_mode: Option<String>,
 }
 
+// No health checks needed
+crate::impl_empty_doctorable!(GrepFileTool);
+
 #[async_trait]
 impl McpTool for GrepFileTool {
     fn name(&self) -> &'static str {

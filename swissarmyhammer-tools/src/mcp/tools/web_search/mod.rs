@@ -3,6 +3,7 @@
 //! This module provides web search tools that enable LLMs to perform web searches using DuckDuckGo.
 //! The tools provide privacy-respecting search capabilities with automatic result fetching and content processing.
 
+pub mod chrome_detection;
 pub mod content_fetcher;
 pub mod duckduckgo_client;
 pub mod search;
@@ -23,6 +24,11 @@ use crate::mcp::tool_registry::ToolRegistry;
 /// # Tools Registered
 ///
 /// - `web_search`: Web search using DuckDuckGo with optional content fetching
+///
+/// # Health Checks
+///
+/// The `web_search` tool implements the Doctorable trait and provides health checks
+/// for Chrome/Chromium browser availability via `sah doctor`.
 pub fn register_web_search_tools(registry: &mut ToolRegistry) {
     registry.register(search::WebSearchTool::new());
 }
@@ -49,7 +55,7 @@ mod tests {
         register_web_search_tools(&mut registry);
 
         let web_search_tool = registry.get_tool("web_search").unwrap();
-        assert_eq!(web_search_tool.name(), "web_search");
+        assert_eq!(<dyn crate::mcp::tool_registry::McpTool as crate::mcp::tool_registry::McpTool>::name(web_search_tool), "web_search");
     }
 
     #[test]
