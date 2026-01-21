@@ -1,5 +1,6 @@
 ---
 system: true
+hidden: true
 title: Rule Checker Agent
 description: Code quality rule checking specialist
 ---

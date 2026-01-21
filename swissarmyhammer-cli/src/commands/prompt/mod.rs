@@ -138,18 +138,20 @@ mod tests {
         };
         assert!(partial_prompt.is_partial_template());
 
-        // Test template with partial description
-        let partial_desc_prompt = Prompt {
-            name: "test-partial-desc".to_string(),
-            description: Some("Partial template for reuse in other prompts".to_string()),
+        // Test template with partial: true in metadata
+        let mut metadata = std::collections::HashMap::new();
+        metadata.insert("partial".to_string(), serde_json::Value::Bool(true));
+        let partial_metadata_prompt = Prompt {
+            name: "test-partial-metadata".to_string(),
+            description: Some("A partial template".to_string()),
             category: None,
             tags: vec![],
             template: "Regular template content".to_string(),
             parameters: vec![],
             source: None,
-            metadata: Default::default(),
+            metadata,
         };
-        assert!(partial_desc_prompt.is_partial_template());
+        assert!(partial_metadata_prompt.is_partial_template());
 
         // Test regular template
         let regular_prompt = Prompt {

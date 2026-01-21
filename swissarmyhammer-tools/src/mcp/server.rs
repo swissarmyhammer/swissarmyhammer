@@ -10,7 +10,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use swissarmyhammer_common::{Pretty, Result, SwissArmyHammerError};
+use swissarmyhammer_common::{is_prompt_visible, Pretty, Result, SwissArmyHammerError};
 use swissarmyhammer_config::model::{parse_model_config, ModelManager};
 use swissarmyhammer_config::{AgentUseCase, TemplateContext};
 use swissarmyhammer_git::GitOperations;
@@ -476,10 +476,10 @@ impl McpServer {
         Ok(())
     }
 
-    /// List all available prompts, excluding partial templates.
+    /// List all available prompts, excluding hidden prompts and partial templates.
     ///
-    /// Partial templates are filtered out as they are meant for internal use
-    /// and should not be exposed via the MCP interface.
+    /// Hidden prompts and partial templates are filtered out as they are meant
+    /// for internal use and should not be exposed via the MCP interface.
     ///
     /// # Returns
     ///
@@ -491,7 +491,11 @@ impl McpServer {
         })?;
         Ok(prompts
             .iter()
-            .filter(|p| !p.is_partial_template())
+            .filter(|p| {
+                let meta = serde_json::to_value(&p.metadata).ok();
+                is_prompt_visible(&p.name, p.description.as_deref(), meta.as_ref())
+                    && !p.is_partial_template()
+            })
             .map(|p| p.name.clone())
             .collect())
     }
@@ -574,11 +578,16 @@ impl McpServer {
             message: e.to_string(),
         })?;
 
-        // Check if this is a partial template
-        if prompt.is_partial_template() {
-            return Err(SwissArmyHammerError::Other { message: format!(
-                "Cannot access partial template '{name}' via MCP. Partial templates are for internal use only."
-            ) });
+        // Check if this prompt is visible (not hidden or a partial)
+        let meta = serde_json::to_value(&prompt.metadata).ok();
+        if !is_prompt_visible(&prompt.name, prompt.description.as_deref(), meta.as_ref())
+            || prompt.is_partial_template()
+        {
+            return Err(SwissArmyHammerError::Other {
+                message: format!(
+                    "Cannot access hidden prompt '{name}' via MCP. Hidden prompts are for internal use only."
+                ),
+            });
         }
 
         // Handle arguments if provided
@@ -810,10 +819,13 @@ impl McpServer {
         prompt: &swissarmyhammer_prompts::Prompt,
         name: &str,
     ) -> std::result::Result<(), McpError> {
-        if prompt.is_partial_template() {
+        let meta = serde_json::to_value(&prompt.metadata).ok();
+        if !is_prompt_visible(&prompt.name, prompt.description.as_deref(), meta.as_ref())
+            || prompt.is_partial_template()
+        {
             return Err(McpError::invalid_request(
                 format!(
-                    "Cannot access partial template '{}' via MCP. Partial templates are for internal use only.",
+                    "Cannot access hidden prompt '{}' via MCP. Hidden prompts are for internal use only.",
                     name
                 ),
                 None,
@@ -942,7 +954,11 @@ impl ServerHandler for McpServer {
             Ok(prompts) => {
                 let prompt_list: Vec<Prompt> = prompts
                     .iter()
-                    .filter(|p| !p.is_partial_template()) // Filter out partial templates
+                    .filter(|p| {
+                        let meta = serde_json::to_value(&p.metadata).ok();
+                        is_prompt_visible(&p.name, p.description.as_deref(), meta.as_ref())
+                            && !p.is_partial_template()
+                    })
                     .map(|p| {
                         // Convert SwissArmyHammer prompt parameters to MCP PromptArguments
                         let arguments = if p.parameters.is_empty() {

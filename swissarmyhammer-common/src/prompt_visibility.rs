@@ -9,41 +9,37 @@
 //! The visibility check uses primitive parameters (`&str`, `Option<&serde_json::Value>`) rather
 //! than specific prompt types, allowing it to work with any prompt representation (MCP, internal, etc.).
 //!
+//! Prompts are hidden only through explicit metadata flags: `partial: true` or `hidden: true`.
+//!
 //! # Example
 //!
 //! ```rust
 //! use swissarmyhammer_common::prompt_visibility::is_prompt_visible;
+//! use serde_json::json;
 //!
 //! // Regular prompt - visible
 //! assert!(is_prompt_visible("test", Some("Run tests"), None));
 //!
-//! // Partial prompt by underscore convention - hidden
-//! assert!(!is_prompt_visible("_header", Some("Header partial"), None));
+//! // Prompt with hidden: true - hidden
+//! let meta = json!({"hidden": true});
+//! assert!(!is_prompt_visible(".check", Some("System prompt"), Some(&meta)));
 //!
-//! // System prompt by dot convention - hidden
-//! assert!(!is_prompt_visible(".system", Some("System prompt"), None));
-//!
-//! // Partial prompt by description - hidden
-//! assert!(!is_prompt_visible("utils", Some("Partial template for reuse in other prompts"), None));
+//! // Prompt with partial: true - hidden
+//! let meta = json!({"partial": true});
+//! assert!(!is_prompt_visible("_header", Some("Header partial"), Some(&meta)));
 //! ```
 
 use serde_json::Value;
 
 /// Checks if a prompt should be visible as a slash command.
 ///
-/// This is the single source of truth for prompt visibility. A prompt is hidden if ANY
-/// of the following conditions are met:
-///
-/// 1. Name starts with underscore (`_`) - convention for partials
-/// 2. Name starts with dot (`.`) - convention for system prompts
-/// 3. Name contains "partial" (case-insensitive)
-/// 4. Description equals "Partial template for reuse in other prompts"
-/// 5. Metadata contains `partial: true` or `hidden: true`
+/// This is the single source of truth for prompt visibility. A prompt is hidden if
+/// its metadata contains `partial: true` or `hidden: true`.
 ///
 /// # Arguments
 ///
-/// * `name` - The prompt name
-/// * `description` - Optional prompt description
+/// * `name` - The prompt name (unused but kept for backward compatibility)
+/// * `description` - Optional prompt description (unused but kept for backward compatibility)
 /// * `meta` - Optional metadata (typically from MCP `Prompt.meta` field)
 ///
 /// # Returns
@@ -60,37 +56,15 @@ pub fn is_prompt_visible(name: &str, description: Option<&str>, meta: Option<&Va
 ///
 /// # Arguments
 ///
-/// * `name` - The prompt name
-/// * `description` - Optional prompt description
+/// * `name` - The prompt name (unused but kept for backward compatibility)
+/// * `description` - Optional prompt description (unused but kept for backward compatibility)
 /// * `meta` - Optional metadata (typically from MCP `Prompt.meta` field)
 ///
 /// # Returns
 ///
 /// `true` if the prompt is a partial template, `false` otherwise.
-pub fn is_prompt_partial(name: &str, description: Option<&str>, meta: Option<&Value>) -> bool {
-    // Check 1: Name starts with underscore (convention for partials)
-    if name.starts_with('_') {
-        return true;
-    }
-
-    // Check 2: Name starts with dot (convention for system prompts like .system, .check)
-    if name.starts_with('.') {
-        return true;
-    }
-
-    // Check 3: Name contains "partial" (case-insensitive)
-    if name.to_lowercase().contains("partial") {
-        return true;
-    }
-
-    // Check 4: Description matches partial template description
-    if let Some(desc) = description {
-        if desc == "Partial template for reuse in other prompts" {
-            return true;
-        }
-    }
-
-    // Check 5: Metadata indicates partial or hidden
+pub fn is_prompt_partial(_name: &str, _description: Option<&str>, meta: Option<&Value>) -> bool {
+    // Check metadata for explicit flags
     if let Some(meta_value) = meta {
         // Check for partial: true
         if let Some(partial) = meta_value.get("partial") {
@@ -124,65 +98,12 @@ mod tests {
             None
         ));
         assert!(is_prompt_visible("review", None, None));
+        // Names with special prefixes are visible without metadata flags
+        assert!(is_prompt_visible("_header", Some("Header"), None));
+        assert!(is_prompt_visible(".check", Some("System prompt"), None));
+        assert!(is_prompt_visible("my-partial-template", None, None));
     }
 
-    #[test]
-    fn test_underscore_prefix_is_hidden() {
-        assert!(!is_prompt_visible("_header", Some("Header partial"), None));
-        assert!(!is_prompt_visible("_footer", None, None));
-        assert!(!is_prompt_visible(
-            "_utils",
-            Some("Utility functions"),
-            None
-        ));
-    }
-
-    #[test]
-    fn test_dot_prefix_is_hidden() {
-        assert!(!is_prompt_visible(".system", Some("System prompt"), None));
-        assert!(!is_prompt_visible(".check", None, None));
-        assert!(!is_prompt_visible(
-            ".internal",
-            Some("Internal use only"),
-            None
-        ));
-    }
-
-    #[test]
-    fn test_partial_in_name_is_hidden() {
-        assert!(!is_prompt_visible("tool_partial", Some("A partial"), None));
-        assert!(!is_prompt_visible("my-partial-template", None, None));
-        assert!(!is_prompt_visible(
-            "PARTIAL",
-            Some("Uppercase partial"),
-            None
-        ));
-        assert!(!is_prompt_visible("somePartialThing", None, None));
-    }
-
-    #[test]
-    fn test_partial_description_is_hidden() {
-        assert!(!is_prompt_visible(
-            "utils",
-            Some("Partial template for reuse in other prompts"),
-            None
-        ));
-    }
-
-    #[test]
-    fn test_similar_description_is_visible() {
-        // Similar but not exact match - should be visible
-        assert!(is_prompt_visible(
-            "utils",
-            Some("A partial template for reuse"),
-            None
-        ));
-        assert!(is_prompt_visible(
-            "utils",
-            Some("partial template for reuse in other prompts"), // lowercase 'p'
-            None
-        ));
-    }
 
     #[test]
     fn test_meta_partial_true_is_hidden() {
@@ -217,21 +138,22 @@ mod tests {
     #[test]
     fn test_is_prompt_partial_inverse_of_visible() {
         // Verify that is_prompt_partial is the inverse of is_prompt_visible
+        use serde_json::json;
+
         let test_cases = vec![
             ("test", Some("Test prompt"), None),
             ("_header", Some("Header"), None),
             ("my_partial", None, None),
-            (
-                "utils",
-                Some("Partial template for reuse in other prompts"),
-                None,
-            ),
+            (".check", Some("System prompt"), None),
+            ("test", Some("Test"), Some(json!({"hidden": true}))),
+            ("test", Some("Test"), Some(json!({"partial": true}))),
         ];
 
         for (name, desc, meta) in test_cases {
+            let meta_ref = meta.as_ref();
             assert_eq!(
-                is_prompt_visible(name, desc, meta),
-                !is_prompt_partial(name, desc, meta),
+                is_prompt_visible(name, desc, meta_ref),
+                !is_prompt_partial(name, desc, meta_ref),
                 "Mismatch for name={}, desc={:?}",
                 name,
                 desc

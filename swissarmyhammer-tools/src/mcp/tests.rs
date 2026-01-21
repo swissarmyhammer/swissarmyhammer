@@ -100,22 +100,24 @@ async fn test_mcp_server_excludes_partials_and_system_prompts_from_list() {
     partial_prompt.metadata = partial_metadata;
     library.add(partial_prompt).unwrap();
 
-    // Add another partial with _partials in name
-    let partial_by_name = Prompt::new("_partials/footer", "Footer partial")
+    // Add another partial with _partials in name and partial: true metadata
+    let mut partial_by_name = Prompt::new("_partials/footer", "Footer partial")
         .with_description("Footer partial template".to_string());
+    partial_by_name.metadata.insert("partial".to_string(), serde_json::Value::Bool(true));
     library.add(partial_by_name).unwrap();
 
-    // Add a system prompt with system: true in metadata
+    // Add a system prompt with hidden: true in metadata
     let mut system_metadata = HashMap::new();
-    system_metadata.insert("system".to_string(), serde_json::Value::Bool(true));
+    system_metadata.insert("hidden".to_string(), serde_json::Value::Bool(true));
     let mut system_prompt = Prompt::new(".system/tester", "System prompt for testing")
         .with_description("System prompt for test mode".to_string());
     system_prompt.metadata = system_metadata;
     library.add(system_prompt).unwrap();
 
-    // Add another system prompt with .system in name
-    let system_by_name = Prompt::new(".system/implementer", "System prompt for implementation")
+    // Add another system prompt with hidden: true metadata
+    let mut system_by_name = Prompt::new(".system/implementer", "System prompt for implementation")
         .with_description("System prompt for implementer mode".to_string());
+    system_by_name.metadata.insert("hidden".to_string(), serde_json::Value::Bool(true));
     library.add(system_by_name).unwrap();
 
     let server = McpServer::new_with_work_dir(library, test_dir.path().to_path_buf(), None)
@@ -334,9 +336,10 @@ async fn test_mcp_server_does_not_expose_partial_templates() {
         .with_description("A regular prompt".to_string());
     library.add(regular_prompt).unwrap();
 
-    // Add a partial template (marked as partial in description)
-    let partial_prompt = Prompt::new("partial_template", "This is a partial template")
-        .with_description("Partial template for reuse in other prompts".to_string());
+    // Add a partial template (marked as partial with metadata)
+    let mut partial_prompt = Prompt::new("partial_template", "This is a partial template")
+        .with_description("A partial template".to_string());
+    partial_prompt.metadata.insert("partial".to_string(), serde_json::Value::Bool(true));
     library.add(partial_prompt).unwrap();
 
     // Add another partial template with {% partial %} marker
@@ -366,12 +369,12 @@ async fn test_mcp_server_does_not_expose_partial_templates() {
     let result = server.get_prompt("partial_template", None).await;
     assert!(result.is_err());
     let error_msg = result.unwrap_err().to_string();
-    assert!(error_msg.contains("partial template"));
+    assert!(error_msg.contains("hidden prompt") || error_msg.contains("partial"));
 
     let result = server.get_prompt("partial_with_marker", None).await;
     assert!(result.is_err());
     let error_msg = result.unwrap_err().to_string();
-    assert!(error_msg.contains("partial template"));
+    assert!(error_msg.contains("hidden prompt") || error_msg.contains("partial"));
 }
 
 #[tokio::test]

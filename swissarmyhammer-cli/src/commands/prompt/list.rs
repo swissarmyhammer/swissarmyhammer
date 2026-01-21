@@ -1,12 +1,13 @@
 //! List command handler for prompts
 //!
 //! Handles listing all available prompts with filtering and display options.
-//! Filters out partial templates and provides both standard and verbose output modes.
+//! Filters out hidden prompts and partial templates.
 
 use crate::context::CliContext;
 use anyhow::Result;
 use std::collections::HashMap;
 use swissarmyhammer::{PromptFilter, PromptLibrary, PromptResolver};
+use swissarmyhammer_common::is_prompt_visible;
 
 /// Execute the list command - shows all available prompts
 pub async fn execute_list_command(cli_context: &CliContext) -> Result<()> {
@@ -30,10 +31,14 @@ pub async fn execute_list_command(cli_context: &CliContext) -> Result<()> {
 
     let all_prompts = library.list_filtered(&filter, &prompt_sources)?;
 
-    // Filter out partial templates
+    // Filter out hidden prompts and partial templates
     let prompts: Vec<_> = all_prompts
         .into_iter()
-        .filter(|prompt| !prompt.is_partial_template())
+        .filter(|prompt| {
+            let meta = serde_json::to_value(&prompt.metadata).ok();
+            is_prompt_visible(&prompt.name, prompt.description.as_deref(), meta.as_ref())
+                && !prompt.is_partial_template()
+        })
         .collect();
 
     // Convert to display objects using emoji-based sources and use context's display_prompts method
@@ -52,6 +57,7 @@ mod tests {
     use crate::commands::prompt::{cli, PromptCommand};
     use crate::context::CliContextBuilder;
     use std::collections::HashMap;
+    use swissarmyhammer_common::is_prompt_visible;
     use swissarmyhammer_config::TemplateContext;
 
     async fn create_test_context(
@@ -111,15 +117,17 @@ mod tests {
     }
 
     fn create_partial_description_prompt(name: &str) -> swissarmyhammer_prompts::Prompt {
+        let mut metadata = HashMap::new();
+        metadata.insert("partial".to_string(), serde_json::Value::Bool(true));
         swissarmyhammer_prompts::Prompt {
             name: name.to_string(),
-            description: Some("Partial template for reuse in other prompts".to_string()),
+            description: Some("A partial template".to_string()),
             category: None,
             tags: vec![],
             template: format!("{} content", name),
             parameters: vec![],
             source: None,
-            metadata: HashMap::new(),
+            metadata,
         }
     }
 
@@ -236,7 +244,11 @@ mod tests {
         // This tests the logic that would be in run_list_command for filtering partials
         let filtered: Vec<_> = prompts
             .into_iter()
-            .filter(|prompt| !prompt.is_partial_template())
+            .filter(|prompt| {
+                let meta = serde_json::to_value(&prompt.metadata).ok();
+                is_prompt_visible(&prompt.name, prompt.description.as_deref(), meta.as_ref())
+                    && !prompt.is_partial_template()
+            })
             .collect();
 
         assert_eq!(filtered.len(), 2);
@@ -254,7 +266,11 @@ mod tests {
 
         let filtered: Vec<_> = prompts
             .into_iter()
-            .filter(|prompt| !prompt.is_partial_template())
+            .filter(|prompt| {
+                let meta = serde_json::to_value(&prompt.metadata).ok();
+                is_prompt_visible(&prompt.name, prompt.description.as_deref(), meta.as_ref())
+                    && !prompt.is_partial_template()
+            })
             .collect();
 
         assert_eq!(filtered.len(), 3);
@@ -272,7 +288,11 @@ mod tests {
 
         let filtered: Vec<_> = prompts
             .into_iter()
-            .filter(|prompt| !prompt.is_partial_template())
+            .filter(|prompt| {
+                let meta = serde_json::to_value(&prompt.metadata).ok();
+                is_prompt_visible(&prompt.name, prompt.description.as_deref(), meta.as_ref())
+                    && !prompt.is_partial_template()
+            })
             .collect();
 
         assert!(filtered.is_empty());
@@ -284,7 +304,11 @@ mod tests {
 
         let filtered: Vec<_> = prompts
             .into_iter()
-            .filter(|prompt| !prompt.is_partial_template())
+            .filter(|prompt| {
+                let meta = serde_json::to_value(&prompt.metadata).ok();
+                is_prompt_visible(&prompt.name, prompt.description.as_deref(), meta.as_ref())
+                    && !prompt.is_partial_template()
+            })
             .collect();
 
         assert!(filtered.is_empty());
@@ -301,7 +325,11 @@ mod tests {
 
         let filtered: Vec<_> = prompts
             .into_iter()
-            .filter(|prompt| !prompt.is_partial_template())
+            .filter(|prompt| {
+                let meta = serde_json::to_value(&prompt.metadata).ok();
+                is_prompt_visible(&prompt.name, prompt.description.as_deref(), meta.as_ref())
+                    && !prompt.is_partial_template()
+            })
             .collect();
 
         // Test standard conversion
