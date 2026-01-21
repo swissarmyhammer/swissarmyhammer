@@ -552,7 +552,10 @@ mod tests {
     #[test]
     fn test_web_search_tool_new() {
         let tool = WebSearchTool::new();
-        assert_eq!(<WebSearchTool as crate::mcp::tool_registry::McpTool>::name(&tool), "web_search");
+        assert_eq!(
+            <WebSearchTool as crate::mcp::tool_registry::McpTool>::name(&tool),
+            "web_search"
+        );
         assert!(!tool.description().is_empty());
     }
 

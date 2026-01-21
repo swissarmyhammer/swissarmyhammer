@@ -55,7 +55,12 @@ mod tests {
         register_web_search_tools(&mut registry);
 
         let web_search_tool = registry.get_tool("web_search").unwrap();
-        assert_eq!(<dyn crate::mcp::tool_registry::McpTool as crate::mcp::tool_registry::McpTool>::name(web_search_tool), "web_search");
+        assert_eq!(
+            <dyn crate::mcp::tool_registry::McpTool as crate::mcp::tool_registry::McpTool>::name(
+                web_search_tool
+            ),
+            "web_search"
+        );
     }
 
     #[test]

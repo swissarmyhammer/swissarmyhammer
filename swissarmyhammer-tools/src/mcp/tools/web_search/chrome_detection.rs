@@ -58,7 +58,6 @@ impl ChromeDetectionResult {
     /// Returns installation instructions even if Chrome is found,
     /// as this can be useful for troubleshooting or alternative installations.
     pub fn installation_instructions(&self) -> String {
-
         #[cfg(target_os = "macos")]
         return "Install Chrome via:\n  - Download from https://www.google.com/chrome/\n  - Or use Homebrew: brew install --cask google-chrome\n  - Or use Chromium: brew install --cask chromium".to_string();
 
@@ -137,7 +136,9 @@ fn get_standard_chrome_paths() -> Vec<PathBuf> {
             PathBuf::from("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"),
             PathBuf::from("/Applications/Google Chrome Beta.app/Contents/MacOS/Google Chrome Beta"),
             PathBuf::from("/Applications/Google Chrome Dev.app/Contents/MacOS/Google Chrome Dev"),
-            PathBuf::from("/Applications/Google Chrome Canary.app/Contents/MacOS/Google Chrome Canary"),
+            PathBuf::from(
+                "/Applications/Google Chrome Canary.app/Contents/MacOS/Google Chrome Canary",
+            ),
             PathBuf::from("/Applications/Chromium.app/Contents/MacOS/Chromium"),
         ]
     }
@@ -158,16 +159,38 @@ fn get_standard_chrome_paths() -> Vec<PathBuf> {
     #[cfg(target_os = "windows")]
     {
         use std::env;
-        let program_files = env::var("ProgramFiles").unwrap_or_else(|_| "C:\\Program Files".to_string());
-        let program_files_x86 = env::var("ProgramFiles(x86)").unwrap_or_else(|_| "C:\\Program Files (x86)".to_string());
-        let local_appdata = env::var("LOCALAPPDATA").unwrap_or_else(|_| format!("{}\\AppData\\Local", env::var("USERPROFILE").unwrap_or_default()));
+        let program_files =
+            env::var("ProgramFiles").unwrap_or_else(|_| "C:\\Program Files".to_string());
+        let program_files_x86 =
+            env::var("ProgramFiles(x86)").unwrap_or_else(|_| "C:\\Program Files (x86)".to_string());
+        let local_appdata = env::var("LOCALAPPDATA").unwrap_or_else(|_| {
+            format!(
+                "{}\\AppData\\Local",
+                env::var("USERPROFILE").unwrap_or_default()
+            )
+        });
 
         vec![
-            PathBuf::from(format!("{}\\Google\\Chrome\\Application\\chrome.exe", program_files)),
-            PathBuf::from(format!("{}\\Google\\Chrome\\Application\\chrome.exe", program_files_x86)),
-            PathBuf::from(format!("{}\\Google\\Chrome\\Application\\chrome.exe", local_appdata)),
-            PathBuf::from(format!("{}\\Chromium\\Application\\chrome.exe", program_files)),
-            PathBuf::from(format!("{}\\Chromium\\Application\\chrome.exe", program_files_x86)),
+            PathBuf::from(format!(
+                "{}\\Google\\Chrome\\Application\\chrome.exe",
+                program_files
+            )),
+            PathBuf::from(format!(
+                "{}\\Google\\Chrome\\Application\\chrome.exe",
+                program_files_x86
+            )),
+            PathBuf::from(format!(
+                "{}\\Google\\Chrome\\Application\\chrome.exe",
+                local_appdata
+            )),
+            PathBuf::from(format!(
+                "{}\\Chromium\\Application\\chrome.exe",
+                program_files
+            )),
+            PathBuf::from(format!(
+                "{}\\Chromium\\Application\\chrome.exe",
+                program_files_x86
+            )),
         ]
     }
 
@@ -208,7 +231,10 @@ mod tests {
         } else {
             assert!(result.path.is_none());
             assert!(result.detection_method.is_none());
-            println!("Chrome not found. Checked {} paths", result.paths_checked.len());
+            println!(
+                "Chrome not found. Checked {} paths",
+                result.paths_checked.len()
+            );
         }
     }
 
@@ -218,7 +244,10 @@ mod tests {
 
         // On major platforms, we should have some standard paths to check
         #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
-        assert!(!paths.is_empty(), "Standard paths should not be empty on major platforms");
+        assert!(
+            !paths.is_empty(),
+            "Standard paths should not be empty on major platforms"
+        );
     }
 
     #[test]

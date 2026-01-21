@@ -105,7 +105,6 @@ mod tests {
         assert!(is_prompt_visible("my-partial-template", None, None));
     }
 
-
     #[test]
     fn test_meta_partial_true_is_hidden() {
         let meta = json!({"partial": true});

@@ -79,6 +79,9 @@ mod tests {
         let chrome_check = checks
             .iter()
             .find(|c| c.name.contains("Chrome") && c.category == "tools");
-        assert!(chrome_check.is_some(), "Should have Chrome check from web_search tool");
+        assert!(
+            chrome_check.is_some(),
+            "Should have Chrome check from web_search tool"
+        );
     }
 }

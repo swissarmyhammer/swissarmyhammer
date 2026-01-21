@@ -9,10 +9,8 @@ use std::sync::Arc;
 use swissarmyhammer_config::ModelConfig;
 use swissarmyhammer_git::GitOperations;
 use swissarmyhammer_tools::mcp::tool_handlers::ToolHandlers;
-use swissarmyhammer_tools::mcp::tools::web_search::{
-    chrome_detection, search::WebSearchTool,
-};
 use swissarmyhammer_tools::mcp::tool_registry::{McpTool, ToolContext};
+use swissarmyhammer_tools::mcp::tools::web_search::{chrome_detection, search::WebSearchTool};
 
 /// Helper function to create a test context for integration tests
 async fn create_test_context() -> ToolContext {
@@ -36,11 +34,17 @@ fn test_chrome_detection_on_system() {
         println!("\nSkipping Chrome-dependent tests");
     } else {
         println!("Chrome found: {}", result.path.as_ref().unwrap().display());
-        println!("Detection method: {}", result.detection_method.as_ref().unwrap());
+        println!(
+            "Detection method: {}",
+            result.detection_method.as_ref().unwrap()
+        );
     }
 
     // Test passes regardless of Chrome availability - just reports status
-    assert!(!result.paths_checked.is_empty(), "Should have checked some paths");
+    assert!(
+        !result.paths_checked.is_empty(),
+        "Should have checked some paths"
+    );
 }
 
 /// Test web_search with real Chrome (ignored by default)
@@ -58,8 +62,10 @@ async fn test_web_search_real_chrome() {
         return;
     }
 
-    println!("Testing web search with Chrome at: {}",
-             chrome_result.path.as_ref().unwrap().display());
+    println!(
+        "Testing web search with Chrome at: {}",
+        chrome_result.path.as_ref().unwrap().display()
+    );
 
     let tool = WebSearchTool::new();
     let context = create_test_context().await;
@@ -189,6 +195,9 @@ async fn test_web_search_error_handling() {
 
     let err = result.unwrap_err();
     let err_msg = err.to_string();
-    assert!(err_msg.contains("cannot be empty") || err_msg.contains("empty"),
-            "Error should mention empty query: {}", err_msg);
+    assert!(
+        err_msg.contains("cannot be empty") || err_msg.contains("empty"),
+        "Error should mention empty query: {}",
+        err_msg
+    );
 }

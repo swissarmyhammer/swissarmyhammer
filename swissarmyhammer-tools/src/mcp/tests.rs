@@ -103,7 +103,9 @@ async fn test_mcp_server_excludes_partials_and_system_prompts_from_list() {
     // Add another partial with _partials in name and partial: true metadata
     let mut partial_by_name = Prompt::new("_partials/footer", "Footer partial")
         .with_description("Footer partial template".to_string());
-    partial_by_name.metadata.insert("partial".to_string(), serde_json::Value::Bool(true));
+    partial_by_name
+        .metadata
+        .insert("partial".to_string(), serde_json::Value::Bool(true));
     library.add(partial_by_name).unwrap();
 
     // Add a system prompt with hidden: true in metadata
@@ -117,7 +119,9 @@ async fn test_mcp_server_excludes_partials_and_system_prompts_from_list() {
     // Add another system prompt with hidden: true metadata
     let mut system_by_name = Prompt::new(".system/implementer", "System prompt for implementation")
         .with_description("System prompt for implementer mode".to_string());
-    system_by_name.metadata.insert("hidden".to_string(), serde_json::Value::Bool(true));
+    system_by_name
+        .metadata
+        .insert("hidden".to_string(), serde_json::Value::Bool(true));
     library.add(system_by_name).unwrap();
 
     let server = McpServer::new_with_work_dir(library, test_dir.path().to_path_buf(), None)
@@ -339,7 +343,9 @@ async fn test_mcp_server_does_not_expose_partial_templates() {
     // Add a partial template (marked as partial with metadata)
     let mut partial_prompt = Prompt::new("partial_template", "This is a partial template")
         .with_description("A partial template".to_string());
-    partial_prompt.metadata.insert("partial".to_string(), serde_json::Value::Bool(true));
+    partial_prompt
+        .metadata
+        .insert("partial".to_string(), serde_json::Value::Bool(true));
     library.add(partial_prompt).unwrap();
 
     // Add another partial template with {% partial %} marker
@@ -596,14 +602,19 @@ async fn test_builtin_partials_not_exposed_in_mcp() {
     let original_dir = std::env::current_dir().expect("Failed to get current dir");
 
     // We need to be in the project root to load builtin prompts
-    let project_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).parent().unwrap().to_path_buf();
+    let project_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .to_path_buf();
     std::env::set_current_dir(&project_root).expect("Failed to change dir");
     let _guard = DirGuard(original_dir);
 
     // Load builtin prompts
     let mut library = PromptLibrary::new();
     let mut resolver = PromptResolver::new();
-    resolver.load_all_prompts(&mut library).expect("Failed to load prompts");
+    resolver
+        .load_all_prompts(&mut library)
+        .expect("Failed to load prompts");
 
     let server = McpServer::new_with_work_dir(library, test_dir.path().to_path_buf(), None)
         .await
@@ -648,6 +659,12 @@ async fn test_builtin_partials_not_exposed_in_mcp() {
         "MCP should expose some non-partial prompts"
     );
 
-    println!("MCP exposed {} prompts (partials correctly filtered)", mcp_prompts.len());
-    println!("Sample of exposed prompts: {:?}", &mcp_prompts[..mcp_prompts.len().min(5)]);
+    println!(
+        "MCP exposed {} prompts (partials correctly filtered)",
+        mcp_prompts.len()
+    );
+    println!(
+        "Sample of exposed prompts: {:?}",
+        &mcp_prompts[..mcp_prompts.len().min(5)]
+    );
 }

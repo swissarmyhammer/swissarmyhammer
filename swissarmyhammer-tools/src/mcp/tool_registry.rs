@@ -1865,7 +1865,10 @@ mod tests {
         registry.register(tool);
 
         let retrieved_tool = registry.get_tool("lookup_test").unwrap();
-        assert_eq!(<dyn McpTool as McpTool>::name(retrieved_tool), "lookup_test");
+        assert_eq!(
+            <dyn McpTool as McpTool>::name(retrieved_tool),
+            "lookup_test"
+        );
         assert_eq!(retrieved_tool.description(), "A lookup test tool");
     }
 

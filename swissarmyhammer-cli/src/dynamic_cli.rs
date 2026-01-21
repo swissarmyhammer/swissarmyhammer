@@ -509,7 +509,10 @@ impl<'a> ToolValidator<'a> {
         match self.tool.cli_category() {
             Some(_) => Ok(()),
             None => Err(ValidationError::MissingSchemaField {
-                field: format!("CLI category for tool {}", <dyn McpTool as McpTool>::name(self.tool)),
+                field: format!(
+                    "CLI category for tool {}",
+                    <dyn McpTool as McpTool>::name(self.tool)
+                ),
             }),
         }
     }

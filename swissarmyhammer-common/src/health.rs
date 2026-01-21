@@ -32,7 +32,11 @@ pub struct HealthCheck {
 
 impl HealthCheck {
     /// Create a new health check with OK status
-    pub fn ok(name: impl Into<String>, message: impl Into<String>, category: impl Into<String>) -> Self {
+    pub fn ok(
+        name: impl Into<String>,
+        message: impl Into<String>,
+        category: impl Into<String>,
+    ) -> Self {
         Self {
             name: name.into(),
             status: HealthStatus::Ok,
@@ -237,7 +241,8 @@ mod tests {
         assert_eq!(ok_check.status, HealthStatus::Ok);
         assert_eq!(ok_check.name, "test");
 
-        let warn_check = HealthCheck::warning("test", "message", Some("fix".to_string()), "category");
+        let warn_check =
+            HealthCheck::warning("test", "message", Some("fix".to_string()), "category");
         assert_eq!(warn_check.status, HealthStatus::Warning);
         assert!(warn_check.fix.is_some());
 
@@ -279,8 +284,14 @@ mod tests {
         let checks = registry.run_all_checks();
         assert_eq!(checks.len(), 2);
 
-        let ok_checks: Vec<_> = checks.iter().filter(|c| c.status == HealthStatus::Ok).collect();
-        let error_checks: Vec<_> = checks.iter().filter(|c| c.status == HealthStatus::Error).collect();
+        let ok_checks: Vec<_> = checks
+            .iter()
+            .filter(|c| c.status == HealthStatus::Ok)
+            .collect();
+        let error_checks: Vec<_> = checks
+            .iter()
+            .filter(|c| c.status == HealthStatus::Error)
+            .collect();
 
         assert_eq!(ok_checks.len(), 1);
         assert_eq!(error_checks.len(), 1);
