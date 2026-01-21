@@ -588,3 +588,66 @@ async fn test_reload_prompts_detects_deleted_prompts() {
         "Reload after deleting prompt should detect changes"
     );
 }
+
+#[tokio::test]
+async fn test_builtin_partials_not_exposed_in_mcp() {
+    // Test that actual builtin partials with partial: true metadata are filtered correctly
+    let test_dir = tempfile::tempdir().unwrap();
+    let original_dir = std::env::current_dir().expect("Failed to get current dir");
+
+    // We need to be in the project root to load builtin prompts
+    let project_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).parent().unwrap().to_path_buf();
+    std::env::set_current_dir(&project_root).expect("Failed to change dir");
+    let _guard = DirGuard(original_dir);
+
+    // Load builtin prompts
+    let mut library = PromptLibrary::new();
+    let mut resolver = PromptResolver::new();
+    resolver.load_all_prompts(&mut library).expect("Failed to load prompts");
+
+    let server = McpServer::new_with_work_dir(library, test_dir.path().to_path_buf(), None)
+        .await
+        .unwrap();
+
+    // List all prompts via MCP
+    let mcp_prompts = server.list_prompts().await.unwrap();
+
+    // Check that none of the partial templates from _partials/ are exposed
+    let partial_names = vec![
+        "detected-projects",
+        "git-practices",
+        "test-driven-development",
+        "coding-standards",
+        "tool_use",
+    ];
+
+    for partial_name in partial_names {
+        assert!(
+            !mcp_prompts.contains(&partial_name.to_string()),
+            "Partial '{}' should not be exposed via MCP but was found in: {:?}",
+            partial_name,
+            mcp_prompts
+        );
+    }
+
+    // Check that hidden prompts (like .check) are not exposed
+    let hidden_names = vec![".check", ".system/rule-checker"];
+
+    for hidden_name in hidden_names {
+        assert!(
+            !mcp_prompts.contains(&hidden_name.to_string()),
+            "Hidden prompt '{}' should not be exposed via MCP but was found in: {:?}",
+            hidden_name,
+            mcp_prompts
+        );
+    }
+
+    // Verify that at least some regular prompts are exposed
+    assert!(
+        !mcp_prompts.is_empty(),
+        "MCP should expose some non-partial prompts"
+    );
+
+    println!("MCP exposed {} prompts (partials correctly filtered)", mcp_prompts.len());
+    println!("Sample of exposed prompts: {:?}", &mcp_prompts[..mcp_prompts.len().min(5)]);
+}

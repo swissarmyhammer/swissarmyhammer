@@ -1250,15 +1250,14 @@ impl PromptLoader {
 
         // Parse metadata
         if let Some(ref metadata_value) = metadata {
-            if let Some(title) = metadata_value
-                .get("title")
-                .and_then(serde_json::Value::as_str)
-            {
-                prompt.metadata.insert(
-                    "title".to_string(),
-                    serde_json::Value::String(title.to_string()),
-                );
+            // First, copy ALL metadata fields into prompt.metadata to preserve flags like hidden, partial, etc.
+            if let Some(obj) = metadata_value.as_object() {
+                for (key, value) in obj {
+                    prompt.metadata.insert(key.clone(), value.clone());
+                }
             }
+
+            // Then extract specific fields into their dedicated Prompt fields
             if let Some(desc) = metadata_value
                 .get("description")
                 .and_then(serde_json::Value::as_str)

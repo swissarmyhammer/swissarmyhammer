@@ -49,10 +49,11 @@ pub fn is_prompt_visible(name: &str, description: Option<&str>, meta: Option<&Va
     !is_prompt_partial(name, description, meta)
 }
 
-/// Checks if a prompt is a partial template (internal use only).
+/// Checks if a prompt is a partial template or hidden.
 ///
-/// This is the inverse of `is_prompt_visible`. Use this when you need to explicitly
-/// check if something is a partial rather than checking visibility.
+/// This checks the metadata for `partial: true` or `hidden: true` flags.
+/// Note: This cannot check for `{% partial %}` directive since it only has access
+/// to metadata. Use `Prompt.is_partial_template()` to also check the template directive.
 ///
 /// # Arguments
 ///
@@ -62,7 +63,7 @@ pub fn is_prompt_visible(name: &str, description: Option<&str>, meta: Option<&Va
 ///
 /// # Returns
 ///
-/// `true` if the prompt is a partial template, `false` otherwise.
+/// `true` if the prompt is a partial or hidden, `false` otherwise.
 pub fn is_prompt_partial(_name: &str, _description: Option<&str>, meta: Option<&Value>) -> bool {
     // Check metadata for explicit flags
     if let Some(meta_value) = meta {

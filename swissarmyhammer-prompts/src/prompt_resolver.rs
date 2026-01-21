@@ -61,23 +61,26 @@ impl PromptResolver {
                 let base_name = base_name.strip_suffix(".md").unwrap_or(base_name);
 
                 // Add the partial with the base name (e.g., "workflow_guards")
-                let partial_prompt = crate::prompts::Prompt::new(base_name, file.content.clone());
+                let mut partial_prompt = crate::prompts::Prompt::new(base_name, file.content.clone());
+                partial_prompt.metadata.insert("partial".to_string(), serde_json::Value::Bool(true));
                 library.add(partial_prompt)?;
                 self.prompt_sources
                     .insert(base_name.to_string(), file.source.clone());
 
                 // Also add with .md extension (e.g., "workflow_guards.md")
                 let name_with_md = format!("{}.md", base_name);
-                let partial_with_md =
+                let mut partial_with_md =
                     crate::prompts::Prompt::new(&name_with_md, file.content.clone());
+                partial_with_md.metadata.insert("partial".to_string(), serde_json::Value::Bool(true));
                 library.add(partial_with_md)?;
                 self.prompt_sources
                     .insert(name_with_md, file.source.clone());
 
                 // Also add with .liquid extension (e.g., "workflow_guards.liquid")
                 let name_with_liquid = format!("{}.liquid", base_name);
-                let partial_with_liquid =
+                let mut partial_with_liquid =
                     crate::prompts::Prompt::new(&name_with_liquid, file.content.clone());
+                partial_with_liquid.metadata.insert("partial".to_string(), serde_json::Value::Bool(true));
                 library.add(partial_with_liquid)?;
                 self.prompt_sources
                     .insert(name_with_liquid, file.source.clone());
