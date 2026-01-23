@@ -45,7 +45,10 @@ impl IsolatedTemplateTest {
     }
 
     fn project_config_dir(&self) -> std::path::PathBuf {
-        let config_dir = self._env.temp_dir().join(SwissarmyhammerDirectory::dir_name());
+        let config_dir = self
+            ._env
+            .temp_dir()
+            .join(SwissarmyhammerDirectory::dir_name());
         fs::create_dir_all(&config_dir).expect("Failed to create project config dir");
         config_dir
     }

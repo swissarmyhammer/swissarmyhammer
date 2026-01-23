@@ -69,7 +69,9 @@ pub fn get_workflow_directories() -> Vec<WorkflowDirectoryInfo> {
 
     // Add user directory if it exists
     if let Some(home) = dirs::home_dir() {
-        let user_workflows_path = home.join(SwissarmyhammerDirectory::dir_name()).join("workflows");
+        let user_workflows_path = home
+            .join(SwissarmyhammerDirectory::dir_name())
+            .join("workflows");
 
         // Validate path before adding
         if validate_path_no_traversal(&user_workflows_path).is_ok() {
@@ -81,7 +83,8 @@ pub fn get_workflow_directories() -> Vec<WorkflowDirectoryInfo> {
     }
 
     // Add local directory
-    let local_workflows_path = PathBuf::from(SwissarmyhammerDirectory::dir_name()).join("workflows");
+    let local_workflows_path =
+        PathBuf::from(SwissarmyhammerDirectory::dir_name()).join("workflows");
 
     // Validate path before adding
     if validate_path_no_traversal(&local_workflows_path).is_ok() {

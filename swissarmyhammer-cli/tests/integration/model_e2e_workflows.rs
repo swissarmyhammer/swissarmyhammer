@@ -175,7 +175,9 @@ async fn verify_and_update_config(project_root: &Path, model_name: &str) -> Resu
         return Ok(());
     }
 
-    let config_path = project_root.join(SwissarmyhammerDirectory::dir_name()).join("sah.yaml");
+    let config_path = project_root
+        .join(SwissarmyhammerDirectory::dir_name())
+        .join("sah.yaml");
     anyhow::ensure!(
         verify_model_config(&config_path, model_name)?,
         "Config should contain {}",
@@ -255,7 +257,9 @@ async fn use_and_verify_custom_model(
         return Ok(());
     }
 
-    let config_path = project_root.join(SwissarmyhammerDirectory::dir_name()).join("sah.yaml");
+    let config_path = project_root
+        .join(SwissarmyhammerDirectory::dir_name())
+        .join("sah.yaml");
     anyhow::ensure!(
         verify_model_config(&config_path, model_name)?,
         "Config should contain {} reference",
@@ -419,7 +423,9 @@ async fn test_all_builtin_models_workflow() -> Result<()> {
     let project_root = &temp_dir;
 
     let builtin_agents = ["claude-code", "qwen-coder", "qwen-next"];
-    let config_path = project_root.join(SwissarmyhammerDirectory::dir_name()).join("sah.yaml");
+    let config_path = project_root
+        .join(SwissarmyhammerDirectory::dir_name())
+        .join("sah.yaml");
 
     for model_name in &builtin_agents {
         verify_builtin_model(project_root, model_name, &config_path).await?;
@@ -726,7 +732,9 @@ async fn test_project_initialization_workflow(project_root: &Path) -> Result<()>
         return Ok(());
     }
 
-    let config_path = project_root.join(SwissarmyhammerDirectory::dir_name()).join("sah.yaml");
+    let config_path = project_root
+        .join(SwissarmyhammerDirectory::dir_name())
+        .join("sah.yaml");
     anyhow::ensure!(
         verify_model_config(&config_path, "project-dev")?,
         "Should contain model reference"
@@ -737,7 +745,9 @@ async fn test_project_initialization_workflow(project_root: &Path) -> Result<()>
 
 /// Test model switching workflow
 async fn test_model_switching_workflow(project_root: &Path) -> Result<()> {
-    let config_path = project_root.join(SwissarmyhammerDirectory::dir_name()).join("sah.yaml");
+    let config_path = project_root
+        .join(SwissarmyhammerDirectory::dir_name())
+        .join("sah.yaml");
 
     let use_qwen = run_sah_command(&["model", "use", "qwen-coder"], Some(project_root)).await?;
 
@@ -759,7 +769,9 @@ async fn test_model_switching_workflow(project_root: &Path) -> Result<()> {
 
 /// Test final verification workflow
 async fn test_final_verification_workflow(project_root: &Path) -> Result<()> {
-    let config_path = project_root.join(SwissarmyhammerDirectory::dir_name()).join("sah.yaml");
+    let config_path = project_root
+        .join(SwissarmyhammerDirectory::dir_name())
+        .join("sah.yaml");
 
     let use_claude = run_sah_command(&["model", "use", "claude-code"], Some(project_root)).await?;
 
@@ -874,7 +886,9 @@ async fn test_concurrent_workflow_safety() -> Result<()> {
     let project_root = &temp_dir;
 
     let models = ["claude-code", "qwen-coder", "qwen-coder-next"];
-    let config_path = project_root.join(SwissarmyhammerDirectory::dir_name()).join("sah.yaml");
+    let config_path = project_root
+        .join(SwissarmyhammerDirectory::dir_name())
+        .join("sah.yaml");
 
     for (i, model) in models.iter().enumerate() {
         verify_model_operation_safety(model, &config_path, project_root, i).await?;

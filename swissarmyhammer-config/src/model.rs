@@ -3284,7 +3284,10 @@ quiet: false"#;
         let result = ModelManager::use_agent("claude-code");
         assert!(result.is_ok(), "Should successfully use claude-code agent");
 
-        let config_path = temp_dir.path().join(SwissarmyhammerDirectory::dir_name()).join("sah.yaml");
+        let config_path = temp_dir
+            .path()
+            .join(SwissarmyhammerDirectory::dir_name())
+            .join("sah.yaml");
         assert!(config_path.exists(), "Should create config file");
 
         let config_content = fs::read_to_string(&config_path).expect("Failed to read config");

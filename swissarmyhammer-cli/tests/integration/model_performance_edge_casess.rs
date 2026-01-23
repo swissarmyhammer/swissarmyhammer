@@ -300,7 +300,9 @@ fn setup_large_agent_test_environment(
     fs::create_dir_all(temp_home)?;
     fs::create_dir_all(project_root)?;
 
-    let user_agents_dir = temp_home.join(SwissarmyhammerDirectory::dir_name()).join("models");
+    let user_agents_dir = temp_home
+        .join(SwissarmyhammerDirectory::dir_name())
+        .join("models");
     let project_agents_dir = project_root.join("models");
 
     let user_agents = create_large_agent_set(&user_agents_dir, 50)?;
@@ -637,7 +639,9 @@ async fn test_invalid_yaml_recovery() -> Result<()> {
     let temp_dir = _env.temp_dir();
     let temp_home = &temp_dir.join("home");
 
-    let user_agents_dir = temp_home.join(SwissarmyhammerDirectory::dir_name()).join("models");
+    let user_agents_dir = temp_home
+        .join(SwissarmyhammerDirectory::dir_name())
+        .join("models");
 
     let valid_agents = create_large_agent_set(&user_agents_dir, 10)?;
     let invalid_files = create_invalid_agent_files(&user_agents_dir)?;
@@ -746,7 +750,9 @@ async fn test_rapid_sequential_operations() -> Result<()> {
         "qwen-next",
         "claude-code",
     ];
-    let config_path = project_root.join(SwissarmyhammerDirectory::dir_name()).join("sah.yaml");
+    let config_path = project_root
+        .join(SwissarmyhammerDirectory::dir_name())
+        .join("sah.yaml");
 
     for (i, agent) in agents.iter().enumerate() {
         let start_time = Instant::now();
@@ -858,7 +864,9 @@ fn setup_large_dataset_environment(
     fs::create_dir_all(temp_home)?;
     fs::create_dir_all(project_root)?;
 
-    let user_agents_dir = temp_home.join(SwissarmyhammerDirectory::dir_name()).join("models");
+    let user_agents_dir = temp_home
+        .join(SwissarmyhammerDirectory::dir_name())
+        .join("models");
     let project_agents_dir = project_root.join("models");
 
     let user_agents = create_large_agent_set(&user_agents_dir, 200)?;

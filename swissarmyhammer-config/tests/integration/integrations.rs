@@ -41,7 +41,10 @@ impl IntegrationTestEnvironment {
     }
 
     fn project_config_dir(&self) -> std::path::PathBuf {
-        let config_dir = self._env.temp_dir().join(SwissarmyhammerDirectory::dir_name());
+        let config_dir = self
+            ._env
+            .temp_dir()
+            .join(SwissarmyhammerDirectory::dir_name());
         fs::create_dir_all(&config_dir).expect("Failed to create project config dir");
         config_dir
     }
@@ -671,7 +674,11 @@ fn test_complex_nested_project_structure_with_inheritance() {
     let nested_subdir = test.create_nested_project_structure();
 
     // Create workspace-level configuration
-    let workspace_config_dir = test._env.temp_dir().join("workspace").join(SwissarmyhammerDirectory::dir_name());
+    let workspace_config_dir = test
+        ._env
+        .temp_dir()
+        .join("workspace")
+        .join(SwissarmyhammerDirectory::dir_name());
     let workspace_config = r#"
 # Workspace-level configuration
 [workspace]
@@ -700,7 +707,8 @@ rust_version = "1.70"
     let project_config_dir = test
         ._env
         .temp_dir()
-        .join("workspace/my-project").join(SwissarmyhammerDirectory::dir_name());
+        .join("workspace/my-project")
+        .join(SwissarmyhammerDirectory::dir_name());
     let project_config = r#"
 # Project-level configuration
 [project]

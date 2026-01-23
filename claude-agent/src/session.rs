@@ -419,9 +419,10 @@ impl SessionManager {
 
     /// Get the default storage path for sessions
     fn default_storage_path() -> Option<PathBuf> {
-        std::env::current_dir()
-            .ok()
-            .map(|cwd| cwd.join(SwissarmyhammerDirectory::dir_name()).join("sessions"))
+        std::env::current_dir().ok().map(|cwd| {
+            cwd.join(SwissarmyhammerDirectory::dir_name())
+                .join("sessions")
+        })
     }
 
     /// Ensure the storage directory exists

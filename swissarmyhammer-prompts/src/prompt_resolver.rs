@@ -169,7 +169,10 @@ mod tests {
         let git_dir = temp_dir.path().join(".git");
         fs::create_dir_all(&git_dir).unwrap();
 
-        let local_prompts_dir = temp_dir.path().join(SwissarmyhammerDirectory::dir_name()).join("prompts");
+        let local_prompts_dir = temp_dir
+            .path()
+            .join(SwissarmyhammerDirectory::dir_name())
+            .join("prompts");
         fs::create_dir_all(&local_prompts_dir).unwrap();
 
         // Create a test prompt file with proper header
@@ -246,7 +249,10 @@ mod tests {
     fn test_user_prompt_overrides_builtin_source_tracking() {
         // Skip isolated test environment setup for now
         let temp_dir = TempDir::new().unwrap();
-        let user_prompts_dir = temp_dir.path().join(SwissarmyhammerDirectory::dir_name()).join("prompts");
+        let user_prompts_dir = temp_dir
+            .path()
+            .join(SwissarmyhammerDirectory::dir_name())
+            .join("prompts");
         fs::create_dir_all(&user_prompts_dir).unwrap();
 
         // Create a user prompt with the same name as a builtin prompt

@@ -322,7 +322,9 @@ async fn test_model_precedence_user_over_builtin() -> Result<()> {
     let temp_home = temp_dir.path();
 
     // Create user models directory with override
-    let user_agents_dir = temp_home.join(SwissarmyhammerDirectory::dir_name()).join("models");
+    let user_agents_dir = temp_home
+        .join(SwissarmyhammerDirectory::dir_name())
+        .join("models");
     create_test_model_files(&user_agents_dir)?;
 
     // Set temporary home directory
@@ -407,7 +409,9 @@ fn setup_hierarchy_test_dirs() -> Result<(TempDir, std::path::PathBuf, std::path
     fs::create_dir_all(&temp_home)?;
     fs::create_dir_all(&project_root)?;
 
-    let user_agents_dir = temp_home.join(SwissarmyhammerDirectory::dir_name()).join("models");
+    let user_agents_dir = temp_home
+        .join(SwissarmyhammerDirectory::dir_name())
+        .join("models");
     create_test_model_files(&user_agents_dir)?;
 
     let project_agents_dir = project_root.join("models");
@@ -542,7 +546,9 @@ async fn test_model_list_with_invalid_model_files() -> Result<()> {
     let temp_home = temp_dir.path();
 
     // Create user models directory with invalid model file
-    let user_agents_dir = temp_home.join(SwissarmyhammerDirectory::dir_name()).join("models");
+    let user_agents_dir = temp_home
+        .join(SwissarmyhammerDirectory::dir_name())
+        .join("models");
     fs::create_dir_all(&user_agents_dir)?;
 
     // Create invalid YAML file
@@ -604,7 +610,9 @@ async fn test_model_use_creates_config_file() -> Result<()> {
     let project_root = temp_dir.path();
 
     // Ensure no existing config
-    let config_path = project_root.join(SwissarmyhammerDirectory::dir_name()).join("sah.yaml");
+    let config_path = project_root
+        .join(SwissarmyhammerDirectory::dir_name())
+        .join("sah.yaml");
     assert!(!config_path.exists(), "Config should not exist initially");
 
     let output = run_model_command_in_dir(&["model", "use", "claude-code"], project_root).await?;
@@ -715,7 +723,9 @@ async fn test_complete_model_workflow() -> Result<()> {
         );
 
         // Step 3: Verify config was created
-        let config_path = project_root.join(SwissarmyhammerDirectory::dir_name()).join("sah.yaml");
+        let config_path = project_root
+            .join(SwissarmyhammerDirectory::dir_name())
+            .join("sah.yaml");
         assert!(config_path.exists(), "Config file should be created");
 
         // Step 4: Switch to different model

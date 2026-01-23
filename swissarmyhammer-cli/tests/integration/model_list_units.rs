@@ -39,7 +39,9 @@ fn setup_test_models() -> Result<(TempDir, Option<String>)> {
     let temp_home = temp_dir.path();
 
     // Create user models directory
-    let user_models_dir = temp_home.join(SwissarmyhammerDirectory::dir_name()).join("models");
+    let user_models_dir = temp_home
+        .join(SwissarmyhammerDirectory::dir_name())
+        .join("models");
     fs::create_dir_all(&user_models_dir)?;
 
     // Create a simple test model
@@ -255,7 +257,9 @@ async fn test_execute_list_command_with_malformed_model_files() -> Result<()> {
     let temp_home = temp_dir.path();
 
     // Create user models directory with malformed YAML
-    let user_models_dir = temp_home.join(SwissarmyhammerDirectory::dir_name()).join("models");
+    let user_models_dir = temp_home
+        .join(SwissarmyhammerDirectory::dir_name())
+        .join("models");
     fs::create_dir_all(&user_models_dir)?;
 
     // Create invalid YAML file
@@ -286,7 +290,9 @@ async fn test_execute_list_command_empty_models_directory() -> Result<()> {
     let temp_home = temp_dir.path();
 
     // Create empty models directory
-    let user_models_dir = temp_home.join(SwissarmyhammerDirectory::dir_name()).join("models");
+    let user_models_dir = temp_home
+        .join(SwissarmyhammerDirectory::dir_name())
+        .join("models");
     fs::create_dir_all(&user_models_dir)?;
 
     let original_home = env::var("HOME").ok();
@@ -379,7 +385,9 @@ async fn test_execute_list_command_with_permission_restricted_directory() -> Res
     let temp_home = temp_dir.path();
 
     // Create models directory
-    let user_models_dir = temp_home.join(SwissarmyhammerDirectory::dir_name()).join("models");
+    let user_models_dir = temp_home
+        .join(SwissarmyhammerDirectory::dir_name())
+        .join("models");
     fs::create_dir_all(&user_models_dir)?;
 
     // Try to make it read-only (may not work on all systems)

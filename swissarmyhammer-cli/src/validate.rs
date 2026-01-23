@@ -1308,7 +1308,10 @@ mod tests {
     fn test_validate_command_includes_workflows() {
         // Test that run_validate_command now validates both prompts and workflows
         let temp_dir = tempfile::TempDir::new().unwrap();
-        let workflows_dir = temp_dir.path().join(SwissarmyhammerDirectory::dir_name()).join("workflows");
+        let workflows_dir = temp_dir
+            .path()
+            .join(SwissarmyhammerDirectory::dir_name())
+            .join("workflows");
         std::fs::create_dir_all(&workflows_dir).unwrap();
 
         // Create a workflow file
@@ -1348,7 +1351,9 @@ mod tests {
         .unwrap();
 
         // Create a workflow in standard local location
-        let standard_dir = current_dir.join(SwissarmyhammerDirectory::dir_name()).join("workflows");
+        let standard_dir = current_dir
+            .join(SwissarmyhammerDirectory::dir_name())
+            .join("workflows");
         std::fs::create_dir_all(&standard_dir).unwrap();
         std::fs::write(
             standard_dir.join("local.md"),
@@ -1409,7 +1414,9 @@ stateDiagram-v2
         }
 
         // Create a workflow in the standard local location
-        let standard_dir = current_dir.join(SwissarmyhammerDirectory::dir_name()).join("workflows");
+        let standard_dir = current_dir
+            .join(SwissarmyhammerDirectory::dir_name())
+            .join("workflows");
         std::fs::create_dir_all(&standard_dir).unwrap();
         std::fs::write(
             standard_dir.join("standard.md"),
@@ -1452,7 +1459,9 @@ stateDiagram-v2
         let current_dir = temp_dir.path();
 
         // Create workflows in standard locations
-        let local_dir = current_dir.join(SwissarmyhammerDirectory::dir_name()).join("workflows");
+        let local_dir = current_dir
+            .join(SwissarmyhammerDirectory::dir_name())
+            .join("workflows");
         std::fs::create_dir_all(&local_dir).unwrap();
 
         // Create a valid workflow
@@ -1813,7 +1822,10 @@ stateDiagram-v2
         let temp_dir = tempfile::TempDir::new().unwrap();
 
         // Create nested workflow directories
-        let workflows_dir1 = temp_dir.path().join(SwissarmyhammerDirectory::dir_name()).join("workflows");
+        let workflows_dir1 = temp_dir
+            .path()
+            .join(SwissarmyhammerDirectory::dir_name())
+            .join("workflows");
         let workflows_dir2 = temp_dir
             .path()
             .join("project")

@@ -1519,7 +1519,10 @@ async fn test_abort_file_detection() {
     let mut run = executor.start_workflow(workflow).unwrap();
 
     // Create the abort file in the current directory to match executor expectations
-    let abort_file_path = test_env.home_path().join(SwissarmyhammerDirectory::dir_name()).join(".abort");
+    let abort_file_path = test_env
+        .home_path()
+        .join(SwissarmyhammerDirectory::dir_name())
+        .join(".abort");
     std::fs::create_dir_all(abort_file_path.parent().unwrap()).unwrap();
     std::fs::write(&abort_file_path, "Test abort reason").unwrap();
 
@@ -1563,7 +1566,10 @@ async fn test_abort_file_detection_with_read_error() {
     let mut run = executor.start_workflow(workflow).unwrap();
 
     // Create abort file but make it unreadable (simulate read error)
-    let abort_file_path = test_env.home_path().join(SwissarmyhammerDirectory::dir_name()).join(".abort");
+    let abort_file_path = test_env
+        .home_path()
+        .join(SwissarmyhammerDirectory::dir_name())
+        .join(".abort");
     std::fs::create_dir_all(abort_file_path.parent().unwrap()).unwrap();
     std::fs::write(&abort_file_path, "").unwrap();
 
@@ -1597,7 +1603,10 @@ async fn test_abort_file_detection_during_multiple_state_transitions() {
     let mut run = executor.start_workflow(workflow).unwrap();
 
     // Create the abort file in the isolated test directory
-    let abort_file_path = test_env.home_path().join(SwissarmyhammerDirectory::dir_name()).join(".abort");
+    let abort_file_path = test_env
+        .home_path()
+        .join(SwissarmyhammerDirectory::dir_name())
+        .join(".abort");
     std::fs::create_dir_all(abort_file_path.parent().unwrap()).unwrap();
     std::fs::write(&abort_file_path, "Mid-execution abort").unwrap();
 
@@ -1638,7 +1647,10 @@ async fn test_abort_file_detection_with_unicode_reason() {
     let mut run = executor.start_workflow(workflow).unwrap();
 
     let unicode_reason = "中文测试 🚫 Abort with émojis and ñoñ-ASCII";
-    let abort_file_path = test_env.home_path().join(SwissarmyhammerDirectory::dir_name()).join(".abort");
+    let abort_file_path = test_env
+        .home_path()
+        .join(SwissarmyhammerDirectory::dir_name())
+        .join(".abort");
     std::fs::create_dir_all(abort_file_path.parent().unwrap()).unwrap();
     std::fs::write(&abort_file_path, unicode_reason).unwrap();
 
@@ -1671,7 +1683,10 @@ async fn test_abort_file_detection_with_large_reason() {
     let mut run = executor.start_workflow(workflow).unwrap();
 
     let large_reason = "x".repeat(5000);
-    let abort_file_path = test_env.home_path().join(SwissarmyhammerDirectory::dir_name()).join(".abort");
+    let abort_file_path = test_env
+        .home_path()
+        .join(SwissarmyhammerDirectory::dir_name())
+        .join(".abort");
     std::fs::create_dir_all(abort_file_path.parent().unwrap()).unwrap();
     std::fs::write(&abort_file_path, &large_reason).unwrap();
 
@@ -1704,7 +1719,10 @@ async fn test_abort_file_detection_with_newlines() {
     let mut run = executor.start_workflow(workflow).unwrap();
 
     let reason_with_newlines = "Line 1\nLine 2\r\nLine 3\n";
-    let abort_file_path = test_env.home_path().join(SwissarmyhammerDirectory::dir_name()).join(".abort");
+    let abort_file_path = test_env
+        .home_path()
+        .join(SwissarmyhammerDirectory::dir_name())
+        .join(".abort");
     std::fs::create_dir_all(abort_file_path.parent().unwrap()).unwrap();
     std::fs::write(&abort_file_path, reason_with_newlines).unwrap();
 
@@ -1746,7 +1764,10 @@ async fn test_abort_file_performance_impact() {
     let duration_without_abort = start_without_abort.elapsed();
 
     // Create abort file in the isolated test environment
-    let abort_file_path = test_env.home_path().join(SwissarmyhammerDirectory::dir_name()).join(".abort");
+    let abort_file_path = test_env
+        .home_path()
+        .join(SwissarmyhammerDirectory::dir_name())
+        .join(".abort");
     std::fs::create_dir_all(abort_file_path.parent().unwrap()).unwrap();
     std::fs::write(&abort_file_path, "Performance test abort").unwrap();
 
@@ -1786,7 +1807,10 @@ async fn test_abort_file_detection_zero_transitions_limit() {
 
     let mut run = executor.start_workflow(workflow).unwrap();
 
-    let abort_file_path = test_env.home_path().join(SwissarmyhammerDirectory::dir_name()).join(".abort");
+    let abort_file_path = test_env
+        .home_path()
+        .join(SwissarmyhammerDirectory::dir_name())
+        .join(".abort");
     std::fs::create_dir_all(abort_file_path.parent().unwrap()).unwrap();
     std::fs::write(&abort_file_path, "Zero limit abort").unwrap();
 

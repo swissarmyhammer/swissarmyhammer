@@ -292,7 +292,9 @@ pub fn check_prompt_directories(checks: &mut Vec<Check>) -> Result<()> {
 
     // Check user prompts directory
     if let Some(home) = dirs::home_dir() {
-        let user_prompts = home.join(SwissarmyhammerDirectory::dir_name()).join("prompts");
+        let user_prompts = home
+            .join(SwissarmyhammerDirectory::dir_name())
+            .join("prompts");
         if user_prompts.exists() {
             let count = count_markdown_files(&user_prompts);
             checks.push(Check {
@@ -347,11 +349,15 @@ pub fn check_yaml_parsing(checks: &mut Vec<Check>) -> Result<()> {
     let mut yaml_errors = Vec::new();
 
     // Check all prompt directories
-    let mut dirs_to_check = vec![PathBuf::from(SwissarmyhammerDirectory::dir_name()).join("prompts")];
+    let mut dirs_to_check =
+        vec![PathBuf::from(SwissarmyhammerDirectory::dir_name()).join("prompts")];
 
     // Add user directory if it exists
     if let Some(home) = dirs::home_dir() {
-        dirs_to_check.push(home.join(SwissarmyhammerDirectory::dir_name()).join("prompts"));
+        dirs_to_check.push(
+            home.join(SwissarmyhammerDirectory::dir_name())
+                .join("prompts"),
+        );
     }
 
     for dir in dirs_to_check {

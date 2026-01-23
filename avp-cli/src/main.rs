@@ -13,12 +13,10 @@ use avp::strategy::HookDispatcher;
 use avp::AvpError;
 
 /// AVP - Agent Validator Protocol
-///
-/// Claude Code hook processor that reads JSON from stdin and outputs JSON to stdout.
 #[derive(Parser, Debug)]
 #[command(name = "avp")]
 #[command(version)]
-#[command(about = "Agent Validator Protocol - Claude Code hook processor")]
+#[command(about = "Agent Validator Protocol")]
 struct Args {
     /// Enable debug output to stderr
     #[arg(short, long)]

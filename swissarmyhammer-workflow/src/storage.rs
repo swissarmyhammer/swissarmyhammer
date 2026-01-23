@@ -747,7 +747,9 @@ stateDiagram-v2
         let git_dir = temp_dir.join(".git");
         fs::create_dir_all(&git_dir).unwrap();
 
-        let local_workflows_dir = temp_dir.join(SwissarmyhammerDirectory::dir_name()).join("workflows");
+        let local_workflows_dir = temp_dir
+            .join(SwissarmyhammerDirectory::dir_name())
+            .join("workflows");
         fs::create_dir_all(&local_workflows_dir).unwrap();
 
         // Create a test workflow file
@@ -816,11 +818,15 @@ stateDiagram-v2
         let test_home = PathBuf::from(std::env::var("HOME").unwrap());
 
         // Create user workflow directory in the isolated home
-        let user_workflows_dir = test_home.join(SwissarmyhammerDirectory::dir_name()).join("workflows");
+        let user_workflows_dir = test_home
+            .join(SwissarmyhammerDirectory::dir_name())
+            .join("workflows");
         fs::create_dir_all(&user_workflows_dir).unwrap();
 
         // Create local workflows directory in the temp directory
-        let local_workflows_dir = temp_dir.join(SwissarmyhammerDirectory::dir_name()).join("workflows");
+        let local_workflows_dir = temp_dir
+            .join(SwissarmyhammerDirectory::dir_name())
+            .join("workflows");
         fs::create_dir_all(&local_workflows_dir).unwrap();
 
         // Create same-named workflow in both locations

@@ -56,8 +56,7 @@ impl ClaudeCodeHookStrategy {
         input: serde_json::Value,
         handler: &impl TypedHookStrategy<I>,
     ) -> Result<(HookOutput, i32), AvpError> {
-        let typed_input: I =
-            serde_json::from_value(input).map_err(AvpError::Json)?;
+        let typed_input: I = serde_json::from_value(input).map_err(AvpError::Json)?;
         handler.process(typed_input)
     }
 
@@ -66,8 +65,7 @@ impl ClaudeCodeHookStrategy {
         &self,
         input: serde_json::Value,
     ) -> Result<(HookOutput, i32), AvpError> {
-        let typed_input: I =
-            serde_json::from_value(input).map_err(AvpError::Json)?;
+        let typed_input: I = serde_json::from_value(input).map_err(AvpError::Json)?;
 
         let mut chain: Chain<I> = Chain::success();
         chain.execute(&typed_input).map_err(AvpError::Chain)
@@ -88,45 +86,23 @@ impl AgentHookStrategy for ClaudeCodeHookStrategy {
         let hook_type = self.extract_hook_type(&input)?;
 
         match hook_type {
-            HookType::SessionStart => {
-                self.process_passthrough::<SessionStartInput>(input)
-            }
-            HookType::UserPromptSubmit => {
-                self.process_passthrough::<UserPromptSubmitInput>(input)
-            }
-            HookType::PreToolUse => {
-                self.process_typed(input, &self.pre_tool_use)
-            }
+            HookType::SessionStart => self.process_passthrough::<SessionStartInput>(input),
+            HookType::UserPromptSubmit => self.process_passthrough::<UserPromptSubmitInput>(input),
+            HookType::PreToolUse => self.process_typed(input, &self.pre_tool_use),
             HookType::PermissionRequest => {
                 self.process_passthrough::<PermissionRequestInput>(input)
             }
-            HookType::PostToolUse => {
-                self.process_typed(input, &self.post_tool_use)
-            }
+            HookType::PostToolUse => self.process_typed(input, &self.post_tool_use),
             HookType::PostToolUseFailure => {
                 self.process_passthrough::<PostToolUseFailureInput>(input)
             }
-            HookType::SubagentStart => {
-                self.process_passthrough::<SubagentStartInput>(input)
-            }
-            HookType::SubagentStop => {
-                self.process_passthrough::<SubagentStopInput>(input)
-            }
-            HookType::Stop => {
-                self.process_passthrough::<StopInput>(input)
-            }
-            HookType::PreCompact => {
-                self.process_passthrough::<PreCompactInput>(input)
-            }
-            HookType::Setup => {
-                self.process_passthrough::<SetupInput>(input)
-            }
-            HookType::SessionEnd => {
-                self.process_passthrough::<SessionEndInput>(input)
-            }
-            HookType::Notification => {
-                self.process_passthrough::<NotificationInput>(input)
-            }
+            HookType::SubagentStart => self.process_passthrough::<SubagentStartInput>(input),
+            HookType::SubagentStop => self.process_passthrough::<SubagentStopInput>(input),
+            HookType::Stop => self.process_passthrough::<StopInput>(input),
+            HookType::PreCompact => self.process_passthrough::<PreCompactInput>(input),
+            HookType::Setup => self.process_passthrough::<SetupInput>(input),
+            HookType::SessionEnd => self.process_passthrough::<SessionEndInput>(input),
+            HookType::Notification => self.process_passthrough::<NotificationInput>(input),
         }
     }
 }

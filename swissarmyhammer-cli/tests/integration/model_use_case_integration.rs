@@ -81,7 +81,9 @@ fn assert_config_contains(
     project_root: &Path,
     expected_patterns: &[(&str, &str)],
 ) -> Result<String> {
-    let config_path = project_root.join(SwissarmyhammerDirectory::dir_name()).join("sah.yaml");
+    let config_path = project_root
+        .join(SwissarmyhammerDirectory::dir_name())
+        .join("sah.yaml");
     assert!(config_path.exists(), "Config file should be created");
 
     let config = fs::read_to_string(config_path)?;
@@ -574,7 +576,10 @@ async fn test_use_case_configuration_persistence() -> Result<()> {
         .run_command(&["model", "use", "rules", "qwen-coder"])
         .await?;
 
-    let config_path = ctx.project_root.join(SwissarmyhammerDirectory::dir_name()).join("sah.yaml");
+    let config_path = ctx
+        .project_root
+        .join(SwissarmyhammerDirectory::dir_name())
+        .join("sah.yaml");
     let config_content = fs::read_to_string(config_path)?;
 
     let config_value: serde_yaml::Value = serde_yaml::from_str(&config_content)?;

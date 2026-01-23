@@ -705,7 +705,10 @@ async fn test_root_validate_help() -> Result<()> {
 async fn test_root_validate_invalid_yaml() -> Result<()> {
     let _guard = IsolatedTestEnvironment::new()?;
     let temp_dir = TempDir::new()?;
-    let prompts_dir = temp_dir.path().join(SwissarmyhammerDirectory::dir_name()).join("prompts");
+    let prompts_dir = temp_dir
+        .path()
+        .join(SwissarmyhammerDirectory::dir_name())
+        .join("prompts");
     std::fs::create_dir_all(&prompts_dir)?;
 
     // Create a prompt with invalid YAML
@@ -740,7 +743,10 @@ Test content"#,
 async fn test_root_validate_missing_fields() -> Result<()> {
     let _guard = IsolatedTestEnvironment::new()?;
     let temp_dir = TempDir::new()?;
-    let prompts_dir = temp_dir.path().join(SwissarmyhammerDirectory::dir_name()).join("prompts");
+    let prompts_dir = temp_dir
+        .path()
+        .join(SwissarmyhammerDirectory::dir_name())
+        .join("prompts");
     std::fs::create_dir_all(&prompts_dir)?;
 
     // Create a prompt missing required fields
@@ -788,7 +794,10 @@ This is line 6 of content."#,
 async fn test_root_validate_undefined_variables() -> Result<()> {
     let _guard = IsolatedTestEnvironment::new()?;
     let temp_dir = TempDir::new()?;
-    let prompts_dir = temp_dir.path().join(SwissarmyhammerDirectory::dir_name()).join("prompts");
+    let prompts_dir = temp_dir
+        .path()
+        .join(SwissarmyhammerDirectory::dir_name())
+        .join("prompts");
     std::fs::create_dir_all(&prompts_dir)?;
 
     // Create a prompt using undefined variables
@@ -929,7 +938,10 @@ async fn test_root_validate_empty_workflow_dirs() -> Result<()> {
 async fn test_root_validate_mixed_valid_invalid_prompts() -> Result<()> {
     let _guard = IsolatedTestEnvironment::new()?;
     let temp_dir = TempDir::new()?;
-    let prompts_dir = temp_dir.path().join(SwissarmyhammerDirectory::dir_name()).join("prompts");
+    let prompts_dir = temp_dir
+        .path()
+        .join(SwissarmyhammerDirectory::dir_name())
+        .join("prompts");
     std::fs::create_dir_all(&prompts_dir)?;
 
     // Create a valid prompt
@@ -1128,7 +1140,10 @@ async fn test_root_validate_special_chars_in_paths() -> Result<()> {
 async fn test_root_validate_quiet_mode_warnings_behavior() -> Result<()> {
     let _guard = IsolatedTestEnvironment::new()?;
     let temp_dir = TempDir::new()?;
-    let prompts_dir = temp_dir.path().join(SwissarmyhammerDirectory::dir_name()).join("prompts");
+    let prompts_dir = temp_dir
+        .path()
+        .join(SwissarmyhammerDirectory::dir_name())
+        .join("prompts");
     std::fs::create_dir_all(&prompts_dir)?;
 
     // Create a prompt that will generate warnings but no errors
@@ -1201,7 +1216,10 @@ This prompt uses {{ used_var | default: "default_value" }} but not unused_var, c
 async fn test_root_validate_quiet_mode_with_errors_and_warnings() -> Result<()> {
     let _guard = IsolatedTestEnvironment::new()?;
     let temp_dir = TempDir::new()?;
-    let prompts_dir = temp_dir.path().join(SwissarmyhammerDirectory::dir_name()).join("prompts");
+    let prompts_dir = temp_dir
+        .path()
+        .join(SwissarmyhammerDirectory::dir_name())
+        .join("prompts");
     std::fs::create_dir_all(&prompts_dir)?;
 
     // Create a prompt with warnings (unused argument)

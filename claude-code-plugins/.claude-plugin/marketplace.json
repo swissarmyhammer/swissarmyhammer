@@ -1,0 +1,23 @@
+{
+  "name": "swissarmyhammer-plugins",
+  "owner": {
+    "name": "SwissArmyHammer"
+  },
+  "metadata": {
+    "description": "SwissArmyHammer Claude Code plugins",
+    "version": "1.0.0"
+  },
+  "plugins": [
+    {
+      "name": "avp",
+      "source": "./avp-plugin",
+      "description": "Agent Validator Protocol - General purpose hook processor for Claude Code",
+      "version": "0.1.0",
+      "author": {
+        "name": "SwissArmyHammer"
+      },
+      "category": "hooks",
+      "keywords": ["hooks", "validation", "avp", "agent-validator-protocol"]
+    }
+  ]
+}

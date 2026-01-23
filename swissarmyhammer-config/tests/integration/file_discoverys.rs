@@ -51,7 +51,10 @@ impl IsolatedDiscoveryTest {
     }
 
     fn project_config_dir(&self) -> std::path::PathBuf {
-        let config_dir = self._env.temp_dir().join(SwissarmyhammerDirectory::dir_name());
+        let config_dir = self
+            ._env
+            .temp_dir()
+            .join(SwissarmyhammerDirectory::dir_name());
         fs::create_dir_all(&config_dir).expect("Failed to create project config dir");
         config_dir
     }
@@ -62,7 +65,8 @@ impl IsolatedDiscoveryTest {
 
     fn home_config_dir(&self) -> std::path::PathBuf {
         let home_path = env::var("HOME").expect("HOME not set");
-        let config_dir = std::path::Path::new(&home_path).join(SwissarmyhammerDirectory::dir_name());
+        let config_dir =
+            std::path::Path::new(&home_path).join(SwissarmyhammerDirectory::dir_name());
         fs::create_dir_all(&config_dir).expect("Failed to create home config dir");
         config_dir
     }

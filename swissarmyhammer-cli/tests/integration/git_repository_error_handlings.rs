@@ -50,7 +50,8 @@ async fn test_commands_work_in_git_repository() {
     Repository::init(&temp_dir).expect("Failed to initialize git repository");
 
     // Create .swissarmyhammer directory
-    fs::create_dir_all(temp_dir.join(SwissarmyhammerDirectory::dir_name())).expect("Failed to create directory");
+    fs::create_dir_all(temp_dir.join(SwissarmyhammerDirectory::dir_name()))
+        .expect("Failed to create directory");
 
     // Use explicit working directory instead of global directory change
 

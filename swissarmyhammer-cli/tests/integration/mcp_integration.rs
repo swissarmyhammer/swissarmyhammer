@@ -44,7 +44,9 @@ async fn test_mcp_server_basic_functionality() {
 async fn test_mcp_server_prompt_loading() {
     let _guard = IsolatedTestEnvironment::new().expect("Failed to create test environment");
     let home_path = std::env::var("HOME").expect("HOME should be set");
-    let prompts_dir = std::path::PathBuf::from(home_path).join(SwissarmyhammerDirectory::dir_name()).join("prompts");
+    let prompts_dir = std::path::PathBuf::from(home_path)
+        .join(SwissarmyhammerDirectory::dir_name())
+        .join("prompts");
     std::fs::create_dir_all(&prompts_dir).unwrap();
 
     // Create a test prompt
