@@ -1,0 +1,294 @@
+//! Hook output types for Claude Code hooks.
+
+use serde::{Deserialize, Serialize};
+
+use super::common::HookType;
+
+/// Common output structure for all hooks.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct HookOutput {
+    /// Whether to continue execution (default: true).
+    #[serde(default = "default_continue", rename = "continue")]
+    pub continue_execution: bool,
+
+    /// Reason for stopping (only relevant if continue is false).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stop_reason: Option<String>,
+
+    /// Whether to suppress output display.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub suppress_output: bool,
+
+    /// System message to inject into context.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub system_message: Option<String>,
+
+    /// Hook-specific output fields.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hook_specific_output: Option<HookSpecificOutput>,
+}
+
+fn default_continue() -> bool {
+    true
+}
+
+fn is_false(b: &bool) -> bool {
+    !*b
+}
+
+impl HookOutput {
+    /// Create a new success output that allows continuation.
+    pub fn success() -> Self {
+        Self {
+            continue_execution: true,
+            ..Default::default()
+        }
+    }
+
+    /// Create a blocking error output that stops execution.
+    pub fn blocking_error(reason: impl Into<String>) -> Self {
+        Self {
+            continue_execution: false,
+            stop_reason: Some(reason.into()),
+            ..Default::default()
+        }
+    }
+
+    /// Add a system message to the output.
+    pub fn with_system_message(mut self, message: impl Into<String>) -> Self {
+        self.system_message = Some(message.into());
+        self
+    }
+
+    /// Suppress output display.
+    pub fn with_suppress_output(mut self) -> Self {
+        self.suppress_output = true;
+        self
+    }
+
+    /// Add hook-specific output.
+    pub fn with_hook_specific(mut self, output: HookSpecificOutput) -> Self {
+        self.hook_specific_output = Some(output);
+        self
+    }
+}
+
+/// Hook-specific output fields based on hook type.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "hookEventName")]
+pub enum HookSpecificOutput {
+    /// PreToolUse hook-specific output.
+    PreToolUse(PreToolUseOutput),
+    /// PermissionRequest hook-specific output.
+    PermissionRequest(PermissionRequestOutput),
+    /// PostToolUse hook-specific output.
+    PostToolUse(PostToolUseOutput),
+    /// UserPromptSubmit hook-specific output.
+    UserPromptSubmit(UserPromptSubmitOutput),
+    /// Stop/SubagentStop hook-specific output.
+    Stop(StopOutput),
+    /// SessionStart/Setup hook-specific output.
+    SessionStart(SessionStartOutput),
+    /// Generic additional context output for other hooks.
+    Generic(GenericOutput),
+}
+
+/// PreToolUse hook-specific output for permission decisions.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct PreToolUseOutput {
+    /// Permission decision: "allow", "deny", or "ask".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub permission_decision: Option<PermissionDecision>,
+
+    /// Reason for the permission decision.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub permission_decision_reason: Option<String>,
+
+    /// Modified tool input (if allowed with changes).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub updated_input: Option<serde_json::Value>,
+
+    /// Additional context to provide to Claude.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub additional_context: Option<String>,
+}
+
+/// Permission decision options for PreToolUse.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum PermissionDecision {
+    /// Allow the tool call to proceed.
+    Allow,
+    /// Deny the tool call.
+    Deny,
+    /// Ask the user for permission.
+    Ask,
+}
+
+/// PermissionRequest hook-specific output.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct PermissionRequestOutput {
+    /// The decision for the permission request.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub decision: Option<PermissionRequestDecision>,
+}
+
+/// Decision structure for PermissionRequest.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PermissionRequestDecision {
+    /// Behavior: "allow" or "deny".
+    pub behavior: PermissionBehavior,
+
+    /// Modified input if allowing with changes.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub updated_input: Option<serde_json::Value>,
+
+    /// Message to display.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
+
+    /// Whether to interrupt execution.
+    #[serde(default)]
+    pub interrupt: bool,
+}
+
+/// Permission behavior options.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum PermissionBehavior {
+    /// Allow the action.
+    Allow,
+    /// Deny the action.
+    Deny,
+}
+
+/// PostToolUse hook-specific output.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct PostToolUseOutput {
+    /// Additional context to provide to Claude.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub additional_context: Option<String>,
+}
+
+/// UserPromptSubmit hook-specific output.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct UserPromptSubmitOutput {
+    /// Additional context to inject.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub additional_context: Option<String>,
+}
+
+/// Stop/SubagentStop hook-specific output.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct StopOutput {
+    /// Reason for blocking (required when blocking stop).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+
+/// SessionStart/Setup hook-specific output.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionStartOutput {
+    /// Additional context to add at session start.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub additional_context: Option<String>,
+}
+
+/// Generic output for hooks that only need additional context.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GenericOutput {
+    /// The hook event name.
+    pub hook_event_name: HookType,
+
+    /// Additional context to provide.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub additional_context: Option<String>,
+}
+
+/// Partial output from a chain link, used for aggregation.
+#[derive(Debug, Clone, Default)]
+pub struct LinkOutput {
+    /// Whether to continue (None means no preference).
+    pub continue_execution: Option<bool>,
+
+    /// Reason for stopping.
+    pub stop_reason: Option<String>,
+
+    /// Whether to suppress output.
+    pub suppress_output: Option<bool>,
+
+    /// System message to add.
+    pub system_message: Option<String>,
+}
+
+impl LinkOutput {
+    /// Create an empty link output.
+    pub fn empty() -> Self {
+        Self::default()
+    }
+
+    /// Create a link output that allows continuation.
+    pub fn allow() -> Self {
+        Self {
+            continue_execution: Some(true),
+            ..Default::default()
+        }
+    }
+
+    /// Create a link output that blocks execution.
+    pub fn block(reason: impl Into<String>) -> Self {
+        Self {
+            continue_execution: Some(false),
+            stop_reason: Some(reason.into()),
+            ..Default::default()
+        }
+    }
+
+    /// Add a system message.
+    pub fn with_message(mut self, message: impl Into<String>) -> Self {
+        self.system_message = Some(message.into());
+        self
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_hook_output_success_serialization() {
+        let output = HookOutput::success();
+        let json = serde_json::to_string(&output).unwrap();
+        assert!(json.contains("\"continue\":true"));
+    }
+
+    #[test]
+    fn test_hook_output_blocking_error() {
+        let output = HookOutput::blocking_error("Not allowed");
+        let json = serde_json::to_string(&output).unwrap();
+        assert!(json.contains("\"continue\":false"));
+        assert!(json.contains("\"stopReason\":\"Not allowed\""));
+    }
+
+    #[test]
+    fn test_pre_tool_use_output() {
+        let output = HookOutput::success().with_hook_specific(HookSpecificOutput::PreToolUse(
+            PreToolUseOutput {
+                permission_decision: Some(PermissionDecision::Allow),
+                permission_decision_reason: Some("Auto-approved".to_string()),
+                ..Default::default()
+            },
+        ));
+        let json = serde_json::to_string(&output).unwrap();
+        assert!(json.contains("\"permissionDecision\":\"allow\""));
+    }
+}
