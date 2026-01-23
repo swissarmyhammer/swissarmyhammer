@@ -10,9 +10,9 @@
   "plugins": [
     {
       "name": "avp",
-      "source": "./avp-plugin",
+      "source": "./claude-code-plugins/avp-plugin",
       "description": "Agent Validator Protocol - General purpose hook processor for Claude Code",
-      "version": "0.1.0",
+      "version": "0.3.0",
       "author": {
         "name": "SwissArmyHammer"
       },

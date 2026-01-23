@@ -174,3 +174,6 @@ cc.json
 acp-conformance/.swissarmyhammer/
 
 .acp
+
+# AVP logs
+.avp/

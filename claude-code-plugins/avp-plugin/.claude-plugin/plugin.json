@@ -1,6 +1,6 @@
 {
   "name": "avp",
-  "version": "0.1.0",
+  "version": "0.3.0",
   "description": "Agent Validator Protocol - General purpose hook processor for Claude Code",
   "author": {
     "name": "SwissArmyHammer",

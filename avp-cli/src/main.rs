@@ -9,14 +9,17 @@ use std::io::{self, IsTerminal, Read, Write};
 
 use clap::Parser;
 
-use avp::strategy::HookDispatcher;
-use avp::AvpError;
+use avp_common::context::{AvpContext, Decision, HookEvent};
+use avp_common::strategy::HookDispatcher;
+use avp_common::AvpError;
 
 /// AVP - Agent Validator Protocol
+///
+/// Claude Code hook processor that reads JSON from stdin and outputs JSON to stdout.
 #[derive(Parser, Debug)]
 #[command(name = "avp")]
 #[command(version)]
-#[command(about = "Agent Validator Protocol")]
+#[command(about = "Agent Validator Protocol - Claude Code hook processor")]
 struct Args {
     /// Enable debug output to stderr
     #[arg(short, long)]
@@ -42,6 +45,9 @@ fn main() {
 }
 
 fn run(args: &Args) -> Result<i32, AvpError> {
+    // Initialize context for logging (best-effort, don't fail if unavailable)
+    let ctx = AvpContext::init().ok();
+
     // Check if stdin is a terminal (no piped input)
     if io::stdin().is_terminal() {
         eprintln!("avp: no input provided (pipe JSON to stdin)");
@@ -67,11 +73,34 @@ fn run(args: &Args) -> Result<i32, AvpError> {
     // Parse input JSON
     let input_value: serde_json::Value = serde_json::from_str(input_str)?;
 
+    // Extract hook event name for logging
+    let hook_event_name = input_value
+        .get("hook_event_name")
+        .and_then(|v| v.as_str())
+        .unwrap_or("Unknown");
+
     // Create dispatcher with default strategies
     let dispatcher = HookDispatcher::with_defaults();
 
     // Process the hook
-    let (output, exit_code) = dispatcher.dispatch(input_value)?;
+    let (output, exit_code) = dispatcher.dispatch(input_value.clone())?;
+
+    // Log the event (smart details based on hook type)
+    if let Some(ctx) = &ctx {
+        let decision = if exit_code == 0 {
+            Decision::Allow
+        } else {
+            Decision::Block
+        };
+
+        let details = extract_details(&input_value, hook_event_name, &output);
+
+        ctx.log_event(&HookEvent {
+            hook_type: hook_event_name,
+            decision,
+            details,
+        });
+    }
 
     if args.debug {
         eprintln!("[avp] Exit code: {}", exit_code);
@@ -83,6 +112,49 @@ fn run(args: &Args) -> Result<i32, AvpError> {
     io::stdout().write_all(b"\n")?;
 
     Ok(exit_code)
+}
+
+/// Extract smart details based on hook type.
+/// Only logs relevant info, not full payloads.
+fn extract_details(
+    input: &serde_json::Value,
+    hook_type: &str,
+    output: &avp_common::HookOutput,
+) -> Option<String> {
+    match hook_type {
+        "PreToolUse" | "PostToolUse" | "PostToolUseFailure" => {
+            // Log tool name
+            input
+                .get("tool_name")
+                .and_then(|v| v.as_str())
+                .map(|name| format!("tool={}", name))
+        }
+        "UserPromptSubmit" => {
+            // Log prompt length, not content
+            input
+                .get("prompt")
+                .and_then(|v| v.as_str())
+                .map(|p| format!("prompt_len={}", p.len()))
+        }
+        "SessionStart" | "SessionEnd" => {
+            // Log session ID
+            input
+                .get("session_id")
+                .and_then(|v| v.as_str())
+                .map(|id| format!("session={}", id))
+        }
+        _ => {
+            // For block decisions, include stop reason
+            if !output.continue_execution {
+                output
+                    .stop_reason
+                    .as_ref()
+                    .map(|r| format!("reason=\"{}\"", r))
+            } else {
+                None
+            }
+        }
+    }
 }
 
 #[cfg(test)]

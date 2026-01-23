@@ -44,13 +44,5 @@
 //! dispatcher.register(ClaudeCodeHookStrategy::new());
 //! ```
 
-pub mod chain;
-pub mod error;
-pub mod hooks;
-pub mod strategy;
-pub mod types;
-
-// Re-export commonly used types at the crate root
-pub use error::{AvpError, ChainError, ValidationError};
-pub use strategy::HookDispatcher;
-pub use types::{HookInput, HookOutput, HookType};
+// Re-export everything from avp-common for backwards compatibility
+pub use avp_common::*;

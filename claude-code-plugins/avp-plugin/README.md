@@ -21,19 +21,17 @@ cp target/release/avp ~/.local/bin/
 
 ## Installation
 
-### Option 1: Direct plugin installation
+### Option 1: From GitHub
 
 ```bash
-claude plugin install /path/to/swissarmyhammer/claude-code-plugins/avp-plugin
+/plugin marketplace add https://github.com/wballard/swissarmyhammer
+/plugin install avp@swissarmyhammer-plugins
 ```
 
-### Option 2: Via local marketplace
+### Option 2: From local clone
 
 ```bash
-# Add the marketplace
-/plugin marketplace add /path/to/swissarmyhammer/claude-code-plugins
-
-# Install the plugin
+/plugin marketplace add /path/to/swissarmyhammer
 /plugin install avp@swissarmyhammer-plugins
 ```
 

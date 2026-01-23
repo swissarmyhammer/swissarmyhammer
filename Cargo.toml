@@ -31,6 +31,7 @@ members = [
     "agent-client-protocol-extras",
     "model-context-protocol-extras",
     "swissarmyhammer-project-detection",
+    "avp-common",
     "avp-cli",
 ]
 resolver = "2"

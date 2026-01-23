@@ -28,6 +28,10 @@ pub enum AvpError {
     /// Error during chain processing.
     #[error("Chain error: {0}")]
     Chain(#[from] ChainError),
+
+    /// Context initialization or operation error.
+    #[error("Context error: {0}")]
+    Context(String),
 }
 
 /// Validation errors for hook inputs.
