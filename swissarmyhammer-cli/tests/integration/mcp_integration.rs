@@ -1,4 +1,5 @@
 use swissarmyhammer_common::test_utils::IsolatedTestEnvironment;
+use swissarmyhammer_common::SwissarmyhammerDirectory;
 use swissarmyhammer_tools::mcp::{
     test_utils::create_test_client,
     unified_server::{start_mcp_server, McpServerMode},
@@ -43,7 +44,7 @@ async fn test_mcp_server_basic_functionality() {
 async fn test_mcp_server_prompt_loading() {
     let _guard = IsolatedTestEnvironment::new().expect("Failed to create test environment");
     let home_path = std::env::var("HOME").expect("HOME should be set");
-    let prompts_dir = std::path::PathBuf::from(home_path).join(".swissarmyhammer/prompts");
+    let prompts_dir = std::path::PathBuf::from(home_path).join(SwissarmyhammerDirectory::dir_name()).join("prompts");
     std::fs::create_dir_all(&prompts_dir).unwrap();
 
     // Create a test prompt

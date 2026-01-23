@@ -8,6 +8,7 @@ use std::env;
 use std::fs;
 use std::sync::Mutex;
 use swissarmyhammer_common::test_utils::IsolatedTestEnvironment;
+use swissarmyhammer_common::SwissarmyhammerDirectory;
 use swissarmyhammer_config::{ConfigurationDiscovery, TemplateContext};
 
 /// Global mutex to serialize tests that modify global state (current directory, HOME environment variable)
@@ -50,7 +51,7 @@ impl IsolatedDiscoveryTest {
     }
 
     fn project_config_dir(&self) -> std::path::PathBuf {
-        let config_dir = self._env.temp_dir().join(".swissarmyhammer");
+        let config_dir = self._env.temp_dir().join(SwissarmyhammerDirectory::dir_name());
         fs::create_dir_all(&config_dir).expect("Failed to create project config dir");
         config_dir
     }
@@ -61,7 +62,7 @@ impl IsolatedDiscoveryTest {
 
     fn home_config_dir(&self) -> std::path::PathBuf {
         let home_path = env::var("HOME").expect("HOME not set");
-        let config_dir = std::path::Path::new(&home_path).join(".swissarmyhammer");
+        let config_dir = std::path::Path::new(&home_path).join(SwissarmyhammerDirectory::dir_name());
         fs::create_dir_all(&config_dir).expect("Failed to create home config dir");
         config_dir
     }
@@ -262,7 +263,10 @@ fn test_discovery_with_nested_project_structure() {
     fs::create_dir_all(&nested_dir).expect("Failed to create nested dirs");
 
     // Create config at the workspace level
-    let workspace_config_dir = test.temp_dir().join("workspace/.swissarmyhammer");
+    let workspace_config_dir = test
+        .temp_dir()
+        .join("workspace")
+        .join(SwissarmyhammerDirectory::dir_name());
     fs::create_dir_all(&workspace_config_dir).expect("Failed to create workspace config dir");
 
     let workspace_config = r#"
@@ -273,7 +277,10 @@ workspace_setting = true
     fs::write(&workspace_config_file, workspace_config).expect("Failed to write workspace config");
 
     // Create config at the project level
-    let project_config_dir = test.temp_dir().join("workspace/project/.swissarmyhammer");
+    let project_config_dir = test
+        .temp_dir()
+        .join("workspace/project")
+        .join(SwissarmyhammerDirectory::dir_name());
     fs::create_dir_all(&project_config_dir).expect("Failed to create project config dir");
 
     let project_config = r#"
@@ -429,9 +436,10 @@ fn test_nonexistent_config_directories() {
     let test = IsolatedDiscoveryTest::new();
 
     // Ensure config directories don't exist
-    let project_config_dir = test.temp_dir().join(".swissarmyhammer");
+    let project_config_dir = test.temp_dir().join(SwissarmyhammerDirectory::dir_name());
     let home_path = env::var("HOME").expect("HOME not set");
-    let home_config_dir = std::path::Path::new(&home_path).join(".swissarmyhammer");
+    let home_config_dir =
+        std::path::Path::new(&home_path).join(SwissarmyhammerDirectory::dir_name());
 
     assert!(
         !project_config_dir.exists(),

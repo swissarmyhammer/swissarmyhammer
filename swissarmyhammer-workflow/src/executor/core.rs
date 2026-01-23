@@ -14,6 +14,7 @@ use crate::{
 use serde_json::Value;
 use std::sync::Arc;
 use std::time::Instant;
+use swissarmyhammer_common::SwissarmyhammerDirectory;
 use swissarmyhammer_config::model::ModelConfig;
 
 /// Workflow execution engine
@@ -298,7 +299,10 @@ impl WorkflowExecutor {
 
     /// Check for abort file before each execution iteration
     fn check_abort_file(&self) -> ExecutorResult<()> {
-        let abort_path = self.working_dir.join(".swissarmyhammer").join(".abort");
+        let abort_path = self
+            .working_dir
+            .join(SwissarmyhammerDirectory::dir_name())
+            .join(".abort");
         if abort_path.exists() {
             let reason = std::fs::read_to_string(&abort_path)
                 .unwrap_or_else(|_| "Unknown abort reason".to_string());

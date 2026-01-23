@@ -1,5 +1,6 @@
 //! Path utilities for SwissArmyHammer
 
+use crate::directory::SwissarmyhammerDirectory;
 use std::path::PathBuf;
 
 /// Get the SwissArmyHammer directory (.swissarmyhammer)
@@ -16,11 +17,7 @@ use std::path::PathBuf;
 )]
 pub fn get_swissarmyhammer_dir() -> Result<PathBuf, std::io::Error> {
     let current_dir = std::env::current_dir()?;
-    let swissarmyhammer_dir = current_dir.join(".swissarmyhammer");
-
-    if !swissarmyhammer_dir.exists() {
-        std::fs::create_dir_all(&swissarmyhammer_dir)?;
-    }
-
-    Ok(swissarmyhammer_dir)
+    SwissarmyhammerDirectory::from_custom_root(current_dir)
+        .map(|dir| dir.root().to_path_buf())
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))
 }

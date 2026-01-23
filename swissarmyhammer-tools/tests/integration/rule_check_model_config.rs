@@ -5,6 +5,7 @@
 
 use std::fs;
 use swissarmyhammer_common::test_utils::IsolatedTestEnvironment;
+use swissarmyhammer_common::SwissarmyhammerDirectory;
 use swissarmyhammer_config::model::{AgentUseCase, ModelManager};
 
 /// Test that RuleCheckTool picks up model config changes
@@ -16,7 +17,7 @@ async fn test_rule_check_uses_configured_model() {
     let temp_path = temp_dir;
 
     // Create .swissarmyhammer directory
-    let sah_dir = temp_path.join(".swissarmyhammer");
+    let sah_dir = temp_path.join(SwissarmyhammerDirectory::dir_name());
     fs::create_dir_all(&sah_dir).unwrap();
 
     // Write config with rules model set to qwen-next
@@ -77,7 +78,7 @@ async fn test_fresh_checker_picks_up_config_changes() {
     let _env = IsolatedTestEnvironment::new().expect("Failed to create test environment");
     let temp_dir = _env.temp_dir();
     let temp_path = temp_dir;
-    let sah_dir = temp_path.join(".swissarmyhammer");
+    let sah_dir = temp_path.join(SwissarmyhammerDirectory::dir_name());
     fs::create_dir_all(&sah_dir).unwrap();
 
     let original_dir = std::env::current_dir().unwrap();

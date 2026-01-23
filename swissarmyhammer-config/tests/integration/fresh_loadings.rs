@@ -10,6 +10,7 @@ use std::fs;
 use std::thread;
 use std::time::Duration;
 use swissarmyhammer_common::test_utils::IsolatedTestEnvironment;
+use swissarmyhammer_common::SwissarmyhammerDirectory;
 use swissarmyhammer_config::TemplateContext;
 
 /// Test helper for isolated fresh loading testing
@@ -43,7 +44,7 @@ impl IsolatedFreshLoadTest {
     }
 
     fn project_config_dir(&self) -> std::path::PathBuf {
-        let config_dir = self._env.temp_dir().join(".swissarmyhammer");
+        let config_dir = self._env.temp_dir().join(SwissarmyhammerDirectory::dir_name());
         fs::create_dir_all(&config_dir).expect("Failed to create project config dir");
         config_dir
     }

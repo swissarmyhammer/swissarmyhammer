@@ -17,6 +17,7 @@
 
 use crate::exit_codes::EXIT_ERROR;
 use anyhow::Result;
+use swissarmyhammer_common::SwissarmyhammerDirectory;
 
 // Re-export types from submodules
 pub use types::*;
@@ -141,7 +142,7 @@ impl Doctor {
 
     /// Check SwissArmyHammer directory in Git repository
     fn check_swissarmyhammer_directory(&mut self, git_root: &std::path::Path) -> Result<()> {
-        let swissarmyhammer_dir = git_root.join(".swissarmyhammer");
+        let swissarmyhammer_dir = git_root.join(SwissarmyhammerDirectory::dir_name());
 
         if !swissarmyhammer_dir.exists() {
             self.checks.push(Check {

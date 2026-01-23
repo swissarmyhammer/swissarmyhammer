@@ -254,15 +254,23 @@ fn create_isolated_test_home() -> (TempDir, PathBuf) {
     let temp_dir = create_temp_dir();
     let home_path = temp_dir.path().to_path_buf();
 
-    // Create mock SwissArmyHammer directory structure
-    let sah_dir = home_path.join(".swissarmyhammer");
-    std::fs::create_dir_all(&sah_dir).expect("Failed to create .swissarmyhammer directory");
-    std::fs::create_dir_all(sah_dir.join("prompts")).expect("Failed to create prompts directory");
-    std::fs::create_dir_all(sah_dir.join("workflows"))
+    // Create mock SwissArmyHammer directory structure using centralized directory management
+    let sah_dir = crate::directory::SwissarmyhammerDirectory::from_custom_root(home_path.clone())
+        .expect("Failed to create .swissarmyhammer directory");
+    sah_dir
+        .ensure_subdir("prompts")
+        .expect("Failed to create prompts directory");
+    sah_dir
+        .ensure_subdir("workflows")
         .expect("Failed to create workflows directory");
-    std::fs::create_dir_all(sah_dir.join("todo")).expect("Failed to create todo directory");
-    std::fs::create_dir_all(sah_dir.join("issues")).expect("Failed to create issues directory");
-    std::fs::create_dir_all(sah_dir.join("issues/complete"))
+    sah_dir
+        .ensure_subdir("todo")
+        .expect("Failed to create todo directory");
+    sah_dir
+        .ensure_subdir("issues")
+        .expect("Failed to create issues directory");
+    sah_dir
+        .ensure_subdir("issues/complete")
         .expect("Failed to create issues/complete directory");
 
     (temp_dir, home_path)
@@ -320,7 +328,10 @@ impl IsolatedTestHome {
 
     /// Get the path to the .swissarmyhammer directory in the isolated home
     pub fn swissarmyhammer_dir(&self) -> PathBuf {
-        self.home_path().join(".swissarmyhammer")
+        crate::directory::SwissarmyhammerDirectory::from_custom_root(self.home_path())
+            .expect("Failed to get swissarmyhammer directory")
+            .root()
+            .to_path_buf()
     }
 }
 

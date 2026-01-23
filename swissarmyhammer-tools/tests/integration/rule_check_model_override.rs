@@ -5,6 +5,7 @@ use std::fs;
 use std::path::Path;
 use swissarmyhammer_common::test_utils::IsolatedTestEnvironment;
 use swissarmyhammer_common::SwissArmyHammerError;
+use swissarmyhammer_common::SwissarmyhammerDirectory;
 use swissarmyhammer_prompts::PromptLibrary;
 use swissarmyhammer_tools::mcp::server::McpServer;
 
@@ -24,7 +25,7 @@ async fn setup_test_server(
 
 /// Helper function to setup a test workspace with rules and test files
 fn setup_test_workspace(temp_dir: &Path) {
-    let sah_dir = temp_dir.join(".swissarmyhammer");
+    let sah_dir = temp_dir.join(SwissarmyhammerDirectory::dir_name());
     fs::create_dir_all(&sah_dir).unwrap();
 
     // Create a simple rule

@@ -2037,6 +2037,12 @@ mod tests {
     use swissarmyhammer_config::ModelConfig;
 
     use swissarmyhammer_common::test_utils::IsolatedTestEnvironment;
+    use swissarmyhammer_common::SwissarmyhammerDirectory;
+
+    /// Helper function to get the abort file path
+    fn abort_file_path() -> std::path::PathBuf {
+        std::path::PathBuf::from(SwissarmyhammerDirectory::dir_name()).join(".abort")
+    }
 
     /// Test helper structure for shell action result verification
     ///
@@ -2496,7 +2502,7 @@ mod tests {
     async fn test_abort_action_execution() {
         let _test_env = IsolatedTestEnvironment::new().expect("Failed to create test environment");
         // Clean up any existing abort file before test
-        let _ = std::fs::remove_file(".swissarmyhammer/.abort");
+        let _ = std::fs::remove_file(abort_file_path());
 
         let action = AbortAction::new("Test abort message".to_string());
         let mut context = WorkflowTemplateContext::with_vars_for_test(HashMap::new());
@@ -2513,14 +2519,14 @@ mod tests {
         }
 
         // Clean up abort file after test
-        let _ = std::fs::remove_file(".swissarmyhammer/.abort");
+        let _ = std::fs::remove_file(abort_file_path());
     }
 
     #[tokio::test]
     async fn test_abort_action_with_variable_substitution() {
         let _test_env = IsolatedTestEnvironment::new().expect("Failed to create test environment");
         // Clean up any existing abort file before test
-        let _ = std::fs::remove_file(".swissarmyhammer/.abort");
+        let _ = std::fs::remove_file(abort_file_path());
 
         let action = AbortAction::new("Error in ${file}: ${error}".to_string());
         let mut context = WorkflowTemplateContext::with_vars_for_test(HashMap::new());
@@ -2542,14 +2548,14 @@ mod tests {
         }
 
         // Clean up abort file after test
-        let _ = std::fs::remove_file(".swissarmyhammer/.abort");
+        let _ = std::fs::remove_file(abort_file_path());
     }
 
     #[tokio::test]
     async fn test_end_to_end_error_propagation() {
         let _test_env = IsolatedTestEnvironment::new().expect("Failed to create test environment");
         // Clean up any existing abort file before test
-        let _ = std::fs::remove_file(".swissarmyhammer/.abort");
+        let _ = std::fs::remove_file(abort_file_path());
 
         // Test that abort errors propagate correctly through the system
         use crate::definition::Workflow;
@@ -2637,7 +2643,7 @@ mod tests {
         // This validates that the error propagation is working correctly
 
         // Clean up abort file after test
-        let _ = std::fs::remove_file(".swissarmyhammer/.abort");
+        let _ = std::fs::remove_file(abort_file_path());
     }
 
     #[test]

@@ -3,6 +3,7 @@
 //! This module provides utilities for finding Git repositories and managing
 //! the .swissarmyhammer directory structure.
 
+use crate::directory::DIR_NAME;
 use crate::error::{Result, SwissArmyHammerError};
 use std::path::{Path, PathBuf};
 
@@ -108,7 +109,7 @@ pub fn find_swissarmyhammer_directory() -> Option<PathBuf> {
 /// * `Option<PathBuf>` - Some(path) if .swissarmyhammer directory found, None otherwise
 pub fn find_swissarmyhammer_directory_from(start_dir: &Path) -> Option<PathBuf> {
     let git_root = find_git_repository_root_from(start_dir)?;
-    let swissarmyhammer_dir = git_root.join(".swissarmyhammer");
+    let swissarmyhammer_dir = git_root.join(DIR_NAME);
 
     if swissarmyhammer_dir.exists() && swissarmyhammer_dir.is_dir() {
         Some(swissarmyhammer_dir)
@@ -169,7 +170,7 @@ pub fn get_or_create_swissarmyhammer_directory_from(start_dir: &Path) -> Result<
     let git_root =
         find_git_repository_root_from(start_dir).ok_or(SwissArmyHammerError::NotInGitRepository)?;
 
-    let swissarmyhammer_dir = git_root.join(".swissarmyhammer");
+    let swissarmyhammer_dir = git_root.join(DIR_NAME);
 
     if swissarmyhammer_dir.exists() {
         if !swissarmyhammer_dir.is_dir() {
@@ -252,7 +253,7 @@ mod tests {
         let swissarmyhammer_dir = result.unwrap();
         assert!(swissarmyhammer_dir.exists());
         assert!(swissarmyhammer_dir.is_dir());
-        assert_eq!(swissarmyhammer_dir, base.join(".swissarmyhammer"));
+        assert_eq!(swissarmyhammer_dir, base.join(DIR_NAME));
     }
 
     #[test]
@@ -264,7 +265,7 @@ mod tests {
         // Create a .git directory to make it a Git repo
         fs::create_dir_all(base.join(".git")).unwrap();
         // Pre-create the .swissarmyhammer directory
-        fs::create_dir_all(base.join(".swissarmyhammer")).unwrap();
+        fs::create_dir_all(base.join(DIR_NAME)).unwrap();
 
         let result = get_or_create_swissarmyhammer_directory_from(base);
         assert!(result.is_ok());
@@ -297,11 +298,11 @@ mod tests {
 
         // Create Git repository with .swissarmyhammer directory
         fs::create_dir_all(base.join(".git")).unwrap();
-        fs::create_dir_all(base.join(".swissarmyhammer")).unwrap();
+        fs::create_dir_all(base.join(DIR_NAME)).unwrap();
 
         let result = find_swissarmyhammer_directory_from(base);
         assert!(result.is_some());
-        assert_eq!(result.unwrap(), base.join(".swissarmyhammer"));
+        assert_eq!(result.unwrap(), base.join(DIR_NAME));
     }
 
     #[test]
@@ -322,7 +323,7 @@ mod tests {
         let base = temp_dir.path();
 
         // Create .swissarmyhammer directory but no Git repository
-        fs::create_dir_all(base.join(".swissarmyhammer")).unwrap();
+        fs::create_dir_all(base.join(DIR_NAME)).unwrap();
 
         let result = find_swissarmyhammer_directory_from(base);
         // Should return None since no Git repository was found
@@ -340,11 +341,11 @@ mod tests {
         fs::create_dir_all(&subdir2).unwrap();
 
         fs::create_dir_all(base.join(".git")).unwrap();
-        fs::create_dir_all(base.join(".swissarmyhammer")).unwrap();
+        fs::create_dir_all(base.join(DIR_NAME)).unwrap();
 
         // Test from nested subdirectory
         let result = find_swissarmyhammer_directory_from(&subdir2);
         assert!(result.is_some());
-        assert_eq!(result.unwrap(), base.join(".swissarmyhammer"));
+        assert_eq!(result.unwrap(), base.join(DIR_NAME));
     }
 }

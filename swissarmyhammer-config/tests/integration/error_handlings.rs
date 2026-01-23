@@ -8,13 +8,14 @@ use std::env;
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use swissarmyhammer_common::IsolatedTestEnvironment;
+use swissarmyhammer_common::SwissarmyhammerDirectory;
 use swissarmyhammer_config::TemplateContext;
 use tempfile::TempDir;
 
 /// Helper to create a project config directory for testing with proper isolation
 fn create_project_config_dir() -> std::path::PathBuf {
     let temp_dir = TempDir::new().expect("Failed to create temp dir");
-    let config_dir = temp_dir.path().join(".swissarmyhammer");
+    let config_dir = temp_dir.path().join(SwissarmyhammerDirectory::dir_name());
     fs::create_dir_all(&config_dir).expect("Failed to create project config dir");
 
     // Change to the temp directory so config discovery works

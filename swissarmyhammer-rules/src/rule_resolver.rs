@@ -93,6 +93,7 @@ impl Default for RuleResolver {
 mod tests {
     use super::*;
     use std::fs;
+    use swissarmyhammer_common::SwissarmyhammerDirectory;
     use tempfile::TempDir;
 
     #[test]
@@ -114,7 +115,7 @@ mod tests {
         let git_dir = temp_dir.path().join(".git");
         fs::create_dir_all(&git_dir).unwrap();
 
-        let local_rules_dir = temp_dir.path().join(".swissarmyhammer").join("rules");
+        let local_rules_dir = temp_dir.path().join(SwissarmyhammerDirectory::dir_name()).join("rules");
         fs::create_dir_all(&local_rules_dir).unwrap();
 
         // Create a test rule file that would override a builtin

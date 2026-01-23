@@ -6,6 +6,7 @@ use anyhow::Result;
 use std::env;
 use std::fs;
 use std::path::PathBuf;
+use swissarmyhammer_common::SwissarmyhammerDirectory;
 use walkdir::WalkDir;
 
 /// Check names constants to avoid typos and improve maintainability
@@ -291,7 +292,7 @@ pub fn check_prompt_directories(checks: &mut Vec<Check>) -> Result<()> {
 
     // Check user prompts directory
     if let Some(home) = dirs::home_dir() {
-        let user_prompts = home.join(SWISSARMYHAMMER_DIR).join("prompts");
+        let user_prompts = home.join(SwissarmyhammerDirectory::dir_name()).join("prompts");
         if user_prompts.exists() {
             let count = count_markdown_files(&user_prompts);
             checks.push(Check {
@@ -314,7 +315,7 @@ pub fn check_prompt_directories(checks: &mut Vec<Check>) -> Result<()> {
     }
 
     // Check local prompts directory
-    let local_prompts = PathBuf::from(SWISSARMYHAMMER_DIR).join("prompts");
+    let local_prompts = PathBuf::from(SwissarmyhammerDirectory::dir_name()).join("prompts");
     if local_prompts.exists() {
         let count = count_markdown_files(&local_prompts);
         checks.push(Check {
@@ -346,11 +347,11 @@ pub fn check_yaml_parsing(checks: &mut Vec<Check>) -> Result<()> {
     let mut yaml_errors = Vec::new();
 
     // Check all prompt directories
-    let mut dirs_to_check = vec![PathBuf::from(SWISSARMYHAMMER_DIR).join("prompts")];
+    let mut dirs_to_check = vec![PathBuf::from(SwissarmyhammerDirectory::dir_name()).join("prompts")];
 
     // Add user directory if it exists
     if let Some(home) = dirs::home_dir() {
-        dirs_to_check.push(home.join(SWISSARMYHAMMER_DIR).join("prompts"));
+        dirs_to_check.push(home.join(SwissarmyhammerDirectory::dir_name()).join("prompts"));
     }
 
     for dir in dirs_to_check {
@@ -468,7 +469,7 @@ pub fn check_workflow_directories(checks: &mut Vec<Check>) -> Result<()> {
 
     // Check workflow run storage directory
     if let Some(home) = dirs::home_dir() {
-        let run_storage = home.join(SWISSARMYHAMMER_DIR).join("runs");
+        let run_storage = home.join(SwissarmyhammerDirectory::dir_name()).join("runs");
         if run_storage.exists() {
             checks.push(Check {
                 name: "Workflow run storage directory".to_string(),
@@ -506,7 +507,7 @@ pub fn check_workflow_permissions(checks: &mut Vec<Check>) -> Result<()> {
 
     // Add run storage directory if it exists
     if let Some(home) = dirs::home_dir() {
-        let run_storage = home.join(SWISSARMYHAMMER_DIR).join("runs");
+        let run_storage = home.join(SwissarmyhammerDirectory::dir_name()).join("runs");
         if run_storage.exists() {
             dirs_to_check.push(run_storage);
         }

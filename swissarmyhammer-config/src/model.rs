@@ -169,7 +169,7 @@
 use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::path::{Path, PathBuf};
-use swissarmyhammer_common::{ErrorSeverity, Severity};
+use swissarmyhammer_common::{ErrorSeverity, Severity, SwissarmyhammerDirectory};
 use thiserror::Error;
 
 /// Model executor type enumeration
@@ -1224,7 +1224,9 @@ impl ModelManager {
     /// ```
     pub fn load_user_models() -> Result<Vec<ModelInfo>, ModelError> {
         if let Some(home_dir) = dirs::home_dir() {
-            let user_models_dir = home_dir.join(".swissarmyhammer").join("models");
+            let user_models_dir = home_dir
+                .join(SwissarmyhammerDirectory::dir_name())
+                .join("models");
             Self::load_models_from_dir(&user_models_dir, ModelConfigSource::User)
         } else {
             // No home directory available (rare case)
@@ -1279,7 +1281,9 @@ impl ModelManager {
         use swissarmyhammer_common::utils::directory_utils::find_git_repository_root;
 
         if let Some(git_root) = find_git_repository_root() {
-            let gitroot_models_dir = git_root.join(".swissarmyhammer").join("models");
+            let gitroot_models_dir = git_root
+                .join(SwissarmyhammerDirectory::dir_name())
+                .join("models");
             Self::load_models_from_dir(&gitroot_models_dir, ModelConfigSource::GitRoot)
         } else {
             // Not in a git repository
@@ -1340,7 +1344,7 @@ impl ModelManager {
     /// ```
     pub fn detect_config_file() -> Option<PathBuf> {
         let current_dir = std::env::current_dir().ok()?;
-        let sah_dir = current_dir.join(".swissarmyhammer");
+        let sah_dir = current_dir.join(SwissarmyhammerDirectory::dir_name());
 
         // Check for YAML config first (preferred)
         let yaml_config = sah_dir.join("sah.yaml");
@@ -1403,7 +1407,7 @@ impl ModelManager {
             canonical_current.display()
         );
 
-        let sah_dir = canonical_current.join(".swissarmyhammer");
+        let sah_dir = canonical_current.join(SwissarmyhammerDirectory::dir_name());
 
         // Create .swissarmyhammer directory if it doesn't exist
         if !sah_dir.exists() {
@@ -1975,7 +1979,7 @@ mod tests {
         content: Option<&str>,
     ) -> std::path::PathBuf {
         use std::fs;
-        let sah_dir = temp_dir.path().join(".swissarmyhammer");
+        let sah_dir = temp_dir.path().join(SwissarmyhammerDirectory::dir_name());
         fs::create_dir_all(&sah_dir).expect("Failed to create .swissarmyhammer dir");
 
         let config_path = sah_dir.join(config_file);
@@ -3145,7 +3149,7 @@ quiet: false"#;
         env::set_current_dir(&temp_dir).expect("Failed to change to temp dir");
 
         // Create .swissarmyhammer directory with both yaml and toml configs
-        let sah_dir = temp_dir.path().join(".swissarmyhammer");
+        let sah_dir = temp_dir.path().join(SwissarmyhammerDirectory::dir_name());
         fs::create_dir_all(&sah_dir).expect("Failed to create .swissarmyhammer dir");
         let yaml_path = sah_dir.join("sah.yaml");
         let toml_path = sah_dir.join("sah.toml");
@@ -3196,7 +3200,7 @@ quiet: false"#;
         );
 
         // Check that the directory was created
-        let sah_dir = temp_dir.path().join(".swissarmyhammer");
+        let sah_dir = temp_dir.path().join(SwissarmyhammerDirectory::dir_name());
         assert!(sah_dir.exists(), "Should create .swissarmyhammer directory");
         assert!(sah_dir.is_dir(), "Should create directory, not file");
 
@@ -3214,7 +3218,7 @@ quiet: false"#;
         env::set_current_dir(&temp_dir).expect("Failed to change to temp dir");
 
         // Pre-create the directory
-        let sah_dir = temp_dir.path().join(".swissarmyhammer");
+        let sah_dir = temp_dir.path().join(SwissarmyhammerDirectory::dir_name());
         fs::create_dir_all(&sah_dir).expect("Failed to pre-create directory");
 
         let result = ModelManager::ensure_config_structure();
@@ -3248,7 +3252,7 @@ quiet: false"#;
         env::set_current_dir(&temp_dir).expect("Failed to change to temp dir");
 
         // Pre-create directory and existing config file
-        let sah_dir = temp_dir.path().join(".swissarmyhammer");
+        let sah_dir = temp_dir.path().join(SwissarmyhammerDirectory::dir_name());
         fs::create_dir_all(&sah_dir).expect("Failed to pre-create directory");
         let existing_config = sah_dir.join("sah.toml");
         fs::write(&existing_config, "[existing]\nvalue = true\n")
@@ -3280,7 +3284,7 @@ quiet: false"#;
         let result = ModelManager::use_agent("claude-code");
         assert!(result.is_ok(), "Should successfully use claude-code agent");
 
-        let config_path = temp_dir.path().join(".swissarmyhammer").join("sah.yaml");
+        let config_path = temp_dir.path().join(SwissarmyhammerDirectory::dir_name()).join("sah.yaml");
         assert!(config_path.exists(), "Should create config file");
 
         let config_content = fs::read_to_string(&config_path).expect("Failed to read config");
@@ -3453,7 +3457,7 @@ agents:
         assert_eq!(config.executor_type(), ModelExecutorType::ClaudeCode);
 
         // Test 2: Config with root agent only - rules should fall back to root
-        let sah_dir = temp_dir.path().join(".swissarmyhammer");
+        let sah_dir = temp_dir.path().join(SwissarmyhammerDirectory::dir_name());
         fs::create_dir_all(&sah_dir).expect("Failed to create sah dir");
         let config_path = sah_dir.join("sah.yaml");
         let config_with_root = r#"agents:

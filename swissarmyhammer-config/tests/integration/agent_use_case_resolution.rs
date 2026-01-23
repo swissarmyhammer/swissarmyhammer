@@ -1,6 +1,7 @@
 // sah rule ignore test_rule_with_allow
 use std::fs;
 use swissarmyhammer_common::test_utils::IsolatedTestEnvironment;
+use swissarmyhammer_common::SwissarmyhammerDirectory;
 use swissarmyhammer_config::model::ModelManager;
 use swissarmyhammer_config::AgentUseCase;
 
@@ -12,7 +13,7 @@ fn test_resolve_rules_model_from_config() {
     let temp_path = temp_dir;
 
     // Create .swissarmyhammer directory
-    let sah_dir = temp_path.join(".swissarmyhammer");
+    let sah_dir = temp_path.join(SwissarmyhammerDirectory::dir_name());
     fs::create_dir_all(&sah_dir).unwrap();
 
     // Write config with rules agent

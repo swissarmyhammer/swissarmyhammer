@@ -8,6 +8,11 @@ use crate::utils::directory_utils::find_git_repository_root;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+/// The directory name for SwissArmyHammer configuration and state.
+/// This is the single source of truth for the directory name.
+/// Crate-private to allow internal usage without exposing to external crates.
+pub(crate) const DIR_NAME: &str = ".swissarmyhammer";
+
 /// Content for .gitignore file in .swissarmyhammer directory
 ///
 /// This ensures temporary files, logs, and runtime artifacts are not committed
@@ -188,7 +193,7 @@ impl SwissarmyhammerDirectory {
     pub fn from_git_root() -> Result<Self> {
         let git_root =
             find_git_repository_root().ok_or(SwissArmyHammerError::NotInGitRepository)?;
-        let root = git_root.join(".swissarmyhammer");
+        let root = git_root.join(DIR_NAME);
         Self::new(root, DirectoryRootType::GitRoot)
     }
 
@@ -218,7 +223,7 @@ impl SwissarmyhammerDirectory {
             message: "Cannot determine home directory".to_string(),
         })?;
 
-        let root = home.join(".swissarmyhammer");
+        let root = home.join(DIR_NAME);
         Self::new(root, DirectoryRootType::UserHome)
     }
 
@@ -250,7 +255,7 @@ impl SwissarmyhammerDirectory {
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     pub fn from_custom_root(custom_root: PathBuf) -> Result<Self> {
-        let root = custom_root.join(".swissarmyhammer");
+        let root = custom_root.join(DIR_NAME);
         Self::new(root, DirectoryRootType::Custom(custom_root))
     }
 
@@ -339,6 +344,26 @@ impl SwissarmyhammerDirectory {
         &self.root_type
     }
 
+    /// Get the directory name used for SwissArmyHammer configuration.
+    ///
+    /// This returns the canonical directory name (e.g., ".swissarmyhammer") that
+    /// is used for all SwissArmyHammer configuration directories. Use this when
+    /// you need to construct paths for existence checks without creating directories.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use swissarmyhammer_common::SwissarmyhammerDirectory;
+    /// use std::path::PathBuf;
+    ///
+    /// let home = PathBuf::from("/home/user");
+    /// let config_dir = home.join(SwissarmyhammerDirectory::dir_name());
+    /// // Now you can check if config_dir exists without creating it
+    /// ```
+    pub fn dir_name() -> &'static str {
+        DIR_NAME
+    }
+
     /// Check if a path is within the .swissarmyhammer directory
     ///
     /// Uses canonicalized path comparison for accuracy.
@@ -386,7 +411,7 @@ mod tests {
 
         assert!(sah_dir.root().exists());
         assert!(sah_dir.root().is_dir());
-        assert_eq!(sah_dir.root(), temp.path().join(".swissarmyhammer"));
+        assert_eq!(sah_dir.root(), temp.path().join(DIR_NAME));
         assert_eq!(
             *sah_dir.root_type(),
             DirectoryRootType::Custom(temp.path().to_path_buf())
@@ -536,7 +561,7 @@ mod tests {
         let temp = TempDir::new().unwrap();
 
         // Create .swissarmyhammer directory manually with custom .gitignore
-        let sah_path = temp.path().join(".swissarmyhammer");
+        let sah_path = temp.path().join(DIR_NAME);
         fs::create_dir_all(&sah_path).unwrap();
 
         let custom_content = "# Custom gitignore\n*.custom\n";

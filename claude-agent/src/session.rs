@@ -7,6 +7,7 @@ use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, SystemTime};
+use swissarmyhammer_common::SwissarmyhammerDirectory;
 use ulid::Ulid;
 
 /// Session identifier - raw ULID that can be used with Claude CLI
@@ -420,7 +421,7 @@ impl SessionManager {
     fn default_storage_path() -> Option<PathBuf> {
         std::env::current_dir()
             .ok()
-            .map(|cwd| cwd.join(".swissarmyhammer").join("sessions"))
+            .map(|cwd| cwd.join(SwissarmyhammerDirectory::dir_name()).join("sessions"))
     }
 
     /// Ensure the storage directory exists

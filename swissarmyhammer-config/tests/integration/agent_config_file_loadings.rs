@@ -4,6 +4,7 @@ use std::env;
 use std::fs;
 use std::path::PathBuf;
 use swissarmyhammer_common::test_utils::IsolatedTestEnvironment;
+use swissarmyhammer_common::SwissarmyhammerDirectory;
 use swissarmyhammer_config::{ModelExecutorType, TemplateContext};
 
 /// RAII guard for temporary test directory that automatically restores the original directory
@@ -17,7 +18,7 @@ struct TempTestDir {
 impl TempTestDir {
     fn new() -> Self {
         let env = IsolatedTestEnvironment::new().unwrap();
-        let config_dir = env.temp_dir().join(".swissarmyhammer");
+        let config_dir = env.temp_dir().join(SwissarmyhammerDirectory::dir_name());
         fs::create_dir(&config_dir).unwrap();
 
         let original_dir = std::env::current_dir().unwrap();

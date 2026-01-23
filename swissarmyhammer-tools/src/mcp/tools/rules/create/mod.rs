@@ -12,6 +12,7 @@ use rmcp::ErrorData as McpError;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
+use swissarmyhammer_common::SwissarmyhammerDirectory;
 
 /// Request structure for rule creation operations via MCP
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -65,7 +66,9 @@ impl CreateRuleTool {
     /// Get the rules directory path
     fn get_rules_directory() -> PathBuf {
         let current_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-        current_dir.join(".swissarmyhammer").join("rules")
+        current_dir
+            .join(SwissarmyhammerDirectory::dir_name())
+            .join("rules")
     }
 
     /// Create the rule file with frontmatter and content

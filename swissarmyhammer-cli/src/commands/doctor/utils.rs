@@ -3,10 +3,8 @@
 use super::types::{WorkflowCategory, WorkflowDirectory, WorkflowDirectoryInfo};
 use anyhow::Result;
 use std::path::{Path, PathBuf};
+use swissarmyhammer_common::SwissarmyhammerDirectory;
 use walkdir::WalkDir;
-
-/// Directory name for SwissArmyHammer configuration and data
-pub const SWISSARMYHAMMER_DIR: &str = ".swissarmyhammer";
 
 /// Count markdown files in a directory
 pub fn count_markdown_files(path: &Path) -> usize {
@@ -71,7 +69,7 @@ pub fn get_workflow_directories() -> Vec<WorkflowDirectoryInfo> {
 
     // Add user directory if it exists
     if let Some(home) = dirs::home_dir() {
-        let user_workflows_path = home.join(SWISSARMYHAMMER_DIR).join("workflows");
+        let user_workflows_path = home.join(SwissarmyhammerDirectory::dir_name()).join("workflows");
 
         // Validate path before adding
         if validate_path_no_traversal(&user_workflows_path).is_ok() {
@@ -83,7 +81,7 @@ pub fn get_workflow_directories() -> Vec<WorkflowDirectoryInfo> {
     }
 
     // Add local directory
-    let local_workflows_path = PathBuf::from(SWISSARMYHAMMER_DIR).join("workflows");
+    let local_workflows_path = PathBuf::from(SwissarmyhammerDirectory::dir_name()).join("workflows");
 
     // Validate path before adding
     if validate_path_no_traversal(&local_workflows_path).is_ok() {
@@ -178,7 +176,7 @@ mod tests {
                 .path
                 .path()
                 .to_string_lossy()
-                .contains(SWISSARMYHAMMER_DIR));
+                .contains(SwissarmyhammerDirectory::dir_name()));
         }
     }
 }

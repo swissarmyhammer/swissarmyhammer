@@ -2,6 +2,7 @@
 
 use std::fs;
 use swissarmyhammer_common::test_utils::IsolatedTestEnvironment;
+use swissarmyhammer_common::SwissarmyhammerDirectory;
 use swissarmyhammer_config::model::{AgentUseCase, ModelManager};
 
 /// Test proving config is read correctly (fast, no model needed)
@@ -10,7 +11,7 @@ async fn test_config_specifies_rules_model() {
     let _env = IsolatedTestEnvironment::new().expect("Failed to create test environment");
     let temp_dir = _env.temp_dir();
     let temp_path = temp_dir;
-    let sah_dir = temp_path.join(".swissarmyhammer");
+    let sah_dir = temp_path.join(SwissarmyhammerDirectory::dir_name());
     fs::create_dir_all(&sah_dir).unwrap();
 
     let config_path = sah_dir.join("sah.yaml");

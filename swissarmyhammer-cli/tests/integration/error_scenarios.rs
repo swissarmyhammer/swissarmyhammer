@@ -5,6 +5,7 @@
 
 use anyhow::Result;
 use swissarmyhammer::test_utils::IsolatedTestEnvironment;
+use swissarmyhammer_common::SwissarmyhammerDirectory;
 use tempfile::TempDir;
 
 use crate::in_process_test_utils::{run_sah_command_in_process_with_dir, CapturedOutput};
@@ -119,7 +120,7 @@ async fn test_storage_backend_permissions() -> Result<()> {
     let (_home_guard, _temp_dir, temp_path) = setup_error_test_environment()?;
 
     // Create a read-only parent directory to cause storage errors
-    let swissarmyhammer_dir = temp_path.join(".swissarmyhammer");
+    let swissarmyhammer_dir = temp_path.join(SwissarmyhammerDirectory::dir_name());
     std::fs::remove_dir_all(&swissarmyhammer_dir).ok(); // Remove existing directory structure
 
     // Create the directory first

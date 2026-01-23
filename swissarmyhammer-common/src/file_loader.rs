@@ -24,7 +24,7 @@
 //! All skipped files and errors are logged using the `tracing` framework at
 //! appropriate levels (warn for security issues, debug for missing directories).
 
-use crate::utils::find_swissarmyhammer_directory;
+use crate::directory::SwissarmyhammerDirectory;
 use crate::Result;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -372,13 +372,8 @@ impl VirtualFileSystem {
         // Note: Builtin files are typically added via add_builtin method
 
         // Load user files from home directory
-        if let Ok(home_str) = std::env::var("HOME") {
-            let home = PathBuf::from(home_str);
-            let user_dir = home.join(".swissarmyhammer");
-            self.load_directory(&user_dir, FileSource::User)?;
-        } else if let Some(home) = dirs::home_dir() {
-            let user_dir = home.join(".swissarmyhammer");
-            self.load_directory(&user_dir, FileSource::User)?;
+        if let Ok(sah_dir) = SwissarmyhammerDirectory::from_user_home() {
+            self.load_directory(sah_dir.root(), FileSource::User)?;
         }
 
         // Load local files by walking up the directory tree
@@ -390,21 +385,20 @@ impl VirtualFileSystem {
     /// Load local files from the Git repository .swissarmyhammer directory
     fn load_local_files(&mut self) -> Result<()> {
         // Primary approach: Find the Git repository .swissarmyhammer directory
-        if let Some(swissarmyhammer_dir) = find_swissarmyhammer_directory() {
-            self.load_directory(&swissarmyhammer_dir, FileSource::Local)?;
+        if let Ok(sah_dir) = SwissarmyhammerDirectory::from_git_root() {
+            self.load_directory(sah_dir.root(), FileSource::Local)?;
             return Ok(());
         }
 
         // Fallback approach: If Git-centric approach fails (e.g., in tests),
-        // look for .swissarmyhammer in the current directory
+        // use .swissarmyhammer in the current directory
         if let Ok(current_dir) = std::env::current_dir() {
-            let current_swissarmyhammer = current_dir.join(".swissarmyhammer");
-            if current_swissarmyhammer.exists() && current_swissarmyhammer.is_dir() {
+            if let Ok(sah_dir) = SwissarmyhammerDirectory::from_custom_root(current_dir) {
                 tracing::debug!(
                     "Using fallback directory detection: {}",
-                    current_swissarmyhammer.display()
+                    sah_dir.root().display()
                 );
-                self.load_directory(&current_swissarmyhammer, FileSource::Local)?;
+                self.load_directory(sah_dir.root(), FileSource::Local)?;
             }
         }
 
@@ -416,32 +410,27 @@ impl VirtualFileSystem {
         let mut directories = Vec::new();
 
         // User directory
-        if let Ok(home_str) = std::env::var("HOME") {
-            let home = PathBuf::from(home_str);
-            let user_dir = home.join(".swissarmyhammer").join(&self.subdirectory);
-            if user_dir.exists() {
-                directories.push(user_dir);
-            }
-        } else if let Some(home) = dirs::home_dir() {
-            let user_dir = home.join(".swissarmyhammer").join(&self.subdirectory);
+        if let Ok(sah_dir) = SwissarmyhammerDirectory::from_user_home() {
+            let user_dir = sah_dir.subdir(&self.subdirectory);
             if user_dir.exists() {
                 directories.push(user_dir);
             }
         }
 
         // Local Git repository directory
-        if let Some(swissarmyhammer_dir) = find_swissarmyhammer_directory() {
-            let subdir = swissarmyhammer_dir.join(&self.subdirectory);
+        if let Ok(sah_dir) = SwissarmyhammerDirectory::from_git_root() {
+            let subdir = sah_dir.subdir(&self.subdirectory);
             if subdir.exists() && subdir.is_dir() {
                 directories.push(subdir);
             }
         } else {
             // Fallback: Look for .swissarmyhammer in current directory
             if let Ok(current_dir) = std::env::current_dir() {
-                let current_swissarmyhammer = current_dir.join(".swissarmyhammer");
-                let subdir = current_swissarmyhammer.join(&self.subdirectory);
-                if subdir.exists() && subdir.is_dir() {
-                    directories.push(subdir);
+                if let Ok(sah_dir) = SwissarmyhammerDirectory::from_custom_root(current_dir) {
+                    let subdir = sah_dir.subdir(&self.subdirectory);
+                    if subdir.exists() && subdir.is_dir() {
+                        directories.push(subdir);
+                    }
                 }
             }
         }

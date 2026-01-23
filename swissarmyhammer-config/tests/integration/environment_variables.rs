@@ -9,6 +9,7 @@ use std::env;
 use std::fs;
 use std::sync::Mutex;
 use swissarmyhammer_common::test_utils::IsolatedTestEnvironment;
+use swissarmyhammer_common::SwissarmyhammerDirectory;
 use swissarmyhammer_config::TemplateContext;
 
 /// Global mutex to serialize environment variable tests
@@ -383,7 +384,10 @@ fn test_environment_variable_override_config_file() {
     let mut test = IsolatedEnvTest::new();
 
     // Create a config file
-    let config_dir = test.temp_dir().temp_dir().join(".swissarmyhammer");
+    let config_dir = test
+        .temp_dir()
+        .temp_dir()
+        .join(SwissarmyhammerDirectory::dir_name());
     fs::create_dir_all(&config_dir).expect("Failed to create config dir");
 
     let config_content = r#"
@@ -623,7 +627,10 @@ fn test_env_var_precedence_order_consistency() {
     let mut test = IsolatedEnvTest::new();
 
     // Create config file
-    let config_dir = test.temp_dir().temp_dir().join(".swissarmyhammer");
+    let config_dir = test
+        .temp_dir()
+        .temp_dir()
+        .join(SwissarmyhammerDirectory::dir_name());
     fs::create_dir_all(&config_dir).expect("Failed to create config dir");
 
     let config_content = r#"

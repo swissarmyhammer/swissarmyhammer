@@ -837,6 +837,7 @@ mod tests {
     use std::env;
     use std::fs;
     use std::sync::Mutex;
+    use swissarmyhammer_common::SwissarmyhammerDirectory;
     use tempfile::TempDir;
 
     /// Global mutex to serialize environment variable tests
@@ -972,7 +973,7 @@ mod tests {
         });
 
         let temp_dir = TempDir::new().unwrap();
-        let config_dir = temp_dir.path().join(".swissarmyhammer");
+        let config_dir = temp_dir.path().join(SwissarmyhammerDirectory::dir_name());
         fs::create_dir(&config_dir).unwrap();
 
         let config_file = config_dir.join("sah.toml");
@@ -1513,7 +1514,7 @@ Generated for {{app.name}} by liquid templating engine.
 
         // Test case: template vars should override any loaded config values
         let temp_dir = TempDir::new().unwrap();
-        let config_dir = temp_dir.path().join(".swissarmyhammer");
+        let config_dir = temp_dir.path().join(SwissarmyhammerDirectory::dir_name());
         fs::create_dir(&config_dir).unwrap();
 
         let config_file = config_dir.join("sah.toml");

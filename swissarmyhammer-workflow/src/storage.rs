@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use swissarmyhammer_common::file_loader::{FileSource, VirtualFileSystem};
-use swissarmyhammer_common::{Result, SwissArmyHammerError};
+use swissarmyhammer_common::{Result, SwissArmyHammerError, SwissarmyhammerDirectory};
 
 // Include the generated builtin workflows
 include!(concat!(env!("OUT_DIR"), "/builtin_workflows.rs"));
@@ -288,14 +288,18 @@ impl FileSystemWorkflowStorage {
     fn workflow_storage_path(&self, name: &WorkflowName) -> Result<PathBuf> {
         // Try to find a local .swissarmyhammer directory first
         let current_dir = std::env::current_dir()?;
-        let local_dir = current_dir.join(".swissarmyhammer").join("workflows");
+        let local_dir = current_dir
+            .join(SwissarmyhammerDirectory::dir_name())
+            .join("workflows");
         if local_dir.exists() {
             return Ok(local_dir.join(format!("{}.mermaid", name.as_str())));
         }
 
         // Fall back to user directory
         if let Some(home) = dirs::home_dir() {
-            let user_dir = home.join(".swissarmyhammer").join("workflows");
+            let user_dir = home
+                .join(SwissarmyhammerDirectory::dir_name())
+                .join("workflows");
             std::fs::create_dir_all(&user_dir)?;
             return Ok(user_dir.join(format!("{}.mermaid", name.as_str())));
         }
@@ -324,7 +328,7 @@ impl WorkflowStorageBackend for FileSystemWorkflowStorage {
         let source = if path.starts_with(
             dirs::home_dir()
                 .unwrap_or_default()
-                .join(".swissarmyhammer"),
+                .join(SwissarmyhammerDirectory::dir_name()),
         ) {
             FileSource::User
         } else {
@@ -679,8 +683,9 @@ mod tests {
 
         let _env =
             IsolatedTestEnvironment::new().expect("Failed to create isolated test environment");
-        let swissarmyhammer_dir = std::env::var("HOME").unwrap() + "/.swissarmyhammer";
-        let user_workflows_dir = PathBuf::from(&swissarmyhammer_dir).join("workflows");
+        let home = std::env::var("HOME").unwrap();
+        let swissarmyhammer_dir = PathBuf::from(&home).join(SwissarmyhammerDirectory::dir_name());
+        let user_workflows_dir = swissarmyhammer_dir.join("workflows");
         fs::create_dir_all(&user_workflows_dir).unwrap();
 
         // Create a test workflow file in user workflows directory
@@ -742,7 +747,7 @@ stateDiagram-v2
         let git_dir = temp_dir.join(".git");
         fs::create_dir_all(&git_dir).unwrap();
 
-        let local_workflows_dir = temp_dir.join(".swissarmyhammer").join("workflows");
+        let local_workflows_dir = temp_dir.join(SwissarmyhammerDirectory::dir_name()).join("workflows");
         fs::create_dir_all(&local_workflows_dir).unwrap();
 
         // Create a test workflow file
@@ -811,11 +816,11 @@ stateDiagram-v2
         let test_home = PathBuf::from(std::env::var("HOME").unwrap());
 
         // Create user workflow directory in the isolated home
-        let user_workflows_dir = test_home.join(".swissarmyhammer").join("workflows");
+        let user_workflows_dir = test_home.join(SwissarmyhammerDirectory::dir_name()).join("workflows");
         fs::create_dir_all(&user_workflows_dir).unwrap();
 
         // Create local workflows directory in the temp directory
-        let local_workflows_dir = temp_dir.join(".swissarmyhammer").join("workflows");
+        let local_workflows_dir = temp_dir.join(SwissarmyhammerDirectory::dir_name()).join("workflows");
         fs::create_dir_all(&local_workflows_dir).unwrap();
 
         // Create same-named workflow in both locations

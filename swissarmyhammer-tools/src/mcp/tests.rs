@@ -4,7 +4,7 @@ use super::server::McpServer;
 use rmcp::ServerHandler;
 use std::collections::HashMap;
 use std::path::PathBuf;
-use swissarmyhammer_common::Pretty;
+use swissarmyhammer_common::{Pretty, SwissarmyhammerDirectory};
 use swissarmyhammer_prompts::{Prompt, PromptLibrary, PromptResolver};
 
 /// RAII guard to ensure working directory is restored when dropped
@@ -394,7 +394,7 @@ async fn test_reload_prompts_detects_no_changes() {
     let _guard = DirGuard(original_dir);
 
     // Create a prompts directory
-    let prompts_dir = test_dir.path().join(".swissarmyhammer").join("prompts");
+    let prompts_dir = test_dir.path().join(SwissarmyhammerDirectory::dir_name()).join("prompts");
     fs::create_dir_all(&prompts_dir).unwrap();
 
     // Create a test prompt file
@@ -449,7 +449,7 @@ async fn test_reload_prompts_detects_content_changes() {
     let _guard = DirGuard(original_dir);
 
     // Create a prompts directory
-    let prompts_dir = test_dir.path().join(".swissarmyhammer").join("prompts");
+    let prompts_dir = test_dir.path().join(SwissarmyhammerDirectory::dir_name()).join("prompts");
     fs::create_dir_all(&prompts_dir).unwrap();
 
     // Create a test prompt file
@@ -500,7 +500,7 @@ async fn test_reload_prompts_detects_new_prompts() {
     let _guard = DirGuard(original_dir);
 
     // Create a prompts directory
-    let prompts_dir = test_dir.path().join(".swissarmyhammer").join("prompts");
+    let prompts_dir = test_dir.path().join(SwissarmyhammerDirectory::dir_name()).join("prompts");
     fs::create_dir_all(&prompts_dir).unwrap();
 
     // Create first prompt file
@@ -552,7 +552,7 @@ async fn test_reload_prompts_detects_deleted_prompts() {
     let _guard = DirGuard(original_dir);
 
     // Create a prompts directory
-    let prompts_dir = test_dir.path().join(".swissarmyhammer").join("prompts");
+    let prompts_dir = test_dir.path().join(SwissarmyhammerDirectory::dir_name()).join("prompts");
     fs::create_dir_all(&prompts_dir).unwrap();
 
     // Create two prompt files

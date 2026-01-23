@@ -1,5 +1,6 @@
 use crate::error::{ConfigurationError, ConfigurationResult};
 use std::path::{Path, PathBuf};
+use swissarmyhammer_common::SwissarmyhammerDirectory;
 use tracing::{debug, error, info, trace};
 
 /// Configuration file discovery paths
@@ -95,7 +96,7 @@ impl ConfigurationDiscovery {
 
         match home {
             Some(home) => {
-                let config_dir = home.join(".swissarmyhammer");
+                let config_dir = home.join(SwissarmyhammerDirectory::dir_name());
                 if config_dir.is_dir() {
                     trace!("Found global config directory: {}", config_dir.display());
                     Ok(Some(config_dir))
@@ -139,7 +140,7 @@ impl ConfigurationDiscovery {
         let mut dir = Some(current_dir.as_path());
 
         while let Some(current) = dir {
-            let config_dir = current.join(".swissarmyhammer");
+            let config_dir = current.join(SwissarmyhammerDirectory::dir_name());
             if config_dir.is_dir() {
                 trace!("Found project config directory: {}", config_dir.display());
                 config_dirs.push(config_dir);
@@ -296,7 +297,7 @@ mod tests {
         fs::create_dir_all(&nested_dir).unwrap();
 
         // Create workspace config directory
-        let workspace_config_dir = workspace_dir.join(".swissarmyhammer");
+        let workspace_config_dir = workspace_dir.join(SwissarmyhammerDirectory::dir_name());
         fs::create_dir_all(&workspace_config_dir).unwrap();
         fs::write(
             workspace_config_dir.join("sah.toml"),
@@ -305,7 +306,7 @@ mod tests {
         .unwrap();
 
         // Create project config directory
-        let project_config_dir = project_dir.join(".swissarmyhammer");
+        let project_config_dir = project_dir.join(SwissarmyhammerDirectory::dir_name());
         fs::create_dir_all(&project_config_dir).unwrap();
         fs::write(
             project_config_dir.join("sah.toml"),

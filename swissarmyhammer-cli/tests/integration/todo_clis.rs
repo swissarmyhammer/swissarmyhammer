@@ -14,6 +14,7 @@ use git2::Repository;
 use serde_yaml::Value;
 use std::process::Command;
 use swissarmyhammer_common::test_utils::IsolatedTestEnvironment;
+use swissarmyhammer_common::SwissarmyhammerDirectory;
 
 /// Length of the YAML prefix `id: ` used when parsing todo IDs from command output
 const YAML_ID_PREFIX_LEN: usize = 4;
@@ -54,7 +55,7 @@ fn setup_todo_test_env() -> IsolatedTestEnvironment {
     let temp_path = env.temp_dir();
 
     init_git_repo(&temp_path);
-    std::fs::create_dir_all(temp_path.join(".swissarmyhammer"))
+    std::fs::create_dir_all(temp_path.join(SwissarmyhammerDirectory::dir_name()))
         .expect("Failed to create .swissarmyhammer dir");
 
     env
@@ -327,7 +328,7 @@ fn assert_help_contains_commands(help_text: &str, commands: &[&str]) {
 /// Helper function to assert todo file was created in the .swissarmyhammer directory
 fn assert_todo_file_created(temp_path: &std::path::Path) {
     let todo_file = temp_path
-        .join(".swissarmyhammer")
+        .join(SwissarmyhammerDirectory::dir_name())
         .join("todo")
         .join("todo.yaml");
     assert!(

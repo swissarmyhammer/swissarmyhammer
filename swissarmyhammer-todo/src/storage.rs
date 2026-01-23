@@ -15,6 +15,7 @@ use crate::utils::get_todo_directory;
 use fs2::FileExt;
 use std::fs::{self, File};
 use std::path::{Path, PathBuf};
+use swissarmyhammer_common::SwissarmyhammerDirectory;
 
 /// Storage backend for todo list operations
 pub struct TodoStorage {
@@ -69,7 +70,9 @@ impl TodoStorage {
             ));
         }
 
-        let todo_dir = working_dir.join(".swissarmyhammer").join("todo");
+        let todo_dir = working_dir
+            .join(SwissarmyhammerDirectory::dir_name())
+            .join("todo");
         fs::create_dir_all(&todo_dir)
             .map_err(|e| TodoError::other(format!("Failed to create todo directory: {e}")))?;
         Ok(Self::new(todo_dir))

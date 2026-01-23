@@ -15,7 +15,7 @@ use rmcp::transport::streamable_http_server::{
 };
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex, Once};
-use swissarmyhammer_common::{Pretty, Result, SwissArmyHammerError};
+use swissarmyhammer_common::{Pretty, Result, SwissArmyHammerError, SwissarmyhammerDirectory};
 use swissarmyhammer_prompts::PromptLibrary;
 
 use tokio::net::TcpListener;
@@ -217,7 +217,7 @@ pub fn configure_mcp_logging(log_filter: Option<&str>) {
         let filter_str = log_filter.unwrap_or("rmcp=warn,debug");
         let filter = EnvFilter::new(filter_str);
 
-        let log_dir = std::path::PathBuf::from(".swissarmyhammer");
+        let log_dir = std::path::PathBuf::from(SwissarmyhammerDirectory::dir_name());
 
         if ensure_log_directory(&log_dir).is_err() {
             return;

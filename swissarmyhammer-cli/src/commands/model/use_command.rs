@@ -195,6 +195,7 @@ mod tests {
     use crate::context::CliContextBuilder;
     use std::env;
     use std::fs;
+    use swissarmyhammer_common::SwissarmyhammerDirectory;
     use swissarmyhammer_config::TemplateContext;
     use tempfile::TempDir;
 
@@ -360,7 +361,7 @@ mod tests {
         match result {
             Ok(()) => {
                 // Check that config file was created in .swissarmyhammer directory
-                let config_path = temp_path.join(".swissarmyhammer").join("sah.yaml");
+                let config_path = temp_path.join(SwissarmyhammerDirectory::dir_name()).join("sah.yaml");
                 assert!(
                     config_path.exists(),
                     "Config file should exist at {:?}",

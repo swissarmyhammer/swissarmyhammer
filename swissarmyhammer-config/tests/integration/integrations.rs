@@ -9,6 +9,7 @@ use serial_test::serial;
 use std::env;
 use std::fs;
 use swissarmyhammer_common::test_utils::IsolatedTestEnvironment;
+use swissarmyhammer_common::SwissarmyhammerDirectory;
 use swissarmyhammer_config::TemplateContext;
 
 /// Test helper for comprehensive integration testing
@@ -40,7 +41,7 @@ impl IntegrationTestEnvironment {
     }
 
     fn project_config_dir(&self) -> std::path::PathBuf {
-        let config_dir = self._env.temp_dir().join(".swissarmyhammer");
+        let config_dir = self._env.temp_dir().join(SwissarmyhammerDirectory::dir_name());
         fs::create_dir_all(&config_dir).expect("Failed to create project config dir");
         config_dir
     }
@@ -59,11 +60,11 @@ impl IntegrationTestEnvironment {
         fs::create_dir_all(&subdir).expect("Failed to create nested structure");
 
         // Create config at workspace level
-        let workspace_config_dir = workspace_dir.join(".swissarmyhammer");
+        let workspace_config_dir = workspace_dir.join(SwissarmyhammerDirectory::dir_name());
         fs::create_dir_all(&workspace_config_dir).expect("Failed to create workspace config");
 
         // Create config at project level
-        let project_config_dir = project_dir.join(".swissarmyhammer");
+        let project_config_dir = project_dir.join(SwissarmyhammerDirectory::dir_name());
         fs::create_dir_all(&project_config_dir).expect("Failed to create project config");
 
         subdir
@@ -670,7 +671,7 @@ fn test_complex_nested_project_structure_with_inheritance() {
     let nested_subdir = test.create_nested_project_structure();
 
     // Create workspace-level configuration
-    let workspace_config_dir = test._env.temp_dir().join("workspace/.swissarmyhammer");
+    let workspace_config_dir = test._env.temp_dir().join("workspace").join(SwissarmyhammerDirectory::dir_name());
     let workspace_config = r#"
 # Workspace-level configuration
 [workspace]
@@ -699,7 +700,7 @@ rust_version = "1.70"
     let project_config_dir = test
         ._env
         .temp_dir()
-        .join("workspace/my-project/.swissarmyhammer");
+        .join("workspace/my-project").join(SwissarmyhammerDirectory::dir_name());
     let project_config = r#"
 # Project-level configuration
 [project]

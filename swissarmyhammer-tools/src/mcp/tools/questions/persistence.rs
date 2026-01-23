@@ -2,6 +2,7 @@ use anyhow::{Context, Result};
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
+use swissarmyhammer_common::SwissarmyhammerDirectory;
 
 /// A single question/answer entry
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -17,7 +18,9 @@ pub struct QuestionAnswerEntry {
 /// Get the questions directory path
 fn get_questions_dir() -> Result<PathBuf> {
     let current_dir = std::env::current_dir().context("Failed to get current directory")?;
-    let questions_dir = current_dir.join(".swissarmyhammer").join("questions");
+    let questions_dir = current_dir
+        .join(SwissarmyhammerDirectory::dir_name())
+        .join("questions");
     Ok(questions_dir)
 }
 

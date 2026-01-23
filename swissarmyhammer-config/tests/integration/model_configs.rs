@@ -1,5 +1,6 @@
 use std::{env, fs};
 use swissarmyhammer_common::test_utils::IsolatedTestEnvironment;
+use swissarmyhammer_common::SwissarmyhammerDirectory;
 use swissarmyhammer_config::model::{
     parse_model_config, parse_model_description, ModelConfigSource, ModelError, ModelManager,
 };
@@ -111,7 +112,9 @@ impl TestEnvironment {
     }
 
     fn gitroot_agents_dir(&self) -> std::path::PathBuf {
-        self.project_root.join(".swissarmyhammer").join("models")
+        self.project_root
+            .join(SwissarmyhammerDirectory::dir_name())
+            .join("models")
     }
 
     fn create_agent(&self, name: &str, content: &str, dir: &std::path::Path) {
@@ -156,7 +159,9 @@ impl ConfigFileHelper {
     }
 
     fn config_path(&self) -> std::path::PathBuf {
-        self.project_root.join(".swissarmyhammer").join("sah.yaml")
+        self.project_root
+            .join(SwissarmyhammerDirectory::dir_name())
+            .join("sah.yaml")
     }
 
     fn write_config(&self, content: &str) {

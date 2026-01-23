@@ -11,6 +11,7 @@ use std::path::Path;
 use std::time::{Duration, Instant};
 
 use swissarmyhammer_common::test_utils::IsolatedTestEnvironment;
+use swissarmyhammer_common::SwissarmyhammerDirectory;
 use tokio::process::Command;
 
 /// Test utility to run sah commands with timeout
@@ -299,7 +300,7 @@ fn setup_large_agent_test_environment(
     fs::create_dir_all(temp_home)?;
     fs::create_dir_all(project_root)?;
 
-    let user_agents_dir = temp_home.join(".swissarmyhammer").join("models");
+    let user_agents_dir = temp_home.join(SwissarmyhammerDirectory::dir_name()).join("models");
     let project_agents_dir = project_root.join("models");
 
     let user_agents = create_large_agent_set(&user_agents_dir, 50)?;
@@ -462,7 +463,7 @@ async fn test_model_use_performance_with_large_config() -> Result<()> {
     let temp_dir = _env.temp_dir();
     let project_root = &temp_dir;
 
-    let sah_dir = project_root.join(".swissarmyhammer");
+    let sah_dir = project_root.join(SwissarmyhammerDirectory::dir_name());
     fs::create_dir_all(&sah_dir)?;
     let config_path = sah_dir.join("sah.yaml");
 
@@ -636,7 +637,7 @@ async fn test_invalid_yaml_recovery() -> Result<()> {
     let temp_dir = _env.temp_dir();
     let temp_home = &temp_dir.join("home");
 
-    let user_agents_dir = temp_home.join(".swissarmyhammer").join("models");
+    let user_agents_dir = temp_home.join(SwissarmyhammerDirectory::dir_name()).join("models");
 
     let valid_agents = create_large_agent_set(&user_agents_dir, 10)?;
     let invalid_files = create_invalid_agent_files(&user_agents_dir)?;
@@ -680,7 +681,7 @@ async fn test_corrupted_config_recovery() -> Result<()> {
     let project_root = &temp_dir;
 
     // Create corrupted config file
-    let sah_dir = project_root.join(".swissarmyhammer");
+    let sah_dir = project_root.join(SwissarmyhammerDirectory::dir_name());
     fs::create_dir_all(&sah_dir)?;
     let config_path = sah_dir.join("sah.yaml");
 
@@ -745,7 +746,7 @@ async fn test_rapid_sequential_operations() -> Result<()> {
         "qwen-next",
         "claude-code",
     ];
-    let config_path = project_root.join(".swissarmyhammer").join("sah.yaml");
+    let config_path = project_root.join(SwissarmyhammerDirectory::dir_name()).join("sah.yaml");
 
     for (i, agent) in agents.iter().enumerate() {
         let start_time = Instant::now();
@@ -791,7 +792,7 @@ async fn test_file_lock_simulation() -> Result<()> {
     let project_root = &temp_dir;
 
     // Create initial config
-    let sah_dir = project_root.join(".swissarmyhammer");
+    let sah_dir = project_root.join(SwissarmyhammerDirectory::dir_name());
     fs::create_dir_all(&sah_dir)?;
     let config_path = sah_dir.join("sah.yaml");
 
@@ -857,7 +858,7 @@ fn setup_large_dataset_environment(
     fs::create_dir_all(temp_home)?;
     fs::create_dir_all(project_root)?;
 
-    let user_agents_dir = temp_home.join(".swissarmyhammer").join("models");
+    let user_agents_dir = temp_home.join(SwissarmyhammerDirectory::dir_name()).join("models");
     let project_agents_dir = project_root.join("models");
 
     let user_agents = create_large_agent_set(&user_agents_dir, 200)?;

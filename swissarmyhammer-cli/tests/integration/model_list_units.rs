@@ -9,6 +9,7 @@ use std::fs;
 use swissarmyhammer_cli::cli::OutputFormat;
 use swissarmyhammer_cli::commands::model::list::execute_list_command;
 use swissarmyhammer_cli::context::{CliContext, CliContextBuilder};
+use swissarmyhammer_common::SwissarmyhammerDirectory;
 use swissarmyhammer_config::TemplateContext;
 use tempfile::TempDir;
 
@@ -38,7 +39,7 @@ fn setup_test_models() -> Result<(TempDir, Option<String>)> {
     let temp_home = temp_dir.path();
 
     // Create user models directory
-    let user_models_dir = temp_home.join(".swissarmyhammer").join("models");
+    let user_models_dir = temp_home.join(SwissarmyhammerDirectory::dir_name()).join("models");
     fs::create_dir_all(&user_models_dir)?;
 
     // Create a simple test model
@@ -254,7 +255,7 @@ async fn test_execute_list_command_with_malformed_model_files() -> Result<()> {
     let temp_home = temp_dir.path();
 
     // Create user models directory with malformed YAML
-    let user_models_dir = temp_home.join(".swissarmyhammer").join("models");
+    let user_models_dir = temp_home.join(SwissarmyhammerDirectory::dir_name()).join("models");
     fs::create_dir_all(&user_models_dir)?;
 
     // Create invalid YAML file
@@ -285,7 +286,7 @@ async fn test_execute_list_command_empty_models_directory() -> Result<()> {
     let temp_home = temp_dir.path();
 
     // Create empty models directory
-    let user_models_dir = temp_home.join(".swissarmyhammer").join("models");
+    let user_models_dir = temp_home.join(SwissarmyhammerDirectory::dir_name()).join("models");
     fs::create_dir_all(&user_models_dir)?;
 
     let original_home = env::var("HOME").ok();
@@ -378,7 +379,7 @@ async fn test_execute_list_command_with_permission_restricted_directory() -> Res
     let temp_home = temp_dir.path();
 
     // Create models directory
-    let user_models_dir = temp_home.join(".swissarmyhammer").join("models");
+    let user_models_dir = temp_home.join(SwissarmyhammerDirectory::dir_name()).join("models");
     fs::create_dir_all(&user_models_dir)?;
 
     // Try to make it read-only (may not work on all systems)
@@ -427,7 +428,7 @@ quiet: false"#;
     fs::write(actual_models.join("symlink-test.yaml"), test_model)?;
 
     // Create .swissarmyhammer directory
-    let sah_dir = temp_home.join(".swissarmyhammer");
+    let sah_dir = temp_home.join(SwissarmyhammerDirectory::dir_name());
     fs::create_dir_all(&sah_dir)?;
 
     // Create symlink to models directory (may not work on all systems)

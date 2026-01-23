@@ -11,6 +11,7 @@ use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 use swissarmyhammer_common::test_utils::IsolatedTestEnvironment;
+use swissarmyhammer_common::SwissarmyhammerDirectory;
 use tokio::process::Command;
 
 // =============================================================================
@@ -80,7 +81,7 @@ fn assert_config_contains(
     project_root: &Path,
     expected_patterns: &[(&str, &str)],
 ) -> Result<String> {
-    let config_path = project_root.join(".swissarmyhammer").join("sah.yaml");
+    let config_path = project_root.join(SwissarmyhammerDirectory::dir_name()).join("sah.yaml");
     assert!(config_path.exists(), "Config file should be created");
 
     let config = fs::read_to_string(config_path)?;
@@ -100,7 +101,7 @@ fn assert_config_contains(
 
 /// Create a test config file with the given content
 fn create_test_config(project_root: &Path, content: &str) -> Result<PathBuf> {
-    let sah_dir = project_root.join(".swissarmyhammer");
+    let sah_dir = project_root.join(SwissarmyhammerDirectory::dir_name());
     fs::create_dir_all(&sah_dir)?;
     let config_path = sah_dir.join("sah.yaml");
     fs::write(&config_path, content)?;
@@ -573,7 +574,7 @@ async fn test_use_case_configuration_persistence() -> Result<()> {
         .run_command(&["model", "use", "rules", "qwen-coder"])
         .await?;
 
-    let config_path = ctx.project_root.join(".swissarmyhammer").join("sah.yaml");
+    let config_path = ctx.project_root.join(SwissarmyhammerDirectory::dir_name()).join("sah.yaml");
     let config_content = fs::read_to_string(config_path)?;
 
     let config_value: serde_yaml::Value = serde_yaml::from_str(&config_content)?;
