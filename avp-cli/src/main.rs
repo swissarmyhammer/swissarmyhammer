@@ -9,7 +9,7 @@ use std::io::{self, IsTerminal, Read, Write};
 
 use clap::Parser;
 
-use avp_common::context::{AvpContext, Decision, HookEvent};
+use avp_common::context::{AvpContext, Decision};
 use avp_common::strategy::HookDispatcher;
 use avp_common::AvpError;
 
@@ -26,9 +26,10 @@ struct Args {
     debug: bool,
 }
 
-fn main() {
+#[tokio::main]
+async fn main() {
     let args = Args::parse();
-    let exit_code = match run(&args) {
+    let exit_code = match run(&args).await {
         Ok(code) => code,
         Err(e) => {
             // Output error as JSON for consistency
@@ -44,10 +45,7 @@ fn main() {
     std::process::exit(exit_code);
 }
 
-fn run(args: &Args) -> Result<i32, AvpError> {
-    // Initialize context for logging (best-effort, don't fail if unavailable)
-    let ctx = AvpContext::init().ok();
-
+async fn run(args: &Args) -> Result<i32, AvpError> {
     // Check if stdin is a terminal (no piped input)
     if io::stdin().is_terminal() {
         eprintln!("avp: no input provided (pipe JSON to stdin)");
@@ -79,27 +77,35 @@ fn run(args: &Args) -> Result<i32, AvpError> {
         .and_then(|v| v.as_str())
         .unwrap_or("Unknown");
 
-    // Create dispatcher with default strategies
-    let dispatcher = HookDispatcher::with_defaults();
+    // Initialize context (required for dispatcher)
+    let ctx = AvpContext::init()?;
 
-    // Process the hook
-    let (output, exit_code) = dispatcher.dispatch(input_value.clone())?;
+    // Create dispatcher with default strategies, passing the context
+    let dispatcher = HookDispatcher::with_defaults(ctx);
+
+    // Process the hook (async)
+    let (output, exit_code) = dispatcher.dispatch(input_value.clone()).await?;
 
     // Log the event (smart details based on hook type)
-    if let Some(ctx) = &ctx {
-        let decision = if exit_code == 0 {
-            Decision::Allow
-        } else {
-            Decision::Block
-        };
+    let decision = if exit_code == 0 {
+        Decision::Allow
+    } else {
+        Decision::Block
+    };
 
-        let details = extract_details(&input_value, hook_event_name, &output);
+    let details = extract_details(&input_value, hook_event_name, &output);
 
-        ctx.log_event(&HookEvent {
-            hook_type: hook_event_name,
+    // Access context from the dispatcher's strategy
+    // Note: For now, we can't easily access the context since it's owned by strategies.
+    // We'll need to revisit logging when we have a proper context accessor.
+    // For now, just log to stderr in debug mode.
+    if args.debug {
+        eprintln!(
+            "[avp] {} decision={} {}",
+            hook_event_name,
             decision,
-            details,
-        });
+            details.as_deref().unwrap_or("")
+        );
     }
 
     if args.debug {

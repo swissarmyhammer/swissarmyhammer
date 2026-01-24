@@ -15,7 +15,6 @@
 //! match:
 //!   tools: [Write, Edit]
 //!   files: ["*.ts", "*.js"]
-//! category: security
 //! tags: [secrets, blocking]
 //! ---
 //!
@@ -52,14 +51,21 @@
 //! }
 //! ```
 
+pub mod executor;
 pub mod loader;
 pub mod parser;
+pub mod runner;
 pub mod types;
 
 // Re-export main types for convenience
+pub use executor::{
+    create_executed_validator, parse_validator_response, render_validator_prompt,
+    VALIDATOR_PROMPT_NAME,
+};
 pub use loader::ValidatorLoader;
 pub use parser::parse_validator;
+pub use runner::{ValidatorAgentConfig, ValidatorRunner};
 pub use types::{
-    MatchContext, Severity, Validator, ValidatorFrontmatter, ValidatorMatch, ValidatorResult,
-    ValidatorSource,
+    ExecutedValidator, MatchContext, Severity, Validator, ValidatorFrontmatter, ValidatorMatch,
+    ValidatorResult, ValidatorSource,
 };

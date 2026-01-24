@@ -1,5 +1,7 @@
 //! Strategy trait for agent-specific hook processing.
 
+use async_trait::async_trait;
+
 use crate::chain::HookInputType;
 use crate::error::AvpError;
 use crate::types::HookOutput;
@@ -12,13 +14,14 @@ use crate::types::HookOutput;
 ///
 /// # Type Parameters
 /// - `I`: The typed input (e.g., `PreToolUseInput`)
+#[async_trait]
 pub trait TypedHookStrategy<I: HookInputType>: Send + Sync {
     /// Process the typed input and return an output with exit code.
     ///
     /// Exit codes:
     /// - 0: Success
     /// - 2: Blocking error
-    fn process(&self, input: I) -> Result<(HookOutput, i32), AvpError>;
+    async fn process(&self, input: I) -> Result<(HookOutput, i32), AvpError>;
 
     /// Get the name of this strategy for debugging.
     fn name(&self) -> &'static str;
@@ -36,6 +39,7 @@ pub trait TypedHookStrategy<I: HookInputType>: Send + Sync {
 /// ```ignore
 /// struct ClaudeCodeHookStrategy { ... }
 ///
+/// #[async_trait]
 /// impl AgentHookStrategy for ClaudeCodeHookStrategy {
 ///     fn name(&self) -> &'static str { "ClaudeCode" }
 ///
@@ -44,11 +48,12 @@ pub trait TypedHookStrategy<I: HookInputType>: Send + Sync {
 ///         input.get("hook_event_name").is_some()
 ///     }
 ///
-///     fn process(&self, input: Value) -> Result<(HookOutput, i32), AvpError> {
+///     async fn process(&self, input: Value) -> Result<(HookOutput, i32), AvpError> {
 ///         // Parse hook_event_name, dispatch to typed handler
 ///     }
 /// }
 /// ```
+#[async_trait]
 pub trait AgentHookStrategy: Send + Sync {
     /// The name of this agent platform (e.g., "ClaudeCode").
     fn name(&self) -> &'static str;
@@ -57,5 +62,5 @@ pub trait AgentHookStrategy: Send + Sync {
     fn can_handle(&self, input: &serde_json::Value) -> bool;
 
     /// Process the raw JSON input and return output with exit code.
-    fn process(&self, input: serde_json::Value) -> Result<(HookOutput, i32), AvpError>;
+    async fn process(&self, input: serde_json::Value) -> Result<(HookOutput, i32), AvpError>;
 }

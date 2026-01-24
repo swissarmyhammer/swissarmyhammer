@@ -19,5 +19,5 @@ pub fn get_swissarmyhammer_dir() -> Result<PathBuf, std::io::Error> {
     let current_dir = std::env::current_dir()?;
     SwissarmyhammerDirectory::from_custom_root(current_dir)
         .map(|dir| dir.root().to_path_buf())
-        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))
+        .map_err(|e| std::io::Error::other(e.to_string()))
 }

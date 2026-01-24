@@ -97,7 +97,6 @@ Return JSON in this exact format:
 ```json
 {
   "status": "passed",
-  "validator_name": "no-secrets",
   "message": "No hardcoded secrets detected"
 }
 ```
@@ -107,8 +106,6 @@ Or if secrets are found:
 ```json
 {
   "status": "failed",
-  "validator_name": "no-secrets",
-  "severity": "error",
   "message": "Found 2 potential secrets - Line 42: Possible API key 'sk-...' in variable 'api_key'; Line 87: Hardcoded password in 'db_password'"
 }
 ```

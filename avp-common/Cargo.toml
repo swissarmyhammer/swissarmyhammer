@@ -31,9 +31,25 @@ walkdir = { workspace = true }
 swissarmyhammer-common = { path = "../swissarmyhammer-common" }
 swissarmyhammer-directory = { path = "../swissarmyhammer-directory" }
 
+# Prompts and templating for validator execution
+swissarmyhammer-config = { path = "../swissarmyhammer-config" }
+swissarmyhammer-prompts = { path = "../swissarmyhammer-prompts" }
+
+# ACP agent execution for validators
+swissarmyhammer-agent = { path = "../swissarmyhammer-agent" }
+
+# Async runtime
+tokio = { workspace = true }
+async-trait = { workspace = true }
+
+# CLI detection
+which = { workspace = true }
+
 [build-dependencies]
 swissarmyhammer-build = { path = "../swissarmyhammer-build" }
 
 [dev-dependencies]
 tempfile = "3"
 serial_test = { workspace = true }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
+agent-client-protocol-extras = { path = "../agent-client-protocol-extras" }

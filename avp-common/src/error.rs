@@ -41,6 +41,10 @@ pub enum AvpError {
         /// The error message.
         message: String,
     },
+
+    /// ACP agent error during validator execution.
+    #[error("Agent error: {0}")]
+    Agent(String),
 }
 
 /// Validation errors for hook inputs.

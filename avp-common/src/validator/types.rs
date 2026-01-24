@@ -330,42 +330,31 @@ impl Validator {
 }
 
 /// Result of running a validator.
+///
+/// The LLM returns just passed/failed with a message. The validator name
+/// and severity are known by the calling code from the validator's frontmatter.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "status")]
 pub enum ValidatorResult {
     /// Validation passed.
     #[serde(rename = "passed")]
-    Passed {
-        validator_name: String,
-        message: String,
-    },
-    /// Validation failed with a severity level.
+    Passed { message: String },
+    /// Validation failed.
     #[serde(rename = "failed")]
-    Failed {
-        validator_name: String,
-        severity: Severity,
-        message: String,
-    },
+    Failed { message: String },
 }
 
 impl ValidatorResult {
     /// Create a passing result.
-    pub fn pass(validator_name: impl Into<String>, message: impl Into<String>) -> Self {
+    pub fn pass(message: impl Into<String>) -> Self {
         Self::Passed {
-            validator_name: validator_name.into(),
             message: message.into(),
         }
     }
 
     /// Create a failing result.
-    pub fn fail(
-        validator_name: impl Into<String>,
-        severity: Severity,
-        message: impl Into<String>,
-    ) -> Self {
+    pub fn fail(message: impl Into<String>) -> Self {
         Self::Failed {
-            validator_name: validator_name.into(),
-            severity,
             message: message.into(),
         }
     }
@@ -375,28 +364,43 @@ impl ValidatorResult {
         matches!(self, Self::Passed { .. })
     }
 
-    /// Get the validator name.
-    pub fn validator_name(&self) -> &str {
-        match self {
-            Self::Passed { validator_name, .. } => validator_name,
-            Self::Failed { validator_name, .. } => validator_name,
-        }
-    }
-
     /// Get the message.
     pub fn message(&self) -> &str {
         match self {
-            Self::Passed { message, .. } => message,
-            Self::Failed { message, .. } => message,
+            Self::Passed { message } => message,
+            Self::Failed { message } => message,
         }
     }
+}
 
-    /// Get the severity (None for passed results).
-    pub fn severity(&self) -> Option<Severity> {
-        match self {
-            Self::Passed { .. } => None,
-            Self::Failed { severity, .. } => Some(*severity),
-        }
+/// Result of executing a validator, paired with validator metadata.
+///
+/// The LLM returns just passed/failed with a message. This struct pairs that
+/// result with the validator's name and severity from the frontmatter.
+#[derive(Debug, Clone)]
+pub struct ExecutedValidator {
+    /// Name of the validator that was executed.
+    pub name: String,
+    /// Severity from the validator's frontmatter.
+    pub severity: Severity,
+    /// Result returned by the LLM.
+    pub result: ValidatorResult,
+}
+
+impl ExecutedValidator {
+    /// Check if the validation passed.
+    pub fn passed(&self) -> bool {
+        self.result.passed()
+    }
+
+    /// Check if this is a blocking failure (failed + error severity).
+    pub fn is_blocking(&self) -> bool {
+        !self.result.passed() && self.severity == Severity::Error
+    }
+
+    /// Get the message from the result.
+    pub fn message(&self) -> &str {
+        self.result.message()
     }
 }
 
@@ -558,36 +562,30 @@ mod tests {
 
     #[test]
     fn test_validator_result_pass() {
-        let result = ValidatorResult::pass("test-validator", "All checks passed");
+        let result = ValidatorResult::pass("All checks passed");
         assert!(result.passed());
-        assert!(result.severity().is_none());
-        assert_eq!(result.validator_name(), "test-validator");
         assert_eq!(result.message(), "All checks passed");
     }
 
     #[test]
     fn test_validator_result_fail() {
-        let result = ValidatorResult::fail(
-            "test-validator",
-            Severity::Error,
-            "Secret detected: Found API key on line 42",
-        );
+        let result = ValidatorResult::fail("Secret detected: Found API key on line 42");
         assert!(!result.passed());
-        assert_eq!(result.severity(), Some(Severity::Error));
         assert_eq!(result.message(), "Secret detected: Found API key on line 42");
     }
 
     #[test]
     fn test_validator_result_serialization() {
         // Test that the enum serializes correctly with the "status" tag
-        let passed = ValidatorResult::pass("test", "OK");
+        let passed = ValidatorResult::pass("OK");
         let json = serde_json::to_string(&passed).unwrap();
         assert!(json.contains(r#""status":"passed""#));
+        assert!(json.contains(r#""message":"OK""#));
 
-        let failed = ValidatorResult::fail("test", Severity::Error, "Bad");
+        let failed = ValidatorResult::fail("Bad");
         let json = serde_json::to_string(&failed).unwrap();
         assert!(json.contains(r#""status":"failed""#));
-        assert!(json.contains(r#""severity":"error""#));
+        assert!(json.contains(r#""message":"Bad""#));
     }
 
     #[test]

@@ -57,7 +57,6 @@ Return JSON in this exact format:
 ```json
 {
   "status": "passed",
-  "validator_name": "safe-commands",
   "message": "Command appears safe"
 }
 ```
@@ -67,8 +66,6 @@ Or if dangerous:
 ```json
 {
   "status": "failed",
-  "validator_name": "safe-commands",
-  "severity": "error",
   "message": "Blocked: The command 'rm -rf /' would delete the entire filesystem"
 }
 ```

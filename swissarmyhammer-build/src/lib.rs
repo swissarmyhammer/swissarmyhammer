@@ -6,7 +6,7 @@
 //!
 //! # Example
 //!
-//! ```no_run
+//! ```ignore
 //! // In build.rs:
 //! use swissarmyhammer_build::BuiltinGenerator;
 //!

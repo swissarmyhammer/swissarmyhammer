@@ -12,6 +12,7 @@ use std::path::Path;
 
 use swissarmyhammer_directory::{AvpConfig, FileSource, ManagedDirectory, VirtualFileSystem};
 
+use crate::context::AvpContext;
 use crate::error::AvpError;
 
 use super::parser::parse_validator;
@@ -41,7 +42,32 @@ impl ValidatorLoader {
         }
     }
 
-    /// Load all validators with proper precedence.
+    /// Load validators from directories specified in the context.
+    ///
+    /// This loads validators using the AvpContext to get directory paths:
+    /// 1. User validators from ~/.avp/validators (if exists)
+    /// 2. Project validators from ./.avp/validators (if exists)
+    ///
+    /// Later sources override earlier ones with the same name.
+    /// Call `load_builtins()` before this if you want builtin validators.
+    pub fn load_from_context(&mut self, context: &AvpContext) -> Result<(), AvpError> {
+        // Load from user directory first (lower precedence)
+        if let Some(home_dir) = context.home_validators_dir() {
+            if home_dir.exists() {
+                self.load_directory(&home_dir, ValidatorSource::User)?;
+            }
+        }
+
+        // Load from project directory (higher precedence, overrides user)
+        let project_dir = context.project_validators_dir();
+        if project_dir.exists() {
+            self.load_directory(&project_dir, ValidatorSource::Project)?;
+        }
+
+        Ok(())
+    }
+
+    /// Load all validators with proper precedence (standalone, no context).
     ///
     /// This loads validators from:
     /// 1. Builtin validators (call `load_builtins()` first if needed)
@@ -49,6 +75,8 @@ impl ValidatorLoader {
     /// 3. Project validators from ./.avp/validators
     ///
     /// Later sources override earlier ones with the same name.
+    ///
+    /// Note: Prefer `load_from_context()` when an AvpContext is available.
     pub fn load_all(&mut self) -> Result<(), AvpError> {
         // Use VirtualFileSystem with AvpConfig for directory stacking
         let mut vfs = VirtualFileSystem::<AvpConfig>::new("validators");

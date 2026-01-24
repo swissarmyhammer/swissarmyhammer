@@ -94,17 +94,17 @@ impl PlaybackAgent {
             "PlaybackAgent: Replaying {} notifications",
             notifications.len()
         );
-        let tx = self.notification_tx.clone();
 
-        tokio::spawn(async move {
-            for notif_json in notifications {
-                if let Ok(notification) =
-                    serde_json::from_value::<agent_client_protocol::SessionNotification>(notif_json)
-                {
-                    let _ = tx.send(notification);
-                }
+        // Send notifications synchronously - broadcast::Sender::send is sync
+        // and doesn't require a runtime. This avoids issues when running inside
+        // spawn_blocking with a different runtime context.
+        for notif_json in notifications {
+            if let Ok(notification) =
+                serde_json::from_value::<agent_client_protocol::SessionNotification>(notif_json)
+            {
+                let _ = self.notification_tx.send(notification);
             }
-        });
+        }
     }
 }
 

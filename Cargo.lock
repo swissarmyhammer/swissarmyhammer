@@ -534,12 +534,15 @@ dependencies = [
  "clap",
  "serde_json",
  "tempfile",
+ "tokio",
 ]
 
 [[package]]
 name = "avp-common"
 version = "0.3.0"
 dependencies = [
+ "agent-client-protocol-extras",
+ "async-trait",
  "chrono",
  "glob",
  "regex",
@@ -547,13 +550,18 @@ dependencies = [
  "serde_json",
  "serde_yaml",
  "serial_test",
+ "swissarmyhammer-agent",
  "swissarmyhammer-build",
  "swissarmyhammer-common",
+ "swissarmyhammer-config",
  "swissarmyhammer-directory",
+ "swissarmyhammer-prompts",
  "tempfile",
  "thiserror 1.0.69",
+ "tokio",
  "tracing",
  "walkdir",
+ "which 7.0.3",
 ]
 
 [[package]]

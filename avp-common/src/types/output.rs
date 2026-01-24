@@ -5,6 +5,13 @@ use serde::{Deserialize, Serialize};
 use super::common::HookType;
 
 /// Common output structure for all hooks.
+///
+/// This follows the Claude Code hook output format:
+/// - `continue`: Whether Claude should continue after hook execution (default: true)
+/// - `stopReason`: Message shown when continue is false
+/// - `decision`: For tool hooks, "block" to prevent the tool call
+/// - `reason`: Explanation for the decision (shown to Claude when blocking)
+/// - `hookSpecificOutput`: Hook-type-specific output fields
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct HookOutput {
@@ -15,6 +22,15 @@ pub struct HookOutput {
     /// Reason for stopping (only relevant if continue is false).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stop_reason: Option<String>,
+
+    /// Decision for tool hooks: "block" to prevent tool call.
+    /// Used for PostToolUse to provide feedback to Claude.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub decision: Option<String>,
+
+    /// Reason for the decision (shown to Claude when blocking).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
 
     /// Whether to suppress output display.
     #[serde(default, skip_serializing_if = "is_false")]
@@ -47,10 +63,33 @@ impl HookOutput {
     }
 
     /// Create a blocking error output that stops execution.
+    ///
+    /// This is used for hooks like Stop/SubagentStop where blocking
+    /// prevents Claude from stopping.
     pub fn blocking_error(reason: impl Into<String>) -> Self {
+        let reason_str = reason.into();
         Self {
             continue_execution: false,
-            stop_reason: Some(reason.into()),
+            stop_reason: Some(reason_str.clone()),
+            decision: Some("block".to_string()),
+            reason: Some(reason_str),
+            ..Default::default()
+        }
+    }
+
+    /// Create a PostToolUse blocking output.
+    ///
+    /// This uses the Claude Code format for PostToolUse blocking:
+    /// - `decision: "block"` to indicate the tool result should be flagged
+    /// - `reason` provides feedback to Claude about what went wrong
+    /// - `continue: true` because the tool already ran, we're just flagging it
+    ///
+    /// Note: For PostToolUse, exit code 2 means "Shows stderr to Claude (tool already ran)"
+    pub fn post_tool_use_block(reason: impl Into<String>) -> Self {
+        Self {
+            continue_execution: true, // Tool already ran, we're flagging the result
+            decision: Some("block".to_string()),
+            reason: Some(reason.into()),
             ..Default::default()
         }
     }
@@ -277,6 +316,20 @@ mod tests {
         let json = serde_json::to_string(&output).unwrap();
         assert!(json.contains("\"continue\":false"));
         assert!(json.contains("\"stopReason\":\"Not allowed\""));
+        // Also includes Claude Code format fields
+        assert!(json.contains("\"decision\":\"block\""));
+        assert!(json.contains("\"reason\":\"Not allowed\""));
+    }
+
+    #[test]
+    fn test_hook_output_post_tool_use_block() {
+        let output = HookOutput::post_tool_use_block("Found hardcoded secrets");
+        let json = serde_json::to_string(&output).unwrap();
+        // PostToolUse blocking uses decision + reason (Claude Code format)
+        assert!(json.contains("\"decision\":\"block\""));
+        assert!(json.contains("\"reason\":\"Found hardcoded secrets\""));
+        // Should NOT have continue:false (tool already ran, we're just flagging it)
+        assert!(json.contains("\"continue\":true"));
     }
 
     #[test]

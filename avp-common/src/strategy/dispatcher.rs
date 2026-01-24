@@ -1,5 +1,6 @@
 //! Hook dispatcher for routing inputs to the correct strategy.
 
+use crate::context::AvpContext;
 use crate::error::AvpError;
 use crate::types::HookOutput;
 
@@ -25,20 +26,25 @@ impl HookDispatcher {
 
     /// Create a dispatcher with the Claude Code strategy registered.
     ///
+    /// The context is used by strategies to access validator directories
+    /// and logging.
+    ///
     /// When adding support for a new agent platform, register it here:
     /// ```ignore
-    /// dispatcher.register(NewAgentStrategy::new());
+    /// dispatcher.register(NewAgentStrategy::new(context));
     /// ```
-    pub fn with_claude_code() -> Self {
+    pub fn with_claude_code(context: AvpContext) -> Self {
         let mut dispatcher = Self::new();
-        dispatcher.register(ClaudeCodeHookStrategy::new());
+        dispatcher.register(ClaudeCodeHookStrategy::new(context));
         // Register additional agent strategies here as they are implemented
         dispatcher
     }
 
-    /// Create a dispatcher with default strategies (alias for with_claude_code).
-    pub fn with_defaults() -> Self {
-        Self::with_claude_code()
+    /// Create a dispatcher with default strategies.
+    ///
+    /// This requires an AvpContext for the strategies to use.
+    pub fn with_defaults(context: AvpContext) -> Self {
+        Self::with_claude_code(context)
     }
 
     /// Register an agent strategy.
@@ -49,11 +55,11 @@ impl HookDispatcher {
     /// Dispatch an input to the appropriate strategy.
     ///
     /// Returns the output and exit code from the first matching strategy.
-    pub fn dispatch(&self, input: serde_json::Value) -> Result<(HookOutput, i32), AvpError> {
+    pub async fn dispatch(&self, input: serde_json::Value) -> Result<(HookOutput, i32), AvpError> {
         // Find the first strategy that can handle this input
         for strategy in &self.strategies {
             if strategy.can_handle(&input) {
-                return strategy.process(input);
+                return strategy.process(input).await;
             }
         }
 
@@ -76,17 +82,39 @@ impl HookDispatcher {
 
 impl Default for HookDispatcher {
     fn default() -> Self {
-        Self::with_claude_code()
+        Self::new()
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
+    use tempfile::TempDir;
 
-    #[test]
-    fn test_dispatcher_with_claude_code() {
-        let dispatcher = HookDispatcher::with_claude_code();
+    /// Helper to create a dispatcher in a temporary git repo.
+    fn create_test_dispatcher() -> (TempDir, HookDispatcher) {
+        let temp = TempDir::new().unwrap();
+        fs::create_dir_all(temp.path().join(".git")).unwrap();
+
+        // Disable agent execution in tests
+        std::env::set_var("AVP_SKIP_AGENT", "1");
+
+        let original_dir = std::env::current_dir().unwrap();
+        std::env::set_current_dir(temp.path()).unwrap();
+
+        let context = AvpContext::init().unwrap();
+        let dispatcher = HookDispatcher::with_claude_code(context);
+
+        std::env::set_current_dir(&original_dir).unwrap();
+
+        (temp, dispatcher)
+    }
+
+    #[tokio::test]
+    #[serial_test::serial(cwd)]
+    async fn test_dispatcher_with_claude_code() {
+        let (_temp, dispatcher) = create_test_dispatcher();
         assert_eq!(dispatcher.len(), 1);
 
         let input = serde_json::json!({
@@ -99,26 +127,27 @@ mod tests {
             "tool_input": {"command": "ls"}
         });
 
-        let (output, exit_code) = dispatcher.dispatch(input).unwrap();
+        let (output, exit_code) = dispatcher.dispatch(input).await.unwrap();
         assert!(output.continue_execution);
         assert_eq!(exit_code, 0);
     }
 
-    #[test]
-    fn test_dispatcher_no_strategy() {
+    #[tokio::test]
+    async fn test_dispatcher_no_strategy() {
         let dispatcher = HookDispatcher::new();
 
         let input = serde_json::json!({
             "some_field": "value"
         });
 
-        let result = dispatcher.dispatch(input);
+        let result = dispatcher.dispatch(input).await;
         assert!(matches!(result, Err(AvpError::UnknownHookType(_))));
     }
 
-    #[test]
-    fn test_dispatch_all_hook_types() {
-        let dispatcher = HookDispatcher::with_defaults();
+    #[tokio::test]
+    #[serial_test::serial(cwd)]
+    async fn test_dispatch_all_hook_types() {
+        let (_temp, dispatcher) = create_test_dispatcher();
 
         // Build complete inputs for each hook type with all required fields
         let hook_inputs = [
@@ -233,7 +262,7 @@ mod tests {
                 .as_str()
                 .unwrap()
                 .to_string();
-            let result = dispatcher.dispatch(input);
+            let result = dispatcher.dispatch(input).await;
             assert!(result.is_ok(), "Failed for hook type: {}", hook_type);
         }
     }

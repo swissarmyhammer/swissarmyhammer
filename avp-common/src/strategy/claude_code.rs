@@ -1,14 +1,17 @@
 //! Claude Code hook strategy implementation.
 
+use async_trait::async_trait;
+
 use crate::builtin::load_builtins;
 use crate::chain::{Chain, HookInputType};
+use crate::context::AvpContext;
 use crate::error::AvpError;
 use crate::types::{
     HookOutput, HookType, NotificationInput, PermissionRequestInput, PostToolUseFailureInput,
     PostToolUseInput, PreCompactInput, PreToolUseInput, SessionEndInput, SessionStartInput,
     SetupInput, StopInput, SubagentStartInput, SubagentStopInput, UserPromptSubmitInput,
 };
-use crate::validator::{ValidatorLoader, ValidatorResult};
+use crate::validator::{ExecutedValidator, ValidatorLoader, ValidatorRunner};
 
 use super::traits::{AgentHookStrategy, TypedHookStrategy};
 
@@ -28,50 +31,93 @@ use super::traits::{AgentHookStrategy, TypedHookStrategy};
 /// Each hook type has its own typed Input that is parsed from JSON and
 /// processed through a chain of responsibility. Validators are loaded
 /// from builtin, user (~/.avp/validators), and project (./.avp/validators)
-/// directories with proper precedence.
-#[derive(Debug)]
+/// directories with proper precedence, and executed via ACP agent.
 pub struct ClaudeCodeHookStrategy {
     /// Strategies for each hook type
     pre_tool_use: PreToolUseHandler,
     post_tool_use: PostToolUseHandler,
     /// Validator loader with all loaded validators
     validator_loader: ValidatorLoader,
+    /// Validator runner for executing validators via ACP agent
+    validator_runner: Option<ValidatorRunner>,
+    /// AVP context for logging and directory access
+    context: AvpContext,
 }
 
-impl Default for ClaudeCodeHookStrategy {
-    fn default() -> Self {
-        Self::new()
+// Manual Debug implementation since ValidatorRunner doesn't implement Debug
+impl std::fmt::Debug for ClaudeCodeHookStrategy {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ClaudeCodeHookStrategy")
+            .field("pre_tool_use", &self.pre_tool_use)
+            .field("post_tool_use", &self.post_tool_use)
+            .field("validator_loader", &self.validator_loader)
+            .field(
+                "validator_runner",
+                &self.validator_runner.as_ref().map(|_| "ValidatorRunner"),
+            )
+            .field("context", &self.context)
+            .finish()
     }
 }
 
 impl ClaudeCodeHookStrategy {
-    /// Create a new Claude Code hook strategy with default handlers.
+    /// Create a new Claude Code hook strategy with the given context.
     ///
     /// This loads all validators:
     /// 1. Builtin validators (embedded in the binary)
     /// 2. User validators (~/.avp/validators)
     /// 3. Project validators (./.avp/validators)
-    pub fn new() -> Self {
+    ///
+    /// The validator runner is created lazily when validators are executed.
+    pub fn new(context: AvpContext) -> Self {
         let mut validator_loader = ValidatorLoader::new();
 
         // Load builtins first (lowest precedence)
         load_builtins(&mut validator_loader);
 
-        // Load user and project validators (higher precedence)
-        if let Err(e) = validator_loader.load_all() {
+        // Load user and project validators (higher precedence) using context
+        if let Err(e) = validator_loader.load_from_context(&context) {
             tracing::warn!("Failed to load validators from directories: {}", e);
         }
 
-        tracing::debug!(
-            "Loaded {} validators",
-            validator_loader.len()
-        );
+        tracing::debug!("Loaded {} validators", validator_loader.len());
+
+        // Create validator runner only if:
+        // 1. We're not in test mode (AVP_SKIP_AGENT env var not set)
+        // 2. Claude CLI is available
+        // This prevents test failures and allows graceful degradation
+        let skip_agent = std::env::var("AVP_SKIP_AGENT").is_ok();
+        let validator_runner = if skip_agent {
+            tracing::debug!("AVP_SKIP_AGENT set - validator execution disabled");
+            None
+        } else if which::which("claude").is_ok() {
+            match ValidatorRunner::with_defaults() {
+                Ok(runner) => {
+                    tracing::debug!("Validator runner initialized (Claude CLI available)");
+                    Some(runner)
+                }
+                Err(e) => {
+                    tracing::warn!("Failed to create validator runner: {} - validators will use placeholder results", e);
+                    None
+                }
+            }
+        } else {
+            tracing::debug!("Claude CLI not available - validator execution disabled");
+            None
+        };
 
         Self {
             pre_tool_use: PreToolUseHandler,
             post_tool_use: PostToolUseHandler,
             validator_loader,
+            validator_runner,
+            context,
         }
+    }
+
+    /// Get a reference to the AVP context.
+    pub fn context(&self) -> &AvpContext {
+        &self.context
     }
 
     /// Extract the hook type from the input JSON.
@@ -97,95 +143,117 @@ impl ClaudeCodeHookStrategy {
 
     /// Execute matching validators for a hook event.
     ///
-    /// Currently, this returns placeholder results. In the future, this will
-    /// execute validators via ACP agent calls.
+    /// If a validator runner is available, validators are executed via ACP agent.
+    /// Otherwise, placeholder pass results are returned.
     ///
-    /// Returns a list of validator results.
-    pub fn execute_validators(
+    /// Returns a list of executed validators with their results and metadata.
+    pub async fn execute_validators(
         &self,
         hook_type: HookType,
         input: &serde_json::Value,
-    ) -> Vec<ValidatorResult> {
+    ) -> Vec<ExecutedValidator> {
         let matching = self.matching_validators(hook_type, input);
 
-        let mut results = Vec::new();
-
-        for validator in matching {
-            tracing::debug!(
-                "Would execute validator '{}' ({}) for hook {}",
-                validator.name(),
-                validator.source,
-                hook_type
-            );
-
-            // TODO: Execute via ACP agent
-            // For now, return a placeholder pass result
-            results.push(ValidatorResult::pass(
-                validator.name(),
-                format!("Validator '{}' matched (execution pending)", validator.name()),
-            ));
+        if matching.is_empty() {
+            return Vec::new();
         }
 
-        results
+        // If we have a runner, execute validators via ACP
+        if let Some(runner) = &self.validator_runner {
+            tracing::debug!(
+                "Executing {} validators via ACP for hook {}",
+                matching.len(),
+                hook_type
+            );
+            return runner.execute_validators(&matching, hook_type, input).await;
+        }
+
+        // Fallback: return placeholder pass results
+        tracing::debug!(
+            "No validator runner available - returning placeholder results for {} validators",
+            matching.len()
+        );
+
+        matching
+            .iter()
+            .map(|validator| {
+                tracing::debug!(
+                    "Would execute validator '{}' ({}) for hook {}",
+                    validator.name(),
+                    validator.source,
+                    hook_type
+                );
+
+                ExecutedValidator {
+                    name: validator.name().to_string(),
+                    severity: validator.severity(),
+                    result: crate::validator::ValidatorResult::pass(format!(
+                        "Validator '{}' matched (runner unavailable)",
+                        validator.name()
+                    )),
+                }
+            })
+            .collect()
     }
 
     /// Process a typed input through its chain.
-    fn process_typed<I: HookInputType>(
+    async fn process_typed<I: HookInputType>(
         &self,
         input: serde_json::Value,
         hook_type: HookType,
         handler: &impl TypedHookStrategy<I>,
     ) -> Result<(HookOutput, i32), AvpError> {
         // Execute matching validators
-        let validator_results = self.execute_validators(hook_type, &input);
+        let validator_results = self.execute_validators(hook_type, &input).await;
 
-        // Check if any validator blocked
-        let blocked = validator_results.iter().any(|r| {
-            !r.passed() && r.severity() == Some(crate::validator::Severity::Error)
-        });
+        // Check if any validator blocked (failed + error severity)
+        if let Some(blocking) = validator_results.iter().find(|r| r.is_blocking()) {
+            let reason = format!(
+                "blocked by validator '{}': {}",
+                blocking.name,
+                blocking.message()
+            );
 
-        if blocked {
-            // Find the blocking result for the message
-            let blocking = validator_results
-                .iter()
-                .find(|r| !r.passed() && r.severity() == Some(crate::validator::Severity::Error))
-                .unwrap();
+            // Use the appropriate output type based on hook type
+            // PostToolUse uses decision: "block" to flag the result to Claude
+            // Other hooks use continue: false to stop execution
+            let output = match hook_type {
+                HookType::PostToolUse => HookOutput::post_tool_use_block(&reason),
+                _ => HookOutput::blocking_error(&reason),
+            };
 
-            return Ok((
-                HookOutput::blocking_error(format!("blocked by validator: {}", blocking.message())),
-                2, // Blocking exit code
-            ));
+            return Ok((output, 2)); // Exit code 2: blocking error
         }
 
         // Continue with normal processing
         let typed_input: I = serde_json::from_value(input).map_err(AvpError::Json)?;
-        handler.process(typed_input)
+        handler.process(typed_input).await
     }
 
     /// Default pass-through processing for hooks without custom logic.
-    fn process_passthrough<I: HookInputType>(
+    async fn process_passthrough<I: HookInputType>(
         &self,
         input: serde_json::Value,
         hook_type: HookType,
     ) -> Result<(HookOutput, i32), AvpError> {
         // Execute matching validators
-        let validator_results = self.execute_validators(hook_type, &input);
+        let validator_results = self.execute_validators(hook_type, &input).await;
 
-        // Check if any validator blocked
-        let blocked = validator_results.iter().any(|r| {
-            !r.passed() && r.severity() == Some(crate::validator::Severity::Error)
-        });
+        // Check if any validator blocked (failed + error severity)
+        if let Some(blocking) = validator_results.iter().find(|r| r.is_blocking()) {
+            let reason = format!(
+                "blocked by validator '{}': {}",
+                blocking.name,
+                blocking.message()
+            );
 
-        if blocked {
-            let blocking = validator_results
-                .iter()
-                .find(|r| !r.passed() && r.severity() == Some(crate::validator::Severity::Error))
-                .unwrap();
+            // Use the appropriate output type based on hook type
+            let output = match hook_type {
+                HookType::PostToolUse => HookOutput::post_tool_use_block(&reason),
+                _ => HookOutput::blocking_error(&reason),
+            };
 
-            return Ok((
-                HookOutput::blocking_error(format!("blocked by validator: {}", blocking.message())),
-                2,
-            ));
+            return Ok((output, 2));
         }
 
         let typed_input: I = serde_json::from_value(input).map_err(AvpError::Json)?;
@@ -200,6 +268,7 @@ impl ClaudeCodeHookStrategy {
     }
 }
 
+#[async_trait]
 impl AgentHookStrategy for ClaudeCodeHookStrategy {
     fn name(&self) -> &'static str {
         "ClaudeCode"
@@ -210,32 +279,61 @@ impl AgentHookStrategy for ClaudeCodeHookStrategy {
         input.get("hook_event_name").is_some()
     }
 
-    fn process(&self, input: serde_json::Value) -> Result<(HookOutput, i32), AvpError> {
+    async fn process(&self, input: serde_json::Value) -> Result<(HookOutput, i32), AvpError> {
         let hook_type = self.extract_hook_type(&input)?;
 
         match hook_type {
-            HookType::SessionStart => self.process_passthrough::<SessionStartInput>(input, hook_type),
+            HookType::SessionStart => {
+                self.process_passthrough::<SessionStartInput>(input, hook_type)
+                    .await
+            }
             HookType::UserPromptSubmit => {
                 self.process_passthrough::<UserPromptSubmitInput>(input, hook_type)
+                    .await
             }
-            HookType::PreToolUse => self.process_typed(input, hook_type, &self.pre_tool_use),
+            HookType::PreToolUse => {
+                self.process_typed(input, hook_type, &self.pre_tool_use)
+                    .await
+            }
             HookType::PermissionRequest => {
                 self.process_passthrough::<PermissionRequestInput>(input, hook_type)
+                    .await
             }
-            HookType::PostToolUse => self.process_typed(input, hook_type, &self.post_tool_use),
+            HookType::PostToolUse => {
+                self.process_typed(input, hook_type, &self.post_tool_use)
+                    .await
+            }
             HookType::PostToolUseFailure => {
                 self.process_passthrough::<PostToolUseFailureInput>(input, hook_type)
+                    .await
             }
             HookType::SubagentStart => {
                 self.process_passthrough::<SubagentStartInput>(input, hook_type)
+                    .await
             }
-            HookType::SubagentStop => self.process_passthrough::<SubagentStopInput>(input, hook_type),
-            HookType::Stop => self.process_passthrough::<StopInput>(input, hook_type),
-            HookType::PreCompact => self.process_passthrough::<PreCompactInput>(input, hook_type),
-            HookType::Setup => self.process_passthrough::<SetupInput>(input, hook_type),
-            HookType::SessionEnd => self.process_passthrough::<SessionEndInput>(input, hook_type),
+            HookType::SubagentStop => {
+                self.process_passthrough::<SubagentStopInput>(input, hook_type)
+                    .await
+            }
+            HookType::Stop => {
+                self.process_passthrough::<StopInput>(input, hook_type)
+                    .await
+            }
+            HookType::PreCompact => {
+                self.process_passthrough::<PreCompactInput>(input, hook_type)
+                    .await
+            }
+            HookType::Setup => {
+                self.process_passthrough::<SetupInput>(input, hook_type)
+                    .await
+            }
+            HookType::SessionEnd => {
+                self.process_passthrough::<SessionEndInput>(input, hook_type)
+                    .await
+            }
             HookType::Notification => {
                 self.process_passthrough::<NotificationInput>(input, hook_type)
+                    .await
             }
         }
     }
@@ -245,8 +343,9 @@ impl AgentHookStrategy for ClaudeCodeHookStrategy {
 #[derive(Debug, Default)]
 pub struct PreToolUseHandler;
 
+#[async_trait]
 impl TypedHookStrategy<PreToolUseInput> for PreToolUseHandler {
-    fn process(&self, input: PreToolUseInput) -> Result<(HookOutput, i32), AvpError> {
+    async fn process(&self, input: PreToolUseInput) -> Result<(HookOutput, i32), AvpError> {
         let mut chain: Chain<PreToolUseInput> = Chain::success();
         chain.execute(&input).map_err(AvpError::Chain)
     }
@@ -260,8 +359,9 @@ impl TypedHookStrategy<PreToolUseInput> for PreToolUseHandler {
 #[derive(Debug, Default)]
 pub struct PostToolUseHandler;
 
+#[async_trait]
 impl TypedHookStrategy<PostToolUseInput> for PostToolUseHandler {
-    fn process(&self, input: PostToolUseInput) -> Result<(HookOutput, i32), AvpError> {
+    async fn process(&self, input: PostToolUseInput) -> Result<(HookOutput, i32), AvpError> {
         let mut chain: Chain<PostToolUseInput> = Chain::success();
         chain.execute(&input).map_err(AvpError::Chain)
     }
@@ -274,10 +374,33 @@ impl TypedHookStrategy<PostToolUseInput> for PostToolUseHandler {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
+    use tempfile::TempDir;
+
+    /// Helper to create a test strategy in a temporary git repo.
+    fn create_test_strategy() -> (TempDir, ClaudeCodeHookStrategy) {
+        let temp = TempDir::new().unwrap();
+        fs::create_dir_all(temp.path().join(".git")).unwrap();
+
+        // Disable agent execution in tests
+        std::env::set_var("AVP_SKIP_AGENT", "1");
+
+        // Change to temp directory to create context
+        let original_dir = std::env::current_dir().unwrap();
+        std::env::set_current_dir(temp.path()).unwrap();
+
+        let context = AvpContext::init().unwrap();
+        let strategy = ClaudeCodeHookStrategy::new(context);
+
+        std::env::set_current_dir(&original_dir).unwrap();
+
+        (temp, strategy)
+    }
 
     #[test]
+    #[serial_test::serial(cwd)]
     fn test_claude_code_strategy_can_handle() {
-        let strategy = ClaudeCodeHookStrategy::new();
+        let (_temp, strategy) = create_test_strategy();
 
         let valid_input = serde_json::json!({
             "hook_event_name": "PreToolUse",
@@ -291,9 +414,10 @@ mod tests {
         assert!(!strategy.can_handle(&invalid_input));
     }
 
-    #[test]
-    fn test_pre_tool_use_processing() {
-        let strategy = ClaudeCodeHookStrategy::new();
+    #[tokio::test]
+    #[serial_test::serial(cwd)]
+    async fn test_pre_tool_use_processing() {
+        let (_temp, strategy) = create_test_strategy();
 
         let input = serde_json::json!({
             "session_id": "test",
@@ -305,14 +429,15 @@ mod tests {
             "tool_input": {"command": "ls"}
         });
 
-        let (output, exit_code) = strategy.process(input).unwrap();
+        let (output, exit_code) = strategy.process(input).await.unwrap();
         assert!(output.continue_execution);
         assert_eq!(exit_code, 0);
     }
 
-    #[test]
-    fn test_session_start_processing() {
-        let strategy = ClaudeCodeHookStrategy::new();
+    #[tokio::test]
+    #[serial_test::serial(cwd)]
+    async fn test_session_start_processing() {
+        let (_temp, strategy) = create_test_strategy();
 
         let input = serde_json::json!({
             "session_id": "test",
@@ -323,26 +448,28 @@ mod tests {
             "source": "startup"
         });
 
-        let (output, exit_code) = strategy.process(input).unwrap();
+        let (output, exit_code) = strategy.process(input).await.unwrap();
         assert!(output.continue_execution);
         assert_eq!(exit_code, 0);
     }
 
-    #[test]
-    fn test_unknown_hook_type() {
-        let strategy = ClaudeCodeHookStrategy::new();
+    #[tokio::test]
+    #[serial_test::serial(cwd)]
+    async fn test_unknown_hook_type() {
+        let (_temp, strategy) = create_test_strategy();
 
         let input = serde_json::json!({
             "hook_event_name": "UnknownHook"
         });
 
-        let result = strategy.process(input);
+        let result = strategy.process(input).await;
         assert!(matches!(result, Err(AvpError::UnknownHookType(_))));
     }
 
     #[test]
+    #[serial_test::serial(cwd)]
     fn test_validators_loaded() {
-        let strategy = ClaudeCodeHookStrategy::new();
+        let (_temp, strategy) = create_test_strategy();
 
         // Should have at least the builtin validators
         assert!(strategy.validator_loader().len() >= 2);
@@ -351,8 +478,9 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial(cwd)]
     fn test_matching_validators_pre_tool_use() {
-        let strategy = ClaudeCodeHookStrategy::new();
+        let (_temp, strategy) = create_test_strategy();
 
         let input = serde_json::json!({
             "hook_event_name": "PreToolUse",
@@ -368,8 +496,9 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial(cwd)]
     fn test_matching_validators_post_tool_use() {
-        let strategy = ClaudeCodeHookStrategy::new();
+        let (_temp, strategy) = create_test_strategy();
 
         let input = serde_json::json!({
             "hook_event_name": "PostToolUse",
@@ -383,5 +512,4 @@ mod tests {
         let names: Vec<_> = matching.iter().map(|v| v.name()).collect();
         assert!(names.contains(&"no-secrets"));
     }
-
 }
