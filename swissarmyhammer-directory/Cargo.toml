@@ -1,0 +1,19 @@
+[package]
+name = "swissarmyhammer-directory"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Generic directory stacking for configuration directories"
+
+[dependencies]
+dirs = { workspace = true }
+walkdir = { workspace = true }
+tracing = { workspace = true }
+thiserror = { workspace = true }
+serde = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

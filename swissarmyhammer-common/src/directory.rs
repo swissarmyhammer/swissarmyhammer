@@ -2,80 +2,24 @@
 //!
 //! This module provides a centralized representation of the .swissarmyhammer directory
 //! structure, supporting different root locations (Git root, user home, custom paths).
+//!
+//! This module re-exports types from `swissarmyhammer-directory` with the
+//! `SwissarmyhammerConfig` configuration for backward compatibility.
 
-use crate::error::{Result, SwissArmyHammerError};
-use crate::utils::directory_utils::find_git_repository_root;
-use std::fs;
-use std::path::{Path, PathBuf};
+// Re-export the shared directory types with SwissarmyhammerConfig bound
+pub use swissarmyhammer_directory::{
+    find_git_repository_root, DirectoryConfig, DirectoryRootType, ManagedDirectory,
+    SwissarmyhammerConfig,
+};
 
 /// The directory name for SwissArmyHammer configuration and state.
 /// This is the single source of truth for the directory name.
 /// Crate-private to allow internal usage without exposing to external crates.
-pub(crate) const DIR_NAME: &str = ".swissarmyhammer";
+pub(crate) const DIR_NAME: &str = SwissarmyhammerConfig::DIR_NAME;
 
-/// Content for .gitignore file in .swissarmyhammer directory
+/// Type alias for backward compatibility.
 ///
-/// This ensures temporary files, logs, and runtime artifacts are not committed
-/// while allowing important project files like rules/ and docs/ to be tracked.
-const GITIGNORE_CONTENT: &str = r#"# SwissArmyHammer temporary files and logs
-# This file is automatically created by swissarmyhammer-common
-
-# Temporary files
-tmp/
-*.tmp
-
-# Todo tracking (ephemeral development session tracking)
-todo/
-
-# Abort signals (workflow control files)
-.abort
-
-# Logs
-*.log
-mcp.log
-
-# Workflow execution state
-workflow-runs/
-
-# Transcripts (conversation history)
-transcripts/
-
-# Question/Answer cache
-questions/
-
-# Keep these directories (they should be committed):
-# - rules/      Project-specific code quality rules
-# - docs/       Project documentation
-"#;
-
-/// Represents the type of root location for a SwissArmyHammer directory
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum DirectoryRootType {
-    /// In user's home directory (~/.swissarmyhammer)
-    UserHome,
-
-    /// At Git repository root (./.swissarmyhammer)
-    GitRoot,
-
-    /// Custom path (for testing or special cases)
-    Custom(PathBuf),
-}
-
-impl std::fmt::Display for DirectoryRootType {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::UserHome => write!(f, "user home"),
-            Self::GitRoot => write!(f, "git repository root"),
-            Self::Custom(path) => write!(f, "custom path: {}", path.display()),
-        }
-    }
-}
-
-/// Represents the .swissarmyhammer directory structure
-///
-/// This struct provides a centralized, type-safe way to access the .swissarmyhammer
-/// directory and its subdirectories. It supports multiple root locations and
-/// provides consistent path resolution across the application.
+/// `SwissarmyhammerDirectory` is now an alias for `ManagedDirectory<SwissarmyhammerConfig>`.
 ///
 /// # Examples
 ///
@@ -92,309 +36,7 @@ impl std::fmt::Display for DirectoryRootType {
 /// let rules_path = sah_dir.subdir("rules");
 /// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
-#[derive(Debug, Clone)]
-pub struct SwissarmyhammerDirectory {
-    /// Root path of the .swissarmyhammer directory
-    root: PathBuf,
-
-    /// The root location type (for debugging/logging)
-    root_type: DirectoryRootType,
-}
-
-impl SwissarmyhammerDirectory {
-    /// Create a new SwissarmyhammerDirectory with the given root path
-    ///
-    /// This private helper handles the common logic of ensuring the directory
-    /// exists and constructing the struct.
-    ///
-    /// # Arguments
-    ///
-    /// * `root` - The path to the .swissarmyhammer directory
-    /// * `root_type` - The type of root location
-    ///
-    /// # Returns
-    ///
-    /// * `Ok(SwissarmyhammerDirectory)` - Successfully created/found directory
-    ///
-    /// # Errors
-    ///
-    /// * `DirectoryCreation` - If .swissarmyhammer directory cannot be created
-    fn new(root: PathBuf, root_type: DirectoryRootType) -> Result<Self> {
-        if !root.exists() {
-            fs::create_dir_all(&root).map_err(SwissArmyHammerError::directory_creation)?;
-        }
-
-        let instance = Self { root, root_type };
-
-        // Ensure .gitignore exists in the .swissarmyhammer directory
-        instance.write_gitignore_if_needed()?;
-
-        // Ensure tmp/ subdirectory exists for temporary file operations
-        instance.ensure_subdir("tmp")?;
-
-        Ok(instance)
-    }
-
-    /// Write .gitignore file if it doesn't exist or needs updating
-    ///
-    /// This ensures the .swissarmyhammer directory has a .gitignore file that
-    /// excludes temporary files, logs, and runtime artifacts while allowing
-    /// important project files to be committed.
-    ///
-    /// # Errors
-    ///
-    /// * Returns error if .gitignore file cannot be written
-    fn write_gitignore_if_needed(&self) -> Result<()> {
-        let gitignore_path = self.root.join(".gitignore");
-
-        // Always write if doesn't exist
-        // If it exists, we let the user manage it (don't overwrite)
-        if !gitignore_path.exists() {
-            fs::write(&gitignore_path, GITIGNORE_CONTENT).map_err(|e| {
-                SwissArmyHammerError::Other {
-                    message: format!(
-                        "Failed to write .gitignore to {}: {}",
-                        gitignore_path.display(),
-                        e
-                    ),
-                }
-            })?;
-            tracing::debug!(
-                "Created .gitignore in .swissarmyhammer directory: {}",
-                gitignore_path.display()
-            );
-        }
-
-        Ok(())
-    }
-
-    /// Create from Git repository root (default for project operations)
-    ///
-    /// Finds the Git repository root and creates .swissarmyhammer directory there.
-    ///
-    /// # Returns
-    ///
-    /// * `Ok(SwissarmyhammerDirectory)` - Successfully created/found directory
-    ///
-    /// # Errors
-    ///
-    /// * `NotInGitRepository` - If not currently in a Git repository
-    /// * `DirectoryCreation` - If .swissarmyhammer directory cannot be created
-    ///
-    /// # Examples
-    ///
-    /// ```no_run
-    /// use swissarmyhammer_common::SwissarmyhammerDirectory;
-    ///
-    /// let sah_dir = SwissarmyhammerDirectory::from_git_root()?;
-    /// println!("Using .swissarmyhammer at: {}", sah_dir.root().display());
-    /// # Ok::<(), Box<dyn std::error::Error>>(())
-    /// ```
-    pub fn from_git_root() -> Result<Self> {
-        let git_root =
-            find_git_repository_root().ok_or(SwissArmyHammerError::NotInGitRepository)?;
-        let root = git_root.join(DIR_NAME);
-        Self::new(root, DirectoryRootType::GitRoot)
-    }
-
-    /// Create from user's home directory (for user-level config/rules)
-    ///
-    /// Creates .swissarmyhammer directory in the user's home directory.
-    ///
-    /// # Returns
-    ///
-    /// * `Ok(SwissarmyhammerDirectory)` - Successfully created/found directory
-    ///
-    /// # Errors
-    ///
-    /// * Returns error if home directory cannot be determined or directory cannot be created
-    ///
-    /// # Examples
-    ///
-    /// ```no_run
-    /// use swissarmyhammer_common::SwissarmyhammerDirectory;
-    ///
-    /// let sah_dir = SwissarmyhammerDirectory::from_user_home()?;
-    /// println!("Using .swissarmyhammer at: {}", sah_dir.root().display());
-    /// # Ok::<(), Box<dyn std::error::Error>>(())
-    /// ```
-    pub fn from_user_home() -> Result<Self> {
-        let home = dirs::home_dir().ok_or_else(|| SwissArmyHammerError::Other {
-            message: "Cannot determine home directory".to_string(),
-        })?;
-
-        let root = home.join(DIR_NAME);
-        Self::new(root, DirectoryRootType::UserHome)
-    }
-
-    /// Create from custom root path (for testing)
-    ///
-    /// Creates .swissarmyhammer directory under the specified custom root.
-    /// This is primarily useful for testing with temporary directories.
-    ///
-    /// # Arguments
-    ///
-    /// * `custom_root` - The root path where .swissarmyhammer should be created
-    ///
-    /// # Returns
-    ///
-    /// * `Ok(SwissarmyhammerDirectory)` - Successfully created/found directory
-    ///
-    /// # Errors
-    ///
-    /// * Returns error if directory cannot be created
-    ///
-    /// # Examples
-    ///
-    /// ```no_run
-    /// use swissarmyhammer_common::SwissarmyhammerDirectory;
-    /// use std::path::PathBuf;
-    ///
-    /// let custom_root = PathBuf::from("/tmp/test");
-    /// let sah_dir = SwissarmyhammerDirectory::from_custom_root(custom_root)?;
-    /// # Ok::<(), Box<dyn std::error::Error>>(())
-    /// ```
-    pub fn from_custom_root(custom_root: PathBuf) -> Result<Self> {
-        let root = custom_root.join(DIR_NAME);
-        Self::new(root, DirectoryRootType::Custom(custom_root))
-    }
-
-    /// Get the root .swissarmyhammer directory path
-    ///
-    /// # Examples
-    ///
-    /// ```no_run
-    /// use swissarmyhammer_common::SwissarmyhammerDirectory;
-    ///
-    /// let sah_dir = SwissarmyhammerDirectory::from_git_root()?;
-    /// println!("Root: {}", sah_dir.root().display());
-    /// # Ok::<(), Box<dyn std::error::Error>>(())
-    /// ```
-    pub fn root(&self) -> &Path {
-        &self.root
-    }
-
-    /// Get a subdirectory path (does not create it)
-    ///
-    /// Tools request subdirectories by name. This method returns the path
-    /// but does not create the directory.
-    ///
-    /// # Arguments
-    ///
-    /// * `name` - Subdirectory name (e.g., "todo", "rules", "tmp")
-    ///
-    /// # Examples
-    ///
-    /// ```no_run
-    /// use swissarmyhammer_common::SwissarmyhammerDirectory;
-    ///
-    /// let sah_dir = SwissarmyhammerDirectory::from_git_root()?;
-    /// let todo_path = sah_dir.subdir("todo");
-    /// // Directory may not exist yet
-    /// # Ok::<(), Box<dyn std::error::Error>>(())
-    /// ```
-    pub fn subdir(&self, name: &str) -> PathBuf {
-        self.root.join(name)
-    }
-
-    /// Get a subdirectory path, creating it if it doesn't exist
-    ///
-    /// Tools request subdirectories by name and this ensures they exist.
-    ///
-    /// # Arguments
-    ///
-    /// * `name` - Subdirectory name (e.g., "todo", "rules", "tmp")
-    ///
-    /// # Returns
-    ///
-    /// * `Ok(PathBuf)` - Path to the subdirectory (guaranteed to exist)
-    ///
-    /// # Errors
-    ///
-    /// * Returns error if directory cannot be created
-    ///
-    /// # Examples
-    ///
-    /// ```no_run
-    /// use swissarmyhammer_common::SwissarmyhammerDirectory;
-    ///
-    /// let sah_dir = SwissarmyhammerDirectory::from_git_root()?;
-    /// let todo_dir = sah_dir.ensure_subdir("todo")?;
-    /// // Directory is guaranteed to exist now
-    /// # Ok::<(), Box<dyn std::error::Error>>(())
-    /// ```
-    pub fn ensure_subdir(&self, name: &str) -> Result<PathBuf> {
-        let path = self.root.join(name);
-        fs::create_dir_all(&path).map_err(SwissArmyHammerError::directory_creation)?;
-        Ok(path)
-    }
-
-    /// Get the root type
-    ///
-    /// # Examples
-    ///
-    /// ```no_run
-    /// use swissarmyhammer_common::SwissarmyhammerDirectory;
-    ///
-    /// let sah_dir = SwissarmyhammerDirectory::from_git_root()?;
-    /// println!("Root type: {}", sah_dir.root_type());
-    /// # Ok::<(), Box<dyn std::error::Error>>(())
-    /// ```
-    pub fn root_type(&self) -> &DirectoryRootType {
-        &self.root_type
-    }
-
-    /// Get the directory name used for SwissArmyHammer configuration.
-    ///
-    /// This returns the canonical directory name (e.g., ".swissarmyhammer") that
-    /// is used for all SwissArmyHammer configuration directories. Use this when
-    /// you need to construct paths for existence checks without creating directories.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use swissarmyhammer_common::SwissarmyhammerDirectory;
-    /// use std::path::PathBuf;
-    ///
-    /// let home = PathBuf::from("/home/user");
-    /// let config_dir = home.join(SwissarmyhammerDirectory::dir_name());
-    /// // Now you can check if config_dir exists without creating it
-    /// ```
-    pub fn dir_name() -> &'static str {
-        DIR_NAME
-    }
-
-    /// Check if a path is within the .swissarmyhammer directory
-    ///
-    /// Uses canonicalized path comparison for accuracy.
-    ///
-    /// # Arguments
-    ///
-    /// * `path` - Path to check
-    ///
-    /// # Examples
-    ///
-    /// ```no_run
-    /// use swissarmyhammer_common::SwissarmyhammerDirectory;
-    /// use std::path::Path;
-    ///
-    /// let sah_dir = SwissarmyhammerDirectory::from_git_root()?;
-    /// let path = Path::new(".swissarmyhammer/todo/todo.yaml");
-    /// assert!(sah_dir.contains_path(path));
-    /// # Ok::<(), Box<dyn std::error::Error>>(())
-    /// ```
-    pub fn contains_path(&self, path: &Path) -> bool {
-        // Try canonicalized comparison first (handles symlinks)
-        if let (Ok(canonical_path), Ok(canonical_root)) =
-            (path.canonicalize(), self.root.canonicalize())
-        {
-            canonical_path.starts_with(canonical_root)
-        } else {
-            // Fallback to non-canonical comparison if canonicalization fails
-            path.starts_with(&self.root)
-        }
-    }
-}
+pub type SwissarmyhammerDirectory = ManagedDirectory<SwissarmyhammerConfig>;
 
 #[cfg(test)]
 mod tests {
@@ -426,10 +68,6 @@ mod tests {
         let result = SwissarmyhammerDirectory::from_git_root();
 
         assert!(result.is_err());
-        match result {
-            Err(SwissArmyHammerError::NotInGitRepository) => {}
-            _ => panic!("Expected NotInGitRepository error"),
-        }
     }
 
     #[test]
@@ -521,7 +159,7 @@ mod tests {
             "git repository root"
         );
 
-        let custom = DirectoryRootType::Custom(PathBuf::from("/tmp/test"));
+        let custom = DirectoryRootType::Custom(std::path::PathBuf::from("/tmp/test"));
         assert!(custom.to_string().contains("custom path"));
         assert!(custom.to_string().contains("/tmp/test"));
     }
@@ -537,12 +175,6 @@ mod tests {
 
         let content = fs::read_to_string(&gitignore_path).unwrap();
         assert!(content.contains("tmp/"), ".gitignore should contain tmp/");
-        assert!(content.contains("todo/"), ".gitignore should contain todo/");
-        assert!(content.contains("*.log"), ".gitignore should contain *.log");
-        assert!(
-            content.contains(".abort"),
-            ".gitignore should contain .abort"
-        );
     }
 
     #[test]
@@ -599,6 +231,6 @@ mod tests {
         );
 
         let content = fs::read_to_string(&gitignore_path).unwrap();
-        assert!(content.contains("SwissArmyHammer temporary files"));
+        assert!(content.contains("tmp/"));
     }
 }

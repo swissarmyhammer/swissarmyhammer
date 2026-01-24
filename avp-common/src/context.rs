@@ -2,28 +2,23 @@
 //!
 //! The `.avp` directory is created at the git repository root and contains:
 //! - `avp.log` - Append-only log of hook events
+//! - `validators/` - Project-specific validators
 //! - `.gitignore` - Excludes log files from version control
+//!
+//! User-level validators can be placed in `~/.avp/validators/`.
 
-use std::fs::{self, File, OpenOptions};
+use std::fs::{File, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use chrono::Utc;
-use swissarmyhammer_common::utils::directory_utils::find_git_repository_root;
+use swissarmyhammer_directory::{AvpConfig, ManagedDirectory};
 
 use crate::error::AvpError;
 
-/// Directory name for AVP state and logs.
-const AVP_DIR_NAME: &str = ".avp";
-
 /// Log file name within .avp directory.
 const LOG_FILE_NAME: &str = "avp.log";
-
-/// Content for .gitignore file in .avp directory.
-const GITIGNORE_CONTENT: &str = r#"# AVP logs and state
-*.log
-"#;
 
 /// Decision outcome for a hook.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -60,11 +55,19 @@ pub struct HookEvent<'a> {
 /// AVP Context - manages .avp directory and logging.
 ///
 /// All .avp directory logic is centralized here. The directory is created
-/// at the git repository root (found via swissarmyhammer-common).
+/// at the git repository root using the shared `swissarmyhammer-directory` crate.
+///
+/// The context tracks both project-level and user-level directories:
+/// - Project: `./.avp/` at git root
+/// - User: `~/.avp/` in home directory
 #[derive(Debug)]
 pub struct AvpContext {
-    /// Path to the .avp directory.
-    avp_dir: PathBuf,
+    /// Managed directory at git root (.avp)
+    project_dir: ManagedDirectory<AvpConfig>,
+
+    /// Managed directory at user home (~/.avp), if available
+    home_dir: Option<ManagedDirectory<AvpConfig>>,
+
     /// Shared log file handle (None if logging failed to initialize).
     log_file: Option<Arc<Mutex<File>>>,
 }
@@ -73,40 +76,90 @@ impl AvpContext {
     /// Initialize AVP context by finding git root and creating .avp directory.
     ///
     /// This will:
-    /// 1. Find git repository root (via swissarmyhammer-common)
-    /// 2. Create .avp directory at git root if it doesn't exist
-    /// 3. Create .gitignore in .avp if it doesn't exist
-    /// 4. Open log file for appending
+    /// 1. Create .avp directory at git root (via swissarmyhammer-directory)
+    /// 2. Create .gitignore in .avp if it doesn't exist
+    /// 3. Open log file for appending
+    /// 4. Optionally connect to user ~/.avp directory
     ///
     /// Returns Err if not in a git repository.
     pub fn init() -> Result<Self, AvpError> {
-        // Use swissarmyhammer-common to find git root
-        let git_root = find_git_repository_root().ok_or_else(|| {
-            AvpError::Context("not in a git repository (no .git found)".to_string())
+        // Create project directory at git root
+        let project_dir = ManagedDirectory::<AvpConfig>::from_git_root().map_err(|e| {
+            AvpError::Context(format!("failed to create .avp directory: {}", e))
         })?;
 
-        let avp_dir = git_root.join(AVP_DIR_NAME);
-
-        // Create .avp directory if needed
-        if !avp_dir.exists() {
-            fs::create_dir_all(&avp_dir).map_err(AvpError::Io)?;
-        }
-
-        // Create .gitignore if needed (best-effort)
-        let gitignore_path = avp_dir.join(".gitignore");
-        if !gitignore_path.exists() {
-            let _ = fs::write(&gitignore_path, GITIGNORE_CONTENT);
-        }
+        // Try to create user directory (optional, may fail if no home dir)
+        let home_dir = ManagedDirectory::<AvpConfig>::from_user_home().ok();
 
         // Open log file for appending (best-effort)
-        let log_file = open_log_file(&avp_dir);
+        let log_file = open_log_file(project_dir.root());
 
-        Ok(Self { avp_dir, log_file })
+        Ok(Self {
+            project_dir,
+            home_dir,
+            log_file,
+        })
     }
 
-    /// Get the .avp directory path.
+    /// Get the project .avp directory path.
     pub fn avp_dir(&self) -> &Path {
-        &self.avp_dir
+        self.project_dir.root()
+    }
+
+    /// Get the project validators directory path (./.avp/validators).
+    ///
+    /// Returns the path even if it doesn't exist yet.
+    pub fn project_validators_dir(&self) -> PathBuf {
+        self.project_dir.subdir("validators")
+    }
+
+    /// Get the user validators directory path (~/.avp/validators).
+    ///
+    /// Returns None if user directory is not available.
+    pub fn home_validators_dir(&self) -> Option<PathBuf> {
+        self.home_dir.as_ref().map(|d| d.subdir("validators"))
+    }
+
+    /// Ensure the project validators directory exists.
+    ///
+    /// Creates the directory if it doesn't exist.
+    pub fn ensure_project_validators_dir(&self) -> Result<PathBuf, AvpError> {
+        self.project_dir
+            .ensure_subdir("validators")
+            .map_err(|e| AvpError::Context(format!("failed to create validators directory: {}", e)))
+    }
+
+    /// Ensure the user validators directory exists.
+    ///
+    /// Creates the directory if it doesn't exist.
+    /// Returns None if user directory is not available.
+    pub fn ensure_home_validators_dir(&self) -> Option<Result<PathBuf, AvpError>> {
+        self.home_dir.as_ref().map(|d| {
+            d.ensure_subdir("validators")
+                .map_err(|e| AvpError::Context(format!("failed to create user validators directory: {}", e)))
+        })
+    }
+
+    /// Get all validator directories that exist.
+    ///
+    /// Returns directories in precedence order (user first, then project).
+    pub fn existing_validator_dirs(&self) -> Vec<PathBuf> {
+        let mut dirs = Vec::new();
+
+        // User directory (lower precedence)
+        if let Some(home_dir) = self.home_validators_dir() {
+            if home_dir.exists() {
+                dirs.push(home_dir);
+            }
+        }
+
+        // Project directory (higher precedence)
+        let project_dir = self.project_validators_dir();
+        if project_dir.exists() {
+            dirs.push(project_dir);
+        }
+
+        dirs
     }
 
     /// Log a hook event.
@@ -150,11 +203,71 @@ fn open_log_file(avp_dir: &Path) -> Option<Arc<Mutex<File>>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
+    use tempfile::TempDir;
 
     #[test]
     fn test_decision_display() {
         assert_eq!(format!("{}", Decision::Allow), "allow");
         assert_eq!(format!("{}", Decision::Block), "block");
         assert_eq!(format!("{}", Decision::Error), "error");
+    }
+
+    #[test]
+    #[serial_test::serial(cwd)]
+    fn test_context_with_git_root() {
+        let temp = TempDir::new().unwrap();
+        fs::create_dir_all(temp.path().join(".git")).unwrap();
+
+        // Change to temp directory
+        let original_dir = std::env::current_dir().unwrap();
+        std::env::set_current_dir(temp.path()).unwrap();
+
+        let result = AvpContext::init();
+
+        // Restore original directory
+        std::env::set_current_dir(&original_dir).unwrap();
+
+        assert!(result.is_ok());
+        let ctx = result.unwrap();
+        assert!(ctx.avp_dir().exists());
+    }
+
+    #[test]
+    #[serial_test::serial(cwd)]
+    fn test_context_validators_dir() {
+        let temp = TempDir::new().unwrap();
+        fs::create_dir_all(temp.path().join(".git")).unwrap();
+
+        let original_dir = std::env::current_dir().unwrap();
+        std::env::set_current_dir(temp.path()).unwrap();
+
+        let ctx = AvpContext::init().unwrap();
+
+        // Validators dir path should be returned even if it doesn't exist
+        let validators_path = ctx.project_validators_dir();
+        assert!(validators_path.ends_with("validators"));
+
+        // Ensure creates it
+        let ensured_path = ctx.ensure_project_validators_dir().unwrap();
+        assert!(ensured_path.exists());
+
+        std::env::set_current_dir(&original_dir).unwrap();
+    }
+
+    #[test]
+    #[serial_test::serial(cwd)]
+    fn test_context_not_in_git_repo() {
+        let temp = TempDir::new().unwrap();
+        // No .git directory
+
+        let original_dir = std::env::current_dir().unwrap();
+        std::env::set_current_dir(temp.path()).unwrap();
+
+        let result = AvpContext::init();
+
+        std::env::set_current_dir(&original_dir).unwrap();
+
+        assert!(result.is_err());
     }
 }

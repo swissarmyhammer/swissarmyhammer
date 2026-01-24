@@ -25,7 +25,7 @@ impl PromptResolver {
     /// Get all directories that prompts are loaded from
     /// Returns paths in the same order as loading precedence
     pub fn get_prompt_directories(&self) -> Result<Vec<std::path::PathBuf>> {
-        self.vfs.get_directories()
+        Ok(self.vfs.get_directories()?)
     }
 
     /// Load all prompts following the correct precedence:

@@ -32,6 +32,15 @@ pub enum AvpError {
     /// Context initialization or operation error.
     #[error("Context error: {0}")]
     Context(String),
+
+    /// Validator parsing or loading error.
+    #[error("Validator '{validator}' error: {message}")]
+    Validator {
+        /// The validator name or path.
+        validator: String,
+        /// The error message.
+        message: String,
+    },
 }
 
 /// Validation errors for hook inputs.

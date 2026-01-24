@@ -1,0 +1,389 @@
+//! Validator loader with directory stacking precedence.
+//!
+//! Loads validators from multiple directories with precedence:
+//! 1. Builtin validators (embedded in the binary) - lowest precedence
+//! 2. User validators (~/.avp/validators)
+//! 3. Project validators (./.avp/validators) - highest precedence
+//!
+//! Later sources override earlier ones with the same name.
+
+use std::collections::HashMap;
+use std::path::Path;
+
+use swissarmyhammer_directory::{AvpConfig, FileSource, ManagedDirectory, VirtualFileSystem};
+
+use crate::error::AvpError;
+
+use super::parser::parse_validator;
+use super::types::{MatchContext, Validator, ValidatorSource};
+
+/// Loader for validators with directory stacking precedence.
+///
+/// The loader manages validators from multiple sources and provides
+/// methods to find validators matching specific criteria.
+#[derive(Debug)]
+pub struct ValidatorLoader {
+    /// Map of validator names to validators.
+    validators: HashMap<String, Validator>,
+}
+
+impl Default for ValidatorLoader {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl ValidatorLoader {
+    /// Create a new empty validator loader.
+    pub fn new() -> Self {
+        Self {
+            validators: HashMap::new(),
+        }
+    }
+
+    /// Load all validators with proper precedence.
+    ///
+    /// This loads validators from:
+    /// 1. Builtin validators (call `load_builtins()` first if needed)
+    /// 2. User validators from ~/.avp/validators
+    /// 3. Project validators from ./.avp/validators
+    ///
+    /// Later sources override earlier ones with the same name.
+    pub fn load_all(&mut self) -> Result<(), AvpError> {
+        // Use VirtualFileSystem with AvpConfig for directory stacking
+        let mut vfs = VirtualFileSystem::<AvpConfig>::new("validators");
+
+        // Load from all directories following precedence
+        if let Err(e) = vfs.load_all() {
+            tracing::warn!("Failed to load validators from some directories: {}", e);
+        }
+
+        // Parse each loaded file as a validator
+        for file_entry in vfs.list() {
+            let source = match file_entry.source {
+                FileSource::Builtin | FileSource::Dynamic => ValidatorSource::Builtin,
+                FileSource::User => ValidatorSource::User,
+                FileSource::Local => ValidatorSource::Project,
+            };
+
+            match parse_validator(&file_entry.content, file_entry.path.clone(), source) {
+                Ok(validator) => {
+                    tracing::debug!(
+                        "Loaded validator '{}' from {} ({})",
+                        validator.name(),
+                        validator.source,
+                        file_entry.path.display()
+                    );
+                    self.validators.insert(validator.name().to_string(), validator);
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        "Failed to parse validator at {}: {}",
+                        file_entry.path.display(),
+                        e
+                    );
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Load validators from a specific directory.
+    pub fn load_directory(&mut self, path: &Path, source: ValidatorSource) -> Result<(), AvpError> {
+        if !path.exists() {
+            return Ok(());
+        }
+
+        // Walk the directory looking for .md files
+        for entry in walkdir::WalkDir::new(path)
+            .into_iter()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_type().is_file())
+        {
+            let file_path = entry.path();
+
+            // Only process .md files
+            if file_path.extension().and_then(|s| s.to_str()) != Some("md") {
+                continue;
+            }
+
+            match std::fs::read_to_string(file_path) {
+                Ok(content) => {
+                    match parse_validator(&content, file_path.to_path_buf(), source.clone()) {
+                        Ok(validator) => {
+                            tracing::debug!(
+                                "Loaded validator '{}' from {} ({})",
+                                validator.name(),
+                                validator.source,
+                                file_path.display()
+                            );
+                            self.validators.insert(validator.name().to_string(), validator);
+                        }
+                        Err(e) => {
+                            tracing::warn!(
+                                "Failed to parse validator at {}: {}",
+                                file_path.display(),
+                                e
+                            );
+                        }
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!("Failed to read validator file {}: {}", file_path.display(), e);
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Add a builtin validator from embedded content.
+    pub fn add_builtin(&mut self, name: &str, content: &str) {
+        use std::path::PathBuf;
+
+        match parse_validator(
+            content,
+            PathBuf::from(format!("builtin:/{}.md", name)),
+            ValidatorSource::Builtin,
+        ) {
+            Ok(validator) => {
+                self.validators.insert(validator.name().to_string(), validator);
+            }
+            Err(e) => {
+                tracing::error!("Failed to parse builtin validator '{}': {}", name, e);
+            }
+        }
+    }
+
+    /// Get a validator by name.
+    pub fn get(&self, name: &str) -> Option<&Validator> {
+        self.validators.get(name)
+    }
+
+    /// List all loaded validators.
+    pub fn list(&self) -> Vec<&Validator> {
+        self.validators.values().collect()
+    }
+
+    /// Get the number of loaded validators.
+    pub fn len(&self) -> usize {
+        self.validators.len()
+    }
+
+    /// Check if there are no loaded validators.
+    pub fn is_empty(&self) -> bool {
+        self.validators.is_empty()
+    }
+
+    /// Find validators matching a hook event context.
+    ///
+    /// Returns all validators that match the given context criteria.
+    pub fn matching(&self, ctx: &MatchContext) -> Vec<&Validator> {
+        self.validators.values().filter(|v| v.matches(ctx)).collect()
+    }
+
+    /// Get all directories that would be searched for validators.
+    pub fn get_directories() -> Vec<std::path::PathBuf> {
+        let mut dirs = Vec::new();
+
+        // User directory
+        if let Ok(dir) = ManagedDirectory::<AvpConfig>::from_user_home() {
+            let validators_dir = dir.subdir("validators");
+            if validators_dir.exists() {
+                dirs.push(validators_dir);
+            }
+        }
+
+        // Project directory
+        if let Ok(dir) = ManagedDirectory::<AvpConfig>::from_git_root() {
+            let validators_dir = dir.subdir("validators");
+            if validators_dir.exists() {
+                dirs.push(validators_dir);
+            }
+        }
+
+        dirs
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::types::HookType;
+    use std::fs;
+    use tempfile::TempDir;
+
+    #[test]
+    fn test_loader_new() {
+        let loader = ValidatorLoader::new();
+        assert!(loader.is_empty());
+        assert_eq!(loader.len(), 0);
+    }
+
+    #[test]
+    fn test_loader_add_builtin() {
+        let mut loader = ValidatorLoader::new();
+
+        let content = r#"---
+name: test-builtin
+description: A test builtin validator
+severity: error
+trigger: PreToolUse
+---
+
+Check for issues.
+"#;
+
+        loader.add_builtin("test-builtin", content);
+
+        assert_eq!(loader.len(), 1);
+        let validator = loader.get("test-builtin").unwrap();
+        assert_eq!(validator.source, ValidatorSource::Builtin);
+    }
+
+    #[test]
+    fn test_loader_load_directory() {
+        let temp = TempDir::new().unwrap();
+        let validators_dir = temp.path().join("validators");
+        fs::create_dir_all(&validators_dir).unwrap();
+
+        // Create a test validator file
+        let validator_content = r#"---
+name: test-file-validator
+description: Test validator from file
+severity: warn
+trigger: PostToolUse
+---
+
+Validation instructions.
+"#;
+
+        fs::write(validators_dir.join("test.md"), validator_content).unwrap();
+
+        let mut loader = ValidatorLoader::new();
+        loader
+            .load_directory(&validators_dir, ValidatorSource::Project)
+            .unwrap();
+
+        assert_eq!(loader.len(), 1);
+        let validator = loader.get("test-file-validator").unwrap();
+        assert_eq!(validator.source, ValidatorSource::Project);
+    }
+
+    #[test]
+    fn test_loader_matching() {
+        let mut loader = ValidatorLoader::new();
+
+        // Add validators for different hooks
+        loader.add_builtin(
+            "pre-tool",
+            r#"---
+name: pre-tool
+description: Pre-tool validator
+severity: error
+trigger: PreToolUse
+---
+Check before tool.
+"#,
+        );
+
+        loader.add_builtin(
+            "post-tool",
+            r#"---
+name: post-tool
+description: Post-tool validator
+severity: warn
+trigger: PostToolUse
+---
+Check after tool.
+"#,
+        );
+
+        loader.add_builtin(
+            "write-only",
+            r#"---
+name: write-only
+description: Only for Write tool
+severity: error
+trigger: PreToolUse
+match:
+  tools: [Write]
+---
+Check Write tool.
+"#,
+        );
+
+        // Test matching by hook type
+        let ctx = MatchContext::new(HookType::PreToolUse);
+        let pre_validators = loader.matching(&ctx);
+        assert_eq!(pre_validators.len(), 1); // pre-tool, but not write-only (needs tool)
+
+        let ctx = MatchContext::new(HookType::PostToolUse);
+        let post_validators = loader.matching(&ctx);
+        assert_eq!(post_validators.len(), 1);
+
+        // Test matching by tool
+        let ctx = MatchContext::new(HookType::PreToolUse).with_tool("Write");
+        let write_validators = loader.matching(&ctx);
+        assert_eq!(write_validators.len(), 2); // pre-tool and write-only
+
+        let ctx = MatchContext::new(HookType::PreToolUse).with_tool("Bash");
+        let bash_validators = loader.matching(&ctx);
+        assert_eq!(bash_validators.len(), 1); // only pre-tool
+    }
+
+    #[test]
+    fn test_loader_precedence() {
+        let mut loader = ValidatorLoader::new();
+
+        // Add builtin
+        loader.add_builtin(
+            "override-test",
+            r#"---
+name: override-test
+description: Builtin version
+severity: info
+trigger: PreToolUse
+---
+Builtin body.
+"#,
+        );
+
+        assert_eq!(
+            loader.get("override-test").unwrap().description(),
+            "Builtin version"
+        );
+
+        // Create temp directory for user validators
+        let temp = TempDir::new().unwrap();
+        let validators_dir = temp.path();
+
+        fs::write(
+            validators_dir.join("override-test.md"),
+            r#"---
+name: override-test
+description: User version
+severity: error
+trigger: PreToolUse
+---
+User body.
+"#,
+        )
+        .unwrap();
+
+        // Load user validators (should override builtin)
+        loader
+            .load_directory(validators_dir, ValidatorSource::User)
+            .unwrap();
+
+        assert_eq!(
+            loader.get("override-test").unwrap().description(),
+            "User version"
+        );
+        assert_eq!(
+            loader.get("override-test").unwrap().source,
+            ValidatorSource::User
+        );
+    }
+}

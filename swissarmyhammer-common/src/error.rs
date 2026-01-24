@@ -143,6 +143,10 @@ pub enum SwissArmyHammerError {
     #[error("IO error: {0}")]
     Io(#[from] io::Error),
 
+    /// Directory operation failed
+    #[error("Directory error: {0}")]
+    Directory(#[from] swissarmyhammer_directory::DirectoryError),
+
     /// Serialization/deserialization error
     #[error("Serialization error: {0}")]
     Serialization(#[from] serde_yaml::Error),
@@ -372,6 +376,7 @@ impl Severity for SwissArmyHammerError {
 
             // Error: Operation failed but system can continue
             SwissArmyHammerError::Io(_) => ErrorSeverity::Error,
+            SwissArmyHammerError::Directory(_) => ErrorSeverity::Error,
             SwissArmyHammerError::Serialization(_) => ErrorSeverity::Error,
             SwissArmyHammerError::Json(_) => ErrorSeverity::Error,
             SwissArmyHammerError::FileNotFound { .. } => ErrorSeverity::Error,

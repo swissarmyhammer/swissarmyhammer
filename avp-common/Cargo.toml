@@ -9,6 +9,7 @@ description = "Agent Validator Protocol - Core library for hook processing"
 # Serialization
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+serde_yaml = { workspace = true }
 
 # Error handling
 thiserror = "1"
@@ -16,8 +17,20 @@ thiserror = "1"
 # Time
 chrono = { workspace = true }
 
-# Git root finding
+# Pattern matching
+glob = { workspace = true }
+regex = { workspace = true }
+
+# Logging
+tracing = { workspace = true }
+
+# File system traversal
+walkdir = { workspace = true }
+
+# Git root finding and directory management
 swissarmyhammer-common = { path = "../swissarmyhammer-common" }
+swissarmyhammer-directory = { path = "../swissarmyhammer-directory" }
 
 [dev-dependencies]
 tempfile = "3"
+serial_test = { workspace = true }

@@ -36,6 +36,9 @@ dirs.workspace = true
 glob.workspace = true
 ignore.workspace = true
 
+# Directory management (shared with AVP)
+swissarmyhammer-directory = { path = "../swissarmyhammer-directory" }
+
 [dev-dependencies]
 tempfile.workspace = true
 serial_test = "3.0"

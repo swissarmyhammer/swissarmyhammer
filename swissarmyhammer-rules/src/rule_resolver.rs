@@ -25,7 +25,7 @@ impl RuleResolver {
     /// Get all directories that rules are loaded from
     /// Returns paths in the same order as loading precedence
     pub fn get_rule_directories(&self) -> Result<Vec<std::path::PathBuf>> {
-        self.vfs.get_directories()
+        Ok(self.vfs.get_directories()?)
     }
 
     /// Load all rules following the correct precedence:

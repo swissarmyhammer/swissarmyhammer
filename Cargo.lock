@@ -541,11 +541,18 @@ name = "avp-common"
 version = "0.3.0"
 dependencies = [
  "chrono",
+ "glob",
+ "regex",
  "serde",
  "serde_json",
+ "serde_yaml",
+ "serial_test",
  "swissarmyhammer-common",
+ "swissarmyhammer-directory",
  "tempfile",
  "thiserror 1.0.69",
+ "tracing",
+ "walkdir",
 ]
 
 [[package]]
@@ -6276,6 +6283,7 @@ dependencies = [
  "serde_json",
  "serde_yaml",
  "serial_test",
+ "swissarmyhammer-directory",
  "tempfile",
  "thiserror 1.0.69",
  "tokio",
@@ -6300,6 +6308,18 @@ dependencies = [
  "swissarmyhammer-common",
  "swissarmyhammer-project-detection",
  "swissarmyhammer-prompts",
+ "tempfile",
+ "thiserror 1.0.69",
+ "tracing",
+ "walkdir",
+]
+
+[[package]]
+name = "swissarmyhammer-directory"
+version = "0.3.0"
+dependencies = [
+ "dirs 5.0.1",
+ "serde",
  "tempfile",
  "thiserror 1.0.69",
  "tracing",

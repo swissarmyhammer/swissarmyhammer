@@ -1,5 +1,6 @@
 //! Claude Code hook strategy implementation.
 
+use crate::builtin::load_builtins;
 use crate::chain::{Chain, HookInputType};
 use crate::error::AvpError;
 use crate::types::{
@@ -7,10 +8,11 @@ use crate::types::{
     PostToolUseInput, PreCompactInput, PreToolUseInput, SessionEndInput, SessionStartInput,
     SetupInput, StopInput, SubagentStartInput, SubagentStopInput, UserPromptSubmitInput,
 };
+use crate::validator::{ValidatorLoader, ValidatorResult};
 
 use super::traits::{AgentHookStrategy, TypedHookStrategy};
 
-/// Claude Code hook strategy.
+/// Claude Code hook strategy with validator support.
 ///
 /// This strategy handles all 13 hook types from Claude Code:
 /// - SessionStart, SessionEnd
@@ -24,19 +26,52 @@ use super::traits::{AgentHookStrategy, TypedHookStrategy};
 /// - Notification
 ///
 /// Each hook type has its own typed Input that is parsed from JSON and
-/// processed through a chain of responsibility.
-#[derive(Debug, Default)]
+/// processed through a chain of responsibility. Validators are loaded
+/// from builtin, user (~/.avp/validators), and project (./.avp/validators)
+/// directories with proper precedence.
+#[derive(Debug)]
 pub struct ClaudeCodeHookStrategy {
     /// Strategies for each hook type
     pre_tool_use: PreToolUseHandler,
     post_tool_use: PostToolUseHandler,
-    // Add more handlers as needed for custom behavior
+    /// Validator loader with all loaded validators
+    validator_loader: ValidatorLoader,
+}
+
+impl Default for ClaudeCodeHookStrategy {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl ClaudeCodeHookStrategy {
     /// Create a new Claude Code hook strategy with default handlers.
+    ///
+    /// This loads all validators:
+    /// 1. Builtin validators (embedded in the binary)
+    /// 2. User validators (~/.avp/validators)
+    /// 3. Project validators (./.avp/validators)
     pub fn new() -> Self {
-        Self::default()
+        let mut validator_loader = ValidatorLoader::new();
+
+        // Load builtins first (lowest precedence)
+        load_builtins(&mut validator_loader);
+
+        // Load user and project validators (higher precedence)
+        if let Err(e) = validator_loader.load_all() {
+            tracing::warn!("Failed to load validators from directories: {}", e);
+        }
+
+        tracing::debug!(
+            "Loaded {} validators",
+            validator_loader.len()
+        );
+
+        Self {
+            pre_tool_use: PreToolUseHandler,
+            post_tool_use: PostToolUseHandler,
+            validator_loader,
+        }
     }
 
     /// Extract the hook type from the input JSON.
@@ -50,12 +85,79 @@ impl ClaudeCodeHookStrategy {
             .map_err(|_| AvpError::UnknownHookType(hook_name.to_string()))
     }
 
+    /// Get matching validators for the current hook event.
+    pub fn matching_validators(
+        &self,
+        hook_type: HookType,
+        input: &serde_json::Value,
+    ) -> Vec<&crate::validator::Validator> {
+        let ctx = crate::validator::MatchContext::from_json(hook_type, input);
+        self.validator_loader.matching(&ctx)
+    }
+
+    /// Execute matching validators for a hook event.
+    ///
+    /// Currently, this returns placeholder results. In the future, this will
+    /// execute validators via ACP agent calls.
+    ///
+    /// Returns a list of validator results.
+    pub fn execute_validators(
+        &self,
+        hook_type: HookType,
+        input: &serde_json::Value,
+    ) -> Vec<ValidatorResult> {
+        let matching = self.matching_validators(hook_type, input);
+
+        let mut results = Vec::new();
+
+        for validator in matching {
+            tracing::debug!(
+                "Would execute validator '{}' ({}) for hook {}",
+                validator.name(),
+                validator.source,
+                hook_type
+            );
+
+            // TODO: Execute via ACP agent
+            // For now, return a placeholder pass result
+            results.push(ValidatorResult::pass(
+                validator.name(),
+                format!("Validator '{}' matched (execution pending)", validator.name()),
+            ));
+        }
+
+        results
+    }
+
     /// Process a typed input through its chain.
     fn process_typed<I: HookInputType>(
         &self,
         input: serde_json::Value,
+        hook_type: HookType,
         handler: &impl TypedHookStrategy<I>,
     ) -> Result<(HookOutput, i32), AvpError> {
+        // Execute matching validators
+        let validator_results = self.execute_validators(hook_type, &input);
+
+        // Check if any validator blocked
+        let blocked = validator_results.iter().any(|r| {
+            !r.passed() && r.severity() == Some(crate::validator::Severity::Error)
+        });
+
+        if blocked {
+            // Find the blocking result for the message
+            let blocking = validator_results
+                .iter()
+                .find(|r| !r.passed() && r.severity() == Some(crate::validator::Severity::Error))
+                .unwrap();
+
+            return Ok((
+                HookOutput::blocking_error(format!("blocked by validator: {}", blocking.message())),
+                2, // Blocking exit code
+            ));
+        }
+
+        // Continue with normal processing
         let typed_input: I = serde_json::from_value(input).map_err(AvpError::Json)?;
         handler.process(typed_input)
     }
@@ -64,11 +166,37 @@ impl ClaudeCodeHookStrategy {
     fn process_passthrough<I: HookInputType>(
         &self,
         input: serde_json::Value,
+        hook_type: HookType,
     ) -> Result<(HookOutput, i32), AvpError> {
+        // Execute matching validators
+        let validator_results = self.execute_validators(hook_type, &input);
+
+        // Check if any validator blocked
+        let blocked = validator_results.iter().any(|r| {
+            !r.passed() && r.severity() == Some(crate::validator::Severity::Error)
+        });
+
+        if blocked {
+            let blocking = validator_results
+                .iter()
+                .find(|r| !r.passed() && r.severity() == Some(crate::validator::Severity::Error))
+                .unwrap();
+
+            return Ok((
+                HookOutput::blocking_error(format!("blocked by validator: {}", blocking.message())),
+                2,
+            ));
+        }
+
         let typed_input: I = serde_json::from_value(input).map_err(AvpError::Json)?;
 
         let mut chain: Chain<I> = Chain::success();
         chain.execute(&typed_input).map_err(AvpError::Chain)
+    }
+
+    /// Get the validator loader for external access.
+    pub fn validator_loader(&self) -> &ValidatorLoader {
+        &self.validator_loader
     }
 }
 
@@ -86,23 +214,29 @@ impl AgentHookStrategy for ClaudeCodeHookStrategy {
         let hook_type = self.extract_hook_type(&input)?;
 
         match hook_type {
-            HookType::SessionStart => self.process_passthrough::<SessionStartInput>(input),
-            HookType::UserPromptSubmit => self.process_passthrough::<UserPromptSubmitInput>(input),
-            HookType::PreToolUse => self.process_typed(input, &self.pre_tool_use),
+            HookType::SessionStart => self.process_passthrough::<SessionStartInput>(input, hook_type),
+            HookType::UserPromptSubmit => {
+                self.process_passthrough::<UserPromptSubmitInput>(input, hook_type)
+            }
+            HookType::PreToolUse => self.process_typed(input, hook_type, &self.pre_tool_use),
             HookType::PermissionRequest => {
-                self.process_passthrough::<PermissionRequestInput>(input)
+                self.process_passthrough::<PermissionRequestInput>(input, hook_type)
             }
-            HookType::PostToolUse => self.process_typed(input, &self.post_tool_use),
+            HookType::PostToolUse => self.process_typed(input, hook_type, &self.post_tool_use),
             HookType::PostToolUseFailure => {
-                self.process_passthrough::<PostToolUseFailureInput>(input)
+                self.process_passthrough::<PostToolUseFailureInput>(input, hook_type)
             }
-            HookType::SubagentStart => self.process_passthrough::<SubagentStartInput>(input),
-            HookType::SubagentStop => self.process_passthrough::<SubagentStopInput>(input),
-            HookType::Stop => self.process_passthrough::<StopInput>(input),
-            HookType::PreCompact => self.process_passthrough::<PreCompactInput>(input),
-            HookType::Setup => self.process_passthrough::<SetupInput>(input),
-            HookType::SessionEnd => self.process_passthrough::<SessionEndInput>(input),
-            HookType::Notification => self.process_passthrough::<NotificationInput>(input),
+            HookType::SubagentStart => {
+                self.process_passthrough::<SubagentStartInput>(input, hook_type)
+            }
+            HookType::SubagentStop => self.process_passthrough::<SubagentStopInput>(input, hook_type),
+            HookType::Stop => self.process_passthrough::<StopInput>(input, hook_type),
+            HookType::PreCompact => self.process_passthrough::<PreCompactInput>(input, hook_type),
+            HookType::Setup => self.process_passthrough::<SetupInput>(input, hook_type),
+            HookType::SessionEnd => self.process_passthrough::<SessionEndInput>(input, hook_type),
+            HookType::Notification => {
+                self.process_passthrough::<NotificationInput>(input, hook_type)
+            }
         }
     }
 }
@@ -205,4 +339,49 @@ mod tests {
         let result = strategy.process(input);
         assert!(matches!(result, Err(AvpError::UnknownHookType(_))));
     }
+
+    #[test]
+    fn test_validators_loaded() {
+        let strategy = ClaudeCodeHookStrategy::new();
+
+        // Should have at least the builtin validators
+        assert!(strategy.validator_loader().len() >= 2);
+        assert!(strategy.validator_loader().get("no-secrets").is_some());
+        assert!(strategy.validator_loader().get("safe-commands").is_some());
+    }
+
+    #[test]
+    fn test_matching_validators_pre_tool_use() {
+        let strategy = ClaudeCodeHookStrategy::new();
+
+        let input = serde_json::json!({
+            "hook_event_name": "PreToolUse",
+            "tool_name": "Bash",
+            "tool_input": {"command": "ls"}
+        });
+
+        let matching = strategy.matching_validators(HookType::PreToolUse, &input);
+
+        // safe-commands should match PreToolUse + Bash
+        let names: Vec<_> = matching.iter().map(|v| v.name()).collect();
+        assert!(names.contains(&"safe-commands"));
+    }
+
+    #[test]
+    fn test_matching_validators_post_tool_use() {
+        let strategy = ClaudeCodeHookStrategy::new();
+
+        let input = serde_json::json!({
+            "hook_event_name": "PostToolUse",
+            "tool_name": "Write",
+            "tool_input": {"file_path": "test.ts"}
+        });
+
+        let matching = strategy.matching_validators(HookType::PostToolUse, &input);
+
+        // no-secrets should match PostToolUse + Write + *.ts
+        let names: Vec<_> = matching.iter().map(|v| v.name()).collect();
+        assert!(names.contains(&"no-secrets"));
+    }
+
 }

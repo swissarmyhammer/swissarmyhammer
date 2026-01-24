@@ -1,0 +1,743 @@
+//! Validator types for the Agent Validator Protocol.
+//!
+//! Validators are markdown files with YAML frontmatter that specify validation
+//! rules to run against hook events.
+
+use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
+
+use crate::types::HookType;
+
+/// Severity level for validator findings.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Severity {
+    /// Informational finding, does not affect execution.
+    Info,
+    /// Warning finding, logged but does not block.
+    #[default]
+    Warn,
+    /// Error finding, blocks the action.
+    Error,
+}
+
+impl std::fmt::Display for Severity {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Severity::Info => write!(f, "info"),
+            Severity::Warn => write!(f, "warn"),
+            Severity::Error => write!(f, "error"),
+        }
+    }
+}
+
+/// Match criteria for filtering when a validator should run.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ValidatorMatch {
+    /// Tool names to match (e.g., ["Write", "Edit"]).
+    #[serde(default)]
+    pub tools: Vec<String>,
+
+    /// File glob patterns to match (e.g., ["*.ts", "src/**/*.rs"]).
+    #[serde(default)]
+    pub files: Vec<String>,
+}
+
+impl ValidatorMatch {
+    /// Check if this match criteria is empty (matches everything).
+    pub fn is_empty(&self) -> bool {
+        self.tools.is_empty() && self.files.is_empty()
+    }
+}
+
+/// Context for matching validators against hook events.
+///
+/// This encapsulates all the information needed to determine if a validator
+/// should run for a given hook event.
+#[derive(Debug, Clone)]
+pub struct MatchContext {
+    /// The hook event type.
+    pub hook_type: HookType,
+
+    /// The tool name (for tool-related hooks).
+    pub tool_name: Option<String>,
+
+    /// The file path being operated on (if applicable).
+    pub file_path: Option<String>,
+
+    /// Event context string for triggerMatcher regex matching.
+    /// This varies by hook type:
+    /// - Notification: notification_type
+    /// - SessionStart: source
+    /// - SubagentStart/Stop: subagent_type or name
+    pub event_context: Option<String>,
+}
+
+impl MatchContext {
+    /// Create a new match context with just the hook type.
+    pub fn new(hook_type: HookType) -> Self {
+        Self {
+            hook_type,
+            tool_name: None,
+            file_path: None,
+            event_context: None,
+        }
+    }
+
+    /// Set the tool name.
+    pub fn with_tool(mut self, tool_name: impl Into<String>) -> Self {
+        self.tool_name = Some(tool_name.into());
+        self
+    }
+
+    /// Set the file path.
+    pub fn with_file(mut self, file_path: impl Into<String>) -> Self {
+        self.file_path = Some(file_path.into());
+        self
+    }
+
+    /// Set the event context for triggerMatcher.
+    pub fn with_event_context(mut self, context: impl Into<String>) -> Self {
+        self.event_context = Some(context.into());
+        self
+    }
+
+    /// Create from JSON input, extracting all relevant fields.
+    pub fn from_json(hook_type: HookType, input: &serde_json::Value) -> Self {
+        let tool_name = input
+            .get("tool_name")
+            .and_then(|v| v.as_str())
+            .map(String::from);
+
+        let file_path = input
+            .get("tool_input")
+            .and_then(|ti| {
+                ti.get("file_path")
+                    .or_else(|| ti.get("path"))
+                    .or_else(|| ti.get("file"))
+            })
+            .and_then(|v| v.as_str())
+            .map(String::from);
+
+        let event_context = input
+            .get("notification_type")
+            .or_else(|| input.get("source"))
+            .or_else(|| input.get("subagent_type"))
+            .or_else(|| input.get("name"))
+            .or_else(|| input.get("hook_event_name"))
+            .and_then(|v| v.as_str())
+            .map(String::from);
+
+        Self {
+            hook_type,
+            tool_name,
+            file_path,
+            event_context,
+        }
+    }
+}
+
+/// Default timeout in seconds for validator execution.
+fn default_timeout() -> u32 {
+    30
+}
+
+/// YAML frontmatter for a validator file.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ValidatorFrontmatter {
+    /// Unique name for the validator.
+    pub name: String,
+
+    /// Human-readable description.
+    pub description: String,
+
+    /// Severity level for findings.
+    #[serde(default)]
+    pub severity: Severity,
+
+    /// Hook event type that triggers this validator.
+    pub trigger: HookType,
+
+    /// Optional match criteria for filtering.
+    #[serde(default, rename = "match")]
+    pub match_criteria: Option<ValidatorMatch>,
+
+    /// Optional regex pattern for matching lifecycle events.
+    #[serde(default, rename = "triggerMatcher")]
+    pub trigger_matcher: Option<String>,
+
+    /// Optional tags for filtering and organization.
+    #[serde(default)]
+    pub tags: Vec<String>,
+
+    /// Run only once per session (default: false).
+    #[serde(default)]
+    pub once: bool,
+
+    /// Timeout in seconds (default: 30).
+    #[serde(default = "default_timeout")]
+    pub timeout: u32,
+}
+
+/// Source of a validator (builtin, user, or project).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub enum ValidatorSource {
+    /// Builtin validators embedded in the binary.
+    Builtin,
+    /// User validators from ~/.avp/validators.
+    User,
+    /// Project validators from ./.avp/validators.
+    Project,
+}
+
+impl std::fmt::Display for ValidatorSource {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ValidatorSource::Builtin => write!(f, "builtin"),
+            ValidatorSource::User => write!(f, "user"),
+            ValidatorSource::Project => write!(f, "project"),
+        }
+    }
+}
+
+/// A loaded validator with its metadata and instructions.
+#[derive(Debug, Clone)]
+pub struct Validator {
+    /// Parsed frontmatter with validator configuration.
+    pub frontmatter: ValidatorFrontmatter,
+
+    /// Markdown body containing validation instructions.
+    pub body: String,
+
+    /// Where this validator came from.
+    pub source: ValidatorSource,
+
+    /// Path to the validator file.
+    pub path: PathBuf,
+}
+
+impl Validator {
+    /// Get the validator name.
+    pub fn name(&self) -> &str {
+        &self.frontmatter.name
+    }
+
+    /// Get the validator description.
+    pub fn description(&self) -> &str {
+        &self.frontmatter.description
+    }
+
+    /// Get the severity level.
+    pub fn severity(&self) -> Severity {
+        self.frontmatter.severity
+    }
+
+    /// Get the trigger hook type.
+    pub fn trigger(&self) -> HookType {
+        self.frontmatter.trigger
+    }
+
+    /// Check if this validator matches the given context.
+    ///
+    /// A validator matches if:
+    /// 1. The hook type matches the trigger
+    /// 2. If tools are specified in match criteria, the tool name matches
+    /// 3. If files are specified in match criteria, the file path matches a glob
+    /// 4. If triggerMatcher is specified, the event context matches the regex
+    pub fn matches(&self, ctx: &MatchContext) -> bool {
+        // Must match hook type
+        if self.frontmatter.trigger != ctx.hook_type {
+            return false;
+        }
+
+        // Check triggerMatcher regex if present (case-insensitive)
+        if let Some(trigger_matcher) = &self.frontmatter.trigger_matcher {
+            match &ctx.event_context {
+                Some(context) => {
+                    match regex::RegexBuilder::new(trigger_matcher)
+                        .case_insensitive(true)
+                        .build()
+                    {
+                        Ok(re) => {
+                            if !re.is_match(context) {
+                                return false;
+                            }
+                        }
+                        Err(e) => {
+                            tracing::warn!(
+                                "Invalid triggerMatcher regex '{}' in validator '{}': {}",
+                                trigger_matcher,
+                                self.frontmatter.name,
+                                e
+                            );
+                            return false;
+                        }
+                    }
+                }
+                None => return false, // triggerMatcher requires context
+            }
+        }
+
+        // Check match criteria if present
+        if let Some(match_criteria) = &self.frontmatter.match_criteria {
+            // If tools are specified, tool_name must match one (case-insensitive regex)
+            if !match_criteria.tools.is_empty() {
+                match &ctx.tool_name {
+                    Some(name) => {
+                        let matches_any = match_criteria.tools.iter().any(|pattern| {
+                            // Anchor the pattern to match the full tool name
+                            let anchored = format!("^(?:{})$", pattern);
+                            regex::RegexBuilder::new(&anchored)
+                                .case_insensitive(true)
+                                .build()
+                                .map(|re| re.is_match(name))
+                                .unwrap_or_else(|_| {
+                                    // Fall back to case-insensitive string equality if regex fails
+                                    pattern.to_lowercase() == name.to_lowercase()
+                                })
+                        });
+                        if !matches_any {
+                            return false;
+                        }
+                    }
+                    None => return false,
+                }
+            }
+
+            // If files are specified, file_path must match a glob (case-insensitive)
+            if !match_criteria.files.is_empty() {
+                match &ctx.file_path {
+                    Some(path) => {
+                        let match_options = glob::MatchOptions {
+                            case_sensitive: false,
+                            ..Default::default()
+                        };
+                        if !match_criteria.files.iter().any(|pattern| {
+                            glob::Pattern::new(pattern)
+                                .map(|p| p.matches_with(path, match_options))
+                                .unwrap_or(false)
+                        }) {
+                            return false;
+                        }
+                    }
+                    None => return false,
+                }
+            }
+        }
+
+        true
+    }
+}
+
+/// Result of running a validator.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "status")]
+pub enum ValidatorResult {
+    /// Validation passed.
+    #[serde(rename = "passed")]
+    Passed {
+        validator_name: String,
+        message: String,
+    },
+    /// Validation failed with a severity level.
+    #[serde(rename = "failed")]
+    Failed {
+        validator_name: String,
+        severity: Severity,
+        message: String,
+    },
+}
+
+impl ValidatorResult {
+    /// Create a passing result.
+    pub fn pass(validator_name: impl Into<String>, message: impl Into<String>) -> Self {
+        Self::Passed {
+            validator_name: validator_name.into(),
+            message: message.into(),
+        }
+    }
+
+    /// Create a failing result.
+    pub fn fail(
+        validator_name: impl Into<String>,
+        severity: Severity,
+        message: impl Into<String>,
+    ) -> Self {
+        Self::Failed {
+            validator_name: validator_name.into(),
+            severity,
+            message: message.into(),
+        }
+    }
+
+    /// Check if the validation passed.
+    pub fn passed(&self) -> bool {
+        matches!(self, Self::Passed { .. })
+    }
+
+    /// Get the validator name.
+    pub fn validator_name(&self) -> &str {
+        match self {
+            Self::Passed { validator_name, .. } => validator_name,
+            Self::Failed { validator_name, .. } => validator_name,
+        }
+    }
+
+    /// Get the message.
+    pub fn message(&self) -> &str {
+        match self {
+            Self::Passed { message, .. } => message,
+            Self::Failed { message, .. } => message,
+        }
+    }
+
+    /// Get the severity (None for passed results).
+    pub fn severity(&self) -> Option<Severity> {
+        match self {
+            Self::Passed { .. } => None,
+            Self::Failed { severity, .. } => Some(*severity),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_severity_display() {
+        assert_eq!(Severity::Info.to_string(), "info");
+        assert_eq!(Severity::Warn.to_string(), "warn");
+        assert_eq!(Severity::Error.to_string(), "error");
+    }
+
+    #[test]
+    fn test_severity_default() {
+        assert_eq!(Severity::default(), Severity::Warn);
+    }
+
+    #[test]
+    fn test_validator_source_display() {
+        assert_eq!(ValidatorSource::Builtin.to_string(), "builtin");
+        assert_eq!(ValidatorSource::User.to_string(), "user");
+        assert_eq!(ValidatorSource::Project.to_string(), "project");
+    }
+
+    #[test]
+    fn test_validator_match_is_empty() {
+        let empty = ValidatorMatch::default();
+        assert!(empty.is_empty());
+
+        let with_tools = ValidatorMatch {
+            tools: vec!["Write".to_string()],
+            files: vec![],
+        };
+        assert!(!with_tools.is_empty());
+    }
+
+    #[test]
+    fn test_validator_matches_hook_type() {
+        let validator = Validator {
+            frontmatter: ValidatorFrontmatter {
+                name: "test".to_string(),
+                description: "Test validator".to_string(),
+                severity: Severity::Error,
+                trigger: HookType::PreToolUse,
+                match_criteria: None,
+                trigger_matcher: None,
+                                tags: vec![],
+                once: false,
+                timeout: 30,
+            },
+            body: String::new(),
+            source: ValidatorSource::Builtin,
+            path: PathBuf::from("test.md"),
+        };
+
+        assert!(validator.matches(&MatchContext::new(HookType::PreToolUse)));
+        assert!(!validator.matches(&MatchContext::new(HookType::PostToolUse)));
+    }
+
+    #[test]
+    fn test_validator_matches_tool_filter() {
+        let validator = Validator {
+            frontmatter: ValidatorFrontmatter {
+                name: "test".to_string(),
+                description: "Test validator".to_string(),
+                severity: Severity::Error,
+                trigger: HookType::PreToolUse,
+                match_criteria: Some(ValidatorMatch {
+                    tools: vec!["Write".to_string(), "Edit".to_string()],
+                    files: vec![],
+                }),
+                trigger_matcher: None,
+                                tags: vec![],
+                once: false,
+                timeout: 30,
+            },
+            body: String::new(),
+            source: ValidatorSource::Builtin,
+            path: PathBuf::from("test.md"),
+        };
+
+        assert!(validator.matches(&MatchContext::new(HookType::PreToolUse).with_tool("Write")));
+        assert!(validator.matches(&MatchContext::new(HookType::PreToolUse).with_tool("Edit")));
+        // Case-insensitive matching
+        assert!(validator.matches(&MatchContext::new(HookType::PreToolUse).with_tool("write")));
+        assert!(validator.matches(&MatchContext::new(HookType::PreToolUse).with_tool("WRITE")));
+        assert!(validator.matches(&MatchContext::new(HookType::PreToolUse).with_tool("eDiT")));
+        assert!(!validator.matches(&MatchContext::new(HookType::PreToolUse).with_tool("Bash")));
+        assert!(!validator.matches(&MatchContext::new(HookType::PreToolUse)));
+    }
+
+    #[test]
+    fn test_validator_matches_tool_regex() {
+        let validator = Validator {
+            frontmatter: ValidatorFrontmatter {
+                name: "test".to_string(),
+                description: "Test validator".to_string(),
+                severity: Severity::Error,
+                trigger: HookType::PreToolUse,
+                match_criteria: Some(ValidatorMatch {
+                    tools: vec!["Write|Edit".to_string(), "Bash.*".to_string()],
+                    files: vec![],
+                }),
+                trigger_matcher: None,
+                tags: vec![],
+                once: false,
+                timeout: 30,
+            },
+            body: String::new(),
+            source: ValidatorSource::Builtin,
+            path: PathBuf::from("test.md"),
+        };
+
+        // Regex alternation
+        assert!(validator.matches(&MatchContext::new(HookType::PreToolUse).with_tool("Write")));
+        assert!(validator.matches(&MatchContext::new(HookType::PreToolUse).with_tool("Edit")));
+        // Case-insensitive regex
+        assert!(validator.matches(&MatchContext::new(HookType::PreToolUse).with_tool("WRITE")));
+        // Regex pattern with wildcard
+        assert!(validator.matches(&MatchContext::new(HookType::PreToolUse).with_tool("Bash")));
+        assert!(validator.matches(&MatchContext::new(HookType::PreToolUse).with_tool("BashCommand")));
+        assert!(validator.matches(&MatchContext::new(HookType::PreToolUse).with_tool("bash")));
+        // Non-matching
+        assert!(!validator.matches(&MatchContext::new(HookType::PreToolUse).with_tool("Read")));
+    }
+
+    #[test]
+    fn test_validator_matches_file_filter() {
+        let validator = Validator {
+            frontmatter: ValidatorFrontmatter {
+                name: "test".to_string(),
+                description: "Test validator".to_string(),
+                severity: Severity::Error,
+                trigger: HookType::PostToolUse,
+                match_criteria: Some(ValidatorMatch {
+                    tools: vec![],
+                    files: vec!["*.ts".to_string(), "src/**/*.rs".to_string()],
+                }),
+                trigger_matcher: None,
+                                tags: vec![],
+                once: false,
+                timeout: 30,
+            },
+            body: String::new(),
+            source: ValidatorSource::Builtin,
+            path: PathBuf::from("test.md"),
+        };
+
+        assert!(validator.matches(&MatchContext::new(HookType::PostToolUse).with_file("test.ts")));
+        assert!(validator.matches(&MatchContext::new(HookType::PostToolUse).with_file("src/lib/utils.rs")));
+        // Case-insensitive file matching
+        assert!(validator.matches(&MatchContext::new(HookType::PostToolUse).with_file("TEST.TS")));
+        assert!(validator.matches(&MatchContext::new(HookType::PostToolUse).with_file("Test.Ts")));
+        assert!(!validator.matches(&MatchContext::new(HookType::PostToolUse).with_file("test.js")));
+        assert!(!validator.matches(&MatchContext::new(HookType::PostToolUse)));
+    }
+
+    #[test]
+    fn test_validator_result_pass() {
+        let result = ValidatorResult::pass("test-validator", "All checks passed");
+        assert!(result.passed());
+        assert!(result.severity().is_none());
+        assert_eq!(result.validator_name(), "test-validator");
+        assert_eq!(result.message(), "All checks passed");
+    }
+
+    #[test]
+    fn test_validator_result_fail() {
+        let result = ValidatorResult::fail(
+            "test-validator",
+            Severity::Error,
+            "Secret detected: Found API key on line 42",
+        );
+        assert!(!result.passed());
+        assert_eq!(result.severity(), Some(Severity::Error));
+        assert_eq!(result.message(), "Secret detected: Found API key on line 42");
+    }
+
+    #[test]
+    fn test_validator_result_serialization() {
+        // Test that the enum serializes correctly with the "status" tag
+        let passed = ValidatorResult::pass("test", "OK");
+        let json = serde_json::to_string(&passed).unwrap();
+        assert!(json.contains(r#""status":"passed""#));
+
+        let failed = ValidatorResult::fail("test", Severity::Error, "Bad");
+        let json = serde_json::to_string(&failed).unwrap();
+        assert!(json.contains(r#""status":"failed""#));
+        assert!(json.contains(r#""severity":"error""#));
+    }
+
+    #[test]
+    fn test_validator_matches_trigger_matcher() {
+        let validator = Validator {
+            frontmatter: ValidatorFrontmatter {
+                name: "test".to_string(),
+                description: "Test validator".to_string(),
+                severity: Severity::Error,
+                trigger: HookType::Notification,
+                match_criteria: None,
+                trigger_matcher: Some("agent_.*_complete".to_string()),
+                                tags: vec![],
+                once: false,
+                timeout: 30,
+            },
+            body: String::new(),
+            source: ValidatorSource::Builtin,
+            path: PathBuf::from("test.md"),
+        };
+
+        // Should match with matching context
+        assert!(validator.matches(
+            &MatchContext::new(HookType::Notification).with_event_context("agent_task_complete")
+        ));
+
+        // Case-insensitive triggerMatcher matching
+        assert!(validator.matches(
+            &MatchContext::new(HookType::Notification).with_event_context("AGENT_TASK_COMPLETE")
+        ));
+        assert!(validator.matches(
+            &MatchContext::new(HookType::Notification).with_event_context("Agent_Task_Complete")
+        ));
+
+        // Should not match with non-matching context
+        assert!(!validator.matches(
+            &MatchContext::new(HookType::Notification).with_event_context("something_else")
+        ));
+
+        // Should not match without context when triggerMatcher is present
+        assert!(!validator.matches(&MatchContext::new(HookType::Notification)));
+    }
+
+    #[test]
+    fn test_validator_trigger_matcher_invalid_regex() {
+        let validator = Validator {
+            frontmatter: ValidatorFrontmatter {
+                name: "test".to_string(),
+                description: "Test validator".to_string(),
+                severity: Severity::Error,
+                trigger: HookType::Notification,
+                match_criteria: None,
+                trigger_matcher: Some("[invalid(regex".to_string()), // Invalid regex
+                                tags: vec![],
+                once: false,
+                timeout: 30,
+            },
+            body: String::new(),
+            source: ValidatorSource::Builtin,
+            path: PathBuf::from("test.md"),
+        };
+
+        // Should not match with invalid regex (fails gracefully)
+        assert!(!validator.matches(
+            &MatchContext::new(HookType::Notification).with_event_context("any_context")
+        ));
+    }
+
+    #[test]
+    fn test_validator_matches_combined_criteria() {
+        // Test validator with both match criteria and triggerMatcher
+        let validator = Validator {
+            frontmatter: ValidatorFrontmatter {
+                name: "test".to_string(),
+                description: "Test validator".to_string(),
+                severity: Severity::Error,
+                trigger: HookType::PreToolUse,
+                match_criteria: Some(ValidatorMatch {
+                    tools: vec!["Bash".to_string()],
+                    files: vec![],
+                }),
+                trigger_matcher: Some("deploy_.*".to_string()),
+                                tags: vec![],
+                once: false,
+                timeout: 30,
+            },
+            body: String::new(),
+            source: ValidatorSource::Builtin,
+            path: PathBuf::from("test.md"),
+        };
+
+        // Must match all criteria: hook type, tool, and triggerMatcher
+        assert!(validator.matches(
+            &MatchContext::new(HookType::PreToolUse)
+                .with_tool("Bash")
+                .with_event_context("deploy_production")
+        ));
+
+        // Fails if triggerMatcher doesn't match
+        assert!(!validator.matches(
+            &MatchContext::new(HookType::PreToolUse)
+                .with_tool("Bash")
+                .with_event_context("run_tests")
+        ));
+
+        // Fails if tool doesn't match
+        assert!(!validator.matches(
+            &MatchContext::new(HookType::PreToolUse)
+                .with_tool("Write")
+                .with_event_context("deploy_production")
+        ));
+    }
+
+    #[test]
+    fn test_match_context_from_json() {
+        // Test extraction of tool_name
+        let input = serde_json::json!({"tool_name": "Bash"});
+        let ctx = MatchContext::from_json(HookType::PreToolUse, &input);
+        assert_eq!(ctx.tool_name, Some("Bash".to_string()));
+        assert_eq!(ctx.file_path, None);
+
+        // Test extraction of file_path from tool_input
+        let input = serde_json::json!({
+            "tool_input": {"file_path": "/path/to/file.ts"}
+        });
+        let ctx = MatchContext::from_json(HookType::PostToolUse, &input);
+        assert_eq!(ctx.file_path, Some("/path/to/file.ts".to_string()));
+
+        // Test extraction of path (alternative field name)
+        let input = serde_json::json!({
+            "tool_input": {"path": "/other/path.rs"}
+        });
+        let ctx = MatchContext::from_json(HookType::PostToolUse, &input);
+        assert_eq!(ctx.file_path, Some("/other/path.rs".to_string()));
+
+        // Test extraction of event_context from notification_type
+        let input = serde_json::json!({"notification_type": "agent_complete"});
+        let ctx = MatchContext::from_json(HookType::Notification, &input);
+        assert_eq!(ctx.event_context, Some("agent_complete".to_string()));
+
+        // Test extraction of event_context from source
+        let input = serde_json::json!({"source": "startup"});
+        let ctx = MatchContext::from_json(HookType::SessionStart, &input);
+        assert_eq!(ctx.event_context, Some("startup".to_string()));
+
+        // Test empty input
+        let input = serde_json::json!({});
+        let ctx = MatchContext::from_json(HookType::PreToolUse, &input);
+        assert_eq!(ctx.tool_name, None);
+        assert_eq!(ctx.file_path, None);
+        assert_eq!(ctx.event_context, None);
+    }
+}

@@ -677,6 +677,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial(cwd)]
     fn test_workflow_resolver_user_workflows() {
         use std::fs;
         use swissarmyhammer_common::test_utils::IsolatedTestEnvironment;
@@ -733,6 +734,7 @@ stateDiagram-v2
     }
 
     #[test]
+    #[serial_test::serial(cwd)]
     fn test_workflow_resolver_local_workflows() {
         use std::fs;
         use swissarmyhammer_common::test_utils::IsolatedTestEnvironment;
@@ -800,6 +802,7 @@ stateDiagram-v2
     }
 
     #[test]
+    #[serial_test::serial(cwd)]
     fn test_workflow_resolver_precedence() {
         use std::fs;
 
