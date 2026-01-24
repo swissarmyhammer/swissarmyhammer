@@ -10,6 +10,7 @@ members = [
     "swissarmyhammer-config",
     "swissarmyhammer-common",
     "swissarmyhammer-directory",
+    "swissarmyhammer-build",
     "swissarmyhammer-git",
     "swissarmyhammer-shell",
     "swissarmyhammer-todo",

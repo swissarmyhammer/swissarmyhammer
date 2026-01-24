@@ -51,6 +51,9 @@ include_dir = "0.7"
 # Language detection - reuse existing tree-sitter
 tree-sitter = { workspace = true }
 
+[build-dependencies]
+swissarmyhammer-build = { path = "../swissarmyhammer-build" }
+
 [dev-dependencies]
 serde_json = { workspace = true }
 tempfile = { workspace = true }

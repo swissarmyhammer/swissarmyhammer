@@ -15,7 +15,7 @@ categories = ["template-engine", "development-tools"]
 workspace = true
 
 [build-dependencies]
-# None needed for build script
+swissarmyhammer-build = { path = "../swissarmyhammer-build" }
 
 [dependencies]
 # Core dependencies

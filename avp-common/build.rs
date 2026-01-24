@@ -1,7 +1,7 @@
 use swissarmyhammer_build::BuiltinGenerator;
 
 fn main() {
-    BuiltinGenerator::new("models")
-        .extensions(&["yaml"])
+    BuiltinGenerator::new("validators")
+        .extensions(&["md"])
         .generate();
 }

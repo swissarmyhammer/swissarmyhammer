@@ -31,6 +31,9 @@ walkdir = { workspace = true }
 swissarmyhammer-common = { path = "../swissarmyhammer-common" }
 swissarmyhammer-directory = { path = "../swissarmyhammer-directory" }
 
+[build-dependencies]
+swissarmyhammer-build = { path = "../swissarmyhammer-build" }
+
 [dev-dependencies]
 tempfile = "3"
 serial_test = { workspace = true }

@@ -39,6 +39,9 @@ tracing = { workspace = true }
 # Template engine integration
 liquid = { workspace = true }
 
+[build-dependencies]
+swissarmyhammer-build = { path = "../swissarmyhammer-build" }
+
 [dev-dependencies]
 tempfile = { workspace = true }
 serial_test = "3.1"

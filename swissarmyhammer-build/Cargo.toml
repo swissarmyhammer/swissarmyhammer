@@ -1,0 +1,10 @@
+[package]
+name = "swissarmyhammer-build"
+version.workspace = true
+edition = "2021"
+description = "Shared build utilities for SwissArmyHammer crates"
+license = "MIT"
+
+# This is a build-time only crate
+[lib]
+path = "src/lib.rs"
