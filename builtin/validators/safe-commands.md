@@ -44,28 +44,12 @@ Examine the command for these dangerous patterns:
 5. **Git Safety**:
    - `git push --force` to main/master without confirmation
    - `git reset --hard` that loses uncommitted work
+ 
+6. ** Editing **
+    - `vi`, `vim`, `nano`, or other interactive editors that may hang
+    - `sed` or `awk` commands -- you should be using your editing tools
 
 ## Exceptions (Allow)
 
 - `rm -rf` on clearly temporary or build directories (`node_modules`, `target`, `dist`, `.cache`)
 - Force push to feature branches (not main/master)
-
-## Response Format
-
-Return JSON in this exact format:
-
-```json
-{
-  "status": "passed",
-  "message": "Command appears safe"
-}
-```
-
-Or if dangerous:
-
-```json
-{
-  "status": "failed",
-  "message": "Blocked: The command 'rm -rf /' would delete the entire filesystem"
-}
-```
