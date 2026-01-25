@@ -102,7 +102,8 @@ impl ValidatorLoader {
                         validator.source,
                         file_entry.path.display()
                     );
-                    self.validators.insert(validator.name().to_string(), validator);
+                    self.validators
+                        .insert(validator.name().to_string(), validator);
                 }
                 Err(e) => {
                     tracing::warn!(
@@ -146,7 +147,8 @@ impl ValidatorLoader {
                                 validator.source,
                                 file_path.display()
                             );
-                            self.validators.insert(validator.name().to_string(), validator);
+                            self.validators
+                                .insert(validator.name().to_string(), validator);
                         }
                         Err(e) => {
                             tracing::warn!(
@@ -158,7 +160,11 @@ impl ValidatorLoader {
                     }
                 }
                 Err(e) => {
-                    tracing::warn!("Failed to read validator file {}: {}", file_path.display(), e);
+                    tracing::warn!(
+                        "Failed to read validator file {}: {}",
+                        file_path.display(),
+                        e
+                    );
                 }
             }
         }
@@ -176,7 +182,8 @@ impl ValidatorLoader {
             ValidatorSource::Builtin,
         ) {
             Ok(validator) => {
-                self.validators.insert(validator.name().to_string(), validator);
+                self.validators
+                    .insert(validator.name().to_string(), validator);
             }
             Err(e) => {
                 tracing::error!("Failed to parse builtin validator '{}': {}", name, e);
@@ -208,7 +215,10 @@ impl ValidatorLoader {
     ///
     /// Returns all validators that match the given context criteria.
     pub fn matching(&self, ctx: &MatchContext) -> Vec<&Validator> {
-        self.validators.values().filter(|v| v.matches(ctx)).collect()
+        self.validators
+            .values()
+            .filter(|v| v.matches(ctx))
+            .collect()
     }
 
     /// Get all directories that would be searched for validators.

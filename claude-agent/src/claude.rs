@@ -9,7 +9,7 @@ use swissarmyhammer_common::Pretty;
 use tokio::sync::Mutex;
 
 use crate::{
-    claude_process::{ClaudeProcess, ClaudeProcessManager},
+    claude_process::{ClaudeProcess, ClaudeProcessManager, SpawnConfig},
     config::ClaudeConfig,
     error::Result,
     protocol_translator::ProtocolTranslator,
@@ -49,38 +49,31 @@ impl ClaudeClient {
     /// message (which contains slash_commands and available_agents) before responding to new_session.
     ///
     /// # Arguments
-    /// * `session_id` - Internal session identifier
-    /// * `acp_session_id` - ACP protocol session identifier
-    /// * `cwd` - Working directory for the Claude process
+    /// * `config` - Spawn configuration including session IDs, working directory, and options
     ///
     /// # Returns
     /// Returns (available_agents, current_agent) if present in init message
     pub async fn spawn_process_and_consume_init(
         &self,
-        session_id: &crate::session::SessionId,
-        acp_session_id: &agent_client_protocol::SessionId,
-        cwd: &std::path::Path,
-        mcp_servers: Vec<crate::config::McpServerConfig>,
-        agent_mode: Option<String>,
-        system_prompt: Option<String>,
+        config: SpawnConfig,
     ) -> Result<(
         Option<Vec<(String, String, Option<String>)>>,
         Option<String>,
     )> {
         tracing::debug!(
-            "Spawning Claude process for session: {} in {} with {} MCP servers, agent_mode={:?}, system_prompt={}",
-            session_id,
-            cwd.display(),
-            mcp_servers.len(),
-            agent_mode,
-            system_prompt.as_ref().map(|s| format!("{} chars", s.len())).unwrap_or_else(|| "None".to_string())
+            "Spawning Claude process for session: {} in {} with {} MCP servers, agent_mode={:?}, system_prompt={}, ephemeral={}",
+            config.session_id,
+            config.cwd.display(),
+            config.mcp_servers.len(),
+            config.agent_mode,
+            config.system_prompt.as_ref().map(|s| format!("{} chars", s.len())).unwrap_or_else(|| "None".to_string()),
+            config.ephemeral
         );
 
-        // Spawn the process with optional mode flags
-        let process = self
-            .process_manager
-            .spawn_process(*session_id, cwd, agent_mode, system_prompt, mcp_servers)
-            .await?;
+        let acp_session_id = config.acp_session_id.clone();
+
+        // Spawn the process with config
+        let process = self.process_manager.spawn_process(config).await?;
 
         // The Claude CLI emits a system/init message AFTER receiving the first input
         // Send a minimal greeting to trigger init without priming Claude's behavior
@@ -122,7 +115,7 @@ impl ClaudeClient {
                 // Parse through protocol_translator
                 match self
                     .protocol_translator
-                    .stream_json_to_acp(&line, acp_session_id)
+                    .stream_json_to_acp(&line, &acp_session_id)
                     .await
                 {
                     Ok(Some(notification)) => {

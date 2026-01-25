@@ -37,25 +37,25 @@ ulid = { workspace = true }
 glob = { workspace = true }
 ignore = { workspace = true }
 fuzzy-matcher = { workspace = true }
-dirs = "5.0"
+dirs = { workspace = true }
 
 # Data structures
 dashmap = { workspace = true }
-lru = "0.12"
+lru = { workspace = true }
 
 # Template engine
-liquid = "0.26"
+liquid = { workspace = true }
 
 # Include functionality for builtin prompts
-include_dir = "0.7"
+include_dir = { workspace = true }
 
 [build-dependencies]
 swissarmyhammer-build = { path = "../swissarmyhammer-build" }
 
 [dev-dependencies]
 tempfile = { workspace = true }
-tokio-test = "0.4"
-serial_test = "3.1"
+tokio-test = { workspace = true }
+serial_test = { workspace = true }
 
 # NEVER add features or feature flags to this Cargo.toml!
 # SwissArmyHammer provides ALL functionality ALL the time.

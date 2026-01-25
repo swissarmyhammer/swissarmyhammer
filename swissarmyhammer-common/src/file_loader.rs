@@ -67,8 +67,7 @@ pub use swissarmyhammer_directory::{FileEntry, FileSource, SwissarmyhammerConfig
 /// 2. User files (from ~/.swissarmyhammer)
 /// 3. Local files (from .swissarmyhammer directories in parent paths)
 /// 4. Dynamic files (programmatically added)
-pub type VirtualFileSystem =
-    swissarmyhammer_directory::VirtualFileSystem<SwissarmyhammerConfig>;
+pub type VirtualFileSystem = swissarmyhammer_directory::VirtualFileSystem<SwissarmyhammerConfig>;
 
 #[cfg(test)]
 mod tests {

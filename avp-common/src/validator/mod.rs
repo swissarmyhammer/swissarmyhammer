@@ -64,7 +64,7 @@ pub use executor::{
 };
 pub use loader::ValidatorLoader;
 pub use parser::parse_validator;
-pub use runner::{ValidatorAgentConfig, ValidatorRunner};
+pub use runner::ValidatorRunner;
 pub use types::{
     ExecutedValidator, MatchContext, Severity, Validator, ValidatorFrontmatter, ValidatorMatch,
     ValidatorResult, ValidatorSource,

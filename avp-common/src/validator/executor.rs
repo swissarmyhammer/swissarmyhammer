@@ -118,7 +118,8 @@ fn try_parse_first_json_object(response: &str) -> Option<ValidatorResult> {
                     if depth == 0 {
                         let potential_json = &remaining[..=i];
                         // Try to parse this as ValidatorResult
-                        if let Ok(result) = serde_json::from_str::<ValidatorResult>(potential_json) {
+                        if let Ok(result) = serde_json::from_str::<ValidatorResult>(potential_json)
+                        {
                             return Some(result);
                         }
                         // Move past this JSON object and try the next one

@@ -40,6 +40,6 @@ ignore.workspace = true
 swissarmyhammer-directory = { path = "../swissarmyhammer-directory" }
 
 [dev-dependencies]
-tempfile.workspace = true
-serial_test = "3.0"
-git2.workspace = true
+tempfile = { workspace = true }
+serial_test = { workspace = true }
+git2 = { workspace = true }

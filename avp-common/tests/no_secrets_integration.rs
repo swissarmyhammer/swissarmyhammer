@@ -17,7 +17,6 @@ use avp_common::{
 use std::fs;
 use std::path::PathBuf;
 use std::sync::Arc;
-use swissarmyhammer_agent::AcpAgentHandle;
 use tempfile::TempDir;
 
 /// Create a test context in a temporary git repository.
@@ -86,16 +85,23 @@ fn fixtures_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(".fixtures/claude")
 }
 
-/// Create an AcpAgentHandle from a PlaybackAgent for testing.
-fn create_playback_handle(fixture_name: &str) -> AcpAgentHandle {
+/// Create an AvpContext with a PlaybackAgent for testing.
+fn create_context_with_playback(
+    temp: &TempDir,
+    fixture_name: &str,
+) -> AvpContext {
     let fixture_path = fixtures_dir().join(fixture_name);
     let agent = PlaybackAgent::new(fixture_path, "claude");
     let notification_rx = agent.subscribe_notifications();
 
-    AcpAgentHandle {
-        agent: Arc::new(agent),
-        notification_rx,
-    }
+    let original_dir = std::env::current_dir().unwrap();
+    std::env::set_current_dir(temp.path()).unwrap();
+
+    let context = AvpContext::with_agent(Arc::new(agent), notification_rx)
+        .expect("Should create context with playback agent");
+
+    std::env::set_current_dir(&original_dir).unwrap();
+    context
 }
 
 // ============================================================================
@@ -210,7 +216,9 @@ fn test_parse_validator_response_failed_with_secrets() {
 
     assert!(!result.passed(), "Should fail when secrets detected");
     assert!(
-        result.message().contains("secret") || result.message().contains("API") || result.message().contains("password"),
+        result.message().contains("secret")
+            || result.message().contains("API")
+            || result.message().contains("password"),
         "Message should describe findings: {}",
         result.message()
     );
@@ -261,7 +269,10 @@ fn test_parse_validator_response_handles_malformed_duplicates() {
     let result = parse_validator_response(response);
 
     // Should still detect the status: passed
-    assert!(result.passed(), "Should handle malformed response gracefully");
+    assert!(
+        result.passed(),
+        "Should handle malformed response gracefully"
+    );
 }
 
 // ============================================================================
@@ -271,28 +282,35 @@ fn test_parse_validator_response_handles_malformed_duplicates() {
 #[test]
 fn test_post_tool_use_block_output_format() {
     let output = avp_common::types::HookOutput::post_tool_use_block(
-        "blocked by validator 'no-secrets': Found hardcoded API key"
+        "blocked by validator 'no-secrets': Found hardcoded API key",
     );
 
     let json = serde_json::to_string(&output).unwrap();
 
     // Verify Claude Code format
     assert!(
-        output.decision.as_ref().map(|d| d == "block").unwrap_or(false),
+        output
+            .decision
+            .as_ref()
+            .map(|d| d == "block")
+            .unwrap_or(false),
         "Should have decision: 'block'"
     );
-    assert!(
-        output.reason.is_some(),
-        "Should have a reason"
-    );
+    assert!(output.reason.is_some(), "Should have a reason");
     assert!(
         output.continue_execution,
         "PostToolUse blocking should have continue: true (tool already ran)"
     );
 
     // Verify JSON structure
-    assert!(json.contains(r#""decision":"block""#), "JSON should contain decision: block");
-    assert!(json.contains("no-secrets"), "Reason should mention validator name");
+    assert!(
+        json.contains(r#""decision":"block""#),
+        "JSON should contain decision: block"
+    );
+    assert!(
+        json.contains("no-secrets"),
+        "Reason should mention validator name"
+    );
 }
 
 #[test]
@@ -313,7 +331,10 @@ fn test_executed_validator_blocking_detection() {
         severity: Severity::Warn,
         result: ValidatorResult::fail("Found hardcoded API key"),
     };
-    assert!(!warning.is_blocking(), "Warn + Failed should not be blocking");
+    assert!(
+        !warning.is_blocking(),
+        "Warn + Failed should not be blocking"
+    );
 
     // Error severity + passed = not blocking
     let passed = ExecutedValidator {
@@ -321,7 +342,10 @@ fn test_executed_validator_blocking_detection() {
         severity: Severity::Error,
         result: ValidatorResult::pass("Clean code"),
     };
-    assert!(!passed.is_blocking(), "Error + Passed should not be blocking");
+    assert!(
+        !passed.is_blocking(),
+        "Error + Passed should not be blocking"
+    );
 }
 
 // ============================================================================
@@ -334,12 +358,15 @@ fn test_executed_validator_blocking_detection() {
 async fn test_no_secrets_validator_detects_secrets_playback() {
     use avp_common::validator::ValidatorRunner;
 
-    let (_temp, _context) = create_test_context();
+    let (temp, _) = create_test_context();
 
-    // Create runner with PlaybackAgent using the secrets-detected fixture
-    let handle = create_playback_handle("no_secrets_detect_secrets.json");
-    let runner = ValidatorRunner::with_agent_handle(handle)
-        .expect("Should create runner with playback agent");
+    // Create context with PlaybackAgent using the secrets-detected fixture
+    let context = create_context_with_playback(&temp, "no_secrets_detect_secrets.json");
+
+    // Get agent from context and create runner
+    let (agent, notifications) = context.agent().await.expect("Should get agent");
+    let runner = ValidatorRunner::new(agent, notifications)
+        .expect("Should create runner");
 
     // Load the no-secrets validator
     let mut loader = ValidatorLoader::new();
@@ -373,12 +400,15 @@ async fn test_no_secrets_validator_detects_secrets_playback() {
 async fn test_no_secrets_validator_passes_clean_code_playback() {
     use avp_common::validator::ValidatorRunner;
 
-    let (_temp, _context) = create_test_context();
+    let (temp, _) = create_test_context();
 
-    // Create runner with PlaybackAgent using the clean-code fixture
-    let handle = create_playback_handle("no_secrets_clean_code.json");
-    let runner = ValidatorRunner::with_agent_handle(handle)
-        .expect("Should create runner with playback agent");
+    // Create context with PlaybackAgent using the clean-code fixture
+    let context = create_context_with_playback(&temp, "no_secrets_clean_code.json");
+
+    // Get agent from context and create runner
+    let (agent, notifications) = context.agent().await.expect("Should get agent");
+    let runner = ValidatorRunner::new(agent, notifications)
+        .expect("Should create runner");
 
     // Load the no-secrets validator
     let mut loader = ValidatorLoader::new();
@@ -400,7 +430,8 @@ async fn test_no_secrets_validator_passes_clean_code_playback() {
         result
     );
     assert!(
-        result.result.message().contains("No hardcoded secrets") || result.result.message().contains("environment"),
+        result.result.message().contains("No hardcoded secrets")
+            || result.result.message().contains("environment"),
         "Message should confirm clean code: {}",
         result.result.message()
     );
@@ -419,10 +450,18 @@ async fn test_no_secrets_validator_passes_clean_code_playback() {
 async fn test_no_secrets_validator_detects_secrets_live() {
     use avp_common::validator::ValidatorRunner;
 
-    let (_temp, _context) = create_test_context();
+    let (temp, _) = create_test_context();
 
-    // Create runner with live Claude agent
-    let runner = ValidatorRunner::with_defaults().expect("Claude CLI required");
+    // Change to temp directory to create live context
+    let original_dir = std::env::current_dir().unwrap();
+    std::env::set_current_dir(temp.path()).unwrap();
+
+    // Create live context and get agent
+    let context = AvpContext::init().expect("Should create context");
+    let (agent, notifications) = context.agent().await.expect("Claude CLI required");
+    let runner = ValidatorRunner::new(agent, notifications).expect("Should create runner");
+
+    std::env::set_current_dir(&original_dir).unwrap();
 
     // Load the no-secrets validator
     let mut loader = ValidatorLoader::new();
@@ -454,9 +493,18 @@ async fn test_no_secrets_validator_detects_secrets_live() {
 async fn test_no_secrets_validator_passes_clean_code_live() {
     use avp_common::validator::ValidatorRunner;
 
-    let (_temp, _context) = create_test_context();
+    let (temp, _) = create_test_context();
 
-    let runner = ValidatorRunner::with_defaults().expect("Claude CLI required");
+    // Change to temp directory to create live context
+    let original_dir = std::env::current_dir().unwrap();
+    std::env::set_current_dir(temp.path()).unwrap();
+
+    // Create live context and get agent
+    let context = AvpContext::init().expect("Should create context");
+    let (agent, notifications) = context.agent().await.expect("Claude CLI required");
+    let runner = ValidatorRunner::new(agent, notifications).expect("Should create runner");
+
+    std::env::set_current_dir(&original_dir).unwrap();
 
     let mut loader = ValidatorLoader::new();
     avp_common::load_builtins(&mut loader);

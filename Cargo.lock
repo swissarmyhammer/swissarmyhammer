@@ -14,7 +14,7 @@ dependencies = [
  "futures",
  "llama-agent",
  "piper",
- "rstest 0.26.1",
+ "rstest",
  "serde",
  "serde_json",
  "serial_test",
@@ -543,16 +543,17 @@ dependencies = [
 name = "avp-common"
 version = "0.3.0"
 dependencies = [
+ "agent-client-protocol",
  "agent-client-protocol-extras",
  "async-trait",
  "chrono",
+ "claude-agent",
  "glob",
  "regex",
  "serde",
  "serde_json",
  "serde_yaml",
  "serial_test",
- "swissarmyhammer-agent",
  "swissarmyhammer-build",
  "swissarmyhammer-common",
  "swissarmyhammer-config",
@@ -562,8 +563,9 @@ dependencies = [
  "thiserror 1.0.69",
  "tokio",
  "tracing",
+ "uuid",
  "walkdir",
- "which 7.0.3",
+ "which 8.0.0",
 ]
 
 [[package]]
@@ -1151,6 +1153,7 @@ dependencies = [
  "tokio-tungstenite",
  "tracing",
  "tracing-subscriber",
+ "typed-builder",
  "ulid",
  "url",
  "uuid",
@@ -1693,20 +1696,11 @@ dependencies = [
 
 [[package]]
 name = "dirs"
-version = "5.0.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "44c45a9d03d6676652bcb5e724c7e988de1acad23a711b5217ab9cbecbec2225"
-dependencies = [
- "dirs-sys 0.4.1",
-]
-
-[[package]]
-name = "dirs"
 version = "6.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c3e8aa94d75141228480295a7d0e7feb620b1a5ad9f12bc40be62411e38cce4e"
 dependencies = [
- "dirs-sys 0.5.0",
+ "dirs-sys",
 ]
 
 [[package]]
@@ -1717,18 +1711,6 @@ checksum = "b98cf8ebf19c3d1b223e151f99a4f9f0690dca41414773390fc824184ac833e1"
 dependencies = [
  "cfg-if",
  "dirs-sys-next",
-]
-
-[[package]]
-name = "dirs-sys"
-version = "0.4.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "520f05a5cbd335fae5a99ff7a6ab8627577660ee5cfd6a94a6a929b52ff0321c"
-dependencies = [
- "libc",
- "option-ext",
- "redox_users 0.4.6",
- "windows-sys 0.48.0",
 ]
 
 [[package]]
@@ -2535,7 +2517,7 @@ version = "0.4.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "629d8f3bbeda9d148036d6b0de0a3ab947abd08ce90626327fc3547a49d59d97"
 dependencies = [
- "dirs 6.0.0",
+ "dirs",
  "futures",
  "indicatif",
  "libc",
@@ -3451,7 +3433,7 @@ dependencies = [
  "axum",
  "chrono",
  "criterion",
- "dirs 6.0.0",
+ "dirs",
  "futures",
  "hf-hub",
  "http 1.4.0",
@@ -3466,7 +3448,7 @@ dependencies = [
  "proptest",
  "regex",
  "rmcp",
- "rstest 0.26.1",
+ "rstest",
  "schemars 0.8.22",
  "serde",
  "serde_json",
@@ -3534,7 +3516,7 @@ dependencies = [
  "llama-cpp-2",
  "llama-loader",
  "md5",
- "rstest 0.26.1",
+ "rstest",
  "serde",
  "serial_test",
  "swissarmyhammer-common",
@@ -3549,7 +3531,7 @@ dependencies = [
 name = "llama-loader"
 version = "0.3.0"
 dependencies = [
- "dirs 6.0.0",
+ "dirs",
  "hf-hub",
  "llama-common",
  "llama-cpp-2",
@@ -3709,7 +3691,7 @@ name = "mermaid-parser"
 version = "0.3.0"
 dependencies = [
  "chumsky",
- "rstest 0.21.0",
+ "rstest",
 ]
 
 [[package]]
@@ -3832,17 +3814,6 @@ name = "new_debug_unreachable"
 version = "1.0.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "650eef8c711430f1a879fdd01d4745a7deea475becfb90269c06775983bbf086"
-
-[[package]]
-name = "nix"
-version = "0.27.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2eb04e9c688eff1c89d72b407f168cf79bb9e867a9d3323ed6c01519eb9cc053"
-dependencies = [
- "bitflags 2.10.0",
- "cfg-if",
- "libc",
-]
 
 [[package]]
 name = "nix"
@@ -5340,73 +5311,13 @@ dependencies = [
 
 [[package]]
 name = "rstest"
-version = "0.21.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9afd55a67069d6e434a95161415f5beeada95a01c7b815508a82dcb0e1593682"
-dependencies = [
- "futures",
- "futures-timer",
- "rstest_macros 0.21.0",
- "rustc_version",
-]
-
-[[package]]
-name = "rstest"
-version = "0.22.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7b423f0e62bdd61734b67cd21ff50871dfaeb9cc74f869dcd6af974fbcb19936"
-dependencies = [
- "futures",
- "futures-timer",
- "rstest_macros 0.22.0",
- "rustc_version",
-]
-
-[[package]]
-name = "rstest"
 version = "0.26.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f5a3193c063baaa2a95a33f03035c8a72b83d97a54916055ba22d35ed3839d49"
 dependencies = [
  "futures-timer",
  "futures-util",
- "rstest_macros 0.26.1",
-]
-
-[[package]]
-name = "rstest_macros"
-version = "0.21.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4165dfae59a39dd41d8dec720d3cbfbc71f69744efb480a3920f5d4e0cc6798d"
-dependencies = [
- "cfg-if",
- "glob",
- "proc-macro-crate",
- "proc-macro2",
- "quote",
- "regex",
- "relative-path",
- "rustc_version",
- "syn 2.0.114",
- "unicode-ident",
-]
-
-[[package]]
-name = "rstest_macros"
-version = "0.22.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c5e1711e7d14f74b12a58411c542185ef7fb7f2e7f8ee6e2940a883628522b42"
-dependencies = [
- "cfg-if",
- "glob",
- "proc-macro-crate",
- "proc-macro2",
- "quote",
- "regex",
- "relative-path",
- "rustc_version",
- "syn 2.0.114",
- "unicode-ident",
+ "rstest_macros",
 ]
 
 [[package]]
@@ -6133,7 +6044,7 @@ dependencies = [
  "clap",
  "dashmap",
  "dialoguer",
- "dirs 5.0.1",
+ "dirs",
  "futures",
  "git2",
  "glob",
@@ -6152,7 +6063,7 @@ dependencies = [
  "regex",
  "reqwest",
  "rmcp",
- "rstest 0.22.0",
+ "rstest",
  "schemars 0.8.22",
  "serde",
  "serde_json",
@@ -6205,7 +6116,7 @@ dependencies = [
  "tokio",
  "tokio-util",
  "tracing",
- "which 7.0.3",
+ "which 8.0.0",
 ]
 
 [[package]]
@@ -6241,7 +6152,7 @@ dependencies = [
  "comfy-table",
  "derive_builder",
  "dialoguer",
- "dirs 5.0.1",
+ "dirs",
  "futures-util",
  "git2",
  "glob",
@@ -6249,7 +6160,7 @@ dependencies = [
  "is-terminal",
  "libc",
  "llama-agent",
- "nix 0.27.1",
+ "nix 0.29.0",
  "once_cell",
  "owo-colors",
  "predicates",
@@ -6287,7 +6198,7 @@ dependencies = [
  "anyhow",
  "dashmap",
  "dialoguer",
- "dirs 5.0.1",
+ "dirs",
  "git2",
  "glob",
  "governor",
@@ -6312,7 +6223,7 @@ name = "swissarmyhammer-config"
 version = "0.3.0"
 dependencies = [
  "anyhow",
- "dirs 5.0.1",
+ "dirs",
  "figment",
  "liquid",
  "regex",
@@ -6334,7 +6245,7 @@ dependencies = [
 name = "swissarmyhammer-directory"
 version = "0.3.0"
 dependencies = [
- "dirs 5.0.1",
+ "dirs",
  "serde",
  "tempfile",
  "thiserror 1.0.69",
@@ -6389,7 +6300,7 @@ name = "swissarmyhammer-modes"
 version = "0.3.0"
 dependencies = [
  "anyhow",
- "dirs 6.0.0",
+ "dirs",
  "include_dir",
  "serde",
  "serde_json",
@@ -6420,7 +6331,7 @@ dependencies = [
  "anyhow",
  "chrono",
  "dashmap",
- "dirs 5.0.1",
+ "dirs",
  "fuzzy-matcher",
  "glob",
  "ignore",
@@ -6452,7 +6363,7 @@ dependencies = [
  "agent-client-protocol",
  "anyhow",
  "chrono",
- "dirs 5.0.1",
+ "dirs",
  "futures-util",
  "git2",
  "glob",
@@ -6548,7 +6459,7 @@ dependencies = [
  "chrono",
  "claude-agent",
  "dashmap",
- "dirs 5.0.1",
+ "dirs",
  "encoding_rs",
  "filetime",
  "futures",
@@ -6600,7 +6511,7 @@ dependencies = [
  "url",
  "urlencoding",
  "walkdir",
- "which 7.0.3",
+ "which 8.0.0",
 ]
 
 [[package]]
@@ -6618,7 +6529,7 @@ dependencies = [
  "ctor",
  "dashmap",
  "dialoguer",
- "dirs 5.0.1",
+ "dirs",
  "futures",
  "git2",
  "glob",
@@ -7454,6 +7365,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "typed-builder"
+version = "0.20.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cd9d30e3a08026c78f246b173243cf07b3696d274debd26680773b6773c2afc7"
+dependencies = [
+ "typed-builder-macro",
+]
+
+[[package]]
+name = "typed-builder-macro"
+version = "0.20.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3c36781cc0e46a83726d9879608e4cf6c2505237e263a8eb8c24502989cfdb28"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.114",
+]
+
+[[package]]
 name = "typenum"
 version = "1.19.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7818,18 +7749,6 @@ dependencies = [
  "either",
  "home",
  "rustix 0.38.44",
- "winsafe",
-]
-
-[[package]]
-name = "which"
-version = "7.0.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "24d643ce3fd3e5b54854602a080f34fb10ab75e0b813ee32d00ca2b44fa74762"
-dependencies = [
- "either",
- "env_home",
- "rustix 1.1.3",
  "winsafe",
 ]
 

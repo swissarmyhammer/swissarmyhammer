@@ -28,10 +28,10 @@ swissarmyhammer-common = { path = "../swissarmyhammer-common" }
 
 # File system and utilities
 walkdir = { workspace = true }
-dirs = "6.0"
+dirs = { workspace = true }
 
 # Include functionality for builtin modes
-include_dir = "0.7"
+include_dir = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

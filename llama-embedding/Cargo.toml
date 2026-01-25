@@ -17,11 +17,11 @@ llama-loader = { workspace = true }
 llama-cpp-2 = { workspace = true }
 swissarmyhammer-common = { path = "../swissarmyhammer-common" }
 tokio = { workspace = true, features = ["sync"] }
-md5 = "0.7"
+md5 = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 serde = { workspace = true }
-tokio-stream = "0.1"
+tokio-stream = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

@@ -14,7 +14,7 @@ use crate::types::HookOutput;
 ///
 /// # Type Parameters
 /// - `I`: The typed input (e.g., `PreToolUseInput`)
-#[async_trait]
+#[async_trait(?Send)]
 pub trait TypedHookStrategy<I: HookInputType>: Send + Sync {
     /// Process the typed input and return an output with exit code.
     ///
@@ -53,7 +53,7 @@ pub trait TypedHookStrategy<I: HookInputType>: Send + Sync {
 ///     }
 /// }
 /// ```
-#[async_trait]
+#[async_trait(?Send)]
 pub trait AgentHookStrategy: Send + Sync {
     /// The name of this agent platform (e.g., "ClaudeCode").
     fn name(&self) -> &'static str;

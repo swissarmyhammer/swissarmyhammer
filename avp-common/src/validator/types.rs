@@ -449,7 +449,7 @@ mod tests {
                 trigger: HookType::PreToolUse,
                 match_criteria: None,
                 trigger_matcher: None,
-                                tags: vec![],
+                tags: vec![],
                 once: false,
                 timeout: 30,
             },
@@ -475,7 +475,7 @@ mod tests {
                     files: vec![],
                 }),
                 trigger_matcher: None,
-                                tags: vec![],
+                tags: vec![],
                 once: false,
                 timeout: 30,
             },
@@ -523,7 +523,9 @@ mod tests {
         assert!(validator.matches(&MatchContext::new(HookType::PreToolUse).with_tool("WRITE")));
         // Regex pattern with wildcard
         assert!(validator.matches(&MatchContext::new(HookType::PreToolUse).with_tool("Bash")));
-        assert!(validator.matches(&MatchContext::new(HookType::PreToolUse).with_tool("BashCommand")));
+        assert!(
+            validator.matches(&MatchContext::new(HookType::PreToolUse).with_tool("BashCommand"))
+        );
         assert!(validator.matches(&MatchContext::new(HookType::PreToolUse).with_tool("bash")));
         // Non-matching
         assert!(!validator.matches(&MatchContext::new(HookType::PreToolUse).with_tool("Read")));
@@ -542,7 +544,7 @@ mod tests {
                     files: vec!["*.ts".to_string(), "src/**/*.rs".to_string()],
                 }),
                 trigger_matcher: None,
-                                tags: vec![],
+                tags: vec![],
                 once: false,
                 timeout: 30,
             },
@@ -552,7 +554,8 @@ mod tests {
         };
 
         assert!(validator.matches(&MatchContext::new(HookType::PostToolUse).with_file("test.ts")));
-        assert!(validator.matches(&MatchContext::new(HookType::PostToolUse).with_file("src/lib/utils.rs")));
+        assert!(validator
+            .matches(&MatchContext::new(HookType::PostToolUse).with_file("src/lib/utils.rs")));
         // Case-insensitive file matching
         assert!(validator.matches(&MatchContext::new(HookType::PostToolUse).with_file("TEST.TS")));
         assert!(validator.matches(&MatchContext::new(HookType::PostToolUse).with_file("Test.Ts")));
@@ -571,7 +574,10 @@ mod tests {
     fn test_validator_result_fail() {
         let result = ValidatorResult::fail("Secret detected: Found API key on line 42");
         assert!(!result.passed());
-        assert_eq!(result.message(), "Secret detected: Found API key on line 42");
+        assert_eq!(
+            result.message(),
+            "Secret detected: Found API key on line 42"
+        );
     }
 
     #[test]
@@ -598,7 +604,7 @@ mod tests {
                 trigger: HookType::Notification,
                 match_criteria: None,
                 trigger_matcher: Some("agent_.*_complete".to_string()),
-                                tags: vec![],
+                tags: vec![],
                 once: false,
                 timeout: 30,
             },
@@ -639,7 +645,7 @@ mod tests {
                 trigger: HookType::Notification,
                 match_criteria: None,
                 trigger_matcher: Some("[invalid(regex".to_string()), // Invalid regex
-                                tags: vec![],
+                tags: vec![],
                 once: false,
                 timeout: 30,
             },
@@ -649,9 +655,8 @@ mod tests {
         };
 
         // Should not match with invalid regex (fails gracefully)
-        assert!(!validator.matches(
-            &MatchContext::new(HookType::Notification).with_event_context("any_context")
-        ));
+        assert!(!validator
+            .matches(&MatchContext::new(HookType::Notification).with_event_context("any_context")));
     }
 
     #[test]
@@ -668,7 +673,7 @@ mod tests {
                     files: vec![],
                 }),
                 trigger_matcher: Some("deploy_.*".to_string()),
-                                tags: vec![],
+                tags: vec![],
                 once: false,
                 timeout: 30,
             },

@@ -7,12 +7,12 @@ description = "Agent Validator Protocol - Core library for hook processing"
 
 [dependencies]
 # Serialization
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
+serde = { workspace = true }
+serde_json = { workspace = true }
 serde_yaml = { workspace = true }
 
 # Error handling
-thiserror = "1"
+thiserror = { workspace = true }
 
 # Time
 chrono = { workspace = true }
@@ -32,11 +32,13 @@ swissarmyhammer-common = { path = "../swissarmyhammer-common" }
 swissarmyhammer-directory = { path = "../swissarmyhammer-directory" }
 
 # Prompts and templating for validator execution
-swissarmyhammer-config = { path = "../swissarmyhammer-config" }
 swissarmyhammer-prompts = { path = "../swissarmyhammer-prompts" }
+swissarmyhammer-config = { path = "../swissarmyhammer-config" }
 
-# ACP agent execution for validators
-swissarmyhammer-agent = { path = "../swissarmyhammer-agent" }
+# Claude agent for validator execution
+claude-agent = { path = "../claude-agent" }
+agent-client-protocol = { workspace = true }
+uuid = { workspace = true }
 
 # Async runtime
 tokio = { workspace = true }
@@ -49,7 +51,7 @@ which = { workspace = true }
 swissarmyhammer-build = { path = "../swissarmyhammer-build" }
 
 [dev-dependencies]
-tempfile = "3"
+tempfile = { workspace = true }
 serial_test = { workspace = true }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
 agent-client-protocol-extras = { path = "../agent-client-protocol-extras" }

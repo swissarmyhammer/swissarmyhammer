@@ -76,8 +76,8 @@ ignore = { workspace = true }
 regex = { workspace = true }
 once_cell = { workspace = true }
 libc = { workspace = true }
-derive_builder = "0.20"
-scopeguard = "1.2"
+derive_builder = { workspace = true }
+scopeguard = { workspace = true }
 sha2 = { workspace = true }
 
 # Git integration
@@ -86,10 +86,10 @@ owo-colors = { workspace = true }
 reqwest.workspace = true
 
 [dev-dependencies]
-assert_cmd = "2.0"
+assert_cmd = { workspace = true }
 predicates = { workspace = true }
 tempfile = { workspace = true }
-serial_test = "3.1"
+serial_test = { workspace = true }
 reqwest = { workspace = true }
 
-nix = { version = "0.27", features = ["signal"] }
+nix = { workspace = true }

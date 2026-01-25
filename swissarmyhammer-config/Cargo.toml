@@ -17,7 +17,7 @@ workspace = true
 [dependencies]
 swissarmyhammer-common = { path = "../swissarmyhammer-common" }
 swissarmyhammer-project-detection = { path = "../swissarmyhammer-project-detection" }
-figment = { version = "0.10", features = ["toml", "yaml", "json", "env"] }
+figment = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 serde_yaml = { workspace = true }
@@ -44,7 +44,7 @@ swissarmyhammer-build = { path = "../swissarmyhammer-build" }
 
 [dev-dependencies]
 tempfile = { workspace = true }
-serial_test = "3.1"
+serial_test = { workspace = true }
 swissarmyhammer-prompts = { path = "../swissarmyhammer-prompts" }
 
 

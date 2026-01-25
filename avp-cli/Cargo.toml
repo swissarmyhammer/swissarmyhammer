@@ -18,10 +18,10 @@ path = "src/main.rs"
 avp-common = { path = "../avp-common" }
 
 # Serialization (needed for main.rs JSON handling)
-serde_json = "1.0"
+serde_json = { workspace = true }
 
 # CLI
-clap = { version = "4", features = ["derive"] }
+clap = { workspace = true }
 
 # Async runtime
 tokio = { workspace = true }
@@ -31,4 +31,4 @@ tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 
 [dev-dependencies]
-tempfile = "3"
+tempfile = { workspace = true }

@@ -29,6 +29,6 @@ llama-agent = { workspace = true }
 claude-agent = { path = "../claude-agent" }
 futures.workspace = true
 tokio-util = { workspace = true, features = ["compat"] }
-piper = "0.2"
+piper = { workspace = true }
 serial_test.workspace = true
 rstest.workspace = true

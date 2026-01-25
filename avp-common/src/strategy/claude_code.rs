@@ -1,6 +1,7 @@
 //! Claude Code hook strategy implementation.
 
 use async_trait::async_trait;
+use tokio::sync::Mutex;
 
 use crate::builtin::load_builtins;
 use crate::chain::{Chain, HookInputType};
@@ -38,24 +39,20 @@ pub struct ClaudeCodeHookStrategy {
     post_tool_use: PostToolUseHandler,
     /// Validator loader with all loaded validators
     validator_loader: ValidatorLoader,
-    /// Validator runner for executing validators via ACP agent
-    validator_runner: Option<ValidatorRunner>,
-    /// AVP context for logging and directory access
+    /// AVP context for logging, directory access, and agent creation
     context: AvpContext,
+    /// Cached validator runner (lazily initialized)
+    runner_cache: Mutex<Option<ValidatorRunner>>,
 }
 
-// Manual Debug implementation since ValidatorRunner doesn't implement Debug
 impl std::fmt::Debug for ClaudeCodeHookStrategy {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ClaudeCodeHookStrategy")
             .field("pre_tool_use", &self.pre_tool_use)
             .field("post_tool_use", &self.post_tool_use)
             .field("validator_loader", &self.validator_loader)
-            .field(
-                "validator_runner",
-                &self.validator_runner.as_ref().map(|_| "ValidatorRunner"),
-            )
             .field("context", &self.context)
+            .field("runner_cache", &"<cached>")
             .finish()
     }
 }
@@ -68,7 +65,8 @@ impl ClaudeCodeHookStrategy {
     /// 2. User validators (~/.avp/validators)
     /// 3. Project validators (./.avp/validators)
     ///
-    /// The validator runner is created lazily when validators are executed.
+    /// The validator runner is created lazily when validators are executed,
+    /// using the agent from the AvpContext.
     pub fn new(context: AvpContext) -> Self {
         let mut validator_loader = ValidatorLoader::new();
 
@@ -82,37 +80,44 @@ impl ClaudeCodeHookStrategy {
 
         tracing::debug!("Loaded {} validators", validator_loader.len());
 
-        // Create validator runner only if:
-        // 1. We're not in test mode (AVP_SKIP_AGENT env var not set)
-        // 2. Claude CLI is available
-        // This prevents test failures and allows graceful degradation
-        let skip_agent = std::env::var("AVP_SKIP_AGENT").is_ok();
-        let validator_runner = if skip_agent {
-            tracing::debug!("AVP_SKIP_AGENT set - validator execution disabled");
-            None
-        } else if which::which("claude").is_ok() {
-            match ValidatorRunner::with_defaults() {
-                Ok(runner) => {
-                    tracing::debug!("Validator runner initialized (Claude CLI available)");
-                    Some(runner)
-                }
-                Err(e) => {
-                    tracing::warn!("Failed to create validator runner: {} - validators will use placeholder results", e);
-                    None
-                }
-            }
-        } else {
-            tracing::debug!("Claude CLI not available - validator execution disabled");
-            None
-        };
-
         Self {
             pre_tool_use: PreToolUseHandler,
             post_tool_use: PostToolUseHandler,
             validator_loader,
-            validator_runner,
             context,
+            runner_cache: Mutex::new(None),
         }
+    }
+
+    /// Execute validators using the cached runner.
+    ///
+    /// The runner is created lazily on first access and reused for subsequent calls.
+    /// This method handles the caching internally to avoid lifetime issues with Mutex guards.
+    async fn execute_with_cached_runner(
+        &self,
+        matching: &[&crate::validator::Validator],
+        hook_type: HookType,
+        input: &serde_json::Value,
+    ) -> Result<Vec<ExecutedValidator>, AvpError> {
+        let mut guard = self.runner_cache.lock().await;
+
+        // Create runner if not cached
+        if guard.is_none() {
+            tracing::debug!("Creating cached ValidatorRunner...");
+            let (agent, notifications) = self.context.agent().await?;
+            let runner = ValidatorRunner::new(agent, notifications)?;
+            *guard = Some(runner);
+            tracing::debug!("ValidatorRunner cached successfully");
+        }
+
+        // Execute with the cached runner
+        let runner = guard.as_ref().unwrap();
+        tracing::debug!(
+            "Executing {} validators via cached ACP runner for hook {}",
+            matching.len(),
+            hook_type
+        );
+        Ok(runner.execute_validators(matching, hook_type, input).await)
     }
 
     /// Get a reference to the AVP context.
@@ -143,8 +148,10 @@ impl ClaudeCodeHookStrategy {
 
     /// Execute matching validators for a hook event.
     ///
-    /// If a validator runner is available, validators are executed via ACP agent.
-    /// Otherwise, placeholder pass results are returned.
+    /// Validators are executed via ACP agent obtained from the AvpContext.
+    /// The ValidatorRunner is cached for performance (created once, reused).
+    /// If the agent is unavailable (e.g., AVP_SKIP_AGENT is set), placeholder
+    /// pass results are returned.
     ///
     /// Returns a list of executed validators with their results and metadata.
     pub async fn execute_validators(
@@ -158,22 +165,31 @@ impl ClaudeCodeHookStrategy {
             return Vec::new();
         }
 
-        // If we have a runner, execute validators via ACP
-        if let Some(runner) = &self.validator_runner {
+        // Check if agent execution is disabled
+        if std::env::var("AVP_SKIP_AGENT").is_ok() {
             tracing::debug!(
-                "Executing {} validators via ACP for hook {}",
-                matching.len(),
-                hook_type
+                "AVP_SKIP_AGENT set - returning placeholder results for {} validators",
+                matching.len()
             );
-            return runner.execute_validators(&matching, hook_type, input).await;
+            return self.placeholder_results(&matching, hook_type);
         }
 
-        // Fallback: return placeholder pass results
-        tracing::debug!(
-            "No validator runner available - returning placeholder results for {} validators",
-            matching.len()
-        );
+        // Execute with cached runner
+        match self.execute_with_cached_runner(&matching, hook_type, input).await {
+            Ok(results) => results,
+            Err(e) => {
+                tracing::warn!("Failed to execute validators: {} - using placeholder results", e);
+                self.placeholder_results(&matching, hook_type)
+            }
+        }
+    }
 
+    /// Generate placeholder pass results when agent is unavailable.
+    fn placeholder_results(
+        &self,
+        matching: &[&crate::validator::Validator],
+        hook_type: HookType,
+    ) -> Vec<ExecutedValidator> {
         matching
             .iter()
             .map(|validator| {
@@ -301,7 +317,7 @@ impl ClaudeCodeHookStrategy {
     }
 }
 
-#[async_trait]
+#[async_trait(?Send)]
 impl AgentHookStrategy for ClaudeCodeHookStrategy {
     fn name(&self) -> &'static str {
         "ClaudeCode"
@@ -420,7 +436,7 @@ impl AgentHookStrategy for ClaudeCodeHookStrategy {
 #[derive(Debug, Default)]
 pub struct PreToolUseHandler;
 
-#[async_trait]
+#[async_trait(?Send)]
 impl TypedHookStrategy<PreToolUseInput> for PreToolUseHandler {
     async fn process(&self, input: PreToolUseInput) -> Result<(HookOutput, i32), AvpError> {
         let mut chain: Chain<PreToolUseInput> = Chain::success();
@@ -436,7 +452,7 @@ impl TypedHookStrategy<PreToolUseInput> for PreToolUseHandler {
 #[derive(Debug, Default)]
 pub struct PostToolUseHandler;
 
-#[async_trait]
+#[async_trait(?Send)]
 impl TypedHookStrategy<PostToolUseInput> for PostToolUseHandler {
     async fn process(&self, input: PostToolUseInput) -> Result<(HookOutput, i32), AvpError> {
         let mut chain: Chain<PostToolUseInput> = Chain::success();

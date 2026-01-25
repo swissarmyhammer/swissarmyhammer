@@ -9,7 +9,7 @@ description = "CEL (Common Expression Language) state management for SwissArmyHa
 
 [dependencies]
 # CEL interpreter
-cel-interpreter = "0.8"
+cel-interpreter = { workspace = true }
 
 # Thread-safe global state
 once_cell = { workspace = true }
@@ -27,4 +27,4 @@ thiserror = { workspace = true }
 tracing = { workspace = true }
 
 [dev-dependencies]
-tokio-test = "0.4"
+tokio-test = { workspace = true }

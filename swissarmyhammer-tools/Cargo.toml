@@ -78,12 +78,12 @@ filetime = { workspace = true }
 # Web fetch functionality
 markdowndown = { workspace = true }
 url = { workspace = true }
-futures-util = "0.3"
-libc = "0.2.175"
+futures-util = { workspace = true }
+libc = { workspace = true }
 
 # Web search dependencies
 chromiumoxide = { workspace = true }
-futures = "0.3"
+futures = { workspace = true }
 html2text = { workspace = true }
 html2md = { workspace = true }
 html-escape = { workspace = true }
@@ -100,16 +100,16 @@ axum = { workspace = true }
 tower = { workspace = true }
 tower-http = { workspace = true, features = ["trace"] }
 hyper = { workspace = true }
-byte-unit = "5.1.6"
+byte-unit = { workspace = true }
 owo-colors = { workspace = true }
 agent-client-protocol = { workspace = true }
 
 [dev-dependencies]
-tokio-test = "0.4"
+tokio-test = { workspace = true }
 
 tempfile = { workspace = true }
 futures-util = { workspace = true }
 tracing-subscriber = { workspace = true }
-proptest = "1.4"
-serial_test = "3.1"
+proptest = { workspace = true }
+serial_test = { workspace = true }
 git2 = { workspace = true }

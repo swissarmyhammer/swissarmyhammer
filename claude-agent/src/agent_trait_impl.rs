@@ -9,6 +9,7 @@
 
 use crate::agent::ClaudeAgent;
 use crate::agent_file_operations::{ReadTextFileParams, WriteTextFileParams};
+use crate::claude_process::SpawnConfig;
 use agent_client_protocol::{
     Agent, AuthenticateRequest, AuthenticateResponse, CancelNotification, ContentBlock,
     ExtNotification, ExtRequest, ExtResponse, InitializeRequest, InitializeResponse,
@@ -200,16 +201,17 @@ impl Agent for ClaudeAgent {
         // Pass agent's configured MCP servers (self.config.mcp_servers) to Claude CLI
         // These are the MCP servers configured during agent creation, not from the request
         tracing::info!("Spawning Claude process for session: {}", session_id);
+        let spawn_config = SpawnConfig::builder()
+            .session_id(session_id)
+            .acp_session_id(protocol_session_id.clone())
+            .cwd(request.cwd.clone())
+            .mcp_servers(self.config.mcp_servers.clone())
+            .ephemeral(self.config.claude.ephemeral)
+            .build();
+
         match self
             .claude_client
-            .spawn_process_and_consume_init(
-                &session_id,
-                &protocol_session_id,
-                &request.cwd,
-                self.config.mcp_servers.clone(),
-                None, // No agent mode at initial session creation
-                None, // No system prompt at initial session creation
-            )
+            .spawn_process_and_consume_init(spawn_config)
             .await
         {
             Ok((Some(agents), current_agent)) => {
@@ -540,16 +542,19 @@ impl Agent for ClaudeAgent {
 
             // Spawn new process with appropriate flags
             let protocol_session_id = SessionId::new(parsed_session_id.to_string());
+            let spawn_config = SpawnConfig::builder()
+                .session_id(parsed_session_id)
+                .acp_session_id(protocol_session_id.clone())
+                .cwd(cwd.clone())
+                .mcp_servers(self.config.mcp_servers.clone())
+                .agent_mode(agent_mode)
+                .system_prompt(system_prompt)
+                .ephemeral(self.config.claude.ephemeral)
+                .build();
+
             if let Err(e) = self
                 .claude_client
-                .spawn_process_and_consume_init(
-                    &parsed_session_id,
-                    &protocol_session_id,
-                    &cwd,
-                    self.config.mcp_servers.clone(),
-                    agent_mode,
-                    system_prompt,
-                )
+                .spawn_process_and_consume_init(spawn_config)
                 .await
             {
                 tracing::error!("Failed to spawn new Claude process for mode change: {}", e);

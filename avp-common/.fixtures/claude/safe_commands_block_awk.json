@@ -1,0 +1,90 @@
+{
+  "calls": [
+    {
+      "method": "initialize",
+      "request": {
+        "clientCapabilities": {
+          "fs": {
+            "readTextFile": false,
+            "writeTextFile": false
+          },
+          "terminal": false
+        },
+        "protocolVersion": 1
+      },
+      "response": {
+        "agentCapabilities": {
+          "_meta": {
+            "streaming": true
+          },
+          "loadSession": true,
+          "mcpCapabilities": {
+            "http": true,
+            "sse": false
+          },
+          "promptCapabilities": {
+            "_meta": {
+              "streaming": true
+            },
+            "audio": true,
+            "embeddedContext": true,
+            "image": true
+          },
+          "sessionCapabilities": {}
+        },
+        "agentInfo": {
+          "name": "claude-agent",
+          "title": "Claude Agent (Playback)",
+          "version": "0.1.0"
+        },
+        "authMethods": [],
+        "protocolVersion": 1
+      },
+      "notifications": []
+    },
+    {
+      "method": "new_session",
+      "request": {
+        "cwd": "/tmp",
+        "mcpServers": []
+      },
+      "response": {
+        "sessionId": "test-session-awk-blocked"
+      },
+      "notifications": []
+    },
+    {
+      "method": "prompt",
+      "request": {
+        "prompt": [
+          {
+            "text": "validator prompt",
+            "type": "text"
+          }
+        ],
+        "sessionId": "test-session-awk-blocked"
+      },
+      "response": {
+        "_meta": {
+          "claude_response": "{\"status\": \"failed\", \"message\": \"Command uses 'awk' which is blocked - use the Edit tool instead for text processing\"}",
+          "processed": true,
+          "session_messages": 3,
+          "streaming": false
+        },
+        "stopReason": "end_turn"
+      },
+      "notifications": [
+        {
+          "sessionId": "test-session-awk-blocked",
+          "update": {
+            "content": {
+              "text": "{\"status\": \"failed\", \"message\": \"Command uses 'awk' which is blocked - use the Edit tool instead for text processing\"}",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        }
+      ]
+    }
+  ]
+}

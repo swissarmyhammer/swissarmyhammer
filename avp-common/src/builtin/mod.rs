@@ -34,7 +34,10 @@ pub fn load_builtins(loader: &mut ValidatorLoader) {
 
 /// Get the names of all builtin validators.
 pub fn builtin_names() -> Vec<&'static str> {
-    get_builtin_validators().into_iter().map(|(name, _)| name).collect()
+    get_builtin_validators()
+        .into_iter()
+        .map(|(name, _)| name)
+        .collect()
 }
 
 #[cfg(test)]
@@ -82,7 +85,10 @@ mod tests {
     #[test]
     fn test_get_builtin_validators() {
         let validators = get_builtin_validators();
-        assert!(!validators.is_empty(), "Should have at least one builtin validator");
+        assert!(
+            !validators.is_empty(),
+            "Should have at least one builtin validator"
+        );
 
         // Each validator should have a non-empty name and content
         for (name, content) in validators {

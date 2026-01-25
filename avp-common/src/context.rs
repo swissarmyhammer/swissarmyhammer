@@ -1,4 +1,4 @@
-//! AVP Context - Manages .avp directory and logging.
+//! AVP Context - Manages .avp directory, logging, and agent access.
 //!
 //! The `.avp` directory is created at the git repository root and contains:
 //! - `avp.log` - Append-only log of hook events
@@ -6,14 +6,21 @@
 //! - `.gitignore` - Excludes log files from version control
 //!
 //! User-level validators can be placed in `~/.avp/validators/`.
+//!
+//! The context also provides access to an ACP Agent for validator execution.
+//! In production, this is a ClaudeAgent created lazily. In tests, a PlaybackAgent
+//! can be injected via `with_agent()`.
 
 use std::fs::{File, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex as StdMutex};
 
+use agent_client_protocol::{Agent, SessionNotification};
 use chrono::Utc;
+use claude_agent::CreateAgentConfig;
 use swissarmyhammer_directory::{AvpConfig, ManagedDirectory};
+use tokio::sync::{broadcast, Mutex};
 
 use crate::error::AvpError;
 
@@ -52,7 +59,13 @@ pub struct HookEvent<'a> {
     pub details: Option<String>,
 }
 
-/// AVP Context - manages .avp directory and logging.
+/// Holds the agent and notification channel.
+struct AgentHandle {
+    agent: Arc<dyn Agent + Send + Sync>,
+    notifications: broadcast::Sender<SessionNotification>,
+}
+
+/// AVP Context - manages .avp directory, logging, and agent access.
 ///
 /// All .avp directory logic is centralized here. The directory is created
 /// at the git repository root using the shared `swissarmyhammer-directory` crate.
@@ -60,7 +73,9 @@ pub struct HookEvent<'a> {
 /// The context tracks both project-level and user-level directories:
 /// - Project: `./.avp/` at git root
 /// - User: `~/.avp/` in home directory
-#[derive(Debug)]
+///
+/// The context also provides access to an ACP Agent for validator execution.
+/// The agent is created lazily on first access, or can be injected for testing.
 pub struct AvpContext {
     /// Managed directory at git root (.avp)
     project_dir: ManagedDirectory<AvpConfig>,
@@ -69,7 +84,21 @@ pub struct AvpContext {
     home_dir: Option<ManagedDirectory<AvpConfig>>,
 
     /// Shared log file handle (None if logging failed to initialize).
-    log_file: Option<Arc<Mutex<File>>>,
+    log_file: Option<Arc<StdMutex<File>>>,
+
+    /// Agent handle (lazily created or injected)
+    agent_handle: Arc<Mutex<Option<AgentHandle>>>,
+}
+
+impl std::fmt::Debug for AvpContext {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AvpContext")
+            .field("project_dir", &self.project_dir.root())
+            .field("home_dir", &self.home_dir.as_ref().map(|d| d.root()))
+            .field("has_log_file", &self.log_file.is_some())
+            .field("has_agent", &"<async>")
+            .finish()
+    }
 }
 
 impl AvpContext {
@@ -81,12 +110,13 @@ impl AvpContext {
     /// 3. Open log file for appending
     /// 4. Optionally connect to user ~/.avp directory
     ///
+    /// The agent is created lazily on first access.
+    ///
     /// Returns Err if not in a git repository.
     pub fn init() -> Result<Self, AvpError> {
         // Create project directory at git root
-        let project_dir = ManagedDirectory::<AvpConfig>::from_git_root().map_err(|e| {
-            AvpError::Context(format!("failed to create .avp directory: {}", e))
-        })?;
+        let project_dir = ManagedDirectory::<AvpConfig>::from_git_root()
+            .map_err(|e| AvpError::Context(format!("failed to create .avp directory: {}", e)))?;
 
         // Try to create user directory (optional, may fail if no home dir)
         let home_dir = ManagedDirectory::<AvpConfig>::from_user_home().ok();
@@ -98,7 +128,103 @@ impl AvpContext {
             project_dir,
             home_dir,
             log_file,
+            agent_handle: Arc::new(Mutex::new(None)),
         })
+    }
+
+    /// Create an AVP context with an injected agent.
+    ///
+    /// This is primarily for testing with PlaybackAgent or other test agents.
+    /// The agent is used immediately without lazy creation.
+    pub fn with_agent(
+        agent: Arc<dyn Agent + Send + Sync>,
+        notifications: broadcast::Receiver<SessionNotification>,
+    ) -> Result<Self, AvpError> {
+        // Create project directory at git root
+        let project_dir = ManagedDirectory::<AvpConfig>::from_git_root()
+            .map_err(|e| AvpError::Context(format!("failed to create .avp directory: {}", e)))?;
+
+        // Try to create user directory (optional, may fail if no home dir)
+        let home_dir = ManagedDirectory::<AvpConfig>::from_user_home().ok();
+
+        // Open log file for appending (best-effort)
+        let log_file = open_log_file(project_dir.root());
+
+        // Create a sender from the receiver (for resubscription)
+        // We need to create a new channel and the injected receiver becomes the first subscriber
+        let (tx, _) = broadcast::channel(256);
+
+        // Spawn a task to forward notifications from the injected receiver to our sender
+        let tx_clone = tx.clone();
+        let mut rx = notifications;
+        tokio::spawn(async move {
+            while let Ok(notification) = rx.recv().await {
+                let _ = tx_clone.send(notification);
+            }
+        });
+
+        Ok(Self {
+            project_dir,
+            home_dir,
+            log_file,
+            agent_handle: Arc::new(Mutex::new(Some(AgentHandle {
+                agent,
+                notifications: tx,
+            }))),
+        })
+    }
+
+    /// Get the agent for validator execution.
+    ///
+    /// Creates an ephemeral ClaudeAgent on first access if not already created.
+    /// Returns a reference to the agent and a notification receiver.
+    pub async fn agent(
+        &self,
+    ) -> Result<
+        (
+            Arc<dyn Agent + Send + Sync>,
+            broadcast::Receiver<SessionNotification>,
+        ),
+        AvpError,
+    > {
+        let mut guard = self.agent_handle.lock().await;
+
+        if guard.is_none() {
+            tracing::debug!("Creating ephemeral ClaudeAgent for validator execution...");
+            let start = std::time::Instant::now();
+
+            // Create ephemeral agent (haiku model, no session persistence)
+            let config = CreateAgentConfig::builder().ephemeral(true).build();
+
+            let (agent, notifications) = claude_agent::create_agent(config)
+                .await
+                .map_err(|e| AvpError::Agent(format!("Failed to create agent: {}", e)))?;
+
+            // Create a broadcast channel for notifications
+            let (tx, _) = broadcast::channel(256);
+            let tx_clone = tx.clone();
+
+            // Forward notifications from the agent to our channel
+            tokio::spawn(async move {
+                let mut rx = notifications;
+                while let Ok(notification) = rx.recv().await {
+                    let _ = tx_clone.send(notification);
+                }
+            });
+
+            tracing::debug!(
+                "Ephemeral ClaudeAgent created in {:.2}s",
+                start.elapsed().as_secs_f64()
+            );
+
+            *guard = Some(AgentHandle {
+                agent: Arc::new(agent),
+                notifications: tx,
+            });
+        }
+
+        let handle = guard.as_ref().unwrap();
+        Ok((Arc::clone(&handle.agent), handle.notifications.subscribe()))
     }
 
     /// Get the project .avp directory path.
@@ -135,8 +261,9 @@ impl AvpContext {
     /// Returns None if user directory is not available.
     pub fn ensure_home_validators_dir(&self) -> Option<Result<PathBuf, AvpError>> {
         self.home_dir.as_ref().map(|d| {
-            d.ensure_subdir("validators")
-                .map_err(|e| AvpError::Context(format!("failed to create user validators directory: {}", e)))
+            d.ensure_subdir("validators").map_err(|e| {
+                AvpError::Context(format!("failed to create user validators directory: {}", e))
+            })
         })
     }
 
@@ -190,14 +317,14 @@ impl AvpContext {
 }
 
 /// Open log file for appending.
-fn open_log_file(avp_dir: &Path) -> Option<Arc<Mutex<File>>> {
+fn open_log_file(avp_dir: &Path) -> Option<Arc<StdMutex<File>>> {
     let log_path = avp_dir.join(LOG_FILE_NAME);
     OpenOptions::new()
         .create(true)
         .append(true)
         .open(&log_path)
         .ok()
-        .map(|f| Arc::new(Mutex::new(f)))
+        .map(|f| Arc::new(StdMutex::new(f)))
 }
 
 #[cfg(test)]

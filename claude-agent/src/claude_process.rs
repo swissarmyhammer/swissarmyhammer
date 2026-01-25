@@ -87,6 +87,7 @@ use crate::session::SessionId;
 use crate::{AgentError, Result};
 use std::collections::HashMap;
 use std::mem::ManuallyDrop;
+use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
@@ -94,6 +95,33 @@ use swissarmyhammer_common::Pretty;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStderr, ChildStdin, ChildStdout, Command};
 use tokio::sync::Mutex;
+use typed_builder::TypedBuilder;
+
+/// Configuration for spawning a Claude process.
+///
+/// Uses builder pattern to allow flexible configuration without
+/// breaking changes when new options are added.
+#[derive(Debug, Clone, TypedBuilder)]
+pub struct SpawnConfig {
+    /// Session ID for this Claude process
+    pub session_id: SessionId,
+    /// ACP protocol session ID (for protocol translation)
+    pub acp_session_id: agent_client_protocol::SessionId,
+    /// Working directory for the process
+    pub cwd: PathBuf,
+    /// Optional Claude agent mode (e.g., "code")
+    #[builder(default)]
+    pub agent_mode: Option<String>,
+    /// Optional system prompt to replace Claude's default
+    #[builder(default)]
+    pub system_prompt: Option<String>,
+    /// MCP servers to configure
+    #[builder(default)]
+    pub mcp_servers: Vec<crate::config::McpServerConfig>,
+    /// Ephemeral mode: uses haiku model and no session persistence
+    #[builder(default)]
+    pub ephemeral: bool,
+}
 
 /// Claude CLI command-line arguments for stream-json communication
 const CLAUDE_CLI_ARGS: &[&str] = &[
@@ -146,47 +174,39 @@ impl ClaudeProcessManager {
     /// Spawn a new claude process for the given session
     /// # Arguments
     /// * `session_id` - Session identifier
-    /// * `cwd` - Working directory for the Claude process
-    /// * `agent_mode` - Optional agent mode to use (passed as --agent flag)
-    /// * `system_prompt` - Optional system prompt to append (for SwissArmyHammer modes)
+    /// * `config` - Spawn configuration including session_id, cwd, agent_mode, etc.
     ///
     /// # Errors
     /// Returns error if:
     /// - Session already has a process
     /// - Failed to spawn claude binary
     /// - Process spawn fails
-    pub async fn spawn_for_session(
-        &self,
-        session_id: SessionId,
-        cwd: &std::path::Path,
-        agent_mode: Option<String>,
-        system_prompt: Option<String>,
-        mcp_servers: Vec<crate::config::McpServerConfig>,
-    ) -> Result<()> {
+    pub async fn spawn_for_session(&self, config: SpawnConfig) -> Result<()> {
         // Check if session already exists - use write lock to prevent race
         let mut processes = self.processes.write().map_err(|_| {
             AgentError::Internal("Failed to acquire write lock on processes".to_string())
         })?;
 
-        if processes.contains_key(&session_id) {
+        if processes.contains_key(&config.session_id) {
             // Process already exists, this is fine - just return success
-            tracing::debug!("Process already exists for session {}", session_id);
+            tracing::debug!("Process already exists for session {}", config.session_id);
             return Ok(());
         }
 
-        // Spawn new process with working directory and optional agent mode
-        let process = ClaudeProcess::spawn(session_id, cwd, agent_mode, system_prompt, mcp_servers)
-            .map_err(|e| {
-                tracing::error!(
-                    "Failed to spawn claude process for session {}: {}",
-                    session_id,
-                    e
-                );
+        let session_id = config.session_id.clone();
+
+        // Spawn new process with config
+        let process = ClaudeProcess::spawn(config).map_err(|e| {
+            tracing::error!(
+                "Failed to spawn claude process for session {}: {}",
+                session_id,
                 e
-            })?;
+            );
+            e
+        })?;
 
         // Insert into map
-        processes.insert(session_id, Arc::new(Mutex::new(process)));
+        processes.insert(session_id.clone(), Arc::new(Mutex::new(process)));
 
         tracing::info!("Spawned claude process for session {}", session_id);
         Ok(())
@@ -215,35 +235,25 @@ impl ClaudeProcessManager {
     /// Spawn a new Claude process for a session
     ///
     /// # Arguments
-    /// * `session_id` - Session to spawn process for
-    /// * `cwd` - Working directory
-    /// * `agent_mode` - Optional agent mode (--agent flag)
-    /// * `system_prompt` - Optional system prompt (--system-prompt flag)
-    /// * `mcp_servers` - MCP servers to configure
+    /// * `config` - Spawn configuration including session_id, cwd, agent_mode, etc.
     ///
     /// # Errors
     /// Returns error if spawning fails
-    pub async fn spawn_process(
-        &self,
-        session_id: SessionId,
-        cwd: &std::path::Path,
-        agent_mode: Option<String>,
-        system_prompt: Option<String>,
-        mcp_servers: Vec<crate::config::McpServerConfig>,
-    ) -> Result<Arc<Mutex<ClaudeProcess>>> {
+    pub async fn spawn_process(&self, config: SpawnConfig) -> Result<Arc<Mutex<ClaudeProcess>>> {
         tracing::info!(
-            "Spawning Claude process for session {} in {}, agent_mode={:?}, system_prompt={}",
-            session_id,
-            cwd.display(),
-            agent_mode,
-            system_prompt
+            "Spawning Claude process for session {} in {}, agent_mode={:?}, system_prompt={}, ephemeral={}",
+            config.session_id,
+            config.cwd.display(),
+            config.agent_mode,
+            config.system_prompt
                 .as_ref()
                 .map(|s| format!("{} chars", s.len()))
-                .unwrap_or_else(|| "None".to_string())
+                .unwrap_or_else(|| "None".to_string()),
+            config.ephemeral
         );
 
-        self.spawn_for_session(session_id, cwd, agent_mode, system_prompt, mcp_servers)
-            .await?;
+        let session_id = config.session_id.clone();
+        self.spawn_for_session(config).await?;
 
         // Get the newly spawned process
         let processes = self.processes.read().map_err(|_| {
@@ -334,13 +344,7 @@ impl ClaudeProcess {
     /// - claude binary not found
     /// - Process spawn fails
     /// - stdin/stdout/stderr not available
-    pub fn spawn(
-        session_id: SessionId,
-        cwd: &std::path::Path,
-        agent_mode: Option<String>,
-        system_prompt: Option<String>,
-        mcp_servers: Vec<crate::config::McpServerConfig>,
-    ) -> Result<Self> {
+    pub fn spawn(config: SpawnConfig) -> Result<Self> {
         // Get test name from thread name or backtrace if in test context
         let test_context = std::thread::current().name().map(|n| n.to_string());
 
@@ -349,10 +353,11 @@ impl ClaudeProcess {
         let claude_session_uuid = uuid::Uuid::new_v4().to_string();
 
         tracing::info!(
-            "ClaudeProcess::spawn for session {} with Claude UUID {}, {} MCP servers",
-            session_id,
+            "ClaudeProcess::spawn for session {} with Claude UUID {}, {} MCP servers, ephemeral={}",
+            config.session_id,
             claude_session_uuid,
-            mcp_servers.len()
+            config.mcp_servers.len(),
+            config.ephemeral
         );
 
         // Build command with optional --agent flag
@@ -363,14 +368,14 @@ impl ClaudeProcess {
             .arg(&claude_session_uuid);
 
         // Add --agent flag if mode is specified (Claude CLI built-in mode)
-        if let Some(mode) = agent_mode {
+        if let Some(ref mode) = config.agent_mode {
             tracing::info!("Spawning Claude with agent mode: {}", mode);
-            command.arg("--agent").arg(&mode);
+            command.arg("--agent").arg(mode);
         }
 
         // Add --system-prompt if system prompt is provided (SwissArmyHammer mode)
         // This REPLACES the default Claude system prompt with our mode's prompt
-        if let Some(ref prompt) = system_prompt {
+        if let Some(ref prompt) = config.system_prompt {
             tracing::info!(
                 "Spawning Claude with SwissArmyHammer system prompt ({} chars)",
                 prompt.len()
@@ -378,16 +383,24 @@ impl ClaudeProcess {
             command.arg("--system-prompt").arg(prompt);
         }
 
+        // Ephemeral mode: use haiku model and disable session persistence
+        // Ideal for validators and quick, stateless operations
+        if config.ephemeral {
+            tracing::info!("Spawning Claude in ephemeral mode (haiku, no session persistence)");
+            command.arg("--model").arg("haiku");
+            command.arg("--no-session-persistence");
+        }
+
         // Build MCP config if servers are specified
-        if !mcp_servers.is_empty() {
+        if !config.mcp_servers.is_empty() {
             tracing::info!(
                 "Building MCP config for Claude with {} servers",
-                mcp_servers.len()
+                config.mcp_servers.len()
             );
 
             // Build MCP config JSON
             let mut mcp_servers_obj = serde_json::Map::new();
-            for server in &mcp_servers {
+            for server in &config.mcp_servers {
                 match server {
                     crate::config::McpServerConfig::Http(http) => {
                         mcp_servers_obj.insert(
@@ -421,7 +434,8 @@ impl ClaudeProcess {
 
             // Write to temp file
             let temp_dir = std::env::temp_dir();
-            let mcp_config_path = temp_dir.join(format!("claude_mcp_config_{}.json", session_id));
+            let mcp_config_path =
+                temp_dir.join(format!("claude_mcp_config_{}.json", config.session_id));
             if let Err(e) = std::fs::write(
                 &mcp_config_path,
                 serde_json::to_string_pretty(&mcp_config).unwrap(),
@@ -451,7 +465,7 @@ impl ClaudeProcess {
         tracing::info!("🚀 Spawning Claude CLI: {}", Pretty(&cmd_info));
 
         let mut cmd = command
-            .current_dir(cwd)
+            .current_dir(&config.cwd)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -482,13 +496,13 @@ impl ClaudeProcess {
         let pid = cmd.id();
         tracing::info!(
             "Claude process spawned: session={}, pid={:?}, test={:?}",
-            session_id,
+            config.session_id,
             pid,
             test_context
         );
 
         Ok(Self {
-            session_id,
+            session_id: config.session_id,
             child: cmd,
             stdin: ManuallyDrop::new(stdin),
             stdout: BufReader::new(stdout),

@@ -376,9 +376,7 @@ impl<C: DirectoryConfig> VirtualFileSystem<C> {
     /// Validate that a path is safe and within the expected directory.
     fn is_path_safe(path: &Path, base_dir: &Path) -> bool {
         match (path.canonicalize(), base_dir.canonicalize()) {
-            (Ok(canonical_path), Ok(canonical_base)) => {
-                canonical_path.starts_with(&canonical_base)
-            }
+            (Ok(canonical_path), Ok(canonical_base)) => canonical_path.starts_with(&canonical_base),
             _ => {
                 let path_str = path.to_string_lossy();
                 !path_str.contains("..") && !path_str.contains('~')

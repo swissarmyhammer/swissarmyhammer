@@ -17,10 +17,10 @@ rust-version = "1.70.0"
 maintenance = { status = "actively-developed" }
 
 [dependencies]
-chumsky = "0.10.1"
+chumsky = { workspace = true }
 
 [dev-dependencies]
-rstest = "0.21"
+rstest = { workspace = true }
 
 # Examples
 [[example]]

@@ -74,6 +74,10 @@ pub struct ClaudeConfig {
     /// Agent operation mode (normal, record, playback)
     #[serde(default)]
     pub mode: ClaudeAgentMode,
+    /// Ephemeral mode: uses haiku model and no session persistence
+    /// Ideal for validators and quick, stateless operations
+    #[serde(default)]
+    pub ephemeral: bool,
 }
 
 /// Server configuration options  
@@ -570,6 +574,7 @@ impl Default for AgentConfig {
                 model: "claude-sonnet-4-20250514".to_string(),
                 stream_format: StreamFormat::StreamJson,
                 mode: ClaudeAgentMode::default(),
+                ephemeral: false,
             },
             server: ServerConfig {
                 port: None,
