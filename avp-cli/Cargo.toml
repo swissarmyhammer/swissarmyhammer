@@ -26,5 +26,9 @@ clap = { version = "4", features = ["derive"] }
 # Async runtime
 tokio = { workspace = true }
 
+# Logging
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+
 [dev-dependencies]
 tempfile = "3"

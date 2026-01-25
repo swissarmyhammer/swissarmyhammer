@@ -4,7 +4,7 @@ use async_trait::async_trait;
 
 use crate::builtin::load_builtins;
 use crate::chain::{Chain, HookInputType};
-use crate::context::AvpContext;
+use crate::context::{AvpContext, Decision, HookEvent};
 use crate::error::AvpError;
 use crate::types::{
     HookOutput, HookType, NotificationInput, PermissionRequestInput, PostToolUseFailureInput,
@@ -266,6 +266,39 @@ impl ClaudeCodeHookStrategy {
     pub fn validator_loader(&self) -> &ValidatorLoader {
         &self.validator_loader
     }
+
+    /// Extract smart log details based on hook type.
+    /// Only logs relevant info, not full payloads.
+    fn extract_log_details(
+        &self,
+        hook_type: HookType,
+        tool_name: &Option<String>,
+        prompt_len: &Option<usize>,
+        result: &Result<(HookOutput, i32), AvpError>,
+    ) -> Option<String> {
+        match hook_type {
+            HookType::PreToolUse | HookType::PostToolUse | HookType::PostToolUseFailure => {
+                // Log tool name
+                tool_name.as_ref().map(|name| format!("tool={}", name))
+            }
+            HookType::UserPromptSubmit => {
+                // Log prompt length, not content
+                prompt_len.map(|len| format!("prompt_len={}", len))
+            }
+            _ => {
+                // For block decisions, include stop reason
+                if let Ok((output, _)) = result {
+                    if !output.continue_execution {
+                        return output
+                            .stop_reason
+                            .as_ref()
+                            .map(|r| format!("reason=\"{}\"", r));
+                    }
+                }
+                None
+            }
+        }
+    }
 }
 
 #[async_trait]
@@ -282,7 +315,18 @@ impl AgentHookStrategy for ClaudeCodeHookStrategy {
     async fn process(&self, input: serde_json::Value) -> Result<(HookOutput, i32), AvpError> {
         let hook_type = self.extract_hook_type(&input)?;
 
-        match hook_type {
+        // Extract details for logging before moving input into processing functions
+        let tool_name: Option<String> = input
+            .get("tool_name")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+
+        let prompt_len: Option<usize> = input
+            .get("prompt")
+            .and_then(|v| v.as_str())
+            .map(|p| p.len());
+
+        let result = match hook_type {
             HookType::SessionStart => {
                 self.process_passthrough::<SessionStartInput>(input, hook_type)
                     .await
@@ -335,7 +379,40 @@ impl AgentHookStrategy for ClaudeCodeHookStrategy {
                 self.process_passthrough::<NotificationInput>(input, hook_type)
                     .await
             }
+        };
+
+        // Log the hook event with smart details based on hook type
+        let hook_type_str = format!("{}", hook_type);
+        let details = self.extract_log_details(hook_type, &tool_name, &prompt_len, &result);
+
+        match &result {
+            Ok((_, exit_code)) => {
+                let decision = if *exit_code == 0 {
+                    Decision::Allow
+                } else {
+                    Decision::Block
+                };
+                self.context.log_event(&HookEvent {
+                    hook_type: &hook_type_str,
+                    decision,
+                    details,
+                });
+            }
+            Err(e) => {
+                let mut error_details = details.unwrap_or_default();
+                if !error_details.is_empty() {
+                    error_details.push(' ');
+                }
+                error_details.push_str(&format!("error={}", e));
+                self.context.log_event(&HookEvent {
+                    hook_type: &hook_type_str,
+                    decision: Decision::Error,
+                    details: Some(error_details),
+                });
+            }
         }
+
+        result
     }
 }
 

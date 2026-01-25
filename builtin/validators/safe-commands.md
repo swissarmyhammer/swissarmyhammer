@@ -6,6 +6,7 @@ trigger: PreToolUse
 match:
   tools:
     - Bash
+    - .*shell.*
 tags:
   - security
   - blocking

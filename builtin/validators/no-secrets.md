@@ -5,8 +5,8 @@ severity: error
 trigger: PostToolUse
 match:
   tools:
-    - Write
-    - Edit
+    - .*write.*
+    - .*edit.* 
   files:
     # JavaScript/TypeScript
     - "*.js"

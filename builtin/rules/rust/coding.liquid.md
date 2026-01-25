@@ -27,13 +27,17 @@ applies_to: "**/*.rs"
 
 ### Type System
 - Create newtype wrappers for domain-specific identifiers
+- Use ULID instead of UUID for unique identifiers
 - Use enums for state machines and variant types
 - Implement `Display` and `Debug` for public types
 - Use `#[derive(Clone, Debug, PartialEq, Eq)]` as standard derives
 
 ### Function Design
-- Prefer functions that take single struct parameters over many individual parameters
+- Avoid primitive types in function signatures, prefer domain-specific types
+- Design functions that take single struct parameters over many individual parameters
+  - Having a long list of primitive parameters is fragile - every new parameter requires updating all call sites
 - Use builder pattern for complex object construction
+  - use a popular macro like `derive_builder` to reduce boilerplate
 - Return `impl Trait` for complex return types when possible
 - Use `&self` methods on types that represent resources or state
 
