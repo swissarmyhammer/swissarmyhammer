@@ -6,8 +6,13 @@
 //!
 //! The execution uses the `.validator` prompt template from the prompts library,
 //! similar to how rule checking uses the `.check` prompt.
+//!
+//! Validator bodies support Liquid templating with partials, using the unified
+//! [`LibraryPartialAdapter`] pattern shared with prompts and rules. Use
+//! `{% include 'partial-name' %}` to include partials from the `_partials/` directory.
 
 use swissarmyhammer_prompts::PromptLibrary;
+use swissarmyhammer_templating::{HashMapPartialLoader, PartialLoader, Template};
 
 use crate::types::HookType;
 use crate::validator::{ExecutedValidator, Validator, ValidatorResult};
@@ -15,23 +20,123 @@ use crate::validator::{ExecutedValidator, Validator, ValidatorResult};
 /// Name of the validator prompt template in the prompts library.
 pub const VALIDATOR_PROMPT_NAME: &str = ".validator";
 
+/// Extract validator partials from a list of validator (name, content) tuples.
+///
+/// Partials are identified by:
+/// - Names starting with `_partials/`
+/// - Content starting with `{% partial %}`
+pub fn extract_partials_from_builtins(
+    builtins: Vec<(&'static str, &'static str)>,
+) -> HashMapPartialLoader {
+    let mut loader = HashMapPartialLoader::empty();
+
+    for (name, content) in builtins {
+        // Check if this is a partial
+        let is_partial =
+            name.starts_with("_partials/") || content.trim_start().starts_with("{% partial %}");
+
+        if is_partial {
+            // Add with the original name
+            loader.add(name, content);
+
+            // Also add with just the base name (without _partials/ prefix)
+            if let Some(base_name) = name.strip_prefix("_partials/") {
+                loader.add(base_name, content);
+            }
+        }
+    }
+
+    loader
+}
+
+/// Render a validator body as a Liquid template with partials support.
+///
+/// If the validator body contains Liquid template syntax, it will be rendered
+/// with the provided partials. If rendering fails or no template syntax is
+/// present, returns the original body unchanged.
+///
+/// This function accepts any type implementing `PartialLoader + Clone`, allowing
+/// it to work with both `HashMapPartialLoader` and `LibraryPartialAdapter<T>`.
+/// This is part of the unified partial adapter pattern shared across prompts,
+/// rules, and validators.
+pub fn render_validator_body<P>(body: &str, partials: &P) -> String
+where
+    P: PartialLoader + Clone + 'static,
+{
+    // Quick check - if no template syntax, return as-is
+    if !body.contains("{%") && !body.contains("{{") {
+        return body.to_string();
+    }
+
+    // Try to render as a Liquid template with partials
+    match Template::with_partials(body, partials.clone()) {
+        Ok(template) => {
+            let empty_args: std::collections::HashMap<String, String> =
+                std::collections::HashMap::new();
+            match template.render(&empty_args) {
+                Ok(rendered) => rendered,
+                Err(e) => {
+                    tracing::warn!("Failed to render validator body as template: {}", e);
+                    body.to_string()
+                }
+            }
+        }
+        Err(e) => {
+            tracing::warn!("Failed to parse validator body as template: {}", e);
+            body.to_string()
+        }
+    }
+}
+
 /// Build the rendered prompt for validator execution.
 ///
 /// This renders the `.validator` prompt template with the validator content
 /// and hook event context, similar to how rule checking renders `.check`.
+///
+/// The validator body is first rendered as a Liquid template if it contains
+/// template syntax, allowing validators to include partials.
 pub fn render_validator_prompt(
     prompt_library: &PromptLibrary,
     validator: &Validator,
     hook_type: HookType,
     context: &serde_json::Value,
 ) -> Result<String, String> {
+    render_validator_prompt_with_partials::<HashMapPartialLoader>(
+        prompt_library,
+        validator,
+        hook_type,
+        context,
+        None,
+    )
+}
+
+/// Build the rendered prompt for validator execution with optional partials support.
+///
+/// This is the same as `render_validator_prompt` but accepts an optional
+/// partial loader for rendering the validator body with partials.
+///
+/// This function accepts any type implementing `PartialLoader + Clone`, allowing
+/// it to work with both `HashMapPartialLoader` and `LibraryPartialAdapter<T>`.
+pub fn render_validator_prompt_with_partials<P>(
+    prompt_library: &PromptLibrary,
+    validator: &Validator,
+    hook_type: HookType,
+    context: &serde_json::Value,
+    partials: Option<&P>,
+) -> Result<String, String>
+where
+    P: PartialLoader + Clone + 'static,
+{
     use swissarmyhammer_config::TemplateContext;
 
+    // Render the validator body with partials if provided
+    let rendered_body = match partials {
+        Some(p) => render_validator_body(&validator.body, p),
+        None => validator.body.clone(),
+    };
+
     let mut template_context = TemplateContext::new();
-    template_context.set(
-        "validator_content".to_string(),
-        validator.body.clone().into(),
-    );
+    template_context.set("validator_content".to_string(), rendered_body.into());
     template_context.set(
         "validator_name".to_string(),
         validator.name().to_string().into(),
@@ -366,5 +471,70 @@ Here's my analysis:
         assert!(prompt_text.contains("Check for issues in the code."));
         assert!(prompt_text.contains("PreToolUse"));
         assert!(prompt_text.contains("tool_name"));
+    }
+
+    #[test]
+    fn test_render_validator_body_with_partials() {
+        // Create partials with a test partial
+        let mut partials = HashMapPartialLoader::empty();
+        partials.add("test-partial", "This is included content.");
+
+        // Test body with include directive
+        let body = "Before include. {% include 'test-partial' %} After include.";
+        let rendered = render_validator_body(body, &partials);
+
+        assert!(
+            rendered.contains("This is included content."),
+            "Rendered body should include partial content: {}",
+            rendered
+        );
+        assert!(
+            !rendered.contains("{% include"),
+            "Rendered body should not contain include directive: {}",
+            rendered
+        );
+    }
+
+    #[test]
+    fn test_render_validator_body_without_template_syntax() {
+        // Body without any template syntax should pass through unchanged
+        let partials = HashMapPartialLoader::empty();
+        let body = "Just plain text without any templates.";
+        let rendered = render_validator_body(body, &partials);
+
+        assert_eq!(rendered, body);
+    }
+
+    #[test]
+    fn test_extract_partials_from_builtins() {
+        // Test that extract_partials_from_builtins correctly identifies partials
+        let builtins = vec![
+            ("_partials/test", "{% partial %}\n\nPartial content"),
+            ("normal-validator", "Normal validator content"),
+            ("partial-in-name", "{% partial %}\n\nAnother partial"),
+        ];
+
+        let loader = extract_partials_from_builtins(builtins);
+
+        // _partials/test should be included
+        assert!(
+            swissarmyhammer_templating::PartialLoader::contains(&loader, "_partials/test"),
+            "Should contain _partials/test"
+        );
+        // It should also be accessible as just "test"
+        assert!(
+            swissarmyhammer_templating::PartialLoader::contains(&loader, "test"),
+            "Should contain test (without prefix)"
+        );
+        // partial-in-name should be included (has {% partial %} marker)
+        assert!(
+            swissarmyhammer_templating::PartialLoader::contains(&loader, "partial-in-name"),
+            "Should contain partial-in-name"
+        );
+        // normal-validator should NOT be included
+        assert!(
+            !swissarmyhammer_templating::PartialLoader::contains(&loader, "normal-validator"),
+            "Should not contain normal-validator"
+        );
     }
 }

@@ -86,10 +86,7 @@ fn fixtures_dir() -> PathBuf {
 }
 
 /// Create an AvpContext with a PlaybackAgent for testing.
-fn create_context_with_playback(
-    temp: &TempDir,
-    fixture_name: &str,
-) -> AvpContext {
+fn create_context_with_playback(temp: &TempDir, fixture_name: &str) -> AvpContext {
     let fixture_path = fixtures_dir().join(fixture_name);
     let agent = PlaybackAgent::new(fixture_path, "claude");
     let notification_rx = agent.subscribe_notifications();
@@ -365,8 +362,7 @@ async fn test_no_secrets_validator_detects_secrets_playback() {
 
     // Get agent from context and create runner
     let (agent, notifications) = context.agent().await.expect("Should get agent");
-    let runner = ValidatorRunner::new(agent, notifications)
-        .expect("Should create runner");
+    let runner = ValidatorRunner::new(agent, notifications).expect("Should create runner");
 
     // Load the no-secrets validator
     let mut loader = ValidatorLoader::new();
@@ -407,8 +403,7 @@ async fn test_no_secrets_validator_passes_clean_code_playback() {
 
     // Get agent from context and create runner
     let (agent, notifications) = context.agent().await.expect("Should get agent");
-    let runner = ValidatorRunner::new(agent, notifications)
-        .expect("Should create runner");
+    let runner = ValidatorRunner::new(agent, notifications).expect("Should create runner");
 
     // Load the no-secrets validator
     let mut loader = ValidatorLoader::new();

@@ -2,113 +2,35 @@
 //!
 //! This module provides the integration between rule libraries and
 //! the Liquid template engine's partial system.
+//!
+//! Note: This is a thin wrapper around the generic [`LibraryPartialAdapter`] from
+//! `swissarmyhammer_templating`. The rules library implements [`TemplateContentProvider`],
+//! which enables it to work with the unified partial adapter system.
 
 use crate::rules::RuleLibrary;
-use std::borrow::Cow;
 use std::sync::Arc;
-use swissarmyhammer_common::Pretty;
-use swissarmyhammer_templating::partials::normalize_partial_name;
+use swissarmyhammer_templating::partials::LibraryPartialAdapter;
 
-/// Adapter that allows rules to be used as Liquid template partials
-#[derive(Debug)]
-pub struct RulePartialAdapter {
-    library: Arc<RuleLibrary>,
-}
+/// Adapter that allows rules to be used as Liquid template partials.
+///
+/// This is a type alias for the generic [`LibraryPartialAdapter`] specialized
+/// for [`RuleLibrary`]. The underlying library implements [`TemplateContentProvider`],
+/// enabling it to work with the unified partial system.
+pub type RulePartialAdapter = LibraryPartialAdapter<RuleLibrary>;
 
-impl RulePartialAdapter {
-    /// Create a new rule partial adapter
-    pub fn new(library: Arc<RuleLibrary>) -> Self {
-        Self { library }
-    }
-
-    /// Get the library reference
-    pub fn library(&self) -> &RuleLibrary {
-        &self.library
-    }
-
-    /// Get the library Arc for cloning
-    pub fn library_arc(&self) -> &Arc<RuleLibrary> {
-        &self.library
-    }
-}
-
-impl swissarmyhammer_templating::PartialLoader for RulePartialAdapter {
-    fn contains(&self, name: &str) -> bool {
-        tracing::trace!("RulePartialAdapter::contains called with name: '{}'", name);
-
-        // Try the requested name and all normalized variants
-        let candidates = normalize_partial_name(name);
-        tracing::trace!("Trying candidates: {}", Pretty(&candidates));
-
-        for candidate in candidates {
-            if self.library.get(&candidate).is_ok() {
-                tracing::trace!("Found matching partial: '{}'", candidate);
-                return true;
-            }
-        }
-
-        tracing::error!("No matching partial found for: '{}'", name);
-        false
-    }
-
-    fn names(&self) -> Vec<String> {
-        let names = self.library.list_names().unwrap_or_default();
-        tracing::trace!("RulePartialAdapter::names returning: {}", Pretty(&names));
-        names
-    }
-
-    fn try_get(&self, name: &str) -> Option<Cow<'_, str>> {
-        tracing::trace!("RulePartialAdapter::try_get called with name: '{}'", name);
-
-        // Try the requested name and all normalized variants
-        let candidates = normalize_partial_name(name);
-        tracing::trace!("Trying candidates: {}", Pretty(&candidates));
-
-        for candidate in candidates {
-            if let Ok(rule) = self.library.get(&candidate) {
-                tracing::trace!("Found matching partial: '{}'", candidate);
-                return Some(Cow::Owned(rule.template.clone()));
-            }
-        }
-
-        tracing::error!("No matching partial found for: '{}'", name);
-        None
-    }
-}
-
-impl liquid::partials::PartialSource for RulePartialAdapter {
-    fn contains(&self, name: &str) -> bool {
-        // Try the requested name and all normalized variants
-        let candidates = normalize_partial_name(name);
-        for candidate in candidates {
-            if self.library.get(&candidate).is_ok() {
-                return true;
-            }
-        }
-        false
-    }
-
-    fn names(&self) -> Vec<&str> {
-        // Return empty slice for now to avoid lifetime issues
-        Vec::new()
-    }
-
-    fn try_get(&self, name: &str) -> Option<std::borrow::Cow<'_, str>> {
-        // Try the requested name and all normalized variants
-        let candidates = normalize_partial_name(name);
-        for candidate in candidates {
-            if let Ok(rule) = self.library.get(&candidate) {
-                return Some(std::borrow::Cow::Owned(rule.template.clone()));
-            }
-        }
-        None
-    }
+/// Create a new rule partial adapter from a library Arc.
+///
+/// This is a convenience function that creates a `RulePartialAdapter`
+/// (which is a `LibraryPartialAdapter<RuleLibrary>`).
+pub fn new_rule_partial_adapter(library: Arc<RuleLibrary>) -> RulePartialAdapter {
+    LibraryPartialAdapter::new(library)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::{Rule, RuleLibrary, Severity};
+    use swissarmyhammer_templating::partials::TemplateContentProvider;
     use swissarmyhammer_templating::PartialLoader;
 
     #[test]
@@ -197,5 +119,44 @@ mod tests {
         // Get names
         let names = PartialLoader::names(&adapter);
         assert_eq!(names.len(), 2);
+    }
+
+    #[test]
+    fn test_template_content_provider_impl() {
+        let mut library = RuleLibrary::new();
+        library
+            .add(Rule::new(
+                "test".to_string(),
+                "Template content".to_string(),
+                Severity::Info,
+            ))
+            .unwrap();
+
+        // Test TemplateContentProvider directly
+        assert!(library.get_template_content("test").is_some());
+        assert_eq!(
+            library.get_template_content("test").unwrap(),
+            "Template content"
+        );
+        assert!(library.get_template_content("nonexistent").is_none());
+
+        let names = library.list_template_names();
+        assert_eq!(names.len(), 1);
+        assert!(names.contains(&"test".to_string()));
+    }
+
+    #[test]
+    fn test_convenience_function() {
+        let mut library = RuleLibrary::new();
+        library
+            .add(Rule::new(
+                "test".to_string(),
+                "Content".to_string(),
+                Severity::Info,
+            ))
+            .unwrap();
+
+        let adapter = new_rule_partial_adapter(Arc::new(library));
+        assert!(PartialLoader::contains(&adapter, "test"));
     }
 }

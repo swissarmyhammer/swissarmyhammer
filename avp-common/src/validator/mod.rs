@@ -27,10 +27,16 @@
 //!
 //! Validators are loaded from multiple directories with precedence:
 //! 1. Builtin validators (embedded in the binary) - lowest precedence
-//! 2. User validators (~/.avp/validators)
-//! 3. Project validators (./.avp/validators) - highest precedence
+//! 2. User validators (~/<AVP_DIR>/validators)
+//! 3. Project validators (./<AVP_DIR>/validators) - highest precedence
 //!
 //! Later sources override earlier ones with the same name.
+//!
+//! # Partial Support
+//!
+//! Validators support Liquid template partials via the unified [`ValidatorPartialAdapter`],
+//! which follows the same pattern as prompts and rules. Use `{% include 'partial-name' %}`
+//! in validator bodies to include shared content from the `_partials/` directory.
 //!
 //! # Example
 //!
@@ -57,9 +63,13 @@ pub mod parser;
 pub mod runner;
 pub mod types;
 
+use std::sync::Arc;
+use swissarmyhammer_templating::partials::LibraryPartialAdapter;
+
 // Re-export main types for convenience
 pub use executor::{
-    create_executed_validator, parse_validator_response, render_validator_prompt,
+    create_executed_validator, extract_partials_from_builtins, parse_validator_response,
+    render_validator_body, render_validator_prompt, render_validator_prompt_with_partials,
     VALIDATOR_PROMPT_NAME,
 };
 pub use loader::ValidatorLoader;
@@ -69,3 +79,22 @@ pub use types::{
     ExecutedValidator, MatchContext, Severity, Validator, ValidatorFrontmatter, ValidatorMatch,
     ValidatorResult, ValidatorSource,
 };
+
+/// Adapter that allows validators to be used as Liquid template partials.
+///
+/// This is a type alias for the generic [`LibraryPartialAdapter`] specialized
+/// for [`ValidatorLoader`]. This follows the same unified pattern as
+/// [`swissarmyhammer_prompts::PromptPartialAdapter`] and
+/// [`swissarmyhammer_rules::RulePartialAdapter`].
+///
+/// The underlying loader implements [`swissarmyhammer_templating::partials::TemplateContentProvider`],
+/// enabling validators to participate in the unified partial system.
+pub type ValidatorPartialAdapter = LibraryPartialAdapter<ValidatorLoader>;
+
+/// Create a new validator partial adapter from a loader Arc.
+///
+/// This is a convenience function that creates a `ValidatorPartialAdapter`
+/// (which is a `LibraryPartialAdapter<ValidatorLoader>`).
+pub fn new_validator_partial_adapter(loader: Arc<ValidatorLoader>) -> ValidatorPartialAdapter {
+    LibraryPartialAdapter::new(loader)
+}

@@ -34,6 +34,7 @@ swissarmyhammer-directory = { path = "../swissarmyhammer-directory" }
 # Prompts and templating for validator execution
 swissarmyhammer-prompts = { path = "../swissarmyhammer-prompts" }
 swissarmyhammer-config = { path = "../swissarmyhammer-config" }
+swissarmyhammer-templating = { path = "../swissarmyhammer-templating" }
 
 # Claude agent for validator execution
 claude-agent = { path = "../claude-agent" }

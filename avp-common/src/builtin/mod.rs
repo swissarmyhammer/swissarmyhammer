@@ -40,6 +40,14 @@ pub fn builtin_names() -> Vec<&'static str> {
         .collect()
 }
 
+/// Get all builtin validators as (name, content) tuples.
+///
+/// This provides direct access to the raw builtin validator content,
+/// which is useful for extracting partials for templating.
+pub fn validators_raw() -> Vec<(&'static str, &'static str)> {
+    get_builtin_validators()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

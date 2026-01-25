@@ -40,7 +40,7 @@ pub use glob::{expand_files_for_rules, DEFAULT_PATTERN};
 pub use language::detect_language;
 pub use rule_filter::RuleFilter;
 pub use rule_loader::RuleLoader;
-pub use rule_partial_adapter::RulePartialAdapter;
+pub use rule_partial_adapter::{new_rule_partial_adapter, RulePartialAdapter};
 pub use rule_resolver::RuleResolver;
 pub use rules::{Rule, RuleBuilder, RuleLibrary};
 pub use severity::Severity;

@@ -117,7 +117,10 @@ pub mod engine;
 // Re-export core types for convenience
 pub use engine::TemplateEngine;
 pub use error::{Result, TemplatingError};
-pub use partials::{PartialLoader, PartialLoaderAdapter, PartialTag};
+pub use partials::{
+    HashMapPartialLoader, LibraryPartialAdapter, PartialLoader, PartialLoaderAdapter, PartialTag,
+    TemplateContentProvider,
+};
 pub use security::{
     validate_template_security, MAX_TEMPLATE_RECURSION_DEPTH, MAX_TEMPLATE_RENDER_TIME_MS,
     MAX_TEMPLATE_SIZE, MAX_TEMPLATE_VARIABLES,

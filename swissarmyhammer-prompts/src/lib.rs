@@ -39,7 +39,7 @@ pub use frontmatter::{parse_frontmatter, FrontmatterResult};
 pub use prompt_filter::PromptFilter;
 
 // Re-export partial adapter types
-pub use prompt_partial_adapter::PromptPartialAdapter;
+pub use prompt_partial_adapter::{new_prompt_partial_adapter, PromptPartialAdapter};
 
 // Include the generated builtin prompts
 include!(concat!(env!("OUT_DIR"), "/builtin_prompts.rs"));

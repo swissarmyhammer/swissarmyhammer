@@ -2,15 +2,20 @@
 //!
 //! Loads validators from multiple directories with precedence:
 //! 1. Builtin validators (embedded in the binary) - lowest precedence
-//! 2. User validators (~/.avp/validators)
-//! 3. Project validators (./.avp/validators) - highest precedence
+//! 2. User validators (~/<AVP_DIR>/validators)
+//! 3. Project validators (./<AVP_DIR>/validators) - highest precedence
 //!
 //! Later sources override earlier ones with the same name.
+//!
+//! The loader implements [`TemplateContentProvider`] from `swissarmyhammer_templating`,
+//! allowing it to be used with the unified [`LibraryPartialAdapter`] for partial
+//! template support. This follows the same pattern as prompts and rules.
 
 use std::collections::HashMap;
 use std::path::Path;
 
 use swissarmyhammer_directory::{AvpConfig, FileSource, ManagedDirectory, VirtualFileSystem};
+use swissarmyhammer_templating::partials::TemplateContentProvider;
 
 use crate::context::AvpContext;
 use crate::error::AvpError;
@@ -45,8 +50,8 @@ impl ValidatorLoader {
     /// Load validators from directories specified in the context.
     ///
     /// This loads validators using the AvpContext to get directory paths:
-    /// 1. User validators from ~/.avp/validators (if exists)
-    /// 2. Project validators from ./.avp/validators (if exists)
+    /// 1. User validators from ~/<AVP_DIR>/validators (if exists)
+    /// 2. Project validators from ./<AVP_DIR>/validators (if exists)
     ///
     /// Later sources override earlier ones with the same name.
     /// Call `load_builtins()` before this if you want builtin validators.
@@ -71,8 +76,8 @@ impl ValidatorLoader {
     ///
     /// This loads validators from:
     /// 1. Builtin validators (call `load_builtins()` first if needed)
-    /// 2. User validators from ~/.avp/validators
-    /// 3. Project validators from ./.avp/validators
+    /// 2. User validators from ~/<AVP_DIR>/validators
+    /// 3. Project validators from ./<AVP_DIR>/validators
     ///
     /// Later sources override earlier ones with the same name.
     ///
@@ -221,6 +226,11 @@ impl ValidatorLoader {
             .collect()
     }
 
+    /// List all validator names.
+    pub fn list_names(&self) -> Vec<String> {
+        self.validators.keys().cloned().collect()
+    }
+
     /// Get all directories that would be searched for validators.
     pub fn get_directories() -> Vec<std::path::PathBuf> {
         let mut dirs = Vec::new();
@@ -242,6 +252,21 @@ impl ValidatorLoader {
         }
 
         dirs
+    }
+}
+
+/// Implement TemplateContentProvider for ValidatorLoader.
+///
+/// This allows the validator loader to be used with the unified LibraryPartialAdapter,
+/// following the same pattern as PromptLibrary and RuleLibrary. Validators can then
+/// use `{% include 'partial-name' %}` to include partials from the _partials/ directory.
+impl TemplateContentProvider for ValidatorLoader {
+    fn get_template_content(&self, name: &str) -> Option<String> {
+        self.get(name).map(|v| v.body.clone())
+    }
+
+    fn list_template_names(&self) -> Vec<String> {
+        self.list_names()
     }
 }
 
@@ -423,5 +448,130 @@ User body.
             loader.get("override-test").unwrap().source,
             ValidatorSource::User
         );
+    }
+
+    #[test]
+    fn test_template_content_provider() {
+        let mut loader = ValidatorLoader::new();
+
+        loader.add_builtin(
+            "test-validator",
+            r#"---
+name: test-validator
+description: Test validator
+severity: error
+trigger: PreToolUse
+---
+Check for issues in the code.
+"#,
+        );
+
+        // Test TemplateContentProvider implementation
+        assert!(loader.get_template_content("test-validator").is_some());
+        let content = loader.get_template_content("test-validator").unwrap();
+        assert!(content.contains("Check for issues"));
+
+        // Non-existent should return None
+        assert!(loader.get_template_content("nonexistent").is_none());
+
+        // list_template_names should work
+        let names = loader.list_template_names();
+        assert_eq!(names.len(), 1);
+        assert!(names.contains(&"test-validator".to_string()));
+    }
+
+    #[test]
+    fn test_loader_with_partials() {
+        let mut loader = ValidatorLoader::new();
+
+        // Add a regular validator
+        loader.add_builtin(
+            "regular-validator",
+            r#"---
+name: regular-validator
+description: Regular validator
+severity: error
+trigger: PreToolUse
+---
+Check for issues.
+"#,
+        );
+
+        // Add a partial (identified by _partials/ prefix)
+        loader.add_builtin(
+            "_partials/response-format",
+            r#"---
+name: _partials/response-format
+description: Response format partial
+severity: info
+trigger: PreToolUse
+---
+{% partial %}
+
+Return JSON with status and message fields.
+"#,
+        );
+
+        // Both should be accessible
+        assert!(loader.get("regular-validator").is_some());
+        assert!(loader.get("_partials/response-format").is_some());
+        assert_eq!(loader.len(), 2);
+
+        // TemplateContentProvider should return both
+        let names = loader.list_template_names();
+        assert_eq!(names.len(), 2);
+    }
+
+    #[test]
+    fn test_load_directory_with_partials() {
+        let temp = TempDir::new().unwrap();
+        let validators_dir = temp.path().join("validators");
+        let partials_dir = validators_dir.join("_partials");
+        fs::create_dir_all(&partials_dir).unwrap();
+
+        // Create a regular validator
+        fs::write(
+            validators_dir.join("test-validator.md"),
+            r#"---
+name: test-validator
+description: Test validator
+severity: error
+trigger: PreToolUse
+---
+Check issues. {% include 'response-helper' %}
+"#,
+        )
+        .unwrap();
+
+        // Create a partial in _partials directory
+        fs::write(
+            partials_dir.join("response-helper.md"),
+            r#"---
+name: _partials/response-helper
+description: Response helper partial
+severity: info
+trigger: PreToolUse
+---
+{% partial %}
+
+Return JSON response.
+"#,
+        )
+        .unwrap();
+
+        let mut loader = ValidatorLoader::new();
+        loader
+            .load_directory(&validators_dir, ValidatorSource::Project)
+            .unwrap();
+
+        // Should load both the validator and the partial
+        assert!(loader.get("test-validator").is_some());
+        assert!(loader.get("_partials/response-helper").is_some());
+
+        // TemplateContentProvider should expose both
+        assert!(loader.get_template_content("test-validator").is_some());
+        assert!(loader
+            .get_template_content("_partials/response-helper")
+            .is_some());
     }
 }

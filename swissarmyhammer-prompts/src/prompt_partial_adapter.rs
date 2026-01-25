@@ -2,111 +2,35 @@
 //!
 //! This module provides the integration between prompt libraries and
 //! the Liquid template engine's partial system.
+//!
+//! Note: This is a thin wrapper around the generic [`LibraryPartialAdapter`] from
+//! `swissarmyhammer_templating`. The prompts library implements [`TemplateContentProvider`],
+//! which enables it to work with the unified partial adapter system.
 
 use crate::prompts::PromptLibrary;
-use std::borrow::Cow;
 use std::sync::Arc;
-use swissarmyhammer_common::Pretty;
-use swissarmyhammer_templating::partials::normalize_partial_name;
+use swissarmyhammer_templating::partials::LibraryPartialAdapter;
 
-/// Adapter that allows prompts to be used as Liquid template partials
-#[derive(Debug)]
-pub struct PromptPartialAdapter {
-    library: Arc<PromptLibrary>,
-}
+/// Adapter that allows prompts to be used as Liquid template partials.
+///
+/// This is a type alias for the generic [`LibraryPartialAdapter`] specialized
+/// for [`PromptLibrary`]. The underlying library implements [`TemplateContentProvider`],
+/// enabling it to work with the unified partial system.
+pub type PromptPartialAdapter = LibraryPartialAdapter<PromptLibrary>;
 
-impl PromptPartialAdapter {
-    /// Create a new prompt partial adapter
-    pub fn new(library: Arc<PromptLibrary>) -> Self {
-        Self { library }
-    }
-
-    /// Get the library reference
-    pub fn library(&self) -> &PromptLibrary {
-        &self.library
-    }
-}
-
-impl swissarmyhammer_templating::PartialLoader for PromptPartialAdapter {
-    fn contains(&self, name: &str) -> bool {
-        tracing::trace!(
-            "PromptPartialAdapter::contains called with name: '{}'",
-            name
-        );
-
-        // Try the requested name and all normalized variants
-        let candidates = normalize_partial_name(name);
-        tracing::trace!("Trying candidates: {}", Pretty(&candidates));
-
-        for candidate in candidates {
-            if self.library.get(&candidate).is_ok() {
-                tracing::trace!("Found matching partial: '{}'", candidate);
-                return true;
-            }
-        }
-
-        tracing::error!("No matching partial found for: '{}'", name);
-        false
-    }
-
-    fn names(&self) -> Vec<String> {
-        let names = self.library.list_names().unwrap_or_default();
-        tracing::trace!("PromptPartialAdapter::names returning: {}", Pretty(&names));
-        names
-    }
-
-    fn try_get(&self, name: &str) -> Option<Cow<'_, str>> {
-        tracing::trace!("PromptPartialAdapter::try_get called with name: '{}'", name);
-
-        // Try the requested name and all normalized variants
-        let candidates = normalize_partial_name(name);
-        tracing::trace!("Trying candidates: {}", Pretty(&candidates));
-
-        for candidate in candidates {
-            if let Ok(prompt) = self.library.get(&candidate) {
-                tracing::trace!("Found matching partial: '{}'", candidate);
-                return Some(Cow::Owned(prompt.template.clone()));
-            }
-        }
-
-        tracing::error!("No matching partial found for: '{}'", name);
-        None
-    }
-}
-
-impl liquid::partials::PartialSource for PromptPartialAdapter {
-    fn contains(&self, name: &str) -> bool {
-        // Try the requested name and all normalized variants
-        let candidates = normalize_partial_name(name);
-        for candidate in candidates {
-            if self.library.get(&candidate).is_ok() {
-                return true;
-            }
-        }
-        false
-    }
-
-    fn names(&self) -> Vec<&str> {
-        // Return empty slice for now to avoid lifetime issues
-        Vec::new()
-    }
-
-    fn try_get(&self, name: &str) -> Option<std::borrow::Cow<'_, str>> {
-        // Try the requested name and all normalized variants
-        let candidates = normalize_partial_name(name);
-        for candidate in candidates {
-            if let Ok(prompt) = self.library.get(&candidate) {
-                return Some(std::borrow::Cow::Owned(prompt.template.clone()));
-            }
-        }
-        None
-    }
+/// Create a new prompt partial adapter from a library Arc.
+///
+/// This is a convenience function that creates a `PromptPartialAdapter`
+/// (which is a `LibraryPartialAdapter<PromptLibrary>`).
+pub fn new_prompt_partial_adapter(library: Arc<PromptLibrary>) -> PromptPartialAdapter {
+    LibraryPartialAdapter::new(library)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::prompts::{Prompt, PromptLibrary};
+    use swissarmyhammer_templating::partials::TemplateContentProvider;
     use swissarmyhammer_templating::PartialLoader;
 
     #[test]
@@ -144,5 +68,34 @@ mod tests {
         assert!(PartialLoader::contains(&adapter, "partial1"));
         assert!(PartialLoader::contains(&adapter, "partial2"));
         assert!(PartialLoader::contains(&adapter, "partial3"));
+    }
+
+    #[test]
+    fn test_template_content_provider_impl() {
+        let mut library = PromptLibrary::new();
+        library
+            .add(Prompt::new("test", "Template content"))
+            .unwrap();
+
+        // Test TemplateContentProvider directly
+        assert!(library.get_template_content("test").is_some());
+        assert_eq!(
+            library.get_template_content("test").unwrap(),
+            "Template content"
+        );
+        assert!(library.get_template_content("nonexistent").is_none());
+
+        let names = library.list_template_names();
+        assert_eq!(names.len(), 1);
+        assert!(names.contains(&"test".to_string()));
+    }
+
+    #[test]
+    fn test_convenience_function() {
+        let mut library = PromptLibrary::new();
+        library.add(Prompt::new("test", "Content")).unwrap();
+
+        let adapter = new_prompt_partial_adapter(Arc::new(library));
+        assert!(PartialLoader::contains(&adapter, "test"));
     }
 }

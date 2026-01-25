@@ -66,8 +66,9 @@ pub use state::{
     CompensationKey, ErrorContext, State, StateError, StateId, StateResult, StateType,
 };
 pub use storage::{
-    CompressedWorkflowStorage, FileSystemWorkflowStorage, MemoryWorkflowStorage, WorkflowResolver,
-    WorkflowStorage, WorkflowStorageBackend,
+    new_workflow_partial_adapter, CompressedWorkflowStorage, FileSystemWorkflowStorage,
+    MemoryWorkflowStorage, WorkflowPartialAdapter, WorkflowResolver, WorkflowStorage,
+    WorkflowStorageBackend,
 };
 pub use template_context::WorkflowTemplateContext;
 pub use transition::{ConditionType, Transition, TransitionCondition};

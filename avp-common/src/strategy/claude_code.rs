@@ -31,7 +31,7 @@ use super::traits::{AgentHookStrategy, TypedHookStrategy};
 ///
 /// Each hook type has its own typed Input that is parsed from JSON and
 /// processed through a chain of responsibility. Validators are loaded
-/// from builtin, user (~/.avp/validators), and project (./.avp/validators)
+/// from builtin, user (~/<AVP_DIR>/validators), and project (./<AVP_DIR>/validators)
 /// directories with proper precedence, and executed via ACP agent.
 pub struct ClaudeCodeHookStrategy {
     /// Strategies for each hook type
@@ -62,8 +62,8 @@ impl ClaudeCodeHookStrategy {
     ///
     /// This loads all validators:
     /// 1. Builtin validators (embedded in the binary)
-    /// 2. User validators (~/.avp/validators)
-    /// 3. Project validators (./.avp/validators)
+    /// 2. User validators (~/<AVP_DIR>/validators)
+    /// 3. Project validators (./<AVP_DIR>/validators)
     ///
     /// The validator runner is created lazily when validators are executed,
     /// using the agent from the AvpContext.
@@ -175,10 +175,16 @@ impl ClaudeCodeHookStrategy {
         }
 
         // Execute with cached runner
-        match self.execute_with_cached_runner(&matching, hook_type, input).await {
+        match self
+            .execute_with_cached_runner(&matching, hook_type, input)
+            .await
+        {
             Ok(results) => results,
             Err(e) => {
-                tracing::warn!("Failed to execute validators: {} - using placeholder results", e);
+                tracing::warn!(
+                    "Failed to execute validators: {} - using placeholder results",
+                    e
+                );
                 self.placeholder_results(&matching, hook_type)
             }
         }

@@ -5,18 +5,28 @@
 //!
 //! The agent is obtained from `AvpContext`, which handles lazy creation of
 //! ClaudeAgent in production or injection of PlaybackAgent for testing.
+//!
+//! Validator partials can come from any of the standard validator directories:
+//! - builtin/validators/_partials/
+//! - ~/<AVP_DIR>/validators/_partials/
+//! - <AVP_DIR>/validators/_partials/
+//!
+//! This follows the same unified pattern as prompts and rules, using
+//! [`ValidatorPartialAdapter`] which is a type alias for
+//! `LibraryPartialAdapter<ValidatorLoader>`.
 
 use std::sync::Arc;
 
 use agent_client_protocol::{Agent, SessionNotification};
 use swissarmyhammer_prompts::{PromptLibrary, PromptResolver};
+use swissarmyhammer_templating::HashMapPartialLoader;
 use tokio::sync::broadcast;
 
 use crate::error::AvpError;
 use crate::types::HookType;
 use crate::validator::{
-    create_executed_validator, parse_validator_response, render_validator_prompt,
-    ExecutedValidator, Validator, VALIDATOR_PROMPT_NAME,
+    create_executed_validator, parse_validator_response, render_validator_prompt_with_partials,
+    ExecutedValidator, Validator, ValidatorLoader, VALIDATOR_PROMPT_NAME,
 };
 
 /// Executes validators via ACP Agent calls.
@@ -26,6 +36,9 @@ use crate::validator::{
 /// 2. Executing prompts via the provided Agent
 /// 3. Parsing LLM responses into pass/fail results
 /// 4. Creating `ExecutedValidator` results with metadata
+///
+/// Validator bodies support Liquid templating with partials, similar to rules
+/// and prompts. The runner loads partials from builtin validators automatically.
 ///
 /// # Usage
 ///
@@ -37,6 +50,8 @@ use crate::validator::{
 pub struct ValidatorRunner {
     /// Prompt library containing the .validator prompt
     prompt_library: Arc<PromptLibrary>,
+    /// Validator partials for template rendering
+    partials: HashMapPartialLoader,
     /// Agent for executing prompts
     agent: Arc<dyn Agent + Send + Sync>,
     /// Notification sender for resubscription
@@ -52,6 +67,7 @@ impl ValidatorRunner {
         notifications: broadcast::Receiver<SessionNotification>,
     ) -> Result<Self, AvpError> {
         let prompt_library = Self::load_prompt_library()?;
+        let partials = Self::load_validator_partials();
 
         // Create a sender so we can resubscribe for each validator execution
         let (tx, _) = broadcast::channel(256);
@@ -67,6 +83,7 @@ impl ValidatorRunner {
 
         Ok(Self {
             prompt_library: Arc::new(prompt_library),
+            partials,
             agent,
             notifications: tx,
         })
@@ -92,6 +109,66 @@ impl ValidatorRunner {
         Ok(prompt_library)
     }
 
+    /// Load validator partials from all sources (builtin + user + project).
+    ///
+    /// This follows the same pattern as prompts and rules - partials are loaded
+    /// from all validator directories with the standard precedence:
+    /// 1. Builtin validators (lowest precedence)
+    /// 2. User validators (~/<AVP_DIR>/validators)
+    /// 3. Project validators (<AVP_DIR>/validators) (highest precedence)
+    fn load_validator_partials() -> HashMapPartialLoader {
+        // Create a loader and load all validators (including partials)
+        let mut loader = ValidatorLoader::new();
+
+        // First load builtins
+        crate::load_builtins(&mut loader);
+
+        // Then load from filesystem (user + project directories)
+        // This uses VirtualFileSystem<AvpConfig> internally
+        if let Err(e) = loader.load_all() {
+            tracing::warn!("Failed to load some validators for partials: {}", e);
+        }
+
+        // Extract partials from all loaded validators
+        let partials = Self::extract_partials_from_loader(&loader);
+        tracing::debug!(
+            "Loaded {} validator partials from {} total validators",
+            partials.len(),
+            loader.len()
+        );
+        partials
+    }
+
+    /// Extract partials from a ValidatorLoader.
+    ///
+    /// Partials are identified by:
+    /// - Names starting with `_partials/`
+    /// - Content starting with `{% partial %}`
+    fn extract_partials_from_loader(loader: &ValidatorLoader) -> HashMapPartialLoader {
+        let mut partials = HashMapPartialLoader::empty();
+
+        for validator in loader.list() {
+            let name = validator.name();
+            let body = &validator.body;
+
+            // Check if this is a partial
+            let is_partial =
+                name.starts_with("_partials/") || body.trim_start().starts_with("{% partial %}");
+
+            if is_partial {
+                // Add with the original name
+                partials.add(name, body.clone());
+
+                // Also add with just the base name (without _partials/ prefix)
+                if let Some(base_name) = name.strip_prefix("_partials/") {
+                    partials.add(base_name, body.clone());
+                }
+            }
+        }
+
+        partials
+    }
+
     /// Execute a single validator against a hook event context.
     ///
     /// Returns an `ExecutedValidator` with the result and validator metadata.
@@ -101,9 +178,14 @@ impl ValidatorRunner {
         hook_type: HookType,
         context: &serde_json::Value,
     ) -> ExecutedValidator {
-        // Render the validator prompt
-        let prompt_result =
-            render_validator_prompt(&self.prompt_library, validator, hook_type, context);
+        // Render the validator prompt with partials support
+        let prompt_result = render_validator_prompt_with_partials(
+            &self.prompt_library,
+            validator,
+            hook_type,
+            context,
+            Some(&self.partials),
+        );
 
         let prompt_text = match prompt_result {
             Ok(text) => text,

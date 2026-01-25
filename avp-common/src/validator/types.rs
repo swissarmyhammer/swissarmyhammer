@@ -184,9 +184,9 @@ pub struct ValidatorFrontmatter {
 pub enum ValidatorSource {
     /// Builtin validators embedded in the binary.
     Builtin,
-    /// User validators from ~/.avp/validators.
+    /// User validators from ~/<AVP_DIR>/validators.
     User,
-    /// Project validators from ./.avp/validators.
+    /// Project validators from ./<AVP_DIR>/validators.
     Project,
 }
 

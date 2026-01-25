@@ -1025,6 +1025,16 @@ impl Default for PromptLibrary {
     }
 }
 
+impl swissarmyhammer_templating::partials::TemplateContentProvider for PromptLibrary {
+    fn get_template_content(&self, name: &str) -> Option<String> {
+        self.get(name).ok().map(|prompt| prompt.template.clone())
+    }
+
+    fn list_template_names(&self) -> Vec<String> {
+        self.list_names().unwrap_or_default()
+    }
+}
+
 /// Loads prompts from various sources
 pub struct PromptLoader {
     /// File extensions to consider

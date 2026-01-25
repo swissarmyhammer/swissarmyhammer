@@ -1,4 +1,8 @@
 //! Storage abstractions and implementations for workflows
+//!
+//! This module also provides [`WorkflowPartialAdapter`], a type alias that allows
+//! workflow storage to be used as a Liquid template partial source. This follows
+//! the same unified pattern as prompts, rules, and validators.
 
 use crate::{MermaidParser, Workflow, WorkflowName};
 use base64::{engine::general_purpose, Engine as _};
@@ -7,6 +11,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use swissarmyhammer_common::file_loader::{FileSource, VirtualFileSystem};
 use swissarmyhammer_common::{Result, SwissArmyHammerError, SwissarmyhammerDirectory};
+use swissarmyhammer_templating::partials::{LibraryPartialAdapter, TemplateContentProvider};
 
 // Include the generated builtin workflows
 include!(concat!(env!("OUT_DIR"), "/builtin_workflows.rs"));
@@ -209,6 +214,7 @@ pub trait WorkflowStorageBackend: Send + Sync {
 }
 
 /// In-memory workflow storage implementation
+#[derive(Debug)]
 pub struct MemoryWorkflowStorage {
     workflows: HashMap<WorkflowName, Workflow>,
 }
@@ -257,6 +263,41 @@ impl WorkflowStorageBackend for MemoryWorkflowStorage {
             workflows: self.workflows.clone(),
         })
     }
+}
+
+/// Implement TemplateContentProvider for MemoryWorkflowStorage.
+///
+/// This allows workflow storage to participate in the unified partial adapter system.
+/// Workflows are state machines rather than templates, so `get_template_content` returns
+/// the workflow description. This is primarily for API consistency with prompts, rules,
+/// and validators.
+impl TemplateContentProvider for MemoryWorkflowStorage {
+    fn get_template_content(&self, name: &str) -> Option<String> {
+        let workflow_name = WorkflowName::try_new(name).ok()?;
+        self.workflows
+            .get(&workflow_name)
+            .map(|w| w.description.clone())
+    }
+
+    fn list_template_names(&self) -> Vec<String> {
+        self.workflows.keys().map(|n| n.to_string()).collect()
+    }
+}
+
+/// Adapter that allows workflows to be used as Liquid template partials.
+///
+/// This is a type alias for the generic [`LibraryPartialAdapter`] specialized
+/// for [`MemoryWorkflowStorage`]. The underlying storage implements [`TemplateContentProvider`],
+/// enabling it to work with the unified partial system shared by prompts, rules,
+/// and validators.
+pub type WorkflowPartialAdapter = LibraryPartialAdapter<MemoryWorkflowStorage>;
+
+/// Create a new workflow partial adapter from a storage Arc.
+///
+/// This is a convenience function that creates a `WorkflowPartialAdapter`
+/// (which is a `LibraryPartialAdapter<MemoryWorkflowStorage>`).
+pub fn new_workflow_partial_adapter(storage: Arc<MemoryWorkflowStorage>) -> WorkflowPartialAdapter {
+    LibraryPartialAdapter::new(storage)
 }
 
 /// File system workflow storage implementation that uses WorkflowResolver for hierarchical loading

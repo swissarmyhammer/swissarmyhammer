@@ -1,11 +1,12 @@
-//! AVP Context - Manages .avp directory, logging, and agent access.
+//! AVP Context - Manages the AVP directory, logging, and agent access.
 //!
-//! The `.avp` directory is created at the git repository root and contains:
+//! The AVP directory (configured via `AvpConfig::DIR_NAME`) is created at the
+//! git repository root and contains:
 //! - `avp.log` - Append-only log of hook events
 //! - `validators/` - Project-specific validators
 //! - `.gitignore` - Excludes log files from version control
 //!
-//! User-level validators can be placed in `~/.avp/validators/`.
+//! User-level validators can be placed in `~/<AVP_DIR>/validators/`.
 //!
 //! The context also provides access to an ACP Agent for validator execution.
 //! In production, this is a ClaudeAgent created lazily. In tests, a PlaybackAgent
@@ -19,12 +20,12 @@ use std::sync::{Arc, Mutex as StdMutex};
 use agent_client_protocol::{Agent, SessionNotification};
 use chrono::Utc;
 use claude_agent::CreateAgentConfig;
-use swissarmyhammer_directory::{AvpConfig, ManagedDirectory};
+use swissarmyhammer_directory::{AvpConfig, DirectoryConfig, ManagedDirectory};
 use tokio::sync::{broadcast, Mutex};
 
 use crate::error::AvpError;
 
-/// Log file name within .avp directory.
+/// Log file name within the AVP directory.
 const LOG_FILE_NAME: &str = "avp.log";
 
 /// Decision outcome for a hook.
@@ -65,22 +66,22 @@ struct AgentHandle {
     notifications: broadcast::Sender<SessionNotification>,
 }
 
-/// AVP Context - manages .avp directory, logging, and agent access.
+/// AVP Context - manages the AVP directory, logging, and agent access.
 ///
-/// All .avp directory logic is centralized here. The directory is created
+/// All AVP directory logic is centralized here. The directory is created
 /// at the git repository root using the shared `swissarmyhammer-directory` crate.
 ///
 /// The context tracks both project-level and user-level directories:
-/// - Project: `./.avp/` at git root
-/// - User: `~/.avp/` in home directory
+/// - Project: `./<AVP_DIR>/` at git root
+/// - User: `~/<AVP_DIR>/` in home directory
 ///
 /// The context also provides access to an ACP Agent for validator execution.
 /// The agent is created lazily on first access, or can be injected for testing.
 pub struct AvpContext {
-    /// Managed directory at git root (.avp)
+    /// Managed directory at git root (<AVP_DIR>)
     project_dir: ManagedDirectory<AvpConfig>,
 
-    /// Managed directory at user home (~/.avp), if available
+    /// Managed directory at user home (~/<AVP_DIR>), if available
     home_dir: Option<ManagedDirectory<AvpConfig>>,
 
     /// Shared log file handle (None if logging failed to initialize).
@@ -102,21 +103,26 @@ impl std::fmt::Debug for AvpContext {
 }
 
 impl AvpContext {
-    /// Initialize AVP context by finding git root and creating .avp directory.
+    /// Initialize AVP context by finding git root and creating the AVP directory.
     ///
     /// This will:
-    /// 1. Create .avp directory at git root (via swissarmyhammer-directory)
-    /// 2. Create .gitignore in .avp if it doesn't exist
+    /// 1. Create AVP directory at git root (via swissarmyhammer-directory)
+    /// 2. Create .gitignore in the AVP directory if it doesn't exist
     /// 3. Open log file for appending
-    /// 4. Optionally connect to user ~/.avp directory
+    /// 4. Optionally connect to user AVP directory
     ///
     /// The agent is created lazily on first access.
     ///
     /// Returns Err if not in a git repository.
     pub fn init() -> Result<Self, AvpError> {
         // Create project directory at git root
-        let project_dir = ManagedDirectory::<AvpConfig>::from_git_root()
-            .map_err(|e| AvpError::Context(format!("failed to create .avp directory: {}", e)))?;
+        let project_dir = ManagedDirectory::<AvpConfig>::from_git_root().map_err(|e| {
+            AvpError::Context(format!(
+                "failed to create {} directory: {}",
+                AvpConfig::DIR_NAME,
+                e
+            ))
+        })?;
 
         // Try to create user directory (optional, may fail if no home dir)
         let home_dir = ManagedDirectory::<AvpConfig>::from_user_home().ok();
@@ -141,8 +147,13 @@ impl AvpContext {
         notifications: broadcast::Receiver<SessionNotification>,
     ) -> Result<Self, AvpError> {
         // Create project directory at git root
-        let project_dir = ManagedDirectory::<AvpConfig>::from_git_root()
-            .map_err(|e| AvpError::Context(format!("failed to create .avp directory: {}", e)))?;
+        let project_dir = ManagedDirectory::<AvpConfig>::from_git_root().map_err(|e| {
+            AvpError::Context(format!(
+                "failed to create {} directory: {}",
+                AvpConfig::DIR_NAME,
+                e
+            ))
+        })?;
 
         // Try to create user directory (optional, may fail if no home dir)
         let home_dir = ManagedDirectory::<AvpConfig>::from_user_home().ok();
@@ -227,19 +238,19 @@ impl AvpContext {
         Ok((Arc::clone(&handle.agent), handle.notifications.subscribe()))
     }
 
-    /// Get the project .avp directory path.
+    /// Get the project AVP directory path.
     pub fn avp_dir(&self) -> &Path {
         self.project_dir.root()
     }
 
-    /// Get the project validators directory path (./.avp/validators).
+    /// Get the project validators directory path (./<AVP_DIR>/validators).
     ///
     /// Returns the path even if it doesn't exist yet.
     pub fn project_validators_dir(&self) -> PathBuf {
         self.project_dir.subdir("validators")
     }
 
-    /// Get the user validators directory path (~/.avp/validators).
+    /// Get the user validators directory path (~/<AVP_DIR>/validators).
     ///
     /// Returns None if user directory is not available.
     pub fn home_validators_dir(&self) -> Option<PathBuf> {

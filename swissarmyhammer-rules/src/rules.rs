@@ -849,6 +849,16 @@ impl Default for RuleLibrary {
     }
 }
 
+impl swissarmyhammer_templating::partials::TemplateContentProvider for RuleLibrary {
+    fn get_template_content(&self, name: &str) -> Option<String> {
+        self.get(name).ok().map(|rule| rule.template.clone())
+    }
+
+    fn list_template_names(&self) -> Vec<String> {
+        self.list_names().unwrap_or_default()
+    }
+}
+
 #[cfg(test)]
 mod library_tests {
     use super::*;
