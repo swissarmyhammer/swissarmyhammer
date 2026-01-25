@@ -53,6 +53,11 @@ impl std::fmt::Display for HookType {
     }
 }
 
+/// Default permission mode when not provided.
+fn default_permission_mode() -> String {
+    "bypassPermissions".to_string()
+}
+
 /// Common fields present in all hook inputs.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CommonInput {
@@ -66,6 +71,8 @@ pub struct CommonInput {
     pub cwd: String,
 
     /// Permission mode (e.g., "default", "plan", "bypassPermissions").
+    /// Defaults to "default" if not provided by Claude Code.
+    #[serde(default = "default_permission_mode")]
     pub permission_mode: String,
 
     /// The hook event name.
@@ -102,5 +109,20 @@ mod tests {
         let input: CommonInput = serde_json::from_str(json).unwrap();
         assert_eq!(input.session_id, "abc123");
         assert_eq!(input.hook_event_name, HookType::PreToolUse);
+    }
+
+    #[test]
+    fn test_common_input_without_permission_mode() {
+        // Claude Code doesn't always send permission_mode for SessionStart
+        let json = r#"{
+            "session_id": "abc123",
+            "transcript_path": "/path/to/transcript.jsonl",
+            "cwd": "/home/user/project",
+            "hook_event_name": "SessionStart"
+        }"#;
+        let input: CommonInput = serde_json::from_str(json).unwrap();
+        assert_eq!(input.session_id, "abc123");
+        assert_eq!(input.permission_mode, "bypassPermissions");
+        assert_eq!(input.hook_event_name, HookType::SessionStart);
     }
 }
