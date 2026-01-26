@@ -19,7 +19,9 @@
 use std::collections::HashMap;
 use std::path::Path;
 
-use swissarmyhammer_directory::{AvpConfig, FileSource, ManagedDirectory, VirtualFileSystem, YamlExpander};
+use swissarmyhammer_directory::{
+    AvpConfig, FileSource, ManagedDirectory, VirtualFileSystem, YamlExpander,
+};
 use swissarmyhammer_templating::partials::TemplateContentProvider;
 
 use crate::context::AvpContext;
@@ -243,9 +245,9 @@ impl ValidatorLoader {
     ///
     /// This should be called before adding validators that reference the include.
     pub fn add_builtin_include(&mut self, name: &str, content: &str) -> Result<(), AvpError> {
-        self.expander
-            .add_builtin(name, content)
-            .map_err(|e| AvpError::Context(format!("Failed to add builtin include '{}': {}", name, e)))
+        self.expander.add_builtin(name, content).map_err(|e| {
+            AvpError::Context(format!("Failed to add builtin include '{}': {}", name, e))
+        })
     }
 
     /// Get a validator by name.

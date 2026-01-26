@@ -69,7 +69,10 @@ pub struct Frontmatter {
 /// assert!(result.content.contains("Main Content"));
 /// ```
 pub fn parse_frontmatter(content: &str) -> Result<Frontmatter> {
-    parse_frontmatter_internal(content, None::<&YamlExpander<swissarmyhammer_directory::SwissarmyhammerConfig>>)
+    parse_frontmatter_internal(
+        content,
+        None::<&YamlExpander<swissarmyhammer_directory::SwissarmyhammerConfig>>,
+    )
 }
 
 /// Parses YAML frontmatter with `@` include expansion.
@@ -133,9 +136,11 @@ fn parse_frontmatter_internal<C: DirectoryConfig>(
 
             // Expand includes if an expander is provided
             if let Some(exp) = expander {
-                yaml_value = exp.expand(yaml_value).map_err(|e| SwissArmyHammerError::Other {
-                    message: format!("Failed to expand YAML includes: {e}"),
-                })?;
+                yaml_value = exp
+                    .expand(yaml_value)
+                    .map_err(|e| SwissArmyHammerError::Other {
+                        message: format!("Failed to expand YAML includes: {e}"),
+                    })?;
             }
 
             // Convert to JSON for consistent handling

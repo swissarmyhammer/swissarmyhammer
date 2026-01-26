@@ -156,11 +156,14 @@ mod tests {
         load_builtins(&mut loader);
 
         let validator = loader.get("no-secrets").unwrap();
-        
+
         // The @file_groups/source_code should have been expanded
-        let match_criteria = validator.frontmatter.match_criteria.as_ref()
+        let match_criteria = validator
+            .frontmatter
+            .match_criteria
+            .as_ref()
             .expect("no-secrets should have match criteria");
-        
+
         // Should have actual file patterns, not the @reference
         assert!(
             !match_criteria.files.is_empty(),
@@ -173,7 +176,10 @@ mod tests {
         );
         // Should contain some expected patterns from source_code.yaml
         assert!(
-            match_criteria.files.iter().any(|f| f == "*.js" || f == "*.ts" || f == "*.py"),
+            match_criteria
+                .files
+                .iter()
+                .any(|f| f == "*.js" || f == "*.ts" || f == "*.py"),
             "Should contain common source file patterns after expansion"
         );
     }
@@ -184,11 +190,14 @@ mod tests {
         load_builtins(&mut loader);
 
         let validator = loader.get("no-test-cheating").unwrap();
-        
+
         // The @file_groups/source_code and @file_groups/test_files should have been expanded
-        let match_criteria = validator.frontmatter.match_criteria.as_ref()
+        let match_criteria = validator
+            .frontmatter
+            .match_criteria
+            .as_ref()
             .expect("no-test-cheating should have match criteria");
-        
+
         // Should have actual file patterns, not the @reference
         assert!(
             !match_criteria.files.is_empty(),
@@ -201,11 +210,17 @@ mod tests {
         );
         // Should contain patterns from both source_code.yaml and test_files.yaml
         assert!(
-            match_criteria.files.iter().any(|f| f == "*.js" || f == "*.ts" || f == "*.py"),
+            match_criteria
+                .files
+                .iter()
+                .any(|f| f == "*.js" || f == "*.ts" || f == "*.py"),
             "Should contain source file patterns after expansion"
         );
         assert!(
-            match_criteria.files.iter().any(|f| f.contains("test") || f.contains("spec")),
+            match_criteria
+                .files
+                .iter()
+                .any(|f| f.contains("test") || f.contains("spec")),
             "Should contain test file patterns after expansion"
         );
     }

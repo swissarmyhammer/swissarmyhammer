@@ -183,11 +183,12 @@ impl<C: DirectoryConfig> YamlExpander<C> {
                 }
 
                 // Look up the include
-                let included = self.includes.get(include_name).ok_or_else(|| {
-                    DirectoryError::Other {
-                        message: format!("Include not found: @{}", include_name),
-                    }
-                })?;
+                let included =
+                    self.includes
+                        .get(include_name)
+                        .ok_or_else(|| DirectoryError::Other {
+                            message: format!("Include not found: @{}", include_name),
+                        })?;
 
                 // Recursively expand the included value
                 visited.push(include_name.to_string());
@@ -217,12 +218,11 @@ impl<C: DirectoryConfig> YamlExpander<C> {
                             }
 
                             // Look up and expand
-                            let included =
-                                self.includes.get(include_name).ok_or_else(|| {
-                                    DirectoryError::Other {
-                                        message: format!("Include not found: @{}", include_name),
-                                    }
-                                })?;
+                            let included = self.includes.get(include_name).ok_or_else(|| {
+                                DirectoryError::Other {
+                                    message: format!("Include not found: @{}", include_name),
+                                }
+                            })?;
 
                             visited.push(include_name.to_string());
                             let expanded = self.expand_value(included.clone(), visited)?;
@@ -426,8 +426,7 @@ match:
             .unwrap();
 
         // Note: @ must be quoted in YAML
-        let input: serde_yaml::Value =
-            serde_yaml::from_str("\"@file_groups/frontend\"").unwrap();
+        let input: serde_yaml::Value = serde_yaml::from_str("\"@file_groups/frontend\"").unwrap();
         let expanded = expander.expand(input).unwrap();
 
         let seq = expanded.as_sequence().unwrap();
@@ -457,8 +456,7 @@ match:
         let expander = YamlExpander::<SwissarmyhammerConfig>::new();
 
         // Note: @ must be quoted in YAML
-        let input: serde_yaml::Value =
-            serde_yaml::from_str("\"@nonexistent/file\"").unwrap();
+        let input: serde_yaml::Value = serde_yaml::from_str("\"@nonexistent/file\"").unwrap();
         let result = expander.expand(input);
 
         assert!(result.is_err());
