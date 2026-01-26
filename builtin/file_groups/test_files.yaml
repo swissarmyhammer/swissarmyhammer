@@ -1,0 +1,45 @@
+# Test file patterns across common programming languages
+# Use with: "@file_groups/test_files"
+
+# JavaScript/TypeScript (Jest, Mocha, Vitest, etc.)
+- "*.test.ts"
+- "*.test.js"
+- "*.test.tsx"
+- "*.test.jsx"
+- "*.spec.ts"
+- "*.spec.js"
+- "*.spec.tsx"
+- "*.spec.jsx"
+
+# Go
+- "*_test.go"
+
+# Python (pytest, unittest)
+- "*_test.py"
+- "test_*.py"
+
+# Rust
+- "*_test.rs"
+
+# Java (JUnit)
+- "*Test.java"
+- "*Tests.java"
+
+# Scala (ScalaTest, Specs2)
+- "*Spec.scala"
+- "*Test.scala"
+
+# Ruby (RSpec, Minitest)
+- "*_spec.rb"
+- "*_test.rb"
+
+# PHP (PHPUnit)
+- "*Test.php"
+
+# C# (xUnit, NUnit, MSTest)
+- "*Tests.cs"
+- "*Test.cs"
+
+# Kotlin
+- "*Test.kt"
+- "*Tests.kt"

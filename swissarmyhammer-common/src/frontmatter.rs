@@ -2,8 +2,33 @@
 //!
 //! This module provides common frontmatter parsing logic used by both
 //! workflow and prompt parsers to eliminate code duplication.
+//!
+//! # YAML Include Expansion
+//!
+//! Frontmatter supports `@path/to/file` references that expand to the contents
+//! of YAML files loaded from the standard directory hierarchy. Use
+//! `parse_frontmatter_with_expansion` to enable this feature.
+//!
+//! ## Example
+//!
+//! Given `file_groups/source_code.yaml`:
+//! ```yaml
+//! - "*.js"
+//! - "*.ts"
+//! ```
+//!
+//! You can reference it in frontmatter:
+//! ```yaml
+//! ---
+//! match:
+//!   files:
+//!     - "@file_groups/source_code"
+//!     - "*.custom"
+//! ---
+//! ```
 
 use crate::{Result, SwissArmyHammerError};
+use swissarmyhammer_directory::{DirectoryConfig, YamlExpander};
 
 /// Represents parsed frontmatter with metadata and content
 #[derive(Debug, Clone)]
@@ -44,6 +69,47 @@ pub struct Frontmatter {
 /// assert!(result.content.contains("Main Content"));
 /// ```
 pub fn parse_frontmatter(content: &str) -> Result<Frontmatter> {
+    parse_frontmatter_internal(content, None::<&YamlExpander<swissarmyhammer_directory::SwissarmyhammerConfig>>)
+}
+
+/// Parses YAML frontmatter with `@` include expansion.
+///
+/// This is like `parse_frontmatter` but expands `@path/to/file` references
+/// in the YAML using the provided expander.
+///
+/// # Arguments
+/// * `content` - The raw content potentially containing YAML frontmatter
+/// * `expander` - The YAML expander with loaded includes
+///
+/// # Examples
+/// ```ignore
+/// use swissarmyhammer_common::frontmatter::parse_frontmatter_with_expansion;
+/// use swissarmyhammer_directory::{YamlExpander, SwissarmyhammerConfig};
+///
+/// let mut expander = YamlExpander::<SwissarmyhammerConfig>::new();
+/// expander.load_all().unwrap();
+///
+/// let content = r#"---
+/// files:
+///   - "@file_groups/source_code"
+/// ---
+/// Content here
+/// "#;
+///
+/// let result = parse_frontmatter_with_expansion(content, &expander).unwrap();
+/// ```
+pub fn parse_frontmatter_with_expansion<C: DirectoryConfig>(
+    content: &str,
+    expander: &YamlExpander<C>,
+) -> Result<Frontmatter> {
+    parse_frontmatter_internal(content, Some(expander))
+}
+
+/// Internal implementation that optionally expands includes.
+fn parse_frontmatter_internal<C: DirectoryConfig>(
+    content: &str,
+    expander: Option<&YamlExpander<C>>,
+) -> Result<Frontmatter> {
     // Check for partial marker first - these don't have frontmatter
     if content.trim_start().starts_with("{% partial %}") {
         return Ok(Frontmatter {
@@ -60,10 +126,17 @@ pub fn parse_frontmatter(content: &str) -> Result<Frontmatter> {
             let body_content = parts[2].to_string();
 
             // Parse YAML frontmatter
-            let yaml_value: serde_yaml::Value =
+            let mut yaml_value: serde_yaml::Value =
                 serde_yaml::from_str(yaml_content).map_err(|e| SwissArmyHammerError::Other {
                     message: format!("Invalid YAML frontmatter: {e}"),
                 })?;
+
+            // Expand includes if an expander is provided
+            if let Some(exp) = expander {
+                yaml_value = exp.expand(yaml_value).map_err(|e| SwissArmyHammerError::Other {
+                    message: format!("Failed to expand YAML includes: {e}"),
+                })?;
+            }
 
             // Convert to JSON for consistent handling
             let json_value =

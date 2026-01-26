@@ -62,9 +62,11 @@ mod config;
 mod directory;
 mod error;
 mod file_loader;
+mod yaml_expander;
 
 // Re-export main types
 pub use config::{AvpConfig, DirectoryConfig, SwissarmyhammerConfig};
 pub use directory::{find_git_repository_root, DirectoryRootType, ManagedDirectory};
 pub use error::{DirectoryError, Result};
 pub use file_loader::{FileEntry, FileSource, VirtualFileSystem};
+pub use yaml_expander::YamlExpander;

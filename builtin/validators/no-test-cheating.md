@@ -8,22 +8,8 @@ match:
     - .*write.*
     - .*edit.*
   files:
-    # Test files across languages
-    - "*.test.ts"
-    - "*.test.js"
-    - "*.test.tsx"
-    - "*.test.jsx"
-    - "*.spec.ts"
-    - "*.spec.js"
-    - "*.spec.tsx"
-    - "*.spec.jsx"
-    - "*_test.go"
-    - "*_test.py"
-    - "test_*.py"
-    - "*_test.rs"
-    - "*Test.java"
-    - "*Spec.scala"
-    - "*_spec.rb"
+    - "@file_groups/source_code"
+    - "@file_groups/test_files"
 tags:
   - testing
   - blocking

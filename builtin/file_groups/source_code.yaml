@@ -1,0 +1,69 @@
+# Source code file patterns across common programming languages
+# Use with: "@file_groups/source_code"
+
+# JavaScript/TypeScript
+- "*.js"
+- "*.jsx"
+- "*.ts"
+- "*.tsx"
+- "*.mjs"
+- "*.cjs"
+
+# Python
+- "*.py"
+- "*.pyw"
+
+# Rust
+- "*.rs"
+
+# Go
+- "*.go"
+
+# C/C++
+- "*.c"
+- "*.h"
+- "*.cpp"
+- "*.hpp"
+- "*.cc"
+- "*.cxx"
+
+# Java/Kotlin/Scala
+- "*.java"
+- "*.kt"
+- "*.kts"
+- "*.scala"
+
+# C#/.NET/F#/Visual Basic
+- "*.cs"
+- "*.vb"
+- "*.fs"
+
+# Swift/Objective-C
+- "*.swift"
+- "*.m"
+- "*.mm"
+
+# Ruby
+- "*.rb"
+
+# PHP
+- "*.php"
+
+# Perl
+- "*.pl"
+- "*.pm"
+
+# R
+- "*.r"
+- "*.R"
+
+# Dart
+- "*.dart"
+
+# Lua
+- "*.lua"
+
+# Shell
+- "*.sh"
+- "*.bash"
+- "*.zsh"

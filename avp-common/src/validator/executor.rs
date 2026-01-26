@@ -4,7 +4,7 @@
 //! via the Agent Client Protocol (ACP). The LLM evaluates the validator's
 //! instructions against the hook event context and returns a pass/fail result.
 //!
-//! The execution uses the `.validator` prompt template from the prompts library,
+//! The execution uses the `.system/validator` prompt template from the prompts library,
 //! similar to how rule checking uses the `.check` prompt.
 //!
 //! Validator bodies support Liquid templating with partials, using the unified
@@ -18,7 +18,7 @@ use crate::types::HookType;
 use crate::validator::{ExecutedValidator, Validator, ValidatorResult};
 
 /// Name of the validator prompt template in the prompts library.
-pub const VALIDATOR_PROMPT_NAME: &str = ".validator";
+pub const VALIDATOR_PROMPT_NAME: &str = ".system/validator";
 
 /// Extract validator partials from a list of validator (name, content) tuples.
 ///

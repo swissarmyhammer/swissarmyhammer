@@ -2,8 +2,26 @@
 //!
 //! Validators are markdown files with a YAML frontmatter block delimited by `---`.
 //! The frontmatter contains configuration, and the body contains validation instructions.
+//!
+//! # YAML Include Expansion
+//!
+//! Validator frontmatter supports `@path/to/file` references that expand to the
+//! contents of YAML files. Use `parse_validator_with_expansion` to enable this.
+//!
+//! ## Example
+//!
+//! ```yaml
+//! ---
+//! name: no-secrets
+//! match:
+//!   files:
+//!     - "@file_groups/source_code"
+//! ---
+//! ```
 
 use std::path::{Path, PathBuf};
+
+use swissarmyhammer_directory::{DirectoryConfig, YamlExpander};
 
 use crate::error::AvpError;
 
@@ -43,14 +61,72 @@ pub fn parse_validator(
     path: PathBuf,
     source: ValidatorSource,
 ) -> Result<Validator, AvpError> {
+    parse_validator_internal(
+        content,
+        path,
+        source,
+        None::<&YamlExpander<swissarmyhammer_directory::AvpConfig>>,
+    )
+}
+
+/// Parse a validator with `@` include expansion.
+///
+/// This is like `parse_validator` but expands `@path/to/file` references
+/// in the YAML frontmatter using the provided expander.
+///
+/// # Example
+///
+/// ```yaml
+/// ---
+/// name: no-secrets
+/// match:
+///   files:
+///     - "@file_groups/source_code"
+///     - "*.custom"
+/// ---
+/// ```
+///
+/// The `@file_groups/source_code` will be expanded to the contents of
+/// `file_groups/source_code.yaml`.
+pub fn parse_validator_with_expansion<C: DirectoryConfig>(
+    content: &str,
+    path: PathBuf,
+    source: ValidatorSource,
+    expander: &YamlExpander<C>,
+) -> Result<Validator, AvpError> {
+    parse_validator_internal(content, path, source, Some(expander))
+}
+
+/// Internal implementation that optionally expands includes.
+fn parse_validator_internal<C: DirectoryConfig>(
+    content: &str,
+    path: PathBuf,
+    source: ValidatorSource,
+    expander: Option<&YamlExpander<C>>,
+) -> Result<Validator, AvpError> {
     // Split on frontmatter delimiters
     let (frontmatter_str, body) = extract_frontmatter(content, &path)?;
 
     // Parse YAML frontmatter
-    let frontmatter: ValidatorFrontmatter =
+    let mut yaml_value: serde_yaml::Value =
         serde_yaml::from_str(frontmatter_str).map_err(|e| AvpError::Validator {
             validator: path.display().to_string(),
             message: format!("failed to parse YAML frontmatter: {}", e),
+        })?;
+
+    // Expand includes if an expander is provided
+    if let Some(exp) = expander {
+        yaml_value = exp.expand(yaml_value).map_err(|e| AvpError::Validator {
+            validator: path.display().to_string(),
+            message: format!("failed to expand YAML includes: {}", e),
+        })?;
+    }
+
+    // Deserialize to typed frontmatter
+    let frontmatter: ValidatorFrontmatter =
+        serde_yaml::from_value(yaml_value).map_err(|e| AvpError::Validator {
+            validator: path.display().to_string(),
+            message: format!("failed to deserialize frontmatter: {}", e),
         })?;
 
     Ok(Validator {

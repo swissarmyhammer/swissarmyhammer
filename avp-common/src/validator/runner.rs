@@ -32,7 +32,7 @@ use crate::validator::{
 /// Executes validators via ACP Agent calls.
 ///
 /// The `ValidatorRunner` handles:
-/// 1. Rendering validator prompts using the `.validator` template
+/// 1. Rendering validator prompts using the `.system/validator` template
 /// 2. Executing prompts via the provided Agent
 /// 3. Parsing LLM responses into pass/fail results
 /// 4. Creating `ExecutedValidator` results with metadata
@@ -100,12 +100,12 @@ impl ValidatorRunner {
         // Verify .validator prompt exists
         prompt_library.get(VALIDATOR_PROMPT_NAME).map_err(|e| {
             AvpError::Agent(format!(
-                ".validator prompt not found in prompt library: {}",
+                ".system/validator prompt not found in prompt library: {}",
                 e
             ))
         })?;
 
-        tracing::debug!(".validator prompt loaded successfully");
+        tracing::debug!(".system/validator prompt loaded successfully");
         Ok(prompt_library)
     }
 

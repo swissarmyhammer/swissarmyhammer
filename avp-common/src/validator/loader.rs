@@ -10,17 +10,22 @@
 //! The loader implements [`TemplateContentProvider`] from `swissarmyhammer_templating`,
 //! allowing it to be used with the unified [`LibraryPartialAdapter`] for partial
 //! template support. This follows the same pattern as prompts and rules.
+//!
+//! # YAML Include Expansion
+//!
+//! The loader supports `@path/to/file` references in validator frontmatter that
+//! expand to YAML file contents. See [`YamlExpander`] for details.
 
 use std::collections::HashMap;
 use std::path::Path;
 
-use swissarmyhammer_directory::{AvpConfig, FileSource, ManagedDirectory, VirtualFileSystem};
+use swissarmyhammer_directory::{AvpConfig, FileSource, ManagedDirectory, VirtualFileSystem, YamlExpander};
 use swissarmyhammer_templating::partials::TemplateContentProvider;
 
 use crate::context::AvpContext;
 use crate::error::AvpError;
 
-use super::parser::parse_validator;
+use super::parser::parse_validator_with_expansion;
 use super::types::{MatchContext, Validator, ValidatorSource};
 
 /// Loader for validators with directory stacking precedence.
@@ -31,6 +36,8 @@ use super::types::{MatchContext, Validator, ValidatorSource};
 pub struct ValidatorLoader {
     /// Map of validator names to validators.
     validators: HashMap<String, Validator>,
+    /// YAML expander for `@` include references.
+    expander: YamlExpander<AvpConfig>,
 }
 
 impl Default for ValidatorLoader {
@@ -44,7 +51,31 @@ impl ValidatorLoader {
     pub fn new() -> Self {
         Self {
             validators: HashMap::new(),
+            expander: YamlExpander::new(),
         }
+    }
+
+    /// Create a new loader with a pre-configured expander.
+    pub fn with_expander(expander: YamlExpander<AvpConfig>) -> Self {
+        Self {
+            validators: HashMap::new(),
+            expander,
+        }
+    }
+
+    /// Get a mutable reference to the expander for adding builtins.
+    pub fn expander_mut(&mut self) -> &mut YamlExpander<AvpConfig> {
+        &mut self.expander
+    }
+
+    /// Load YAML includes from all directories.
+    ///
+    /// This should be called before loading validators to ensure
+    /// `@` references can be expanded.
+    pub fn load_includes(&mut self) -> Result<(), AvpError> {
+        self.expander
+            .load_all()
+            .map_err(|e| AvpError::Context(format!("Failed to load YAML includes: {}", e)))
     }
 
     /// Load validators from directories specified in the context.
@@ -82,6 +113,7 @@ impl ValidatorLoader {
     /// Later sources override earlier ones with the same name.
     ///
     /// Note: Prefer `load_from_context()` when an AvpContext is available.
+    /// Note: Call `load_includes()` before this to enable `@` reference expansion.
     pub fn load_all(&mut self) -> Result<(), AvpError> {
         // Use VirtualFileSystem with AvpConfig for directory stacking
         let mut vfs = VirtualFileSystem::<AvpConfig>::new("validators");
@@ -99,7 +131,12 @@ impl ValidatorLoader {
                 FileSource::Local => ValidatorSource::Project,
             };
 
-            match parse_validator(&file_entry.content, file_entry.path.clone(), source) {
+            match parse_validator_with_expansion(
+                &file_entry.content,
+                file_entry.path.clone(),
+                source,
+                &self.expander,
+            ) {
                 Ok(validator) => {
                     tracing::debug!(
                         "Loaded validator '{}' from {} ({})",
@@ -144,7 +181,12 @@ impl ValidatorLoader {
 
             match std::fs::read_to_string(file_path) {
                 Ok(content) => {
-                    match parse_validator(&content, file_path.to_path_buf(), source.clone()) {
+                    match parse_validator_with_expansion(
+                        &content,
+                        file_path.to_path_buf(),
+                        source.clone(),
+                        &self.expander,
+                    ) {
                         Ok(validator) => {
                             tracing::debug!(
                                 "Loaded validator '{}' from {} ({})",
@@ -181,10 +223,11 @@ impl ValidatorLoader {
     pub fn add_builtin(&mut self, name: &str, content: &str) {
         use std::path::PathBuf;
 
-        match parse_validator(
+        match parse_validator_with_expansion(
             content,
             PathBuf::from(format!("builtin:/{}.md", name)),
             ValidatorSource::Builtin,
+            &self.expander,
         ) {
             Ok(validator) => {
                 self.validators
@@ -194,6 +237,15 @@ impl ValidatorLoader {
                 tracing::error!("Failed to parse builtin validator '{}': {}", name, e);
             }
         }
+    }
+
+    /// Add a builtin YAML include for expansion.
+    ///
+    /// This should be called before adding validators that reference the include.
+    pub fn add_builtin_include(&mut self, name: &str, content: &str) -> Result<(), AvpError> {
+        self.expander
+            .add_builtin(name, content)
+            .map_err(|e| AvpError::Context(format!("Failed to add builtin include '{}': {}", name, e)))
     }
 
     /// Get a validator by name.

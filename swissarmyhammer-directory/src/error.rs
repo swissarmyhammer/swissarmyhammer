@@ -56,6 +56,10 @@ pub enum DirectoryError {
     /// IO error.
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
+
+    /// Other error with a message.
+    #[error("{message}")]
+    Other { message: String },
 }
 
 impl DirectoryError {

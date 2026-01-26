@@ -161,21 +161,21 @@ fn test_no_test_cheating_validator_matches_write_to_test_file() {
 
 #[test]
 #[serial_test::serial(cwd)]
-fn test_no_test_cheating_validator_does_not_match_non_test_file() {
+fn test_no_test_cheating_validator_matches_source_files() {
     let (_temp, context) = create_test_context();
 
     std::env::set_var("AVP_SKIP_AGENT", "1");
     let strategy = ClaudeCodeHookStrategy::new(context);
     std::env::remove_var("AVP_SKIP_AGENT");
 
-    // Regular source file should not match
+    // Source files should match because tests can be embedded anywhere
     let input = build_post_tool_use_write_test_input("src/utils.ts", "export const foo = 'bar';");
 
     let matching = strategy.matching_validators(HookType::PostToolUse, &input);
     let names: Vec<_> = matching.iter().map(|v| v.name()).collect();
     assert!(
-        !names.contains(&"no-test-cheating"),
-        "no-test-cheating validator should not match non-test files, but got: {:?}",
+        names.contains(&"no-test-cheating"),
+        "no-test-cheating validator should match source files (tests can be anywhere), but got: {:?}",
         names
     );
 }
