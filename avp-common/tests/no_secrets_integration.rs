@@ -373,7 +373,7 @@ async fn test_no_secrets_validator_detects_secrets_playback() {
     let input = build_post_tool_use_write_input("config.ts", CODE_WITH_SECRETS);
 
     // Execute the validator
-    let result = runner
+    let (result, _rate_limited) = runner
         .execute_validator(validator, HookType::PostToolUse, &input)
         .await;
 
@@ -414,7 +414,7 @@ async fn test_no_secrets_validator_passes_clean_code_playback() {
     let input = build_post_tool_use_write_input("config.ts", CODE_WITHOUT_SECRETS);
 
     // Execute the validator
-    let result = runner
+    let (result, _rate_limited) = runner
         .execute_validator(validator, HookType::PostToolUse, &input)
         .await;
 
@@ -467,7 +467,7 @@ async fn test_no_secrets_validator_detects_secrets_live() {
     let input = build_post_tool_use_write_input("config.ts", CODE_WITH_SECRETS);
 
     // Execute the validator
-    let result = runner
+    let (result, _rate_limited) = runner
         .execute_validator(validator, HookType::PostToolUse, &input)
         .await;
 
@@ -507,7 +507,7 @@ async fn test_no_secrets_validator_passes_clean_code_live() {
 
     let input = build_post_tool_use_write_input("config.ts", CODE_WITHOUT_SECRETS);
 
-    let result = runner
+    let (result, _rate_limited) = runner
         .execute_validator(validator, HookType::PostToolUse, &input)
         .await;
 

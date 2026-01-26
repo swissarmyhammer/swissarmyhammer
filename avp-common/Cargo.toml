@@ -44,6 +44,8 @@ uuid = { workspace = true }
 # Async runtime
 tokio = { workspace = true }
 async-trait = { workspace = true }
+futures = { workspace = true }
+num_cpus = { workspace = true }
 
 # CLI detection
 which = { workspace = true }

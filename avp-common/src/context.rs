@@ -60,6 +60,19 @@ pub struct HookEvent<'a> {
     pub details: Option<String>,
 }
 
+/// A validator execution event to log.
+#[derive(Debug)]
+pub struct ValidatorEvent<'a> {
+    /// The validator name.
+    pub name: &'a str,
+    /// Whether the validator passed.
+    pub passed: bool,
+    /// The validator message.
+    pub message: &'a str,
+    /// The hook type that triggered this validator.
+    pub hook_type: &'a str,
+}
+
 /// Holds the agent and notification channel.
 struct AgentHandle {
     agent: Arc<dyn Agent + Send + Sync>,
@@ -318,6 +331,35 @@ impl AvpContext {
         let line = format!(
             "{} {} decision={}{}\n",
             timestamp, event.hook_type, event.decision, details_str
+        );
+
+        if let Ok(mut file) = log_file.lock() {
+            let _ = file.write_all(line.as_bytes());
+            let _ = file.flush();
+        }
+    }
+
+    /// Log a validator execution event.
+    ///
+    /// Format: `2024-01-23T10:15:32.123Z VALIDATOR rust-coding passed hook=PostToolUse "No issues found"`
+    pub fn log_validator(&self, event: &ValidatorEvent) {
+        let Some(log_file) = &self.log_file else {
+            return;
+        };
+
+        let timestamp = Utc::now().format("%Y-%m-%dT%H:%M:%S%.3fZ");
+        let status = if event.passed { "passed" } else { "FAILED" };
+
+        // Truncate message for log readability
+        let message = if event.message.len() > 100 {
+            format!("{}...", &event.message[..97])
+        } else {
+            event.message.to_string()
+        };
+
+        let line = format!(
+            "{} VALIDATOR {} {} hook={} \"{}\"\n",
+            timestamp, event.name, status, event.hook_type, message
         );
 
         if let Ok(mut file) = log_file.lock() {

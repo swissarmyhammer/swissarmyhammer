@@ -215,7 +215,7 @@ describe('feature', () => {
     );
 
     // Execute the validator
-    let result = runner
+    let (result, _rate_limited) = runner
         .execute_validator(validator, HookType::PostToolUse, &input)
         .await;
 
@@ -265,7 +265,7 @@ describe('feature', () => {
     );
 
     // Execute the validator
-    let result = runner
+    let (result, _rate_limited) = runner
         .execute_validator(validator, HookType::PostToolUse, &input)
         .await;
 

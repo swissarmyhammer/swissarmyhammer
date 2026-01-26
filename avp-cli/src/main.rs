@@ -1,6 +1,7 @@
 //! AVP CLI - Agent Validator Protocol command-line interface.
 //!
 //! Reads JSON from stdin, processes the hook, and writes JSON to stdout.
+//! Validators now run in parallel with adaptive concurrency control.
 //! Exit codes:
 //! - 0: Success
 //! - 2: Blocking error (hook rejected the action)

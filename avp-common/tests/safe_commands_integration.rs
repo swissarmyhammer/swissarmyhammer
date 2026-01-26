@@ -174,7 +174,7 @@ async fn test_safe_commands_validator_blocks_sed_playback() {
     let input = build_pre_tool_use_bash_input("sed -i 's/foo/bar/g' file.txt");
 
     // Execute the validator
-    let result = runner
+    let (result, _rate_limited) = runner
         .execute_validator(validator, HookType::PreToolUse, &input)
         .await;
 
@@ -213,7 +213,7 @@ async fn test_safe_commands_validator_blocks_awk_playback() {
     let input = build_pre_tool_use_bash_input("awk '{print $1}' file.txt");
 
     // Execute the validator
-    let result = runner
+    let (result, _rate_limited) = runner
         .execute_validator(validator, HookType::PreToolUse, &input)
         .await;
 

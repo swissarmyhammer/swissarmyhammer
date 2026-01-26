@@ -5,7 +5,7 @@ use tokio::sync::Mutex;
 
 use crate::builtin::load_builtins;
 use crate::chain::{Chain, HookInputType};
-use crate::context::{AvpContext, Decision, HookEvent};
+use crate::context::{AvpContext, Decision, HookEvent, ValidatorEvent};
 use crate::error::AvpError;
 use crate::types::{
     HookOutput, HookType, NotificationInput, PermissionRequestInput, PostToolUseFailureInput,
@@ -175,7 +175,7 @@ impl ClaudeCodeHookStrategy {
         }
 
         // Execute with cached runner
-        match self
+        let results = match self
             .execute_with_cached_runner(&matching, hook_type, input)
             .await
         {
@@ -187,7 +187,20 @@ impl ClaudeCodeHookStrategy {
                 );
                 self.placeholder_results(&matching, hook_type)
             }
+        };
+
+        // Log each validator result
+        let hook_type_str = hook_type.to_string();
+        for result in &results {
+            self.context.log_validator(&ValidatorEvent {
+                name: &result.name,
+                passed: result.result.passed(),
+                message: result.result.message(),
+                hook_type: &hook_type_str,
+            });
         }
+
+        results
     }
 
     /// Generate placeholder pass results when agent is unavailable.
