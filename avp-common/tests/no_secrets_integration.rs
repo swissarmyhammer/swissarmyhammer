@@ -99,7 +99,8 @@ fn test_no_secrets_validator_does_not_match_non_code_files() {
     let strategy = ClaudeCodeHookStrategy::new(context);
     std::env::remove_var("AVP_SKIP_AGENT");
 
-    let input = HookInputBuilder::post_tool_use_write("readme.md", "# README\nThis is documentation.");
+    let input =
+        HookInputBuilder::post_tool_use_write("readme.md", "# README\nThis is documentation.");
     let matching = strategy.matching_validators(HookType::PostToolUse, &input);
 
     let names: Vec<_> = matching.iter().map(|v| v.name()).collect();

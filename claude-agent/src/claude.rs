@@ -108,8 +108,9 @@ impl ClaudeClient {
         self.send_init_trigger(&process).await?;
 
         let init_line = self.read_init_message(&process).await;
-        let (available_agents, current_agent) =
-            self.process_init_line(init_line, &acp_session_id, &process).await;
+        let (available_agents, current_agent) = self
+            .process_init_line(init_line, &acp_session_id, &process)
+            .await;
 
         Ok((available_agents, current_agent))
     }
@@ -144,7 +145,10 @@ impl ClaudeClient {
     async fn read_init_message(
         &self,
         process: &Arc<Mutex<ClaudeProcess>>,
-    ) -> std::result::Result<std::result::Result<Option<String>, crate::error::AgentError>, tokio::time::error::Elapsed> {
+    ) -> std::result::Result<
+        std::result::Result<Option<String>, crate::error::AgentError>,
+        tokio::time::error::Elapsed,
+    > {
         tracing::debug!("Reading system/init message from Claude CLI");
         tokio::time::timeout(std::time::Duration::from_secs(INIT_TIMEOUT_SECS), async {
             let mut proc = process.lock().await;
@@ -156,13 +160,20 @@ impl ClaudeClient {
     /// Process the init line and extract agents info.
     async fn process_init_line(
         &self,
-        init_line: std::result::Result<std::result::Result<Option<String>, crate::error::AgentError>, tokio::time::error::Elapsed>,
+        init_line: std::result::Result<
+            std::result::Result<Option<String>, crate::error::AgentError>,
+            tokio::time::error::Elapsed,
+        >,
         acp_session_id: &agent_client_protocol::SessionId,
         process: &Arc<Mutex<ClaudeProcess>>,
-    ) -> (Option<Vec<(String, String, Option<String>)>>, Option<String>) {
+    ) -> (
+        Option<Vec<(String, String, Option<String>)>>,
+        Option<String>,
+    ) {
         match init_line {
             Ok(Ok(Some(line))) => {
-                self.handle_init_line_received(&line, acp_session_id, process).await
+                self.handle_init_line_received(&line, acp_session_id, process)
+                    .await
             }
             Ok(Ok(None)) => {
                 tracing::error!("Claude process closed before sending init message");
@@ -185,7 +196,10 @@ impl ClaudeClient {
         line: &str,
         acp_session_id: &agent_client_protocol::SessionId,
         process: &Arc<Mutex<ClaudeProcess>>,
-    ) -> (Option<Vec<(String, String, Option<String>)>>, Option<String>) {
+    ) -> (
+        Option<Vec<(String, String, Option<String>)>>,
+        Option<String>,
+    ) {
         tracing::info!("Received init line from Claude CLI ({} bytes)", line.len());
 
         if let Some(ref manager) = self.raw_message_manager {
@@ -205,8 +219,15 @@ impl ClaudeClient {
         &self,
         line: &str,
         acp_session_id: &agent_client_protocol::SessionId,
-    ) -> (Option<Vec<(String, String, Option<String>)>>, Option<String>) {
-        match self.protocol_translator.stream_json_to_acp(line, acp_session_id).await {
+    ) -> (
+        Option<Vec<(String, String, Option<String>)>>,
+        Option<String>,
+    ) {
+        match self
+            .protocol_translator
+            .stream_json_to_acp(line, acp_session_id)
+            .await
+        {
             Ok(Some(notification)) => {
                 tracing::info!("Protocol translator created notification from init message");
                 let available_agents = Self::extract_available_agents(&notification);
@@ -215,7 +236,9 @@ impl ClaudeClient {
                 (available_agents, current_agent)
             }
             Ok(None) => {
-                tracing::warn!("Init message produced no notification - check protocol_translator parsing");
+                tracing::warn!(
+                    "Init message produced no notification - check protocol_translator parsing"
+                );
                 (None, None)
             }
             Err(e) => {
@@ -241,7 +264,11 @@ impl ClaudeClient {
                         let id = agent_tuple.first()?.as_str()?.to_string();
                         let name = agent_tuple.get(1)?.as_str()?.to_string();
                         let description = agent_tuple.get(2).and_then(|v| {
-                            if v.is_null() { None } else { v.as_str().map(|s| s.to_string()) }
+                            if v.is_null() {
+                                None
+                            } else {
+                                v.as_str().map(|s| s.to_string())
+                            }
                         });
                         Some((id, name, description))
                     })
@@ -269,7 +296,10 @@ impl ClaudeClient {
         if let Some(sender) = &self.notification_sender {
             tracing::info!("Forwarding AvailableCommandsUpdate from Claude init message");
             if let Err(e) = sender.send_update(notification).await {
-                tracing::warn!("Failed to send init notification (expected in tests): {}", e);
+                tracing::warn!(
+                    "Failed to send init notification (expected in tests): {}",
+                    e
+                );
             }
         } else {
             tracing::warn!("No notification sender configured - cannot forward init notification");
@@ -340,7 +370,10 @@ impl ClaudeClient {
             let msg_type = json.get("type").and_then(|t| t.as_str());
             tracing::trace!("Init response type: {}", Pretty(&msg_type));
             if msg_type == Some("result") {
-                tracing::info!("✅ Consumed complete init response ({} lines)", lines_consumed);
+                tracing::info!(
+                    "✅ Consumed complete init response ({} lines)",
+                    lines_consumed
+                );
                 return true;
             }
         }
@@ -695,7 +728,8 @@ impl ClaudeClient {
 
             Self::update_stream_event_flag(&line, &mut state.saw_stream_events);
 
-            let notification = match ctx.protocol_translator
+            let notification = match ctx
+                .protocol_translator
                 .stream_json_to_acp(&line, &ctx.acp_session_id)
                 .await
             {
@@ -761,7 +795,10 @@ impl ClaudeClient {
                 token_usage: None,
                 stop_reason: result.stop_reason.clone(),
             };
-            tracing::debug!("Sending final chunk with stop_reason={:?}", result.stop_reason);
+            tracing::debug!(
+                "Sending final chunk with stop_reason={:?}",
+                result.stop_reason
+            );
             let _ = ctx.tx.send(chunk);
         }
     }
@@ -795,9 +832,7 @@ impl ClaudeClient {
             SessionUpdate::AgentMessageChunk(chunk) => {
                 Self::handle_message_chunk(ctx, chunk, state)
             }
-            SessionUpdate::ToolCall(tool_call) => {
-                Self::handle_tool_call(ctx, tool_call, state)
-            }
+            SessionUpdate::ToolCall(tool_call) => Self::handle_tool_call(ctx, tool_call, state),
             SessionUpdate::ToolCallUpdate(_) => {
                 tracing::debug!("ToolCallUpdate notification forwarded");
                 true

@@ -316,7 +316,10 @@ pub fn parse_validator_response(response: &str, stop_reason: &StopReason) -> Val
     }
 
     tracing::warn!("Failed to parse validator response as JSON: {:?}", response);
-    ValidatorResult::fail(format!("Validator returned invalid JSON response: {}", response))
+    ValidatorResult::fail(format!(
+        "Validator returned invalid JSON response: {}",
+        response
+    ))
 }
 
 /// Try to parse plain text PASS/FAIL format.
@@ -867,8 +870,12 @@ Here's my analysis:
 
     #[test]
     fn test_create_executed_validator() {
-        let validator =
-            create_test_validator_with_body("test-validator", HookType::PreToolUse, Severity::Error, "Test body");
+        let validator = create_test_validator_with_body(
+            "test-validator",
+            HookType::PreToolUse,
+            Severity::Error,
+            "Test body",
+        );
 
         let result = ValidatorResult::pass("All good".to_string());
         let executed = create_executed_validator(&validator, result);
@@ -933,13 +940,9 @@ Here's my analysis:
         let context = serde_json::json!({"session_id": "test-session"});
         let changed = vec!["src/lib.rs".to_string(), "src/main.rs".to_string()];
 
-        let render_ctx = ValidatorRenderContext::new(
-            &prompt_library,
-            &validator,
-            HookType::Stop,
-            &context,
-        )
-        .with_changed_files(Some(&changed));
+        let render_ctx =
+            ValidatorRenderContext::new(&prompt_library, &validator, HookType::Stop, &context)
+                .with_changed_files(Some(&changed));
 
         let result = render_ctx.render();
         assert!(result.is_ok(), "Render should succeed: {:?}", result.err());
@@ -976,13 +979,9 @@ Here's my analysis:
         let context = serde_json::json!({"session_id": "test"});
         let empty_files: Vec<String> = vec![];
 
-        let render_ctx = ValidatorRenderContext::new(
-            &prompt_library,
-            &validator,
-            HookType::Stop,
-            &context,
-        )
-        .with_changed_files(Some(&empty_files));
+        let render_ctx =
+            ValidatorRenderContext::new(&prompt_library, &validator, HookType::Stop, &context)
+                .with_changed_files(Some(&empty_files));
 
         let result = render_ctx.render();
         assert!(result.is_ok());

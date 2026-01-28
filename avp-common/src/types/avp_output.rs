@@ -99,7 +99,10 @@ impl AvpPreToolUseOutput {
     }
 
     /// Create a deny output from a validator block.
-    pub fn deny_from_validator(validator_name: impl Into<String>, message: impl Into<String>) -> Self {
+    pub fn deny_from_validator(
+        validator_name: impl Into<String>,
+        message: impl Into<String>,
+    ) -> Self {
         let validator_name = validator_name.into();
         let message = message.into();
         Self {
@@ -160,7 +163,10 @@ impl AvpPermissionRequestOutput {
     }
 
     /// Create a deny output from a validator block.
-    pub fn deny_from_validator(validator_name: impl Into<String>, message: impl Into<String>) -> Self {
+    pub fn deny_from_validator(
+        validator_name: impl Into<String>,
+        message: impl Into<String>,
+    ) -> Self {
         let validator_name = validator_name.into();
         let message = message.into();
         Self {
@@ -217,7 +223,10 @@ impl AvpPostToolUseOutput {
     }
 
     /// Create a flagged output from a validator block.
-    pub fn flag_from_validator(validator_name: impl Into<String>, message: impl Into<String>) -> Self {
+    pub fn flag_from_validator(
+        validator_name: impl Into<String>,
+        message: impl Into<String>,
+    ) -> Self {
         let validator_name = validator_name.into();
         let message = message.into();
         Self {
@@ -278,7 +287,10 @@ impl AvpStopOutput {
     }
 
     /// Create a block output from a validator.
-    pub fn block_from_validator(validator_name: impl Into<String>, message: impl Into<String>) -> Self {
+    pub fn block_from_validator(
+        validator_name: impl Into<String>,
+        message: impl Into<String>,
+    ) -> Self {
         let validator_name = validator_name.into();
         let message = message.into();
         Self {
@@ -513,7 +525,6 @@ impl AvpPostToolUseFailureOutput {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -536,7 +547,8 @@ mod tests {
 
     #[test]
     fn test_pre_tool_use_deny_from_validator() {
-        let output = AvpPreToolUseOutput::deny_from_validator("safe-commands", "rm -rf not allowed");
+        let output =
+            AvpPreToolUseOutput::deny_from_validator("safe-commands", "rm -rf not allowed");
         assert!(!output.allow);
         assert!(output.base.validator_block.is_some());
         let block = output.base.validator_block.as_ref().unwrap();
@@ -568,7 +580,10 @@ mod tests {
     fn test_stop_block() {
         let output = AvpStopOutput::block("Must fix tests before stopping");
         assert!(!output.allow_stop);
-        assert_eq!(output.block_reason.as_deref(), Some("Must fix tests before stopping"));
+        assert_eq!(
+            output.block_reason.as_deref(),
+            Some("Must fix tests before stopping")
+        );
         assert!(output.base.should_continue); // Force agent to continue
     }
 }

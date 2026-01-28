@@ -388,5 +388,4 @@ mod tests {
         assert!(json.contains("\"hookEventName\":\"Stop\""));
         assert!(json.contains("\"reason\":\"Validator blocked stop\""));
     }
-
 }

@@ -532,6 +532,8 @@ version = "0.3.0"
 dependencies = [
  "avp-common",
  "clap",
+ "dirs",
+ "serde",
  "serde_json",
  "tempfile",
  "tokio",

@@ -443,7 +443,8 @@ impl ClaudeAgent {
         let mut sah_modes = self.sah_modes.write().await;
 
         for mode in sah_mode_list {
-            let system_prompt = Self::resolve_mode_system_prompt(&mode, &prompt_library, &template_context);
+            let system_prompt =
+                Self::resolve_mode_system_prompt(&mode, &prompt_library, &template_context);
             sah_modes.insert(mode.id().to_string(), system_prompt);
             agents.push((
                 mode.id().to_string(),
@@ -452,7 +453,10 @@ impl ClaudeAgent {
             ));
         }
 
-        tracing::info!("Loaded {} SwissArmyHammer modes from ModeRegistry", sah_modes.len());
+        tracing::info!(
+            "Loaded {} SwissArmyHammer modes from ModeRegistry",
+            sah_modes.len()
+        );
         agents
     }
 
@@ -1348,7 +1352,10 @@ impl ClaudeAgent {
     }
 
     /// Handle found session: replay history and build response.
-    pub(crate) async fn handle_session_found(&self, session: &crate::session::Session) -> LoadSessionResponse {
+    pub(crate) async fn handle_session_found(
+        &self,
+        session: &crate::session::Session,
+    ) -> LoadSessionResponse {
         tracing::info!(
             "Loaded session: {} with {} historical messages",
             session.id,
@@ -1408,12 +1415,18 @@ impl ClaudeAgent {
             serde_json::json!("historical_replay"),
         );
 
-        SessionNotification::new(SessionId::new(session.id.to_string()), message.update.clone())
-            .meta(meta_map)
+        SessionNotification::new(
+            SessionId::new(session.id.to_string()),
+            message.update.clone(),
+        )
+        .meta(meta_map)
     }
 
     /// Build load session response with metadata.
-    pub(crate) fn build_load_session_response(&self, session: &crate::session::Session) -> LoadSessionResponse {
+    pub(crate) fn build_load_session_response(
+        &self,
+        session: &crate::session::Session,
+    ) -> LoadSessionResponse {
         let mut meta_map = serde_json::Map::new();
         meta_map.insert(
             "session_id".to_string(),
@@ -1810,8 +1823,10 @@ impl ClaudeAgent {
             .map_err(|_| agent_client_protocol::Error::internal_error())?;
 
         // Add user message
-        let user_message =
-            crate::session::Message::new(crate::session::MessageRole::User, prompt_text.to_string());
+        let user_message = crate::session::Message::new(
+            crate::session::MessageRole::User,
+            prompt_text.to_string(),
+        );
 
         self.session_manager
             .update_session(session_id, |session| {
@@ -1831,14 +1846,18 @@ impl ClaudeAgent {
         // Check turn request limit
         let current_requests = session.increment_turn_requests();
         if current_requests > self.config.max_turn_requests {
-            return Ok(Some(self.build_max_requests_response(session_id, current_requests)));
+            return Ok(Some(
+                self.build_max_requests_response(session_id, current_requests),
+            ));
         }
 
         // Check token limit
         let estimated_tokens = (prompt_text.len() as u64) / 4;
         let current_tokens = session.add_turn_tokens(estimated_tokens);
         if current_tokens > self.config.max_tokens_per_turn {
-            return Ok(Some(self.build_max_tokens_response(session_id, current_tokens)));
+            return Ok(Some(
+                self.build_max_tokens_response(session_id, current_tokens),
+            ));
         }
 
         // Update session with counters
@@ -1943,7 +1962,10 @@ impl ClaudeAgent {
             .extract_tool_info(&request.tool_call.tool_call_id)
             .await;
 
-        let policy_result = match self.evaluate_permission_policy(&tool_name, &tool_args).await {
+        let policy_result = match self
+            .evaluate_permission_policy(&tool_name, &tool_args)
+            .await
+        {
             Ok(result) => result,
             Err(_) => return Ok(Self::cancelled_response()),
         };
@@ -2090,7 +2112,10 @@ impl ClaudeAgent {
             crate::tools::PermissionOptionKind::AllowAlways => "allow-always",
             crate::tools::PermissionOptionKind::RejectAlways => "reject-always",
             _ => {
-                tracing::warn!("Unexpected stored permission kind: {}", Pretty(&stored_kind));
+                tracing::warn!(
+                    "Unexpected stored permission kind: {}",
+                    Pretty(&stored_kind)
+                );
                 "allow-once"
             }
         };

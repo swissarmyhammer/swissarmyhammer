@@ -424,13 +424,12 @@ impl AgentHookStrategy for ClaudeCodeHookStrategy {
             Ok((chain_output, _)) => {
                 let details =
                     self.extract_log_details(hook_type, &tool_name, &prompt_len, chain_output);
-                let decision = if chain_output.continue_execution
-                    && chain_output.validator_block.is_none()
-                {
-                    Decision::Allow
-                } else {
-                    Decision::Block
-                };
+                let decision =
+                    if chain_output.continue_execution && chain_output.validator_block.is_none() {
+                        Decision::Allow
+                    } else {
+                        Decision::Block
+                    };
                 self.context.log_event(&HookEvent {
                     hook_type: &hook_type_str,
                     decision,
@@ -447,9 +446,8 @@ impl AgentHookStrategy for ClaudeCodeHookStrategy {
         }
 
         // Transform ChainOutput to Claude-specific HookOutput
-        chain_result.map(|(chain_output, _)| {
-            Self::transform_to_claude_output(chain_output, hook_type)
-        })
+        chain_result
+            .map(|(chain_output, _)| Self::transform_to_claude_output(chain_output, hook_type))
     }
 }
 

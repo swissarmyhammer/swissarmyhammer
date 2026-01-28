@@ -95,14 +95,18 @@ fn test_hook_output_pre_tool_use_deny_json_format() {
         "JSON should have continue: true"
     );
 
-    let hook_specific = json.get("hookSpecificOutput").expect("should have hookSpecificOutput");
+    let hook_specific = json
+        .get("hookSpecificOutput")
+        .expect("should have hookSpecificOutput");
     assert_eq!(
         hook_specific.get("hookEventName").and_then(|v| v.as_str()),
         Some("PreToolUse"),
         "hookEventName should be PreToolUse"
     );
     assert_eq!(
-        hook_specific.get("permissionDecision").and_then(|v| v.as_str()),
+        hook_specific
+            .get("permissionDecision")
+            .and_then(|v| v.as_str()),
         Some("deny"),
         "permissionDecision should be deny"
     );

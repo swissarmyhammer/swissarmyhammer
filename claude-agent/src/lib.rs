@@ -190,9 +190,13 @@ pub async fn execute_prompt_with_agent<A: Agent + ?Sized>(
         .await
         .map_err(|e| AgentError::Internal(format!("Failed to execute prompt: {}", e)))?;
 
-    let content =
-        collect_response_content(collector, collected_text, notification_count, &prompt_response)
-            .await;
+    let content = collect_response_content(
+        collector,
+        collected_text,
+        notification_count,
+        &prompt_response,
+    )
+    .await;
 
     Ok(CollectedResponse {
         content,
@@ -211,9 +215,7 @@ async fn initialize_agent<A: Agent + ?Sized>(agent: &A) -> Result<()> {
 }
 
 /// Create a new session with the agent.
-async fn create_session<A: Agent + ?Sized>(
-    agent: &A,
-) -> Result<agent_client_protocol::SessionId> {
+async fn create_session<A: Agent + ?Sized>(agent: &A) -> Result<agent_client_protocol::SessionId> {
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/tmp"));
     let session_request = NewSessionRequest::new(cwd);
     let session_response = agent
@@ -311,7 +313,10 @@ async fn collect_response_content(
     notification_count: Arc<std::sync::atomic::AtomicUsize>,
     prompt_response: &agent_client_protocol::PromptResponse,
 ) -> String {
-    tokio::time::sleep(std::time::Duration::from_millis(NOTIFICATION_COLLECTION_DELAY_MS)).await;
+    tokio::time::sleep(std::time::Duration::from_millis(
+        NOTIFICATION_COLLECTION_DELAY_MS,
+    ))
+    .await;
     collector.abort();
 
     let content = collected_text.lock().await.clone();

@@ -118,11 +118,9 @@ impl crate::agent::ClaudeAgent {
                 self.config.max_turn_requests,
                 session_id
             );
-            return Ok(Some(
-                PromptResponse::new(StopReason::MaxTurnRequests).meta(
-                    self.build_turn_limit_meta(session_id, current_requests, true),
-                ),
-            ));
+            return Ok(Some(PromptResponse::new(StopReason::MaxTurnRequests).meta(
+                self.build_turn_limit_meta(session_id, current_requests, true),
+            )));
         }
 
         self.session_manager
@@ -223,11 +221,7 @@ impl crate::agent::ClaudeAgent {
         session_id: &crate::session::SessionId,
         session_id_str: &str,
     ) -> Option<PromptResponse> {
-        if self
-            .cancellation_manager
-            .is_cancelled(session_id_str)
-            .await
-        {
+        if self.cancellation_manager.is_cancelled(session_id_str).await {
             tracing::info!("Streaming cancelled for session {}", session_id);
             self.cancellation_manager
                 .reset_for_new_turn(session_id_str)
@@ -260,8 +254,13 @@ impl crate::agent::ClaudeAgent {
             )
             .await?;
         } else if !chunk.content.is_empty() {
-            self.handle_streaming_text_chunk(session_id, session_id_str, chunk, accumulated_content)
-                .await?;
+            self.handle_streaming_text_chunk(
+                session_id,
+                session_id_str,
+                chunk,
+                accumulated_content,
+            )
+            .await?;
         }
         Ok(())
     }
@@ -307,11 +306,7 @@ impl crate::agent::ClaudeAgent {
         session_id_str: &str,
         claude_stop_reason: Option<String>,
     ) -> Result<PromptResponse, agent_client_protocol::Error> {
-        if self
-            .cancellation_manager
-            .is_cancelled(session_id_str)
-            .await
-        {
+        if self.cancellation_manager.is_cancelled(session_id_str).await {
             tracing::info!("Session {} cancelled after streaming", session_id_str);
             let mut meta_map = serde_json::Map::new();
             meta_map.insert(

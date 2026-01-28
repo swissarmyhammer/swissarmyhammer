@@ -169,11 +169,7 @@ impl ChainOutputAggregator {
         }
 
         // OR suppress_output
-        if self
-            .outputs
-            .iter()
-            .any(|o| o.suppress_output == Some(true))
-        {
+        if self.outputs.iter().any(|o| o.suppress_output == Some(true)) {
             result.suppress_output = true;
         }
 

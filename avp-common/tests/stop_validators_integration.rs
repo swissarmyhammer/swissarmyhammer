@@ -20,10 +20,9 @@ use std::fs;
 use std::sync::Arc;
 use tempfile::TempDir;
 use test_helpers::{
-    assert_message_contains, assert_validator_failed, assert_validator_passed,
-    build_stop_input, cleanup_skip_agent_env, create_context_with_playback,
-    create_test_chain_factory, create_test_context, setup_turn_state_with_changes,
-    HookInputBuilder,
+    assert_message_contains, assert_validator_failed, assert_validator_passed, build_stop_input,
+    cleanup_skip_agent_env, create_context_with_playback, create_test_chain_factory,
+    create_test_context, setup_turn_state_with_changes, HookInputBuilder,
 };
 
 // ============================================================================
@@ -224,8 +223,12 @@ async fn test_file_tracker_records_pending_hash() {
     fs::write(&test_file, "original content").unwrap();
 
     let pre_tracker = PreToolUseFileTracker::new(turn_state.clone());
-    let input =
-        HookInputBuilder::pre_tool_use_input("session-1", "Edit", &test_file.to_string_lossy(), "tool-1");
+    let input = HookInputBuilder::pre_tool_use_input(
+        "session-1",
+        "Edit",
+        &test_file.to_string_lossy(),
+        "tool-1",
+    );
     let mut ctx = ChainContext::new();
     pre_tracker.process(&input, &mut ctx).await;
 
@@ -245,8 +248,12 @@ async fn test_file_tracker_detects_change() {
 
     // Record pre-hash
     let pre_tracker = PreToolUseFileTracker::new(turn_state.clone());
-    let pre_input =
-        HookInputBuilder::pre_tool_use_input("session-1", "Edit", &test_file.to_string_lossy(), "tool-1");
+    let pre_input = HookInputBuilder::pre_tool_use_input(
+        "session-1",
+        "Edit",
+        &test_file.to_string_lossy(),
+        "tool-1",
+    );
     let mut ctx = ChainContext::new();
     pre_tracker.process(&pre_input, &mut ctx).await;
 
@@ -255,8 +262,12 @@ async fn test_file_tracker_detects_change() {
 
     // Detect change
     let post_tracker = PostToolUseFileTracker::new(turn_state.clone());
-    let post_input =
-        HookInputBuilder::post_tool_use_input("session-1", "Edit", &test_file.to_string_lossy(), "tool-1");
+    let post_input = HookInputBuilder::post_tool_use_input(
+        "session-1",
+        "Edit",
+        &test_file.to_string_lossy(),
+        "tool-1",
+    );
     post_tracker.process(&post_input, &mut ctx).await;
 
     let state = turn_state.load("session-1").unwrap();
@@ -291,15 +302,23 @@ async fn test_file_tracker_no_change_detected_when_unchanged() {
 
     // PreToolUse records file hash
     let pre_tracker = PreToolUseFileTracker::new(turn_state.clone());
-    let pre_input =
-        HookInputBuilder::pre_tool_use_input("session-1", "Read", &test_file.to_string_lossy(), "tool-1");
+    let pre_input = HookInputBuilder::pre_tool_use_input(
+        "session-1",
+        "Read",
+        &test_file.to_string_lossy(),
+        "tool-1",
+    );
     let mut ctx = ChainContext::new();
     pre_tracker.process(&pre_input, &mut ctx).await;
 
     // DON'T modify the file - PostToolUse should not detect change
     let post_tracker = PostToolUseFileTracker::new(turn_state.clone());
-    let post_input =
-        HookInputBuilder::post_tool_use_input("session-1", "Read", &test_file.to_string_lossy(), "tool-1");
+    let post_input = HookInputBuilder::post_tool_use_input(
+        "session-1",
+        "Read",
+        &test_file.to_string_lossy(),
+        "tool-1",
+    );
     post_tracker.process(&post_input, &mut ctx).await;
 
     let state = turn_state.load("session-1").unwrap();
@@ -445,7 +464,10 @@ async fn test_stop_validator_response_acknowledges_files() {
         run_validator_with_changed_files(&temp, "stop_with_changed_files.json", files).await;
 
     // Verify the validator passed and returned a response about the files
-    assert!(passed, "Validator should pass for files without duplication");
+    assert!(
+        passed,
+        "Validator should pass for files without duplication"
+    );
     assert!(
         !message.is_empty(),
         "Response should have a message: {}",

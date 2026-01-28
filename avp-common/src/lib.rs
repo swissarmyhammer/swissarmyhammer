@@ -17,9 +17,9 @@ pub mod types;
 pub mod validator;
 
 pub use builtin::load_builtins;
+pub use chain::LinkOutput;
 pub use context::{AvpContext, Decision, HookEvent};
 pub use error::{AvpError, ChainError, ValidationError};
 pub use strategy::HookDispatcher;
-pub use chain::LinkOutput;
 pub use types::{HookInput, HookOutput, HookType};
 pub use validator::{MatchContext, Severity, Validator, ValidatorLoader, ValidatorResult};

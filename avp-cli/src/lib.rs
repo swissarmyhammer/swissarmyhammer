@@ -63,5 +63,7 @@
 //! // dispatcher.register(ClaudeCodeHookStrategy::new(context));
 //! ```
 
+pub mod install;
+
 // Re-export everything from avp-common for backwards compatibility
 pub use avp_common::*;

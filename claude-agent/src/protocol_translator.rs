@@ -118,7 +118,9 @@ impl ProtocolTranslator {
                 uri: link.uri.clone(),
                 name: link.name.clone(),
             }),
-            _ => Err(AgentError::Internal("Unknown content block type".to_string())),
+            _ => Err(AgentError::Internal(
+                "Unknown content block type".to_string(),
+            )),
         }
     }
 
@@ -179,9 +181,8 @@ impl ProtocolTranslator {
         line: &str,
         session_id: &SessionId,
     ) -> Result<Option<SessionNotification>> {
-        let parsed: JsonValue = serde_json::from_str(line).map_err(|e| {
-            AgentError::Internal(format!("Malformed JSON: {}. Line: {}", e, line))
-        })?;
+        let parsed: JsonValue = serde_json::from_str(line)
+            .map_err(|e| AgentError::Internal(format!("Malformed JSON: {}. Line: {}", e, line)))?;
 
         let msg_type = parsed.get("type").and_then(|v| v.as_str()).ok_or_else(|| {
             AgentError::Internal("Missing 'type' field in stream-json".to_string())
@@ -242,19 +243,24 @@ impl ProtocolTranslator {
     ) -> Result<Option<SessionNotification>> {
         use agent_client_protocol::{ToolCall, ToolCallId};
 
-        let id = item.get("id").and_then(|i| i.as_str()).ok_or_else(|| {
-            AgentError::Internal("Missing id in tool_use".to_string())
-        })?;
-        let name = item.get("name").and_then(|n| n.as_str()).ok_or_else(|| {
-            AgentError::Internal("Missing name in tool_use".to_string())
-        })?;
-        let input = item.get("input").ok_or_else(|| {
-            AgentError::Internal("Missing input in tool_use".to_string())
-        })?;
+        let id = item
+            .get("id")
+            .and_then(|i| i.as_str())
+            .ok_or_else(|| AgentError::Internal("Missing id in tool_use".to_string()))?;
+        let name = item
+            .get("name")
+            .and_then(|n| n.as_str())
+            .ok_or_else(|| AgentError::Internal("Missing name in tool_use".to_string()))?;
+        let input = item
+            .get("input")
+            .ok_or_else(|| AgentError::Internal("Missing input in tool_use".to_string()))?;
 
         tracing::debug!("🔧 ASSISTANT tool_use: {} ({})", name, id);
 
-        let policy_evaluation = self.permission_engine.evaluate_tool_call(name, input).await?;
+        let policy_evaluation = self
+            .permission_engine
+            .evaluate_tool_call(name, input)
+            .await?;
         let (status, meta) = self.evaluate_tool_policy(name, policy_evaluation);
 
         let tool_call = ToolCall::new(ToolCallId::new(id), name)
@@ -279,9 +285,12 @@ impl ProtocolTranslator {
         &self,
         name: &str,
         policy_evaluation: crate::permissions::PolicyEvaluation,
-    ) -> (agent_client_protocol::ToolCallStatus, Option<serde_json::Map<String, JsonValue>>) {
-        use agent_client_protocol::ToolCallStatus;
+    ) -> (
+        agent_client_protocol::ToolCallStatus,
+        Option<serde_json::Map<String, JsonValue>>,
+    ) {
         use crate::permissions::PolicyEvaluation;
+        use agent_client_protocol::ToolCallStatus;
 
         match policy_evaluation {
             PolicyEvaluation::Allowed => {
@@ -311,9 +320,10 @@ impl ProtocolTranslator {
         item: &JsonValue,
         session_id: &SessionId,
     ) -> Result<Option<SessionNotification>> {
-        let text = item.get("text").and_then(|t| t.as_str()).ok_or_else(|| {
-            AgentError::Internal("Missing text in text content".to_string())
-        })?;
+        let text = item
+            .get("text")
+            .and_then(|t| t.as_str())
+            .ok_or_else(|| AgentError::Internal("Missing text in text content".to_string()))?;
 
         tracing::debug!("📨 ASSISTANT text: {} chars", text.len());
         let text_content = TextContent::new(text.to_string());
@@ -369,7 +379,9 @@ impl ProtocolTranslator {
 
         let tool_content = self.extract_tool_result_content(content_item);
 
-        use agent_client_protocol::{ToolCallId, ToolCallStatus, ToolCallUpdate, ToolCallUpdateFields};
+        use agent_client_protocol::{
+            ToolCallId, ToolCallStatus, ToolCallUpdate, ToolCallUpdateFields,
+        };
 
         let mut fields = ToolCallUpdateFields::new().status(ToolCallStatus::Completed);
         if let Some(content) = tool_content {
@@ -470,7 +482,10 @@ impl ProtocolTranslator {
             tracing::info!(
                 "Claude CLI provided {} agents: {:?}",
                 agents.len(),
-                agents.iter().map(|(id, name, _)| format!("{}:{}", id, name)).collect::<Vec<_>>()
+                agents
+                    .iter()
+                    .map(|(id, name, _)| format!("{}:{}", id, name))
+                    .collect::<Vec<_>>()
             );
         }
 
@@ -492,16 +507,19 @@ impl ProtocolTranslator {
         &self,
         parsed: &JsonValue,
     ) -> Option<Vec<(String, String, Option<String>)>> {
-        parsed.get("agents").and_then(|v| v.as_array()).map(|agents| {
-            agents
-                .iter()
-                .filter_map(|agent| {
-                    let id = agent.as_str()?;
-                    let name = Self::format_agent_name(id);
-                    Some((id.to_string(), name, None::<String>))
-                })
-                .collect()
-        })
+        parsed
+            .get("agents")
+            .and_then(|v| v.as_array())
+            .map(|agents| {
+                agents
+                    .iter()
+                    .filter_map(|agent| {
+                        let id = agent.as_str()?;
+                        let name = Self::format_agent_name(id);
+                        Some((id.to_string(), name, None::<String>))
+                    })
+                    .collect()
+            })
     }
 
     /// Format agent ID as human-readable name.
@@ -538,7 +556,8 @@ impl ProtocolTranslator {
         );
 
         let available_commands = self.convert_commands_to_acp(command_names);
-        let commands_update = agent_client_protocol::AvailableCommandsUpdate::new(available_commands);
+        let commands_update =
+            agent_client_protocol::AvailableCommandsUpdate::new(available_commands);
 
         let mut meta_map = serde_json::Map::new();
         meta_map.insert("source".to_string(), serde_json::json!("claude_cli_init"));
@@ -702,8 +721,14 @@ impl ProtocolTranslator {
     fn handle_content_block_start(&self, event: &JsonValue) -> Result<Option<SessionNotification>> {
         if let Some(content_block) = event.get("content_block") {
             if content_block.get("type").and_then(|t| t.as_str()) == Some("tool_use") {
-                let id = content_block.get("id").and_then(|i| i.as_str()).unwrap_or("");
-                let name = content_block.get("name").and_then(|n| n.as_str()).unwrap_or("");
+                let id = content_block
+                    .get("id")
+                    .and_then(|i| i.as_str())
+                    .unwrap_or("");
+                let name = content_block
+                    .get("name")
+                    .and_then(|n| n.as_str())
+                    .unwrap_or("");
                 tracing::debug!("🔧 STREAM_EVENT tool_use start: {} ({})", name, id);
             }
         }

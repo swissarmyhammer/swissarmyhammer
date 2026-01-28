@@ -325,12 +325,21 @@ fn handle_execution_error(
     let is_rate_limit = is_rate_limit_error(&error_str);
 
     if is_rate_limit {
-        tracing::warn!("Rate limit/timeout for validator '{}': {}", validator.name(), error);
+        tracing::warn!(
+            "Rate limit/timeout for validator '{}': {}",
+            validator.name(),
+            error
+        );
     } else {
-        tracing::error!("Agent execution failed for validator '{}': {}", validator.name(), error);
+        tracing::error!(
+            "Agent execution failed for validator '{}': {}",
+            validator.name(),
+            error
+        );
     }
 
-    let result = crate::validator::ValidatorResult::fail(format!("Agent execution failed: {}", error));
+    let result =
+        crate::validator::ValidatorResult::fail(format!("Agent execution failed: {}", error));
     (create_executed_validator(validator, result), is_rate_limit)
 }
 
@@ -427,7 +436,11 @@ impl ValidatorTask {
 
     /// Create error result for render failures.
     fn render_error(self, error: String) -> (usize, ExecutedValidator, bool) {
-        (self.idx, create_render_error(&self.validator, &error), false)
+        (
+            self.idx,
+            create_render_error(&self.validator, &error),
+            false,
+        )
     }
 }
 
@@ -1099,7 +1112,10 @@ mod tests {
             .execute_validators(&validators, HookType::PreToolUse, &context, None)
             .await;
 
-        assert!(results.is_empty(), "Empty input should produce empty output");
+        assert!(
+            results.is_empty(),
+            "Empty input should produce empty output"
+        );
     }
 
     #[tokio::test]
@@ -1114,12 +1130,7 @@ mod tests {
         let changed_files = vec!["src/lib.rs".to_string(), "src/main.rs".to_string()];
 
         let (result, is_rate_limited) = runner
-            .execute_validator(
-                &validator,
-                HookType::Stop,
-                &context,
-                Some(&changed_files),
-            )
+            .execute_validator(&validator, HookType::Stop, &context, Some(&changed_files))
             .await;
 
         assert!(!is_rate_limited);

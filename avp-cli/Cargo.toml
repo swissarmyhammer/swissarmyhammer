@@ -18,6 +18,7 @@ path = "src/main.rs"
 avp-common = { path = "../avp-common" }
 
 # Serialization (needed for main.rs JSON handling)
+serde = { workspace = true }
 serde_json = { workspace = true }
 
 # CLI
@@ -29,6 +30,9 @@ tokio = { workspace = true }
 # Logging
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
+
+# File system
+dirs = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

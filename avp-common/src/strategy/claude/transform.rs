@@ -15,8 +15,8 @@ use crate::types::{
 // Re-export output types with Claude-prefixed aliases for backwards compatibility
 pub use super::output::{
     GenericOutput as ClaudeGenericOutput, HookOutput as ClaudeHookOutput,
-    HookSpecificOutput as ClaudeHookSpecificOutput,
-    PermissionBehavior as ClaudePermissionBehavior, PermissionDecision as ClaudePermissionDecision,
+    HookSpecificOutput as ClaudeHookSpecificOutput, PermissionBehavior as ClaudePermissionBehavior,
+    PermissionDecision as ClaudePermissionDecision,
     PermissionRequestDecision as ClaudePermissionRequestDecision,
     PermissionRequestOutput as ClaudePermissionRequestOutput,
     PostToolUseOutput as ClaudePostToolUseOutput, PreToolUseOutput as ClaudePreToolUseOutput,
@@ -65,9 +65,7 @@ pub fn avp_pre_tool_use_to_claude(avp: AvpPreToolUseOutput) -> (HookOutput, i32)
 /// - Exit code 0 (so JSON is parsed)
 /// - `hookSpecificOutput.decision.behavior: "deny"`
 /// - `hookSpecificOutput.decision.message` explains why
-pub fn avp_permission_request_to_claude(
-    avp: AvpPermissionRequestOutput,
-) -> (HookOutput, i32) {
+pub fn avp_permission_request_to_claude(avp: AvpPermissionRequestOutput) -> (HookOutput, i32) {
     if avp.grant {
         (HookOutput::success(), 0)
     } else {
@@ -115,9 +113,7 @@ pub fn avp_post_tool_use_to_claude(avp: AvpPostToolUseOutput) -> (HookOutput, i3
 }
 
 /// Transform AVP PostToolUseFailure output to Claude format.
-pub fn avp_post_tool_use_failure_to_claude(
-    avp: AvpPostToolUseFailureOutput,
-) -> (HookOutput, i32) {
+pub fn avp_post_tool_use_failure_to_claude(avp: AvpPostToolUseFailureOutput) -> (HookOutput, i32) {
     if !avp.flagged {
         (HookOutput::success(), 0)
     } else {
@@ -182,9 +178,7 @@ pub fn avp_subagent_stop_to_claude(avp: AvpSubagentStopOutput) -> (HookOutput, i
 /// - Exit code 0 (so JSON is parsed)
 /// - `decision: "block"` prevents the prompt
 /// - `reason` is shown to user (not added to context)
-pub fn avp_user_prompt_submit_to_claude(
-    avp: AvpUserPromptSubmitOutput,
-) -> (HookOutput, i32) {
+pub fn avp_user_prompt_submit_to_claude(avp: AvpUserPromptSubmitOutput) -> (HookOutput, i32) {
     if avp.allow {
         (HookOutput::success(), 0)
     } else {

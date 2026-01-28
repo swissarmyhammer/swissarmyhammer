@@ -195,7 +195,11 @@ impl ValidatorLoader {
                 self.parse_and_insert_validator(&content, file_path, source);
             }
             Err(e) => {
-                tracing::warn!("Failed to read validator file {}: {}", file_path.display(), e);
+                tracing::warn!(
+                    "Failed to read validator file {}: {}",
+                    file_path.display(),
+                    e
+                );
             }
         }
     }

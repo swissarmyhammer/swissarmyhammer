@@ -243,7 +243,14 @@ impl AvpContext {
     }
 
     /// Initialize directories and log file (shared by init and with_agent).
-    fn init_directories() -> Result<(ManagedDirectory<AvpConfig>, Option<ManagedDirectory<AvpConfig>>, Option<Arc<StdMutex<File>>>), AvpError> {
+    fn init_directories() -> Result<
+        (
+            ManagedDirectory<AvpConfig>,
+            Option<ManagedDirectory<AvpConfig>>,
+            Option<Arc<StdMutex<File>>>,
+        ),
+        AvpError,
+    > {
         let project_dir = ManagedDirectory::<AvpConfig>::from_git_root().map_err(|e| {
             AvpError::Context(format!(
                 "failed to create {} directory: {}",

@@ -402,7 +402,8 @@ impl ClaudeAgent {
         &self,
         request: &ExtRequest,
     ) -> Result<ExtResponse, agent_client_protocol::Error> {
-        self.validate_ext_terminal_capability("terminal/output").await?;
+        self.validate_ext_terminal_capability("terminal/output")
+            .await?;
         let params: crate::terminal_manager::TerminalOutputParams =
             self.parse_ext_params(request, "terminal/output")?;
         let response = self.handle_terminal_output(params).await?;
@@ -414,7 +415,8 @@ impl ClaudeAgent {
         &self,
         request: &ExtRequest,
     ) -> Result<ExtResponse, agent_client_protocol::Error> {
-        self.validate_ext_terminal_capability("terminal/release").await?;
+        self.validate_ext_terminal_capability("terminal/release")
+            .await?;
         let params: crate::terminal_manager::TerminalReleaseParams =
             self.parse_ext_params(request, "terminal/release")?;
         let response = self.handle_terminal_release(params).await?;
@@ -426,7 +428,8 @@ impl ClaudeAgent {
         &self,
         request: &ExtRequest,
     ) -> Result<ExtResponse, agent_client_protocol::Error> {
-        self.validate_ext_terminal_capability("terminal/wait_for_exit").await?;
+        self.validate_ext_terminal_capability("terminal/wait_for_exit")
+            .await?;
         let params: crate::terminal_manager::TerminalOutputParams =
             self.parse_ext_params(request, "terminal/wait_for_exit")?;
         let response = self.handle_terminal_wait_for_exit(params).await?;
@@ -438,7 +441,8 @@ impl ClaudeAgent {
         &self,
         request: &ExtRequest,
     ) -> Result<ExtResponse, agent_client_protocol::Error> {
-        self.validate_ext_terminal_capability("terminal/kill").await?;
+        self.validate_ext_terminal_capability("terminal/kill")
+            .await?;
         let params: crate::terminal_manager::TerminalOutputParams =
             self.parse_ext_params(request, "terminal/kill")?;
         self.handle_terminal_kill(params).await?;
@@ -450,7 +454,8 @@ impl ClaudeAgent {
         &self,
         request: &ExtRequest,
     ) -> Result<ExtResponse, agent_client_protocol::Error> {
-        self.validate_ext_terminal_capability("terminal/create").await?;
+        self.validate_ext_terminal_capability("terminal/create")
+            .await?;
         let params: crate::terminal_manager::TerminalCreateParams =
             self.parse_ext_params(request, "terminal/create")?;
         let response = self.handle_terminal_create(params).await?;
@@ -580,8 +585,8 @@ impl ClaudeAgent {
         request: &ExtRequest,
         method: &str,
     ) -> Result<T, agent_client_protocol::Error> {
-        let params_value: serde_json::Value = serde_json::from_str(request.params.get())
-            .map_err(|e| {
+        let params_value: serde_json::Value =
+            serde_json::from_str(request.params.get()).map_err(|e| {
                 tracing::error!("Failed to parse {} parameters: {}", method, e);
                 agent_client_protocol::Error::invalid_params()
             })?;

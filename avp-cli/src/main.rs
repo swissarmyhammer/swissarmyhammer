@@ -1,39 +1,64 @@
 //! AVP CLI - Agent Validator Protocol command-line interface.
 //!
-//! Reads JSON from stdin, processes the hook, and writes JSON to stdout.
-//! Validators now run in parallel with adaptive concurrency control.
+//! Commands:
+//! - `avp` (no args): Read JSON from stdin, process hook, write JSON to stdout
+//! - `avp install <target>`: Install AVP hooks into Claude Code settings
+//! - `avp uninstall <target>`: Remove AVP hooks from Claude Code settings
+//!
+//! Targets: project, local, user
+//!
 //! Exit codes:
 //! - 0: Success
 //! - 2: Blocking error (hook rejected the action)
 
 use std::io::{self, IsTerminal, Read, Write};
 
-use clap::Parser;
+use clap::{Parser, Subcommand};
 use tracing_subscriber::EnvFilter;
 
+use avp::install::{self, InstallTarget};
 use avp_common::context::AvpContext;
 use avp_common::strategy::HookDispatcher;
 use avp_common::AvpError;
 
 /// AVP - Agent Validator Protocol
 ///
-/// Claude Code hook processor that reads JSON from stdin and outputs JSON to stdout.
+/// Claude Code hook processor that validates tool calls, file changes, and more.
 #[derive(Parser, Debug)]
 #[command(name = "avp")]
 #[command(version)]
 #[command(about = "Agent Validator Protocol - Claude Code hook processor")]
-struct Args {
+struct Cli {
     /// Enable debug output to stderr
-    #[arg(short, long)]
+    #[arg(short, long, global = true)]
     debug: bool,
+
+    #[command(subcommand)]
+    command: Option<Commands>,
+}
+
+#[derive(Subcommand, Debug)]
+enum Commands {
+    /// Install AVP hooks into Claude Code settings
+    Install {
+        /// Where to install the hooks
+        #[arg(value_enum)]
+        target: InstallTarget,
+    },
+    /// Remove AVP hooks from Claude Code settings
+    Uninstall {
+        /// Where to remove the hooks from
+        #[arg(value_enum)]
+        target: InstallTarget,
+    },
 }
 
 #[tokio::main]
 async fn main() {
-    let args = Args::parse();
+    let cli = Cli::parse();
 
     // Initialize tracing with appropriate level
-    let filter = if args.debug {
+    let filter = if cli.debug {
         EnvFilter::new("avp=debug,avp_common=debug")
     } else {
         EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("warn"))
@@ -45,27 +70,59 @@ async fn main() {
         .with_writer(std::io::stderr)
         .init();
 
-    let exit_code = match run(&args).await {
-        Ok(code) => code,
-        Err(e) => {
-            // Output error as JSON for consistency
-            let error_output = serde_json::json!({
-                "continue": false,
-                "stopReason": e.to_string()
-            });
-            tracing::error!("{}", e);
-            let _ = io::stdout().write_all(error_output.to_string().as_bytes());
-            2 // Blocking error
+    let exit_code = match cli.command {
+        Some(Commands::Install { target }) => match install::install(target) {
+            Ok(()) => 0,
+            Err(e) => {
+                eprintln!("Error: {}", e);
+                1
+            }
+        },
+        Some(Commands::Uninstall { target }) => match install::uninstall(target) {
+            Ok(()) => 0,
+            Err(e) => {
+                eprintln!("Error: {}", e);
+                1
+            }
+        },
+        None => {
+            // Default behavior: process hook from stdin
+            match run_hook_processor(&cli).await {
+                Ok(code) => code,
+                Err(e) => {
+                    // Output error as JSON for consistency
+                    let error_output = serde_json::json!({
+                        "continue": false,
+                        "stopReason": e.to_string()
+                    });
+                    tracing::error!("{}", e);
+                    let _ = io::stdout().write_all(error_output.to_string().as_bytes());
+                    2 // Blocking error
+                }
+            }
         }
     };
+
     std::process::exit(exit_code);
 }
 
-async fn run(_args: &Args) -> Result<i32, AvpError> {
+async fn run_hook_processor(_cli: &Cli) -> Result<i32, AvpError> {
     // Check if stdin is a terminal (no piped input)
     if io::stdin().is_terminal() {
-        tracing::warn!("no input provided (pipe JSON to stdin)");
-        tracing::info!("Usage: echo '{{\"hook_event_name\":\"PreToolUse\",...}}' | avp");
+        // Show help when run interactively without subcommand
+        println!("AVP - Agent Validator Protocol");
+        println!();
+        println!("Usage:");
+        println!("  avp                           Process hook from stdin (pipe JSON)");
+        println!("  avp install <project|local|user>   Install hooks to Claude settings");
+        println!("  avp uninstall <project|local|user> Remove hooks from Claude settings");
+        println!();
+        println!("Examples:");
+        println!("  avp install project           Install to .claude/settings.json");
+        println!("  avp install user              Install to ~/.claude/settings.json");
+        println!("  echo '{{...}}' | avp           Process a hook event");
+        println!();
+        println!("Run 'avp --help' for more information.");
         return Ok(0);
     }
 
@@ -120,14 +177,72 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_args_parsing() {
-        let args = Args::parse_from(["avp"]);
-        assert!(!args.debug);
+    fn test_cli_parsing_no_args() {
+        let cli = Cli::parse_from(["avp"]);
+        assert!(!cli.debug);
+        assert!(cli.command.is_none());
     }
 
     #[test]
-    fn test_args_with_debug() {
-        let args = Args::parse_from(["avp", "--debug"]);
-        assert!(args.debug);
+    fn test_cli_parsing_debug() {
+        let cli = Cli::parse_from(["avp", "--debug"]);
+        assert!(cli.debug);
+        assert!(cli.command.is_none());
+    }
+
+    #[test]
+    fn test_cli_parsing_install_project() {
+        let cli = Cli::parse_from(["avp", "install", "project"]);
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Install {
+                target: InstallTarget::Project
+            })
+        ));
+    }
+
+    #[test]
+    fn test_cli_parsing_install_local() {
+        let cli = Cli::parse_from(["avp", "install", "local"]);
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Install {
+                target: InstallTarget::Local
+            })
+        ));
+    }
+
+    #[test]
+    fn test_cli_parsing_install_user() {
+        let cli = Cli::parse_from(["avp", "install", "user"]);
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Install {
+                target: InstallTarget::User
+            })
+        ));
+    }
+
+    #[test]
+    fn test_cli_parsing_uninstall_project() {
+        let cli = Cli::parse_from(["avp", "uninstall", "project"]);
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Uninstall {
+                target: InstallTarget::Project
+            })
+        ));
+    }
+
+    #[test]
+    fn test_cli_parsing_debug_with_install() {
+        let cli = Cli::parse_from(["avp", "--debug", "install", "user"]);
+        assert!(cli.debug);
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Install {
+                target: InstallTarget::User
+            })
+        ));
     }
 }
